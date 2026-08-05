@@ -972,7 +972,9 @@ test "logSoftmax large input" {
 
 test "logSoftmax empty is no-op" {
     var empty: [0]f32 = .{};
-    logSoftmax(&empty); // Should not crash
+    logSoftmax(&empty);
+    // Empty input must remain empty (early return before SIMD reductions).
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
 }
 
 test "softmaxWithTemp temperature=1 is standard softmax" {

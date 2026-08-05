@@ -28,6 +28,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: docs-check-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check-docs:
     name: Link and count hygiene

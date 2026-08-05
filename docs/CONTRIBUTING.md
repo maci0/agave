@@ -351,7 +351,7 @@ Transports are selected via `--transport auto|tcp|shm|nccl`:
 - `nccl`: NCCL over RoCE RDMA (requires libnccl2, ConnectX NICs)
 - `rccl`: AMD's NCCL equivalent (declared, not yet implemented)
 
-UDP peer discovery (`src/parallel/discovery.zig`) is a separate mechanism — rank 0 broadcasts a beacon on port 49460, other ranks discover it automatically on the same subnet.
+UDP peer discovery (`src/parallel/peer_discovery.zig`) is a separate mechanism: rank 0 broadcasts a beacon on port 49460, other ranks discover it automatically on the same subnet.
 
 ### NCCL Architecture
 
@@ -398,3 +398,76 @@ allReduceAdd(buf, n):
 5. **Tests**: add unit tests in `src/ops/math.zig`, fuzz test in `src/fuzz_tests.zig`
 
 6. **Docs**: update `docs/API.md` (parameter table), `docs/tutorial/07-sampling.md`, `--help` text, `README.md`
+
+## Versioning & Releases
+
+Agave is a CLI + HTTP server. The consumer contract is the binary behavior, CLI
+flags, and the HTTP API in `docs/API.md`, not a Zig package API.
+
+### SemVer (0.x)
+
+- Product version: **0.1.0**, reported by `agave --version`, `/health` `version`,
+  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.1.0`).
+- On **0.x**, breaking changes are allowed without bumping the major digit, but
+  they must be called out in `CHANGELOG.md` under **Breaking** (or **Changed**
+  with an explicit compatibility note) before merge.
+- At **1.0.0**, treat removed/renamed CLI flags, HTTP fields, defaults that alter
+  existing request results, and on-disk format changes as major bumps; new
+  features as minor; fixes as patch.
+- Git tag `v1.0` (2026-03-22) is a **milestone name only**. It is not product
+  SemVer `1.0.0`. Prefer tags that match the product version (for example
+  `v0.1.0`) for future releases.
+
+### Single sources of truth
+
+| Field | Location |
+|-------|----------|
+| Product SemVer string | `build.zig.zon` `.version` only (injected as `build_options.version`; `display.version` re-exports it) |
+| Minimum Zig | `build.zig.zon` `.minimum_zig_version` and `.zigversion` |
+| User-facing history | `CHANGELOG.md` (Keep a Changelog-style sections; date stamps for historical entries) |
+
+Bump `.version` in `build.zig.zon` in the release commit. Do not publish a tag
+whose name disagrees with that string.
+
+### Changelog requirements
+
+For every user-facing change, add an entry under `## [Unreleased]` before merge:
+
+- **Breaking**: removed/renamed flag or API field, default change that alters
+  results, fail-closed behavior that used to succeed, wire/format changes
+- **Added**: new flags, endpoints, models, backends, quant types
+- **Fixed**: correctness or crash fixes consumers would notice
+- **Changed**: non-breaking behavior or docs that affect upgrade decisions
+
+Write for operators and API clients (what breaks, what to do), not for
+maintainers (avoid commit hashes as the only description).
+
+### Release checklist
+
+1. Move `## [Unreleased]` items into a dated/versioned section; bump
+   `build.zig.zon` `.version` when cutting a release.
+2. Confirm `CHANGELOG.md` and `build.zig.zon` `.version` agree (`agave --version`).
+3. Tag `vX.Y.Z` matching the product version (do not reuse or mutate tags).
+4. Smoke: `agave --version`, one short CPU inference, and `GET /health` if serving.
+5. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
+   builders).
+
+### Deprecation
+
+Prefer deprecate-then-remove for CLI flags and HTTP fields: warn for at least
+one release (or document a removal date), name the replacement, update
+examples/docs so they stop recommending the old path, then remove.
+
+### Support and lifecycle (0.x)
+
+Until **1.0.0**, there is no multi-version support matrix and no promised LTS:
+
+- **Fixes and security**: applied on current `main` / the latest product tag that
+  matches `build.zig.zon` `.version`. Older tags are not maintained.
+- **Backports**: none by default. Cherry-picks are case-by-case only.
+- **Minimum Zig**: `.zigversion` / `build.zig.zon` `.minimum_zig_version`. Raising
+  it is a **Breaking** changelog entry for anyone building from source.
+- **Experimental surface**: features described as incomplete, not CLI-enabled, or
+  `501 Not Implemented` in `docs/API.md` (for example token-bucket rate limiting)
+  are not a stability promise; do not depend on them without a changelog
+  commitment.

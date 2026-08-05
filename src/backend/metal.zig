@@ -2628,7 +2628,8 @@ pub const MetalBackend = struct {
     /// for future chunks/decode. All dispatches in one command buffer.
     ///
     /// For turbo KV types: CPU-side KV append + sequential GPU turbo SDPA per token.
-    /// For non-turbo quantized types (q8_0, f16, etc.): full CPU fallback.
+    /// For f32 KV: dual-source FA2 prefill on GPU, then GPU copy into the cache.
+    /// Other quantized KV types panic (fail closed; no silent CPU fallback).
     pub fn sdpaPrefill(self: *MetalBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();

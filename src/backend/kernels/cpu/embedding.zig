@@ -101,16 +101,26 @@ pub fn embQ4_0(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
 
 /// Dequantizes a Q8_0 embedding row to f32.
 pub fn embQ8_0(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
+    const V8 = @Vector(8, f32);
     const nb = (dim + quant_block_elems - 1) / quant_block_elems;
     const rp = data + tok * nb * q8_0_block_bytes;
     for (0..nb) |b| {
         const bp = rp + b * q8_0_block_bytes;
         const s: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
-        for (0..quant_block_elems) |i| {
-            const idx = b * quant_block_elems + i;
-            if (idx < dim) {
-                out[idx] = @as(f32, @floatFromInt(@as(i8, @bitCast(bp[2 + i])))) * s;
+        const sv: V8 = @splat(s);
+        const base = b * quant_block_elems;
+        const count = @min(quant_block_elems, dim - base);
+        const q = bp + 2;
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            var qv: V8 = undefined;
+            inline for (0..8) |j| {
+                qv[j] = @floatFromInt(@as(i8, @bitCast(q[i + j])));
             }
+            out[base + i ..][0..8].* = qv * sv;
+        }
+        while (i < count) : (i += 1) {
+            out[base + i] = @as(f32, @floatFromInt(@as(i8, @bitCast(q[i])))) * s;
         }
     }
 }

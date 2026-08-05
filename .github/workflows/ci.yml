@@ -24,9 +24,6 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  ZIG_VERSION: "0.16.0"
-
 jobs:
   fmt-check:
     name: Check formatting
@@ -37,10 +34,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Zig version
+        id: zig
+        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
-          version: ${{ env.ZIG_VERSION }}
+          version: ${{ steps.zig.outputs.version }}
 
       - name: Check formatting
         run: zig fmt --check src/ tests/ build.zig build.zig.zon
@@ -55,10 +56,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Zig version
+        id: zig
+        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
-          version: ${{ env.ZIG_VERSION }}
+          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -66,8 +71,8 @@ jobs:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-${{ env.ZIG_VERSION }}-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: zig-${{ env.ZIG_VERSION }}-linux-x86-
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-linux-x86-
 
       - name: Run tests
         run: zig build test
@@ -82,10 +87,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Zig version
+        id: zig
+        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
-          version: ${{ env.ZIG_VERSION }}
+          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -93,8 +102,8 @@ jobs:
           path: |
             .zig-cache
             ~/Library/Caches/zig
-          key: zig-${{ env.ZIG_VERSION }}-macos-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: zig-${{ env.ZIG_VERSION }}-macos-
+          key: zig-${{ steps.zig.outputs.version }}-macos-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-macos-
 
       - name: Run tests
         run: zig build test
@@ -104,6 +113,10 @@ jobs:
     needs: fmt-check
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # GHA cache export for buildx requires actions: write.
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -117,19 +130,27 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: agave:ci
           build-args: |
             ENABLE_CUDA=false
             ENABLE_VULKAN=false
             ENABLE_ROCM=false
+            ENABLE_WEBGPU=false
+            ENABLE_DEBUG=false
             ENABLE_QWEN35=false
             ENABLE_GPT_OSS=false
             ENABLE_NEMOTRON_H=false
             ENABLE_NEMOTRON_NANO=false
             ENABLE_GLM4=false
             ENABLE_GEMMA4=false
+            ENABLE_DIFFUSION_GEMMA=false
             ENABLE_LLAMA4=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke test binary
+        run: docker run --rm --entrypoint agave agave:ci --help
 
   cross-compile-check:
     name: Cross-compilation matrix
@@ -140,18 +161,22 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - x86_64-linux
-          - aarch64-linux
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
           - aarch64-macos
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
+      - name: Read Zig version
+        id: zig
+        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Zig
         uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
         with:
-          version: ${{ env.ZIG_VERSION }}
+          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -159,24 +184,57 @@ jobs:
           path: |
             .zig-cache
             ~/.cache/zig
-          key: zig-${{ env.ZIG_VERSION }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: zig-${{ env.ZIG_VERSION }}-cross-${{ matrix.target }}-
+          key: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-
 
       - name: Build for target
         env:
           TARGET: ${{ matrix.target }}
         run: |
           FLAGS="-Dtarget=$TARGET"
-          # Metal is macOS-only and unavailable on Linux runners — disable for macOS cross-compile.
+          # Metal is macOS-only and unavailable on Linux runners; disable for macOS cross-compile.
           if [[ "$TARGET" == *"-macos" ]]; then
             FLAGS="$FLAGS -Denable-metal=false"
           fi
           zig build $FLAGS
 
+  fuzz-smoke:
+    name: Fuzz smoke (parsers + API surfaces)
+    needs: fmt-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Read Zig version
+        id: zig
+        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
+        with:
+          version: ${{ steps.zig.outputs.version }}
+
+      - name: Cache Zig build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-${{ steps.zig.outputs.version }}-fuzz-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-fuzz-
+
+      - name: Run bounded fuzz pass
+        # --fuzz=N runs coverage-guided mutation for N iterations then exits.
+        # Focus on untrusted-input surfaces (JSON, GGUF, image, grammar, CLI).
+        run: zig build test --fuzz=500 --summary all
+
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, fuzz-smoke]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:

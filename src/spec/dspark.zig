@@ -15,6 +15,8 @@ const math = std.math;
 
 /// Maximum draft block size (positions).
 pub const max_block: usize = 32;
+/// Floor/ceil epsilon when mapping confidence into logit space (avoids log(0)).
+const logit_clamp_eps: f32 = 1e-7;
 
 /// Pre-profiled steps-per-second table indexed by forward-pass batch size.
 /// Entry sps_table[B] = expected steps/sec for a batch of B tokens.
@@ -408,8 +410,7 @@ pub fn calibrateSts(
 /// Apply calibrated temperature to a raw confidence score.
 /// c_calibrated = σ(logit(c) / T) where logit(c) = log(c/(1-c)).
 fn calibratedConf(c: f32, temp: f32) f32 {
-    const eps = 1e-7;
-    const clamped = @max(eps, @min(1.0 - eps, c));
+    const clamped = @max(logit_clamp_eps, @min(1.0 - logit_clamp_eps, c));
     const logit = @log(clamped / (1.0 - clamped));
     return sigmoid(logit / temp);
 }

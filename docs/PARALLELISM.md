@@ -172,7 +172,7 @@ agave model.gguf --tp 2 --rank 0 "prompt"     # broadcasts beacon
 agave model.gguf --tp 2 --rank 1 "prompt"     # discovers rank 0
 ```
 
-Implemented in `src/parallel/discovery.zig`.
+Implemented in `src/parallel/peer_discovery.zig`.
 
 ---
 
@@ -199,7 +199,7 @@ Implemented in `src/parallel/discovery.zig`.
 | :--- | :--- |
 | `src/parallel/transport.zig` | Transport layer: TCP, shm, NCCL |
 | `src/parallel/tp.zig` | Tensor parallelism weight sharding and all-reduce logic |
-| `src/parallel/discovery.zig` | UDP peer discovery (LAN broadcast/join) |
+| `src/parallel/peer_discovery.zig` | UDP peer discovery (LAN broadcast/join) |
 | `src/main.zig` | CLI parsing, transport setup, NCCL wiring |
 | `src/models/qwen35.zig` | TP/PP model integration (sharding, all-reduce, send/recv) |
 | `src/backend/cuda.zig` | CUDA primary context, device pointer lookup for NCCL |

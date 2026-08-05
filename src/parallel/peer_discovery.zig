@@ -1,5 +1,9 @@
 //! Zero-config peer discovery via UDP broadcast.
 //!
+//! Distinct from `devices/discovery.zig` (local GPU/CPU enumeration for
+//! `--list-devices`). This module finds remote ranks on the LAN when `--peers`
+//! is omitted.
+//!
 //! When --peers is not specified, rank 0 broadcasts a beacon on the LAN
 //! and waits for rank 1+ to respond. Peers respond with their IP address.
 //! Eliminates manual --peers configuration for same-network setups.
@@ -137,9 +141,10 @@ test "discovery — join message format" {
 }
 
 test "discovery — function signatures exist" {
-    comptime {
-        _ = @TypeOf(discoverPeer);
-    }
+    // world_size < 2 must short-circuit without opening sockets.
+    try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(0, 0, 8080));
+    try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(0, 1, 8080));
+    try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 1, 8080));
 }
 
 test "discovery — beacon prefix detection" {
@@ -193,6 +198,16 @@ test "discovery — DiscoveredPeer edge addresses" {
 }
 
 test "discovery — private function signatures exist" {
+    // Join payload after prefix must parse as a rank integer.
+    const join_msg = "AGAVE-JOIN:3";
+    try std.testing.expect(std.mem.startsWith(u8, join_msg, join_prefix));
+    const rank_str = join_msg[join_prefix.len..];
+    const rank_val = try std.fmt.parseInt(u32, rank_str, 10);
+    try std.testing.expectEqual(@as(u32, 3), rank_val);
+
+    // Malformed join payload must fail parse (worker path ignores bad ranks).
+    try std.testing.expectError(error.InvalidCharacter, std.fmt.parseInt(u32, "not-a-rank", 10));
+
     comptime {
         _ = @TypeOf(discoverAsRank0);
         _ = @TypeOf(discoverAsWorker);

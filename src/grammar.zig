@@ -1066,6 +1066,14 @@ test "char repetition plus rejects zero matches" {
 
     // Cannot start with 'x' — need at least one digit first
     try std.testing.expect(state.acceptChar('x') == false);
+    try std.testing.expect(!state.isComplete());
+
+    // Valid path on a fresh state: one-or-more digits then literal x
+    var ok = try grammar.initState();
+    defer ok.deinit();
+    try std.testing.expect(ok.acceptChar('9'));
+    try std.testing.expect(ok.acceptChar('x'));
+    try std.testing.expect(ok.isComplete());
 }
 
 test "grouped repetition star" {

@@ -1,0 +1,151 @@
+{
+  "runId": "96ad5f94",
+  "agent": "reviewer",
+  "task": "Review the current unstaged diff in docs/tutorial/ for CORRECTNESS against the actual codebase.\n\nRun `git diff docs/tutorial/` to see the changes, then verify every claim against the source code:\n\n1. **Ch07 CLI flags table** — verify every flag name, short alias, and default value against src/main.zig. Check the grammar priority claim.\n2. **Ch22 CLI flags** — verify --tp, --pp, --rank, --peers, --transport, --disagg, --list-devices, --device against src/main.zig. Check that --transport default is correct (is it 'auto' or something else?). Check default port for --peers.\n3. **Ch23 server flags** — verify --serve, --port, --host, --api-key, --sleep-after, --max-batch-size, --no-kv-cache against src/main.zig. Check the default port (49453?), host (127.0.0.1?), and batch size (8?).\n4. **Ch02 Llama 4** — verify iRoPE pattern against src/models/llama4.zig: is `(layer_id + 1) % nope_interval == 0` correct? What is default_nope_interval? Is 'temperature scaling' the right term for Q scaling?\n5. **Ch06 Nemotron-H** — verify the layer counts (21 SSM, 4 attn, 17 FFN-only) against src/models/nemotron_h.zig.\n6. **Ch08 WASM** — verify the exported function names against src/wasm_entry.zig. Is the codegen bug claim current?\n7. **Ch00 pull** — verify `agave pull` syntax, the --quant and --list flags against src/main.zig and src/pull.zig.\n\nFor each item, state: CORRECT, INCORRECT (with the actual value), or UNVERIFIABLE.\n\nDo NOT edit any files.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/outputs/96ad5f94/parallel-0/0-reviewer/review.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 19,
+    "output": 9174,
+    "cacheRead": 266136,
+    "cacheWrite": 58813,
+    "cost": 0.7300942500000001,
+    "turns": 10
+  },
+  "model": "vertex-anthropic/claude-opus-4-6:high",
+  "attemptedModels": [
+    "vertex-anthropic/claude-opus-4-6:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "vertex-anthropic/claude-opus-4-6:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 19,
+        "output": 9174,
+        "cacheRead": 266136,
+        "cacheWrite": 58813,
+        "cost": 0.7300942500000001,
+        "turns": 10
+      }
+    }
+  ],
+  "durationMs": 174710,
+  "toolCount": 34,
+  "launchContractDigest": "ca11ebc023f241360de837d8d0d412ea99e04350ec5e77b244223d6d71a0b95f",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "30 claims verified against src/main.zig, src/models/llama4.zig, src/models/nemotron_h.zig, src/wasm_entry.zig, src/pull.zig. 2 issues found with file paths and severity."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git diff docs/tutorial/",
+          "result": "passed",
+          "summary": "Retrieved unstaged diff across 7 tutorial files"
+        },
+        {
+          "command": "grep/sed against src/main.zig, src/models/llama4.zig, src/models/nemotron_h.zig, src/wasm_entry.zig, src/pull.zig",
+          "result": "passed",
+          "summary": "Verified 30 factual claims; 28 correct, 1 incorrect, 1 source inconsistency"
+        }
+      ],
+      "validationOutput": [
+        "Ch07 CLI flags: all 17 flags, aliases, and defaults CORRECT (main.zig:342-358,676-811)",
+        "Ch22 distributed flags: all 8 flags and defaults CORRECT (main.zig:362-369)",
+        "Ch23 server flags: 6/7 CORRECT; --max-batch-size default=8 matches code but contradicts help text at main.zig:1663",
+        "Ch02 Llama 4 iRoPE: formula, interval, layer indices, temperature scaling term all CORRECT (llama4.zig:57,692-694)",
+        "Ch06 Nemotron-H: 21/4/17 layer counts and positions CORRECT (nemotron_h.zig:773-786)",
+        "Ch08 WASM: exports list INCOMPLETE — missing agave_alloc and agave_dealloc (wasm_entry.zig:189,195)",
+        "Ch00 pull: syntax, --quant, --list all CORRECT (pull.zig:3,248-249,312-334)"
+      ],
+      "residualRisks": [
+        "Ch08 WASM codegen bug claim is temporal ('currently blocked') and will go stale when fixed",
+        "main.zig:1663 has stale --max-batch-size default text ([default: 1] vs actual 8) — source bug independent of this doc diff"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Adds CLI quick-reference tables to Ch07/Ch22/Ch23, iRoPE details to Ch02, Nemotron-H layer pattern to Ch06, WASM export list to Ch08, and pull subcommand examples to Ch00",
+      "reviewFindings": [
+        "blocker: docs/tutorial/08-backends.md - WASM exports list omits agave_alloc and agave_dealloc (wasm_entry.zig exports 6 functions, doc lists 4)",
+        "warning: docs/tutorial/23-server-http-api.md - --max-batch-size default=8 is correct per code but contradicts --help output at main.zig:1663 which says default=1 (source code bug)",
+        "info: docs/tutorial/08-backends.md - codegen bug claim is temporal and will silently go stale"
+      ],
+      "manualNotes": "Recommend fixing main.zig:1663 help text (change [default: 1] to [default: 8]) alongside this doc change to avoid user confusion. The WASM export omission should be fixed before merging."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "/Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/96ad5f94_reviewer_0_transcript.jsonl",
+  "timestamp": 1785855563005
+}

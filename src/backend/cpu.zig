@@ -1210,11 +1210,16 @@ test "detectSystemMem — returns non-zero" {
 
 test "detectCacheSizes — returns reasonable values" {
     const caches = detectCacheSizes();
-    // On modern CPUs, at least L1 should be non-zero (typically 32K-128K).
-    // Some VMs may report 0, so we just check it doesn't crash.
-    _ = caches.l1;
-    _ = caches.l2;
-    _ = caches.l3;
+    // Values are either zero (unavailable) or within plausible CPU cache bounds.
+    const max_l1: usize = 1 * mb_to_bytes;
+    const max_l2: usize = 64 * mb_to_bytes;
+    const max_l3: usize = 512 * mb_to_bytes;
+    try std.testing.expect(caches.l1 <= max_l1);
+    try std.testing.expect(caches.l2 <= max_l2);
+    try std.testing.expect(caches.l3 <= max_l3);
+    if (caches.l1 > 0 and caches.l2 > 0) {
+        try std.testing.expect(caches.l2 >= caches.l1);
+    }
 }
 
 test "detectOsVersion — returns non-empty string" {
@@ -1230,9 +1235,12 @@ test "detectOsVersion — returns non-empty string" {
 
 test "detectAvailMem — returns something" {
     const avail = detectAvailMem();
-    // Available memory should be non-zero on a running system.
-    // Some constrained environments might have very little, so just check it doesn't crash.
-    _ = avail;
+    if (comptime builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        // Running hosts expose a positive available-memory estimate.
+        try std.testing.expect(avail > 0);
+        // Sanity upper bound: less than 16 PiB (guards against unit mistakes).
+        try std.testing.expect(avail < (@as(usize, 16) << 50));
+    }
 }
 
 test "parallel constants — values are reasonable" {

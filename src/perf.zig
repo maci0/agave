@@ -17,13 +17,13 @@ const percent_scale: f64 = 100.0;
 /// Stderr file handle via std.Io.File (Zig 0.16 idiom).
 const stderr_file = if (is_freestanding) {} else Io.File.stderr();
 
-/// Nanosecond timestamp via clock_gettime.
-/// Uses raw C call directly for minimal overhead in the hot profiling path,
-/// avoiding Io virtual dispatch.
+/// Nanosecond timestamp via CLOCK_MONOTONIC.
+/// Interval timing must not use REALTIME (NTP/step adjustments corrupt deltas).
+/// Raw C call avoids Io virtual dispatch on the profiling hot path.
 fn nanoTimestamp() i128 {
     if (comptime is_freestanding) return 0;
     var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 

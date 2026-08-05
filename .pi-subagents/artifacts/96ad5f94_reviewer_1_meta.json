@@ -1,0 +1,155 @@
+{
+  "runId": "96ad5f94",
+  "agent": "reviewer",
+  "task": "Review the current unstaged diff in docs/tutorial/ for STYLE CONSISTENCY with the existing tutorial conventions.\n\nRun `git diff docs/tutorial/` to see the changes, then check each addition against the established patterns in the surrounding chapters:\n\n1. **Section heading level** — do new sections use the right ## / ### level relative to neighbors?\n2. **Table format** — do new tables match the column style of existing tables in the same chapter?\n3. **Code block format** — are bash examples consistent (backtick fencing, language tag)?\n4. **Bold inline definitions** — are new terms bolded on first use with inline parenthetical definitions, matching the tutorial style?\n5. **Cross-references** — do source file references use the `[src/file.zig](../../src/file.zig)` link pattern?\n6. **Placement** — are new sections placed logically (e.g., CLI references before Gotchas, not after)?\n7. **Tone** — does the new content match the concise, systems-programmer voice of the surrounding text?\n8. **Glossary** — should any newly introduced terms be added to the chapter's glossary?\n\nList specific issues with file:line references. Do NOT edit any files.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/outputs/96ad5f94/parallel-0/1-reviewer/review.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 23,
+    "output": 8492,
+    "cacheRead": 453575,
+    "cacheWrite": 48807,
+    "cost": 0.74424625,
+    "turns": 14
+  },
+  "model": "vertex-anthropic/claude-opus-4-6:high",
+  "attemptedModels": [
+    "vertex-anthropic/claude-opus-4-6:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "vertex-anthropic/claude-opus-4-6:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 23,
+        "output": 8492,
+        "cacheRead": 453575,
+        "cacheWrite": 48807,
+        "cost": 0.74424625,
+        "turns": 14
+      }
+    }
+  ],
+  "durationMs": 188320,
+  "toolCount": 39,
+  "launchContractDigest": "222de2885206aa58984c8757c4f367fa852b12c7c5bf00ab2c4e3f8f53a140a1",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "7 specific findings with file paths and severity (2 MAJOR, 5 MINOR), all with line references and inline annotations quoting exact text"
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git diff docs/tutorial/",
+          "result": "passed",
+          "summary": "7 files changed: 00-getting-started.md, 02-the-transformer.md, 06-state-space-models.md, 07-sampling.md, 08-backends.md, 22-distributed-inference.md, 23-server-http-api.md"
+        },
+        {
+          "command": "ls -la src/pull.zig src/wasm_entry.zig src/models/llama4.zig src/models/nemotron_h.zig",
+          "result": "passed",
+          "summary": "All 4 cross-referenced source files exist on disk"
+        }
+      ],
+      "validationOutput": [
+        "W1 MAJOR: Ch22 CLI table has 3 columns vs 4 in Ch07/Ch23",
+        "W2 MAJOR: Ch22 Note blockquote duplicates first Gotcha nearly verbatim; blockquote format unused elsewhere",
+        "W3 MINOR: Ch08 WASM entry omits source file from bold title parenthetical",
+        "W4 MINOR: Ch00 pull block interrupts artifact→format-detection flow",
+        "W5 MINOR: Missing glossary entries for iRoPE, NoPE, chunked attention, FFN-only layer, WASM",
+        "W6 MINOR: Ch22 has ### Examples subheading not used in Ch07/Ch23",
+        "W7 MINOR: Ch02 iRoPE paragraph is 4 sentences vs single-sentence variant pattern"
+      ],
+      "residualRisks": [
+        "Q1: --list-devices and --device flags may belong in Ch08 rather than (or in addition to) Ch22",
+        "Q2: Nemotron-H 8B layer pattern (21+4+17=42) is hardcoded detail that may become stale"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Adds CLI quick-reference tables (Ch07, Ch22, Ch23), pull subcommand docs (Ch00), iRoPE/chunked attention variant (Ch02), Nemotron-H Mamba-2 paragraph (Ch06), and Browser/WASM backend entry (Ch08)",
+      "reviewFindings": [
+        "MAJOR: 22-distributed-inference.md:~114 - CLI table uses 3 columns; Ch07/Ch23 use 4 (missing Short column)",
+        "MAJOR: 22-distributed-inference.md:~150 - Note blockquote duplicates first Gotcha; blockquote format is non-standard",
+        "MINOR: 08-backends.md:~396 - WASM entry omits source file from bold title parenthetical",
+        "MINOR: 00-getting-started.md:~16 - pull block interrupts artifact format-detection flow",
+        "MINOR: 02-the-transformer.md, 06-state-space-models.md, 08-backends.md - Missing glossary entries for 5+ new terms",
+        "MINOR: 22-distributed-inference.md:~125 - ### Examples subheading inconsistent with Ch07/Ch23",
+        "MINOR: 02-the-transformer.md:~455 - iRoPE paragraph breaks single-sentence variant pattern"
+      ],
+      "manualNotes": "No fatal issues. The 2 MAJOR issues are quick fixes (add column, delete duplicate). All source file cross-references verified on disk."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "/Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/96ad5f94_reviewer_1_transcript.jsonl",
+  "timestamp": 1785855576615
+}

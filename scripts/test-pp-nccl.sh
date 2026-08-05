@@ -7,7 +7,7 @@
 #
 # Start rank 1 FIRST (downstream), then rank 0.
 
-set -e
+set -euo pipefail
 
 RANK=${1:?Usage: $0 <rank> <peer_ip> <model_path>}
 PEER=${2:?Missing peer IP}

@@ -150,14 +150,17 @@ test "Prefetcher — constants" {
 }
 
 test "Prefetcher — initial state" {
-    // Can't fully construct without a TieredKvCache, but we can check
-    // that the struct fields have correct default values.
-    comptime {
-        _ = @TypeOf(Prefetcher.init);
-        _ = @TypeOf(Prefetcher.start);
-        _ = @TypeOf(Prefetcher.deinit);
-        _ = @TypeOf(Prefetcher.prefetchNext);
-    }
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 1, 1, 0, 16, null);
+    defer cache.deinit();
+
+    const pref = Prefetcher.init(&cache);
+    try std.testing.expectEqual(@as(usize, 0), pref.ring_head);
+    try std.testing.expectEqual(@as(usize, 0), pref.ring_len);
+    try std.testing.expectEqual(@as(u32, 0), pref.generation.load(.monotonic));
+    try std.testing.expectEqual(false, pref.shutdown.load(.monotonic));
+    try std.testing.expect(pref.thread == null);
+    try std.testing.expect(pref.cache == &cache);
 }
 
 test "Prefetcher — ring buffer size matches max_queue_size" {
@@ -174,24 +177,18 @@ test "Prefetcher — struct size is reasonable" {
 }
 
 test "Prefetcher — default field values" {
-    // Verify that zero-initialized fields have correct defaults without
-    // needing a real TieredKvCache. Use @offsetOf to confirm fields exist
-    // and check default values via comptime struct inspection.
-    try std.testing.expectEqual(@as(usize, 0), @as(usize, 0)); // ring_head default
-    try std.testing.expectEqual(@as(usize, 0), @as(usize, 0)); // ring_len default
+    // Construct via init and assert defaults on a live instance (not tautological 0==0).
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 1, 1, 0, 16, null);
+    defer cache.deinit();
 
-    // Verify atomic defaults: generation starts at 0, shutdown starts at false.
-    const gen_default = std.atomic.Value(u32).init(0);
-    try std.testing.expectEqual(@as(u32, 0), gen_default.raw);
+    const pref = Prefetcher.init(&cache);
+    try std.testing.expectEqual(@as(usize, 0), pref.ring_head);
+    try std.testing.expectEqual(@as(usize, 0), pref.ring_len);
+    try std.testing.expectEqual(@as(u32, 0), pref.generation.raw);
+    try std.testing.expectEqual(false, pref.shutdown.raw);
+    try std.testing.expectEqual(@as(?std.Thread, null), pref.thread);
 
-    const shutdown_default = std.atomic.Value(bool).init(false);
-    try std.testing.expectEqual(false, shutdown_default.raw);
-
-    // thread defaults to null.
-    const thread_default: ?std.Thread = null;
-    try std.testing.expectEqual(@as(?std.Thread, null), thread_default);
-
-    // Confirm field offsets exist (compile-time struct shape validation).
     comptime {
         _ = @offsetOf(Prefetcher, "ring_head");
         _ = @offsetOf(Prefetcher, "ring_len");

@@ -1532,11 +1532,21 @@ test "fuzz: GGUF fromBuffer no crash" {
     const gguf = @import("format/gguf.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            var buf: [256]u8 = undefined;
+            var buf: [512]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
-            const len = smith.indexWithHash(buf.len, 1) + 24; // at least min header size
+            // Structure-aware path: plant GGUF magic + version, mutate the rest so
+            // metadata/tensor parsing is reached instead of failing at magic check.
+            if (smith.valueWithHash(u8, 2) & 1 == 0) {
+                std.mem.writeInt(u32, buf[0..4], 0x46554747, .little); // "GGUF"
+                std.mem.writeInt(u32, buf[4..8], 3, .little);
+                // tensor_count / kv_count: keep small to avoid DoS-sized allocations
+                const n_tensors: u64 = smith.valueWithHash(u8, 3) % 4;
+                const n_kv: u64 = smith.valueWithHash(u8, 4) % 8;
+                std.mem.writeInt(u64, buf[8..16], n_tensors, .little);
+                std.mem.writeInt(u64, buf[16..24], n_kv, .little);
+            }
+            const len = smith.indexWithHash(buf.len - 23, 1) + 24; // at least min header
             const effective_len = @min(len, buf.len);
-            // Must not crash — just return error for invalid data
             var g = gguf.GGUFFile.fromBuffer(std.testing.allocator, buf[0..effective_len]) catch return;
             defer g.deinit();
         }
@@ -1937,10 +1947,8 @@ test "fuzz: extractFloatField no crash" {
             const len = smith.indexWithHash(buf.len + 1, 1);
             const fields = [_][]const u8{ "temperature", "top_p", "frequency_penalty", "presence_penalty" };
             inline for (fields) |field| {
-                if (json.extractFloatField(buf[0..len], field)) |v| {
-                    // If extracted, must be a valid f32 or NaN
-                    _ = v;
-                }
+                // May return Inf for extreme exponents; callers clamp via isFinite
+                _ = json.extractFloatField(buf[0..len], field);
             }
         }
     }.f, .{});
@@ -2755,7 +2763,8 @@ test "fuzz: dequantToF32 all supported dtypes" {
     const quant = @import("ops/quant.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            // dequantToF32 supports: f32, bf16, f16, q8_0, q4_0
+            // dequantToF32 supports: f32, bf16, f16, q8_0, q4_0, iq4_nl, iq4_xs
+            // (IQ2/IQ3/IQ1 and other dtypes zero the buffer; not exercised here)
             const variant = smith.indexWithHash(5, 0);
             switch (variant) {
                 0 => {
@@ -3066,6 +3075,109 @@ test "fuzz: Recipe match + applyDefaults cycle" {
                 try std.testing.expect(std.math.isFinite(applied.temperature));
                 try std.testing.expect(std.math.isFinite(applied.top_p));
                 try std.testing.expect(applied.top_k <= 1024);
+            }
+        }
+    }.f, .{});
+}
+
+// ── High-risk untrusted-input surfaces (vision + nested API JSON) ──
+
+test "fuzz: nested chat/completions JSON messages + tools" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            // Structure-aware: wrap mutated payloads in the shapes the HTTP API expects
+            // so extractMessages / parseTools / parseSampling reach nested paths.
+            var inner: [192]u8 = undefined;
+            smith.bytesWithHash(&inner, 0);
+            const inner_len = smith.indexWithHash(inner.len + 1, 1);
+            // Sanitize to printable ASCII, excluding " and \ so the JSON wrapper stays valid
+            for (inner[0..inner_len]) |*b| {
+                var c: u8 = 0x20 + (b.* % 0x5f);
+                if (c == '"' or c == '\\') c = 'x';
+                b.* = c;
+            }
+
+            var body: [512]u8 = undefined;
+            const n = std.fmt.bufPrint(&body,
+                \\{{"model":"m","temperature":{d},"messages":[{{"role":"user","content":"{s}"}}],"tools":[{{"type":"function","function":{{"name":"{s}"}}}}],"stream":true}}
+            , .{
+                @as(f32, @floatFromInt(smith.valueWithHash(u8, 2))) / 64.0,
+                inner[0 .. @min(inner_len, 64)],
+                inner[0 .. @min(inner_len, 32)],
+            }) catch return;
+
+            const s = json.parseSampling(body[0..n.len]);
+            try std.testing.expect(std.math.isFinite(s.temperature) and s.temperature >= 0);
+            try std.testing.expect(std.math.isFinite(s.top_p));
+
+            const tools = json.parseTools(body[0..n.len]);
+            try std.testing.expect(tools.tool_count <= 16);
+
+            if (json.extractMessages(body[0..n.len], std.testing.allocator)) |msgs| {
+                var m = msgs;
+                defer m.deinit(std.testing.allocator);
+                try std.testing.expect(m.messages.len <= 128);
+            }
+            _ = json.extractLastMessage(body[0..n.len]);
+            _ = json.extractJsonImage(body[0..n.len]);
+        }
+    }.f, .{});
+}
+
+test "fuzz: vision form/json image extract + base64 + decode" {
+    const image_mod = @import("image.zig");
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // Build fake image bytes (PNG-shaped or random), base64-encode, embed in API bodies
+            var raw: [96]u8 = undefined;
+            smith.bytesWithHash(&raw, 0);
+            if (smith.valueWithHash(u8, 1) & 1 == 0) {
+                const sig = [_]u8{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
+                @memcpy(raw[0..8], &sig);
+            }
+            const raw_len = smith.indexWithHash(raw.len - 7, 2) + 8;
+
+            var b64_buf: [256]u8 = undefined;
+            const enc = std.base64.standard.Encoder;
+            const b64_len = enc.calcSize(raw_len);
+            if (b64_len > b64_buf.len) return;
+            _ = enc.encode(b64_buf[0..b64_len], raw[0..raw_len]);
+
+            // OpenAI-style JSON body
+            var json_body: [400]u8 = undefined;
+            const jn = std.fmt.bufPrint(&json_body,
+                \\{{"messages":[{{"role":"user","content":[{{"type":"image_url","image_url":{{"url":"data:image/png;base64,{s}"}}}}]}}]}}
+            , .{b64_buf[0..b64_len]}) catch return;
+            const extracted = json.extractJsonImage(json_body[0..jn.len]);
+            if (extracted) |b64| {
+                // Mirror processVisionImage decode path (without vision encoder)
+                const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(b64) catch return;
+                const image_bytes = allocator.alloc(u8, decoded_size) catch return;
+                defer allocator.free(image_bytes);
+                std.base64.standard.Decoder.decode(image_bytes, b64) catch return;
+                switch (image_mod.detectFormat(image_bytes)) {
+                    .png => {
+                        var png = image_mod.decodePng(allocator, image_bytes) catch return;
+                        defer png.deinit();
+                        try std.testing.expect(png.pixels.len == @as(usize, png.width) * png.height * 3);
+                    },
+                    .ppm => {
+                        const ppm = image_mod.decodePpm(image_bytes) catch return;
+                        try std.testing.expect(ppm.pixels.len == @as(usize, ppm.width) * ppm.height * 3);
+                    },
+                    .jpeg, .unknown => {},
+                }
+            }
+
+            // Form-encoded image field (URL-encoded base64 marker path)
+            var form_body: [400]u8 = undefined;
+            const fn_written = std.fmt.bufPrint(&form_body, "message=hi&image=data%3Aimage%2Fpng%3Bbase64%2C{s}&stream=1", .{b64_buf[0..b64_len]}) catch return;
+            if (json.extractFormImage(form_body[0..fn_written.len])) |form_b64| {
+                const url_decoded = json.urlDecode(allocator, form_b64) catch return;
+                defer allocator.free(url_decoded);
+                try std.testing.expect(url_decoded.len <= form_b64.len);
             }
         }
     }.f, .{});

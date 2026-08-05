@@ -100,6 +100,18 @@ pub const SharedNgramPool = struct {
         self.mu.unlock();
     }
 
+    /// Wipe shared token history so prior requests' tokens are not retained
+    /// across idle periods or explicit clear. Zeros the used region before
+    /// resetting length.
+    pub fn clear(self: *SharedNgramPool) void {
+        self.lock();
+        defer self.unlock();
+        if (self.len > 0) {
+            @memset(self.history[0..self.len], 0);
+            self.len = 0;
+        }
+    }
+
     /// Record a generated token into the shared pool (called by every server slot).
     pub fn push(self: *SharedNgramPool, token: u32) void {
         self.lock();
@@ -128,13 +140,16 @@ pub const SharedNgramPool = struct {
 
         var best_pos: usize = 0;
         var best_len: usize = 0;
+        // hist.len - 1: need ≥1 token after a match to draft from.
         const max_n = @min(max_ngram, @min(tail.len, hist.len - 1));
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
             const pat = tail[tail.len - n ..];
-            const end = hist.len - n;
+            // Tail is an external query (not hist's own suffix), so search every
+            // alignment that leaves at least one continuation token.
+            // (Unlike SuffixState, which must exclude a self-match at the end.)
             var pos: usize = 0;
-            while (pos + n <= end) : (pos += 1) {
+            while (pos + n < hist.len) : (pos += 1) {
                 if (std.mem.eql(u32, hist[pos .. pos + n], pat)) {
                     best_pos = pos + n;
                     best_len = n;
@@ -182,7 +197,10 @@ pub const SuffixState = struct {
     }
 
     pub fn deinit(self: *SuffixState) void {
+        @memset(self.history, 0);
+        self.len = 0;
         self.allocator.free(self.history);
+        self.history = &.{};
     }
 
     /// Add a generated token to the suffix cache.
@@ -269,6 +287,27 @@ test "suffix no match" {
     var draft: [4]u32 = undefined;
     const n = s.propose(&draft);
     try std.testing.expect(n == 0);
+}
+
+test "shared pool clear zeros history" {
+    var pool = SharedNgramPool{};
+    for ([_]u32{ 10, 20, 30, 40, 50 }) |t| pool.push(t);
+    try std.testing.expect(pool.len == 5);
+    pool.clear();
+    try std.testing.expect(pool.len == 0);
+    for (pool.history[0..5]) |v| try std.testing.expect(v == 0);
+}
+
+test "shared pool propose finds late alignment" {
+    // Regression: search used `pos + n <= hist.len - n`, which skipped the only
+    // valid match near the end of a short history (e.g. pattern at index 3 of 7).
+    var pool = SharedNgramPool{};
+    for ([_]u32{ 1, 2, 3, 4, 5, 6, 7 }) |t| pool.push(t);
+    const tail = [_]u32{ 4, 5, 6 }; // min_ngram = 3
+    var draft: [4]u32 = undefined;
+    const n = pool.propose(&tail, 2, &draft);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqual(@as(u32, 7), draft[0]);
 }
 
 test "fuzz: SuffixState" {

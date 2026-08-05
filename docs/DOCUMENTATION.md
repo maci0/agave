@@ -23,7 +23,7 @@ A progressive tutorial series that builds understanding layer by layer:
 14. [Format Conventions](tutorial/14-format-conventions.md) — GGUF vs SafeTensors, tensor layout
 15. [Chat Templates](tutorial/15-chat-templates.md) — data-driven role markers, EOG tokens
 16. [Recipe System](tutorial/16-recipe-system.md) — per-model/hardware defaults, user overrides
-17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md) — 12 modes: DDTree, self-spec, n-gram, suffix, lookahead, EAGLE, EAGLE-3, MLP Speculator, Medusa, MTP, FR-Spec, shared pools
+17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md) — 14 modes: auto, standard, DDTree, self-spec, n-gram, suffix, lookahead, MTP/Medusa, EAGLE, EAGLE-3, MLP Speculator, PFlash, DSpark (plus FR-Spec vocab map)
 18. [Multi-Token Prediction](tutorial/18-multi-token-prediction.md) — MTP heads, +1 offset norm, draft/verify loop
 19. [PFlash and Block Sparse Attention](tutorial/19-pflash-and-block-sparse.md) — block sparsity, speculative prefill, alpha tuning, scoring models, PFlash+DDTree composition
 20. [Diffusion Language Models](tutorial/20-diffusion-lm.md) — DiffusionGemma, block diffusion, uniform state diffusion, bidirectional canvas attention, confidence-based acceptance, block autoregressive chaining
@@ -43,13 +43,13 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 ## Product Documentation
 
 - **[HTTP API](API.md)** — server endpoints, sampling parameters, structured output, streaming
-- **[Architecture](ARCHITECTURE.md)** — project structure, module reference, inference pipeline
+- **[Architecture](ARCHITECTURE.md)**: project structure, Design Decisions table, module reference, inference pipeline
 - **[Models](MODELS.md)** — supported models, parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)** — per-backend kernel implementation status
 - **[Megakernel System](MEGAKERNEL.md)** — three-tier megakernel architecture (fused FFN, true megakernels, composed megakernels)
 - **[Benchmarks](BENCHMARKS.md)** — performance data across models, backends, and quantization types
-- **[Contributing](CONTRIBUTING.md)** — how to add backends, models, quantization, megakernels, chat templates
+- **[Contributing](CONTRIBUTING.md)** — how to add backends, models, quantization, megakernels, chat templates; [versioning & releases](CONTRIBUTING.md#versioning--releases) (0.x SemVer, changelog, deprecation, support/lifecycle)
 - **[Test Matrix](TEST_MATRIX.md)** — model × backend test status and known issues
 - **[Parallelism](PARALLELISM.md)** — distributed inference: TP, PP, NCCL, transports
 - **[TODO & Roadmap](TODO.md)** — bugs, roadmap, design notes
-- **[Changelog](../CHANGELOG.md)** — release history and feature summaries
+- **[Changelog](../CHANGELOG.md)** — user-facing release history (product version 0.1.0)

@@ -15,16 +15,11 @@ const Io = if (is_freestanding) struct {
     pub const File = void;
 } else std.Io;
 const SsdFile = if (is_freestanding) void else Io.File;
+const sim_clock = @import("../sim_clock.zig");
 
-/// Millisecond timestamp via raw C call (avoids Io dispatch in hot path).
+/// Millisecond timestamp (injectable via sim_clock; 0 on freestanding).
 fn milliTimestamp() i64 {
-    if (comptime is_freestanding) {
-        return 0;
-    } else {
-        var ts: std.posix.timespec = undefined;
-        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
-    }
+    return sim_clock.milliNow();
 }
 const Allocator = std.mem.Allocator;
 
@@ -854,7 +849,11 @@ test "TieredKvCache batchPromoteToVram empty list" {
     var cache = try TieredKvCache.init(allocator, 1, 2, 2, 1, 0, 16, null);
     defer cache.deinit();
 
+    const vram_before = cache.vram_used.load(.monotonic);
+    const ram_before = cache.ram_used.load(.monotonic);
     try cache.batchPromoteToVram(&[_]u32{});
+    try std.testing.expectEqual(vram_before, cache.vram_used.load(.monotonic));
+    try std.testing.expectEqual(ram_before, cache.ram_used.load(.monotonic));
 }
 
 test "TieredKvCache block_bytes calculation" {

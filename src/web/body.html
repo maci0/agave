@@ -20,7 +20,7 @@
 <h2 class="sidebar-title">Chats</h2>
 <button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 </div>
-<div class="conv-list" id="conv-list" role="list" aria-label="Conversations"><div class="conv-empty">No conversations yet</div></div>
+<div class="conv-list" id="conv-list" role="list" aria-label="Conversations"><div class="conv-empty">No conversations yet.<br>Use <strong>+ New</strong> to start.</div></div>
 </aside>
 <main class="main">
 <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
@@ -56,17 +56,19 @@
 <h3>Shortcuts</h3>
 <div class="info-row"><span class="info-label">Send</span><span class="info-val"><kbd>Enter</kbd></span></div>
 <div class="info-row"><span class="info-label">New line</span><span class="info-val"><kbd>Shift+Enter</kbd></span></div>
-<div class="info-row"><span class="info-label">Stop</span><span class="info-val"><kbd>Escape</kbd></span></div>
+<div class="info-row"><span class="info-label">Stop / close</span><span class="info-val"><kbd>Escape</kbd></span></div>
 </div>
 </div>
 </div>
 <div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 <form id="chat-form" onsubmit="return onSubmit(event)" aria-label="Chat">
 <div id="img-preview" class="img-preview" style="display:none">
+<div class="img-preview-inner">
 <img id="img-thumb" alt="Attached image preview">
 <button type="button" class="img-remove" onclick="removeImage()" aria-label="Remove image" title="Remove image">&times;</button>
 </div>
-<div class="settings-panel" id="settings-panel" role="region" aria-label="Sampling settings">
+</div>
+<div class="settings-panel" id="settings-panel" role="region" aria-label="Sampling settings" hidden>
 <div class="settings-grid">
 <div class="setting-group">
 <label for="temperature">Temperature <span class="setting-val" id="temp-val">0.0</span></label>
@@ -87,8 +89,8 @@
 </div>
 </div>
 <div class="input-row">
-<input type="file" id="img-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" onchange="onImageSelect(event)">
-<button type="button" class="hdr-btn img-btn" onclick="document.getElementById('img-input').click()" title="Attach image" aria-label="Attach image">&#128247;</button>
+<input type="file" id="img-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" aria-label="Attach image" onchange="onImageSelect(event)">
+<button type="button" class="hdr-btn img-btn" id="img-btn" onclick="document.getElementById('img-input').click()" title="Attach image" aria-label="Attach image">&#128247;</button>
 <textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" autofocus dir="auto"></textarea>
 <button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Toggle settings panel" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
 <button type="submit" class="send-btn" id="send-btn" title="Send message (Enter)" aria-label="Send message">Send</button>

@@ -1,5 +1,8 @@
 /**
- * Agave WASM inference engine — JavaScript glue layer.
+ * Agave WASM browser inference glue (`web/`), not the HTTP chat UI.
+ *
+ * The server chat UI lives in `src/web/` and is embedded by `server.zig`.
+ * This file pairs with `web/index.html` and `agave.wasm` for in-browser runs.
  *
  * Usage:
  *   const agave = new AgaveEngine();

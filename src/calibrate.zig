@@ -178,6 +178,7 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
             result.output = val;
         } else if (arg.len > 0 and arg[0] == '-') {
             eprint("Error: unknown option '{s}'\n", .{arg});
+            eprint("  Valid options: --help, --version, --tokens, --output\n", .{});
             eprint("Run 'agave calibrate --help' for more information.\n", .{});
             std.process.exit(2);
         } else {

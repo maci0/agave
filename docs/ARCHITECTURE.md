@@ -39,7 +39,8 @@ agave/
 │   │   ├── scheduler.zig  # Continuous batching request scheduler
 │   │   ├── metrics.zig    # Prometheus metrics collector
 │   │   ├── rate_limiter.zig # Token bucket rate limiter
-│   │   └── json.zig        # JSON field extraction, encoding, and form-parsing
+│   │   ├── json.zig        # JSON field extraction, encoding, and form-parsing
+│   │   └── fixed_buf_stream.zig # Allocation-free fixed buffer writer (server responses)
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
 │   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS, Llama 4)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo
@@ -47,6 +48,7 @@ agave/
 │   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
+│   ├── sim_clock.zig      # Injectable wall clock (deterministic tests / future sim harness)
 │   ├── perf.zig           # Performance timer utilities
 │   ├── readline.zig       # Line editor for interactive REPL
 │   ├── term.zig           # Terminal I/O: key parser, ANSI sequences, display width (pure Zig, no libc)
@@ -59,7 +61,6 @@ agave/
 │   │   ├── gguf.zig       # GGUF v2/v3 parser with mmap
 │   │   └── safetensors.zig# Multi-shard SafeTensors loader with config.json
 │   ├── lora.zig           # LoRA adapter load + merge at model load time
-│   ├── pull.zig           # HuggingFace Hub model download (`agave pull`)
 │   ├── models/
 │   │   ├── model.zig      # Model interface (forward, prefill, resetCache, cancel)
 │   │   ├── gemma3.zig     # Gemma 3 (GQA, GELU, post-norms)
@@ -107,13 +108,15 @@ agave/
 │   ├── parallel/
 │   │   ├── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
 │   │   ├── tp.zig         # CPU tensor parallelism coordinator (rank-0 only; GPU TP uses NCCL via transport.zig)
-│   │   └── discovery.zig  # UDP peer discovery (LAN broadcast, auto-connect)
+│   │   └── peer_discovery.zig # UDP peer discovery (LAN broadcast, auto-connect; not devices/discovery)
 │   ├── spec/
 │   │   ├── spec_decode.zig # Speculative decoding orchestrator (draft, verify, accept)
 │   │   ├── ddtree.zig     # DDTree tree construction (best-first heap, compile, walk)
-│   │   └── ngram.zig      # N-gram speculative decoding (history-based, no draft model)
+│   │   ├── ngram.zig      # N-gram / suffix / lookahead (history-based, no draft model)
+│   │   ├── pflash.zig     # PFlash speculative prefill (block scoring, alpha threshold)
+│   │   └── dspark.zig     # DSpark confidence-scheduled verification (trim + SPS)
 │   ├── devices/
-│   │   └── discovery.zig  # GPU device enumeration (--list-devices, --device N)
+│   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; not peer discovery)
 │   ├── kvcache/
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
@@ -127,7 +130,25 @@ agave/
 │   └── tokenizer/
 │       ├── tokenizer.zig  # Tokenizer interface
 │       └── bpe.zig        # BPE + SPM tokenizer with byte-level encoding
+├── web/                   # Browser WASM shell (distinct from src/web server chat UI)
+│   ├── index.html         # Standalone WASM demo page
+│   └── agave.js           # JS glue for agave.wasm (AgaveEngine)
 ```
+
+## Design Decisions
+
+Irreversible or high-cost choices. Rationale lives here so they are not re-litigated casually.
+
+| Decision | Choice | Why | Revisit when |
+|----------|--------|-----|--------------|
+| Dependencies | Zero external ML or CLI libs; pure Zig + OS GPU APIs | Hot-path control, cross-compile, no ABI churn | A platform requires a vendor SDK that cannot be `dlopen`'d |
+| Backend dispatch | Tagged union + `inline else` (not vtable) | Zero indirect-call cost on every GEMV/SDPA | Dynamic plugin backends become a hard requirement |
+| Model dispatch | Comptime-generated vtable (`Model.from`) | Architectures differ too much for one tagged union; optional methods (EAGLE, MTP, SSM snapshot) need soft no-ops | VTable surface exceeds ~40 methods and most models leave half unused |
+| Quantization | Dequant inside kernels; no full f32 weight materialization on hot path | Bandwidth-bound decode; full dequant would dominate | A backend cannot express in-kernel dequant for a new format |
+| Wall clock | `sim_clock` for server/scheduler/rate-limiter/tiered KV; MONOTONIC for interval timers (`perf`, `pull`, benches) | One injectable clock for deterministic timeout/refill tests; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks |
+| Device discovery `BackendKind` | `cpu/metal/cuda/rocm/vulkan` only (no `webgpu`) | `--list-devices` / TP-PP target discrete GPUs; WebGPU is a single logical adapter (browser or wgpu), not multi-device topology | WebGPU multi-adapter or peer groups become real |
+| Server sleep mode | Flag in `/health` only; weights stay resident | Orchestrators need an idle signal without cold-start latency | Memory pressure requires actual weight unload / sleep-to-disk |
+| GPU missing kernels | `@panic` (fail closed), except documented cases (`embLookup`, small Metal softmax) | Silent CPU fallback hides broken builds and destroys latency | A new op is proven faster on CPU on UMA (must comment why) |
 
 ## The Inference Pipeline
 
@@ -306,7 +327,7 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 
 ### Speculative Decoding (`src/spec/`)
 
-Agave supports 12 speculative decoding modes via `--spec-mode`:
+Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`):
 
 | Module | Description |
 |--------|-------------|
@@ -324,6 +345,7 @@ Agave supports 12 speculative decoding modes via `--spec-mode`:
 
 | `--spec-mode` | Draft source | Draft model required? |
 |---|---|---|
+| `auto` | DDTree with `--draft-model`, else n-gram | Conditional |
 | `standard` | Separate draft model, greedy | Yes |
 | `ddtree` | Separate draft model, tree-based | Yes |
 | `self` | Target model with layer skip | No |
@@ -333,6 +355,7 @@ Agave supports 12 speculative decoding modes via `--spec-mode`:
 | `mtp` | Built-in MTP prediction heads | No (in model) |
 | `medusa` | Built-in Medusa MLP heads (MTP alias) | No (in model) |
 | `eagle` | Hidden-state conditioned draft (chained) | Yes |
+| `eagle3` | Pre-output-norm hidden-state conditioned draft | Yes |
 | `mlp` | Hidden-state conditioned draft (frozen) | Yes |
 | `pflash` | Block-scored speculative prefill | Yes |
 | `dspark` | Confidence-scheduled verification (any drafter) | Optional |
@@ -481,7 +504,7 @@ DDTree speculative decode -> output tokens
 - KV cache is organized into 16-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
 - `PagedKvView` provides block table indirection, translating logical token positions to physical block locations.
 - `sdpaPagedHeads` computes attention over paged blocks with thread-pool parallelism across heads.
-- CPU backend has a native paged SDPA kernel; GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) dispatch through `Backend.sdpaPaged()` which falls back to the CPU kernel.
+- Every backend implements `sdpaPaged()` natively. GPU paths gather scattered host blocks into a flat staging buffer, then run a GPU paged SDPA kernel (no silent CPU compute fallback). Staging gather is host-side by design: the paged pool lives in CPU-visible memory for prefix sharing and tier demotion.
 
 ### KV Cache Eviction
 

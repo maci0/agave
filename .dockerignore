@@ -21,6 +21,9 @@ outputs/
 notes/
 progress.md
 scripts/
+graphify-out/
+.pi-subagents/
+.review-loop.lock
 
 # IDE / tools
 .opencode/

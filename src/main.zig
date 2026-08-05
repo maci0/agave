@@ -386,9 +386,9 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "kv-budget", .kind = .option, .help = "Max KV positions to keep during eviction [default: 80% of ctx-size]." },
     // Server
     .{ .long = "serve", .short = 's', .help = "Start HTTP server (OpenAI + Anthropic API)." },
-    .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]." },
-    .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]." },
-    .{ .long = "api-key", .kind = .option, .help = "API key for server auth (or AGAVE_API_KEY env)." },
+    .{ .long = "port", .short = 'p', .kind = .option, .help = "Server port [default: 49453]. Falls back to AGAVE_PORT." },
+    .{ .long = "host", .kind = .option, .help = "Server bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]. Falls back to AGAVE_HOST." },
+    .{ .long = "api-key", .kind = .option, .help = "API key for server auth. Prefer AGAVE_API_KEY (avoids process-list exposure; env wins if both set)." },
     .{ .long = "sleep-after", .kind = .option, .help = "Enter sleep mode after N seconds of server inactivity (0 = disabled). Signals /health sleeping:true; wakes on next request." },
     .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
     // LoRA
@@ -605,15 +605,20 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Error on options that appeared at end of args without a value
     if (res.missing_value) |name| {
         eprint("Error: --{s} requires a value\n", .{name});
+        eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     }
 
-    // Warn about unknown flags (catches typos like --temeprature)
-    warnUnknownOptions(&res);
+    // Reject unknown flags (catches typos like --temeprature); matches pull/calibrate.
+    rejectUnknownOptions(&res);
 
-    // Detect when a known flag was consumed as another option's value.
+    // Reject when a known flag was consumed as another option's value.
     // Example: `--system --serve` sets system prompt to "--serve" and loses --serve.
-    warnFlagAsValue(&res);
+    rejectFlagAsValue(&res);
+
+    // Reject unknown short options that the parser treated as positionals (e.g. -z, -qv).
+    // Letter-only forms only so numeric prompts like "-5" still work. Use -- for odd paths.
+    rejectUnknownShortPositionals(&res);
 
     // Auto-detect TTY: disable color when stdout is not a terminal
     g_tty = stdout_file.isTty(g_io) catch false;
@@ -845,10 +850,20 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
     }
 
-    // Validate port range (1-65535, u16 parse already enforces upper bound)
-    if (parseU16(res.option("port"), "port")) |p| {
+    // Validate port range (1-65535, u16 parse already enforces upper bound).
+    // CLI --port wins over AGAVE_PORT; both are validated the same way.
+    const port_raw = res.option("port") orelse g_environ.get("AGAVE_PORT");
+    if (parseU16(port_raw, "port")) |p| {
         if (p == 0) {
-            eprint("Error: --port must be in range 1-65535\n", .{});
+            eprint("Error: --port / AGAVE_PORT must be in range 1-65535\n", .{});
+            std.process.exit(2);
+        }
+    }
+
+    // Validate max-batch-size (0 would silently fall back inside the server)
+    if (parseU32(res.option("max-batch-size"), "max-batch-size")) |mbs| {
+        if (mbs == 0) {
+            eprint("Error: --max-batch-size must be >= 1\n", .{});
             std.process.exit(2);
         }
     }
@@ -859,14 +874,23 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         eprint("  Usage: agave model.gguf \"multi word prompt\"\n", .{});
     }
 
-    // Warn about server-only flags that have no effect without --serve
+    // Warn about server-only flags/env that have no effect without --serve
     if (!res.flag("serve")) {
-        if (res.option("port") != null)
+        if (res.option("port") != null) {
             eprint("Warning: --port has no effect without --serve\n", .{});
-        if (res.option("host") != null)
+        } else if (g_environ.get("AGAVE_PORT") != null) {
+            eprint("Warning: AGAVE_PORT has no effect without --serve\n", .{});
+        }
+        if (res.option("host") != null) {
             eprint("Warning: --host has no effect without --serve\n", .{});
-        if (res.option("api-key") != null)
+        } else if (g_environ.get("AGAVE_HOST") != null) {
+            eprint("Warning: AGAVE_HOST has no effect without --serve\n", .{});
+        }
+        if (res.option("api-key") != null) {
             eprint("Warning: --api-key has no effect without --serve\n", .{});
+        } else if (g_environ.get("AGAVE_API_KEY") != null) {
+            eprint("Warning: AGAVE_API_KEY has no effect without --serve\n", .{});
+        }
     } else {
         // Warn about flags ignored in server mode (early, before model loading)
         if (n_positionals > 1)
@@ -879,6 +903,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --benchmark exits before server starts; remove --serve or --benchmark\n", .{});
         if (res.flag("model-info"))
             eprint("Warning: --model-info exits before server starts; remove --serve or --model-info\n", .{});
+        // --api-key appears in `ps`/`/proc/*/cmdline`; AGAVE_API_KEY wins when both are set.
+        if (res.option("api-key") != null and g_environ.get("AGAVE_API_KEY") != null) {
+            eprint("Warning: both --api-key and AGAVE_API_KEY set; using AGAVE_API_KEY (CLI value ignored)\n", .{});
+        } else if (res.option("api-key") != null) {
+            eprint("Warning: --api-key is visible in process listings; prefer AGAVE_API_KEY\n", .{});
+        }
     }
 
     // Warn about conflicting exit-early flags (--model-info runs first, --benchmark skipped)
@@ -985,11 +1015,49 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
     }
 
+    // Resolve bind address before auth checks so loopback uses the parsed octets
+    // (entire 127.0.0.0/8), not only the string forms "127.0.0.1"/"localhost".
+    // CLI --host wins over AGAVE_HOST.
+    const bind_host: [4]u8 = blk: {
+        const host_str = res.option("host") orelse g_environ.get("AGAVE_HOST") orelse break :blk [4]u8{ 127, 0, 0, 1 };
+        if (std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0")) break :blk [4]u8{ 0, 0, 0, 0 };
+        if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
+        var parts: [4]u8 = undefined;
+        if (!parseIpv4(host_str, &parts)) {
+            eprint("Error: invalid host address '{s}' (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{host_str});
+            std.process.exit(2);
+        }
+        break :blk parts;
+    };
+    const api_key: ?[]const u8 = blk: {
+        // Prefer AGAVE_API_KEY over --api-key so the active secret is not taken from
+        // process listings when both are present (CLI value is still visible in ps).
+        const key = g_environ.get("AGAVE_API_KEY") orelse res.option("api-key");
+        // Non-loopback bind without a key exposes the full inference API.
+        const is_loopback = bind_host[0] == 127;
+        if (res.flag("serve") and !is_loopback and key == null) {
+            const host_str = res.option("host") orelse g_environ.get("AGAVE_HOST") orelse "127.0.0.1";
+            eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
+            eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
+            std.process.exit(2);
+        }
+        // Empty/whitespace key would satisfy "key present" checks while accepting any empty header.
+        if (key) |k| {
+            const trimmed = std.mem.trim(u8, k, " \t\r\n");
+            if (trimmed.len == 0) {
+                eprint("Error: --api-key (or AGAVE_API_KEY) must be non-empty\n", .{});
+                std.process.exit(2);
+            }
+            break :blk trimmed;
+        }
+        break :blk null;
+    };
+
     return .{
         .model_path = res.positional(0).?,
         .prompt = res.positional(1),
         .serve = res.flag("serve"),
-        .port = parseU16(res.option("port"), "port") orelse default_port,
+        .port = parseU16(port_raw, "port") orelse default_port,
         .max_tokens = parseU32(res.option("max-tokens"), "max-tokens") orelse default_max_tokens,
         .temperature = temperature,
         .top_p = top_p,
@@ -1050,39 +1118,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             break :blk .none;
         } else .none,
         .kv_budget = parseU32(res.option("kv-budget"), "kv-budget") orelse 0,
-        .host = blk: {
-            const host_str = res.option("host") orelse break :blk [4]u8{ 127, 0, 0, 1 };
-            if (std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0")) break :blk [4]u8{ 0, 0, 0, 0 };
-            if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
-            var parts: [4]u8 = undefined;
-            if (!parseIpv4(host_str, &parts)) {
-                eprint("Error: invalid host address '{s}' (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{host_str});
-                std.process.exit(2);
-            }
-            break :blk parts;
-        },
-        .api_key = blk: {
-            const key = res.option("api-key") orelse g_environ.get("AGAVE_API_KEY");
-            // Non-loopback bind without a key exposes the full inference API.
-            const host_str = res.option("host") orelse "127.0.0.1";
-            const open_bind = std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0") or
-                !(std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost"));
-            if (res.flag("serve") and open_bind and key == null) {
-                eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
-                eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
-                std.process.exit(2);
-            }
-            // Empty/whitespace key would satisfy "key present" checks while accepting any empty header.
-            if (key) |k| {
-                const trimmed = std.mem.trim(u8, k, " \t\r\n");
-                if (trimmed.len == 0) {
-                    eprint("Error: --api-key (or AGAVE_API_KEY) must be non-empty\n", .{});
-                    std.process.exit(2);
-                }
-                break :blk trimmed;
-            }
-            break :blk null;
-        },
+        .host = bind_host,
+        .api_key = api_key,
         .allow_cpu_fallback = res.flag("allow-cpu-fallback"),
         .debug = res.flag("debug"),
         .json = json_mode,
@@ -1146,7 +1183,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
                 if (std.mem.eql(u8, s, "dspark")) break :blk SpecMode.dspark;
                 if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
-                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, mtp, eagle, eagle3, mlp, lookahead, pflash, dspark)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -1158,6 +1195,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                     eprint("Error: --pflash-alpha must be a number\n", .{});
                     std.process.exit(2);
                 };
+                if (v < 0.0 or v > 2.0) {
+                    eprint("Error: --pflash-alpha must be in [0.0, 2.0] (got {d:.2})\n", .{v});
+                    std.process.exit(2);
+                }
                 break :blk v;
             }
             break :blk 0.85;
@@ -1169,10 +1210,15 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .diffusion_canvas = parseU32(res.option("diffusion-canvas"), "diffusion-canvas") orelse 256,
         .diffusion_confidence = blk: {
             if (res.option("diffusion-confidence")) |s| {
-                break :blk std.fmt.parseFloat(f32, s) catch {
+                const v = std.fmt.parseFloat(f32, s) catch {
                     eprint("Error: --diffusion-confidence must be a number\n", .{});
-                    std.process.exit(1);
+                    std.process.exit(2);
                 };
+                if (v < 0.0 or v > 1.0) {
+                    eprint("Error: --diffusion-confidence must be in [0.0, 1.0] (got {d:.2})\n", .{v});
+                    std.process.exit(2);
+                }
+                break :blk v;
             }
             break :blk 0.5;
         },
@@ -1458,42 +1504,74 @@ fn insertionMatch(shorter: []const u8, longer: []const u8) bool {
     return true;
 }
 
-/// Warn about any flags or options not recognized by cli_specs.
+/// Reject flags or options not recognized by cli_specs (exit 2).
 /// Catches typos like --temeprature that would otherwise silently use defaults.
-fn warnUnknownOptions(res: *const cli_mod.ParseResult) void {
+fn rejectUnknownOptions(res: *const cli_mod.ParseResult) void {
+    var found = false;
     var flag_it = res.flags.iterator();
     while (flag_it.next()) |entry| {
         if (!isKnownSpec(entry.key_ptr.*)) {
-            eprint("Warning: unknown option '--{s}'", .{entry.key_ptr.*});
+            eprint("Error: unknown option '--{s}'", .{entry.key_ptr.*});
             if (suggestSpec(entry.key_ptr.*)) |s|
                 eprint(" (did you mean '--{s}'?)", .{s});
             eprint("\n", .{});
+            found = true;
         }
     }
     var opt_it = res.options.iterator();
     while (opt_it.next()) |entry| {
         if (!isKnownSpec(entry.key_ptr.*)) {
-            eprint("Warning: unknown option '--{s}'", .{entry.key_ptr.*});
+            eprint("Error: unknown option '--{s}'", .{entry.key_ptr.*});
             if (suggestSpec(entry.key_ptr.*)) |s|
                 eprint(" (did you mean '--{s}'?)", .{s});
             eprint("\n", .{});
+            found = true;
         }
+    }
+    if (found) {
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(2);
     }
 }
 
-/// Warn when an option's value looks like a known flag that was accidentally consumed.
+/// Reject when an option's value looks like a known flag that was accidentally consumed.
 /// Catches `--system --serve` (system prompt becomes "--serve", --serve flag lost)
 /// and `--system -s` (short flag consumed as value).
-fn warnFlagAsValue(res: *const cli_mod.ParseResult) void {
+fn rejectFlagAsValue(res: *const cli_mod.ParseResult) void {
     var opt_it = res.options.iterator();
     while (opt_it.next()) |entry| {
         const val = entry.value_ptr.*;
         if (val.len > 2 and val[0] == '-' and val[1] == '-' and isKnownSpec(val[2..])) {
-            eprint("Warning: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+            eprint("Error: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+            eprint("Run 'agave --help' for more information.\n", .{});
+            std.process.exit(2);
         } else if (val.len == 2 and val[0] == '-' and val[1] != '-') {
             if (isKnownShort(val[1])) {
-                eprint("Warning: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+                eprint("Error: --{s} has value '{s}' which looks like a flag (missing value for --{s}?)\n", .{ entry.key_ptr.*, val, entry.key_ptr.* });
+                eprint("Run 'agave --help' for more information.\n", .{});
+                std.process.exit(2);
             }
+        }
+    }
+}
+
+/// True if a positional looks like an unknown short option (-z) or cluster (-qv).
+/// Letter-only so prompts like "-5" are not rejected. Paths like "-n" need `./-n` or `--`.
+fn looksLikeUnknownShortOpt(pos: []const u8) bool {
+    if (pos.len < 2 or pos[0] != '-' or pos[1] == '-') return false;
+    for (pos[1..]) |c| {
+        if (!std.ascii.isAlphabetic(c)) return false;
+    }
+    return true;
+}
+
+/// Reject unknown short options that landed in positionals (parser treats them as args).
+fn rejectUnknownShortPositionals(res: *const cli_mod.ParseResult) void {
+    for (res.positionals.items) |pos| {
+        if (looksLikeUnknownShortOpt(pos)) {
+            eprint("Error: unknown option '{s}'\n", .{pos});
+            eprint("Run 'agave --help' for more information.\n", .{});
+            std.process.exit(2);
         }
     }
 }
@@ -1655,12 +1733,14 @@ fn printUsage() void {
         \\
         \\SERVER:
         \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
-        \\  -p, --port <PORT>      Server port [default: 49453]
+        \\  -p, --port <PORT>      Server port [default: 49453] (falls back to AGAVE_PORT)
         \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
         \\                         Non-loopback binds require --api-key (or AGAVE_API_KEY)
-        \\      --api-key <KEY>    API key for server auth (or AGAVE_API_KEY env)
+        \\                         Falls back to AGAVE_HOST when --host is omitted
+        \\      --api-key <KEY>    API key for server auth (prefer AGAVE_API_KEY; CLI arg is visible in ps)
+        \\                         When both are set, AGAVE_API_KEY wins
         \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
-        \\      --max-batch-size <N>  Max concurrent batched requests [default: 1]
+        \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
         \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
         \\
         \\PARALLELISM:
@@ -1678,29 +1758,24 @@ fn printUsage() void {
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
         \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
-        \\      --pflash-alpha <F>    PFlash block selection threshold [default: 0.85]
+        \\      --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
         \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
         \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
         \\
         \\ADAPTERS & DIFFUSION:
-        \\      --lora <PATH>         Merge LoRA adapter GGUF at load time
+        \\      --lora <PATH>         Merge LoRA adapter GGUF at load time into base weights
         \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
         \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
-        \\      --diffusion-confidence <F>  Diffusion acceptance confidence [default: 0.9]
+        \\      --diffusion-confidence <F>  Diffusion acceptance confidence (0.0-1.0) [default: 0.5]
         \\
         \\OPTIMIZATION:
         \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
-        \\
-        \\LORA:
-        \\      --lora <PATH>      LoRA adapter GGUF — merged at load time into base weights
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
         \\      --image <PATH>     Path to image file (PNG or PPM P6)
         \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
         \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
-        \\      --sleep-after <N>  Server sleep-mode idle timeout in seconds (0=off)
-        \\      --max-batch-size <N> Max concurrent requests per scheduler cycle [default: 8]
         \\
         \\DIAGNOSTICS:
         \\  -V, --verbose          Show technical details (params, load times, EOG)
@@ -1712,10 +1787,13 @@ fn printUsage() void {
         \\
         \\ENVIRONMENT:
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
-        \\  AGAVE_API_KEY        API key for server auth (alternative to --api-key)
+        \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
+        \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
+        \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
         \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
         \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
         \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
+        \\  XDG_CACHE_HOME       XDG cache base for pull (fallback: ~/.cache)
         \\
         \\EXAMPLES:
         \\  agave model.gguf                          Interactive REPL
@@ -2377,7 +2455,7 @@ fn initAndRun(
 
         // Auto-discover peers via UDP broadcast if --peers not specified
         if (cli.tp_peers == null and cli.tp_degree > 1) {
-            const peer_discovery = @import("parallel/discovery.zig");
+            const peer_discovery = @import("parallel/peer_discovery.zig");
             if (peer_discovery.discoverPeer(cli.tp_rank, cli.tp_degree, tp_discovery_port)) |ip| {
                 var ip_buf: [16]u8 = undefined;
                 const ip_str = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
@@ -2398,7 +2476,7 @@ fn initAndRun(
         std.log.info("PP={d} rank={d}", .{ cli.pp_degree, cli.tp_rank });
         // Auto-discover peers for PP if --peers not specified
         if (cli.tp_peers == null) {
-            const peer_discovery = @import("parallel/discovery.zig");
+            const peer_discovery = @import("parallel/peer_discovery.zig");
             if (peer_discovery.discoverPeer(cli.tp_rank, cli.pp_degree, pp_discovery_port)) |ip| {
                 var ip_buf2: [16]u8 = undefined;
                 const ip_str = std.fmt.bufPrint(&ip_buf2, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
@@ -4206,7 +4284,9 @@ test {
     _ = @import("server/json.zig");
     _ = @import("server/rate_limiter.zig");
     _ = @import("server/metrics.zig");
+    _ = @import("server/fixed_buf_stream.zig");
     _ = @import("server/scheduler.zig");
+    _ = @import("sim_clock.zig");
     _ = @import("kvcache/block_allocator.zig");
     _ = @import("kvcache/manager.zig");
     _ = @import("kvcache/tiered.zig");
@@ -4339,11 +4419,20 @@ test "suggestSpec finds known flags" {
     try std.testing.expect(suggestSpec("x") == null);
 }
 
+test "looksLikeUnknownShortOpt detects short typos" {
+    try std.testing.expect(looksLikeUnknownShortOpt("-z"));
+    try std.testing.expect(looksLikeUnknownShortOpt("-qv"));
+    try std.testing.expect(!looksLikeUnknownShortOpt("-5"));
+    try std.testing.expect(!looksLikeUnknownShortOpt("--quiet"));
+    try std.testing.expect(!looksLikeUnknownShortOpt("model.gguf"));
+    try std.testing.expect(!looksLikeUnknownShortOpt("-"));
+}
+
 // Force test discovery for modules only imported at runtime (inside function bodies).
 // Without these comptime references, zig test won't find their test blocks.
 comptime {
     _ = @import("devices/discovery.zig");
-    _ = @import("parallel/discovery.zig");
+    _ = @import("parallel/peer_discovery.zig");
     _ = @import("parallel/tp.zig");
     _ = @import("kvcache/prefetch.zig");
 }
@@ -4456,8 +4545,10 @@ test "fuzz: main.zig pure functions" {
                 _ = &parseU64;
                 _ = &parseU16;
                 _ = &parseF32;
-                _ = &warnUnknownOptions;
-                _ = &warnFlagAsValue;
+                _ = &rejectUnknownOptions;
+                _ = &rejectFlagAsValue;
+                _ = &rejectUnknownShortPositionals;
+                _ = &looksLikeUnknownShortOpt;
                 _ = &validateFileExists;
                 _ = &runBenchmark;
                 _ = &printUsage;

@@ -638,13 +638,18 @@ test "getenv returns null for nonexistent var" {
 }
 
 test "TransportKind enum has all expected variants" {
-    // Compile-time verification that all transport kinds exist
+    // Tag names must match the public transport surface (not tautological self-equality).
     const fields = @typeInfo(TransportKind).@"enum".fields;
     try std.testing.expectEqual(@as(usize, 4), fields.len);
-    try std.testing.expectEqual(TransportKind.tcp, .tcp);
-    try std.testing.expectEqual(TransportKind.shm, .shm);
-    try std.testing.expectEqual(TransportKind.nccl, .nccl);
-    try std.testing.expectEqual(TransportKind.rccl, .rccl);
+    try std.testing.expectEqualStrings("tcp", @tagName(TransportKind.tcp));
+    try std.testing.expectEqualStrings("shm", @tagName(TransportKind.shm));
+    try std.testing.expectEqualStrings("nccl", @tagName(TransportKind.nccl));
+    try std.testing.expectEqualStrings("rccl", @tagName(TransportKind.rccl));
+    // Every declared field name must be one of the known kinds.
+    inline for (fields) |field| {
+        const kind: TransportKind = @enumFromInt(field.value);
+        try std.testing.expectEqualStrings(field.name, @tagName(kind));
+    }
 }
 
 test "Transport.init tcp" {
@@ -671,7 +676,7 @@ test "Transport.init rccl returns NotImplemented" {
 }
 
 test "Transport struct methods exist at comptime" {
-    // Verify the public API surface compiles and exists
+    // Verify the public API surface compiles and empty batch paths are callable.
     try std.testing.expect(@hasDecl(Transport, "init"));
     try std.testing.expect(@hasDecl(Transport, "deinit"));
     try std.testing.expect(@hasDecl(Transport, "connectPeer"));
@@ -684,6 +689,17 @@ test "Transport struct methods exist at comptime" {
     try std.testing.expect(@hasDecl(Transport, "sendBufs"));
     try std.testing.expect(@hasDecl(Transport, "recvBuf"));
     try std.testing.expect(@hasDecl(Transport, "recvBufs"));
+
+    const allocator = std.testing.allocator;
+    var t = try Transport.init(allocator, .tcp, 0, 2);
+    defer t.deinit();
+    // Empty batch paths must be no-ops on an unconnected transport.
+    const empty_send: []const [*]const f32 = &.{};
+    const empty_recv: []const [*]f32 = &.{};
+    const empty_lens: []const usize = &.{};
+    t.sendBufs(empty_send, empty_lens);
+    t.recvBufs(empty_recv, empty_lens);
+    try std.testing.expectEqual(@as(u32, 0), t.tcp_connected);
 }
 
 test "Transport.init nccl" {

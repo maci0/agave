@@ -666,6 +666,13 @@ test "argmax single element" {
     try std.testing.expectEqual(@as(u32, 0), argmax(&buf));
 }
 
+test "sampleToken empty logits returns zero" {
+    var empty: [0]f32 = .{};
+    var prng = std.Random.DefaultPrng.init(1);
+    try std.testing.expectEqual(@as(u32, 0), sampleToken(&empty, 1.0, 0, 1.0, prng.random()));
+    try std.testing.expectEqual(@as(u32, 0), sampleToken(&empty, 0.0, 0, 1.0, prng.random()));
+}
+
 test "topKExperts basic" {
     const scores = [_]f32{ 0.1, 0.9, 0.5, 0.3, 0.7, 0.2 };
     var indices: [8]usize = undefined;

@@ -1,0 +1,143 @@
+{
+  "runId": "e789eeae",
+  "agent": "researcher",
+  "task": "Audit Agave tutorial files chapters 08-15 plus two appendices against the actual codebase. For each tutorial file listed below, read the full tutorial content, extract every code reference (file paths, function names, struct names, field names, CLI flags, default values, API patterns), then verify each reference against the actual source files in the repo.\n\nTutorial files to audit:\n- docs/tutorial/08-backends.md\n- docs/tutorial/09-cpu-simd-optimization.md\n- docs/tutorial/10-memory-safety.md\n- docs/tutorial/11-metal-backend-internals.md\n- docs/tutorial/12-cpu-parallelism.md\n- docs/tutorial/13-batched-dispatch-and-fusion.md\n- docs/tutorial/14-format-conventions.md\n- docs/tutorial/15-chat-templates.md\n- docs/tutorial/appendix-compile-time.md\n- docs/tutorial/appendix-atomics.md\n\nFor EACH tutorial, produce a structured findings list with:\n1. Tutorial filename\n2. Each claim/reference checked, what the tutorial says vs what the code actually shows\n3. VERDICT per claim: MATCH, MISMATCH, STALE, MISSING, or AMBIGUOUS\n4. For mismatches: the actual code state with file path and line reference\n\nFocus especially on:\n- File paths mentioned (do they exist?)\n- Function/struct names (do they exist in the cited file?)\n- CLI flags (do they match src/cli.zig?)\n- Default values and constants\n- Code snippets (do they reflect current Zig 0.16 API patterns?)\n- Backend dispatch patterns (tagged union, inline else)\n\nWrite your complete findings to outputs/tutorials-audit-batch2.md\n\n---\nUpdate progress at: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/progress/e789eeae/progress.md\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/outputs/e789eeae/outputs/tutorials-audit-batch2.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 1,
+  "usage": {
+    "input": 23,
+    "output": 15473,
+    "cacheRead": 1401034,
+    "cacheWrite": 151558,
+    "cost": 2.0346944999999996,
+    "turns": 14
+  },
+  "model": "vertex-anthropic/claude-opus-4-6:high",
+  "attemptedModels": [
+    "vertex-anthropic/claude-opus-4-6:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "vertex-anthropic/claude-opus-4-6:high",
+      "success": false,
+      "exitCode": 1,
+      "error": "Agent 'researcher' requested unavailable child tools: hf_dataset_info, hf_repo_files, hf_repo_read_file.\nThe `tools` field is a strict allowlist; it does not load extension code.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+      "usage": {
+        "input": 23,
+        "output": 15473,
+        "cacheRead": 1401034,
+        "cacheWrite": 151558,
+        "cost": 2.0346944999999996,
+        "turns": 14
+      }
+    }
+  ],
+  "durationMs": 275667,
+  "toolCount": 31,
+  "error": "Agent 'researcher' requested unavailable child tools: hf_dataset_info, hf_repo_files, hf_repo_read_file.\nThe `tools` field is a strict allowlist; it does not load extension code.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+  "launchContractDigest": "0640ccc4c93c72cf6bb3c628e871a65249b1be9e8312a4a88f41f4a52c394d8f",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "144 claims checked across 10 tutorial files. 139 MATCH, 0 MISMATCH, 0 STALE, 0 MISSING, 5 AMBIGUOUS (unverified numeric counts). Every file path, struct, function, CLI flag, and constant verified with grep/ls against source. Findings with file paths written to tutorials-audit-batch2.md."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "grep/ls/read across src/backend/backend.zig, src/backend/metal.zig, src/thread_pool.zig, src/chat_template.zig, src/arch.zig, src/format/format.zig, src/format/safetensors.zig, src/format/gguf.zig, src/models/qwen35.zig, src/models/gemma4.zig, src/ops/quant.zig, src/ops/math.zig, src/backend/kernels/cpu/gemv*.zig, src/backend/mega_compose.zig, src/main.zig, src/cli.zig, and 15+ other files",
+          "result": "passed",
+          "summary": "All 144 code references verified. 139 exact matches, 5 ambiguous (numeric counts not individually verified), 0 mismatches."
+        }
+      ],
+      "validationOutput": [
+        "08-backends.md: 15 claims, 13 MATCH, 2 AMBIGUOUS",
+        "09-cpu-simd-optimization.md: 13 claims, 12 MATCH, 1 AMBIGUOUS",
+        "10-memory-safety.md: 7 claims, 7 MATCH",
+        "11-metal-backend-internals.md: 19 claims, 19 MATCH",
+        "12-cpu-parallelism.md: 13 claims, 13 MATCH",
+        "13-batched-dispatch-and-fusion.md: 18 claims, 16 MATCH, 2 AMBIGUOUS",
+        "14-format-conventions.md: 16 claims, 16 MATCH",
+        "15-chat-templates.md: 20 claims, 20 MATCH",
+        "appendix-compile-time.md: 12 claims, 12 MATCH",
+        "appendix-atomics.md: 11 claims, 11 MATCH"
+      ],
+      "residualRisks": [
+        "5 AMBIGUOUS items are all numeric counts (71 Metal pipelines, 61 CUDA kernels, NR values, 4 CUDA fused kernels, 4334 lines) — plausible but not individually verified",
+        "MSL shader code contents not audited for correctness — only existence verified",
+        "Performance claims sourced from BENCHMARKS.md not independently validated"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No changes made — audit-only task",
+      "reviewFindings": [
+        "no blockers: all 10 tutorials are accurate against current codebase, zero mismatches found"
+      ],
+      "manualNotes": "This batch of tutorials is exceptionally well-maintained. Every single file path, struct name, function name, CLI flag, constant value, and API pattern checked against the codebase was correct. The 5 AMBIGUOUS items are all numeric counts that would require line-by-line counting to verify precisely but are consistent with the codebase structure."
+    }
+  },
+  "transcriptPath": "/Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/e789eeae_researcher_1_transcript.jsonl",
+  "timestamp": 1785818043935
+}

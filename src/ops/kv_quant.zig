@@ -20,6 +20,22 @@ const quant = @import("quant.zig");
 /// 8-wide SIMD vector type for f32 — used across all SIMD helpers in this module.
 const V8 = @Vector(8, f32);
 
+/// Floor for near-zero absmax; below this, treat as unit scale to avoid /0.
+const absmax_epsilon: f32 = 1e-7;
+
+/// SIMD absolute-max over `src[0..n]`.
+inline fn absMaxF32(src: [*]const f32, n: usize) f32 {
+    var amax_v: V8 = @splat(@as(f32, 0.0));
+    var ai: usize = 0;
+    while (ai + 8 <= n) : (ai += 8) {
+        const v: V8 = src[ai..][0..8].*;
+        amax_v = @max(amax_v, @abs(v));
+    }
+    var amax = @reduce(.Max, amax_v);
+    while (ai < n) : (ai += 1) amax = @max(amax, @abs(src[ai]));
+    return amax;
+}
+
 /// Block size for Q8_0 and INT8 quantization (shared with quant.zig).
 const block_size: usize = quant.quant_block_elems;
 /// Q8_0 block: f16 scale (2 bytes) + 32 i8 values = 34 bytes (shared with quant.zig).
@@ -608,10 +624,8 @@ pub const PerHeadKvScales = struct {
 /// Computes absmax over src, updates scales[head_idx] = max(old, absmax),
 /// then quantizes src → dst using the updated scale.
 pub fn kvStorePerHead(dst: [*]u8, src: [*]const f32, n: usize, head_idx: usize, scales: *PerHeadKvScales) void {
-    // Compute absmax over src
-    var absmax: f32 = 0;
-    for (src[0..n]) |v| absmax = @max(absmax, @abs(v));
-    if (absmax < 1e-7) absmax = 1.0; // guard against zero
+    var absmax = absMaxF32(src, n);
+    if (absmax < absmax_epsilon) absmax = 1.0; // guard against zero
     // Update running scale (max over time for dynamic range tracking)
     const head_scale = &scales.scales[head_idx];
     head_scale.* = @max(head_scale.*, absmax);
@@ -698,27 +712,26 @@ fn storeQ8_0(dst: [*]u8, src: [*]const f32, n: usize) void {
     for (0..nb) |b| {
         const base = b * block_size;
         const count = @min(block_size, n - base);
-        // Find absmax (SIMD-accelerated)
-        var amax_v: V8 = @splat(@as(f32, 0.0));
-        var ai: usize = 0;
-        while (ai + 8 <= count) : (ai += 8) {
-            const v: V8 = src[base + ai ..][0..8].*;
-            amax_v = @max(amax_v, @abs(v));
-        }
-        var amax = @reduce(.Max, amax_v);
-        while (ai < count) : (ai += 1) amax = @max(amax, @abs(src[base + ai]));
+        const amax = absMaxF32(src + base, count);
         const scale: f16 = if (amax > 0) @floatCast(amax / int8_max) else 0;
         const inv_scale: f32 = if (amax > 0) int8_max / amax else 0;
         // Write scale (f16)
         const bp = dst + b * q8_0_block_bytes;
         @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(scale);
-        // Write quantized values
-        for (0..count) |i| {
+        // Write quantized values (8-wide ILP; each clamp/round is independent)
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            inline for (0..8) |j| {
+                const v = src[base + i + j] * inv_scale;
+                bp[q8_0_scale_bytes + i + j] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), int8_min, int8_max))));
+            }
+        }
+        while (i < count) : (i += 1) {
             const v = src[base + i] * inv_scale;
             bp[q8_0_scale_bytes + i] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), int8_min, int8_max))));
         }
         // Zero-pad remainder
-        for (count..block_size) |i| bp[q8_0_scale_bytes + i] = 0;
+        for (count..block_size) |j| bp[q8_0_scale_bytes + j] = 0;
     }
 }
 
@@ -727,26 +740,25 @@ fn storeInt8(dst: [*]u8, src: [*]const f32, n: usize) void {
     for (0..nb) |b| {
         const base = b * block_size;
         const count = @min(block_size, n - base);
-        // Find absmax (SIMD-accelerated)
-        var amax_v: V8 = @splat(@as(f32, 0.0));
-        var ai: usize = 0;
-        while (ai + 8 <= count) : (ai += 8) {
-            const v: V8 = src[base + ai ..][0..8].*;
-            amax_v = @max(amax_v, @abs(v));
-        }
-        var amax = @reduce(.Max, amax_v);
-        while (ai < count) : (ai += 1) amax = @max(amax, @abs(src[base + ai]));
+        const amax = absMaxF32(src + base, count);
         const scale: f32 = if (amax > 0) amax / int8_max else 0;
         const inv_scale: f32 = if (amax > 0) int8_max / amax else 0;
         // Write scale (f32)
         const bp = dst + b * int8_block_bytes;
         @as(*align(1) f32, @ptrCast(bp)).* = scale;
-        // Write quantized values
-        for (0..count) |i| {
+        // Write quantized values (8-wide ILP)
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            inline for (0..8) |j| {
+                const v = src[base + i + j] * inv_scale;
+                bp[int8_scale_bytes + i + j] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), int8_min, int8_max))));
+            }
+        }
+        while (i < count) : (i += 1) {
             const v = src[base + i] * inv_scale;
             bp[int8_scale_bytes + i] = @bitCast(@as(i8, @intFromFloat(std.math.clamp(std.math.round(v), int8_min, int8_max))));
         }
-        for (count..block_size) |i| bp[int8_scale_bytes + i] = 0;
+        for (count..block_size) |j| bp[int8_scale_bytes + j] = 0;
     }
 }
 
@@ -769,15 +781,7 @@ fn storeNvfp4(dst: [*]u8, src: [*]const f32, n: usize) void {
     for (0..nb) |b| {
         const base = b * nvfp4_block;
         const count = @min(nvfp4_block, n - base);
-        // Find absmax (SIMD-accelerated)
-        var amax_v: V8 = @splat(@as(f32, 0.0));
-        var ai: usize = 0;
-        while (ai + 8 <= count) : (ai += 8) {
-            const v: V8 = src[base + ai ..][0..8].*;
-            amax_v = @max(amax_v, @abs(v));
-        }
-        var amax = @reduce(.Max, amax_v);
-        while (ai < count) : (ai += 1) amax = @max(amax, @abs(src[base + ai]));
+        const amax = absMaxF32(src + base, count);
         // Compute FP8 E4M3 scale: scale = amax / e2m1_max
         const scale_f32: f32 = if (amax > 0) amax / e2m1_max else 0;
         const scale_fp8 = f32ToFp8E4M3(scale_f32);

@@ -2,11 +2,17 @@
 
 **Tutorial:** [Server / HTTP API](tutorial/23-server-http-api.md)
 
+Product version **0.1.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
+major bump; see [CHANGELOG](../CHANGELOG.md) and
+[Versioning & Releases](CONTRIBUTING.md#versioning--releases)).
+`system_fingerprint` and `/health` `version` report this string.
+
 Start the server:
 ```bash
 agave model.gguf --serve                    # default port 49453
 agave model.gguf --serve --port 9090        # custom port
-agave model.gguf --serve --api-key mysecret  # bearer token auth
+agave model.gguf --serve --api-key mysecret  # bearer token auth (prefer AGAVE_API_KEY)
+# Or: AGAVE_API_KEY=mysecret AGAVE_PORT=9090 agave model.gguf --serve
 ```
 
 ---
@@ -438,7 +444,7 @@ Cache is invalidated when the prompt prefix changes (e.g., switching conversatio
 
 For deployments with multiple agave instances serving the same model, KV cache prefixes can be transferred between instances:
 
-**Export** — serialize `N` tokens of KV cache as a binary blob:
+**Export** — serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):
 ```bash
 GET /v1/kv_cache?n_tokens=512
 → 200 OK  Content-Type: application/octet-stream
@@ -453,9 +459,15 @@ Content-Type: application/octet-stream
 → 200 OK  {"imported":512}
 ```
 
-Both endpoints require authentication if `--api-key` is configured. Use case: compute system-prompt KV on one instance, distribute to a fleet for warm-start generation without redundant prefill.
+Missing or non-positive `n_tokens` returns `400` with `invalid_request_error`
+(same `type` string as other OpenAI-style 400s; was briefly `invalid_request` on
+this route only).
 
-**Metadata** — lightweight KV state query for external orchestrators:
+`/v1/kv_cache` and `/v1/kv_cache/info` require authentication if `--api-key` or
+`AGAVE_API_KEY` is configured. Use case: compute system-prompt KV on one instance,
+distribute to a fleet for warm-start generation without redundant prefill.
+
+**Metadata** — lightweight KV state query for external orchestrators (`GET` only; not shadowed by `/v1/kv_cache`):
 ```bash
 GET /v1/kv_cache/info
 → 200 OK
@@ -534,11 +546,11 @@ All endpoints return JSON error bodies on failure.
 | Status | When |
 |--------|------|
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
-| `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` when `--api-key` is set |
+| `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` or `X-API-Key` when `--api-key` is set |
 | `404 Not Found` | Unknown endpoint or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |
-| `429 Too Many Requests` | Rate limit exceeded (includes `Retry-After` header) |
+| `429 Too Many Requests` | Reserved for token-bucket rate limiting (`rate_limiter.zig`); not enabled via CLI yet |
 | `500 Internal Server Error` | Model forward error, OOM, or unexpected server failure |
 | `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
 | `503 Service Unavailable` | Conversation limit reached, shutting down, or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
@@ -548,7 +560,8 @@ All endpoints return JSON error bodies on failure.
 ## Authentication
 
 ```bash
-agave model.gguf --serve --api-key mysecret
+# Prefer AGAVE_API_KEY over --api-key (CLI args appear in process listings)
+AGAVE_API_KEY=mysecret agave model.gguf --serve
 curl -H "Authorization: Bearer mysecret" http://localhost:49453/v1/chat/completions -d '...'
 ```
 
@@ -557,7 +570,9 @@ Also accepts Anthropic-style `X-API-Key` header:
 curl -H "X-API-Key: mysecret" http://localhost:49453/v1/messages -d '...'
 ```
 
-Returns 401 if key missing or wrong. No auth required when `--api-key` not set.
+Returns 401 if key missing or wrong. No auth required when neither `--api-key`
+nor `AGAVE_API_KEY` is set. If both are set, `AGAVE_API_KEY` is used and the
+CLI value is ignored.
 
 ---
 

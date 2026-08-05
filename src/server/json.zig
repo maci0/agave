@@ -100,6 +100,8 @@ pub const SamplingParams = struct {
     pub fn matchesStop(self: *const SamplingParams, text: []const u8) bool {
         for (self.stop[0..self.n_stop]) |s| {
             if (s) |seq| {
+                // Empty stop sequences match every string via endsWith("", ""); skip them.
+                if (seq.len == 0) continue;
                 if (text.len >= seq.len and std.mem.endsWith(u8, text, seq)) return true;
             }
         }
@@ -346,7 +348,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             }
             break :blk true;
         },
-        .user = extractField(body, "user"),
+        .user = null, // not ingested: OpenAI "user" is often email/username; unused by inference
         .n = @intCast(@max(1, @min(extractIntField(body, "n") orelse 1, 1))),
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
@@ -355,12 +357,16 @@ pub fn parseSampling(body: []const u8) SamplingParams {
 
     // Parse stop sequences: "stop": "string" or "stop": ["s1", "s2"]
     // Also accepts "stop_sequences" (Anthropic API field name).
+    // Empty strings are ignored: endsWith(haystack, "") is always true and would
+    // truncate generation on the first token.
     const stop_field_names = [_][]const u8{ "stop", "stop_sequences" };
     for (stop_field_names) |stop_field| {
         if (result.n_stop > 0) break;
         if (extractField(body, stop_field)) |stop_str| {
-            result.stop[0] = stop_str;
-            result.n_stop = 1;
+            if (stop_str.len > 0) {
+                result.stop[0] = stop_str;
+                result.n_stop = 1;
+            }
         } else {
             var sbuf: [64]u8 = undefined;
             const needle = std.fmt.bufPrint(&sbuf, "\"{s}\"", .{stop_field}) catch continue;
@@ -379,8 +385,11 @@ pub fn parseSampling(body: []const u8) SamplingParams {
                                 if (body[si] == '\\') si += 1;
                                 si += 1;
                             }
-                            result.stop[result.n_stop] = body[str_start..si];
-                            result.n_stop += 1;
+                            const seq = body[str_start..si];
+                            if (seq.len > 0) {
+                                result.stop[result.n_stop] = seq;
+                                result.n_stop += 1;
+                            }
                             if (si < body.len) si += 1;
                         } else break;
                     }
@@ -1228,7 +1237,11 @@ test "extractIntField handles negative and zero" {
 
 test "extractFloatField handles edge values" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), extractFloatField("{\"t\": 0.0}", "t").?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.5), extractFloatField("{\"t\": -1.5}", "t").?, 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5e2), extractFloatField("{\"t\": 1.5e2}", "t").?, 0.1);
     try std.testing.expect(extractFloatField("{\"t\": not_a_number}", "t") == null);
+    try std.testing.expect(extractFloatField("{\"other\": 1.0}", "t") == null);
+    try std.testing.expect(extractFloatField("{}", "t") == null);
 }
 
 test "extractJsonImage handles truncated base64 marker" {
@@ -1310,6 +1323,26 @@ test "matchesStop" {
     try std.testing.expect(s.matchesStop("hello world END"));
     try std.testing.expect(!s.matchesStop("hello world"));
     try std.testing.expect(s.matchesStop("END"));
+}
+
+test "matchesStop ignores empty sequence" {
+    var s = SamplingParams{};
+    s.stop[0] = "";
+    s.n_stop = 1;
+    try std.testing.expect(!s.matchesStop("hello"));
+    try std.testing.expect(!s.matchesStop(""));
+}
+
+test "parseSampling empty stop string ignored" {
+    const s = parseSampling("{\"stop\":\"\"}");
+    try std.testing.expectEqual(@as(u32, 0), s.n_stop);
+    try std.testing.expect(!s.matchesStop("anything"));
+}
+
+test "parseSampling empty stop array entries skipped" {
+    const s = parseSampling("{\"stop\":[\"\",\"end\",\"\"]}");
+    try std.testing.expectEqual(@as(u32, 1), s.n_stop);
+    try std.testing.expectEqualStrings("end", s.stop[0].?);
 }
 
 test "extractObjectField" {

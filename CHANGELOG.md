@@ -1,5 +1,59 @@
 # Changelog
 
+All notable user-facing changes to Agave are recorded here.
+Product version is **0.1.0** (`agave --version`, `/health`, `system_fingerprint`).
+While on **0.x**, SemVer allows breaking changes without a major bump; such changes
+must still appear under **Changed** or **Breaking** below. See
+[Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
+
+> Note: git tag `v1.0` (2026-03-22) is a historical milestone name, not the product
+> SemVer. Do not treat it as release `1.0.0`.
+
+## [Unreleased]
+
+### Breaking
+- GPU backends (CUDA and peers): missing GPTQ/AWQ/MXFP4 kernels now fail closed
+  instead of silently falling back to CPU. Workloads that accidentally relied on
+  that fallback will error; enable a backend that implements the kernel, or use CPU
+  explicitly (`--backend cpu`).
+- CLI: unknown flags and options now exit with code 2 (previously printed a
+  warning and continued). Fix typos or remove unrecognized flags.
+- CLI: an option value that looks like another flag (e.g. `--port --host`) now
+  exits with code 2 instead of a warning. Pass an explicit value for each option.
+- Auth: when both `--api-key` and `AGAVE_API_KEY` are set, `AGAVE_API_KEY` wins
+  (previously the CLI flag won). Prefer setting only the env var.
+- HTTP: `/v1/kv_cache` error `type` is now `invalid_request_error` (was
+  `invalid_request`) for missing/invalid `n_tokens` and import failures. Align
+  client checks with OpenAI-style `invalid_request_error`.
+- HTTP: `/v1/kv_cache` matches the exact path only (no longer
+  `startsWith("/v1/kv_cache")`). `/v1/kv_cache/info` is routed separately and is
+  not shadowed. Clients using a longer path prefix must call the documented URLs.
+
+### Added
+- Server env fallbacks: `AGAVE_HOST` and `AGAVE_PORT` when `--host` / `--port`
+  are omitted (`--host` / `--port` still win when set). Documented in `--help`
+  and Docker examples.
+
+### Fixed
+- GPT-OSS / MXFP4 SafeTensors: group size corrected to 16 and block scales decoded
+  as FP8 E4M3 (was group size 32 + E8M0, which garbled output)
+- IQ2/IQ3 GEMV: sign extraction and qs indexing; `iq4_nl` / `iq4_xs` dequant paths
+- ROCm: HSACO load works on ROCm 6.x with Zig 0.16 (ISA triple / ABI version workarounds)
+- `--lora` with a SafeTensors base model now warns that LoRA merge is unsupported
+  (previously ignored with no message)
+- LoRA: reject adapters whose `lora_b` rank does not match `lora_a` (corrupted GGUF)
+- HTTP JSON responses: allocation failure while escaping no longer inserts raw
+  (possibly unescaped) strings; returns a generic `500` JSON error instead
+
+### Changed
+- Changelog entries are consumer-oriented; date-stamped sections below remain the
+  historical log until the next tagged product release bumps `0.1.0`
+- `--diffusion-confidence` docs/help now report default `0.5` (runtime default was
+  already `0.5`; help/README previously said `0.9`)
+- `--max-batch-size` help no longer claims default `1`; runtime default remains `8`
+- Non-loopback `--serve` without a key still requires auth; prefer `AGAVE_API_KEY`
+  over `--api-key` (process-list exposure)
+
 ## 2026-06-30 — DSpark Speculative Decoding
 
 ### DSpark: Confidence-Scheduled Speculative Decoding (Cheng et al., 2026)

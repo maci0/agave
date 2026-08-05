@@ -335,21 +335,19 @@ pub fn injectImageTokens(
 ///
 /// If `prefix_seq` is empty or not found, returns 0 (insert at the beginning).
 pub fn findImageInsertPos(tokens: []const u32, prefix_seq: []const u32) usize {
-    // Find the LAST occurrence of the full prefix_seq in tokens and return
-    // the position after it. Matching the full sequence avoids false matches
-    // when individual tokens (like \n) appear in earlier parts of the prompt
-    // (e.g., system prompt section).
+    // Search from the end: chat user prefixes sit near the end of the prompt,
+    // so typical cost is O(prefix_len) instead of O(tokens.len * prefix_len).
     if (prefix_seq.len == 0) return 0;
-    var last_match: usize = 0;
-    if (tokens.len >= prefix_seq.len) {
-        var i: usize = 0;
-        while (i + prefix_seq.len <= tokens.len) : (i += 1) {
-            if (std.mem.eql(u32, tokens[i..][0..prefix_seq.len], prefix_seq)) {
-                last_match = i + prefix_seq.len;
-            }
+    if (tokens.len < prefix_seq.len) return 0;
+    var i: usize = tokens.len - prefix_seq.len;
+    while (true) {
+        if (std.mem.eql(u32, tokens[i..][0..prefix_seq.len], prefix_seq)) {
+            return i + prefix_seq.len;
         }
+        if (i == 0) break;
+        i -= 1;
     }
-    return last_match;
+    return 0;
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

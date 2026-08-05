@@ -30,6 +30,10 @@ pub const quant_block_elems: usize = 32;
 pub const q8_0_block_bytes: usize = 34;
 /// Bytes per Q4_0 block: f16 scale (2) + 16 nibble bytes = 18.
 pub const q4_0_block_bytes: usize = 18;
+/// Elements per IQ4_XS super-block (8×32 sub-blocks).
+const iq4_xs_block_elems: usize = 256;
+/// IQ4_XS sub-scale unit: (s - 32) is mapped through this factor (1/16).
+const iq4_xs_scale_unit: f32 = 0.0625;
 
 /// Convert a BF16 value (stored as u16) to f32.
 /// BF16 shares f32's exponent range; conversion is a 16-bit left shift.
@@ -152,8 +156,10 @@ pub inline fn fp8e5m2ToF32(val: u8) f32 {
 }
 
 /// Dequantize tensor data to f32.
-/// Handles f32 (pass-through), bf16, f16, q8_0, and q4_0 formats.
-/// Unsupported dtypes trigger a panic.
+/// Handles f32 (pass-through), bf16, f16, q8_0, q4_0, iq4_nl, and iq4_xs.
+/// IQ2/IQ3/IQ1 codebook formats and other unsupported dtypes zero the output
+/// (with a warning for the `else` path) rather than panic; this is the LoRA
+/// merge / direct-read path where crashing on rare quants is worse than skip.
 /// Used for "direct read" tensors (norms, biases, conv weights) that are
 /// passed to CPU code expecting [*]const f32 but may be stored quantized.
 ///
@@ -191,13 +197,25 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             while (i < n) : (i += 1) output[i] = @floatCast(src[i]);
         },
         .q8_0 => {
+            const V8 = @Vector(8, f32);
             const n_blocks = (n + quant_block_elems - 1) / quant_block_elems;
             for (0..n_blocks) |b| {
                 const blk = data[b * q8_0_block_bytes ..];
                 const scale: f32 = @floatCast(@as(*const f16, @ptrCast(@alignCast(blk))).*);
-                const count = @min(quant_block_elems, n - b * quant_block_elems);
-                for (0..count) |i| {
-                    output[b * quant_block_elems + i] = scale * @as(f32, @floatFromInt(@as(i8, @bitCast(blk[2 + i]))));
+                const sv: V8 = @splat(scale);
+                const base = b * quant_block_elems;
+                const count = @min(quant_block_elems, n - base);
+                const q = blk[2..];
+                var i: usize = 0;
+                while (i + 8 <= count) : (i += 8) {
+                    var qv: V8 = undefined;
+                    inline for (0..8) |j| {
+                        qv[j] = @floatFromInt(@as(i8, @bitCast(q[i + j])));
+                    }
+                    output[base + i ..][0..8].* = qv * sv;
+                }
+                while (i < count) : (i += 1) {
+                    output[base + i] = scale * @as(f32, @floatFromInt(@as(i8, @bitCast(q[i]))));
                 }
             }
         },
@@ -224,7 +242,7 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             // Split packing: elements [0..15] use low nibbles, [16..31] use high nibbles.
             // (Matches gemvIQ4_NL split packing; different from Q4_0 interleaved packing.)
             const bpb = @import("../backend/backend.zig").iq4_nl_block_bytes;
-            const qk: usize = 32;
+            const qk = quant_block_elems;
             const nb = (n + qk - 1) / qk;
             for (0..nb) |b| {
                 const blk = data[b * bpb ..];
@@ -247,9 +265,9 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
             //   scales_l u8[4] [4..7]   4 low  bits per sub-block
             //   qs       u8[128][8..135] 256 nibbles via iq4nl_table
             // Sub-scale for sub-block ib: s = low4 | (high2 << 4), range 0..63
-            // Effective: d * (s - 32) * 0.0625 * iq4nl_table[nibble]
+            // Effective: d * (s - 32) * iq4_xs_scale_unit * iq4nl_table[nibble]
             const bpb = @import("../backend/backend.zig").iq4_xs_block_bytes;
-            const qk: usize = 256;
+            const qk = iq4_xs_block_elems;
             const nb = (n + qk - 1) / qk;
             for (0..nb) |b| {
                 const blk = data[b * bpb ..];
@@ -258,11 +276,11 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
                 const scales_l = blk[4..8];
                 const count = @min(qk, n - b * qk);
                 for (0..count) |i| {
-                    const ib32: usize = i / 32; // sub-block index (0..7)
+                    const ib32: usize = i / quant_block_elems; // sub-block index (0..7)
                     const low4: u6 = @truncate((scales_l[ib32 >> 1] >> @intCast(4 * (ib32 & 1))) & 0xF);
                     const high2: u6 = @truncate((scales_h >> @intCast(2 * ib32)) & 0x3);
                     const s: i32 = @intCast(low4 | (high2 << 4));
-                    const sub_scale: f32 = d * @as(f32, @floatFromInt(s - 32)) * 0.0625;
+                    const sub_scale: f32 = d * @as(f32, @floatFromInt(s - 32)) * iq4_xs_scale_unit;
                     const byte = blk[8 + i / 2];
                     const nibble: u4 = if (i % 2 == 0) @truncate(byte & 0xF) else @truncate(byte >> 4);
                     output[b * qk + i] = sub_scale * @as(f32, @floatFromInt(iq4nl_table[nibble]));

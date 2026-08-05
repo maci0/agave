@@ -6,11 +6,10 @@
 const std = @import("std");
 const Io = std.Io;
 const Mutex = Io.Mutex;
+const sim_clock = @import("../sim_clock.zig");
 
 fn milliTimestamp() i64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    return sim_clock.milliNow();
 }
 
 const ms_per_second: f64 = 1000.0;
@@ -181,20 +180,23 @@ test "consume full capacity then fail" {
 }
 
 test "refill after 1 second" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
     var limiter = RateLimiter.init(60, 600, testIo());
 
     // Consume one request
     try std.testing.expect(limiter.tryConsumeRequest(10));
 
-    // Manually advance time by simulating 1 second elapsed
-    limiter.request_bucket.last_refill -= 1000;
-    limiter.token_bucket.last_refill -= 1000;
+    // Advance simulated clock by 1 second (refill driven by injectable clock)
+    sim_clock.advanceMs(1000);
 
     // Should be able to consume again (refilled 1 request and 10 tokens)
     try std.testing.expect(limiter.tryConsumeRequest(10));
 }
 
 test "long idle clamps to capacity" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
     var limiter = RateLimiter.init(10, 100, testIo());
 
     // Consume 5 requests
@@ -203,9 +205,8 @@ test "long idle clamps to capacity" {
         try std.testing.expect(limiter.tryConsumeRequest(1));
     }
 
-    // Simulate 10 minutes idle (would refill 100 requests without clamping)
-    limiter.request_bucket.last_refill -= 600_000;
-    limiter.token_bucket.last_refill -= 600_000;
+    // Advance simulated clock by 10 minutes (would refill 100 requests without clamping)
+    sim_clock.advanceMs(600_000);
 
     // Should have exactly 10 requests available (clamped to capacity)
     i = 0;

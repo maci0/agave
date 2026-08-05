@@ -29,7 +29,7 @@
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Model Download**: `agave pull <org/repo>` — download GGUF models from HuggingFace Hub with auto quant selection
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
-- **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, rate limiting
+- **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, Bearer token auth
 - **Multimodal**: Image (`--image`) and video frames (`--video`, `--video-fps`) via Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL encoders; also HTTP API
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
 - **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, seed. HTTP API also: frequency/presence penalties, stop sequences
@@ -183,7 +183,8 @@ The calibration pass records per-head Q/K frequency statistics used by the `--kv
 Start with `--serve`. Supports both synchronous JSON and SSE streaming.
 
 ```bash
-./zig-out/bin/agave model.gguf --serve --api-key sk-mykey
+# Prefer AGAVE_API_KEY over --api-key (CLI args appear in process listings)
+AGAVE_API_KEY=sk-mykey ./zig-out/bin/agave model.gguf --serve
 ```
 
 **API Endpoints:**
@@ -205,7 +206,7 @@ Start with `--serve`. Supports both synchronous JSON and SSE streaming.
 | `/ready` | GET | Readiness check |
 | `/metrics` | GET | Prometheus metrics |
 
-Server features: up to 64 concurrent connections, request scheduler (batch up to 8, 120s timeout), 30s connection read timeout, rate limiting, Bearer token auth, CORS support.
+Server features: up to 64 concurrent connections, request scheduler (batch up to 8, 120s timeout), 30s connection read timeout, Bearer token auth, CORS support.
 
 ## Interactive REPL
 
@@ -317,7 +318,7 @@ agave [OPTIONS] <model> [prompt]
       --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd
       --kv-ssd-budget <GB> SSD tier budget in GB, requires --kv-tiers with ssd [default: 10]
       --host <ADDR>        Server bind address [default: 127.0.0.1]
-      --api-key <KEY>      API key for server authentication (Bearer token)
+      --api-key <KEY>      API key for server auth (prefer AGAVE_API_KEY; env wins if both set)
       --prefill-batch-size <N> Prefill chunk size in tokens [default: 512]
       --no-color           Disable colored output (same as --color=never)
       --color <MODE>       Color mode: auto, always, never [default: auto]
@@ -352,9 +353,9 @@ agave [OPTIONS] <model> [prompt]
       --video-fps <N>      Video frame sampling rate [default: 1]
       --diffusion-steps <N>  DiffusionGemma denoising steps [default: 16]
       --diffusion-canvas <N> DiffusionGemma canvas size [default: 256]
-      --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.9]
+      --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.5]
       --sleep-after <N>    Server sleep after N seconds idle (0=off)
-      --max-batch-size <N> Server concurrent batch size
+      --max-batch-size <N> Server concurrent batch size [default: 8]
       --no-kv-cache        Prefill-only / embedding server mode
       --list-devices       List available compute devices and exit
       --device <N>         GPU device index for CUDA/ROCm/Vulkan [default: 0]
@@ -509,7 +510,7 @@ src/
 ├── parallel/          # Distributed inference
 │   ├── transport.zig  #   TCP, POSIX shm, NCCL transport
 │   ├── tp.zig         #   Tensor parallelism utilities
-│   └── discovery.zig  #   UDP peer discovery
+│   └── peer_discovery.zig #   UDP peer discovery
 ├── devices/
 │   └── discovery.zig  #   GPU device enumeration (--list-devices)
 ├── kvcache/
@@ -560,8 +561,10 @@ docker buildx build --load -t agave \
 # Run inference
 docker run --rm -v /path/to/models:/models agave /models/model.gguf "Hello"
 
-# Run HTTP server
-docker run --rm -p 49453:49453 -v /path/to/models:/models agave /models/model.gguf --serve
+# Run HTTP server (AGAVE_API_KEY required: image binds 0.0.0.0)
+# HEALTHCHECK reads AGAVE_PORT; keep -p and -e AGAVE_PORT aligned if you change the port.
+docker run --rm -p 49453:49453 -e AGAVE_API_KEY=changeme \
+  -v /path/to/models:/models agave /models/model.gguf --serve
 
 # Override Zig version at build time
 docker buildx build --build-arg ZIG_VERSION=0.16.0 -t agave .
@@ -595,7 +598,8 @@ zig build -Dtarget=aarch64-linux-musl \
 - **[Benchmarks](docs/BENCHMARKS.md)** — Performance comparisons vs llama.cpp
 - **[Kernel Status](docs/KERNELS.md)** — Per-backend kernel implementation status
 - **[Distributed Inference](docs/PARALLELISM.md)** — TP, PP, disaggregated prefill/decode
-- **[Contributing](docs/CONTRIBUTING.md)** — How to add backends, models, quantization
+- **[Contributing](docs/CONTRIBUTING.md)** — How to add backends, models, quantization; [versioning & releases](docs/CONTRIBUTING.md#versioning--releases)
+- **[Changelog](CHANGELOG.md)** — User-facing history (product version `0.1.0`, 0.x SemVer)
 - **[API Reference](docs/API.md)** — HTTP API endpoints, request/response formats
 - **[Megakernel System](docs/MEGAKERNEL.md)** — Composable fused GPU dispatch
 - **[CLAUDE.md](CLAUDE.md)** — Engineering standards for contributors

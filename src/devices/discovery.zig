@@ -1,5 +1,8 @@
 //! Device discovery for multi-GPU tensor/pipeline parallelism.
 //! Enumerates available compute devices across all enabled backends.
+//!
+//! Distinct from `parallel/peer_discovery.zig` (UDP LAN peer join for TP/PP).
+//! This module only lists local GPUs/CPUs for `--list-devices` and `--device N`.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,6 +12,9 @@ const max_devices: usize = 16;
 const name_buf_size: usize = 64;
 const cc_buf_size: usize = 16;
 
+/// Discrete / host backends that participate in `--list-devices` and TP/PP topology.
+/// WebGPU is intentionally omitted: it exposes one logical adapter (browser or wgpu),
+/// not a multi-device mesh. Inference still selects it via `BackendChoice.webgpu`.
 pub const BackendKind = enum { cpu, metal, cuda, rocm, vulkan };
 
 pub const DeviceInfo = struct {
@@ -39,6 +45,12 @@ pub const DeviceList = struct {
         if (self.count < max_devices) {
             self.devices[self.count] = dev;
             self.count += 1;
+        } else {
+            std.log.warn("device list full ({d}); dropping {s} device_id={d}", .{
+                max_devices,
+                @tagName(dev.backend),
+                dev.device_id,
+            });
         }
     }
 
@@ -442,7 +454,7 @@ test "DeviceList — max capacity enforcement" {
     }
     try @import("std").testing.expectEqual(max_devices, list.count);
 
-    // Adding beyond max should be silently ignored.
+    // Adding beyond max should be ignored (and logged at warn).
     list.add(.{ .backend = .cuda, .device_id = 99 });
     try @import("std").testing.expectEqual(max_devices, list.count);
 }

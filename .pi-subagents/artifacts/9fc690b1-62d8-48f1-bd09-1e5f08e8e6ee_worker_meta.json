@@ -1,0 +1,258 @@
+{
+  "runId": "9fc690b1-62d8-48f1-bd09-1e5f08e8e6ee",
+  "agent": "worker",
+  "task": "Fill tutorial coverage gaps across multiple chapters. Each change should match the existing tutorial style: inline term definitions in bold on first use, Mermaid diagrams where they help, code references to actual source files, and accurate CLI flag names matching src/main.zig.\n\nBefore making any edit, verify the actual code to ensure accuracy. Use `grep` and `read` to check flag names, function signatures, defaults, and struct fields.\n\n## Changes to make\n\n### 1. Ch07 (docs/tutorial/07-sampling.md) — Add CLI flags reference\n\nNear the end of the chapter (before Gotchas), add a section \"## CLI Quick Reference\" with a table of ALL sampling-related CLI flags and their defaults. Check src/main.zig for the exact flag names and defaults. The flags to include are at minimum:\n- `-t` / `--temperature` (default 0)\n- `--top-k` (default)\n- `--top-p` (default)\n- `--min-p` (default)\n- `--repeat-penalty` (default)\n- `--mirostat-mode` (default)\n- `--mirostat-tau` (default)\n- `--mirostat-eta` (default)\n- `--dry-multiplier` (default)\n- `--dry-length` (default)\n- `--xtc-probability` (default)\n- `--xtc-threshold` (default)\n- `--seed` (default)\n- `--grammar` / `--grammar-string`\n- `--json-schema`\n\nVerify each flag and default in src/main.zig before writing.\n\n### 2. Ch22 (docs/tutorial/22-distributed-inference.md) — Add CLI invocation section\n\nBefore the Gotchas section, add a \"## CLI Invocation\" section showing the actual flags. Check src/main.zig for exact names. Include:\n- `--tp N` (note: blocked at CLI today for N>1)\n- `--pp N`\n- `--rank N`\n- `--peers HOST`\n- `--transport tcp|shm|nccl`\n- `--disagg`\n- `--list-devices`\n- `--device N`\n\nShow concrete usage examples matching the AGENTS.md quick reference.\n\n### 3. Ch23 (docs/tutorial/23-server-http-api.md) — Add CLI flags\n\nIn section 11 (Sleep Mode) or a new \"## CLI Quick Reference\" before Gotchas, add:\n- `--sleep-after N` (seconds)\n- `--no-kv-cache`\n- `--max-batch-size N`\n- `--host` / `--port`\n- `--api-key`\n\nVerify in src/main.zig.\n\n### 4. Ch02 (docs/tutorial/02-the-transformer.md) — Add Llama 4 to Attention Variants\n\nFind the \"### Attention Variants\" table and add a row for Llama 4:\n- iRoPE (interleaved RoPE/NoPE layers)\n- Chunked attention on local layers\n\nAlso add a brief paragraph explaining iRoPE after the table entries. Check src/models/llama4.zig for the actual pattern (alternating local RoPE + global NoPE layers). Keep it concise — 3-5 sentences max.\n\n### 5. Ch06 (docs/tutorial/06-state-space-models.md) — Add Nemotron-H Mamba-2 note\n\nIn the hybrid architectures table (around line 388), add Nemotron-H. Check src/models/nemotron_h.zig for the actual layer pattern (how many SSM vs attention vs FFN-only layers). Add one brief paragraph noting Nemotron-H uses Mamba-2 (not DeltaNet like Qwen3.5).\n\n### 6. Ch08 (docs/tutorial/08-backends.md) — Add WASM/browser mention\n\nFind where WebGPU is discussed and add a brief note about the WASM entry point (src/wasm_entry.zig) that enables running in the browser. 2-3 sentences max.\n\n### 7. Ch00 (docs/tutorial/00-getting-started.md) — Add model download mention\n\nIn section 1 (\"The Model Artifact on Disk\"), add a brief note that Agave can download models directly from Hugging Face Hub via `agave pull`:\n\n```\nagave pull Qwen/Qwen3.5-0.6B-GGUF\n```\n\nReference src/pull.zig. Keep it to 2-3 sentences.\n\n## Rules\n- Verify every flag name and default against src/main.zig before writing\n- Verify every struct field and function name against actual source files\n- Match existing tutorial style (inline bold definitions, code blocks, tables)\n- Do not add new tutorial files — only edit existing ones\n- Do not modify content outside the gap areas\n- Run `wc -l` on each modified file when done to confirm reasonable size\n\nReport: changed files, commands run with exit codes, validation evidence, and anything left undone.\n\n## Acceptance Contract\nAcceptance level: checked\nCompletion is not accepted from prose alone. End with a structured acceptance report.\n\nCriteria:\n- criterion-1: Implement the requested change without widening scope\n- criterion-2: Return evidence sufficient for an independent acceptance review\n\nRequired evidence: changed-files, tests-added, commands-run, residual-risks, no-staged-files\n\nReview gate: required by reviewer.\n\nFinish with a fenced JSON block tagged `acceptance-report` in this shape:\nUse empty arrays when no items apply; array fields contain strings unless object entries are shown.\n`criteriaSatisfied[].status` must be exactly one of: satisfied, not-satisfied, not-applicable.\n`commandsRun[].result` must be exactly one of: passed, failed, not-run.\n`manualNotes` and `notes` are optional strings; an empty string means no note and does not satisfy `manual-notes` evidence.\n```acceptance-report\n{\n  \"criteriaSatisfied\": [\n    {\n      \"id\": \"criterion-1\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    },\n    {\n      \"id\": \"criterion-2\",\n      \"status\": \"satisfied\",\n      \"evidence\": \"specific proof\"\n    }\n  ],\n  \"changedFiles\": [\n    \"src/file.ts\"\n  ],\n  \"testsAddedOrUpdated\": [\n    \"test/file.test.ts\"\n  ],\n  \"commandsRun\": [\n    {\n      \"command\": \"command\",\n      \"result\": \"passed\",\n      \"summary\": \"short result\"\n    }\n  ],\n  \"validationOutput\": [\n    \"validation output or concise summary\"\n  ],\n  \"residualRisks\": [\n    \"none\"\n  ],\n  \"noStagedFiles\": true,\n  \"diffSummary\": \"short description of the diff\",\n  \"reviewFindings\": [\n    \"blocker: file.ts:12 - issue found, or no blockers\"\n  ],\n  \"manualNotes\": \"anything else the parent should know\"\n}\n```",
+  "exitCode": 0,
+  "model": "vertex-anthropic/claude-opus-4-6:high",
+  "attemptedModels": [
+    "vertex-anthropic/claude-opus-4-6:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "vertex-anthropic/claude-opus-4-6:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 32,
+        "output": 9654,
+        "cacheRead": 1514102,
+        "cacheWrite": 83553,
+        "cost": 1.5207672500000002,
+        "turns": 23
+      }
+    }
+  ],
+  "acceptance": {
+    "status": "review-required",
+    "evidenceStatus": "checked",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "checked",
+      "explicit": false,
+      "inferredReason": [
+        "async write-capable or risky run"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Implement the requested change without widening scope",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        },
+        {
+          "id": "criterion-2",
+          "must": "Return evidence sufficient for an independent acceptance review",
+          "evidence": [
+            "changed-files",
+            "tests-added",
+            "commands-run",
+            "residual-risks",
+            "no-staged-files"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "changed-files",
+        "tests-added",
+        "commands-run",
+        "residual-risks",
+        "no-staged-files"
+      ],
+      "verify": [],
+      "review": {
+        "agent": "reviewer",
+        "required": true
+      },
+      "stopRules": []
+    },
+    "inferredReason": [
+      "async write-capable or risky run"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Implement the requested change without widening scope",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      },
+      {
+        "id": "criterion-2",
+        "must": "Return evidence sufficient for an independent acceptance review",
+        "evidence": [
+          "changed-files",
+          "tests-added",
+          "commands-run",
+          "residual-risks",
+          "no-staged-files"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [
+      {
+        "id": "criterion:criterion-1",
+        "status": "passed",
+        "message": "Required criterion 'criterion-1' satisfied."
+      },
+      {
+        "id": "criterion:criterion-2",
+        "status": "passed",
+        "message": "Required criterion 'criterion-2' satisfied."
+      },
+      {
+        "id": "evidence:changed-files",
+        "status": "passed",
+        "message": "changed-files evidence present."
+      },
+      {
+        "id": "evidence:tests-added",
+        "status": "not-applicable",
+        "message": "tests-added evidence explicitly reported as not applicable."
+      },
+      {
+        "id": "evidence:commands-run",
+        "status": "passed",
+        "message": "commands-run evidence present."
+      },
+      {
+        "id": "evidence:residual-risks",
+        "status": "passed",
+        "message": "residual-risks evidence present."
+      },
+      {
+        "id": "evidence:no-staged-files",
+        "status": "passed",
+        "message": "no-staged-files evidence present."
+      },
+      {
+        "id": "no-staged-files",
+        "status": "passed",
+        "message": "No staged files detected."
+      }
+    ],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "All 7 requested changes implemented without scope widening: Ch07 CLI table, Ch22 CLI invocation, Ch23 CLI reference, Ch02 Llama 4 iRoPE rows, Ch06 Nemotron-H Mamba-2 paragraph, Ch08 WASM note, Ch00 pull command. No new files created, no content outside gap areas modified."
+        },
+        {
+          "id": "criterion-2",
+          "status": "satisfied",
+          "evidence": "Every flag name and default verified via grep against src/main.zig parseF32/parseU32 orelse values. Llama 4 iRoPE verified against src/models/llama4.zig isNopeLayer + default_nope_interval. Nemotron-H layer counts verified against nemotron_h.zig test fixture (21 SSM, 4 attn, 17 FFN-only). WASM entry verified against src/wasm_entry.zig header comments. Pull subcommand verified against src/pull.zig and main.zig line 545. wc -l confirms reasonable file sizes."
+        }
+      ],
+      "changedFiles": [
+        "docs/tutorial/07-sampling.md",
+        "docs/tutorial/22-distributed-inference.md",
+        "docs/tutorial/23-server-http-api.md",
+        "docs/tutorial/02-the-transformer.md",
+        "docs/tutorial/06-state-space-models.md",
+        "docs/tutorial/08-backends.md",
+        "docs/tutorial/00-getting-started.md"
+      ],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "grep sampling/distributed/server flags in src/main.zig",
+          "result": "passed",
+          "summary": "All flag names and defaults verified against CLI option definitions and parseF32/parseU32 orelse values"
+        },
+        {
+          "command": "grep iRoPE/nope patterns in src/models/llama4.zig",
+          "result": "passed",
+          "summary": "Confirmed isNopeLayer formula: (layer+1) % nope_interval == 0, default interval 4"
+        },
+        {
+          "command": "grep layer_types in src/models/nemotron_h.zig",
+          "result": "passed",
+          "summary": "Confirmed 42 layers, tensor-presence detection, test fixture: 21 SSM + 4 attn + 17 FFN-only"
+        },
+        {
+          "command": "grep wasm/browser in src/wasm_entry.zig",
+          "result": "passed",
+          "summary": "Confirmed WASM exports, CPU-only, Zig 0.16 LLVM 21 codegen bug blocking forward pass"
+        },
+        {
+          "command": "grep pull in src/pull.zig and src/main.zig",
+          "result": "passed",
+          "summary": "Confirmed pull subcommand with --quant and --list flags"
+        },
+        {
+          "command": "wc -l on all 7 modified files",
+          "result": "passed",
+          "summary": "565 + 197 + 148 + 772 + 442 + 535 + 165 = 2824 total lines, all reasonable sizes"
+        },
+        {
+          "command": "git status --porcelain",
+          "result": "passed",
+          "summary": "All 7 files show ' M' (unstaged modifications), no staged files"
+        }
+      ],
+      "validationOutput": [
+        "All 17 sampling flags in Ch07 table match src/main.zig lines 342-358 and runtime defaults at lines 676-1024",
+        "Ch22 distributed flags match src/main.zig lines 362-369, examples match AGENTS.md quick reference",
+        "Ch23 server flags match src/main.zig lines 388-393, --max-batch-size runtime default is 8 (orelse 8 at line 1117)",
+        "Ch02 Llama 4 iRoPE rows verified against src/models/llama4.zig lines 55-76, 690-694",
+        "Ch06 Nemotron-H Mamba-2 paragraph verified against src/models/nemotron_h.zig lines 1-13, 196-225, 775-785",
+        "Ch08 WASM note verified against src/wasm_entry.zig lines 1-14",
+        "Ch00 pull note verified against src/pull.zig lines 1-3 and src/main.zig line 545"
+      ],
+      "residualRisks": [
+        "Pre-existing inconsistency: --max-batch-size help text display says 'default: 1' (line 1663) but runtime default is 8 (orelse 8 at line 1117). Tutorial uses correct runtime value of 8."
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "Added CLI reference tables and usage examples to Ch07 (17 sampling flags), Ch22 (8 distributed flags + 7 examples), Ch23 (7 server flags + 5 examples). Added Llama 4 iRoPE rows + paragraph to Ch02 attention variants. Added Nemotron-H Mamba-2 explanatory paragraph to Ch06. Added WASM/browser note to Ch08. Added agave pull model download note to Ch00.",
+      "reviewFindings": [
+        "no blockers"
+      ],
+      "manualNotes": ""
+    },
+    "reviewResult": {
+      "status": "review-required",
+      "findings": [
+        {
+          "severity": "non-blocking",
+          "issue": "Independent review has not been supplied.",
+          "rationale": "The run cannot be marked reviewed from child evidence alone."
+        }
+      ]
+    }
+  },
+  "launchContractDigest": "1b649dab92a1b821ad2786c541d484cbf386880892ce9ced9b60331393860c1a",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "transcriptPath": "/Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/9fc690b1-62d8-48f1-bd09-1e5f08e8e6ee_worker_transcript.jsonl",
+  "skills": [],
+  "timestamp": 1785855342915
+}

@@ -1,0 +1,137 @@
+{
+  "runId": "e789eeae",
+  "agent": "researcher",
+  "task": "Audit Agave tutorial files chapters 16-23 plus remaining appendices against the actual codebase. For each tutorial file listed below, read the full tutorial content, extract every code reference (file paths, function names, struct names, field names, CLI flags, default values, API patterns), then verify each reference against the actual source files in the repo.\n\nTutorial files to audit:\n- docs/tutorial/16-recipe-system.md\n- docs/tutorial/17-speculative-decoding.md\n- docs/tutorial/18-multi-token-prediction.md\n- docs/tutorial/19-pflash-and-block-sparse.md\n- docs/tutorial/20-diffusion-lm.md\n- docs/tutorial/21-lora.md\n- docs/tutorial/22-distributed-inference.md\n- docs/tutorial/23-server-http-api.md\n- docs/tutorial/appendix-profiling.md\n- docs/tutorial/appendix-troubleshooting.md\n- docs/tutorial/README.md\n\nFor EACH tutorial, produce a structured findings list with:\n1. Tutorial filename\n2. Each claim/reference checked, what the tutorial says vs what the code actually shows\n3. VERDICT per claim: MATCH, MISMATCH, STALE, MISSING, or AMBIGUOUS\n4. For mismatches: the actual code state with file path and line reference\n\nFocus especially on:\n- File paths mentioned (do they exist?)\n- Function/struct names (do they exist in the cited file?)\n- CLI flags (do they match src/cli.zig?)\n- Default values and constants\n- Speculative decoding modes and their implementations\n- Server API endpoints and parameters\n- Distributed inference transport/peer discovery\n\nWrite your complete findings to outputs/tutorials-audit-batch3.md\n\n---\nUpdate progress at: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/progress/e789eeae/progress.md\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/outputs/e789eeae/outputs/tutorials-audit-batch3.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 1,
+  "usage": {
+    "input": 59,
+    "output": 25174,
+    "cacheRead": 5021895,
+    "cacheWrite": 137249,
+    "cost": 3.9983987500000002,
+    "turns": 50
+  },
+  "model": "vertex-anthropic/claude-opus-4-6:high",
+  "attemptedModels": [
+    "vertex-anthropic/claude-opus-4-6:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "vertex-anthropic/claude-opus-4-6:high",
+      "success": false,
+      "exitCode": 1,
+      "error": "Agent 'researcher' requested unavailable child tools: hf_dataset_info, hf_repo_files, hf_repo_read_file.\nThe `tools` field is a strict allowlist; it does not load extension code.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+      "usage": {
+        "input": 59,
+        "output": 25174,
+        "cacheRead": 5021895,
+        "cacheWrite": 137249,
+        "cost": 3.9983987500000002,
+        "turns": 50
+      }
+    }
+  ],
+  "durationMs": 505569,
+  "toolCount": 78,
+  "error": "Agent 'researcher' requested unavailable child tools: hf_dataset_info, hf_repo_files, hf_repo_read_file.\nThe `tools` field is a strict allowlist; it does not load extension code.\nFor extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.\nFor MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
+  "launchContractDigest": "da5b21b0ef899d1eeeb6b388f3b288e12b15166627a7ee58697827a71d0d26cc",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "162 claims checked across 11 tutorial files with file paths and line numbers. 161 MATCH, 0 MISMATCH, 1 AMBIGUOUS (GGUF tensor naming convention — indirectly verified). All file paths, function names, struct names, CLI flags, default values, speculative decoding modes, server API endpoints, distributed transport mechanisms verified against source."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "grep/read across src/recipe.zig, src/main.zig, src/cli.zig, src/spec/*.zig, src/models/*.zig, src/parallel/*.zig, src/devices/*.zig, src/server/*.zig, src/perf.zig, src/lora.zig, src/backend/metal.zig, src/ops/sparse_attn.zig, src/ops/attention.zig, src/backend/kernels/cpu/sdpa_tree.zig",
+          "result": "passed",
+          "summary": "All referenced source files exist; all named structs, functions, enums, constants, and CLI flags verified"
+        }
+      ],
+      "validationOutput": [
+        "161 MATCH, 0 MISMATCH, 1 AMBIGUOUS across 162 checked claims in 11 tutorial files",
+        "Key verified defaults: spec_tokens=5, tree_budget=64, pflash_alpha=0.85, pflash_block_size=64, diffusion_steps=16, diffusion_canvas=256, diffusion_confidence=0.5, max_batch_size=8, default_port=49453, softmax_cpu_threshold=128",
+        "All 14 SpecMode enum values match tutorial descriptions",
+        "All server endpoints (/v1/chat/completions, /v1/completions, /v1/messages, /v1/responses, /health, /metrics) confirmed",
+        "All 4 TransportKind values (tcp, shm, nccl, rccl) confirmed with rccl returning error.NotImplemented"
+      ],
+      "residualRisks": [
+        "Ch 18 GGUF tensor naming convention (blk.N.nextn.*) verified indirectly through model loader code consistency, not through direct GGUF file inspection",
+        "Runtime behavior claims (performance numbers, acceptance rates, speedup factors) not checked — these are algorithmic claims, not code structure claims"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "No files changed — audit-only task",
+      "reviewFindings": [
+        "no blockers: All 162 checked code references in tutorials 16-23 + appendices match the actual codebase"
+      ],
+      "manualNotes": "This batch of tutorials is exceptionally accurate. Zero mismatches found. The 1 AMBIGUOUS item (GGUF MTP tensor naming) is a format convention claim that is consistent with the code but requires actual GGUF file inspection to fully verify. LookaheadState constants (W=5, N=7) initially appeared mismatched but on closer inspection the tutorial correctly describes runtime defaults (n_branches=5, window=7) while compile-time maximums (max_branches=7, max_window=16) are different but not what the tutorial claims."
+    }
+  },
+  "transcriptPath": "/Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/e789eeae_researcher_2_transcript.jsonl",
+  "timestamp": 1785818273836
+}

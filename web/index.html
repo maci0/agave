@@ -3,43 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agave — Browser LLM Inference</title>
+    <title>Agave - Browser LLM Inference</title>
     <style>
+        :root {
+            --bg: #1a1a2e;
+            --surface: #16213e;
+            --text: #e0e0e0;
+            --muted: #a0a0a0;
+            --accent: #5aad35;
+            --accent-hover: #6bb83f;
+            --accent-ink: #1a1a2e;
+            --focus: #5aad35;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
-        body { font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; line-height: 1.5; }
-        header { padding: 1rem 2rem; background: #16213e; border-bottom: 1px solid #333; }
-        header h1 { font-size: 1.2rem; color: #4a8c2a; }
-        header small { color: #999; }
+        body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
+        header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid #333; }
+        header h1 { font-size: 1.2rem; color: var(--accent); }
+        header small { color: var(--muted); }
         main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         #chat { flex: 1; overflow-y: auto; padding: 1rem 2rem; outline: none; }
-        #chat:focus-visible { outline: 2px solid #4a8c2a; outline-offset: -2px; }
-        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; }
-        .msg.user { background: #1a3a5c; margin-left: auto; }
+        #chat:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; line-break: loose; }
+        .msg.user { background: #1a3a5c; margin-inline-start: auto; }
         .msg.assistant { background: #2a2a3e; }
         .msg.system { background: #2a3e2a; color: #8c8; font-size: 0.9rem; max-width: 100%; }
         .msg.error { background: #3e2a2a; color: #e88; font-size: 0.9rem; max-width: 100%; }
-        #controls { padding: 1rem 2rem; background: #16213e; border-top: 1px solid #333; display: flex; gap: 0.5rem; }
-        #prompt { flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 8px; background: #1a1a2e; color: #e0e0e0; font-size: 1rem; transition: border-color 0.15s; }
-        #prompt:focus { border-color: #4a8c2a; box-shadow: 0 0 0 3px rgba(74, 140, 42, 0.15); outline: none; }
-        #prompt:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; }
-        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: #4a8c2a; color: white; cursor: pointer; font-size: 1rem; transition: background 0.15s, transform 0.1s; }
-        button:hover:not(:disabled) { background: #5aa63a; }
+        #controls { padding: 1rem 2rem; background: var(--surface); border-top: 1px solid #333; display: flex; gap: 0.5rem; }
+        #prompt { flex: 1; padding: 0.75rem; border: 1px solid #444; border-radius: 8px; background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; }
+        #prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 173, 53, 0.2); outline: none; }
+        #prompt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 1rem; font-weight: 600; transition: background 0.15s, transform 0.1s; }
+        button:hover:not(:disabled) { background: var(--accent-hover); }
         button:active:not(:disabled) { transform: scale(0.97); }
-        button:disabled { background: #555; cursor: not-allowed; opacity: 0.6; }
+        button:disabled { background: #555; color: #ccc; cursor: not-allowed; opacity: 0.6; }
         input:disabled { opacity: 0.6; cursor: not-allowed; }
-        #status { padding: 0.5rem 2rem; background: #111; color: #888; font-size: 0.85rem; }
-        #model-input { padding: 1rem 2rem; background: #16213e; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-        #model-input input[type="url"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background: #1a1a2e; color: #e0e0e0; }
-        #model-input input[type="url"]:focus { border-color: #4a8c2a; box-shadow: 0 0 0 3px rgba(74, 140, 42, 0.15); outline: none; }
-        #model-input input[type="url"]:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; }
-        #drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 0.5rem 1rem; color: #999; cursor: pointer; font-size: 0.9rem; }
-        #drop-zone:hover { border-color: #4a8c2a; color: #4a8c2a; }
-        #drop-zone.dragover { border-color: #4a8c2a; color: #4a8c2a; }
+        #status { padding: 0.5rem 2rem; background: #111; color: var(--muted); font-size: 0.85rem; }
+        #model-input { padding: 1rem 2rem; background: var(--surface); display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        #model-input label[for="model-url"] { font-size: 0.9rem; color: var(--muted); flex: 0 0 auto; }
+        #model-input input[type="url"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid #444; border-radius: 4px; background: var(--bg); color: var(--text); }
+        #model-input input[type="url"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 173, 53, 0.2); outline: none; }
+        #model-input input[type="url"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+        #drop-zone { border: 2px dashed #666; border-radius: 8px; padding: 0.5rem 1rem; color: var(--muted); cursor: pointer; font-size: 0.9rem; }
+        #drop-zone:hover { border-color: var(--accent); color: var(--accent); }
+        #drop-zone.dragover { border-color: var(--accent); color: var(--accent); }
         #file-input { display: none; }
-        button:focus-visible, input:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; }
-        #drop-zone:focus-visible { outline: 2px solid #4a8c2a; outline-offset: 2px; border-color: #4a8c2a; }
-        .skip-link { position: absolute; top: -100%; left: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: #4a8c2a; color: white; border-radius: 4px; text-decoration: none; transition: top .2s; }
+        button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+        #drop-zone:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-color: var(--accent); }
+        .skip-link { position: absolute; top: -100%; inset-inline-start: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); border-radius: 4px; text-decoration: none; font-weight: 600; transition: top .2s; }
         .skip-link:focus { top: 8px; }
         @media (prefers-reduced-motion: reduce) {
             .skip-link { transition: none; }
@@ -54,7 +65,7 @@
         }
         @media (max-width: 600px) {
             header { padding: 0.75rem 1rem; }
-            #model-input { padding: 0.75rem 1rem; flex-direction: column; }
+            #model-input { padding: 0.75rem 1rem; flex-direction: column; align-items: stretch; }
             #model-input input[type="url"] { min-width: unset; width: 100%; }
             #chat { padding: 0.75rem 1rem; }
             #controls { padding: 0.75rem 1rem; }
@@ -73,21 +84,22 @@
         <small>LLM inference in the browser via WebAssembly</small>
     </header>
     <div id="model-input" role="region" aria-label="Model loading">
-        <input type="url" id="model-url" placeholder="https://example.com/model.gguf" aria-label="Model URL" autocomplete="url" spellcheck="false" />
+        <label for="model-url">Model URL</label>
+        <input type="url" id="model-url" placeholder="https://example.com/model.gguf" autocomplete="url" spellcheck="false" />
         <button type="button" onclick="loadModelFromUrl()" id="load-btn">Load URL</button>
         <div id="drop-zone" role="button" tabindex="0" aria-label="Drop GGUF file or click to browse" onclick="document.getElementById('file-input').click()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.getElementById('file-input').click();}">
             Drop GGUF file or click
         </div>
-        <input type="file" id="file-input" accept=".gguf" onchange="loadModelFromFile(event)" />
+        <input type="file" id="file-input" accept=".gguf" aria-label="Choose GGUF model file" onchange="loadModelFromFile(event)" />
     </div>
     <main aria-label="Chat">
     <div id="status" role="status" aria-live="polite">Status: Not initialized</div>
     <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0"></div>
-    <div id="controls">
+    <form id="controls" onsubmit="event.preventDefault(); send();" aria-label="Send message">
         <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" dir="auto" disabled />
-        <button type="button" onclick="send()" id="send-btn" aria-label="Send message" disabled>Send</button>
-    </div>
-    <div id="input-hint" style="text-align:center;padding:4px;color:#999;font-size:0.8rem;display:none;">Enter to send</div>
+        <button type="submit" id="send-btn" aria-label="Send message" disabled>Send</button>
+    </form>
+    <div id="input-hint" style="text-align:center;padding:4px;color:var(--muted);font-size:0.8rem;display:none;">Enter to send</div>
     </main>
     <div id="sr-announce" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" aria-live="polite" aria-atomic="true"></div>
 
@@ -114,8 +126,13 @@
         });
 
         async function loadModelFromUrl() {
-            const url = document.getElementById('model-url').value;
-            if (!url) return;
+            const url = document.getElementById('model-url').value.trim();
+            if (!url) {
+                status.textContent = 'Error: Enter a model URL first';
+                announceToSR('Enter a model URL first');
+                document.getElementById('model-url').focus();
+                return;
+            }
             await initAndLoad(async () => {
                 status.textContent = 'Status: Downloading model...';
                 await engine.loadModel(url);
@@ -130,7 +147,7 @@
 
         async function loadModelFromBuffer(file) {
             await initAndLoad(async () => {
-                status.textContent = `Status: Reading ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)...`;
+                status.textContent = `Status: Reading ${file.name} (${(file.size / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} MB)...`;
                 const data = await file.arrayBuffer();
                 await engine.loadModel(data);
             });
@@ -138,7 +155,13 @@
 
         async function initAndLoad(loadFn) {
             const loadBtn = document.getElementById('load-btn');
+            const dropZoneEl = document.getElementById('drop-zone');
             loadBtn.disabled = true;
+            loadBtn.setAttribute('aria-busy', 'true');
+            loadBtn.textContent = 'Loading…';
+            dropZoneEl.setAttribute('aria-disabled', 'true');
+            dropZoneEl.style.pointerEvents = 'none';
+            dropZoneEl.style.opacity = '0.5';
             status.textContent = 'Status: Initializing WASM engine...';
             try {
                 if (!engine.ready) await engine.init();
@@ -150,12 +173,18 @@
                 promptInput.placeholder = 'Type a message...';
                 document.getElementById('send-btn').disabled = false;
                 document.getElementById('input-hint').style.display = '';
+                promptInput.focus();
             } catch (e) {
                 status.textContent = `Error: ${e.message}`;
                 addMessage('error', `Error: ${e.message}`);
                 announceToSR('Error loading model: ' + e.message);
             }
             loadBtn.disabled = false;
+            loadBtn.removeAttribute('aria-busy');
+            loadBtn.textContent = 'Load URL';
+            dropZoneEl.removeAttribute('aria-disabled');
+            dropZoneEl.style.pointerEvents = '';
+            dropZoneEl.style.opacity = '';
         }
 
         let isSending = false;
@@ -187,17 +216,23 @@
             isSending = false;
         }
 
+        function truncateAnnounce(text, maxChars) {
+            const chars = Array.from(text);
+            if (chars.length <= maxChars) return text;
+            return chars.slice(0, maxChars).join('') + '...';
+        }
+
         function addMessage(role, text) {
             const div = document.createElement('div');
             div.className = `msg ${role}`;
+            div.dir = 'auto';
             div.textContent = text;
             if (role === 'error') div.setAttribute('role', 'alert');
             chat.appendChild(div);
             chat.scrollTop = chat.scrollHeight;
             if (role === 'error' || role === 'system') announceToSR(text);
             else if (role === 'assistant') {
-                const preview = text.length > 200 ? text.substring(0, 200) + '...' : text;
-                announceToSR('Agave responded: ' + preview);
+                announceToSR('Agave responded: ' + truncateAnnounce(text, 200));
             }
         }
 

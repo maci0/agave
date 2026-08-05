@@ -1,4 +1,4 @@
-//! Display module — types and output formatting for the Agave inference engine.
+//! Display module: types and output formatting for the Agave inference engine.
 //! Provides TTY-aware output (banner, stats, progress) and JSON serialization.
 //! Single source of truth for all display-related types used across main.zig and server.zig.
 
@@ -11,7 +11,8 @@ const term = @import("term.zig");
 const erase_line = "\x1b[K";
 
 /// Engine version string, shared across all output modes.
-pub const version = "0.1.0";
+/// Single source of truth: `build.zig.zon` `.version`, injected via `build_options`.
+pub const version = @import("build_options").version;
 
 /// Brand emoji for version/banner output (🌵).
 pub const cactus = "\xf0\x9f\x8c\xb5";
@@ -1001,6 +1002,11 @@ test "sanitizeMetadata strips control characters" {
     try std.testing.expectEqual(@as(u8, '?'), result[15]);
     // Regular chars preserved
     try std.testing.expectEqual(@as(u8, 'h'), result[0]);
+}
+
+test "version is non-empty semver-shaped product string" {
+    try std.testing.expect(version.len >= 5);
+    try std.testing.expect(std.mem.indexOfScalar(u8, version, '.') != null);
 }
 
 test "Display.init" {

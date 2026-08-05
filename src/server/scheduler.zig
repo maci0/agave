@@ -7,12 +7,11 @@
 const std = @import("std");
 const Io = std.Io;
 const Mutex = Io.Mutex;
+const sim_clock = @import("../sim_clock.zig");
 
-/// Millisecond timestamp via raw clock_gettime.
+/// Millisecond timestamp (injectable via sim_clock for deterministic tests).
 fn milliTimestamp() i64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    return sim_clock.milliNow();
 }
 
 const Model = @import("../models/model.zig").Model;
@@ -648,6 +647,9 @@ test "step removes finished requests" {
 
 test "step cancels timed-out requests" {
     const allocator = std.testing.allocator;
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(10_000);
+
     var metrics = Metrics{};
     var manager = try RequestManager.init(allocator, &metrics, 2, 1, null, testIo()); // 1 second timeout
     defer manager.deinit();
@@ -656,20 +658,28 @@ test "step cancels timed-out requests" {
     const req = try manager.enqueue(&dummy_tokens);
     // req stays in running (cancelled but not removed until next step) — freed by manager.deinit()
 
-    // Simulate request enqueued 2 seconds ago
-    req.enqueued_at = milliTimestamp() - 2000;
-
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
 
-    // Step 1: move to running
-    try manager.step(&model, &[_]u32{});
+    // At exactly timeout_sec seconds, elapsed > timeout is false — must not cancel yet.
+    sim_clock.advanceMs(1000);
+    try manager.step(&model, &[_]u32{}); // admit to running
+    try std.testing.expect(!req.is_cancelled.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().running_count);
+    try std.testing.expectEqual(@as(u64, 0), metrics.requests_timeout.load(.monotonic));
 
-    // Step 2: check timeout on running requests
+    // Cross into the next whole second while running (elapsedSeconds uses ms/1000).
+    sim_clock.advanceMs(1000);
     try manager.step(&model, &[_]u32{});
-
-    // Should be cancelled due to timeout
     try std.testing.expect(req.is_cancelled.load(.acquire));
+    try std.testing.expectEqual(@as(u64, 1), metrics.requests_timeout.load(.monotonic));
+    // Cancelled requests stay in running until the next step removes them.
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().running_count);
+
+    try manager.step(&model, &[_]u32{});
+    try std.testing.expectEqual(@as(u32, 0), manager.getStats().running_count);
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().cancelled_total);
+    try std.testing.expect(req.scheduler_done.load(.acquire));
 }
 
 test "appendToken marks finished on EOG" {
@@ -775,11 +785,10 @@ test "requestPriority prefers longer cached prefix" {
 
 test "appendToken at capacity sets cancelled flag" {
     const allocator = std.testing.allocator;
-    // Verify that when items.len >= capacity, appendToken sets is_cancelled
-    // without appending. We test this by checking the code path condition
-    // directly: construct a Request where tokens.items.len == tokens.capacity.
+    // Small capacity so we can fill the buffer without allocating 4K tokens.
+    const cap: usize = 3;
     var tokens: std.ArrayList(u32) = .empty;
-    try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
+    try tokens.ensureTotalCapacity(allocator, cap);
     defer tokens.deinit(allocator);
 
     var req = Request{
@@ -794,14 +803,21 @@ test "appendToken at capacity sets cancelled flag" {
         .allocator = allocator,
     };
 
-    // Verify normal append works
-    req.appendToken(42, &[_]u32{});
-    try std.testing.expectEqual(@as(usize, 1), req.tokens.items.len);
-    try std.testing.expect(!req.is_cancelled.load(.acquire));
-    try std.testing.expectEqual(@as(u32, 42), req.last_token_id);
+    var i: u32 = 0;
+    while (i < cap) : (i += 1) {
+        req.appendToken(i + 1, &[_]u32{});
+        try std.testing.expect(!req.is_cancelled.load(.acquire));
+    }
+    try std.testing.expectEqual(cap, req.tokens.items.len);
+    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.visible_len.load(.acquire));
+    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.last_token_id);
 
-    // Verify capacity > 0 and the guard condition in appendToken
-    try std.testing.expect(req.tokens.capacity >= initial_token_capacity);
+    // Next append must cancel without growing the buffer or mutating state.
+    req.appendToken(999, &[_]u32{});
+    try std.testing.expect(req.is_cancelled.load(.acquire));
+    try std.testing.expectEqual(cap, req.tokens.items.len);
+    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.last_token_id);
+    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.visible_len.load(.acquire));
 }
 
 test "elapsedSeconds large elapsed" {
@@ -884,6 +900,9 @@ test "Request.deinit frees tokens" {
     };
     req.appendToken(42, &[_]u32{});
     req.appendToken(43, &[_]u32{});
+    try std.testing.expectEqual(@as(usize, 2), req.tokens.items.len);
+    try std.testing.expectEqual(@as(u32, 43), req.last_token_id);
+    try std.testing.expectEqual(@as(u32, 2), req.visible_len.load(.acquire));
     // deinit should not leak (testing allocator will catch leaks)
     req.deinit();
 }
@@ -894,8 +913,12 @@ test "milliTimestamp returns positive value" {
 }
 
 test "sleepNs does not crash" {
-    // Verify sleepNs completes without error for a minimal duration
+    // Zero-duration and short sleep must complete; clock must not go backwards.
+    const before = milliTimestamp();
+    sleepNs(0);
     sleepNs(1_000); // 1 microsecond
+    const after = milliTimestamp();
+    try std.testing.expect(after >= before);
 }
 
 // Mock model for testing

@@ -103,7 +103,8 @@ fn findByShort(specs: []const ArgSpec, ch: u8) ?*const ArgSpec {
 /// are treated as positionals. Unrecognized long options are stored as
 /// flags (or as options when using `--name=value` form). Unrecognized
 /// short options are treated as positionals to avoid breaking on model
-/// paths that start with `-` (rare but possible).
+/// paths that start with `-` (rare but possible). Callers should reject
+/// letter-only shorts that look like typos (see rejectUnknownShortPositionals).
 pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []const ArgSpec) ParseResult {
     var result = ParseResult{
         .flags = std.StringHashMap(void).init(allocator),
@@ -185,7 +186,7 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
                     }
                 }
             } else {
-                // Unknown short: treat as positional
+                // Unknown short: treat as positional (callers may reject letter-only typos)
                 result.positionals.append(allocator, arg) catch @panic("out of memory");
             }
             continue;
@@ -206,9 +207,24 @@ test "flag parsing" {
         .{ .long = "verbose", .short = 'V' },
     };
 
-    // Simulate args: ["prog", "--help", "-V"]
-    // We can't easily construct std.process.Args in tests, so we test
-    // the lookup helpers instead.
+    // POSIX Args.Vector is []const [*:0]const u8 (same construction as fuzz tests).
+    const argv = [_][*:0]const u8{ "agave", "--help", "-V" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expect(r.flag("help"));
+    try std.testing.expect(r.flag("verbose"));
+    try std.testing.expect(!r.flag("serve"));
+    try std.testing.expect(r.positional(0) == null);
+}
+
+test "findByLong and findByShort lookup" {
+    const specs = [_]ArgSpec{
+        .{ .long = "help", .short = 'h' },
+        .{ .long = "verbose", .short = 'V' },
+    };
+
     const h = findByLong(&specs, "help");
     try std.testing.expect(h != null);
     try std.testing.expectEqual(@as(?u8, 'h'), h.?.short);
@@ -219,6 +235,54 @@ test "flag parsing" {
 
     const missing = findByLong(&specs, "nonexistent");
     try std.testing.expect(missing == null);
+}
+
+test "parse options equals form and double dash" {
+    const specs = [_]ArgSpec{
+        .{ .long = "backend", .short = 'b', .kind = .option },
+        .{ .long = "max-tokens", .short = 'n', .kind = .option },
+        .{ .long = "verbose", .short = 'V' },
+    };
+
+    const argv = [_][*:0]const u8{ "agave", "--backend=metal", "-n", "128", "--", "--verbose", "model.gguf" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expectEqualStrings("metal", r.option("backend").?);
+    try std.testing.expectEqual(@as(?u32, 128), r.optionU32("max-tokens"));
+    // After `--`, `--verbose` is positional, not a flag.
+    try std.testing.expect(!r.flag("verbose"));
+    try std.testing.expectEqualStrings("--verbose", r.positional(0).?);
+    try std.testing.expectEqualStrings("model.gguf", r.positional(1).?);
+}
+
+test "parse missing option value sets missing_value" {
+    const specs = [_]ArgSpec{
+        .{ .long = "backend", .kind = .option },
+    };
+
+    const argv = [_][*:0]const u8{ "agave", "--backend" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expectEqualStrings("backend", r.missing_value.?);
+    try std.testing.expect(r.option("backend") == null);
+}
+
+test "parse unknown short treated as positional" {
+    const specs = [_]ArgSpec{
+        .{ .long = "help", .short = 'h' },
+    };
+
+    const argv = [_][*:0]const u8{ "agave", "-x", "model.gguf" };
+    const args = std.process.Args{ .vector = &argv };
+    var r = parse(std.testing.allocator, args, &specs);
+    defer r.deinit();
+
+    try std.testing.expectEqualStrings("-x", r.positional(0).?);
+    try std.testing.expectEqualStrings("model.gguf", r.positional(1).?);
 }
 
 test "option spec lookup" {

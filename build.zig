@@ -1,5 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
+/// Product SemVer from build.zig.zon; injected into binaries via build_options.version.
+const package_version: []const u8 = @import("build.zig.zon").version;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -179,9 +181,11 @@ pub fn build(b: *std.Build) void {
         //
         // Run this build step on a Linux machine with ROCm installed and llvm-objcopy
         // (from /opt/rocm/lib/llvm/bin) in PATH. The resulting HSACO is committed.
-        const fix_obj = b.addSystemCommand(&.{
-            "python3", b.path("src/backend/kernels/rocm/fix_kd_isa.py").getPath(b),
-        });
+        // Pass the fixup script via addFileArg so the build graph tracks it as an
+        // input (rebuilds when the script changes) and avoids configure-time getPath
+        // absolute host paths.
+        const fix_obj = b.addSystemCommand(&.{"python3"});
+        fix_obj.addFileArg(b.path("src/backend/kernels/rocm/fix_kd_isa.py"));
         fix_obj.addFileArg(obj.getEmittedBin());
         const fixed_obj = fix_obj.addOutputFileArg("kernels_fixed.o");
         fix_obj.step.dependOn(&obj.step);
@@ -198,6 +202,7 @@ pub fn build(b: *std.Build) void {
 
     // ── ReleaseFast executable (default) ──────────────────────────
     const backend_options = b.addOptions();
+    backend_options.addOption([]const u8, "version", package_version);
     backend_options.addOption(bool, "enable_cpu", enable_cpu);
     backend_options.addOption(bool, "enable_metal", enable_metal);
     backend_options.addOption(bool, "enable_vulkan", enable_vulkan);
@@ -404,6 +409,7 @@ pub fn build(b: *std.Build) void {
     // ── WASM build (browser inference) ──────────────────────────
     const wasm_step = b.step("wasm", "Build WebAssembly module for browser inference");
     const wasm_options = b.addOptions();
+    wasm_options.addOption([]const u8, "version", package_version);
     wasm_options.addOption(bool, "enable_cpu", true);
     wasm_options.addOption(bool, "enable_metal", false);
     wasm_options.addOption(bool, "enable_vulkan", false);

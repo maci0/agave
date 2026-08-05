@@ -204,7 +204,9 @@ test "wasmLogFn is a no-op" {
     comptime {
         _ = &wasmLogFn;
     }
+    // Must complete without trapping; scope/level are accepted but ignored.
     wasmLogFn(.debug, .wasm, "test {}", .{42});
+    wasmLogFn(.err, .wasm, "err {s}", .{"x"});
 }
 
 test "agave_alloc zero returns null pointer" {
@@ -220,6 +222,10 @@ test "agave_alloc and agave_dealloc round-trip" {
 test "agave_dealloc zero ptr is safe" {
     agave_dealloc(0, 0);
     agave_dealloc(0, 16);
+    // Still able to allocate after null deallocs.
+    const ptr = agave_alloc(8);
+    try std.testing.expect(ptr != 0);
+    agave_dealloc(ptr, 8);
 }
 
 test "fuzz: wasm entry pure functions" {

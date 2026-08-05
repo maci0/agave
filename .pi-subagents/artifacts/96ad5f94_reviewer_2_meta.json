@@ -1,0 +1,174 @@
+{
+  "runId": "96ad5f94",
+  "agent": "reviewer",
+  "task": "Review the current unstaged diff in docs/tutorial/ for COMPLETENESS and GAPS.\n\nRun `git diff docs/tutorial/` to see the changes. For each of the 7 modified files, assess:\n\n1. **Ch07 sampling CLI** — Are any sampling-related flags from src/main.zig still missing from the table? Check every `.long =` option definition in the CLI parser related to sampling.\n2. **Ch22 distributed** — Are the examples sufficient? Is --rank's range documented? Missing flags?\n3. **Ch23 server** — Is --mmap missing (it's server-relevant for memory-mapped weights)? Any other server flags missed?\n4. **Ch02 Llama 4** — Does the iRoPE explanation cover enough? Should MoE routing be mentioned (Llama 4 has MoE)?\n5. **Ch06 Nemotron-H** — Is the distinction between DeltaNet and Mamba-2 clear enough for the target audience?\n6. **Ch08 WASM** — Is the codegen bug note going to be confusing? Should it mention what works vs what doesn't?\n7. **Ch00 pull** — Is `--quant Q4_K_M` the right flag name? Does pull actually use that flag?\n\nAlso check: does the diff introduce any redundancy with existing content in the same chapters?\n\nList specific findings. Do NOT edit any files.\n\n---\n**Output:**\nWrite your findings to exactly this path: /Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/outputs/96ad5f94/parallel-0/2-reviewer/review.md\nThis path is authoritative for this run.\nIgnore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt, system prompt, or task instructions.",
+  "exitCode": 0,
+  "usage": {
+    "input": 26,
+    "output": 9100,
+    "cacheRead": 534960,
+    "cacheWrite": 64863,
+    "cost": 0.90050375,
+    "turns": 17
+  },
+  "model": "vertex-anthropic/claude-opus-4-6:high",
+  "attemptedModels": [
+    "vertex-anthropic/claude-opus-4-6:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "vertex-anthropic/claude-opus-4-6:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 26,
+        "output": 9100,
+        "cacheRead": 534960,
+        "cacheWrite": 64863,
+        "cost": 0.90050375,
+        "turns": 17
+      }
+    }
+  ],
+  "durationMs": 212782,
+  "toolCount": 41,
+  "launchContractDigest": "8081ca2a6db427a4d3e062266bdb630e6178858bcc703e3511ca198ff4ed2cfd",
+  "launchResolvedExtensions": {
+    "version": 1,
+    "source": "launch-resolved",
+    "disableAmbientExtensions": false,
+    "runtime": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "configured": [],
+    "effective": [
+      "sha256:ffde8c173fd18e6f"
+    ],
+    "omitted": {
+      "runtime": 0,
+      "configured": 0,
+      "effective": 0
+    }
+  },
+  "acceptance": {
+    "status": "attested",
+    "evidenceStatus": "attested",
+    "explicit": false,
+    "effectiveAcceptance": {
+      "level": "attested",
+      "explicit": false,
+      "inferredReason": [
+        "read-only/reviewer-style agent"
+      ],
+      "criteria": [
+        {
+          "id": "criterion-1",
+          "must": "Return concrete findings with file paths and severity when applicable",
+          "evidence": [
+            "review-findings",
+            "residual-risks"
+          ],
+          "severity": "required"
+        }
+      ],
+      "evidence": [
+        "review-findings",
+        "residual-risks"
+      ],
+      "verify": [],
+      "stopRules": []
+    },
+    "inferredReason": [
+      "read-only/reviewer-style agent"
+    ],
+    "criteria": [
+      {
+        "id": "criterion-1",
+        "must": "Return concrete findings with file paths and severity when applicable",
+        "evidence": [
+          "review-findings",
+          "residual-risks"
+        ],
+        "severity": "required"
+      }
+    ],
+    "runtimeChecks": [],
+    "verifyRuns": [],
+    "childReport": {
+      "criteriaSatisfied": [
+        {
+          "id": "criterion-1",
+          "status": "satisfied",
+          "evidence": "12 findings (W1–W12) with file paths, line numbers, and severity ratings (3 MAJOR, 9 MINOR). Each finding references specific source lines in src/main.zig, src/pull.zig, src/models/llama4.zig, src/models/nemotron_h.zig, or src/wasm_entry.zig."
+        }
+      ],
+      "changedFiles": [],
+      "testsAddedOrUpdated": [],
+      "commandsRun": [
+        {
+          "command": "git diff docs/tutorial/",
+          "result": "passed",
+          "summary": "117 lines added across 7 files in docs/tutorial/"
+        },
+        {
+          "command": "grep -n '.long =' src/main.zig",
+          "result": "passed",
+          "summary": "79 CLI options extracted; all 17 sampling flags verified present in Ch07 table"
+        },
+        {
+          "command": "head -100 src/pull.zig",
+          "result": "passed",
+          "summary": "Confirmed --quant flag name matches docs; verified --list exists"
+        },
+        {
+          "command": "grep MoE/expert src/models/llama4.zig",
+          "result": "passed",
+          "summary": "Confirmed Llama 4 has MoE routing (top-1 expert + shared expert) — missing from Ch02 diff"
+        },
+        {
+          "command": "grep peers/parsePeerAddr src/main.zig",
+          "result": "passed",
+          "summary": "Confirmed --peers accepts HOST:PORT format, but docs only show HOST"
+        }
+      ],
+      "validationOutput": [
+        "Ch07 sampling: COMPLETE — all 17 sampling flags from main.zig lines 342-358 present with correct defaults",
+        "Ch22 distributed: --peers format inaccurate (HOST vs HOST[:PORT]), TP note duplicates Gotcha, --rank range undocumented",
+        "Ch23 server: --mmap missing, several server-operator flags (--ctx-size, --kv-type, --backend) absent",
+        "Ch02 Llama 4: MoE routing completely omitted despite being a defining feature (confirmed in llama4.zig lines 7-8, 78-79, 98-101)",
+        "Ch00 pull: --quant flag name correct, but HF_TOKEN/HF_HOME env vars and --list description missing from prose"
+      ],
+      "residualRisks": [
+        "W7 (MoE omission in Llama 4) is the largest content gap — a defining architectural feature is invisible to readers",
+        "W1 (--peers format) could cause real user confusion when configuring non-default ports",
+        "W5 (--mmap missing from server) is a practical gap for production server deployments"
+      ],
+      "noStagedFiles": true,
+      "diffSummary": "117 lines added across 7 tutorial chapters: CLI reference tables for sampling/distributed/server, Llama 4 iRoPE, Nemotron-H Mamba-2 distinction, WASM entry point, and pull subcommand. Review-only pass, no edits made.",
+      "reviewFindings": [
+        "MAJOR: Ch02 (02-the-transformer.md) — Llama 4 MoE routing completely omitted; llama4.zig has top-1 expert routing + shared expert + dense fallback",
+        "MAJOR: Ch22 (22-distributed-inference.md) — --peers format shows HOST but source accepts HOST[:PORT] per main.zig:367",
+        "MAJOR: Ch22 (22-distributed-inference.md) — TP-blocked Note blockquote duplicates first Gotcha verbatim",
+        "MAJOR: Ch23 (23-server-http-api.md) — --mmap missing from server flags table despite being server-relevant",
+        "MINOR: Ch22 — --rank range (0-1 only) not surfaced in flag table",
+        "MINOR: Ch22 — --backend used in example but not in flag table",
+        "MINOR: Ch23 — --ctx-size, --kv-type, --backend also absent from server table",
+        "MINOR: Ch06 — Mamba-2 vs DeltaNet comparison is dense, could use backreference",
+        "MINOR: Ch08 — WASM codegen bug note doesn't specify failure mode (compile-time crash)",
+        "MINOR: Ch08 — No resolution path or issue tracker link for WASM bug",
+        "MINOR: Ch00 — --list flag only described in code comment, not prose",
+        "MINOR: Ch00 — HF_TOKEN/HF_HOME env vars not mentioned"
+      ],
+      "manualNotes": "Ch07 sampling table is the strongest addition — verified complete against all 17 sampling .long options in main.zig. The 4 MAJOR findings should be addressed before merging; the 8 MINOR findings are polish."
+    }
+  },
+  "effects": {
+    "fileMutation": {
+      "status": "not-applicable",
+      "expected": false,
+      "attempted": true
+    }
+  },
+  "transcriptPath": "/Users/mwysocki/Experiments/agave/.pi-subagents/artifacts/96ad5f94_reviewer_2_transcript.jsonl",
+  "timestamp": 1785855601079
+}

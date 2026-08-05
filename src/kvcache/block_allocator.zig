@@ -287,8 +287,10 @@ test "freeSeqTable on empty table is a no-op" {
     var block_alloc = BlockAllocator.init(&paged, allocator);
     // Create an "empty" SeqBlockTable with zero layers
     var empty = SeqBlockTable{ .block_table = &.{}, .seq_len = 0 };
-    // Should not crash
+    const free_before = paged.freeCount();
     block_alloc.freeSeqTable(&empty);
+    try std.testing.expectEqual(free_before, paged.freeCount());
+    try std.testing.expectEqual(@as(usize, 0), empty.seq_len);
 }
 
 test "free and re-allocate produces valid blocks" {

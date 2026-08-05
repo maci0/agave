@@ -1342,9 +1342,11 @@ test "weightBytes — NVFP4" {
 }
 
 test "weightBytes — all dtypes handled" {
-    // Ensure weightBytes doesn't panic for any DType variant.
+    // Ensure weightBytes doesn't panic for any DType variant and stays bounded.
     inline for (comptime std.enums.values(DType)) |dtype| {
-        _ = weightBytes(dtype, 256, 256);
+        const bytes = weightBytes(dtype, 256, 256);
+        // n*k f32 is an upper bound for dense/quantized layouts at these dims.
+        try std.testing.expect(bytes <= 256 * 256 * @sizeOf(f32));
     }
 }
 

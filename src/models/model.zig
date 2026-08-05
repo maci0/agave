@@ -48,6 +48,12 @@ pub const ForwardError = error{
 /// Usage: implement `forward`, `prefill`, `resetCache`, `cancel` methods and fields
 /// `eos_token_id`, `vocab_size`, `n_layers`, `n_embd`, `n_head`, `n_head_kv`,
 /// then call `Model.from(MyModel, &my_instance)`.
+///
+/// Required for every architecture: forward, prefill, reset_cache, cancel, dims
+/// getters, get_logits, KV seq accessors. Optional features (tree verify, MTP,
+/// EAGLE hidden state, SSM snapshot, image embeddings, KV export) get soft
+/// no-op / empty-slice stubs from `genVTable` when the concrete type omits them.
+/// Prefer stubs over forcing every model to stub optional APIs by hand.
 pub const Model = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -1202,9 +1208,15 @@ const MockModel = struct {
     n_visual_tokens: u32 = 0,
     image_pad_token_id: u32 = 0,
     visual_token_idx: u32 = 0,
+    cache_reset_count: u32 = 0,
+    ssm_restore_count: u32 = 0,
+    mtp_reset_count: u32 = 0,
 
     const MockBackend = struct {
-        pub fn setThreadContext(_: *MockBackend) void {}
+        thread_context_count: u32 = 0,
+        pub fn setThreadContext(self: *MockBackend) void {
+            self.thread_context_count += 1;
+        }
     };
 
     fn forward(_: *MockModel, _: u32) ForwardError!u32 {
@@ -1213,12 +1225,20 @@ const MockModel = struct {
     fn prefill(_: *MockModel, _: []const u32) ForwardError!u32 {
         return 7;
     }
-    fn resetCache(_: *MockModel) void {}
+    fn resetCache(self: *MockModel) void {
+        self.cache_reset_count += 1;
+    }
     fn cancel(self: *MockModel) void {
         signalCancel(&self.cancelled);
     }
     fn getBlockTable(_: *MockModel) []const u32 {
         return &.{};
+    }
+    fn restoreSsmState(self: *MockModel, _: []const u8) void {
+        self.ssm_restore_count += 1;
+    }
+    fn resetMtpCache(self: *MockModel) void {
+        self.mtp_reset_count += 1;
     }
 };
 
@@ -1298,7 +1318,8 @@ test "Model.from and vtable dispatch — prefill" {
 test "Model.from and vtable dispatch — resetCache" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
-    m.resetCache(); // Must not panic
+    m.resetCache();
+    try std.testing.expectEqual(@as(u32, 1), mock.cache_reset_count);
 }
 
 test "Model.from and vtable dispatch — cancel" {
@@ -1311,7 +1332,8 @@ test "Model.from and vtable dispatch — cancel" {
 test "Model.from and vtable dispatch — setThreadContext" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
-    m.setThreadContext(); // Must not panic
+    m.setThreadContext();
+    try std.testing.expectEqual(@as(u32, 1), mock.be.thread_context_count);
 }
 
 test "Model.from and vtable dispatch — getBlockTable" {
@@ -1364,7 +1386,8 @@ test "Model.from and vtable dispatch — saveSsmState returns null for mock" {
 test "Model.from and vtable dispatch — restoreSsmState no-op for mock" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
-    m.restoreSsmState(&[_]u8{ 1, 2, 3 }); // Must not panic
+    m.restoreSsmState(&[_]u8{ 1, 2, 3 });
+    try std.testing.expectEqual(@as(u32, 1), mock.ssm_restore_count);
 }
 
 test "Model.from and vtable dispatch — getMtpDepth returns 0 for mock" {
@@ -1382,7 +1405,8 @@ test "Model.from and vtable dispatch — getMtpLogits returns empty for mock" {
 test "Model.from and vtable dispatch — resetMtpCache no-op for mock" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
-    m.resetMtpCache(); // Must not panic
+    m.resetMtpCache();
+    try std.testing.expectEqual(@as(u32, 1), mock.mtp_reset_count);
 }
 
 test "Model.from and vtable dispatch — mtpForward returns MissingTensor for mock" {

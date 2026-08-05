@@ -699,21 +699,76 @@ test "fuzz: all image functions" {
                 _ = @intFromEnum(fmt); // valid enum
             }
 
-            // --- pub fn decodePng ---
+            // --- pub fn decodePng (structure-aware: valid sig + IHDR, mutated body) ---
+            // Random bytes almost never pass the PNG signature check, so build a
+            // minimal PNG-shaped buffer that reaches chunk parsing / zlib / unfilter.
             {
-                var buf: [64]u8 = undefined;
+                var buf: [512]u8 = undefined;
                 for (&buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 100));
-                var img = decodePng(allocator, &buf) catch return;
-                img.deinit(); // exercises PngImage.deinit
+                @memcpy(buf[0..png_signature.len], &png_signature);
+                // IHDR: length=13, type=IHDR, 13-byte payload, 4-byte CRC
+                std.mem.writeInt(u32, buf[8..12], 13, .big);
+                @memcpy(buf[12..16], &chunk_ihdr);
+                const w: u32 = @as(u32, smith.valueWithHash(u8, 120) % 4) + 1; // 1..4
+                const h: u32 = @as(u32, smith.valueWithHash(u8, 121) % 4) + 1; // 1..4
+                std.mem.writeInt(u32, buf[16..20], w, .big);
+                std.mem.writeInt(u32, buf[20..24], h, .big);
+                buf[24] = supported_bit_depth; // bit depth
+                buf[25] = if (smith.valueWithHash(u8, 122) & 1 == 0) color_type_rgb else color_type_rgba;
+                buf[26] = 0; // compression
+                buf[27] = 0; // filter
+                buf[28] = 0; // interlace
+                // CRC left as fuzz bytes. Optionally plant an IDAT + IEND skeleton.
+                if (smith.valueWithHash(u8, 123) & 1 == 0) {
+                    const idat_off: usize = 33; // after IHDR CRC
+                    const idat_len: u32 = @as(u32, smith.valueWithHash(u8, 124) % 64) + 1;
+                    if (idat_off + 12 + idat_len + 12 <= buf.len) {
+                        std.mem.writeInt(u32, buf[idat_off..][0..4], idat_len, .big);
+                        @memcpy(buf[idat_off + 4 ..][0..4], &chunk_idat);
+                        const iend_off = idat_off + 8 + idat_len + 4;
+                        std.mem.writeInt(u32, buf[iend_off..][0..4], 0, .big);
+                        @memcpy(buf[iend_off + 4 ..][0..4], &chunk_iend);
+                    }
+                }
+                var img = decodePng(allocator, &buf) catch {
+                    // Also exercise fully-random buffers for signature rejection path
+                    var junk: [64]u8 = undefined;
+                    for (&junk, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 150));
+                    _ = decodePng(allocator, &junk) catch {};
+                    return;
+                };
+                defer img.deinit();
+                try std.testing.expect(img.width > 0);
+                try std.testing.expect(img.height > 0);
+                try std.testing.expect(img.pixels.len == @as(usize, img.width) * img.height * rgb_channels);
             }
 
-            // --- pub fn decodePpm ---
+            // --- pub fn decodePpm (structure-aware: P6 header + mutated pixels) ---
             {
-                var buf: [64]u8 = undefined;
-                for (&buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 200));
-                const ppm = decodePpm(&buf) catch return;
-                try std.testing.expect(ppm.width > 0);
-                try std.testing.expect(ppm.height > 0);
+                var buf: [256]u8 = undefined;
+                const w: u32 = @as(u32, smith.valueWithHash(u8, 200) % 4) + 1;
+                const h: u32 = @as(u32, smith.valueWithHash(u8, 201) % 4) + 1;
+                const hdr = std.fmt.bufPrint(&buf, "P6\n{d} {d}\n255\n", .{ w, h }) catch unreachable;
+                const pixel_bytes = @as(usize, w) * h * rgb_channels;
+                if (hdr.len + pixel_bytes <= buf.len) {
+                    for (buf[hdr.len .. hdr.len + pixel_bytes], 0..) |*b, i| {
+                        b.* = smith.valueWithHash(u8, @intCast(i +| 210));
+                    }
+                    const ppm = decodePpm(buf[0 .. hdr.len + pixel_bytes]) catch {
+                        // Rejection path with truncated / junk bodies
+                        var junk: [64]u8 = undefined;
+                        for (&junk, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 250));
+                        _ = decodePpm(&junk) catch {};
+                        return;
+                    };
+                    try std.testing.expectEqual(w, ppm.width);
+                    try std.testing.expectEqual(h, ppm.height);
+                    try std.testing.expectEqual(pixel_bytes, ppm.pixels.len);
+                } else {
+                    var junk: [64]u8 = undefined;
+                    for (&junk, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i +| 250));
+                    _ = decodePpm(&junk) catch {};
+                }
             }
 
             // --- pub fn resize ---

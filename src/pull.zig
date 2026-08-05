@@ -39,10 +39,11 @@ const stderr_file = Io.File.stderr();
 /// Module-level Io instance, set by run() from caller.
 var mod_io: Io = undefined;
 
-/// Nanosecond timestamp via raw C call.
+/// Nanosecond timestamp via CLOCK_MONOTONIC (progress-interval deltas).
+/// REALTIME can jump under NTP and make the progress bar stutter or stall.
 fn nanoTimestamp() i128 {
     var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
@@ -287,6 +288,12 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
     var have_repo = false;
 
     result.token = getenv("HF_TOKEN");
+    if (result.token) |t| {
+        // Empty/whitespace HF_TOKEN would send `Authorization: Bearer ` and fail
+        // auth with a confusing 401 instead of treating the token as unset.
+        const trimmed = std.mem.trim(u8, t, " \t\r\n");
+        result.token = if (trimmed.len == 0) null else trimmed;
+    }
 
     var past_options = false;
 
@@ -336,6 +343,7 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
             past_options = true;
         } else if (arg.len > 0 and arg[0] == '-') {
             eprint("Error: unknown option '{s}'\n", .{arg});
+            eprint("  Valid options: --help, --version, --list, --quant\n", .{});
             eprint("Run 'agave pull --help' for more information.\n", .{});
             return PullError.InvalidArgument;
         } else {
