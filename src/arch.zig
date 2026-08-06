@@ -49,6 +49,8 @@ pub const Arch = enum {
             .{ "glm4_moe_lite", .glm4 },
             .{ "glm4", .glm4 },
             .{ "deepseek2", .glm4 },
+            .{ "deepseek_v4", .glm4 },
+            .{ "deepseek4", .glm4 },
             .{ "llama4", .llama4 },
             .{ "llama4_text", .llama4 },
             .{ "diffusion_gemma", .diffusion_gemma },

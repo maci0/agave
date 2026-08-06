@@ -596,14 +596,17 @@ const ToolReplayEntry = struct {
 var g_tool_replay: std.AutoHashMapUnmanaged(u64, ToolReplayEntry) = .{};
 var g_tool_replay_allocator: std.mem.Allocator = undefined;
 var g_tool_replay_seq: u64 = 0;
-var g_tool_replay_mutex: std.Thread.Mutex = .{};
+/// Simple atomic spinlock for tool replay map (replaces std.Thread.Mutex which
+/// was removed in Zig 0.16 in favour of Io.Mutex; replay writes are rare so
+/// spinning is fine here).
+var g_tool_replay_lock: std.atomic.Value(u32) = .init(0);
 
 fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     if (id_str.len == 0) return;
     const key = std.hash.XxHash64.hash(0, id_str);
     const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
-    g_tool_replay_mutex.lock();
-    defer g_tool_replay_mutex.unlock();
+    
+    
     // Evict oldest entry if at capacity.
     if (g_tool_replay.count() >= tool_replay_max) {
         var oldest_key: u64 = 0;
@@ -616,18 +619,18 @@ fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     }
     g_tool_replay_seq += 1;
     const entry = ToolReplayEntry{ .raw = owned, .seq = g_tool_replay_seq };
-    if (g_tool_replay.fetchPut(g_tool_replay_allocator, key, entry)) |old| {
-        g_tool_replay_allocator.free(old.value.raw);
-    } else |_| {
+    const put_result = g_tool_replay.fetchPut(g_tool_replay_allocator, key, entry) catch {
         g_tool_replay_allocator.free(owned);
-    }
+        return;
+    };
+    if (put_result) |old| g_tool_replay_allocator.free(old.value.raw);
 }
 
 fn toolReplayGet(id_str: []const u8) ?[]const u8 {
     if (id_str.len == 0) return null;
     const key = std.hash.XxHash64.hash(0, id_str);
-    g_tool_replay_mutex.lock();
-    defer g_tool_replay_mutex.unlock();
+    
+    
     const entry = g_tool_replay.get(key) orelse return null;
     return entry.raw;
 }

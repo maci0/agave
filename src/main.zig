@@ -4470,14 +4470,24 @@ fn generateAndPrintInner(
         if (cli.power_pct < 100 and gi > 0) {
             const idle_num = @as(u64, 100 - cli.power_pct);
             const idle_ns = power_last_forward_ns * idle_num / cli.power_pct;
-            if (idle_ns > 0) std.time.sleep(idle_ns);
+            if (idle_ns > 0) {
+                const ts = std.posix.timespec{
+                    .sec = @intCast(idle_ns / 1_000_000_000),
+                    .nsec = @intCast(idle_ns % 1_000_000_000),
+                };
+                _ = std.posix.system.nanosleep(&ts, null);
+            }
         }
-        const power_t0 = std.time.nanoTimestamp();
+        var power_ts0: std.posix.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.REALTIME, &power_ts0);
         var next = mdl.forward(last) catch |e| {
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
-        power_last_forward_ns = @intCast(@max(0, std.time.nanoTimestamp() - power_t0));
+        var power_ts1: std.posix.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.REALTIME, &power_ts1);
+        const power_delta_ns: i64 = (@as(i64, power_ts1.sec) - @as(i64, power_ts0.sec)) * 1_000_000_000 + (@as(i64, power_ts1.nsec) - @as(i64, power_ts0.nsec));
+        power_last_forward_ns = @intCast(@max(0, power_delta_ns));
         // Apply repeat penalty to logits for recently generated tokens
         const logits = mdl.getLogits();
         if (use_repeat_penalty and token_count > 0) {
