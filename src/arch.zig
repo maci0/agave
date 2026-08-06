@@ -51,6 +51,7 @@ pub const Arch = enum {
             .{ "deepseek2", .glm4 },
             .{ "deepseek_v4", .glm4 },
             .{ "deepseek4", .glm4 },
+            .{ "dflash", .glm4 }, // DeepSeek V4 Flash DSpark draft model
             .{ "llama4", .llama4 },
             .{ "llama4_text", .llama4 },
             .{ "diffusion_gemma", .diffusion_gemma },

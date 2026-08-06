@@ -1227,7 +1227,53 @@ pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.E
     }
 }
 
+/// Return the shard count if filename matches split-GGUF pattern "…-00001-of-NNNNN.gguf".
+/// Returns 0 if not a split file (single shard).
+fn detectGgufShardCount(filename: []const u8) u32 {
+    // Pattern: basename ends with -NNNNN-of-MMMMM.gguf
+    const gguf_sfx = ".gguf";
+    if (!std.mem.endsWith(u8, filename, gguf_sfx)) return 0;
+    const stem = filename[0 .. filename.len - gguf_sfx.len];
+    // Find the last two hyphen-separated digit groups: "…-NNNNN-of-MMMMM"
+    const of_pos = std.mem.lastIndexOf(u8, stem, "-of-") orelse return 0;
+    const total_str = stem[of_pos + 4 ..];
+    const total = std.fmt.parseInt(u32, total_str, 10) catch return 0;
+    if (total < 2) return 0;
+    // Verify the preceding group is also digits
+    const pre = stem[0..of_pos];
+    const dash_pos = std.mem.lastIndexOfScalar(u8, pre, '-') orelse return 0;
+    const idx_str = pre[dash_pos + 1 ..];
+    _ = std.fmt.parseInt(u32, idx_str, 10) catch return 0;
+    return total;
+}
+
+/// Build the shard filename for a given index (1-based) given the first shard filename.
+/// Preserves zero-padding width of the original filename.
+fn buildShardFilename(allocator: Allocator, shard1: []const u8, idx: u32, total: u32) ![]u8 {
+    const gguf_sfx = ".gguf";
+    const stem = shard1[0 .. shard1.len - gguf_sfx.len];
+    const of_pos = std.mem.lastIndexOf(u8, stem, "-of-") orelse return error.InvalidShardName;
+    const pre_dash = std.mem.lastIndexOfScalar(u8, stem[0..of_pos], '-') orelse return error.InvalidShardName;
+    const base = stem[0 .. pre_dash + 1]; // includes trailing dash
+    const idx1_str = stem[pre_dash + 1 .. of_pos];
+    const width = idx1_str.len; // e.g. 5 for "00001"
+    // Format idx and total with zero-padding to match original width
+    var idx_buf: [16]u8 = undefined;
+    var tot_buf: [16]u8 = undefined;
+    const idx_raw = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch return error.InvalidShardName;
+    const tot_raw = std.fmt.bufPrint(&tot_buf, "{d}", .{total}) catch return error.InvalidShardName;
+    // Pad with leading zeros
+    var idx_padded: [16]u8 = [_]u8{'0'} ** 16;
+    @memcpy(idx_padded[width - idx_raw.len .. width], idx_raw);
+    var tot_padded: [16]u8 = [_]u8{'0'} ** 16;
+    @memcpy(tot_padded[width - tot_raw.len .. width], tot_raw);
+    return std.fmt.allocPrint(allocator, "{s}{s}-of-{s}{s}", .{
+        base, idx_padded[0..width], tot_padded[0..width], gguf_sfx,
+    });
+}
+
 /// Download a single GGUF model file with cache layout and integrity check.
+/// Automatically downloads all shards when the selected file is part of a split GGUF.
 fn pullGgufModel(
     allocator: Allocator,
     args: PullArgs,
@@ -1265,10 +1311,47 @@ fn pullGgufModel(
         }
     } else |_| {}
 
-    // Download if needed.
+    // Download shard 1 (or the only shard) if needed.
     if (!already_complete) {
         try downloadFile(allocator, args.repo, selected.filename, blob_path, args.token);
         eprint("Download complete.\n", .{});
+    }
+
+    // Detect split-GGUF and download remaining shards (shard 2..N).
+    const total_shards = detectGgufShardCount(selected.filename);
+    if (total_shards > 1) {
+        eprint("Split GGUF: {d} shards total — downloading remaining shards...\n", .{total_shards});
+        for (2..total_shards + 1) |shard_idx| {
+            const shard_name = buildShardFilename(pa, selected.filename, @intCast(shard_idx), total_shards) catch {
+                eprint("Warning: could not build shard {d}/{d} filename, skipping\n", .{ shard_idx, total_shards });
+                continue;
+            };
+            defer pa.free(shard_name);
+
+            // Find matching GgufFile entry for size info.
+            var shard_size: u64 = 0;
+            for (list_result.files) |f| {
+                if (std.mem.eql(u8, f.filename, shard_name)) { shard_size = f.size; break; }
+            }
+            const shard_gb = @as(f64, @floatFromInt(shard_size)) / bytes_per_gb;
+            const shard_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard_name }) catch return error.OutOfMemory;
+            const shard_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, shard_name }) catch return error.OutOfMemory;
+
+            var shard_done = false;
+            if (Io.Dir.cwd().statFile(mod_io, shard_blob, .{})) |stat| {
+                if ((shard_size > 0 and stat.size == shard_size) or (shard_size == 0 and stat.size > 0)) {
+                    eprint("  shard {d}/{d} already downloaded: {s}\n", .{ shard_idx, total_shards, shard_name });
+                    shard_done = true;
+                }
+            } else |_| {}
+
+            if (!shard_done) {
+                eprint("  shard {d}/{d}: {s} ({d:.1} GB)\n", .{ shard_idx, total_shards, shard_name, shard_gb });
+                try downloadFile(allocator, args.repo, shard_name, shard_blob, args.token);
+                eprint("  shard {d}/{d} complete.\n", .{ shard_idx, total_shards });
+            }
+            atomicSymlink(pa, std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard_name}) catch return error.OutOfMemory, shard_link);
+        }
     }
 
     // Verify GGUF magic bytes (catches truncation and corruption).
