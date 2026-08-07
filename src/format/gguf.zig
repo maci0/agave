@@ -232,6 +232,8 @@ pub const TensorInfo = struct {
     dims: [4]u64 = .{ 0, 0, 0, 0 },
     ggml_type: GGMLType,
     offset: u64, // relative to data section start
+    /// Non-null for tensors from a secondary shard: absolute pointer into that shard's mmap.
+    abs_ptr: ?[*]const u8 = null,
 
     /// Returns the total number of elements (product of all dimensions).
     pub fn numElements(self: *const TensorInfo) usize {
@@ -266,6 +268,9 @@ pub const GGUFFile = struct {
     owned_arrays: std.ArrayList([*]const u8) = .empty,
     owned_array_lens: std.ArrayList(usize) = .empty,
     owned_u32_arrays: std.ArrayList([]u32) = .empty,
+    /// Extra mmap'd regions from additional shards of a split GGUF.
+    /// Owned by this GGUFFile; freed in deinit().
+    extra_shards: std.ArrayList([]align(std.heap.page_size_min) u8) = .empty,
     /// Tensor overrides: merged LoRA weights that replace mmap'd tensors.
     /// Keyed by GGUF tensor name. Values are allocator-owned F32 slices.
     lora_overrides: std.StringHashMapUnmanaged(LoraOverride) = .empty,
@@ -314,7 +319,109 @@ pub const GGUFFile = struct {
             .allocator = allocator,
         };
         try self.parseHeader();
+
+        // Auto-load sibling shards for split GGUFs (e.g. *-00001-of-00002.gguf).
+        // Each shard is a complete GGUF; we merge all their tensor tables into self.
+        try self.loadSplitShards(path);
+
         return self;
+    }
+
+    /// Detect and load additional shards of a split GGUF, merging their tensors.
+    fn loadSplitShards(self: *GGUFFile, shard1_path: []const u8) !void {
+        const gguf_sfx = ".gguf";
+        if (!std.mem.endsWith(u8, shard1_path, gguf_sfx)) return;
+        const stem = shard1_path[0 .. shard1_path.len - gguf_sfx.len];
+        const of_pos = std.mem.lastIndexOf(u8, stem, "-of-") orelse return;
+        const total_str = stem[of_pos + 4 ..];
+        const total = std.fmt.parseInt(u32, total_str, 10) catch return;
+        if (total < 2) return;
+        const pre = stem[0..of_pos];
+        const dash_pos = std.mem.lastIndexOfScalar(u8, pre, '-') orelse return;
+        const idx1_str = pre[dash_pos + 1 .. of_pos];
+        _ = std.fmt.parseInt(u32, idx1_str, 10) catch return;
+        const idx_width = idx1_str.len;
+        const base_prefix = pre[0 .. dash_pos + 1]; // includes trailing '-'
+
+        self.extra_shards = .empty;
+
+        for (2..total + 1) |si| {
+            // Build shard path.
+            var idx_raw_buf: [16]u8 = undefined;
+            var tot_raw_buf: [16]u8 = undefined;
+            const idx_raw = std.fmt.bufPrint(&idx_raw_buf, "{d}", .{si}) catch continue;
+            const tot_raw = std.fmt.bufPrint(&tot_raw_buf, "{d}", .{total}) catch continue;
+            var idx_buf: [16]u8 = [_]u8{'0'} ** 16;
+            var tot_buf: [16]u8 = [_]u8{'0'} ** 16;
+            @memcpy(idx_buf[idx_width - idx_raw.len .. idx_width], idx_raw);
+            @memcpy(tot_buf[idx_width - tot_raw.len .. idx_width], tot_raw);
+
+            const shard_name = std.fmt.allocPrint(self.allocator, "{s}{s}-of-{s}{s}", .{
+                base_prefix, idx_buf[0..idx_width], tot_buf[0..idx_width], gguf_sfx,
+            }) catch continue;
+            defer self.allocator.free(shard_name);
+
+            const sfd = posix.openat(posix.AT.FDCWD, shard_name, .{}, 0) catch |open_err| {
+                std.log.warn("split GGUF: shard {d}/{d} not found at '{s}' ({}), stopping", .{ si, total, shard_name, open_err });
+                break;
+            };
+            const sfsize: usize = blk: {
+                if (comptime @import("builtin").os.tag == .linux) {
+                    var buf2: std.os.linux.Statx = undefined;
+                    const rc = std.os.linux.statx(sfd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf2);
+                    if (rc != 0) { _ = std.c.close(sfd); continue; }
+                    break :blk @intCast(buf2.size);
+                } else {
+                    var ss: posix.Stat = undefined;
+                    if (std.c.fstat(sfd, &ss) != 0) { _ = std.c.close(sfd); continue; }
+                    break :blk @intCast(ss.size);
+                }
+            };
+            _ = std.c.close(sfd); // close the stat fd; re-open for mmap below
+
+            // mmap the shard and parse its tensor table.
+            const sfd2 = posix.openat(posix.AT.FDCWD, shard_name, .{}, 0) catch continue;
+            const smapped = posix.mmap(null, sfsize, .{ .READ = true }, .{ .TYPE = .SHARED }, sfd2, 0) catch {
+                _ = std.c.close(sfd2);
+                continue;
+            };
+            _ = std.c.close(sfd2);
+            posix.madvise(smapped.ptr, smapped.len, posix.MADV.SEQUENTIAL) catch {};
+
+            self.extra_shards.append(self.allocator, smapped) catch {
+                posix.munmap(smapped);
+                continue;
+            };
+
+            // Parse the shard header and merge tensors into self.tensors.
+            var shard_gguf = GGUFFile{
+                .mapped_data = smapped,
+                .file_size = sfsize,
+                .metadata = std.StringHashMap(MetaValue).init(self.allocator),
+                .tensors = std.StringHashMap(TensorInfo).init(self.allocator),
+                .allocator = self.allocator,
+            };
+            shard_gguf.parseHeader() catch {
+                shard_gguf.metadata.deinit();
+                shard_gguf.tensors.deinit();
+                continue;
+            };
+            // Merge tensors: move all entries into self, computing absolute pointers
+            // so tensorData() resolves correctly against shard 2's mmap (not shard 1's).
+            var it = shard_gguf.tensors.iterator();
+            while (it.next()) |kv| {
+                var info = kv.value_ptr.*;
+                info.abs_ptr = shard_gguf.tensorData(&info);
+                self.tensors.put(kv.key_ptr.*, info) catch {};
+            }
+            shard_gguf.tensors.clearRetainingCapacity();
+            shard_gguf.metadata.deinit();
+            shard_gguf.tensors.deinit();
+            // Note: shard_gguf.owned_strings etc. not freed here — tensor names
+            // are pointers into smapped which stays alive via self.extra_shards.
+
+            std.log.info("split GGUF: loaded shard {d}/{d} ({d} tensors)", .{ si, total, shard_gguf.tensor_count });
+        }
     }
 
     /// Open from a raw byte buffer (no file I/O — for WASM or embedded use).
@@ -480,6 +587,8 @@ pub const GGUFFile = struct {
                     _ = std.c.close(self.file_fd);
                 }
             }
+            for (self.extra_shards.items) |shard| posix.munmap(shard);
+            self.extra_shards.deinit(self.allocator);
         }
     }
 
@@ -709,6 +818,7 @@ pub const GGUFFile = struct {
 
     /// Returns raw tensor data bytes for the given tensor info.
     pub fn tensorData(self: *const GGUFFile, info: *const TensorInfo) [*]const u8 {
+        if (info.abs_ptr) |p| return p;
         return self.data().ptr + self.data_offset + @as(usize, @intCast(info.offset));
     }
 
