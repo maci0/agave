@@ -115,6 +115,10 @@ pub const Ds4Model = struct {
     router_logits: []f32 = &.{},    // [n_experts]
     logits_buf: []f32 = &.{},       // [vocab_size]
 
+    // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
+    rope_freqs: [32]f32 = undefined,       // freq_base = rope_freq (layers with ratio=0)
+    compress_rope_freqs: [32]f32 = undefined, // freq_base = compress_rope_freq (ratio≠0 layers)
+
     // KV cache as f16 bytes for GPU SDPA: [n_layers * ctx * kv_lora_rank * 2]
     kv_k_bytes: []u8 = &.{},
     kv_v_bytes: []u8 = &.{},
@@ -202,6 +206,14 @@ pub const Ds4Model = struct {
         const og: usize = self.o_groups;
         const olr: usize = self.o_lora_rank;
         const ctx: usize = self.max_seq_len;
+        const rd: usize = self.rope_dim;
+        const nd: usize = rd / 2;
+
+        // Pre-compute RoPE frequency bases once (eliminates pow() per token per layer).
+        for (0..nd) |i| {
+            self.rope_freqs[i] = std.math.pow(f32, self.rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
+            self.compress_rope_freqs[i] = std.math.pow(f32, self.compress_rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
+        }
 
         self.hc_state = try allocator.alloc(f32, n_hc * e);
         self.new_hc = try allocator.alloc(f32, n_hc * e);
@@ -510,8 +522,6 @@ pub const Ds4Model = struct {
         const nope: usize = kd - rd;
         const pos = self.kv_seq_len;
         const max_comp_dim: usize = 2 * kd; // buffer stride (max of CSA=1024 and HCA=512)
-        // Use compressed rope freq for layers with ratio≠0 (most layers in DS4)
-        const rope_freq = if (self.compress_ratios[li] != 0) self.compress_rope_freq else self.rope_freq;
 
         // All Q, KV, and (if CSA) compressor GPU ops in ONE command buffer → 1 sync
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
@@ -547,13 +557,13 @@ pub const Ds4Model = struct {
 
         self.be.sync(); // single sync: CPU reads q_full + kv_proj + CSA/HCA projections
 
-        // Pre-compute RoPE cos/sin table once for this (pos, rope_freq) — shared by all heads.
+        // RoPE cos/sin from pre-computed freq bases (no pow() per token).
         const nd = rd / 2;
+        const freqs = if (self.compress_ratios[li] != 0) &self.compress_rope_freqs else &self.rope_freqs;
         var rope_cos: [32]f32 = undefined;
         var rope_sin: [32]f32 = undefined;
         for (0..nd) |i| {
-            const freq = std.math.pow(f32, rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
-            const theta = @as(f32, @floatFromInt(pos)) * freq;
+            const theta = @as(f32, @floatFromInt(pos)) * freqs[i];
             rope_cos[i] = @cos(theta);
             rope_sin[i] = @sin(theta);
         }
@@ -671,21 +681,16 @@ pub const Ds4Model = struct {
                     }
                     const comp_rope = compressed[nope..kd];
 
-                    // RoPE on compressed rope portion using group position.
-                    // Reuse rope_cos/rope_sin freq bases (same compress_rope_freq),
-                    // just scale theta by (group_start / pos) ratio.
+                    // RoPE on compressed rope portion using group start position.
+                    // Uses pre-computed compress_rope_freqs (no pow() per token).
                     const comp_pos = group_start;
                     if (comp_pos == pos) {
-                        // Same position — reuse pre-computed table directly
                         applyRopeTable(comp_rope[0..rd], rope_cos[0..nd], rope_sin[0..nd]);
                     } else {
                         var cg_cos: [32]f32 = undefined;
                         var cg_sin: [32]f32 = undefined;
                         for (0..nd) |i| {
-                            // rope_cos[i] = cos(pos * freq_i), we need cos(comp_pos * freq_i)
-                            // Recompute only the theta multiply, not the pow()
-                            const freq = std.math.pow(f32, self.compress_rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
-                            const theta = @as(f32, @floatFromInt(comp_pos)) * freq;
+                            const theta = @as(f32, @floatFromInt(comp_pos)) * self.compress_rope_freqs[i];
                             cg_cos[i] = @cos(theta);
                             cg_sin[i] = @sin(theta);
                         }
@@ -977,13 +982,13 @@ pub const Ds4Model = struct {
         var top_weights: [8]f32 = undefined;
 
         if (li < self.hash_layer_count) {
-            // Hash routing: gate GEMV still runs (weights come from logits), only selection is hash-based.
-            // No exp_probs_b for hash layers.
+            // Hash routing: expert selection is by hash lookup (CPU, no GPU sync needed).
+            // Gate GEMV deferred — batched with expert GEMVs, read after final sync.
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
             self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
-            self.be.sync();
+            // NO sync here — gate_inp GEMV batched with expert GEMVs below
 
-            // Hash lookup: determines which experts are selected
+            // Hash lookup: determines which experts are selected (CPU-only, no GPU data needed)
             const t2e = try self.layerTensorReq(li, "ffn_gate_tid2eid.weight");
             const n_slots: usize = @intCast(t2e.dims[0]);
             const vocab: usize = @intCast(t2e.dims[1]);
@@ -993,17 +998,7 @@ pub const Ds4Model = struct {
                 top_ids[j] = @intCast(data[safe_tid * n_slots + j]);
             }
             n_active = nk;
-
-            // Weights from gate logits at the selected expert positions (no bias for hash layers)
-            var wsum: f32 = 0.0;
-            for (0..n_active) |j| {
-                top_weights[j] = sqrtSoftplus(self.router_logits[top_ids[j]]);
-                wsum += top_weights[j];
-            }
-            if (wsum > 0.0) {
-                const inv = self.expert_weights_scale / wsum;
-                for (0..n_active) |j| top_weights[j] *= inv;
-            }
+            // Weights computed after final sync (gate logits not yet available)
         } else {
             // Learned routing: gate_inp GEMV → sync → top-k on CPU
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
@@ -1091,7 +1086,24 @@ pub const Ds4Model = struct {
             self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
         }
 
-        self.be.sync(); // all down GEMVs complete
+        self.be.sync(); // all down GEMVs complete (+ gate_inp for hash layers)
+
+        // Deferred hash-layer weight computation: gate logits now available after sync.
+        if (li < self.hash_layer_count) {
+            var wsum: f32 = 0.0;
+            for (0..n_active) |j| {
+                top_weights[j] = sqrtSoftplus(self.router_logits[top_ids[j]]);
+                wsum += top_weights[j];
+            }
+            if (wsum > 0.0) {
+                const inv = self.expert_weights_scale / wsum;
+                for (0..n_active) |j| top_weights[j] *= inv;
+            }
+            // Update slot_weights for expert slots (shared expert weight=1.0 already set)
+            for (shexp_slots..n_scratch) |slot| {
+                slot_weights[slot] = top_weights[slot - shexp_slots];
+            }
+        }
 
         // CPU: SIMD weighted accumulation from all scratch slots
         const V8 = @Vector(8, f32);
@@ -1119,10 +1131,11 @@ pub const Ds4Model = struct {
         const e = self.n_embd;
         const nl = self.n_layers;
 
-        // Embed → broadcast to all n_hc HC streams
+        // Embed → broadcast to all n_hc HC streams.
+        // CPU-side dequant avoids GPU dispatch + sync for single-row read.
         const emb = try self.getTensorReq("token_embd.weight");
-        self.be.embLookup(.{ .data = emb.data_ptr, .dtype = emb.dtype }, token_id, self.hc_state.ptr, e);
-        self.be.sync();
+        const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
+        quant_ops.dequantToF32(self.hc_state[0..e], emb.data_ptr + token_id * row_bytes, emb.dtype, e);
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
         for (0..nl) |li| {
@@ -1151,10 +1164,9 @@ pub const Ds4Model = struct {
         const hh_scale = try self.getTensorReq("output_hc_scale.weight");
         self.hcHead(hh_fn, hh_base, hh_scale);
 
-        // Final norm + LM head
+        // Final norm + LM head — single GPU command buffer, single sync
         const norm_w = try self.getTensorReq("output_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
-        self.be.sync();
         const lm = try self.getTensorReq("output.weight");
         self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
