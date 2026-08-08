@@ -812,7 +812,20 @@ pub const Ds4Model = struct {
                 null;
             const V8 = @Vector(8, f32);
             const ss = self.score_stride;
-            for (0..nh) |h| {
+
+            // Dispatch per-head attention via thread pool when available (64 independent heads).
+            if (self.pool) |pool| {
+                var ctx = CompressedAttnCtx{
+                    .q_full = self.q_full, .scores_buf = self.scores_buf, .attn_out = self.attn_out,
+                    .kv_k_layer = kv_k_layer, .kv_v_layer = kv_v_layer,
+                    .csa_k = self.csa_k, .lid_topk_ids = if (use_lid) self.lid_topk_ids else &.{},
+                    .sink_data = sink_data,
+                    .kd = kd, .pos = pos, .ss = ss, .kv_elem_bytes = kv_elem_bytes,
+                    .n_attend_comp = n_attend_comp, .sl_total = sl_total,
+                    .comp_slots = comp_slots, .li = li, .scale = scale, .use_lid = use_lid,
+                };
+                pool.parallelFor(nh, 1, @ptrCast(&ctx), CompressedAttnCtx.perHeadFn);
+            } else for (0..nh) |h| {
                 const q_h = self.q_full[h * kd ..][0..kd];
                 const scores_h = self.scores_buf[h * ss ..];
                 // QK dot products for raw KV positions (supports any kv_type via kvDot)
@@ -915,6 +928,93 @@ pub const Ds4Model = struct {
         self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.hidden.ptr, e, og * olr);
         self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
     }
+
+    // ── Compressed attention parallel dispatch context ─────────
+
+    const CompressedAttnCtx = struct {
+        q_full: []f32,
+        scores_buf: []f32,
+        attn_out: []f32,
+        kv_k_layer: []u8,
+        kv_v_layer: []u8,
+        csa_k: []f32,
+        lid_topk_ids: []u32,
+        sink_data: ?[*]const f32,
+        kd: usize,
+        pos: usize,
+        ss: usize,
+        kv_elem_bytes: usize,
+        n_attend_comp: usize,
+        sl_total: usize,
+        comp_slots: usize,
+        li: usize,
+        scale: f32,
+        use_lid: bool,
+
+        fn perHeadFn(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+            const ctx: *CompressedAttnCtx = @ptrCast(@alignCast(ctx_ptr));
+            for (start..end) |h| {
+                ctx.processHead(h);
+            }
+        }
+
+        fn processHead(ctx: *const CompressedAttnCtx, h: usize) void {
+            const kd = ctx.kd;
+            const V8 = @Vector(8, f32);
+            const q_h = ctx.q_full[h * kd ..][0..kd];
+            const scores_h = ctx.scores_buf[h * ctx.ss ..];
+            // QK dot products for raw KV positions
+            for (0..ctx.pos + 1) |t| {
+                const k_ptr = ctx.kv_k_layer[t * ctx.kv_elem_bytes ..].ptr;
+                scores_h[t] = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * ctx.scale;
+            }
+            // QK for compressed positions
+            for (0..ctx.n_attend_comp) |gi| {
+                const g = if (ctx.use_lid) ctx.lid_topk_ids[gi] else @as(u32, @intCast(gi));
+                const ck = ctx.csa_k[(ctx.li * ctx.comp_slots + g) * kd ..][0..kd];
+                var acc: V8 = @splat(0.0);
+                var i: usize = 0;
+                while (i + 8 <= kd) : (i += 8) {
+                    acc += @as(V8, q_h[i..][0..8].*) * @as(V8, ck[i..][0..8].*);
+                }
+                var dot = @reduce(.Add, acc);
+                while (i < kd) : (i += 1) dot += q_h[i] * ck[i];
+                scores_h[ctx.pos + 1 + gi] = dot * ctx.scale;
+            }
+            // Softmax
+            {
+                var mx = scores_h[0];
+                for (scores_h[1..ctx.sl_total]) |v| if (v > mx) { mx = v; };
+                if (ctx.sink_data) |sd| {
+                    if (sd[h] > mx) mx = sd[h];
+                }
+                var sm: f32 = 0;
+                for (scores_h[0..ctx.sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
+                if (ctx.sink_data) |sd| sm += @exp(sd[h] - mx);
+                const inv = 1.0 / sm;
+                for (scores_h[0..ctx.sl_total]) |*v| v.* *= inv;
+            }
+            // V accumulation
+            const ao_h = ctx.attn_out[h * kd ..][0..kd];
+            @memset(ao_h, 0.0);
+            for (0..ctx.pos + 1) |t| {
+                if (scores_h[t] < sparse_v_threshold) continue;
+                const v_ptr = ctx.kv_v_layer[t * ctx.kv_elem_bytes ..].ptr;
+                kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+            }
+            for (0..ctx.n_attend_comp) |gi| {
+                const g = if (ctx.use_lid) ctx.lid_topk_ids[gi] else @as(u32, @intCast(gi));
+                const ck = ctx.csa_k[(ctx.li * ctx.comp_slots + g) * kd ..][0..kd];
+                const wv: V8 = @splat(scores_h[ctx.pos + 1 + gi]);
+                var i: usize = 0;
+                while (i + 8 <= kd) : (i += 8) {
+                    const cur: V8 = ao_h[i..][0..8].*;
+                    ao_h[i..][0..8].* = @mulAdd(V8, @as(V8, ck[i..][0..8].*), wv, cur);
+                }
+                while (i < kd) : (i += 1) ao_h[i] += ck[i] * scores_h[ctx.pos + 1 + gi];
+            }
+        }
+    };
 
     // ── Lightning Indexer ────────────────────────────────────────
 
