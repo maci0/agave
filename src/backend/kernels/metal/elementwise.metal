@@ -94,6 +94,21 @@ kernel void silu_mul_f32(
     out[tid] = (x / (1.0f + exp(-x))) * b[tid];
 }
 
+// Clamped SiLU + multiply: gate clamped to (-∞,10], up clamped to [-10,10], out = silu(gate)*up.
+// Used by DeepSeek V4 Flash (swiglu_clamp=10.0) to prevent activation explosion from Q2_K.
+kernel void clamped_silu_mul_f32(
+    device const float* gate [[buffer(0)]],
+    device const float* up   [[buffer(1)]],
+    device float* out        [[buffer(2)]],
+    constant uint& n         [[buffer(3)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= n) return;
+    float g = min(gate[tid], 10.0f);
+    float u = clamp(up[tid], -10.0f, 10.0f);
+    out[tid] = (g / (1.0f + exp(-g))) * u;
+}
+
 // Fused GELU + multiply: out = gelu(a) * b — used by GeGLU FFN in Gemma3.
 kernel void gelu_mul_f32(
     device const float* a [[buffer(0)]],

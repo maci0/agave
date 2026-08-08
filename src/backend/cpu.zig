@@ -451,6 +451,14 @@ pub const CpuBackend = struct {
         activation_kernel.siluMul(a, b, out, n);
     }
 
+    pub fn clampedSiluMul(_: *CpuBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        for (0..n) |i| {
+            const g = @min(gate[i], @as(f32, 10.0));
+            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
+            out[i] = (g / (1.0 + @exp(-g))) * u;
+        }
+    }
+
     /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
     /// Single-pass SIMD avoids a second cache traversal over the output buffer.
     pub fn geluMul(_: *CpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {

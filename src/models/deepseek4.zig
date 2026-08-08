@@ -351,34 +351,52 @@ pub const Ds4Model = struct {
         }
         hcSinkhorn(self.hc_comb);
 
-        // sublayer input = weighted sum of streams
-        @memset(self.hidden, 0.0);
-        for (0..n_hc) |s| {
-            const stream = self.hc_state[s * e ..][0..e];
-            const w = self.hc_pre_w[s];
-            for (0..e) |i| self.hidden[i] += stream[i] * w;
+        // Weighted sum of HC streams → sublayer input (SIMD-optimized)
+        const V8 = @Vector(8, f32);
+        var i: usize = 0;
+        while (i + 8 <= e) : (i += 8) {
+            var acc: V8 = @splat(@as(f32, 0.0));
+            for (0..n_hc) |s| {
+                const w: V8 = @splat(self.hc_pre_w[s]);
+                acc = @mulAdd(V8, @as(V8, self.hc_state[s * e + i ..][0..8].*), w, acc);
+            }
+            self.hidden[i..][0..8].* = acc;
+        }
+        while (i < e) : (i += 1) {
+            var v: f32 = 0.0;
+            for (0..n_hc) |s| v += self.hc_state[s * e + i] * self.hc_pre_w[s];
+            self.hidden[i] = v;
         }
     }
 
     /// Update HC state after a sublayer. Sublayer output must be in `self.hidden`.
     fn hcPost(self: *Ds4Model) void {
         if (debug_disable_hc) {
-            // Identity: copy sublayer output to all streams
             const e = self.n_embd;
             for (0..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hidden);
             return;
         }
         const e = self.n_embd;
         const sub = self.hidden;
+        const V8 = @Vector(8, f32);
         for (0..n_hc) |dst| {
             const ns = self.new_hc[dst * e ..][0..e];
-            const pw = self.hc_post_w[dst];
-            for (0..e) |i| ns[i] = sub[i] * pw;
-            for (0..n_hc) |src| {
-                const ss = self.hc_state[src * e ..][0..e];
-                // Column-major storage: comb[dst, src] = hc_comb[dst + src*n_hc]
-                const c = self.hc_comb[dst + src * n_hc];
-                for (0..e) |i| ns[i] += ss[i] * c;
+            const pw: V8 = @splat(self.hc_post_w[dst]);
+            // Pre-load comb coefficients for this dst
+            var cvec: [n_hc]V8 = undefined;
+            for (0..n_hc) |src| cvec[src] = @splat(self.hc_comb[dst + src * n_hc]);
+            var i: usize = 0;
+            while (i + 8 <= e) : (i += 8) {
+                var acc: V8 = @as(V8, sub[i..][0..8].*) * pw;
+                for (0..n_hc) |src| {
+                    acc = @mulAdd(V8, @as(V8, self.hc_state[src * e + i ..][0..8].*), cvec[src], acc);
+                }
+                ns[i..][0..8].* = acc;
+            }
+            while (i < e) : (i += 1) {
+                var v = sub[i] * self.hc_post_w[dst];
+                for (0..n_hc) |src| v += self.hc_state[src * e + i] * self.hc_comb[dst + src * n_hc];
+                ns[i] = v;
             }
         }
         @memcpy(self.hc_state, self.new_hc);
@@ -626,9 +644,9 @@ pub const Ds4Model = struct {
             }
         }
 
-        // Phase 2: GPU siluMul for all slots — no sync needed (same cmd buffer as Phase 1)
+        // Phase 2: clamped SiLU×mul (gate≤10, up±10) — no sync needed (same cmd buffer)
         for (0..n_scratch) |slot| {
-            self.be.siluMul(
+            self.be.clampedSiluMul(
                 self.ff_gate_scratch.ptr + slot * ff,
                 self.ff_up_scratch.ptr + slot * ff,
                 self.ff_gate_scratch.ptr + slot * ff, ff);
@@ -741,12 +759,22 @@ inline fn sqrtSoftplus(x: f32) f32 {
     return @sqrt(@log(1.0 + @exp(x)));
 }
 
-/// In-place RMS normalization, no learned weight.
+/// In-place RMS normalization, no learned weight. SIMD-optimized.
 fn plainRmsNorm(x: []f32, eps: f32) void {
-    var ss: f32 = 0.0;
-    for (x) |v| ss += v * v;
-    const s = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(x.len)) + eps);
-    for (x) |*v| v.* *= s;
+    const V8 = @Vector(8, f32);
+    var acc: V8 = @splat(@as(f32, 0.0));
+    var i: usize = 0;
+    while (i + 8 <= x.len) : (i += 8) {
+        const v: V8 = x[i..][0..8].*;
+        acc = @mulAdd(V8, v, v, acc);
+    }
+    var ss: f32 = @reduce(.Add, acc);
+    while (i < x.len) : (i += 1) ss += x[i] * x[i];
+    const scale = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(x.len)) + eps);
+    const sv: V8 = @splat(scale);
+    i = 0;
+    while (i + 8 <= x.len) : (i += 8) x[i..][0..8].* = @as(V8, x[i..][0..8].*) * sv;
+    while (i < x.len) : (i += 1) x[i] *= scale;
 }
 
 /// SiGLU with per-DS4 clamping: up clamped [-10,10], gate upper-clamped [−∞,10].

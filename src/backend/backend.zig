@@ -385,6 +385,13 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn clampedSiluMul(_: *NullBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        for (0..n) |i| {
+            const g = @min(gate[i], 10.0);
+            const u = @min(10.0, @max(-10.0, up[i]));
+            out[i] = (g / (1.0 + @exp(-g))) * u;
+        }
+    }
     pub fn siluMul(_: *NullBackend, _: [*]const f32, _: [*]const f32, _: [*]f32, _: usize) void {
         unreachable;
     }
@@ -717,6 +724,13 @@ pub const Backend = union(enum) {
     pub inline fn splitQGate(self: Backend, qg: [*]const f32, q_out: [*]f32, g_out: [*]f32, hd: usize, nh: usize) void {
         switch (self) {
             inline else => |be| be.splitQGate(qg, q_out, g_out, hd, nh),
+        }
+    }
+
+    /// Clamped SiLU×mul: gate(-∞,10] + up[-10,10] + silu(gate)*up in one dispatch.
+    pub inline fn clampedSiluMul(self: Backend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        switch (self) {
+            inline else => |be| be.clampedSiluMul(gate, up, out, n),
         }
     }
 

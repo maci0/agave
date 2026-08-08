@@ -170,6 +170,7 @@ pub const MetalBackend = struct {
     pipe_gemv_t_q8_0: objc.id,
     pipe_deinterleave: objc.id,
     pipe_silu_mul: objc.id,
+    pipe_clamped_silu_mul: objc.id,
     pipe_gelu_mul: objc.id,
     pipe_rms_norm_fused: objc.id,
     pipe_add_rms_norm_fused: objc.id,
@@ -349,6 +350,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_t_q8_0 = undefined,
             .pipe_deinterleave = undefined,
             .pipe_silu_mul = undefined,
+            .pipe_clamped_silu_mul = undefined,
             .pipe_gelu_mul = undefined,
             .pipe_rms_norm_fused = undefined,
             .pipe_add_rms_norm_fused = undefined,
@@ -444,6 +446,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_t_q8_0 = try self.makePipeline("gemv_t_q8_0");
         self.pipe_deinterleave = try self.makePipeline("deinterleave_f32");
         self.pipe_silu_mul = try self.makePipeline("silu_mul_f32");
+        self.pipe_clamped_silu_mul = try self.makePipeline("clamped_silu_mul_f32");
         self.pipe_gelu_mul = try self.makePipeline("gelu_mul_f32");
         self.pipe_rms_norm_fused = try self.makePipeline("rms_norm_fused_f32");
         self.pipe_add_rms_norm_fused = try self.makePipeline("add_rms_norm_fused_f32");
@@ -1061,6 +1064,11 @@ pub const MetalBackend = struct {
     /// Replaces separate silu + mul dispatches (2 dispatches → 1).
     pub fn siluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         self.dispatchBinaryOp(self.pipe_silu_mul, a, b, out, n);
+    }
+
+    /// Clamped SiLU×mul: gate clamped to (-∞,10], up to [-10,10], out = silu(gate)*up.
+    pub fn clampedSiluMul(self: *MetalBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_clamped_silu_mul, gate, up, out, n);
     }
 
     /// out[i] = gelu(a[i]) * b[i] — fused GeGLU activation.

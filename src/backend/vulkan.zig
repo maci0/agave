@@ -2196,7 +2196,16 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_silu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
 
-    /// Fused GELU + multiply.
+    
+    pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        for (0..n) |idx| {
+            const g = @min(gate[idx], @as(f32, 10.0));
+            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[idx]));
+            out[idx] = (g / (1.0 + @exp(-g))) * u;
+        }
+    }
+
+/// Fused GELU + multiply.
     pub fn geluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
         const a_buf = self.getInputBuf(a, sz);
