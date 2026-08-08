@@ -450,7 +450,7 @@ pub const Ds4Model = struct {
         // Use compressed rope freq for layers with ratio≠0 (most layers in DS4)
         const rope_freq = if (self.compress_ratios[li] != 0) self.compress_rope_freq else self.rope_freq;
 
-        // Pre-norm → q_a → q_a_norm → q_b all on GPU in one batch
+        // All Q and KV GPU ops in ONE command buffer (6 ops → 1 sync instead of 2)
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
@@ -459,21 +459,19 @@ pub const Ds4Model = struct {
         self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
         const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
         self.be.gemv(self.q_compressed.ptr, .{ .data = q_b.data_ptr, .dtype = q_b.dtype }, self.q_full.ptr, nh * kd, ql);
-        self.be.sync(); // CPU per-head norm + RoPE read q_full
+        const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
+        self.be.gemv(self.hidden2.ptr, .{ .data = kv_a.data_ptr, .dtype = kv_a.dtype }, self.kv_proj.ptr, kd, e);
+        const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
+        self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
+        self.be.sync(); // single sync: CPU reads q_full + kv_proj
 
-        // Per-head Q RMS norm + RoPE
+        // CPU: per-head Q RMS norm + Q RoPE
         for (0..nh) |h| {
             const q_head = self.q_full[h * kd ..][0..kd];
             plainRmsNorm(q_head, self.rms_eps);
             applyRope(q_head[nope..][0..rd], pos, rope_freq, rd);
         }
-
-        // KV: hidden2 → kv_a → kv_a_norm on GPU, then CPU RoPE
-        const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
-        self.be.gemv(self.hidden2.ptr, .{ .data = kv_a.data_ptr, .dtype = kv_a.dtype }, self.kv_proj.ptr, kd, e);
-        const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
-        self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
-        self.be.sync(); // CPU RoPE reads kv_proj
+        // CPU: KV RoPE
         applyRope(self.kv_proj[nope..][0..rd], pos, rope_freq, rd);
 
         // SDPA: head_dim=512 exceeds Metal GPU limit (256), force CPU SIMD path via window.
@@ -513,17 +511,16 @@ pub const Ds4Model = struct {
         const group_in: usize = nh * kd / og; // = 64*512/8 = 4096
         const wo_a = try self.layerTensorReq(li, "attn_output_a.weight");
         const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
+        // wo_a groups + wo_b in one GPU command buffer: lora_out feeds directly into wo_b
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
             const wp = wo_a.data_ptr + g * olr * row_bytes;
             const yp = self.lora_out.ptr + g * olr;
             self.be.gemv(xp, .{ .data = wp, .dtype = wo_a.dtype }, yp, olr, group_in);
         }
-        self.be.sync();
-
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
         self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.attn_result.ptr, e, og * olr);
-        self.be.sync();
+        self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
 
         @memcpy(self.hidden, self.attn_result);
     }
