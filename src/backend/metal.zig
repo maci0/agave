@@ -55,7 +55,8 @@ const softmax_cpu_threshold: usize = 128;
 /// 65536 = 64K tokens; real limit is --ctx-size / KV cache allocation.
 const sdpa_max_seq_len: usize = 65536;
 /// Maximum per-head dimension for the fused SDPA kernel.
-const sdpa_max_head_dim: usize = 256;
+/// hd ≤ 256 uses sdpa_fa2 (block_size=16), hd ≤ 512 uses sdpa_fa2_hd512 (block_size=8).
+const sdpa_max_head_dim: usize = 512;
 /// Number of output rows processed per threadgroup in Q4_0 GEMV (must match q4_0_nr in gemv.metal).
 const q4_0_nr: usize = 4;
 /// Number of output rows processed per threadgroup in Q8_0 GEMV (must match q8_0_nr in gemv.metal).
@@ -180,6 +181,7 @@ pub const MetalBackend = struct {
     pipe_sdpa_tree: objc.id,
     pipe_sdpa_tree_turbo: objc.id,
     pipe_sdpa_turbo: objc.id,
+    pipe_sdpa_hd512: objc.id,
     pipe_sdpa_paged: objc.id,
     pipe_dn_gate_beta: objc.id,
     pipe_dn_conv1d: objc.id,
@@ -360,6 +362,7 @@ pub const MetalBackend = struct {
             .pipe_sdpa_tree = undefined,
             .pipe_sdpa_tree_turbo = undefined,
             .pipe_sdpa_turbo = undefined,
+            .pipe_sdpa_hd512 = undefined,
             .pipe_sdpa_paged = undefined,
             .pipe_dn_gate_beta = undefined,
             .pipe_dn_conv1d = undefined,
@@ -456,6 +459,7 @@ pub const MetalBackend = struct {
         self.pipe_sdpa_tree = try self.makePipeline("sdpa_tree_fa2");
         self.pipe_sdpa_tree_turbo = try self.makePipeline("sdpa_tree_fa2_turbo");
         self.pipe_sdpa_turbo = try self.makePipeline("sdpa_fa2_turbo");
+        self.pipe_sdpa_hd512 = try self.makePipeline("sdpa_fa2_hd512");
         self.pipe_sdpa_paged = try self.makePipeline("sdpa_fa2_paged");
         self.pipe_dn_gate_beta = try self.makePipeline("deltanet_gate_beta");
         self.pipe_dn_conv1d = try self.makePipeline("deltanet_conv1d");
@@ -2308,14 +2312,15 @@ pub const MetalBackend = struct {
 
         // ── GPU SDPA: FlashAttention-2 ──
         if (is_f32_k and is_f32_v) {
-            // Pure f32 path: use existing sdpa_fa2 kernel
+            // Pure f32 path: select kernel by head dim (hd>256 → hd512 variant with block_size=8)
+            const sdpa_pipe = if (hd > 256) self.pipe_sdpa_hd512 else self.pipe_sdpa;
             const f32_keys: [*]f32 = @ptrCast(@alignCast(keys.ptr));
             const f32_values: [*]f32 = @ptrCast(@alignCast(values.ptr));
             const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
             const keys_ref = self.getBufRef(@ptrCast(f32_keys), sl * kvd * @sizeOf(f32));
             const vals_ref = self.getBufRef(@ptrCast(f32_values), sl * kvd * @sizeOf(f32));
             const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
-            const enc = self.getEncoder(self.pipe_sdpa);
+            const enc = self.getEncoder(sdpa_pipe);
             setBuf(enc, q_ref, 0);
             setBuf(enc, keys_ref, 1);
             setBuf(enc, vals_ref, 2);

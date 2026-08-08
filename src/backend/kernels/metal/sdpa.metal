@@ -253,6 +253,148 @@ kernel void sdpa_fa2(
     }
 }
 
+// ── Large head-dim SDPA — hd up to 512 ──────────────────────────
+// Same FlashAttention-2 algorithm as sdpa_fa2 but with reduced block size (8 instead of 16)
+// to fit 32KB threadgroup memory budget:
+//   q_local[512] + kv_block[8*512] + out_acc[512] + scores[8] + shared[8]
+//   = 2KB + 16KB + 2KB + 32B + 32B ≈ 20KB
+constant uint sdpa_block_size_lg = 8;
+constant uint sdpa_max_head_dim_lg = 512;
+
+kernel void sdpa_fa2_hd512(
+    device const float* Q,
+    device const float* K_cache,
+    device const float* V_cache,
+    device float* output,
+    constant uint& nh,
+    constant uint& nkv,
+    constant uint& hd,
+    constant uint& sl,
+    constant float& scale,
+    uint h     [[threadgroup_position_in_grid]],
+    uint tid   [[thread_index_in_threadgroup]],
+    uint tg_sz [[threads_per_threadgroup]])
+{
+    if (h >= nh) return;
+
+    uint hpg = nh / nkv;
+    uint kvh = h / hpg;
+    uint kvd = nkv * hd;
+    uint num_blocks = (sl + sdpa_block_size_lg - 1) / sdpa_block_size_lg;
+
+    threadgroup float q_local[sdpa_max_head_dim_lg];
+    threadgroup float kv_block[sdpa_block_size_lg * sdpa_max_head_dim_lg];
+    threadgroup float scores[sdpa_block_size_lg];
+    threadgroup float shared[8];
+
+    for (uint d = tid; d < hd; d += tg_sz) {
+        q_local[d] = Q[h * hd + d];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m_i = -INFINITY;
+    float l_i = 0.0f;
+    threadgroup float out_acc[sdpa_max_head_dim_lg];
+    for (uint d = tid; d < hd; d += tg_sz) {
+        out_acc[d] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint block = 0; block < num_blocks; block++) {
+        uint block_start = block * sdpa_block_size_lg;
+        uint block_len = min(sdpa_block_size_lg, sl - block_start);
+
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            uint t_global = block_start + t;
+            uint k_base = t_global * kvd + kvh * hd;
+            for (uint d = 0; d < hd; d++) {
+                kv_block[t * hd + d] = K_cache[k_base + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            float dot_val = 0.0f;
+            for (uint d = 0; d < hd; d++) {
+                dot_val += q_local[d] * kv_block[t * hd + d];
+            }
+            scores[t] = dot_val * scale;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        uint simd_lane  = tid % 32;
+        uint simd_group = tid / 32;
+        uint num_sg = (tg_sz + 31) / 32;
+
+        float block_max = -INFINITY;
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            block_max = max(block_max, scores[t]);
+        }
+        block_max = simd_max(block_max);
+        if (simd_lane == 0) shared[simd_group] = block_max;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tid < num_sg) block_max = shared[tid]; else block_max = -INFINITY;
+        if (tid < 32) {
+            block_max = simd_max(block_max);
+            if (tid == 0) shared[0] = block_max;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float m_new = shared[0];
+
+        float m_prev = m_i;
+        m_i = max(m_i, m_new);
+        float rescale_factor = exp(m_prev - m_i);
+        l_i *= rescale_factor;
+        for (uint d = tid; d < hd; d += tg_sz) {
+            out_acc[d] *= rescale_factor;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        float local_sum = 0.0f;
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            float v = exp(scores[t] - m_i);
+            scores[t] = v;
+            local_sum += v;
+        }
+        local_sum = simd_sum(local_sum);
+        if (simd_lane == 0) shared[simd_group] = local_sum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tid < num_sg) local_sum = shared[tid]; else local_sum = 0.0f;
+        if (tid < 32) {
+            local_sum = simd_sum(local_sum);
+            if (tid == 0) shared[0] = local_sum;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        l_i += shared[0];
+
+        for (uint t = tid; t < block_len; t += tg_sz) {
+            if (scores[t] < sparse_v_threshold) continue;
+            uint t_global = block_start + t;
+            uint v_base = t_global * kvd + kvh * hd;
+            for (uint d = 0; d < hd; d++) {
+                kv_block[t * hd + d] = V_cache[v_base + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint d = tid; d < hd; d += tg_sz) {
+            float acc = 0.0f;
+            for (uint t = 0; t < block_len; t++) {
+                if (scores[t] < sparse_v_threshold) continue;
+                acc += scores[t] * kv_block[t * hd + d];
+            }
+            out_acc[d] += acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (uint d = tid; d < hd; d += tg_sz) {
+        output[h * hd + d] = out_acc[d] / l_i;
+    }
+}
+
 // ── Paged SDPA — block-table-indexed FlashAttention-2 ────────────
 // Same algorithm as sdpa_fa2 but K/V access uses block-table indirection.
 // K_flat and V_flat store all physical blocks concatenated:
