@@ -137,9 +137,18 @@ pub const ExpertProfile = struct {
         const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch |e| return e;
         defer _ = std.posix.system.close(fd);
         // Stat for size, then read all.
-        var st: std.c.Stat = undefined;
-        if (std.c.fstat(fd, &st) != 0) return error.StatFailed;
-        const fsize: usize = @intCast(@max(0, st.size));
+        const fsize: usize = blk: {
+            if (comptime @import("builtin").os.tag == .linux) {
+                var buf: std.os.linux.Statx = undefined;
+                const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf);
+                if (rc != 0) return error.StatFailed;
+                break :blk @intCast(buf.size);
+            } else {
+                var st: std.posix.Stat = undefined;
+                if (std.c.fstat(fd, &st) != 0) return error.StatFailed;
+                break :blk @intCast(@max(0, st.size));
+            }
+        };
         if (fsize == 0) return error.EmptyFile;
         const data = try allocator.alloc(u8, fsize);
         var got: usize = 0;

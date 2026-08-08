@@ -496,10 +496,21 @@ fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
     const P = std.posix;
     const fd = P.openat(P.AT.FDCWD, path, .{}, 0) catch return null;
     defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
-    var s: std.c.Stat = undefined;
-    if (std.c.fstat(fd, &s) != 0) return null;
-    if (s.size <= 0) return null;
-    const size: usize = @intCast(s.size);
+    const file_size: usize = blk: {
+        if (comptime builtin.os.tag == .linux) {
+            var buf: std.os.linux.Statx = undefined;
+            const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf);
+            if (rc != 0) return null;
+            break :blk @intCast(buf.size);
+        } else {
+            var s: std.c.Stat = undefined;
+            if (std.c.fstat(fd, &s) != 0) return null;
+            if (s.size <= 0) return null;
+            break :blk @intCast(s.size);
+        }
+    };
+    if (file_size == 0) return null;
+    const size: usize = file_size;
     const buf = allocator.alloc(u8, size) catch return null;
     var off: usize = 0;
     while (off < size) {
