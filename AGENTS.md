@@ -148,7 +148,7 @@ These rules are non-negotiable. Every change must respect all of them.
 - Zero external dependencies. CLI parsing is self-contained (`cli.zig`). Terminal I/O is self-contained (`term.zig`).
 - Every change must maintain cross-compilation for all targets (Linux x86_64/aarch64, macOS aarch64).
 - `ReleaseFast` is production. `Debug` retains full safety checks.
-- Model toggles: `-Denable-<model>=false` (gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4).
+- Model toggles: `-Denable-<model>=false` (gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4).
 - Backend maturity: Level 0 (CPU) → Level 1 (Metal + Vulkan, current goal) → Level 2 (CUDA + ROCm optimized). WebGPU has 48 shaders (most core ops).
 
 ### Error Handling & Safety

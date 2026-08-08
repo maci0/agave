@@ -990,7 +990,7 @@ const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen3
 const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
 const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
 const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model else void;
-const Ds4Model = if (build_options.enable_glm4) @import("deepseek4.zig").Ds4Model else void;
+const Ds4Model = if (build_options.enable_deepseek4) @import("deepseek4.zig").Ds4Model else void;
 const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
 const Llama4Model = if (build_options.enable_llama4) @import("llama4.zig").Llama4Model else void;
 
