@@ -1168,18 +1168,28 @@ pub const Ds4Model = struct {
             }
         }
 
-        // CPU: SIMD weighted accumulation directly into hidden (avoids 16KB copy)
+        // CPU: SIMD weighted accumulation directly into hidden.
+        // First slot: direct scaled write (skip memset + mulAdd into zeros).
+        // Remaining slots: fused multiply-add.
         const V8 = @Vector(8, f32);
-        @memset(self.hidden, 0.0);
-        for (0..n_scratch) |slot| {
-            const sd = self.expert_scratch[slot * e ..][0..e];
-            const wv: V8 = @splat(slot_weights[slot]);
+        if (n_scratch > 0) {
+            const sd0 = self.expert_scratch[0..e];
+            const wv0: V8 = @splat(slot_weights[0]);
             var i: usize = 0;
             while (i + 8 <= e) : (i += 8) {
-                const acc: V8 = self.hidden[i..][0..8].*;
-                self.hidden[i..][0..8].* = @mulAdd(V8, @as(V8, sd[i..][0..8].*), wv, acc);
+                self.hidden[i..][0..8].* = @as(V8, sd0[i..][0..8].*) * wv0;
             }
-            while (i < e) : (i += 1) self.hidden[i] += sd[i] * slot_weights[slot];
+            while (i < e) : (i += 1) self.hidden[i] = sd0[i] * slot_weights[0];
+            for (1..n_scratch) |slot| {
+                const sd = self.expert_scratch[slot * e ..][0..e];
+                const wv: V8 = @splat(slot_weights[slot]);
+                i = 0;
+                while (i + 8 <= e) : (i += 8) {
+                    const acc: V8 = self.hidden[i..][0..8].*;
+                    self.hidden[i..][0..8].* = @mulAdd(V8, @as(V8, sd[i..][0..8].*), wv, acc);
+                }
+                while (i < e) : (i += 1) self.hidden[i] += sd[i] * slot_weights[slot];
+            }
         }
     }
 
