@@ -119,6 +119,7 @@ pub const Ds4Model = struct {
     ff_up_scratch: []f32 = &.{},    // [max_total_experts * ff_exp] up outputs pre-siluMul
     router_logits: []f32 = &.{},    // [n_experts]
     logits_buf: []f32 = &.{},       // [vocab_size]
+    score_stride: usize = 0,        // per-head score buffer stride
 
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
     rope_freqs: [32]f32 = undefined,       // freq_base = rope_freq (layers with ratio=0)
@@ -232,8 +233,9 @@ pub const Ds4Model = struct {
         self.q_compressed = try allocator.alloc(f32, ql);
         self.q_full = try allocator.alloc(f32, nh * kd);
         self.kv_proj = try allocator.alloc(f32, kd);
-        // scores_buf must hold raw (ctx) + compressed groups (ctx/4+1) positions + sinks
-        self.scores_buf = try allocator.alloc(f32, ctx + compSlotsPerLayer(ctx) + 1);
+        // scores_buf: per-head slices for parallel attention (64 heads × score_stride).
+        self.score_stride = ctx + compSlotsPerLayer(ctx) + 1;
+        self.scores_buf = try allocator.alloc(f32, nh * self.score_stride);
         self.attn_out = try allocator.alloc(f32, nh * kd);
         self.lora_out = try allocator.alloc(f32, og * olr);
         self.attn_result = try allocator.alloc(f32, e);
@@ -809,12 +811,14 @@ pub const Ds4Model = struct {
             else
                 null;
             const V8 = @Vector(8, f32);
+            const ss = self.score_stride;
             for (0..nh) |h| {
                 const q_h = self.q_full[h * kd ..][0..kd];
+                const scores_h = self.scores_buf[h * ss ..];
                 // QK dot products for raw KV positions (supports any kv_type via kvDot)
                 for (0..pos + 1) |t| {
                     const k_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
-                    self.scores_buf[t] = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * scale;
+                    scores_h[t] = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * scale;
                 }
                 // QK for compressed positions (always f32 — CSA cache is unquantized)
                 for (0..n_attend_comp) |gi| {
@@ -827,34 +831,34 @@ pub const Ds4Model = struct {
                     }
                     var dot = @reduce(.Add, acc);
                     while (i < kd) : (i += 1) dot += q_h[i] * ck[i];
-                    self.scores_buf[pos + 1 + gi] = dot * scale;
+                    scores_h[pos + 1 + gi] = dot * scale;
                 }
                 // Softmax over all attended positions
                 {
-                    var mx = self.scores_buf[0];
-                    for (self.scores_buf[1..sl_total]) |v| if (v > mx) { mx = v; };
+                    var mx = scores_h[0];
+                    for (scores_h[1..sl_total]) |v| if (v > mx) { mx = v; };
                     if (sink_data) |sd| {
                         if (sd[h] > mx) mx = sd[h];
                     }
                     var sm: f32 = 0;
-                    for (self.scores_buf[0..sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
+                    for (scores_h[0..sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
                     if (sink_data) |sd| sm += @exp(sd[h] - mx);
                     const inv = 1.0 / sm;
-                    for (self.scores_buf[0..sl_total]) |*v| v.* *= inv;
+                    for (scores_h[0..sl_total]) |*v| v.* *= inv;
                 }
                 // V accumulation: zero per-head, skip negligible weights (sparse V)
                 const ao_h = self.attn_out[h * kd ..][0..kd];
                 @memset(ao_h, 0.0);
                 for (0..pos + 1) |t| {
-                    if (self.scores_buf[t] < sparse_v_threshold) continue;
+                    if (scores_h[t] < sparse_v_threshold) continue;
                     const v_ptr = kv_v_layer[t * kv_elem_bytes ..].ptr;
-                    kv_quant.kvMulAccum(ao_h.ptr, self.scores_buf[t], v_ptr, kd, kv_type);
+                    kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
                 }
                 // V accumulation: compressed (always f32)
                 for (0..n_attend_comp) |gi| {
                     const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                     const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
-                    const wv: V8 = @splat(self.scores_buf[pos + 1 + gi]);
+                    const wv: V8 = @splat(scores_h[pos + 1 + gi]);
                     var i: usize = 0;
                     while (i + 8 <= kd) : (i += 8) {
                         const cur: V8 = ao_h[i..][0..8].*;
