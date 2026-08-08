@@ -1382,26 +1382,59 @@ fn hcSinkhorn(m: []f32) void {
 /// CPU Q8_0 GEMV: y[n_out] = w[n_out rows × n_in cols] @ x[n_in].
 /// Avoids Metal GPU dispatch overhead for tiny output dims (like HC pre's 24-output GEMV).
 /// Q8_0 block: 2-byte f16 scale + 32 i8 values = 34 bytes.
+/// Processes 2 rows at a time to share x[] loads and improve ILP.
 fn cpuGemvQ8_0(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
     const V8 = @Vector(8, f32);
     const block_size: usize = 32;
     const block_bytes: usize = 34;
     const n_out = y.len;
     const blocks_per_row = n_in / block_size;
-    for (0..n_out) |i| {
+    const row_stride = blocks_per_row * block_bytes;
+    // 2-row interleaved path: share x[] loads between row pairs
+    var i: usize = 0;
+    while (i + 2 <= n_out) : (i += 2) {
+        var acc0: V8 = @splat(0.0);
+        var acc1: V8 = @splat(0.0);
+        const rp0 = w_ptr + i * row_stride;
+        const rp1 = w_ptr + (i + 1) * row_stride;
+        for (0..blocks_per_row) |b| {
+            const blk0 = rp0 + b * block_bytes;
+            const blk1 = rp1 + b * block_bytes;
+            const s0: f32 = @floatCast(@as(f16, @bitCast(@as(u16, blk0[0]) | (@as(u16, blk0[1]) << 8))));
+            const s1: f32 = @floatCast(@as(f16, @bitCast(@as(u16, blk1[0]) | (@as(u16, blk1[1]) << 8))));
+            const sv0: V8 = @splat(s0);
+            const sv1: V8 = @splat(s1);
+            const xb = x[b * block_size ..][0..32];
+            var k: usize = 0;
+            while (k + 8 <= 32) : (k += 8) {
+                const xv: V8 = xb[k..][0..8].*;
+                var qv0: V8 = undefined;
+                var qv1: V8 = undefined;
+                inline for (0..8) |idx| {
+                    qv0[idx] = @floatFromInt(@as(i8, @bitCast((blk0 + 2)[k + idx])));
+                    qv1[idx] = @floatFromInt(@as(i8, @bitCast((blk1 + 2)[k + idx])));
+                }
+                acc0 = @mulAdd(V8, qv0 * sv0, xv, acc0);
+                acc1 = @mulAdd(V8, qv1 * sv1, xv, acc1);
+            }
+        }
+        y[i] = @reduce(.Add, acc0);
+        y[i + 1] = @reduce(.Add, acc1);
+    }
+    // Scalar tail for odd n_out
+    while (i < n_out) : (i += 1) {
         var acc: V8 = @splat(0.0);
-        const row_ptr = w_ptr + i * blocks_per_row * block_bytes;
+        const row_ptr = w_ptr + i * row_stride;
         for (0..blocks_per_row) |b| {
             const blk = row_ptr + b * block_bytes;
             const scale: f32 = @floatCast(@as(f16, @bitCast(@as(u16, blk[0]) | (@as(u16, blk[1]) << 8))));
             const sv: V8 = @splat(scale);
-            const q = blk + 2;
             const xb = x[b * block_size ..][0..32];
             var k: usize = 0;
             while (k + 8 <= 32) : (k += 8) {
-                var qv: V8 = undefined;
-                inline for (0..8) |idx| qv[idx] = @floatFromInt(@as(i8, @bitCast(q[k + idx])));
                 const xv: V8 = xb[k..][0..8].*;
+                var qv: V8 = undefined;
+                inline for (0..8) |idx| qv[idx] = @floatFromInt(@as(i8, @bitCast((blk + 2)[k + idx])));
                 acc = @mulAdd(V8, qv * sv, xv, acc);
             }
         }
