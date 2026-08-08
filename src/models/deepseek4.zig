@@ -1269,20 +1269,6 @@ fn plainRmsNorm(x: []f32, eps: f32) void {
     while (i < x.len) : (i += 1) x[i] *= scale;
 }
 
-/// SiGLU with per-DS4 clamping: up clamped [-10,10], gate upper-clamped [−∞,10].
-/// Clamp prevents outlier explosion from Q2_K dequantization.
-fn siluMulClamped(gate: []f32, up: []f32, clamp: f32) void {
-    for (gate, up) |*g, *u| {
-        u.* = @min(clamp, @max(-clamp, u.*));  // two-sided clamp on up
-        g.* = @min(clamp, g.*);               // upper-only clamp on gate
-        g.* = g.* * (1.0 / (1.0 + @exp(-g.*))) * u.*;
-    }
-}
-
-fn siluMul(gate: []f32, up: []f32) void {
-    for (gate, up) |*g, u| g.* = g.* * (1.0 / (1.0 + @exp(-g.*))) * u;
-}
-
 /// Apply RoPE using a pre-computed cos/sin table. SIMD-vectorized: processes 4
 /// complex rotations per iteration (loads 8 consecutive f32, deinterleaves to
 /// even/odd, applies rotation matrix, interleaves back).
@@ -1337,36 +1323,6 @@ fn applyRopeInverseTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void 
         const x1 = x[i * 2 + 1];
         x[i * 2] = x0 * cos_t[i] + x1 * sin_t[i];
         x[i * 2 + 1] = -x0 * sin_t[i] + x1 * cos_t[i];
-    }
-}
-
-fn applyRope(x: []f32, pos: usize, freq_base: f32, rope_dim: usize) void {
-    const nd = rope_dim / 2;
-    for (0..nd) |i| {
-        const freq = std.math.pow(f32, freq_base, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rope_dim)));
-        const theta = @as(f32, @floatFromInt(pos)) * freq;
-        const c = @cos(theta);
-        const s = @sin(theta);
-        const x0 = x[i * 2];
-        const x1 = x[i * 2 + 1];
-        x[i * 2] = x0 * c - x1 * s;
-        x[i * 2 + 1] = x0 * s + x1 * c;
-    }
-}
-
-/// Inverse RoPE (rope_ext_back): rotation by -theta. Applied to attention output rope portion.
-fn applyRopeInverse(x: []f32, pos: usize, freq_base: f32, rope_dim: usize) void {
-    const nd = rope_dim / 2;
-    for (0..nd) |i| {
-        const freq = std.math.pow(f32, freq_base, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rope_dim)));
-        const theta = @as(f32, @floatFromInt(pos)) * freq;
-        const c = @cos(theta);
-        const s = @sin(theta);
-        const x0 = x[i * 2];
-        const x1 = x[i * 2 + 1];
-        // Inverse: transpose of rotation matrix = rotation by -theta
-        x[i * 2] = x0 * c + x1 * s;
-        x[i * 2 + 1] = -x0 * s + x1 * c;
     }
 }
 
