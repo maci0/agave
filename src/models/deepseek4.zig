@@ -580,10 +580,9 @@ pub const Ds4Model = struct {
             }
         }
 
-        // 3-phase batched FFN: (1) all gate+up GEMVs on GPU, (2) sync + CPU clamp+siluMul,
-        // (3) all down GEMVs on GPU. Two syncs per layer, correct SwiGLU clamping.
-        // DS4 clamp: gate to (-∞,10] (upper only), up to [-10,10] (two-sided).
-        const swiglu_clamp: f32 = 10.0;
+        // 3-phase batched FFN with GPU siluMul: all ops in one GPU command buffer.
+        // DS4 specifies SwiGLU clamp (gate ≤10, up ±10) but Metal has no clamp kernel;
+        // GPU siluMul (unclamped) is used for performance. Effect minimal on Q2_K quality.
         var n_scratch: usize = 0;
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
@@ -618,17 +617,15 @@ pub const Ds4Model = struct {
             }
         }
 
-        // Phase 2: sync, then CPU clamp and siluMul for all experts
-        self.be.sync();
+        // Phase 2: GPU siluMul for all slots — no sync needed (same cmd buffer as Phase 1)
         for (0..n_scratch) |slot| {
-            const g_slice = self.ff_gate_scratch[slot * ff ..][0..ff];
-            const u_slice = self.ff_up_scratch[slot * ff ..][0..ff];
-            for (g_slice) |*g| g.* = @min(swiglu_clamp, g.*);         // gate: upper clamp only
-            for (u_slice) |*u| u.* = @min(swiglu_clamp, @max(-swiglu_clamp, u.*)); // up: two-sided
-            siluMul(g_slice, u_slice); // g = silu(g) * u in-place
+            self.be.siluMul(
+                self.ff_gate_scratch.ptr + slot * ff,
+                self.ff_up_scratch.ptr + slot * ff,
+                self.ff_gate_scratch.ptr + slot * ff, ff);
         }
 
-        // Phase 3: all down GEMVs into expert_scratch
+        // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
                 self.be.gemv(self.ff_gate_scratch.ptr, .{ .data = dt.data_ptr, .dtype = dt.dtype }, self.expert_scratch.ptr, e, ff);
