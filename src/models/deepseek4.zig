@@ -13,7 +13,10 @@ const model_mod = @import("model.zig");
 const math_ops = @import("../ops/math.zig");
 
 const quant_ops = @import("../ops/quant.zig");
+const kv_quant = @import("../ops/kv_quant.zig");
+const attn_ops = @import("../ops/attention.zig");
 const Backend = backend_mod.Backend;
+const KvQuantType = kv_quant.KvQuantType;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
 const DType = format_mod.DType;
@@ -99,9 +102,9 @@ pub const Ds4Model = struct {
     router_logits: []f32 = &.{},    // [n_experts]
     logits_buf: []f32 = &.{},       // [vocab_size]
 
-    // Simple flat f32 KV cache: [n_layers * ctx * kv_lora_rank]
-    kv_k: []f32 = &.{},
-    kv_v: []f32 = &.{},
+    // KV cache as f16 bytes for GPU SDPA: [n_layers * ctx * kv_lora_rank * 2]
+    kv_k_bytes: []u8 = &.{},
+    kv_v_bytes: []u8 = &.{},
 
     // Norm weight cache (dequantized to f32)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
@@ -191,9 +194,10 @@ pub const Ds4Model = struct {
         self.router_logits = try allocator.alloc(f32, self.n_experts);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
 
-        // Simple flat KV cache: nl layers × ctx positions × kd dims × 2 (K and V same size)
-        self.kv_k = try allocator.alloc(f32, nl * ctx * kd);
-        self.kv_v = try allocator.alloc(f32, nl * ctx * kd);
+        // KV cache bytes: each layer stores ctx × nkv=1 × kd elements in kv_type format
+        const kv_bytes_per_layer = kv_quant.kvByteOffset(kv_type, ctx * kd);
+        self.kv_k_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
+        self.kv_v_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
 
         self.warmNormCache();
         return self;
@@ -227,7 +231,7 @@ pub const Ds4Model = struct {
             &self.q_full, &self.kv_proj, &self.scores_buf, &self.attn_out, &self.lora_out,
             &self.attn_result, &self.ff_gate, &self.ff_up, &self.ff_down, &self.expert_accum,
             &self.expert_scratch, &self.ff_gate_scratch, &self.ff_up_scratch,
-            &self.router_logits, &self.logits_buf, &self.kv_k, &self.kv_v,
+            &self.router_logits, &self.logits_buf, &self.kv_k_bytes, &self.kv_v_bytes,
         }) |buf| a.free(buf.*);
     }
 
@@ -279,16 +283,20 @@ pub const Ds4Model = struct {
 
     // ── KV cache helpers ──────────────────────────────────────────
 
-    fn kvKSlice(self: *Ds4Model, li: usize, pos: usize) []f32 {
-        const kd = self.kv_lora_rank;
-        const ctx = self.max_seq_len;
-        return self.kv_k[li * ctx * kd + pos * kd ..][0..kd];
+    const kv_type: KvQuantType = .f32;
+
+    fn kvLayerBytes(self: *Ds4Model) usize {
+        return kv_quant.kvByteOffset(kv_type, self.max_seq_len * self.kv_lora_rank);
     }
 
-    fn kvVSlice(self: *Ds4Model, li: usize, pos: usize) []f32 {
-        const kd = self.kv_lora_rank;
-        const ctx = self.max_seq_len;
-        return self.kv_v[li * ctx * kd + pos * kd ..][0..kd];
+    fn kvKLayer(self: *Ds4Model, li: usize) []u8 {
+        const layer_bytes = self.kvLayerBytes();
+        return self.kv_k_bytes[li * layer_bytes ..][0..layer_bytes];
+    }
+
+    fn kvVLayer(self: *Ds4Model, li: usize) []u8 {
+        const layer_bytes = self.kvLayerBytes();
+        return self.kv_v_bytes[li * layer_bytes ..][0..layer_bytes];
     }
 
     // ── Hyper Connection ──────────────────────────────────────────
@@ -441,46 +449,30 @@ pub const Ds4Model = struct {
         self.be.sync(); // CPU RoPE reads kv_proj
         applyRope(self.kv_proj[nope..][0..rd], pos, rope_freq, rd);
 
-        // Store KV (K = V in this MLA variant)
-        @memcpy(self.kvKSlice(li, pos), self.kv_proj);
-        @memcpy(self.kvVSlice(li, pos), self.kv_proj);
-
-        // Attention: Q [nh, kd] × K [1, kd, sl] → scores → × V
-        const sl = pos + 1;
+        // SDPA: head_dim=512 exceeds Metal GPU limit (256), force CPU SIMD path via window.
+        // K=V in DS4 MLA (single compressed head, GQA 64:1).
         const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
-        // Per-head sink biases added to position 0 score (prevents attention collapse)
-        const sinks_t = self.layerTensor(li, "attn_sinks.weight");
-        const sinks_data: ?[*]const f32 = if (sinks_t) |t| @ptrCast(@alignCast(t.data_ptr)) else null;
-        @memset(self.attn_out, 0.0);
-        for (0..nh) |h| {
-            const q_h = self.q_full[h * kd ..][0..kd];
-            // QK scores
-            for (0..sl) |t| {
-                const k_t = self.kvKSlice(li, t);
-                var dot: f32 = 0.0;
-                for (0..kd) |i| dot += q_h[i] * k_t[i];
-                self.scores_buf[t] = dot * scale;
-            }
-            // Softmax with attention sinks: virtual sink token added to denominator.
-            // sinks[h] acts as score of an imaginary token; real weights sum to < 1.
-            {
-                var mx = self.scores_buf[0];
-                for (self.scores_buf[1..sl]) |v| if (v > mx) { mx = v; };
-                if (sinks_data) |sd| if (sd[h] > mx) { mx = sd[h]; };
-                var sm: f32 = 0.0;
-                for (self.scores_buf[0..sl]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
-                if (sinks_data) |sd| sm += @exp(sd[h] - mx);
-                const inv = 1.0 / sm;
-                for (self.scores_buf[0..sl]) |*v| v.* *= inv;
-            }
-            // V accumulation
-            const ao_h = self.attn_out[h * kd ..][0..kd];
-            for (0..sl) |t| {
-                const v_t = self.kvVSlice(li, t);
-                const w = self.scores_buf[t];
-                for (0..kd) |i| ao_h[i] += v_t[i] * w;
-            }
-        }
+        const kv_k_layer = self.kvKLayer(li);
+        const kv_v_layer = self.kvVLayer(li);
+        attn_ops.scaledDotProductAttention(
+            self.q_full.ptr,
+            kv_k_layer,
+            kv_v_layer,
+            self.kv_proj, // k_new (K=V: same kv_proj)
+            self.kv_proj, // v_new
+            self.attn_out.ptr,
+            self.scores_buf.ptr,
+            nh,
+            1,     // nkv=1 (GQA 64:1)
+            kd,
+            pos,   // past seq_len; SDPA appends current token at pos
+            scale,
+            self.be,
+            .{ .start = 0, .len = pos + 1 }, // window covering all positions → CPU SIMD path
+            0,
+            kv_type,
+            kv_type,
+        );
 
         // Apply inverse RoPE (derope) to rope portion of each attention head output.
         // llama.cpp applies ggml_rope_ext_back before the output LoRA projection.
