@@ -2261,19 +2261,18 @@ pub const MetalBackend = struct {
     /// Appends k_new/v_new to KV cache, then runs FlashAttention-2 on GPU.
     /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
     /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
-    /// KV append for turbo types uses CPU quantization (once per token per layer,
-    /// not the SDPA hot path). Panics on non-f32, non-turbo KV types.
-    /// Panics for sequences > 4096 or head dims > 256.
+    /// KV append for non-f32 types uses CPU quantization (once per token per layer,
+    /// not the SDPA hot path). Supports f32, turbo2/3/4, and q8_0 KV types.
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
-        self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else "sdpa_fa2";
-        const is_turbo_k = kv_type_k.isTurbo();
-        const is_turbo_v = kv_type_v.isTurbo();
+        self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else if (kv_type_k == .q8_0) "sdpa_turbo" else "sdpa_fa2";
+        const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0;
+        const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0;
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
 
-        // Non-turbo, non-f32 quantized KV: not supported — add GPU kernel or use --kv-type f32
+        // Non-turbo, non-f32, non-q8_0 quantized KV: not supported
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
-            @panic("Metal SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
+            @panic("Metal SDPA: unsupported KV type — use --kv-type f32, q8_0, or turbo2/3/4");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;

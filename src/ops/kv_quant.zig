@@ -514,16 +514,19 @@ pub const KvQuantType = enum {
             .turbo2, .planar2, .iso2, .rotor2 => 2,
             .turbo3, .planar3, .iso3, .rotor3 => 3,
             .turbo4, .planar4, .iso4, .rotor4 => 4,
+            .q8_0 => 8,
             else => 0,
         };
     }
 
-    /// Return the byte size per 32-element turbo block, or 0 for non-turbo types.
+    /// Return the byte size per 32-element block, or 0 for non-block types.
+    /// Covers turbo variants and Q8_0 (34 bytes = f16 scale + 32 × i8).
     pub fn turboBlockByteSize(self: KvQuantType) u32 {
         return switch (self) {
             .turbo2 => @intCast(turbo2_block_bytes),
             .turbo3 => @intCast(turbo3_block_bytes),
             .turbo4 => @intCast(turbo4_block_bytes),
+            .q8_0 => @intCast(q8_0_block_bytes),
             else => 0,
         };
     }

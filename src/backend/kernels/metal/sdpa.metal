@@ -787,6 +787,20 @@ kernel void sdpa_fa2_turbo(
                 for (uint d = 0; d < hd; d++) {
                     kv_block[t * hd + d] = K_f32[k_base + d];
                 }
+            } else if (bits_k == 8) {
+                // Q8_0 dequant: 34 bytes per 32-element block (f16 scale + 32 × i8)
+                uint elem_base = t_global * kvd + kvh * hd;
+                uint n_q8_blocks = hd / 32;
+                for (uint blk = 0; blk < n_q8_blocks; blk++) {
+                    uint elem_idx = elem_base + blk * 32;
+                    uint q8_block_idx = elem_idx / 32;
+                    uint byte_off = q8_block_idx * 34; // block_bytes_k for Q8_0 = 34
+                    device const uchar* bp = K_cache + byte_off;
+                    float s = float(*((device const half*)bp));
+                    for (uint d = 0; d < 32; d++) {
+                        kv_block[t * hd + blk * 32 + d] = s * float((device const char*)(bp + 2))[d];
+                    }
+                }
             } else {
                 // TurboQuant: dequant 32-element blocks for this position's head dims
                 uint elem_base = t_global * kvd + kvh * hd;
@@ -875,6 +889,20 @@ kernel void sdpa_fa2_turbo(
                 uint v_base = t_global * kvd + kvh * hd;
                 for (uint d = 0; d < hd; d++) {
                     kv_block[t * hd + d] = V_f32[v_base + d];
+                }
+            } else if (bits_v == 8) {
+                // Q8_0 dequant for V
+                uint elem_base = t_global * kvd + kvh * hd;
+                uint n_q8_blocks = hd / 32;
+                for (uint blk = 0; blk < n_q8_blocks; blk++) {
+                    uint elem_idx = elem_base + blk * 32;
+                    uint q8_block_idx = elem_idx / 32;
+                    uint byte_off = q8_block_idx * 34;
+                    device const uchar* bp = V_cache + byte_off;
+                    float s = float(*((device const half*)bp));
+                    for (uint d = 0; d < 32; d++) {
+                        kv_block[t * hd + blk * 32 + d] = s * float((device const char*)(bp + 2))[d];
+                    }
                 }
             } else {
                 // TurboQuant: dequant 32-element blocks for this position's head dims
