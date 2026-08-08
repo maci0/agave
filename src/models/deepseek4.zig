@@ -106,6 +106,7 @@ pub const Ds4Model = struct {
     kv_k_bytes: []u8 = &.{},
     kv_v_bytes: []u8 = &.{},
 
+
     // Norm weight cache (dequantized to f32)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
@@ -328,9 +329,13 @@ pub const Ds4Model = struct {
         @memcpy(self.flat_norm, self.hc_state);
         plainRmsNorm(self.flat_norm, self.rms_eps);
 
-        // mixes[24] = hc_fn @ flat_norm
-        self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_mixes.ptr, hc_mix_dim, flat_size);
-        self.be.sync();
+        // mixes[24] = hc_fn @ flat_norm — CPU GEMV avoids GPU dispatch overhead for 24-output case
+        if (hc_fn.dtype == .q8_0) {
+            cpuGemvQ8_0(hc_fn.data_ptr, self.flat_norm, self.hc_mixes, flat_size);
+        } else {
+            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_mixes.ptr, hc_mix_dim, flat_size);
+            self.be.sync();
+        }
 
         const base = self.normAsF32(hc_base, hc_mix_dim);
         const scale = self.normAsF32(hc_scale, 3);
@@ -394,8 +399,12 @@ pub const Ds4Model = struct {
         const e = self.n_embd;
         @memcpy(self.flat_norm, self.hc_state);
         plainRmsNorm(self.flat_norm, self.rms_eps);
-        self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_pre_w.ptr, n_hc, n_hc * e);
-        self.be.sync();
+        if (hc_fn.dtype == .q8_0) {
+            cpuGemvQ8_0(hc_fn.data_ptr, self.flat_norm, self.hc_pre_w, n_hc * e);
+        } else {
+            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_pre_w.ptr, n_hc, n_hc * e);
+            self.be.sync();
+        }
 
         const base = self.normAsF32(hc_base, n_hc);
         const scale = self.normAsF32(hc_scale, 1);
@@ -810,6 +819,36 @@ fn hcSinkhorn(m: []f32) void {
         for (0..n) |r| for (0..n) |c| { row_s[r] += m[r * n + c]; };
         for (&row_s) |*v| v.* += hc_eps;
         for (0..n) |r| for (0..n) |c| { m[r * n + c] /= row_s[r]; };
+    }
+}
+
+/// CPU Q8_0 GEMV: y[n_out] = w[n_out rows × n_in cols] @ x[n_in].
+/// Avoids Metal GPU dispatch overhead for tiny output dims (like HC pre's 24-output GEMV).
+/// Q8_0 block: 2-byte f16 scale + 32 i8 values = 34 bytes.
+fn cpuGemvQ8_0(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const V8 = @Vector(8, f32);
+    const block_size: usize = 32;
+    const block_bytes: usize = 34;
+    const n_out = y.len;
+    const blocks_per_row = n_in / block_size;
+    for (0..n_out) |i| {
+        var acc: V8 = @splat(0.0);
+        const row_ptr = w_ptr + i * blocks_per_row * block_bytes;
+        for (0..blocks_per_row) |b| {
+            const blk = row_ptr + b * block_bytes;
+            const scale: f32 = @floatCast(@as(f16, @bitCast(@as(u16, blk[0]) | (@as(u16, blk[1]) << 8))));
+            const sv: V8 = @splat(scale);
+            const q = blk + 2;
+            const xb = x[b * block_size ..][0..32];
+            var k: usize = 0;
+            while (k + 8 <= 32) : (k += 8) {
+                var qv: V8 = undefined;
+                inline for (0..8) |idx| qv[idx] = @floatFromInt(@as(i8, @bitCast(q[k + idx])));
+                const xv: V8 = xb[k..][0..8].*;
+                acc = @mulAdd(V8, qv * sv, xv, acc);
+            }
+        }
+        y[i] = @reduce(.Add, acc);
     }
 }
 
