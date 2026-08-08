@@ -1021,16 +1021,33 @@ pub const Ds4Model = struct {
             self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
             self.be.sync(); // CPU reads router_logits
 
-            // Compute probs = sqrt_softplus(logits) — used for final weights (unbiased)
+            // Compute probs = sqrt_softplus(logits) — SIMD vectorized (3 transcendentals × 256)
             var probs: [256]f32 = undefined;
-            for (0..ne) |i| probs[i] = sqrtSoftplus(self.router_logits[i]);
+            {
+                const V8f = @Vector(8, f32);
+                const ones: V8f = @splat(1.0);
+                var vi: usize = 0;
+                while (vi + 8 <= ne) : (vi += 8) {
+                    const x: V8f = self.router_logits[vi..][0..8].*;
+                    const r: V8f = @sqrt(@log(ones + @exp(x)));
+                    probs[vi..][0..8].* = r;
+                }
+                while (vi < ne) : (vi += 1) probs[vi] = sqrtSoftplus(self.router_logits[vi]);
+            }
 
             // Selection uses biased probs (exp_probs_b added AFTER sqrt_softplus)
             // Weights use UNBIASED probs (per DeepSeek V3/V4 spec)
             var selection: [256]f32 = probs;
             if (self.layerTensor(li, "exp_probs_b.bias")) |bias_t| {
-                const bias = @as([*]const f32, @ptrCast(@alignCast(bias_t.data_ptr)))[0..ne];
-                for (0..ne) |i| selection[i] += bias[i];
+                const bias = @as([*]const f32, @ptrCast(@alignCast(bias_t.data_ptr)));
+                const V8f = @Vector(8, f32);
+                var bi: usize = 0;
+                while (bi + 8 <= ne) : (bi += 8) {
+                    const sv: V8f = selection[bi..][0..8].*;
+                    const bv: V8f = bias[bi..][0..8].*;
+                    selection[bi..][0..8].* = sv + bv;
+                }
+                while (bi < ne) : (bi += 1) selection[bi] += bias[bi];
             }
 
             math_ops.topKExperts(selection[0..ne], nk, top_ids[0..nk], top_scores[0..nk]);
