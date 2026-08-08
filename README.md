@@ -18,7 +18,7 @@
 
 ## Features
 
-- **9 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, Llama 4
+- **10 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
@@ -145,6 +145,7 @@ Supports heterogeneous setups: different backends (CUDA + Vulkan + CPU), archite
 | Nemotron-H | — | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
 | Nemotron Nano | 30B | Partial | MLX 4-bit, NVFP4 | SSM + MoE + attention hybrid, SafeTensors (poor output quality) |
 | GLM-4 MoE Lite | 4.7B | Partial | MLX 4/6/8-bit | MLA + MoE (GGUF compatibility issue, poor output quality) |
+| DeepSeek V4 Flash | 0731 | Working | Q4_K, Q8_0 | MLA, 4-stream HC, CSA/HCA compressors, LID, 256 MoE experts top-6 |
 | Llama 4 | Scout | Working | Q4_K, Q8_0 | iRoPE, chunked attention, MoE top-1 + shared expert, batched prefill |
 
 ## Model Download
