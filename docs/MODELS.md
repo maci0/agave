@@ -18,6 +18,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
 | **Gemma 4** | `gemma4` | GQA + QK norm + post-norms | GELU + SwiGLU | MoE (top-8) or dense, PLE (E2B/E4B), vision (SigLIP-2), Q4_K/Q5_K/Q6_K GEMM |
 | **DiffusionGemma** | `diffusion_gemma` | GQA + bidirectional canvas | SiLU + SwiGLU | Block diffusion: 256-token canvas, 128 MoE experts top-8, BF16 SafeTensors only |
+| **DeepSeek V4 Flash** | `deepseek4` | MLA (K=V compressed) | SiLU + SwiGLU | 4-stream HC, CSA/HCA compressors, LID, hash+sqrt_softplus routing, 256 experts top-6, output LoRA |
 | **GLM-4 / DeepSeek V3** | `glm4` | MLA (compressed KV) | SiLU + SwiGLU | MoE (64/256 experts, top-4/top-8, sigmoid routing) |
 | **Llama 4** | `llama4` | iRoPE (local+global, chunked) | SiLU + SwiGLU | MoE (top-1) + shared expert, temperature scaling, 10M context |
 
@@ -39,6 +40,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Gemma4 12B | 2304 | 8 | 8/1 (sl/gl) | 256/512 (sl/gl) | 9216 | 48 | 10K | 256/128 (sl/gl) |
 | Gemma4 26B-A4B | 2816 | 16 | 8/2 (sl/gl) | 256/512 (sl/gl) | 2816 + 704/expert (MoE) | 30 | 10K/1M (sl/gl) | 256/128 (sl/gl) |
 | GLM-4 | 2048 | 20 | 20 (MLA) | 256 (qk_nope=192 + qk_rope=64) | 10240 (dense) / 1536 (MoE, 64 experts top-4) | 47 | 1M | 64 |
+| DeepSeek V4 Flash | 4096 | 64 | 1 (MLA) | 512 (kv_lora=512 + rope=64) | 2048 (MoE, 256 experts top-6 + 1 shared) | 43 | 10K | 64 |
 | Llama 4 Scout | 5120 | 40 | 8 | 128 | 14336 (MoE top-1 + shared) | 48 | 500K | 128 |
 
 ## Model-Specific Details
@@ -58,6 +60,8 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 The 12B variant has 48 layers with a global attention layer every 6 layers (layers 5, 11, 17, ...). Unlike the 26B which stores a scalar `attention.head_count_kv`, the 12B GGUF stores a per-layer `head_count_kv` array: SWA layers use nkv=8 with head_dim=256, global layers use nkv=1 with head_dim=512. Global layers also omit the V projection (tied K=V: copy K to V after `k_norm`, not before). When loading, read `attention.key_length_global` before `attention.key_length` to detect the global head dimension — if the key is absent, fall back to `attention.key_length`. Sliding window size: 4096 tokens. Maximum context: 128K.
 
 **GLM-4 / DeepSeek V2/V3** (MLX + GGUF): MLA (Multi-head Latent Attention) compresses K/V into a low-rank latent space via `kv_a_proj_with_mqa` → latent → per-head `kv_b_proj`. Q also uses low-rank factorization (`q_a_proj` + `q_b_proj`). Sigmoid routing for MoE (independent expert gates, not competing). GLM-4 uses MLX 4/6/8-bit affine quantization. DeepSeek V3 uses GGUF format (`arch=deepseek2`), with tensor names `blk.N.attn_q_a.weight`, `blk.N.attn_kv_a_mqa.weight` etc — both GGUF and SafeTensors now supported. MLA params (q_lora_rank, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim) auto-detected from GGUF metadata. Supports `--megakernel` (fused FFN SiLU on Metal).
+
+**DeepSeek V4 Flash 0731** (GGUF): Modified MLA where K=V share a single compressed head (no separate V projection). 4-stream hyper connections (HC) with Sinkhorn-normalized combination matrices mix information across streams at each layer boundary. Routing: layers 0–2 use hash routing (deterministic expert assignment), layers 3+ use sqrt_softplus scoring with learned bias. Output uses grouped LoRA (8 groups × 1024 rank) instead of a single dense output projection. KV compressors: CSA (ratio=4, 21 layers) and HCA (ratio=128, 20 layers) compress KV cache with per-ratio APE and group compression. Lightning Indexer (LID) scores compressed blocks via multi-head ReLU dot-product and selects top-k for sparse attention when block count exceeds `index_topk`. KV cache uses Q8_0 quantization. GGUF tensor prefix: `blk.N.*`.
 
 **DiffusionGemma** (SafeTensors BF16 only): Google's block-autoregressive discrete text diffusion model (26B-A4B). Built on Gemma 4 26B backbone but generates text in 256-token blocks via iterative denoising. Uses *uniform state diffusion*: instead of a special [MASK] token, noisy positions are replaced with random vocabulary tokens. Each denoising step runs bidirectional attention across the entire canvas, scores each position's confidence, and locks high-confidence tokens. Up to 48 steps supported; typically converges in 12-16. Tensor prefix: `model.decoder.layers.N.` with fused `experts.gate_up_proj` per-layer. Reported up to 4x faster than autoregressive on H200 at FP8. See `--diffusion-steps`, `--diffusion-canvas`, `--diffusion-confidence`.
 
