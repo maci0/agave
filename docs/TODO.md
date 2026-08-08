@@ -120,7 +120,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 24 | RDMA over Thunderbolt 5 | Exo |
 | 25 | Inter-model collaboration (MoM) | Mesh-LLM |
 | ~~26~~ | ~~Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured)~~ | Done (CPU +21%, Metal +12%) |
-| 27 | DeepSeek V4 Flash 0731 full support | Medium | Needs new `deepseek4.zig` model file — completely different from GLM-4. Novel components: (1) hyper connections (4 residual streams via `hc_attn_fn`/`hc_ffn_fn` matrices + Sinkhorn mixing), (2) modified MLA with output LoRA decomp (`attn_output_a`/`b`, rank 8192), (3) KV compressor for sliding window (`attn_compressor_*`), (4) indexer attention (`indexer_compressor_*`, `indexer.proj`, `indexer.attn_q_b`), (5) hash routing layers 0-2 (`ffn_gate_tid2eid` shape [6,129280]), (6) output HC streams. Split GGUF loading fixed (abs_ptr for cross-shard tensors, was SIGBUS). Multi-shard pull fixed. |
+| ~~27~~ | ~~DeepSeek V4 Flash 0731 full support~~ | Done | All components implemented: (1) hyper connections, (2) MLA with output LoRA, (3) CSA+HCA compressors (ratio=4/128), (4) Lightning Indexer (LID), (5) hash routing, (6) HC streams. Perf: KV q8_0, Metal SDPA hd=512+Q8_0, SIMD RoPE/routing/compressor, thread-pool parallel attention, sparse V, buffer elimination. |
 | ~~28~~ | ~~AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major — wrong packing)~~ | Done (all 6 backends + nibble order fix) |
 | ~~29~~ | ~~TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte)~~ | Done (all 6 backends) |
 | ~~30~~ | ~~TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2)~~ | Done (all 6 backends) |
