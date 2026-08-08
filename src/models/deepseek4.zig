@@ -404,17 +404,31 @@ pub const Ds4Model = struct {
         const e = self.n_embd;
         const flat_size = n_hc * e;
 
-        // RMS-norm the flat HC state (no learned weight)
-        @memcpy(self.flat_norm, self.hc_state);
-        plainRmsNorm(self.flat_norm, self.rms_eps);
+        // Compute RMS scale factor from hc_state without copying.
+        // Then run GEMV on raw hc_state and post-scale the output.
+        // Saves 16KB memcpy + in-place norm pass (was: copy → norm → GEMV).
+        const rms_inv = blk: {
+            const V8 = @Vector(8, f32);
+            var acc: V8 = @splat(0.0);
+            var ri: usize = 0;
+            while (ri + 8 <= flat_size) : (ri += 8) {
+                const v: V8 = self.hc_state[ri..][0..8].*;
+                acc = @mulAdd(V8, v, v, acc);
+            }
+            var ss: f32 = @reduce(.Add, acc);
+            while (ri < flat_size) : (ri += 1) ss += self.hc_state[ri] * self.hc_state[ri];
+            break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
+        };
 
-        // mixes[24] = hc_fn @ flat_norm — CPU GEMV avoids GPU dispatch overhead for 24-output case
+        // mixes[24] = hc_fn @ hc_state — then post-scale by rms_inv
         if (hc_fn.dtype == .q8_0) {
-            cpuGemvQ8_0(hc_fn.data_ptr, self.flat_norm, self.hc_mixes, flat_size);
+            cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_mixes, flat_size);
         } else {
+            @memcpy(self.flat_norm, self.hc_state); // GPU path still needs stable buffer
             self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_mixes.ptr, hc_mix_dim, flat_size);
             self.be.sync();
         }
+        for (self.hc_mixes[0..hc_mix_dim]) |*m| m.* *= rms_inv;
 
         const base = self.normAsF32(hc_base, hc_mix_dim);
         const scale = self.normAsF32(hc_scale, 3);
@@ -497,14 +511,28 @@ pub const Ds4Model = struct {
             return;
         }
         const e = self.n_embd;
-        @memcpy(self.flat_norm, self.hc_state);
-        plainRmsNorm(self.flat_norm, self.rms_eps);
+        const flat_size_h = n_hc * e;
+        // Same post-scale RMS optimization as hcPre
+        const rms_inv_h = blk: {
+            const V8 = @Vector(8, f32);
+            var acc: V8 = @splat(0.0);
+            var ri: usize = 0;
+            while (ri + 8 <= flat_size_h) : (ri += 8) {
+                const v: V8 = self.hc_state[ri..][0..8].*;
+                acc = @mulAdd(V8, v, v, acc);
+            }
+            var ss: f32 = @reduce(.Add, acc);
+            while (ri < flat_size_h) : (ri += 1) ss += self.hc_state[ri] * self.hc_state[ri];
+            break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size_h)) + self.rms_eps);
+        };
         if (hc_fn.dtype == .q8_0) {
-            cpuGemvQ8_0(hc_fn.data_ptr, self.flat_norm, self.hc_pre_w, n_hc * e);
+            cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_pre_w, flat_size_h);
         } else {
-            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_pre_w.ptr, n_hc, n_hc * e);
+            @memcpy(self.flat_norm, self.hc_state);
+            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_pre_w.ptr, n_hc, flat_size_h);
             self.be.sync();
         }
+        for (self.hc_pre_w[0..n_hc]) |*m| m.* *= rms_inv_h;
 
         const base = self.normAsF32(hc_base, n_hc);
         const scale = self.normAsF32(hc_scale, 1);
