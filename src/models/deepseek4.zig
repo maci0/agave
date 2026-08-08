@@ -670,12 +670,18 @@ pub const Ds4Model = struct {
 
         self.be.sync(); // all down GEMVs complete
 
-        // CPU: weighted accumulation from scratch slots
+        // CPU: SIMD weighted accumulation from all scratch slots
+        const V8 = @Vector(8, f32);
         @memset(self.expert_accum, 0.0);
         for (0..n_scratch) |slot| {
             const sd = self.expert_scratch[slot * e ..][0..e];
-            const w = slot_weights[slot];
-            for (0..e) |i| self.expert_accum[i] += sd[i] * w;
+            const wv: V8 = @splat(slot_weights[slot]);
+            var i: usize = 0;
+            while (i + 8 <= e) : (i += 8) {
+                const acc: V8 = self.expert_accum[i..][0..8].*;
+                self.expert_accum[i..][0..8].* = @mulAdd(V8, @as(V8, sd[i..][0..8].*), wv, acc);
+            }
+            while (i < e) : (i += 1) self.expert_accum[i] += sd[i] * slot_weights[slot];
         }
 
         @memcpy(self.hidden, self.expert_accum);
