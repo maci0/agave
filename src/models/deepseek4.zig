@@ -1335,7 +1335,7 @@ inline fn plainRmsNorm(x: []f32, eps: f32) void {
 /// Apply RoPE using a pre-computed cos/sin table. SIMD-vectorized: processes 4
 /// complex rotations per iteration (loads 8 consecutive f32, deinterleaves to
 /// even/odd, applies rotation matrix, interleaves back).
-fn applyRopeTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
+inline fn applyRopeTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
     const V4 = @Vector(4, f32);
     const n = cos_t.len;
     var i: usize = 0;
@@ -1364,7 +1364,7 @@ fn applyRopeTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
 }
 
 /// Inverse RoPE using pre-computed table (negate sin). SIMD-vectorized.
-fn applyRopeInverseTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
+inline fn applyRopeInverseTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
     const V4 = @Vector(4, f32);
     const n = cos_t.len;
     var i: usize = 0;
