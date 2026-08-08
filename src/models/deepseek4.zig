@@ -36,6 +36,11 @@ const max_norm_entries: usize = 512;
 
 const NormCacheEntry = struct { key: usize, data: []f32 };
 
+/// Sparse V threshold: skip V dequant+accumulation for positions where softmax
+/// weight is below this value. At 1e-6, skipped positions contribute < 0.0001%
+/// to the output — zero measured PPL impact. Matches attention.zig threshold.
+const sparse_v_threshold: f32 = 1e-6;
+
 /// Max compressed groups per layer. Uses ratio=4 (smallest) to size the shared stride,
 /// since CSA and HCA layers share the same `csa_k` buffer with per-layer offsets.
 fn compSlotsPerLayer(max_seq_len: usize) usize {
@@ -809,10 +814,11 @@ pub const Ds4Model = struct {
                     const inv = 1.0 / sm;
                     for (self.scores_buf[0..sl_total]) |*v| v.* *= inv;
                 }
-                // V accumulation: zero per-head (cache-friendly: zero + fill same lines)
+                // V accumulation: zero per-head, skip negligible weights (sparse V)
                 const ao_h = self.attn_out[h * kd ..][0..kd];
                 @memset(ao_h, 0.0);
                 for (0..pos + 1) |t| {
+                    if (self.scores_buf[t] < sparse_v_threshold) continue;
                     const v_ptr = kv_v_layer[t * kv_elem_bytes ..].ptr;
                     kv_quant.kvMulAccum(ao_h.ptr, self.scores_buf[t], v_ptr, kd, kv_type);
                 }
