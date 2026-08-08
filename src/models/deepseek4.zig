@@ -93,7 +93,9 @@ pub const Ds4Model = struct {
     ff_up: []f32 = &.{},            // [ff_exp]
     ff_down: []f32 = &.{},          // [n_embd]
     expert_accum: []f32 = &.{},     // [n_embd]
-    expert_scratch: []f32 = &.{},   // [max_total_experts * n_embd] for batched down GEMVs
+    expert_scratch: []f32 = &.{},    // [max_total_experts * n_embd] for batched down GEMVs
+    ff_gate_scratch: []f32 = &.{},  // [max_total_experts * ff_exp] gate outputs pre-siluMul
+    ff_up_scratch: []f32 = &.{},    // [max_total_experts * ff_exp] up outputs pre-siluMul
     router_logits: []f32 = &.{},    // [n_experts]
     logits_buf: []f32 = &.{},       // [vocab_size]
 
@@ -184,6 +186,8 @@ pub const Ds4Model = struct {
         // Scratch for batched expert down GEMVs (max_experts = n_expert_used + n_expert_shared)
         const max_experts: usize = @as(usize, self.n_expert_used) + @as(usize, self.n_expert_shared);
         self.expert_scratch = try allocator.alloc(f32, max_experts * e);
+        self.ff_gate_scratch = try allocator.alloc(f32, max_experts * ff);
+        self.ff_up_scratch = try allocator.alloc(f32, max_experts * ff);
         self.router_logits = try allocator.alloc(f32, self.n_experts);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
 
@@ -222,7 +226,8 @@ pub const Ds4Model = struct {
             &self.hc_comb, &self.hidden, &self.hidden2, &self.flat_norm, &self.q_compressed,
             &self.q_full, &self.kv_proj, &self.scores_buf, &self.attn_out, &self.lora_out,
             &self.attn_result, &self.ff_gate, &self.ff_up, &self.ff_down, &self.expert_accum,
-            &self.expert_scratch, &self.router_logits, &self.logits_buf, &self.kv_k, &self.kv_v,
+            &self.expert_scratch, &self.ff_gate_scratch, &self.ff_up_scratch,
+            &self.router_logits, &self.logits_buf, &self.kv_k, &self.kv_v,
         }) |buf| a.free(buf.*);
     }
 
@@ -288,6 +293,9 @@ pub const Ds4Model = struct {
 
     // ── Hyper Connection ──────────────────────────────────────────
 
+    /// Debug: disable HC, use mean of streams as identity
+    const debug_disable_hc = false;
+
     /// Compute HC pre-weights and sublayer input in `self.hidden`.
     fn hcPre(
         self: *Ds4Model,
@@ -295,6 +303,16 @@ pub const Ds4Model = struct {
         hc_base: TensorInfo,
         hc_scale: TensorInfo,
     ) void {
+        if (debug_disable_hc) {
+            // Identity: just mean of HC streams
+            const e = self.n_embd;
+            @memset(self.hidden, 0.0);
+            for (0..n_hc) |s| {
+                const stream = self.hc_state[s * e ..][0..e];
+                for (0..e) |i| self.hidden[i] += stream[i] * (1.0 / n_hc);
+            }
+            return;
+        }
         const e = self.n_embd;
         const flat_size = n_hc * e;
 
@@ -331,6 +349,12 @@ pub const Ds4Model = struct {
 
     /// Update HC state after a sublayer. Sublayer output must be in `self.hidden`.
     fn hcPost(self: *Ds4Model) void {
+        if (debug_disable_hc) {
+            // Identity: copy sublayer output to all streams
+            const e = self.n_embd;
+            for (0..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hidden);
+            return;
+        }
         const e = self.n_embd;
         const sub = self.hidden;
         for (0..n_hc) |dst| {
@@ -349,6 +373,16 @@ pub const Ds4Model = struct {
 
     /// HC head: merge 4 streams → self.hidden.
     fn hcHead(self: *Ds4Model, hc_fn: TensorInfo, hc_base: TensorInfo, hc_scale: TensorInfo) void {
+        if (debug_disable_hc) {
+            // Identity: mean of streams
+            const e = self.n_embd;
+            @memset(self.hidden, 0.0);
+            for (0..n_hc) |s| {
+                const stream = self.hc_state[s * e ..][0..e];
+                for (0..e) |i| self.hidden[i] += stream[i] * (1.0 / n_hc);
+            }
+            return;
+        }
         const e = self.n_embd;
         @memcpy(self.flat_norm, self.hc_state);
         plainRmsNorm(self.flat_norm, self.rms_eps);
@@ -427,14 +461,15 @@ pub const Ds4Model = struct {
                 for (0..kd) |i| dot += q_h[i] * k_t[i];
                 self.scores_buf[t] = dot * scale;
             }
-            // Add sink bias to position 0 (attention sink)
-            if (sinks_data) |sd| self.scores_buf[0] += sd[h];
-            // Softmax
+            // Softmax with attention sinks: virtual sink token added to denominator.
+            // sinks[h] acts as score of an imaginary token; real weights sum to < 1.
             {
                 var mx = self.scores_buf[0];
                 for (self.scores_buf[1..sl]) |v| if (v > mx) { mx = v; };
+                if (sinks_data) |sd| if (sd[h] > mx) { mx = sd[h]; };
                 var sm: f32 = 0.0;
                 for (self.scores_buf[0..sl]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
+                if (sinks_data) |sd| sm += @exp(sd[h] - mx);
                 const inv = 1.0 / sm;
                 for (self.scores_buf[0..sl]) |*v| v.* *= inv;
             }
@@ -493,7 +528,13 @@ pub const Ds4Model = struct {
         var top_weights: [8]f32 = undefined;
 
         if (li < self.hash_layer_count) {
-            // Hash routing: table lookup, no GPU data needed
+            // Hash routing: gate GEMV still runs (weights come from logits), only selection is hash-based.
+            // No exp_probs_b for hash layers.
+            const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
+            self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
+            self.be.sync();
+
+            // Hash lookup: determines which experts are selected
             const t2e = try self.layerTensorReq(li, "ffn_gate_tid2eid.weight");
             const n_slots: usize = @intCast(t2e.dims[0]);
             const vocab: usize = @intCast(t2e.dims[1]);
@@ -501,9 +542,19 @@ pub const Ds4Model = struct {
             const safe_tid: usize = @min(@as(usize, token_id), vocab - 1);
             for (0..nk) |j| {
                 top_ids[j] = @intCast(data[safe_tid * n_slots + j]);
-                top_weights[j] = 1.0 / @as(f32, @floatFromInt(nk));
             }
             n_active = nk;
+
+            // Weights from gate logits at the selected expert positions (no bias for hash layers)
+            var wsum: f32 = 0.0;
+            for (0..n_active) |j| {
+                top_weights[j] = sqrtSoftplus(self.router_logits[top_ids[j]]);
+                wsum += top_weights[j];
+            }
+            if (wsum > 0.0) {
+                const inv = self.expert_weights_scale / wsum;
+                for (0..n_active) |j| top_weights[j] *= inv;
+            }
         } else {
             // Learned routing: gate_inp GEMV → sync → top-k on CPU
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
@@ -537,47 +588,65 @@ pub const Ds4Model = struct {
             }
         }
 
-        // All expert gate+up+siluMul+down GEMVs batched on GPU — single sync at end.
-        // Results in expert_scratch[slot*e..]; slot_weights tracks scaling per slot.
+        // 3-phase batched FFN: (1) all gate+up GEMVs on GPU, (2) sync + CPU clamp+siluMul,
+        // (3) all down GEMVs on GPU. Two syncs per layer, correct SwiGLU clamping.
+        // DS4 clamp: gate to (-∞,10] (upper only), up to [-10,10] (two-sided).
+        const swiglu_clamp: f32 = 10.0;
         var n_scratch: usize = 0;
-        var slot_weights: [9]f32 = [_]f32{0.0} ** 9; // max = n_expert_used+n_expert_shared
+        var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
-        // Shared expert (weight 1.0, unscaled)
+        // Phase 1: all gate+up GEMVs into scratch buffers (no siluMul yet)
         if (self.n_expert_shared > 0) {
             if (self.layerTensor(li, "ffn_gate_shexp.weight")) |gt| {
                 const ut = self.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
-                const dt = self.layerTensor(li, "ffn_down_shexp.weight") orelse return error.MissingTensor;
-                self.be.gemv(self.hidden2.ptr, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate.ptr, ff, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up.ptr, ff, e);
-                self.be.siluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
-                self.be.gemv(self.ff_gate.ptr, .{ .data = dt.data_ptr, .dtype = dt.dtype }, self.expert_scratch.ptr + n_scratch * e, e, ff);
+                self.be.gemv(self.hidden2.ptr, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                self.be.gemv(self.hidden2.ptr, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
             }
         }
+        const shexp_slots = n_scratch;
 
-        // Routed experts — all on GPU, no intermediate syncs
+        var de_ptrs: [9][*]const u8 = undefined;
+        var de_dtype: DType = .f32;
         if (self.layerTensor(li, "ffn_gate_exps.weight")) |ge| {
             const ue = self.layerTensor(li, "ffn_up_exps.weight") orelse return error.MissingTensor;
             const de = self.layerTensor(li, "ffn_down_exps.weight") orelse return error.MissingTensor;
+            de_dtype = de.dtype;
             const gs = ds4ExpertStride(ge);
             const us = ds4ExpertStride(ue);
             const ds = ds4ExpertStride(de);
             for (0..n_active) |j| {
                 const eid = top_ids[j];
-                const gp = ge.data_ptr + eid * gs;
-                const up = ue.data_ptr + eid * us;
-                const dp = de.data_ptr + eid * ds;
-                self.be.gemv(self.hidden2.ptr, .{ .data = gp, .dtype = ge.dtype }, self.ff_gate.ptr, ff, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = up, .dtype = ue.dtype }, self.ff_up.ptr, ff, e);
-                self.be.siluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, ff);
-                self.be.gemv(self.ff_gate.ptr, .{ .data = dp, .dtype = de.dtype }, self.expert_scratch.ptr + n_scratch * e, e, ff);
+                self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                de_ptrs[n_scratch] = de.data_ptr + eid * ds;
                 slot_weights[n_scratch] = top_weights[j];
                 n_scratch += 1;
             }
         }
 
-        self.be.sync(); // single sync — all expert down GEMVs complete
+        // Phase 2: sync, then CPU clamp and siluMul for all experts
+        self.be.sync();
+        for (0..n_scratch) |slot| {
+            const g_slice = self.ff_gate_scratch[slot * ff ..][0..ff];
+            const u_slice = self.ff_up_scratch[slot * ff ..][0..ff];
+            for (g_slice) |*g| g.* = @min(swiglu_clamp, g.*);         // gate: upper clamp only
+            for (u_slice) |*u| u.* = @min(swiglu_clamp, @max(-swiglu_clamp, u.*)); // up: two-sided
+            siluMul(g_slice, u_slice); // g = silu(g) * u in-place
+        }
+
+        // Phase 3: all down GEMVs into expert_scratch
+        if (shexp_slots > 0) {
+            if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
+                self.be.gemv(self.ff_gate_scratch.ptr, .{ .data = dt.data_ptr, .dtype = dt.dtype }, self.expert_scratch.ptr, e, ff);
+            }
+        }
+        for (shexp_slots..n_scratch) |slot| {
+            self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+        }
+
+        self.be.sync(); // all down GEMVs complete
 
         // CPU: weighted accumulation from scratch slots
         @memset(self.expert_accum, 0.0);
@@ -726,17 +795,17 @@ fn applyRopeInverse(x: []f32, pos: usize, freq_base: f32, rope_dim: usize) void 
     }
 }
 
-/// Sinkhorn normalization for [n_hc × n_hc] matrix stored row-major [dst*n_hc+src].
-/// Initial softmax is column-wise (over dst for each src), matching ggml column-major convention.
+/// Sinkhorn normalization for [n_hc × n_hc] matrix.
+/// m[r*n+c] maps to comb(dst=c, src=r). ggml_soft_max runs over ne[0]=dst for each src.
 fn hcSinkhorn(m: []f32) void {
     const n = n_hc;
-    // Softmax over columns (dst dimension) for each src — matches ggml ggml_soft_max on [ne0=dst, ne1=src]
-    for (0..n) |c| { // for each src
-        var mx = m[0 * n + c];
-        for (1..n) |r| if (m[r * n + c] > mx) { mx = m[r * n + c]; };
+    // Initial softmax: for each src=r, normalize over dst=c (matches ggml_soft_max over ne[0]=dst)
+    for (0..n) |r| { // for each src=r
+        var mx = m[r * n + 0];
+        for (1..n) |c| if (m[r * n + c] > mx) { mx = m[r * n + c]; };
         var sm: f32 = 0.0;
-        for (0..n) |r| { m[r * n + c] = @exp(m[r * n + c] - mx); sm += m[r * n + c]; }
-        for (0..n) |r| m[r * n + c] /= sm;
+        for (0..n) |c| { m[r * n + c] = @exp(m[r * n + c] - mx); sm += m[r * n + c]; }
+        for (0..n) |c| m[r * n + c] /= sm;
     }
     for (m) |*v| v.* += hc_eps;
 

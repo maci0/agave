@@ -247,7 +247,7 @@ pub const ChatTemplate = struct {
         .assistant_suffix = "<｜end▁of▁sentence｜>",
         .eog_tokens = &.{ "<｜end▁of▁sentence｜>", "<｜end▁of▁sentence|>" },
         .default_system = "",
-        .generation_prefix = "</think>",
+        .generation_prefix = "</think>\n\n",
     };
 
     /// GPT-OSS Harmony.
