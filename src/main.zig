@@ -4702,6 +4702,7 @@ test {
     _ = @import("models/qwen35.zig");
     _ = @import("models/gpt_oss.zig");
     _ = @import("models/glm4.zig");
+    _ = @import("models/deepseek4.zig");
     _ = @import("models/llama4.zig");
     _ = @import("models/nemotron_nano.zig");
     _ = @import("models/nemotron_h.zig");
