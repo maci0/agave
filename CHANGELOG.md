@@ -35,6 +35,8 @@ must still appear under **Changed** or **Breaking** below. See
   not shadowed. Clients using a longer path prefix must call the documented URLs.
 
 ### Added
+- **DeepSeek V4 Flash 0731**: full architecture support — hyper connections,
+  MLA, CSA/HCA compressors, Lightning Indexer, hash routing. See 2026-07-31 entry.
 - Server env fallbacks: `AGAVE_HOST` and `AGAVE_PORT` when `--host` / `--port`
   are omitted (`--host` / `--port` still win when set). Documented in `--help`
   and Docker examples.
@@ -54,6 +56,8 @@ must still appear under **Changed** or **Breaking** below. See
 - LoRA: reject adapters whose `lora_b` rank does not match `lora_a` (corrupted GGUF)
 - HTTP JSON responses: allocation failure while escaping no longer inserts raw
   (possibly unescaped) strings; returns a generic `500` JSON error instead
+- Split GGUF shard merging: `tensors.put()` now propagates OOM instead of
+  silently dropping tensors (could cause silent model corruption on large shards)
 
 ### Changed
 - Changelog entries are consumer-oriented; date-stamped sections below remain the
@@ -65,6 +69,38 @@ must still appear under **Changed** or **Breaking** below. See
   over `--api-key` (process-list exposure)
 - HTTP JSON errors more often include machine-readable `param` and `code` (additive
   for clients that ignore unknown fields; see `docs/API.md`)
+
+## 2026-07-31 — DeepSeek V4 Flash 0731
+
+### DeepSeek V4 Flash Full Architecture Support
+
+New model architecture in `src/models/deepseek4.zig` with complete inference support.
+
+**Architecture:**
+- 4-stream hyper connections (HC) with Sinkhorn-normalized combination matrices
+- Modified MLA: K=V single compressed head, no separate V projection
+- Hash routing (layers 0–2), sqrt_softplus routing (layers 3+)
+- Grouped output LoRA (8 groups × 1024 rank)
+- CSA compressor (ratio=4, 21 layers) and HCA compressor (ratio=128, 20 layers)
+- Lightning Indexer (LID): multi-head ReLU dot-product block scoring for sparse attention
+
+**Performance optimizations (cumulative):**
+- KV cache switched from f32 to Q8_0 (~4× memory reduction)
+- Metal GPU SDPA kernel for hd=512 (`sdpa_fa2_hd512`) + Q8_0 KV support
+- SIMD vectorized: RoPE cos/sin (8-wide), RoPE apply/inverse (4-wide complex rotation),
+  sqrt_softplus routing + bias, LID scoring (head-outer loop), expert accumulation
+- CPU Q8_0 GEMV for HC pre/head (eliminates 86 GPU dispatches/token)
+- 2-row interleaved cpuGemvQ8_0 for HC GEMV throughput
+- Sparse V threshold skips negligible attention positions (zero PPL impact)
+- Buffer copy elimination in hot path (~3.5 MB/token saved)
+- RoPE table cache eliminates 128× redundant transcendental calls per token
+- Thread-pool parallel per-head compressed attention
+- Inline plainRmsNorm, RoPE table apply/inverse for tight per-head loops
+
+**GPU fast paths:**
+- Non-compressed layers use GPU SDPA directly
+- Batched CSA+HCA compressor GEMVs in single GPU command buffer
+- Hoist sink tensor lookup outside per-head attention loop
 
 ## 2026-06-30 — DSpark Speculative Decoding
 
