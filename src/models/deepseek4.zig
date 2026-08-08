@@ -1743,3 +1743,62 @@ test "hcSinkhorn produces doubly stochastic matrix" {
     // All entries must be non-negative
     for (m) |v| try std.testing.expect(v >= 0);
 }
+
+test "cpuGemvQ8_0 basic correctness" {
+    // Q8_0 block: 2-byte f16 scale + 32 i8 values = 34 bytes.
+    // Create a simple 2-output × 32-input weight matrix (1 block per row).
+    const block_size: usize = 32;
+    const block_bytes: usize = 34;
+    const n_out: usize = 2;
+    const n_in: usize = block_size;
+
+    var w: [n_out * block_bytes]u8 = undefined;
+
+    // Row 0: scale=1.0, all quants=1 → dot([1,1,...,1], x) = sum(x)
+    const scale_one: u16 = @bitCast(@as(f16, 1.0));
+    w[0] = @truncate(scale_one);
+    w[1] = @truncate(scale_one >> 8);
+    @memset(w[2..block_bytes], 1); // i8 = 1
+
+    // Row 1: scale=2.0, all quants=1 → 2.0 * sum(x)
+    const scale_two: u16 = @bitCast(@as(f16, 2.0));
+    w[block_bytes] = @truncate(scale_two);
+    w[block_bytes + 1] = @truncate(scale_two >> 8);
+    @memset(w[block_bytes + 2 .. 2 * block_bytes], 1);
+
+    // Input: x = [1.0, 1.0, ..., 1.0] (32 ones)
+    var x: [n_in]f32 = undefined;
+    @memset(&x, 1.0);
+
+    var y: [n_out]f32 = undefined;
+    cpuGemvQ8_0(&w, &x, &y, n_in);
+
+    // Row 0: 1.0 * (1*1 + 1*1 + ... 32 times) = 32.0
+    try std.testing.expectApproxEqAbs(@as(f32, 32.0), y[0], 0.1);
+    // Row 1: 2.0 * 32 = 64.0
+    try std.testing.expectApproxEqAbs(@as(f32, 64.0), y[1], 0.1);
+}
+
+test "cpuGemvQ8_0 odd output count" {
+    // Test the scalar tail path (odd n_out)
+    const block_bytes: usize = 34;
+    const n_in: usize = 32;
+
+    var w: [3 * block_bytes]u8 = undefined;
+    const scale_one: u16 = @bitCast(@as(f16, 1.0));
+    // All 3 rows: scale=1.0, quants=2
+    for (0..3) |r| {
+        w[r * block_bytes] = @truncate(scale_one);
+        w[r * block_bytes + 1] = @truncate(scale_one >> 8);
+        @memset(w[r * block_bytes + 2 .. (r + 1) * block_bytes], 2); // i8 = 2
+    }
+
+    var x: [n_in]f32 = undefined;
+    @memset(&x, 0.5);
+
+    var y: [3]f32 = undefined;
+    cpuGemvQ8_0(&w, &x, &y, n_in);
+
+    // Each row: 1.0 * (2 * 0.5) * 32 = 32.0
+    for (y) |v| try std.testing.expectApproxEqAbs(@as(f32, 32.0), v, 0.1);
+}
