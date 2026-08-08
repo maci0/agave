@@ -1283,23 +1283,60 @@ fn siluMul(gate: []f32, up: []f32) void {
     for (gate, up) |*g, u| g.* = g.* * (1.0 / (1.0 + @exp(-g.*))) * u;
 }
 
-/// Apply RoPE using a pre-computed cos/sin table (avoids recomputing per head).
+/// Apply RoPE using a pre-computed cos/sin table. SIMD-vectorized: processes 4
+/// complex rotations per iteration (loads 8 consecutive f32, deinterleaves to
+/// even/odd, applies rotation matrix, interleaves back).
 fn applyRopeTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
-    for (cos_t, sin_t, 0..) |c, s, i| {
+    const V4 = @Vector(4, f32);
+    const n = cos_t.len;
+    var i: usize = 0;
+    while (i + 4 <= n) : (i += 4) {
+        const c: V4 = cos_t[i..][0..4].*;
+        const s: V4 = sin_t[i..][0..4].*;
+        // Deinterleave: x[2i], x[2i+2], x[2i+4], x[2i+6] → evens
+        //               x[2i+1], x[2i+3], x[2i+5], x[2i+7] → odds
+        const base = i * 2;
+        const x0 = V4{ x[base], x[base + 2], x[base + 4], x[base + 6] };
+        const x1 = V4{ x[base + 1], x[base + 3], x[base + 5], x[base + 7] };
+        const r0 = @mulAdd(V4, x0, c, -x1 * s);
+        const r1 = @mulAdd(V4, x0, s, x1 * c);
+        // Interleave back
+        x[base] = r0[0]; x[base + 1] = r1[0];
+        x[base + 2] = r0[1]; x[base + 3] = r1[1];
+        x[base + 4] = r0[2]; x[base + 5] = r1[2];
+        x[base + 6] = r0[3]; x[base + 7] = r1[3];
+    }
+    while (i < n) : (i += 1) {
         const x0 = x[i * 2];
         const x1 = x[i * 2 + 1];
-        x[i * 2] = x0 * c - x1 * s;
-        x[i * 2 + 1] = x0 * s + x1 * c;
+        x[i * 2] = x0 * cos_t[i] - x1 * sin_t[i];
+        x[i * 2 + 1] = x0 * sin_t[i] + x1 * cos_t[i];
     }
 }
 
-/// Inverse RoPE using pre-computed table (negate sin).
+/// Inverse RoPE using pre-computed table (negate sin). SIMD-vectorized.
 fn applyRopeInverseTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
-    for (cos_t, sin_t, 0..) |c, s, i| {
+    const V4 = @Vector(4, f32);
+    const n = cos_t.len;
+    var i: usize = 0;
+    while (i + 4 <= n) : (i += 4) {
+        const c: V4 = cos_t[i..][0..4].*;
+        const s: V4 = sin_t[i..][0..4].*;
+        const base = i * 2;
+        const x0 = V4{ x[base], x[base + 2], x[base + 4], x[base + 6] };
+        const x1 = V4{ x[base + 1], x[base + 3], x[base + 5], x[base + 7] };
+        const r0 = @mulAdd(V4, x0, c, x1 * s);
+        const r1 = @mulAdd(V4, x1, c, -x0 * s);
+        x[base] = r0[0]; x[base + 1] = r1[0];
+        x[base + 2] = r0[1]; x[base + 3] = r1[1];
+        x[base + 4] = r0[2]; x[base + 5] = r1[2];
+        x[base + 6] = r0[3]; x[base + 7] = r1[3];
+    }
+    while (i < n) : (i += 1) {
         const x0 = x[i * 2];
         const x1 = x[i * 2 + 1];
-        x[i * 2] = x0 * c + x1 * s;
-        x[i * 2 + 1] = -x0 * s + x1 * c;
+        x[i * 2] = x0 * cos_t[i] + x1 * sin_t[i];
+        x[i * 2 + 1] = -x0 * sin_t[i] + x1 * cos_t[i];
     }
 }
 
