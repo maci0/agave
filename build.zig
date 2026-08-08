@@ -76,30 +76,34 @@ pub fn build(b: *std.Build) void {
     {
         const kernel_files = [_][]const u8{
             // Core ops
-            "all",          "silu",         "gelu",         "add",          "mul",
-            "rms_norm",     "softmax",      "l2_norm",      "rope",         "add_scaled",
-            "silu_mul",     "gelu_mul",     "add_rms_norm", "rms_norm_add", "rms_norm_batched",
-            "rope_batched", "sigmoid_mul",  "deinterleave", "split_qgate",
+            "all",           "silu",           "gelu",           "add",            "mul",
+            "rms_norm",      "softmax",        "l2_norm",        "rope",           "add_scaled",
+            "silu_mul",      "gelu_mul",       "add_rms_norm",   "rms_norm_add",   "rms_norm_batched",
+            "rope_batched",  "sigmoid_mul",    "deinterleave",   "split_qgate",
             // SDPA
-            "sdpa",         "sdpa_turbo",   "sdpa_prefill", "sdpa_tree",
+               "sdpa",
+            "sdpa_turbo",    "sdpa_prefill",   "sdpa_tree",
             // Dense GEMV
-            "gemv_f32",     "gemv_bf16",    "gemv_f16",     "gemv_t_q8_0",
+                 "gemv_f32",       "gemv_bf16",
+            "gemv_f16",      "gemv_t_q8_0",
             // Quantized GEMV — standard GGUF formats
-            "gemv_q8_0",    "gemv_q4_0",    "gemv_q4_0_batch", "gemv_q4_1",
-            "gemv_q5_0",    "gemv_q4_k",    "gemv_q5_k",    "gemv_q6_k",
-            "gemv_q2_k",    "gemv_q3_k",    "gemv_iq4_nl",  "gemv_iq4_xs",
+               "gemv_q8_0",      "gemv_q4_0",      "gemv_q4_0_batch",
+            "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",      "gemv_q6_k",
+            "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
             // FP8/FP4
-            "gemv_fp8_e4m3", "gemv_fp8_e5m2", "gemv_nvfp4_st", "gemv_mxfp4_st",
-            "gemv_fp4_tc",
+               "gemv_fp8_e4m3",
+            "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_fp4_tc",
             // MLX / TQ
-            "gemv_mlx_q4",  "gemv_mlx_q6",  "gemv_mlx_q8",
-            "gemv_tq1_0",   "gemv_tq2_0",
+               "gemv_mlx_q4",
+            "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",     "gemv_tq2_0",
             // Specialist formats
-            "gemv_gptq",    "gemv_awq",     "gemv_hqq",
+                "gemv_gptq",
+            "gemv_awq",      "gemv_hqq",
             // GEMM
-            "gemm_q8_0",
+                  "gemm_q8_0",
             // Megakernels
-            "mega_qwen35_q8", "mega_gemma_q4k", "mega_gemma_q8",
+                 "mega_qwen35_q8", "mega_gemma_q4k",
+            "mega_gemma_q8",
             // Fused FFN
             "fused_ffn_q8_0", "fused_ffn_q4_k", "fused_ffn_q5_k", "fused_ffn_q6_k",
         };

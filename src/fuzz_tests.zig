@@ -3102,8 +3102,8 @@ test "fuzz: nested chat/completions JSON messages + tools" {
                 \\{{"model":"m","temperature":{d},"messages":[{{"role":"user","content":"{s}"}}],"tools":[{{"type":"function","function":{{"name":"{s}"}}}}],"stream":true}}
             , .{
                 @as(f32, @floatFromInt(smith.valueWithHash(u8, 2))) / 64.0,
-                inner[0 .. @min(inner_len, 64)],
-                inner[0 .. @min(inner_len, 32)],
+                inner[0..@min(inner_len, 64)],
+                inner[0..@min(inner_len, 32)],
             }) catch return;
 
             const s = json.parseSampling(body[0..n.len]);

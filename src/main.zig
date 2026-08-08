@@ -1839,7 +1839,10 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
             n_frontiers += 1;
         }
     }
-    if (n_frontiers == 0) { eprint("frontier-bench: no valid context lengths in --frontier-ctx\n", .{}); return; }
+    if (n_frontiers == 0) {
+        eprint("frontier-bench: no valid context lengths in --frontier-ctx\n", .{});
+        return;
+    }
 
     // Build a prompt long enough to cover the largest frontier.
     const max_ctx = frontiers_buf[0..n_frontiers][n_frontiers - 1];
@@ -1847,9 +1850,15 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
 
     // Repeat a filler sentence to fill max_ctx tokens.
     const filler = "The quick brown fox jumps over the lazy dog. ";
-    const filler_ids = tok_if.encode(filler) catch { eprint("frontier-bench: encode failed\n", .{}); return; };
+    const filler_ids = tok_if.encode(filler) catch {
+        eprint("frontier-bench: encode failed\n", .{});
+        return;
+    };
     defer allocator.free(filler_ids);
-    if (filler_ids.len == 0) { eprint("frontier-bench: empty filler token list\n", .{}); return; }
+    if (filler_ids.len == 0) {
+        eprint("frontier-bench: empty filler token list\n", .{});
+        return;
+    }
     var full_prompt = std.ArrayList(u32).empty;
     defer full_prompt.deinit(allocator);
     while (full_prompt.items.len < max_ctx) {

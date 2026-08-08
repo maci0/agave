@@ -591,7 +591,7 @@ var g_server: *Server = undefined;
 const tool_replay_max: usize = 10_000;
 const ToolReplayEntry = struct {
     raw: []u8, // owned, allocated via g_tool_replay_allocator
-    seq: u64,  // insertion sequence number (for LRU eviction)
+    seq: u64, // insertion sequence number (for LRU eviction)
 };
 var g_tool_replay: std.AutoHashMapUnmanaged(u64, ToolReplayEntry) = .{};
 var g_tool_replay_allocator: std.mem.Allocator = undefined;
@@ -605,15 +605,17 @@ fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     if (id_str.len == 0) return;
     const key = std.hash.XxHash64.hash(0, id_str);
     const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
-    
-    
+
     // Evict oldest entry if at capacity.
     if (g_tool_replay.count() >= tool_replay_max) {
         var oldest_key: u64 = 0;
         var oldest_seq: u64 = std.math.maxInt(u64);
         var it = g_tool_replay.iterator();
         while (it.next()) |e| {
-            if (e.value_ptr.seq < oldest_seq) { oldest_seq = e.value_ptr.seq; oldest_key = e.key_ptr.*; }
+            if (e.value_ptr.seq < oldest_seq) {
+                oldest_seq = e.value_ptr.seq;
+                oldest_key = e.key_ptr.*;
+            }
         }
         if (g_tool_replay.fetchRemove(oldest_key)) |removed| g_tool_replay_allocator.free(removed.value.raw);
     }
@@ -629,8 +631,7 @@ fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
 fn toolReplayGet(id_str: []const u8) ?[]const u8 {
     if (id_str.len == 0) return null;
     const key = std.hash.XxHash64.hash(0, id_str);
-    
-    
+
     const entry = g_tool_replay.get(key) orelse return null;
     return entry.raw;
 }

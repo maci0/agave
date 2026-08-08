@@ -10,7 +10,6 @@ export fn sigmoid_mul_kernel(a: [*]const f32, b: [*]const f32, output: [*]f32, n
     output[idx] = a[idx] * cu.sigmoidf(b[idx]);
 }
 
-
 const std = @import("std");
 
 test "constants valid" {

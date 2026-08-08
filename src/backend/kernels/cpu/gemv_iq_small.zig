@@ -183,7 +183,10 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
 
             var gi: usize = 0;
             var yi: usize = 0;
-            while (yi < 256) : ({ yi += 32; gi += 8; }) {
+            while (yi < 256) : ({
+                yi += 32;
+                gi += 8;
+            }) {
                 const aux = std.mem.readInt(u32, qs[gi + 4 ..][0..4], .little);
                 const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.25;
                 const sb0 = ksigns_iq2xs[(aux >> 0) & 0x7F];
@@ -250,7 +253,11 @@ pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
             var qi: usize = 0;
             var gi: usize = 0;
             var yi: usize = 0;
-            while (yi < 256) : ({ yi += 32; qi += 8; gi += 4; }) {
+            while (yi < 256) : ({
+                yi += 32;
+                qi += 8;
+                gi += 4;
+            }) {
                 const aux = std.mem.readInt(u32, gas[gi..][0..4], .little);
                 const dl = d * (0.5 + @as(f32, @floatFromInt(aux >> 28))) * 0.5;
                 const base = base0 + yi;
@@ -567,8 +574,8 @@ pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
             if (gemv_common.isBlockSparse(x, b * qk, @min(qk, k - b * qk))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
-            const qs = bp + 2;    // uint8[64]
-            const qh = bp + 66;   // uint8[8]
+            const qs = bp + 2; // uint8[64]
+            const qh = bp + 66; // uint8[8]
             const signs = bp + 74; // uint8[32]
             const scales = bp + 106; // uint8[4]
             const full = b * qk + qk <= k;
@@ -895,8 +902,8 @@ pub fn gemvIQ2_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
             if (gemv_common.isBlockSparse(x, b * qk, @min(qk, k - b * qk))) continue;
             const bp = rp + b * bpb;
             const d: f32 = readF16LE(bp, 0);
-            const qs = bp + 2;     // uint8[32] grid low + uint8[32] signs
-            const qh = bp + 66;    // uint8[8]
+            const qs = bp + 2; // uint8[32] grid low + uint8[32] signs
+            const qh = bp + 66; // uint8[8]
             const scales = bp + 74; // uint8[8]
             const full = b * qk + qk <= k;
 
@@ -1025,7 +1032,8 @@ test "gemvIQ2_XXS ksigns_iq2xs lookup distinguishes from direct-bit extraction" 
     //   Groups 1..7: aux=0 → all positive. Each = 32×1.0. Total: 7×32 = 224.
     //   Expected total: 16 + 224 = 240.  Old code gives 18+224=242 (bit-7 of g0 wrong).
     var block = [_]u8{0} ** backend_mod.iq2_xxs_block_bytes;
-    block[0] = 0x00; block[1] = 0x3C; // f16(1.0)
+    block[0] = 0x00;
+    block[1] = 0x3C; // f16(1.0)
     // Group 0 aux at bytes 6..9: lower 7 bits = 0x7F, rest 0.
     block[6] = 0x7F; // aux = 0x0000007F; sub_scale=0, sb0_idx=127
     var x = [_]f32{1.0} ** 256;
@@ -1048,12 +1056,19 @@ test "gemvIQ3_S split qs layout: grid1 from qs[l], grid2 from qs[l+4]" {
     //   l=0: 4+103=107.  l=2 grid1=iq3s_grid[qs[4]]=iq3s_grid[3]=[11,1,1,1]×x[16..19]=0 → 0.
     //   Sub-block 0 old: 107. Total: 107.  1107 ≠ 107 → test catches the bug.
     var block = [_]u8{0} ** backend_mod.iq3_s_block_bytes;
-    block[0] = 0x00; block[1] = 0x3C; // f16(1.0)
+    block[0] = 0x00;
+    block[1] = 0x3C; // f16(1.0)
     block[6] = 3; // qs[4] = 3 → iq3s_grid[3] (byte offset: 2 + 4 = 6)
     // scales[0..3]=0 → scale_nibble=0 → db=1.0*(1+0)=1.0; qh=0; signs=0.
     var x = [_]f32{0.0} ** 256;
-    x[0] = 1.0; x[1] = 1.0; x[2] = 1.0; x[3] = 1.0; // grid1 elements
-    x[4] = 100.0; x[5] = 1.0; x[6] = 1.0; x[7] = 1.0; // grid2 elements
+    x[0] = 1.0;
+    x[1] = 1.0;
+    x[2] = 1.0;
+    x[3] = 1.0; // grid1 elements
+    x[4] = 100.0;
+    x[5] = 1.0;
+    x[6] = 1.0;
+    x[7] = 1.0; // grid2 elements
     var y = [_]f32{0.0};
     gemvIQ3_S(&x, &block, &y, 1, 256);
     try std.testing.expectApproxEqAbs(@as(f32, 1107.0), y[0], 1e-1);
@@ -1080,7 +1095,8 @@ test "gemvIQ3_XXS ksigns_iq2xs lookup: sign_idx=1 gives 0b10000001 not 0b0000000
     // Grand total: 252.0.
     // Old code (direct bits, signs=1): only element 0 negative → group 0 = 30. Total = 254. DIFFERENT.
     var block = [_]u8{0} ** backend_mod.iq3_xxs_block_bytes;
-    block[0] = 0x00; block[1] = 0x3C; // f16(1.0)
+    block[0] = 0x00;
+    block[1] = 0x3C; // f16(1.0)
     // qs[0..7] = 0 (all groups use iq3xxs_grid[0])
     block[66] = 1; // gas group 0 aux byte0 = 1 → sign_idx0=1 → ksigns_iq2xs[1]=129
     var x = [_]f32{1.0} ** 256;
@@ -1095,7 +1111,10 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
             // Clamp f16 scale to non-NaN/Inf (exponent 0x1F = NaN/Inf → clamp to 0).
             const clampF16 = struct {
                 fn c(w: []u8, off: usize) void {
-                    if (w[off + 1] & 0x7C == 0x7C) { w[off] = 0; w[off + 1] = 0; }
+                    if (w[off + 1] & 0x7C == 0x7C) {
+                        w[off] = 0;
+                        w[off + 1] = 0;
+                    }
                 }
             }.c;
 
@@ -1103,7 +1122,9 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
             var x_raw: [256 * 4]u8 = undefined;
             smith.bytesWithHash(&x_raw, 0);
             x = @bitCast(x_raw);
-            for (&x) |*v| { if (!std.math.isFinite(v.*)) v.* = 0.0; }
+            for (&x) |*v| {
+                if (!std.math.isFinite(v.*)) v.* = 0.0;
+            }
 
             // IQ2_XXS
             {

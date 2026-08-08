@@ -963,7 +963,6 @@ pub const RocmBackend = struct {
         self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
     }
 
-    
     pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |idx| {
             const g = @min(gate[idx], @as(f32, 10.0));
@@ -972,7 +971,7 @@ pub const RocmBackend = struct {
         }
     }
 
-/// Sequential GELU + multiply: out[i] = gelu(a[i]) * b[i] (two dispatches, not fused).
+    /// Sequential GELU + multiply: out[i] = gelu(a[i]) * b[i] (two dispatches, not fused).
     pub fn geluMul(self: *RocmBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         if (self.fn_gelu_mul == null) {
             self.gelu(a, out, n);

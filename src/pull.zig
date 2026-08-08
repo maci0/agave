@@ -1331,7 +1331,10 @@ fn pullGgufModel(
             // Find matching GgufFile entry for size info.
             var shard_size: u64 = 0;
             for (list_result.files) |f| {
-                if (std.mem.eql(u8, f.filename, shard_name)) { shard_size = f.size; break; }
+                if (std.mem.eql(u8, f.filename, shard_name)) {
+                    shard_size = f.size;
+                    break;
+                }
             }
             const shard_gb = @as(f64, @floatFromInt(shard_size)) / bytes_per_gb;
             const shard_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard_name }) catch return error.OutOfMemory;

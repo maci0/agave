@@ -507,7 +507,10 @@ fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
         if (n == 0) break;
         off += n;
     }
-    return if (off == size) buf else { allocator.free(buf); return null; };
+    return if (off == size) buf else {
+        allocator.free(buf);
+        return null;
+    };
 }
 fn saveVkCacheFile(data: []const u8) void {
     var path_buf: [512]u8 = undefined;
@@ -2196,7 +2199,6 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_silu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
 
-    
     pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |idx| {
             const g = @min(gate[idx], @as(f32, 10.0));
@@ -2205,7 +2207,7 @@ pub const VulkanBackend = struct {
         }
     }
 
-/// Fused GELU + multiply.
+    /// Fused GELU + multiply.
     pub fn geluMul(self: *VulkanBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const sz = n * @sizeOf(f32);
         const a_buf = self.getInputBuf(a, sz);

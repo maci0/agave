@@ -267,11 +267,11 @@ pub const RnnHead = struct {
     /// z_scratch: caller-provided scratch of length ≥ 2*rank + hidden_dim (zero-alloc hot path).
     pub fn step(
         self: RnnHead,
-        state: []f32,       // [rank], updated in-place
+        state: []f32, // [rank], updated in-place
         prev_token: u32,
-        h_k: []const f32,   // [hidden_dim]
-        bias: []f32,         // [vocab_size], output
-        z_scratch: []f32,    // [≥ 2*rank + hidden_dim], caller-owned scratch
+        h_k: []const f32, // [hidden_dim]
+        bias: []f32, // [vocab_size], output
+        z_scratch: []f32, // [≥ 2*rank + hidden_dim], caller-owned scratch
     ) void {
         const r = self.rank;
         const d = self.hidden_dim;
@@ -282,9 +282,9 @@ pub const RnnHead = struct {
         // Caller provides z_scratch of length ≥ z_dim (no hot-path allocation).
         std.debug.assert(z_scratch.len >= z_dim);
         const z = z_scratch[0..z_dim];
-        @memcpy(z[0..r], state[0..r]);                         // s_{k-1}
+        @memcpy(z[0..r], state[0..r]); // s_{k-1}
         @memcpy(z[r .. r + r], self.w1[prev_token * r ..][0..r]); // W1[x_{k-1}]
-        @memcpy(z[2 * r .. 2 * r + d], h_k);                   // h_k
+        @memcpy(z[2 * r .. 2 * r + d], h_k); // h_k
 
         // Apply W_gco: [z_dim, r*3] → [gate; cand; out] each R^r
         std.debug.assert(r <= 4096); // stack buffers below are sized for r ≤ 4096
@@ -392,7 +392,10 @@ pub fn calibrateSts(
                 // Label: 1 if prefix of length k+1 fully accepted.
                 var label: f32 = 1.0;
                 for (0..k + 1) |i| {
-                    if (i >= a_seq.len or !a_seq[i]) { label = 0.0; break; }
+                    if (i >= a_seq.len or !a_seq[i]) {
+                        label = 0.0;
+                        break;
+                    }
                 }
                 const diff = cum - label;
                 ece += diff * diff;

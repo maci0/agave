@@ -80,8 +80,8 @@ fn detectCpuModel() []const u8 {
         // Try x86-style first, then ARM/RISC-V fallbacks.
         const needles = [_][]const u8{
             "model name\t: ", // x86, some ARM kernels
-            "Model\t: ",      // Raspberry Pi, some ARM
-            "Hardware\t: ",   // older ARM kernels
+            "Model\t: ", // Raspberry Pi, some ARM
+            "Hardware\t: ", // older ARM kernels
         };
         for (needles) |needle| {
             if (std.mem.indexOf(u8, data, needle)) |pos| {
@@ -104,8 +104,7 @@ fn detectCpuModel() []const u8 {
             const pstart = if (ppos > 0) ppos + part_needle.len else 0;
             const pend = if (ppos > 0) std.mem.indexOfScalarPos(u8, data, pstart, '\n') orelse data.len else 0;
             if (ppos > 0) {
-                const n = std.fmt.bufPrint(&cpu_model_buf, "ARM impl={s} part={s}",
-                    .{ data[istart..iend], data[pstart..pend] }) catch {
+                const n = std.fmt.bufPrint(&cpu_model_buf, "ARM impl={s} part={s}", .{ data[istart..iend], data[pstart..pend] }) catch {
                     cpu_model_detected.store(true, .release);
                     return "";
                 };

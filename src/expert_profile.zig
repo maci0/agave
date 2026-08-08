@@ -180,7 +180,10 @@ pub const ExpertProfile = struct {
         var lines2 = std.mem.splitScalar(u8, data, '\n');
         while (lines2.next()) |line| {
             const t = std.mem.trim(u8, line, " \t\r");
-            if (std.mem.indexOf(u8, t, "\"layers\"") != null) { in_layers = true; continue; }
+            if (std.mem.indexOf(u8, t, "\"layers\"") != null) {
+                in_layers = true;
+                continue;
+            }
             if (!in_layers) continue;
             if (!std.mem.startsWith(u8, t, "[")) continue;
             if (layer_idx >= n_layers) break;

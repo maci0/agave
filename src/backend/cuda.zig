@@ -928,7 +928,6 @@ pub const CudaBackend = struct {
         self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
     }
 
-
     pub fn clampedSiluMul(_: *CudaBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |i| {
             const g = @min(gate[i], @as(f32, 10.0));

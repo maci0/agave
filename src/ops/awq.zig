@@ -166,7 +166,7 @@ test "awqGemvRows chunk uses full-n strides" {
     var qweight = [_]u32{ 0, 0x97585367 };
     var qzeros = [_]u32{ 0, 0xb6674377 };
     var scales = [_]u16{
-        0,    0,    0,    0,    0,    0,    0,    0,
+        0,    0,    0,    0,    0,     0,    0,    0,
         6794, 7247, 8252, 7744, 11327, 8329, 8451, 8314,
     };
     var x = [_]f32{1.0};
