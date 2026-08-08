@@ -1,1 +1,0 @@
-Continue autonomous codebase improvement. 9 commits, 654 lines added across 17 files. Look for: more missing errdefer patterns, additional test coverage for pure functions in other model files (gemma3, qwen35, gpt_oss), any remaining documentation gaps.

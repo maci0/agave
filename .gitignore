@@ -99,3 +99,4 @@ docs/superpowers/
 glossary-batch*.md
 outputs/
 progress.md
+.qwen/
