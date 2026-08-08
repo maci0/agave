@@ -955,13 +955,14 @@ pub const Ds4Model = struct {
         self.be.sync(); // Read back lid_query + lid_head_w
 
         // Step 3: Multi-head ReLU scoring: I_{s} = Σ_h w_h · ReLU(q_h · K^IComp_s)
+        // Head-outer loop: keeps qh in registers across all groups (better locality).
         const V8 = @Vector(8, f32);
-        for (0..n_groups) |g| {
-            const ik = self.lid_comp_k[(li * comp_slots + g) * ihd ..][0..ihd];
-            var total_score: f32 = 0.0;
-            for (0..inh) |h| {
-                const qh = self.lid_query[h * ihd ..][0..ihd];
-                // SIMD dot product
+        @memset(self.lid_scores[0..n_groups], 0.0);
+        for (0..inh) |h| {
+            const qh = self.lid_query[h * ihd ..][0..ihd];
+            const wh = self.lid_head_w[h];
+            for (0..n_groups) |g| {
+                const ik = self.lid_comp_k[(li * comp_slots + g) * ihd ..][0..ihd];
                 var acc: V8 = @splat(0.0);
                 var i: usize = 0;
                 while (i + 8 <= ihd) : (i += 8) {
@@ -969,10 +970,8 @@ pub const Ds4Model = struct {
                 }
                 var dot = @reduce(.Add, acc);
                 while (i < ihd) : (i += 1) dot += qh[i] * ik[i];
-                // ReLU + weighted sum
-                total_score += self.lid_head_w[h] * @max(0.0, dot);
+                self.lid_scores[g] += wh * @max(0.0, dot);
             }
-            self.lid_scores[g] = total_score;
         }
 
         // Step 4: Top-k selection (partial sort)
