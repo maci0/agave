@@ -125,7 +125,8 @@ pub const Arch = enum {
             .gpt_oss => build_options.enable_gpt_oss,
             .nemotron_h => build_options.enable_nemotron_h,
             .nemotron_nano => build_options.enable_nemotron_nano,
-            .glm4, .deepseek4 => build_options.enable_glm4,
+            .glm4 => build_options.enable_glm4,
+            .deepseek4 => build_options.enable_deepseek4,
             .llama4 => build_options.enable_llama4,
         };
     }
