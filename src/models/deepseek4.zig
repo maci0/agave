@@ -464,6 +464,7 @@ pub const Ds4Model = struct {
         const nope: usize = kd - rd;
         const pos = self.kv_seq_len;
         const comp_dim: usize = 2 * kd; // CSA compressor output dim (coff=2 for ratio=4)
+        const csa_ratio_4: usize = 4; // CSA compression ratio
         // Use compressed rope freq for layers with ratio≠0 (most layers in DS4)
         const rope_freq = if (self.compress_ratios[li] != 0) self.compress_rope_freq else self.rope_freq;
 
@@ -481,11 +482,12 @@ pub const Ds4Model = struct {
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
-        // CSA: batch compressor projections with Q+KV (no extra sync needed)
+        // CSA compressor (ratio=4): batch projections with Q+KV in same GPU cmd buffer
+        // HCA (ratio=128) skipped — only relevant for contexts > 128 tokens
         const layer_stride = self.max_seq_len * comp_dim;
         var comp_kv_pos: []f32 = &.{};
         var comp_score_pos: []f32 = &.{};
-        if (self.compress_ratios[li] == 4) {
+        if (self.compress_ratios[li] == csa_ratio_4) {
             comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * comp_dim ..][0..comp_dim];
             comp_score_pos = self.csa_comp_score[li * layer_stride + pos * comp_dim ..][0..comp_dim];
             if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
@@ -518,8 +520,8 @@ pub const Ds4Model = struct {
         applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
 
         // CSA compressor (ratio=4): GPU projections already done above; do APE + compression here.
-        const csa_ratio: usize = 4;
-        if (self.compress_ratios[li] == 4 and comp_kv_pos.len > 0) {
+        const csa_ratio: usize = csa_ratio_4;
+        if (self.compress_ratios[li] == csa_ratio_4 and comp_kv_pos.len > 0) {
             {
                 const ape = self.layerTensor(li, "attn_compressor_ape.weight");
 
@@ -599,7 +601,7 @@ pub const Ds4Model = struct {
         const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
         const kv_k_layer = self.kvKLayer(li);
         const kv_v_layer = self.kvVLayer(li);
-        const n_csa_groups: usize = if (self.compress_ratios[li] == 4) (pos + 1) / csa_ratio else 0;
+        const n_csa_groups: usize = if (self.compress_ratios[li] == csa_ratio_4) (pos + 1) / csa_ratio_4 else 0;
 
         if (n_csa_groups > 0) {
             // CSA attention: append current KV to cache, then attend raw + compressed.
