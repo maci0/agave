@@ -742,7 +742,6 @@ pub const Ds4Model = struct {
 
             const sl_total = pos + 1 + n_attend_comp;
 
-            @memset(self.attn_out, 0.0);
             const kv_elem_bytes = kv_quant.kvByteOffset(kv_type, kd);
             // Hoist sink tensor lookup outside per-head loop (avoids 128 hash lookups)
             const sink_data: ?[*]const f32 = if (self.layerTensor(li, "attn_sinks.weight")) |st|
@@ -783,8 +782,9 @@ pub const Ds4Model = struct {
                     const inv = 1.0 / sm;
                     for (self.scores_buf[0..sl_total]) |*v| v.* *= inv;
                 }
-                // V accumulation: raw (supports any kv_type via kvMulAccum)
+                // V accumulation: zero per-head (cache-friendly: zero + fill same lines)
                 const ao_h = self.attn_out[h * kd ..][0..kd];
+                @memset(ao_h, 0.0);
                 for (0..pos + 1) |t| {
                     const v_ptr = kv_v_layer[t * kv_elem_bytes ..].ptr;
                     kv_quant.kvMulAccum(ao_h.ptr, self.scores_buf[t], v_ptr, kd, kv_type);
