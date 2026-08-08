@@ -1314,7 +1314,8 @@ inline fn sqrtSoftplus(x: f32) f32 {
 }
 
 /// In-place RMS normalization, no learned weight. SIMD-optimized.
-fn plainRmsNorm(x: []f32, eps: f32) void {
+/// Inlined for tight per-head loops (called 64× per layer).
+inline fn plainRmsNorm(x: []f32, eps: f32) void {
     const V8 = @Vector(8, f32);
     var acc: V8 = @splat(@as(f32, 0.0));
     var i: usize = 0;
