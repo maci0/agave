@@ -263,22 +263,6 @@ Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 9 model architectu
 - **Cross-Platform**: Must cross-compile for Linux x86_64, Linux aarch64, macOS aarch64
 - **No Regressions**: Performance changes must be benchmarked. >5% regression requires justification
 
-## GSD Workflow Enforcement
-
-Before using Edit, Write, or other file-changing tools, start work through a GSD command so planning artifacts and execution context stay in sync.
-
-Use these entry points:
-- `/gsd:quick` for small fixes, doc updates, and ad-hoc tasks
-- `/gsd:debug` for investigation and bug fixing
-- `/gsd:execute-phase` for planned phase work
-
-Do not make direct repo edits outside a GSD workflow unless the user explicitly asks to bypass it.
-
-## Developer Profile
-
-> Profile not yet configured. Run `/gsd:profile-user` to generate your developer profile.
-> This section is managed by `generate-claude-profile` -- do not edit manually.
-
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
