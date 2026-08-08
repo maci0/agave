@@ -90,39 +90,39 @@ pub const Ds4Model = struct {
     kv_seq_len: usize = 0,
 
     // HC buffers
-    hc_state: []f32 = &.{},   // [n_hc * n_embd]
-    new_hc: []f32 = &.{},     // [n_hc * n_embd] temp
-    hc_mixes: []f32 = &.{},   // [hc_mix_dim = 24]
-    hc_pre_w: []f32 = &.{},   // [n_hc]
-    hc_post_w: []f32 = &.{},  // [n_hc]
-    hc_comb: []f32 = &.{},    // [n_hc * n_hc]
+    hc_state: []f32 = &.{}, // [n_hc * n_embd]
+    new_hc: []f32 = &.{}, // [n_hc * n_embd] temp
+    hc_mixes: []f32 = &.{}, // [hc_mix_dim = 24]
+    hc_pre_w: []f32 = &.{}, // [n_hc]
+    hc_post_w: []f32 = &.{}, // [n_hc]
+    hc_comb: []f32 = &.{}, // [n_hc * n_hc]
 
     // Attention buffers
-    hidden: []f32 = &.{},       // [n_embd]
-    hidden2: []f32 = &.{},      // [n_embd]
-    flat_norm: []f32 = &.{},    // [n_hc * n_embd] for HC rms norm
+    hidden: []f32 = &.{}, // [n_embd]
+    hidden2: []f32 = &.{}, // [n_embd]
+    flat_norm: []f32 = &.{}, // [n_hc * n_embd] for HC rms norm
     q_compressed: []f32 = &.{}, // [q_lora_rank]
-    q_full: []f32 = &.{},       // [n_head * kv_lora_rank]
-    kv_proj: []f32 = &.{},      // [kv_lora_rank]
-    scores_buf: []f32 = &.{},   // [max_seq_len]
-    attn_out: []f32 = &.{},     // [n_head * kv_lora_rank]
-    lora_out: []f32 = &.{},     // [o_groups * o_lora_rank]
-    attn_result: []f32 = &.{},  // [n_embd]
+    q_full: []f32 = &.{}, // [n_head * kv_lora_rank]
+    kv_proj: []f32 = &.{}, // [kv_lora_rank]
+    scores_buf: []f32 = &.{}, // [max_seq_len]
+    attn_out: []f32 = &.{}, // [n_head * kv_lora_rank]
+    lora_out: []f32 = &.{}, // [o_groups * o_lora_rank]
+    attn_result: []f32 = &.{}, // [n_embd]
 
     // FFN buffers
-    ff_gate: []f32 = &.{},          // [ff_exp]
-    ff_up: []f32 = &.{},            // [ff_exp]
-    ff_down: []f32 = &.{},          // [n_embd]
-    expert_accum: []f32 = &.{},     // [n_embd]
-    expert_scratch: []f32 = &.{},    // [max_total_experts * n_embd] for batched down GEMVs
-    ff_gate_scratch: []f32 = &.{},  // [max_total_experts * ff_exp] gate outputs pre-siluMul
-    ff_up_scratch: []f32 = &.{},    // [max_total_experts * ff_exp] up outputs pre-siluMul
-    router_logits: []f32 = &.{},    // [n_experts]
-    logits_buf: []f32 = &.{},       // [vocab_size]
-    score_stride: usize = 0,        // per-head score buffer stride
+    ff_gate: []f32 = &.{}, // [ff_exp]
+    ff_up: []f32 = &.{}, // [ff_exp]
+    ff_down: []f32 = &.{}, // [n_embd]
+    expert_accum: []f32 = &.{}, // [n_embd]
+    expert_scratch: []f32 = &.{}, // [max_total_experts * n_embd] for batched down GEMVs
+    ff_gate_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] gate outputs pre-siluMul
+    ff_up_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] up outputs pre-siluMul
+    router_logits: []f32 = &.{}, // [n_experts]
+    logits_buf: []f32 = &.{}, // [vocab_size]
+    score_stride: usize = 0, // per-head score buffer stride
 
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
-    rope_freqs: [32]f32 = undefined,       // freq_base = rope_freq (layers with ratio=0)
+    rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
     compress_rope_freqs: [32]f32 = undefined, // freq_base = compress_rope_freq (ratio≠0 layers)
 
     // KV cache as f16 bytes for GPU SDPA: [n_layers * ctx * kv_lora_rank * 2]
@@ -135,7 +135,7 @@ pub const Ds4Model = struct {
     csa_comp_kv: []f32 = &.{},
     csa_comp_score: []f32 = &.{},
     csa_k: []f32 = &.{},
-    csa_score_scratch: []f32 = &.{},  // [2 * kv_lora_rank] temp scratch
+    csa_score_scratch: []f32 = &.{}, // [2 * kv_lora_rank] temp scratch
 
     // Lightning Indexer state (CSA layers only).
     // Compressed indexer keys: [n_layers * compSlotsPerLayer(ctx) * index_head_dim]
@@ -305,14 +305,13 @@ pub const Ds4Model = struct {
         for (self.norm_cache[0..self.norm_cache_len]) |e| self.allocator.free(e.data);
         const a = self.allocator;
         inline for (.{
-            &self.hc_state, &self.new_hc, &self.hc_mixes, &self.hc_pre_w, &self.hc_post_w,
-            &self.hc_comb, &self.hidden, &self.hidden2, &self.flat_norm, &self.q_compressed,
-            &self.q_full, &self.kv_proj, &self.scores_buf, &self.attn_out, &self.lora_out,
-            &self.attn_result, &self.ff_gate, &self.ff_up, &self.ff_down, &self.expert_accum,
-            &self.expert_scratch, &self.ff_gate_scratch, &self.ff_up_scratch,
-            &self.router_logits, &self.logits_buf, &self.kv_k_bytes, &self.kv_v_bytes,
-            &self.csa_comp_kv, &self.csa_comp_score, &self.csa_k, &self.csa_score_scratch,
-            &self.lid_comp_k, &self.lid_query, &self.lid_head_w, &self.lid_scores,
+            &self.hc_state,          &self.new_hc,          &self.hc_mixes,      &self.hc_pre_w,       &self.hc_post_w,
+            &self.hc_comb,           &self.hidden,          &self.hidden2,       &self.flat_norm,      &self.q_compressed,
+            &self.q_full,            &self.kv_proj,         &self.scores_buf,    &self.attn_out,       &self.lora_out,
+            &self.attn_result,       &self.ff_gate,         &self.ff_up,         &self.ff_down,        &self.expert_accum,
+            &self.expert_scratch,    &self.ff_gate_scratch, &self.ff_up_scratch, &self.router_logits,  &self.logits_buf,
+            &self.kv_k_bytes,        &self.kv_v_bytes,      &self.csa_comp_kv,   &self.csa_comp_score, &self.csa_k,
+            &self.csa_score_scratch, &self.lid_comp_k,      &self.lid_query,     &self.lid_head_w,     &self.lid_scores,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
     }
@@ -816,13 +815,24 @@ pub const Ds4Model = struct {
             // Dispatch per-head attention via thread pool when available (64 independent heads).
             if (self.pool) |pool| {
                 var ctx = CompressedAttnCtx{
-                    .q_full = self.q_full, .scores_buf = self.scores_buf, .attn_out = self.attn_out,
-                    .kv_k_layer = kv_k_layer, .kv_v_layer = kv_v_layer,
-                    .csa_k = self.csa_k, .lid_topk_ids = if (use_lid) self.lid_topk_ids else &.{},
+                    .q_full = self.q_full,
+                    .scores_buf = self.scores_buf,
+                    .attn_out = self.attn_out,
+                    .kv_k_layer = kv_k_layer,
+                    .kv_v_layer = kv_v_layer,
+                    .csa_k = self.csa_k,
+                    .lid_topk_ids = if (use_lid) self.lid_topk_ids else &.{},
                     .sink_data = sink_data,
-                    .kd = kd, .pos = pos, .ss = ss, .kv_elem_bytes = kv_elem_bytes,
-                    .n_attend_comp = n_attend_comp, .sl_total = sl_total,
-                    .comp_slots = comp_slots, .li = li, .scale = scale, .use_lid = use_lid,
+                    .kd = kd,
+                    .pos = pos,
+                    .ss = ss,
+                    .kv_elem_bytes = kv_elem_bytes,
+                    .n_attend_comp = n_attend_comp,
+                    .sl_total = sl_total,
+                    .comp_slots = comp_slots,
+                    .li = li,
+                    .scale = scale,
+                    .use_lid = use_lid,
                 };
                 pool.parallelFor(nh, 1, @ptrCast(&ctx), CompressedAttnCtx.perHeadFn);
             } else for (0..nh) |h| {
@@ -849,12 +859,17 @@ pub const Ds4Model = struct {
                 // Softmax over all attended positions
                 {
                     var mx = scores_h[0];
-                    for (scores_h[1..sl_total]) |v| if (v > mx) { mx = v; };
+                    for (scores_h[1..sl_total]) |v| if (v > mx) {
+                        mx = v;
+                    };
                     if (sink_data) |sd| {
                         if (sd[h] > mx) mx = sd[h];
                     }
                     var sm: f32 = 0;
-                    for (scores_h[0..sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
+                    for (scores_h[0..sl_total]) |*v| {
+                        v.* = @exp(v.* - mx);
+                        sm += v.*;
+                    }
                     if (sink_data) |sd| sm += @exp(sd[h] - mx);
                     const inv = 1.0 / sm;
                     for (scores_h[0..sl_total]) |*v| v.* *= inv;
@@ -984,12 +999,17 @@ pub const Ds4Model = struct {
             // Softmax
             {
                 var mx = scores_h[0];
-                for (scores_h[1..ctx.sl_total]) |v| if (v > mx) { mx = v; };
+                for (scores_h[1..ctx.sl_total]) |v| if (v > mx) {
+                    mx = v;
+                };
                 if (ctx.sink_data) |sd| {
                     if (sd[h] > mx) mx = sd[h];
                 }
                 var sm: f32 = 0;
-                for (scores_h[0..ctx.sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
+                for (scores_h[0..ctx.sl_total]) |*v| {
+                    v.* = @exp(v.* - mx);
+                    sm += v.*;
+                }
                 if (ctx.sink_data) |sd| sm += @exp(sd[h] - mx);
                 const inv = 1.0 / sm;
                 for (scores_h[0..ctx.sl_total]) |*v| v.* *= inv;
@@ -1190,7 +1210,7 @@ pub const Ds4Model = struct {
             // Weights from unbiased probs, normalized
             var wsum: f32 = 0.0;
             for (0..n_active) |j| {
-                top_weights[j] = probs[top_ids[j]];  // unbiased prob for selected expert
+                top_weights[j] = probs[top_ids[j]]; // unbiased prob for selected expert
                 wsum += top_weights[j];
             }
             if (wsum > 0.0) {
@@ -1237,10 +1257,7 @@ pub const Ds4Model = struct {
 
         // Phase 2: clamped SiLU×mul (gate≤10, up±10) — no sync needed (same cmd buffer)
         for (0..n_scratch) |slot| {
-            self.be.clampedSiluMul(
-                self.ff_gate_scratch.ptr + slot * ff,
-                self.ff_up_scratch.ptr + slot * ff,
-                self.ff_gate_scratch.ptr + slot * ff, ff);
+            self.be.clampedSiluMul(self.ff_gate_scratch.ptr + slot * ff, self.ff_up_scratch.ptr + slot * ff, self.ff_gate_scratch.ptr + slot * ff, ff);
         }
 
         // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
@@ -1365,10 +1382,19 @@ pub const Ds4Model = struct {
         self.cancelled.store(true, .release);
     }
 
-    pub fn setMegakernel(self: *Ds4Model, en: bool) void { self.megakernel_enabled = en; }
-    pub fn setLayerSkip(self: *Ds4Model, s: u32, end: u32) void { self.layer_skip_start = s; self.layer_skip_end = end; }
-    pub fn getHidden(self: *const Ds4Model) []const f32 { return self.hidden; }
-    pub fn getBlockTable(_: *const Ds4Model) []const u32 { return &.{}; }
+    pub fn setMegakernel(self: *Ds4Model, en: bool) void {
+        self.megakernel_enabled = en;
+    }
+    pub fn setLayerSkip(self: *Ds4Model, s: u32, end: u32) void {
+        self.layer_skip_start = s;
+        self.layer_skip_end = end;
+    }
+    pub fn getHidden(self: *const Ds4Model) []const f32 {
+        return self.hidden;
+    }
+    pub fn getBlockTable(_: *const Ds4Model) []const u32 {
+        return &.{};
+    }
 };
 
 // ── Math helpers ─────────────────────────────────────────────────
@@ -1454,10 +1480,14 @@ inline fn applyRopeTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void 
         const r0 = @mulAdd(V4, x0, c, -x1 * s);
         const r1 = @mulAdd(V4, x0, s, x1 * c);
         // Interleave back
-        x[base] = r0[0]; x[base + 1] = r1[0];
-        x[base + 2] = r0[1]; x[base + 3] = r1[1];
-        x[base + 4] = r0[2]; x[base + 5] = r1[2];
-        x[base + 6] = r0[3]; x[base + 7] = r1[3];
+        x[base] = r0[0];
+        x[base + 1] = r1[0];
+        x[base + 2] = r0[1];
+        x[base + 3] = r1[1];
+        x[base + 4] = r0[2];
+        x[base + 5] = r1[2];
+        x[base + 6] = r0[3];
+        x[base + 7] = r1[3];
     }
     while (i < n) : (i += 1) {
         const x0 = x[i * 2];
@@ -1480,10 +1510,14 @@ inline fn applyRopeInverseTable(x: []f32, cos_t: []const f32, sin_t: []const f32
         const x1 = V4{ x[base + 1], x[base + 3], x[base + 5], x[base + 7] };
         const r0 = @mulAdd(V4, x0, c, x1 * s);
         const r1 = @mulAdd(V4, x1, c, -x0 * s);
-        x[base] = r0[0]; x[base + 1] = r1[0];
-        x[base + 2] = r0[1]; x[base + 3] = r1[1];
-        x[base + 4] = r0[2]; x[base + 5] = r1[2];
-        x[base + 6] = r0[3]; x[base + 7] = r1[3];
+        x[base] = r0[0];
+        x[base + 1] = r1[0];
+        x[base + 2] = r0[1];
+        x[base + 3] = r1[1];
+        x[base + 4] = r0[2];
+        x[base + 5] = r1[2];
+        x[base + 6] = r0[3];
+        x[base + 7] = r1[3];
     }
     while (i < n) : (i += 1) {
         const x0 = x[i * 2];
@@ -1500,9 +1534,14 @@ fn hcSinkhorn(m: []f32) void {
     // Initial softmax: for each src=r, normalize over dst=c (matches ggml_soft_max over ne[0]=dst)
     for (0..n) |r| { // for each src=r
         var mx = m[r * n + 0];
-        for (1..n) |c| if (m[r * n + c] > mx) { mx = m[r * n + c]; };
+        for (1..n) |c| if (m[r * n + c] > mx) {
+            mx = m[r * n + c];
+        };
         var sm: f32 = 0.0;
-        for (0..n) |c| { m[r * n + c] = @exp(m[r * n + c] - mx); sm += m[r * n + c]; }
+        for (0..n) |c| {
+            m[r * n + c] = @exp(m[r * n + c] - mx);
+            sm += m[r * n + c];
+        }
         for (0..n) |c| m[r * n + c] /= sm;
     }
     for (m) |*v| v.* += hc_eps;
@@ -1511,14 +1550,22 @@ fn hcSinkhorn(m: []f32) void {
     var row_s: [n_hc]f32 = undefined;
     for (0..hc_sinkhorn_iters) |_| {
         @memset(&col_s, 0.0);
-        for (0..n) |r| for (0..n) |c| { col_s[c] += m[r * n + c]; };
+        for (0..n) |r| for (0..n) |c| {
+            col_s[c] += m[r * n + c];
+        };
         for (&col_s) |*v| v.* += hc_eps;
-        for (0..n) |r| for (0..n) |c| { m[r * n + c] /= col_s[c]; };
+        for (0..n) |r| for (0..n) |c| {
+            m[r * n + c] /= col_s[c];
+        };
 
         @memset(&row_s, 0.0);
-        for (0..n) |r| for (0..n) |c| { row_s[r] += m[r * n + c]; };
+        for (0..n) |r| for (0..n) |c| {
+            row_s[r] += m[r * n + c];
+        };
         for (&row_s) |*v| v.* += hc_eps;
-        for (0..n) |r| for (0..n) |c| { m[r * n + c] /= row_s[r]; };
+        for (0..n) |r| for (0..n) |c| {
+            m[r * n + c] /= row_s[r];
+        };
     }
 }
 
