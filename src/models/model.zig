@@ -763,13 +763,14 @@ pub const ModelStorage = union(enum) {
     nemotron_h: NemotronHModel,
     nemotron_nano: NemotronNanoModel,
     glm4: Glm4Model,
+    deepseek4: Ds4Model,
     llama4: Llama4Model,
 
     /// Initialize a model from its architecture type.
     /// Returns a ModelStorage union holding the initialized concrete model.
     pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, kv_boundary_v: u32, kv_eviction_budget: u32, tiered_cache: ?*TieredKvCache, tp_rank: u32, tp_degree: u32) !ModelStorage {
         switch (arch) {
-            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .llama4 => |a| {
+            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
                 var mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
@@ -802,6 +803,7 @@ pub const ModelStorage = union(enum) {
             .nemotron_h => NemotronHModel,
             .nemotron_nano => NemotronNanoModel,
             .glm4 => Glm4Model,
+            .deepseek4 => Ds4Model,
             .llama4 => Llama4Model,
         };
     }
@@ -988,6 +990,7 @@ const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen3
 const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
 const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
 const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model else void;
+const Ds4Model = if (build_options.enable_glm4) @import("deepseek4.zig").Ds4Model else void;
 const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
 const Llama4Model = if (build_options.enable_llama4) @import("llama4.zig").Llama4Model else void;
 

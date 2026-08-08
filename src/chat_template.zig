@@ -236,6 +236,20 @@ pub const ChatTemplate = struct {
         },
     };
 
+    /// DeepSeek V4 Flash — uses <｜User｜>/<｜Assistant｜> role markers with BOS prefix.
+    /// Format: <｜begin▁of▁sentence｜><｜User｜>PROMPT<｜Assistant｜></think>
+    pub const deepseek4 = ChatTemplate{
+        .system_prefix = "<｜begin▁of▁sentence｜>",
+        .system_suffix = "",
+        .user_prefix = "<｜User｜>",
+        .user_suffix = "",
+        .assistant_prefix = "<｜Assistant｜>",
+        .assistant_suffix = "<｜end▁of▁sentence｜>",
+        .eog_tokens = &.{ "<｜end▁of▁sentence｜>", "<｜end▁of▁sentence|>" },
+        .default_system = "",
+        .generation_prefix = "</think>",
+    };
+
     /// GPT-OSS Harmony.
     pub const gpt_oss = ChatTemplate{
         .system_prefix = "<|start|>system<|message|>",

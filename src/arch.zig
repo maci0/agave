@@ -18,6 +18,7 @@ pub const Arch = enum {
     nemotron_h,
     nemotron_nano,
     glm4,
+    deepseek4,
     llama4,
 
     /// Detect model architecture from GGUF/SafeTensors arch string.
@@ -49,9 +50,9 @@ pub const Arch = enum {
             .{ "glm4_moe_lite", .glm4 },
             .{ "glm4", .glm4 },
             .{ "deepseek2", .glm4 },
-            .{ "deepseek_v4", .glm4 },
-            .{ "deepseek4", .glm4 },
-            .{ "dflash", .glm4 }, // DeepSeek V4 Flash DSpark draft model
+            .{ "deepseek_v4", .deepseek4 },
+            .{ "deepseek4", .deepseek4 },
+            .{ "dflash", .deepseek4 }, // DeepSeek V4 Flash DSpark draft model
             .{ "llama4", .llama4 },
             .{ "llama4_text", .llama4 },
             .{ "diffusion_gemma", .diffusion_gemma },
@@ -74,6 +75,7 @@ pub const Arch = enum {
             .nemotron_h => "Nemotron-H",
             .nemotron_nano => "Nemotron-Nano",
             .glm4 => "GLM-4",
+            .deepseek4 => "DeepSeek V4 Flash",
             .llama4 => "Llama 4",
         };
     }
@@ -86,6 +88,7 @@ pub const Arch = enum {
             .gpt_oss => ChatTemplate.gpt_oss,
             .qwen35 => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
+            .deepseek4 => ChatTemplate.deepseek4,
             .llama4 => ChatTemplate.llama4,
             else => ChatTemplate.chatml,
         };
@@ -106,6 +109,7 @@ pub const Arch = enum {
             .gpt_oss => "gpt-oss",
             .qwen35 => "qwen35",
             .glm4 => "glm4",
+            .deepseek4 => "deepseek4",
             .llama4 => "llama4",
             else => "chatml",
         };
@@ -121,7 +125,7 @@ pub const Arch = enum {
             .gpt_oss => build_options.enable_gpt_oss,
             .nemotron_h => build_options.enable_nemotron_h,
             .nemotron_nano => build_options.enable_nemotron_nano,
-            .glm4 => build_options.enable_glm4,
+            .glm4, .deepseek4 => build_options.enable_glm4,
             .llama4 => build_options.enable_llama4,
         };
     }
@@ -130,7 +134,7 @@ pub const Arch = enum {
     /// Returns null for architectures that don't prepend BOS (GPT-2 family).
     pub fn defaultBos(self: Arch) ?u32 {
         return switch (self) {
-            .glm4 => glm4_fallback_bos,
+            .glm4, .deepseek4 => glm4_fallback_bos,
             .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano => null,
             .llama4 => llama4_fallback_bos,
             .gemma3, .gemma4, .diffusion_gemma => default_bos_id,
@@ -166,7 +170,7 @@ pub const Arch = enum {
             .gpt_oss => "gpt-oss",
             .nemotron_h => "nemotron-h",
             .nemotron_nano => "nemotron-nano",
-            .glm4 => "glm4",
+            .glm4, .deepseek4 => "glm4",
             .llama4 => "llama4",
         };
     }
