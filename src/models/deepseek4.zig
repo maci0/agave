@@ -107,6 +107,7 @@ pub const Ds4Model = struct {
     kv_v_bytes: []u8 = &.{},
 
 
+
     // Norm weight cache (dequantized to f32)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
