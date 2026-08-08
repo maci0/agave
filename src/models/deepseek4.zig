@@ -473,7 +473,10 @@ pub const Ds4Model = struct {
                 ns[i] = v;
             }
         }
-        @memcpy(self.hc_state, self.new_hc);
+        // Swap buffers instead of copying 16KB
+        const tmp = self.hc_state;
+        self.hc_state = self.new_hc;
+        self.new_hc = tmp;
     }
 
     /// HC head: merge 4 streams → self.hidden.
@@ -844,10 +847,9 @@ pub const Ds4Model = struct {
             self.be.gemv(xp, .{ .data = wp, .dtype = wo_a.dtype }, yp, olr, group_in);
         }
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
-        self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.attn_result.ptr, e, og * olr);
+        // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
+        self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.hidden.ptr, e, og * olr);
         self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
-
-        @memcpy(self.hidden, self.attn_result);
     }
 
     // ── Lightning Indexer ────────────────────────────────────────
@@ -1090,21 +1092,19 @@ pub const Ds4Model = struct {
             }
         }
 
-        // CPU: SIMD weighted accumulation from all scratch slots
+        // CPU: SIMD weighted accumulation directly into hidden (avoids 16KB copy)
         const V8 = @Vector(8, f32);
-        @memset(self.expert_accum, 0.0);
+        @memset(self.hidden, 0.0);
         for (0..n_scratch) |slot| {
             const sd = self.expert_scratch[slot * e ..][0..e];
             const wv: V8 = @splat(slot_weights[slot]);
             var i: usize = 0;
             while (i + 8 <= e) : (i += 8) {
-                const acc: V8 = self.expert_accum[i..][0..8].*;
-                self.expert_accum[i..][0..8].* = @mulAdd(V8, @as(V8, sd[i..][0..8].*), wv, acc);
+                const acc: V8 = self.hidden[i..][0..8].*;
+                self.hidden[i..][0..8].* = @mulAdd(V8, @as(V8, sd[i..][0..8].*), wv, acc);
             }
-            while (i < e) : (i += 1) self.expert_accum[i] += sd[i] * slot_weights[slot];
+            while (i < e) : (i += 1) self.hidden[i] += sd[i] * slot_weights[slot];
         }
-
-        @memcpy(self.hidden, self.expert_accum);
     }
 
     // ── Forward pass ─────────────────────────────────────────────
