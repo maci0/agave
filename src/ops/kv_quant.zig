@@ -451,6 +451,7 @@ pub const KvQuantType = enum {
     rotor3,
     rotor4,
 
+    /// Returns the short display name for this KV quantization type (e.g. "TQ2", "F16").
     pub fn name(self: KvQuantType) []const u8 {
         return switch (self) {
             .f32 => "F32",
@@ -489,26 +490,32 @@ pub const KvQuantType = enum {
         };
     }
 
+    /// Returns true if this is a TurboQuant variant (turbo2/3/4).
     pub fn isTurbo(self: KvQuantType) bool {
         return self == .turbo2 or self == .turbo3 or self == .turbo4;
     }
 
+    /// Returns true if this is a PlanarQuant variant (planar2/3/4).
     pub fn isPlanar(self: KvQuantType) bool {
         return self == .planar2 or self == .planar3 or self == .planar4;
     }
 
+    /// Returns true if this is an IsoQuant variant (iso2/3/4).
     pub fn isIso(self: KvQuantType) bool {
         return self == .iso2 or self == .iso3 or self == .iso4;
     }
 
+    /// Returns true if this is a RotorQuant variant (rotor2/3/4).
     pub fn isRotor(self: KvQuantType) bool {
         return self == .rotor2 or self == .rotor3 or self == .rotor4;
     }
 
+    /// Returns true if this is any rotation-based quantization method (Turbo, Planar, Iso, or Rotor).
     pub fn isRotationQuant(self: KvQuantType) bool {
         return self.isTurbo() or self.isPlanar() or self.isIso() or self.isRotor();
     }
 
+    /// Returns the bit-width for rotation/turbo quant types (2, 3, or 4), 8 for Q8_0, 0 for others.
     pub fn turboBits(self: KvQuantType) u32 {
         return switch (self) {
             .turbo2, .planar2, .iso2, .rotor2 => 2,
@@ -612,12 +619,15 @@ pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
 pub const PerHeadKvScales = struct {
     scales: []f32, // shape [n_heads], one f32 scale per head
 
+    /// Allocate per-head scale array of length `n_heads`, initialized to 1.0 (no rescaling).
+    /// Caller owns the returned scales and must call `deinit` with the same allocator.
     pub fn init(allocator: std.mem.Allocator, n_heads: usize) !PerHeadKvScales {
         const s = try allocator.alloc(f32, n_heads);
         @memset(s, 1.0); // safe default: scale=1 = no rescaling
         return .{ .scales = s };
     }
 
+    /// Free the per-head scale array. Must use the same allocator passed to `init`.
     pub fn deinit(self: PerHeadKvScales, allocator: std.mem.Allocator) void {
         allocator.free(self.scales);
     }

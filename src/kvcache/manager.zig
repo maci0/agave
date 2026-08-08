@@ -104,6 +104,8 @@ pub const PagedKvView = struct {
     kv_dim: usize,
     seq_len: usize,
 
+    /// Construct a view into the paged KV cache for one layer. Uses bit-shift
+    /// addressing when `block_size` is a power of two, division otherwise.
     pub inline fn initView(block_table: []const u32, blocks: []const CacheBlock, block_size: u16, kv_dim: usize, seq_len: usize) PagedKvView {
         std.debug.assert(block_size > 0);
         return .{

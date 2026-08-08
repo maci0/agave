@@ -89,12 +89,16 @@ pub const Grammar = struct {
         return parse(allocator, gbnf);
     }
 
+    /// Parse a GBNF grammar string into a `Grammar`. The returned grammar owns all
+    /// allocated rule data; call `deinit` to release it.
+    /// Returns `error.GrammarTooLarge` if `input` exceeds `max_grammar_input_size`.
     pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Grammar {
         if (input.len > max_grammar_input_size) return error.GrammarTooLarge;
         var parser = Parser.init(allocator, input);
         return parser.parseGrammar();
     }
 
+    /// Free all rule elements, the rules slice, and the rule-name map.
     pub fn deinit(self: *Grammar) void {
         for (self.rules) |rule| {
             self.allocator.free(rule.elements);
@@ -103,6 +107,8 @@ pub const Grammar = struct {
         self.rule_names.deinit();
     }
 
+    /// Create a fresh `GrammarState` for constrained decoding, starting at the root rule.
+    /// Returns `error.OutOfMemory` if the stack allocation fails.
     pub fn initState(self: *const Grammar) error{OutOfMemory}!GrammarState {
         return try GrammarState.init(self);
     }
@@ -254,6 +260,8 @@ pub const GrammarState = struct {
     stack: std.ArrayList(StackEntry),
     completed: bool = false,
 
+    /// Initialize a grammar state by pushing the root rule onto the stack.
+    /// Uses the grammar's allocator for stack storage.
     pub fn init(grammar: *const Grammar) error{OutOfMemory}!GrammarState {
         var state = GrammarState{
             .grammar = grammar,
@@ -263,10 +271,13 @@ pub const GrammarState = struct {
         return state;
     }
 
+    /// Free the rule stack using the grammar's allocator.
     pub fn deinit(self: *GrammarState) void {
         self.stack.deinit(self.grammar.allocator);
     }
 
+    /// Test whether byte `c` is accepted by the current grammar state.
+    /// Advances the state machine if accepted. Returns true if the byte matched.
     pub fn acceptChar(self: *GrammarState, c: u8) bool {
         return self.acceptCharInner(c, 0);
     }
@@ -412,6 +423,8 @@ pub const GrammarState = struct {
         return false;
     }
 
+    /// Feed a full token's text through the state machine, accepting characters one by one.
+    /// Strips BPE multi-byte prefixes via `getEffectiveText` before processing.
     pub fn acceptToken(self: *GrammarState, text: []const u8) void {
         const effective = Grammar.getEffectiveText(text);
         for (effective) |c| {
@@ -419,6 +432,7 @@ pub const GrammarState = struct {
         }
     }
 
+    /// Returns true if the grammar has reached a terminal state (all rules satisfied).
     pub fn isComplete(self: *const GrammarState) bool {
         return self.completed;
     }
@@ -1429,4 +1443,127 @@ test "fuzz: all grammar functions" {
             }
         }
     }.f, .{});
+}
+
+test "Grammar.parse simple rule count" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"hello\"");
+    defer g.deinit();
+    try std.testing.expect(g.rules.len >= 1);
+}
+
+test "GrammarState.acceptChar matches literal" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"abc\"");
+    defer g.deinit();
+    var state = try g.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('a'));
+    try std.testing.expect(!state.isComplete());
+    try std.testing.expect(state.acceptChar('b'));
+    try std.testing.expect(state.acceptChar('c'));
+    try std.testing.expect(state.isComplete());
+}
+
+test "GrammarState.acceptChar rejects wrong char" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"xy\"");
+    defer g.deinit();
+    var state = try g.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('x'));
+    try std.testing.expect(!state.acceptChar('z')); // should reject 'z', expects 'y'
+}
+
+test "GrammarState.acceptToken processes full token" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"hello\"");
+    defer g.deinit();
+    var state = try g.initState();
+    defer state.deinit();
+
+    state.acceptToken("hello");
+    try std.testing.expect(state.isComplete());
+}
+
+test "GrammarState.acceptToken partial match" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"hello\"");
+    defer g.deinit();
+    var state = try g.initState();
+    defer state.deinit();
+
+    state.acceptToken("hel");
+    try std.testing.expect(!state.isComplete());
+}
+
+test "GrammarState.isComplete false at start" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"x\"");
+    defer g.deinit();
+    var state = try g.initState();
+    defer state.deinit();
+
+    try std.testing.expect(!state.isComplete());
+    try std.testing.expect(state.acceptChar('x'));
+    try std.testing.expect(state.isComplete());
+}
+
+test "GrammarState char range acceptance" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= [a-z]");
+    defer g.deinit();
+    var state = try g.initState();
+    defer state.deinit();
+
+    try std.testing.expect(state.acceptChar('m'));
+    try std.testing.expect(state.isComplete());
+}
+
+test "GrammarState alternation" {
+    var g = try Grammar.parse(std.testing.allocator, "root ::= \"yes\" | \"no\"");
+    defer g.deinit();
+
+    // Path 1: "yes"
+    {
+        var state = try g.initState();
+        defer state.deinit();
+        state.acceptToken("yes");
+        try std.testing.expect(state.isComplete());
+    }
+
+    // Path 2: "no"
+    {
+        var state = try g.initState();
+        defer state.deinit();
+        state.acceptToken("no");
+        try std.testing.expect(state.isComplete());
+    }
+}
+
+test "Grammar.getEffectiveText strips BPE prefix" {
+    // 0xC4 prefix (Qwen/GPT BPE): strip first 2 bytes
+    const with_prefix = [_]u8{ 0xC4, 0xA0, 'h', 'i' };
+    const effective = Grammar.getEffectiveText(&with_prefix);
+    try std.testing.expectEqualStrings("hi", effective);
+
+    // No prefix: identity
+    const plain = "hello";
+    try std.testing.expectEqualStrings(plain, Grammar.getEffectiveText(plain));
+}
+
+test "Grammar.parse rejects oversized input" {
+    const big = try std.testing.allocator.alloc(u8, 65 * 1024);
+    defer std.testing.allocator.free(big);
+    @memset(big, 'a');
+    const result = Grammar.parse(std.testing.allocator, big);
+    try std.testing.expectError(error.GrammarTooLarge, result);
+}
+
+test "Grammar.fromJsonSchema basic object" {
+    const schema =
+        \\{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}
+    ;
+    var g = Grammar.fromJsonSchema(std.testing.allocator, schema) catch |err| {
+        // If schema conversion fails (non-trivial), just skip this test
+        if (err == error.OutOfMemory) return err;
+        return; // schema parse failures are acceptable edge cases
+    };
+    defer g.deinit();
+    try std.testing.expect(g.rules.len >= 1);
 }

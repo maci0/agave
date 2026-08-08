@@ -189,6 +189,7 @@ pub const SuffixState = struct {
     max_k: usize = default_max_k,
     allocator: std.mem.Allocator,
 
+    /// Allocate the suffix token cache (cache_capacity entries). Caller owns the result.
     pub fn init(allocator: std.mem.Allocator) !SuffixState {
         return SuffixState{
             .history = try allocator.alloc(u32, cache_capacity),
@@ -196,6 +197,7 @@ pub const SuffixState = struct {
         };
     }
 
+    /// Zero and free the suffix cache. Safe to call multiple times.
     pub fn deinit(self: *SuffixState) void {
         @memset(self.history, 0);
         self.len = 0;
@@ -513,4 +515,92 @@ test "lookahead seed and match" {
     ls.advance(&[_]u32{ 10, 20, 30, 40, 50 });
     try std.testing.expectEqual(@as(usize, 2), ls.branch_len[0]);
     try std.testing.expectEqual(@as(u32, 10), ls.branches[0][1]);
+}
+
+test "NgramState propose returns 0 with insufficient history" {
+    var state = NgramState{};
+    // Push fewer than min_ngram+1 tokens (min_ngram=3, need 4 tokens)
+    state.push(1);
+    state.push(2);
+    state.push(3);
+    var draft: [4]u32 = undefined;
+    const n = state.propose(4, &draft);
+    try std.testing.expectEqual(@as(usize, 0), n);
+}
+
+test "NgramState propose finds repeated pattern" {
+    var state = NgramState{};
+    // Pattern: [10,20,30,40,50,10,20,30] — last 3 tokens "10,20,30" match at pos 0
+    // Should propose continuation after that match: "40,50"
+    for ([_]u32{ 10, 20, 30, 40, 50, 10, 20, 30 }) |t| state.push(t);
+    var draft: [8]u32 = undefined;
+    const n = state.propose(8, &draft);
+    try std.testing.expect(n >= 2);
+    try std.testing.expectEqual(@as(u32, 40), draft[0]);
+    try std.testing.expectEqual(@as(u32, 50), draft[1]);
+}
+
+test "SuffixState compaction preserves functionality" {
+    var s = try SuffixState.init(std.testing.allocator);
+    defer s.deinit();
+
+    // Push a repeating pattern many times (enough to trigger compaction)
+    const pattern = [_]u32{ 100, 200, 300, 400 };
+    for (0..3000) |_| {
+        for (pattern) |t| s.push(t);
+    }
+    // After compaction, propose should still find the pattern
+    var draft: [4]u32 = undefined;
+    const n = s.propose(&draft);
+    // The repeating pattern should be found
+    try std.testing.expect(n >= 1);
+}
+
+test "SharedNgramPool propose no match returns 0" {
+    var pool = SharedNgramPool{};
+    for ([_]u32{ 1, 2, 3, 4, 5 }) |t| pool.push(t);
+    // Query with tokens that don't appear in history
+    const tail = [_]u32{ 99, 98, 97 };
+    var draft: [4]u32 = undefined;
+    const n = pool.propose(&tail, 4, &draft);
+    try std.testing.expectEqual(@as(usize, 0), n);
+}
+
+test "SharedNgramPool propose on empty pool returns 0" {
+    var pool = SharedNgramPool{};
+    const tail = [_]u32{ 1, 2, 3 };
+    var draft: [4]u32 = undefined;
+    const n = pool.propose(&tail, 4, &draft);
+    try std.testing.expectEqual(@as(usize, 0), n);
+}
+
+test "LookaheadState advance wraps at max_window" {
+    var ls = LookaheadState{};
+    ls.n_branches = 1;
+    ls.window = 4;
+    ls.seed(&[_]u32{1});
+
+    // Advance past max_window to trigger the shift path
+    for (0..LookaheadState.max_window + 2) |i| {
+        ls.advance(&[_]u32{@intCast(i + 10)});
+    }
+    // Branch should not exceed max_window length
+    try std.testing.expect(ls.branch_len[0] <= LookaheadState.max_window);
+}
+
+test "LookaheadState findMatch short context returns null" {
+    var ls = LookaheadState{};
+    ls.seed(&[_]u32{ 1, 2, 3, 4, 5 });
+    // Context shorter than lookahead_min_match (2) should return null
+    const short = [_]u32{1};
+    try std.testing.expect(ls.findMatch(&short) == null);
+}
+
+test "LookaheadState proposeContinuation no continuation" {
+    var ls = LookaheadState{};
+    ls.seed(&[_]u32{ 1, 2, 3, 4, 5 });
+    // If match_len >= branch_len, there are no continuation tokens
+    var out: [4]u32 = undefined;
+    const n = ls.proposeContinuation(0, ls.branch_len[0], 4, &out);
+    try std.testing.expectEqual(@as(usize, 0), n);
 }

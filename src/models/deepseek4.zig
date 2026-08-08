@@ -1673,3 +1673,29 @@ test "compSlotsPerLayer" {
     try std.testing.expectEqual(@as(usize, 129), compSlotsPerLayer(512));
     try std.testing.expectEqual(@as(usize, 16385), compSlotsPerLayer(65536));
 }
+
+test "hcSinkhorn produces doubly stochastic matrix" {
+    // Input: 4x4 matrix of log-scale values (n_hc=4)
+    var m = [_]f32{
+        1.0, 2.0, 0.5, 1.5,
+        0.3, 1.8, 2.2, 0.7,
+        1.1, 0.4, 1.6, 1.9,
+        2.0, 1.0, 0.8, 0.2,
+    };
+    hcSinkhorn(&m);
+
+    // After Sinkhorn iterations, rows and columns should each sum to ~1.0
+    for (0..n_hc) |r| {
+        var row_sum: f32 = 0;
+        for (0..n_hc) |c| row_sum += m[r * n_hc + c];
+        try std.testing.expectApproxEqAbs(@as(f32, 1.0), row_sum, 0.02);
+    }
+    for (0..n_hc) |c| {
+        var col_sum: f32 = 0;
+        for (0..n_hc) |r| col_sum += m[r * n_hc + c];
+        try std.testing.expectApproxEqAbs(@as(f32, 1.0), col_sum, 0.02);
+    }
+
+    // All entries must be non-negative
+    for (m) |v| try std.testing.expect(v >= 0);
+}

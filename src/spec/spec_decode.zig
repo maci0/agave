@@ -57,6 +57,9 @@ pub const SpecState = struct {
     /// Owned by caller (allocator.free(mask) in deinit).
     token_mask: ?[]bool = null,
 
+    /// Allocate draft log-prob and sampling buffers for speculative decoding.
+    /// `k`: maximum draft length. `vocab_size`: model vocabulary size.
+    /// Caller owns the returned state and must call `deinit` with the same allocator.
     pub fn init(allocator: std.mem.Allocator, k: u32, vocab_size: u32) !SpecState {
         const draft_log_probs = try allocator.alloc(f32, max_draft_tokens * vocab_size);
         errdefer allocator.free(draft_log_probs);
@@ -70,21 +73,26 @@ pub const SpecState = struct {
         };
     }
 
+    /// Free draft_log_probs and sampling_buf. Must use the same allocator passed to `init`.
     pub fn deinit(self: *SpecState, allocator: std.mem.Allocator) void {
         if (self.draft_log_probs.len > 0) allocator.free(self.draft_log_probs);
         if (self.sampling_buf.len > 0) allocator.free(self.sampling_buf);
     }
 
+    /// Overall acceptance rate: total_accepted / total_drafted. Returns 0 if nothing drafted.
     pub fn acceptanceRate(self: SpecState) f32 {
         if (self.total_drafted == 0) return 0;
         return @as(f32, @floatFromInt(self.total_accepted)) / @as(f32, @floatFromInt(self.total_drafted));
     }
 
+    /// Mean accepted tokens per verification round. Returns 0 if no rounds recorded.
     pub fn meanAccepted(self: SpecState) f32 {
         if (self.total_rounds == 0) return 0;
         return @as(f32, @floatFromInt(self.total_accepted)) / @as(f32, @floatFromInt(self.total_rounds));
     }
 
+    /// Record results of a speculative round: updates counters, per-K profiling
+    /// (when adaptive enabled), and sliding-window acceptance for adaptive V2.
     pub fn recordRound(self: *SpecState, accepted: u32) void {
         self.total_accepted += accepted;
         self.total_drafted += self.n_draft;
@@ -460,6 +468,8 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
     return mask;
 }
 
+/// Generate draft tokens, saving per-depth log-prob distributions for rejection sampling.
+/// Applies FR-Spec token mask if configured. Returns number of draft tokens generated.
 pub fn draftWithLogits(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     var tok = last_token;
     var n: u32 = 0;
@@ -1160,4 +1170,107 @@ test "fuzz: all spec_decode functions" {
             }
         }
     }.f, .{});
+}
+
+test "dsparkTrimDraft with no history uses default prior" {
+    var s = try SpecState.init(std.testing.allocator, 10, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.n_draft = 8;
+    // No k_accept_counts/k_total_counts set — all zeros → uses 0.75 prior.
+    // survival = 0.75^k: at k=1 → 0.75, k=2 → 0.5625, k=3 → 0.4219, k=4 → 0.3164,
+    //                     k=5 → 0.2373, k=6 → 0.1780, k=7 → 0.1335 < 0.15 → trims at k=7
+    dsparkTrimDraft(&s);
+    // Should trim before reaching 8 since 0.75^7 ≈ 0.1335 < 0.15
+    try std.testing.expect(s.n_draft < 8);
+    try std.testing.expect(s.n_draft >= 6); // 0.75^6 ≈ 0.178 > 0.15, so at least 6
+}
+
+test "dsparkTrimDraft with high acceptance keeps all drafts" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.n_draft = 4;
+    // Set high acceptance at all depths (90%)
+    for (0..4) |k| {
+        s.k_total_counts[k] = 10;
+        s.k_accept_counts[k] = 9; // 0.9 acceptance
+    }
+    dsparkTrimDraft(&s);
+    // 0.9^4 = 0.6561 >> 0.15 → should keep all 4
+    try std.testing.expectEqual(@as(u32, 4), s.n_draft);
+}
+
+test "dsparkTrimDraft trims at low-acceptance depth" {
+    var s = try SpecState.init(std.testing.allocator, 10, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.n_draft = 5;
+    // Depth 0: good (0.9), Depth 1: terrible (0.1)
+    s.k_total_counts[0] = 10;
+    s.k_accept_counts[0] = 9;
+    s.k_total_counts[1] = 10;
+    s.k_accept_counts[1] = 1; // 0.1
+    s.k_total_counts[2] = 10;
+    s.k_accept_counts[2] = 9;
+    dsparkTrimDraft(&s);
+    // survival after depth 1 = 0.9 * 0.1 = 0.09 < 0.15 → trim at k=2
+    try std.testing.expectEqual(@as(u32, 2), s.n_draft);
+}
+
+test "dsparkTrimDraft no-op for single draft" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+
+    s.n_draft = 1;
+    dsparkTrimDraft(&s);
+    try std.testing.expectEqual(@as(u32, 1), s.n_draft);
+
+    s.n_draft = 0;
+    dsparkTrimDraft(&s);
+    try std.testing.expectEqual(@as(u32, 0), s.n_draft);
+}
+
+test "applyFrSpecMask sets non-mapped to -inf" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    const mask = [_]bool{ true, false, true, false };
+    applyFrSpecMask(&logits, &mask);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[0], 1e-6);
+    try std.testing.expect(logits[1] == -std.math.inf(f32));
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), logits[2], 1e-6);
+    try std.testing.expect(logits[3] == -std.math.inf(f32));
+}
+
+test "applyFrSpecMask masks excess logits beyond mask length" {
+    var logits = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0 };
+    const mask = [_]bool{ true, true, false };
+    applyFrSpecMask(&logits, &mask);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), logits[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), logits[1], 1e-6);
+    try std.testing.expect(logits[2] == -std.math.inf(f32));
+    // Beyond mask length: also -inf
+    try std.testing.expect(logits[3] == -std.math.inf(f32));
+    try std.testing.expect(logits[4] == -std.math.inf(f32));
+}
+
+test "adaptive K V2 sliding window adjusts current_k" {
+    var s = try SpecState.init(std.testing.allocator, 5, 100);
+    defer s.deinit(std.testing.allocator);
+    s.adaptive_k_enabled = true;
+
+    // Simulate 8 rounds with low acceptance to trigger k reduction
+    for (0..8) |_| {
+        s.n_draft = 5;
+        s.recordRound(1); // only 1/5 accepted = 20% < 30% threshold
+    }
+    // After 8 rounds of low acceptance, current_k should have decreased
+    try std.testing.expect(s.current_k < 5);
+
+    // Now simulate 8 rounds with high acceptance to trigger k increase
+    const low_k = s.current_k;
+    for (0..8) |_| {
+        s.n_draft = s.current_k;
+        s.recordRound(s.current_k); // 100% accepted > 80% threshold
+    }
+    try std.testing.expect(s.current_k >= low_k);
 }

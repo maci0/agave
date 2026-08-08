@@ -369,11 +369,17 @@ pub const GGUFFile = struct {
                 if (comptime @import("builtin").os.tag == .linux) {
                     var buf2: std.os.linux.Statx = undefined;
                     const rc = std.os.linux.statx(sfd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf2);
-                    if (rc != 0) { _ = std.c.close(sfd); continue; }
+                    if (rc != 0) {
+                        _ = std.c.close(sfd);
+                        continue;
+                    }
                     break :blk @intCast(buf2.size);
                 } else {
                     var ss: posix.Stat = undefined;
-                    if (std.c.fstat(sfd, &ss) != 0) { _ = std.c.close(sfd); continue; }
+                    if (std.c.fstat(sfd, &ss) != 0) {
+                        _ = std.c.close(sfd);
+                        continue;
+                    }
                     break :blk @intCast(ss.size);
                 }
             };
@@ -412,7 +418,10 @@ pub const GGUFFile = struct {
             while (it.next()) |kv| {
                 var info = kv.value_ptr.*;
                 info.abs_ptr = shard_gguf.tensorData(&info);
-                self.tensors.put(kv.key_ptr.*, info) catch {};
+                self.tensors.put(kv.key_ptr.*, info) catch |err| {
+                    std.log.err("split GGUF: failed to merge tensor '{s}': {s}", .{ kv.key_ptr.*, @errorName(err) });
+                    return err;
+                };
             }
             shard_gguf.tensors.clearRetainingCapacity();
             shard_gguf.metadata.deinit();

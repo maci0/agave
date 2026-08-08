@@ -35,12 +35,14 @@ pub const BlockMask = struct {
         allocator.free(self.data);
     }
 
+    const bits_per_word: u64 = @bitSizeOf(u64);
+
     /// Returns true if query block qi should attend to key block ki.
     pub fn get(self: BlockMask, qi: u32, ki: u32) bool {
         if (ki > qi) return false; // causal
         const bit_idx = @as(u64, qi) * self.n_blocks + ki;
-        const word = bit_idx / 64;
-        const bit = @as(u6, @truncate(bit_idx % 64));
+        const word = bit_idx / bits_per_word;
+        const bit = @as(u6, @truncate(bit_idx % bits_per_word));
         return (self.data[word] >> bit) & 1 == 1;
     }
 
@@ -48,8 +50,8 @@ pub const BlockMask = struct {
     fn set(self: BlockMask, qi: u32, ki: u32) void {
         if (ki > qi) return;
         const bit_idx = @as(u64, qi) * self.n_blocks + ki;
-        const word = bit_idx / 64;
-        const bit = @as(u6, @truncate(bit_idx % 64));
+        const word = bit_idx / bits_per_word;
+        const bit = @as(u6, @truncate(bit_idx % bits_per_word));
         self.data[word] |= @as(u64, 1) << bit;
     }
 };
@@ -60,7 +62,7 @@ pub fn buildMask(allocator: std.mem.Allocator, pattern: BlockSparsePattern, seq_
     const bs = @as(usize, pattern.block_size);
     const n_blocks: u32 = @intCast((seq_len + bs - 1) / bs);
     const n_bits = @as(u64, n_blocks) * n_blocks;
-    const n_words = (n_bits + 63) / 64;
+    const n_words = (n_bits + BlockMask.bits_per_word - 1) / BlockMask.bits_per_word;
     const data = try allocator.alloc(u64, @intCast(n_words));
     @memset(data, 0);
 
