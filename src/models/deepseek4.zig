@@ -482,14 +482,18 @@ pub const Ds4Model = struct {
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
-        // CSA compressor (ratio=4): batch projections with Q+KV in same GPU cmd buffer
-        // HCA (ratio=128) skipped — only relevant for contexts > 128 tokens
+        // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
+        // CSA: batched with Q+KV in same cmd buffer. HCA: computed after sync (separate).
         const layer_stride = self.max_seq_len * comp_dim;
         var comp_kv_pos: []f32 = &.{};
         var comp_score_pos: []f32 = &.{};
-        if (self.compress_ratios[li] == csa_ratio_4) {
+        var actual_comp_dim: usize = 0;
+        const ratio = self.compress_ratios[li];
+        if (ratio == csa_ratio_4) {
+            // CSA: batch with Q+KV (no extra sync)
             comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * comp_dim ..][0..comp_dim];
             comp_score_pos = self.csa_comp_score[li * layer_stride + pos * comp_dim ..][0..comp_dim];
+            actual_comp_dim = comp_dim;
             if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
                 const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse @panic("CSA gate missing");
                 self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, comp_dim, e);
@@ -497,7 +501,21 @@ pub const Ds4Model = struct {
             }
         }
 
-        self.be.sync(); // single sync: CPU reads q_full + kv_proj + CSA projections
+        self.be.sync(); // sync: CPU reads q_full + kv_proj + CSA projections
+
+        if (ratio != 0 and ratio != csa_ratio_4) {
+            // HCA (ratio=128): separate GPU dispatch after main sync to avoid command buffer overflow.
+            // comp_dim for HCA is 512 (coff=1 vs coff=2 for CSA).
+            if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
+                const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse return error.MissingTensor;
+                actual_comp_dim = @intCast(wkv.dims[1]); // 512 for HCA
+                comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * comp_dim ..][0..actual_comp_dim];
+                comp_score_pos = self.csa_comp_score[li * layer_stride + pos * comp_dim ..][0..actual_comp_dim];
+                self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
+                self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, actual_comp_dim, e);
+                self.be.sync(); // HCA projections need separate sync
+            }
+        }
 
         // Pre-compute RoPE cos/sin table once for this (pos, rope_freq) — shared by all heads.
         const nd = rd / 2;
@@ -520,8 +538,8 @@ pub const Ds4Model = struct {
         applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
 
         // CSA compressor (ratio=4): GPU projections already done above; do APE + compression here.
-        const csa_ratio: usize = csa_ratio_4;
-        if (self.compress_ratios[li] == csa_ratio_4 and comp_kv_pos.len > 0) {
+        const csa_ratio: usize = if (ratio != 0) ratio else csa_ratio_4;
+        if (ratio != 0 and actual_comp_dim > 0) {
             {
                 const ape = self.layerTensor(li, "attn_compressor_ape.weight");
 
@@ -541,7 +559,7 @@ pub const Ds4Model = struct {
                 if ((pos + 1) % csa_ratio == 0 and pos >= csa_ratio - 1) {
                     const group_start = pos + 1 - csa_ratio;
                     const group_idx = (pos + 1) / csa_ratio - 1;
-                    const csa_slots = (self.max_seq_len / csa_ratio + 1);
+                    const csa_slots = (self.max_seq_len / csa_ratio_4 + 1); // fixed stride for all layers
 
                     // Softmax over the 4-token dimension for each of comp_dim dimensions independently
                     // Then weighted sum → compressed KV [comp_dim]
@@ -611,7 +629,7 @@ pub const Ds4Model = struct {
             kv_quant.kvStore(kv_v_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, kv_type);
 
             // Manual attention over raw (0..pos+1) + compressed (n_csa_groups) positions
-            const csa_slots = (self.max_seq_len / csa_ratio + 1);
+            const csa_slots = (self.max_seq_len / csa_ratio_4 + 1); // fixed stride for all layers
             const sl_total = pos + 1 + n_csa_groups;
 
             @memset(self.attn_out, 0.0);
