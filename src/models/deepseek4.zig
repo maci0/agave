@@ -564,14 +564,15 @@ pub const Ds4Model = struct {
                         compressed[d] = acc;
                     }
 
-                    // Apply norm to nope portion [0..nope], RoPE to rope portion [nope..kd]
-                    // Compressor norm is on dim n_embd_head=kd (first half of comp_dim)
-                    var comp_nope = compressed[0..nope];
-                    var comp_rope = compressed[nope..kd];
+                    // Apply RMS norm + scale to full [0..kd=512] compressed vector
+                    // Then split into nope [0..448] and rope [448..512] for RoPE
                     if (self.layerTensor(li, "attn_compressor_norm.weight")) |cn| {
                         const norm_w = self.normAsF32(cn, kd);
-                        for (0..nope) |i| comp_nope[i] *= norm_w[i];
+                        var comp_first = compressed[0..kd];
+                        plainRmsNorm(comp_first, self.rms_eps);
+                        for (0..kd) |i| comp_first[i] *= norm_w[i];
                     }
+                    const comp_rope = compressed[nope..kd];
 
                     // RoPE on compressed rope portion using group position
                     // Use compressed_rope_freq since this is a ratio≠0 layer
