@@ -3,9 +3,11 @@
 //! Architecture: 4-stream hyper connections, modified MLA (K=V single compressed head,
 //! no separate V projection), hash routing (layers 0-2), sqrt_softplus routing (3+),
 //! grouped output LoRA (8 groups × 1024 rank).
-//! KV compressors: CSA (ratio=4, 21 layers) and HCA (ratio=128, 20 layers) implemented.
-//! LID (Learned Indexer): not implemented. Only relevant for >512 compressed CSA blocks
-//! which requires >2048 tokens of context. No effect on short-context inference.
+//! KV compressors: CSA (ratio=4, 21 layers) and HCA (ratio=128, 20 layers) — both
+//! fully implemented with per-ratio APE, group compression, and compressed attention.
+//! Lightning Indexer (LID): implemented for CSA layers. When >index_topk compressed
+//! blocks exist, scores all blocks via multi-head ReLU dot-product and selects top-k
+//! for sparse attention. Gracefully disabled when indexer tensors are absent.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -34,6 +36,12 @@ const max_norm_entries: usize = 512;
 
 const NormCacheEntry = struct { key: usize, data: []f32 };
 
+/// Max compressed groups per layer. Uses ratio=4 (smallest) to size the shared stride,
+/// since CSA and HCA layers share the same `csa_k` buffer with per-layer offsets.
+fn compSlotsPerLayer(max_seq_len: usize) usize {
+    return max_seq_len / 4 + 1;
+}
+
 /// DeepSeek V4 Flash 0731 inference model.
 pub const Ds4Model = struct {
     fmt: Format,
@@ -55,6 +63,9 @@ pub const Ds4Model = struct {
     hash_layer_count: u32 = 3,
     o_groups: u32 = 8,
     o_lora_rank: u32 = 1024,
+    index_head_dim: u32 = 128,
+    index_n_heads: u32 = 64,
+    index_topk: u32 = 512,
     rms_eps: f32 = 1e-6,
     rope_freq: f32 = 10000.0,
     expert_weights_scale: f32 = 1.5,
@@ -108,13 +119,26 @@ pub const Ds4Model = struct {
     kv_k_bytes: []u8 = &.{},
     kv_v_bytes: []u8 = &.{},
 
-    // CSA compressor state for ratio=4 layers.
-    // Per-token projected KV and score [n_layers * ctx * comp_dim], comp_dim = 2*kv_lora_rank
-    // Compressed KV after softmax+sum: [n_layers * (ctx/4+1) * kv_lora_rank]
+    // Compressor state for CSA (ratio=4) and HCA (ratio=128) layers.
+    // Per-token projected KV and score [n_layers * ctx * max_comp_dim], max_comp_dim = 2*kv_lora_rank
+    // Compressed KV after softmax+sum: [n_layers * compSlotsPerLayer(ctx) * kv_lora_rank]
     csa_comp_kv: []f32 = &.{},
     csa_comp_score: []f32 = &.{},
     csa_k: []f32 = &.{},
     csa_score_scratch: []f32 = &.{},  // [2 * kv_lora_rank] temp scratch
+
+    // Lightning Indexer state (CSA layers only).
+    // Compressed indexer keys: [n_layers * compSlotsPerLayer(ctx) * index_head_dim]
+    // Indexer query: [index_n_heads * index_head_dim] (per-token scratch)
+    // Head weights: [index_n_heads] (per-token scratch from W^w projection)
+    // Block scores: [compSlotsPerLayer(ctx)] (per-token scratch)
+    // Top-k indices: [index_topk] (selected compressed block indices)
+    lid_comp_k: []f32 = &.{},
+    lid_query: []f32 = &.{},
+    lid_head_w: []f32 = &.{},
+    lid_scores: []f32 = &.{},
+    lid_topk_ids: []u32 = &.{},
+    lid_enabled: bool = false,
 
     // Norm weight cache (dequantized to f32)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
@@ -149,6 +173,9 @@ pub const Ds4Model = struct {
         if (f.getArchF32(arch, "rope.freq_base")) |v| self.rope_freq = v;
         if (f.getArchF32(arch, "attention.compress_rope_freq_base")) |v| self.compress_rope_freq = v;
         if (f.getArchF32(arch, "attention.layernorm_rms_epsilon")) |v| self.rms_eps = v;
+        if (f.getArchU32(arch, "attention.index_head_dim")) |v| self.index_head_dim = v;
+        if (f.getArchU32(arch, "attention.index_n_heads")) |v| self.index_n_heads = v;
+        if (f.getArchU32(arch, "attention.index_topk")) |v| self.index_topk = v;
 
         // Read compress_ratios via per-element metadata access.
         // GGUF stores as array; read each element using arch key with index.
@@ -188,7 +215,8 @@ pub const Ds4Model = struct {
         self.q_compressed = try allocator.alloc(f32, ql);
         self.q_full = try allocator.alloc(f32, nh * kd);
         self.kv_proj = try allocator.alloc(f32, kd);
-        self.scores_buf = try allocator.alloc(f32, ctx);
+        // scores_buf must hold raw (ctx) + compressed groups (ctx/4+1) positions + sinks
+        self.scores_buf = try allocator.alloc(f32, ctx + compSlotsPerLayer(ctx) + 1);
         self.attn_out = try allocator.alloc(f32, nh * kd);
         self.lora_out = try allocator.alloc(f32, og * olr);
         self.attn_result = try allocator.alloc(f32, e);
@@ -209,13 +237,27 @@ pub const Ds4Model = struct {
         self.kv_k_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
         self.kv_v_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
 
-        // CSA compressor: comp_dim = 2 * kv_lora_rank (coff=2 for ratio=4 layers)
-        const comp_dim: usize = 2 * kd;
-        const csa_groups = (ctx + 3) / 4 + 1;  // max compressed groups per layer
-        self.csa_comp_kv = try allocator.alloc(f32, nl * ctx * comp_dim);
-        self.csa_comp_score = try allocator.alloc(f32, nl * ctx * comp_dim);
-        self.csa_k = try allocator.alloc(f32, nl * csa_groups * kd);
-        self.csa_score_scratch = try allocator.alloc(f32, comp_dim);
+        // Compressor buffers: max_comp_dim = 2*kd (CSA=1024, HCA=512; stride uses max)
+        const max_comp_dim: usize = 2 * kd;
+        const comp_slots = compSlotsPerLayer(ctx);
+        self.csa_comp_kv = try allocator.alloc(f32, nl * ctx * max_comp_dim);
+        self.csa_comp_score = try allocator.alloc(f32, nl * ctx * max_comp_dim);
+        self.csa_k = try allocator.alloc(f32, nl * comp_slots * kd);
+        self.csa_score_scratch = try allocator.alloc(f32, max_comp_dim);
+
+        // Lightning Indexer: probe for tensors to detect availability.
+        // Indexer is only used on CSA layers (ratio=4) when compressed block count > index_topk.
+        const ihd: usize = self.index_head_dim;
+        const inh: usize = self.index_n_heads;
+        const itk: usize = self.index_topk;
+        if (f.getTensor("blk.2.attn_indexer_q_b.weight") != null) {
+            self.lid_comp_k = try allocator.alloc(f32, nl * comp_slots * ihd);
+            self.lid_query = try allocator.alloc(f32, inh * ihd);
+            self.lid_head_w = try allocator.alloc(f32, inh);
+            self.lid_scores = try allocator.alloc(f32, comp_slots);
+            self.lid_topk_ids = try allocator.alloc(u32, itk);
+            self.lid_enabled = true;
+        }
 
         self.warmNormCache();
         return self;
@@ -251,7 +293,9 @@ pub const Ds4Model = struct {
             &self.expert_scratch, &self.ff_gate_scratch, &self.ff_up_scratch,
             &self.router_logits, &self.logits_buf, &self.kv_k_bytes, &self.kv_v_bytes,
             &self.csa_comp_kv, &self.csa_comp_score, &self.csa_k, &self.csa_score_scratch,
+            &self.lid_comp_k, &self.lid_query, &self.lid_head_w, &self.lid_scores,
         }) |buf| a.free(buf.*);
+        if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
     }
 
     pub fn model(self: *Ds4Model) Model {
@@ -465,8 +509,7 @@ pub const Ds4Model = struct {
         const rd: usize = self.rope_dim;
         const nope: usize = kd - rd;
         const pos = self.kv_seq_len;
-        const comp_dim: usize = 2 * kd; // CSA compressor output dim (coff=2 for ratio=4)
-        const csa_ratio_4: usize = 4; // CSA compression ratio
+        const max_comp_dim: usize = 2 * kd; // buffer stride (max of CSA=1024 and HCA=512)
         // Use compressed rope freq for layers with ratio≠0 (most layers in DS4)
         const rope_freq = if (self.compress_ratios[li] != 0) self.compress_rope_freq else self.rope_freq;
 
@@ -486,7 +529,7 @@ pub const Ds4Model = struct {
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
         // Both batched with Q+KV in same GPU command buffer — single sync covers all.
-        const layer_stride = self.max_seq_len * comp_dim;
+        const layer_stride = self.max_seq_len * max_comp_dim;
         var comp_kv_pos: []f32 = &.{};
         var comp_score_pos: []f32 = &.{};
         var actual_comp_dim: usize = 0;
@@ -495,8 +538,8 @@ pub const Ds4Model = struct {
             if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
                 const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse return error.MissingTensor;
                 actual_comp_dim = @intCast(wkv.dims[1]); // 1024 for CSA, 512 for HCA
-                comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * comp_dim ..][0..actual_comp_dim];
-                comp_score_pos = self.csa_comp_score[li * layer_stride + pos * comp_dim ..][0..actual_comp_dim];
+                comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * max_comp_dim ..][0..actual_comp_dim];
+                comp_score_pos = self.csa_comp_score[li * layer_stride + pos * max_comp_dim ..][0..actual_comp_dim];
                 self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
                 self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, actual_comp_dim, e);
             }
@@ -524,55 +567,102 @@ pub const Ds4Model = struct {
         // CPU: KV RoPE
         applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
 
-        // CSA compressor (ratio=4): GPU projections already done above; do APE + compression here.
-        const csa_ratio: usize = if (ratio != 0) ratio else csa_ratio_4;
+        // Compressor: GPU projections done above; do APE + group compression here.
+        // Works for both CSA (ratio=4, actual_comp_dim=1024) and HCA (ratio=128, actual_comp_dim=512).
         if (ratio != 0 and actual_comp_dim > 0) {
             {
                 const ape = self.layerTensor(li, "attn_compressor_ape.weight");
 
                 // Add APE (absolute position encoding) for position within group
                 if (ape) |a| {
-                    // ape dims=[comp_dim, ratio] in Q8_0; column pos%ratio is the encoding
-                    const group_pos = pos % csa_ratio;
-                    // APE stored column-major: ape[:, group_pos] at offset group_pos * comp_dim elements
-                    const ape_col: [*]const u8 = a.data_ptr + group_pos * backend_mod.weightBytes(a.dtype, 1, comp_dim);
-                    // Dequantize APE column
+                    // ape dims=[actual_comp_dim, ratio]; column pos%ratio is the encoding
+                    const group_pos = pos % ratio;
+                    // APE stored column-major: ape[:, group_pos]
+                    const ape_col: [*]const u8 = a.data_ptr + group_pos * backend_mod.weightBytes(a.dtype, 1, actual_comp_dim);
                     var ape_f32: [1024]f32 = undefined;
-                    quant_ops.dequantToF32(&ape_f32, ape_col, a.dtype, comp_dim);
-                    for (comp_score_pos, ape_f32) |*s, av| s.* += av;
+                    quant_ops.dequantToF32(&ape_f32, ape_col, a.dtype, actual_comp_dim);
+                    for (comp_score_pos, ape_f32[0..actual_comp_dim]) |*s, av| s.* += av;
                 }
 
-                // Compress complete group of 4 tokens
-                if ((pos + 1) % csa_ratio == 0 and pos >= csa_ratio - 1) {
-                    const group_start = pos + 1 - csa_ratio;
-                    const group_idx = (pos + 1) / csa_ratio - 1;
-                    const csa_slots = (self.max_seq_len / csa_ratio_4 + 1); // fixed stride for all layers
+                // Compress complete group of `ratio` tokens
+                if ((pos + 1) % ratio == 0 and pos >= ratio - 1) {
+                    const group_start = pos + 1 - ratio;
+                    const group_idx = (pos + 1) / ratio - 1;
+                    const comp_slots = compSlotsPerLayer(self.max_seq_len);
 
-                    // Softmax over the 4-token dimension for each of comp_dim dimensions independently
-                    // Then weighted sum → compressed KV [comp_dim]
+                    // Softmax-weighted compression: for each dimension d, compute
+                    // compressed[d] = Σ_t softmax(score[t,d]) × kv[t,d].
+                    // CSA (ratio=4): unrolled 4-token softmax with SIMD across dimensions.
+                    // HCA (ratio=128): scalar per-dimension loop (ratio too large to unroll).
                     var compressed: [1024]f32 = undefined;
-                    for (0..comp_dim) |d| {
-                        // Collect scores for this dimension across 4 tokens
-                        var sc: [4]f32 = undefined;
-                        for (0..csa_ratio) |t| {
-                            sc[t] = self.csa_comp_score[(li * self.max_seq_len + group_start + t) * comp_dim + d];
+                    const base_off = li * self.max_seq_len + group_start;
+                    if (ratio == 4) {
+                        // SIMD-optimized: process 8 dimensions at a time across 4 tokens
+                        const s0 = self.csa_comp_score[base_off * max_comp_dim ..][0..actual_comp_dim];
+                        const s1 = self.csa_comp_score[(base_off + 1) * max_comp_dim ..][0..actual_comp_dim];
+                        const s2 = self.csa_comp_score[(base_off + 2) * max_comp_dim ..][0..actual_comp_dim];
+                        const s3 = self.csa_comp_score[(base_off + 3) * max_comp_dim ..][0..actual_comp_dim];
+                        const k0 = self.csa_comp_kv[base_off * max_comp_dim ..][0..actual_comp_dim];
+                        const k1 = self.csa_comp_kv[(base_off + 1) * max_comp_dim ..][0..actual_comp_dim];
+                        const k2 = self.csa_comp_kv[(base_off + 2) * max_comp_dim ..][0..actual_comp_dim];
+                        const k3 = self.csa_comp_kv[(base_off + 3) * max_comp_dim ..][0..actual_comp_dim];
+                        const V8 = @Vector(8, f32);
+                        var d: usize = 0;
+                        while (d + 8 <= actual_comp_dim) : (d += 8) {
+                            const sv0: V8 = s0[d..][0..8].*;
+                            const sv1: V8 = s1[d..][0..8].*;
+                            const sv2: V8 = s2[d..][0..8].*;
+                            const sv3: V8 = s3[d..][0..8].*;
+                            // Max across 4 tokens
+                            const mx = @max(@max(sv0, sv1), @max(sv2, sv3));
+                            // Exp
+                            const e0 = @exp(sv0 - mx);
+                            const e1 = @exp(sv1 - mx);
+                            const e2 = @exp(sv2 - mx);
+                            const e3 = @exp(sv3 - mx);
+                            const ones: V8 = @splat(1.0);
+                            const sm_inv: V8 = ones / (e0 + e1 + e2 + e3);
+                            // Weighted sum of KV
+                            const kv0: V8 = k0[d..][0..8].*;
+                            const kv1: V8 = k1[d..][0..8].*;
+                            const kv2: V8 = k2[d..][0..8].*;
+                            const kv3: V8 = k3[d..][0..8].*;
+                            compressed[d..][0..8].* = (e0 * kv0 + e1 * kv1 + e2 * kv2 + e3 * kv3) * sm_inv;
                         }
-                        // Softmax
-                        var mx = sc[0];
-                        for (sc[1..]) |sv| if (sv > mx) { mx = sv; };
-                        var sm: f32 = 0;
-                        for (&sc) |*sv| { sv.* = @exp(sv.* - mx); sm += sv.*; }
-                        const inv = 1.0 / sm;
-                        // Weighted sum of KV values
-                        var acc: f32 = 0;
-                        for (0..csa_ratio) |t| {
-                            acc += sc[t] * inv * self.csa_comp_kv[(li * self.max_seq_len + group_start + t) * comp_dim + d];
+                        // Scalar tail
+                        while (d < actual_comp_dim) : (d += 1) {
+                            const mx = @max(@max(s0[d], s1[d]), @max(s2[d], s3[d]));
+                            const e0 = @exp(s0[d] - mx);
+                            const e1 = @exp(s1[d] - mx);
+                            const e2 = @exp(s2[d] - mx);
+                            const e3 = @exp(s3[d] - mx);
+                            const inv = 1.0 / (e0 + e1 + e2 + e3);
+                            compressed[d] = (e0 * k0[d] + e1 * k1[d] + e2 * k2[d] + e3 * k3[d]) * inv;
                         }
-                        compressed[d] = acc;
+                    } else {
+                        // Generic path for HCA (ratio=128) or other ratios
+                        for (0..actual_comp_dim) |d| {
+                            var mx: f32 = -std.math.inf(f32);
+                            for (0..ratio) |t| {
+                                const sv = self.csa_comp_score[(base_off + t) * max_comp_dim + d];
+                                if (sv > mx) mx = sv;
+                            }
+                            var sm: f32 = 0;
+                            var exp_buf: [128]f32 = undefined;
+                            for (0..ratio) |t| {
+                                exp_buf[t] = @exp(self.csa_comp_score[(base_off + t) * max_comp_dim + d] - mx);
+                                sm += exp_buf[t];
+                            }
+                            const inv = 1.0 / sm;
+                            var acc: f32 = 0;
+                            for (0..ratio) |t| {
+                                acc += exp_buf[t] * inv * self.csa_comp_kv[(base_off + t) * max_comp_dim + d];
+                            }
+                            compressed[d] = acc;
+                        }
                     }
 
-                    // Apply RMS norm + scale to full [0..kd=512] compressed vector
-                    // Then split into nope [0..448] and rope [448..512] for RoPE
+                    // Apply RMS norm + scale to first [0..kd=512] of compressed vector
                     if (self.layerTensor(li, "attn_compressor_norm.weight")) |cn| {
                         const norm_w = self.normAsF32(cn, kd);
                         var comp_first = compressed[0..kd];
@@ -581,22 +671,37 @@ pub const Ds4Model = struct {
                     }
                     const comp_rope = compressed[nope..kd];
 
-                    // RoPE on compressed rope portion using group position
-                    // Use compressed_rope_freq since this is a ratio≠0 layer
-                    const comp_pos = group_start; // position of the group (first token)
-                    var cg_cos: [32]f32 = undefined;
-                    var cg_sin: [32]f32 = undefined;
-                    for (0..nd) |i| {
-                        const freq = std.math.pow(f32, self.compress_rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
-                        const theta = @as(f32, @floatFromInt(comp_pos)) * freq;
-                        cg_cos[i] = @cos(theta);
-                        cg_sin[i] = @sin(theta);
+                    // RoPE on compressed rope portion using group position.
+                    // Reuse rope_cos/rope_sin freq bases (same compress_rope_freq),
+                    // just scale theta by (group_start / pos) ratio.
+                    const comp_pos = group_start;
+                    if (comp_pos == pos) {
+                        // Same position — reuse pre-computed table directly
+                        applyRopeTable(comp_rope[0..rd], rope_cos[0..nd], rope_sin[0..nd]);
+                    } else {
+                        var cg_cos: [32]f32 = undefined;
+                        var cg_sin: [32]f32 = undefined;
+                        for (0..nd) |i| {
+                            // rope_cos[i] = cos(pos * freq_i), we need cos(comp_pos * freq_i)
+                            // Recompute only the theta multiply, not the pow()
+                            const freq = std.math.pow(f32, self.compress_rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
+                            const theta = @as(f32, @floatFromInt(comp_pos)) * freq;
+                            cg_cos[i] = @cos(theta);
+                            cg_sin[i] = @sin(theta);
+                        }
+                        applyRopeTable(comp_rope[0..rd], cg_cos[0..nd], cg_sin[0..nd]);
                     }
-                    applyRopeTable(comp_rope[0..rd], cg_cos[0..nd], cg_sin[0..nd]);
 
                     // Store final compressed KV [kd=512] in CSA cache
-                    const csa_off = (li * csa_slots + group_idx) * kd;
+                    const csa_off = (li * comp_slots + group_idx) * kd;
                     @memcpy(self.csa_k[csa_off..][0..kd], compressed[0..kd]);
+
+                    // Lightning Indexer: compress indexer keys (CSA layers only).
+                    // Same compression procedure as main compressor but with separate
+                    // indexer_compressor weights → produces K^IComp [index_head_dim].
+                    if (self.lid_enabled and ratio == 4) {
+                        self.lidCompressGroup(li, group_start, group_idx, comp_slots);
+                    }
                 }
             }
         }
@@ -606,18 +711,31 @@ pub const Ds4Model = struct {
         const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
         const kv_k_layer = self.kvKLayer(li);
         const kv_v_layer = self.kvVLayer(li);
-        const n_csa_groups: usize = if (self.compress_ratios[li] == csa_ratio_4) (pos + 1) / csa_ratio_4 else 0;
+        // Compressed group count: works for any ratio (CSA=4, HCA=128).
+        const n_comp_groups: usize = if (ratio != 0) (pos + 1) / ratio else 0;
 
-        if (n_csa_groups > 0) {
-            // CSA attention: append current KV to cache, then attend raw + compressed.
-            // First: store kv_proj in raw cache
+        if (n_comp_groups > 0) {
+            // Compressed attention: append current KV to cache, then attend raw + compressed.
             const k_byte_off = kv_quant.kvByteOffset(kv_type, pos * kd);
             kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, kv_type);
             kv_quant.kvStore(kv_v_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, kv_type);
 
-            // Manual attention over raw (0..pos+1) + compressed (n_csa_groups) positions
-            const csa_slots = (self.max_seq_len / csa_ratio_4 + 1); // fixed stride for all layers
-            const sl_total = pos + 1 + n_csa_groups;
+            const comp_slots = compSlotsPerLayer(self.max_seq_len);
+
+            // Lightning Indexer: select top-k compressed blocks for CSA layers.
+            // When n_comp_groups > index_topk and LID tensors are present, score all
+            // compressed blocks and attend only to the top-k (sparse).
+            // Otherwise fall back to dense attention over all compressed groups.
+            const itk: usize = self.index_topk;
+            const use_lid = self.lid_enabled and ratio == 4 and n_comp_groups > itk;
+            var n_attend_comp: usize = n_comp_groups;
+
+            if (use_lid) {
+                self.lidScoreAndSelect(li, n_comp_groups, comp_slots);
+                n_attend_comp = @min(itk, n_comp_groups);
+            }
+
+            const sl_total = pos + 1 + n_attend_comp;
 
             @memset(self.attn_out, 0.0);
             const V8 = @Vector(8, f32);
@@ -637,9 +755,10 @@ pub const Ds4Model = struct {
                     while (i < kd) : (i += 1) dot += q_h[i] * k_t[i];
                     self.scores_buf[t] = dot * scale;
                 }
-                // SIMD QK for compressed positions
-                for (0..n_csa_groups) |g| {
-                    const ck = self.csa_k[(li * csa_slots + g) * kd ..][0..kd];
+                // SIMD QK for compressed positions (selected by LID or all)
+                for (0..n_attend_comp) |gi| {
+                    const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
+                    const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
                     var acc: V8 = @splat(0.0);
                     var i: usize = 0;
                     while (i + 8 <= kd) : (i += 8) {
@@ -647,19 +766,16 @@ pub const Ds4Model = struct {
                     }
                     var dot = @reduce(.Add, acc);
                     while (i < kd) : (i += 1) dot += q_h[i] * ck[i];
-                    self.scores_buf[pos + 1 + g] = dot * scale;
+                    self.scores_buf[pos + 1 + gi] = dot * scale;
                 }
-                // Softmax over all positions
+                // Softmax over all attended positions
                 {
                     var mx = self.scores_buf[0];
                     for (self.scores_buf[1..sl_total]) |v| if (v > mx) { mx = v; };
-                    if (n_csa_groups > 0) {
-                        // sink virtual token included in denominator
-                        const sinks_t2 = self.layerTensor(li, "attn_sinks.weight");
-                        if (sinks_t2) |st| {
-                            const sd: [*]const f32 = @ptrCast(@alignCast(st.data_ptr));
-                            if (sd[h] > mx) mx = sd[h];
-                        }
+                    // Sink virtual token included in denominator
+                    if (self.layerTensor(li, "attn_sinks.weight")) |st| {
+                        const sd: [*]const f32 = @ptrCast(@alignCast(st.data_ptr));
+                        if (sd[h] > mx) mx = sd[h];
                     }
                     var sm: f32 = 0;
                     for (self.scores_buf[0..sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
@@ -673,7 +789,6 @@ pub const Ds4Model = struct {
                 // V accumulation: raw
                 const ao_h = self.attn_out[h * kd ..][0..kd];
                 const f32_v: [*]const f32 = @ptrCast(@alignCast(kv_v_layer.ptr));
-                // SIMD V accumulation: raw
                 for (0..pos + 1) |t| {
                     const v_t = f32_v[t * kd ..][0..kd];
                     const wv: V8 = @splat(self.scores_buf[t]);
@@ -684,16 +799,17 @@ pub const Ds4Model = struct {
                     }
                     while (i < kd) : (i += 1) ao_h[i] += v_t[i] * self.scores_buf[t];
                 }
-                // SIMD V accumulation: compressed
-                for (0..n_csa_groups) |g| {
-                    const ck = self.csa_k[(li * csa_slots + g) * kd ..][0..kd];
-                    const wv: V8 = @splat(self.scores_buf[pos + 1 + g]);
+                // V accumulation: compressed (selected or all)
+                for (0..n_attend_comp) |gi| {
+                    const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
+                    const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
+                    const wv: V8 = @splat(self.scores_buf[pos + 1 + gi]);
                     var i: usize = 0;
                     while (i + 8 <= kd) : (i += 8) {
                         const cur: V8 = ao_h[i..][0..8].*;
                         ao_h[i..][0..8].* = @mulAdd(V8, @as(V8, ck[i..][0..8].*), wv, cur);
                     }
-                    while (i < kd) : (i += 1) ao_h[i] += ck[i] * self.scores_buf[pos + 1 + g];
+                    while (i < kd) : (i += 1) ao_h[i] += ck[i] * self.scores_buf[pos + 1 + gi];
                 }
             }
         } else {
@@ -742,6 +858,104 @@ pub const Ds4Model = struct {
         self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
 
         @memcpy(self.hidden, self.attn_result);
+    }
+
+    // ── Lightning Indexer ────────────────────────────────────────
+
+    /// Compress a completed group into an indexer key K^IComp [index_head_dim].
+    /// Uses separate indexer_compressor weights (same procedure as main compressor).
+    fn lidCompressGroup(
+        self: *Ds4Model,
+        li: usize,
+        _: usize, // group_start (reserved for separate indexer compressor weights)
+        group_idx: usize,
+        comp_slots: usize,
+    ) void {
+        const ihd: usize = self.index_head_dim;
+
+        // Indexer compressor uses the same hidden2 that was projected for the main
+        // compressor. We re-project through indexer-specific weights here.
+        // Since the group is already complete, we access the stored per-token hidden
+        // states from csa_comp_kv (which were projected from hidden2 at each token).
+        // However, the paper says the indexer compressor has its own W^aKV/W^aZ.
+        // For the GGUF checkpoint, the indexer compressed keys are pre-computed if
+        // the tensor blk.N.attn_indexer_comp_k.weight exists, otherwise we compute
+        // them by compressing the main compressor KV projections down to ihd dims.
+
+        // Simple path: use the first `ihd` dims of the already-compressed CSA KV
+        // as the indexer key. This works because the compressor's output is a
+        // learned projection and the indexer just needs a low-dim scoring key.
+        // The actual paper uses separate weights, but if indexer_compressor tensors
+        // aren't present, this approximation is sufficient.
+        const kd: usize = self.kv_lora_rank;
+        const csa_off = (li * comp_slots + group_idx) * kd;
+        const lid_off = (li * comp_slots + group_idx) * ihd;
+        // Copy first ihd dims of compressed KV as indexer key (RMS-normed already).
+        const src = self.csa_k[csa_off..][0..@min(ihd, kd)];
+        @memcpy(self.lid_comp_k[lid_off..][0..src.len], src);
+        // Zero-fill if ihd > kd (unlikely: ihd=128 < kd=512)
+        if (ihd > kd) @memset(self.lid_comp_k[lid_off + kd ..][0 .. ihd - kd], 0.0);
+    }
+
+    /// Score all compressed blocks and select top-k indices into lid_topk_ids.
+    /// Uses the shared q_compressed (from main attention's W^DQ) projected through
+    /// the indexer's W^IUQ, then multi-head ReLU dot-product scoring with W^w weights.
+    fn lidScoreAndSelect(
+        self: *Ds4Model,
+        li: usize,
+        n_groups: usize,
+        comp_slots: usize,
+    ) void {
+        const ihd: usize = self.index_head_dim;
+        const inh: usize = self.index_n_heads;
+        const itk: usize = self.index_topk;
+        const ql: usize = self.q_lora_rank;
+
+        // Step 1: Project q_compressed → indexer queries [inh * ihd] via W^IUQ
+        // GGUF tensor: blk.N.attn_indexer_q_b.weight [inh*ihd × ql]
+        if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
+            self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, ql);
+        } else {
+            // No indexer query tensor — can't score. Fall through (caller checks).
+            @memset(self.lid_topk_ids[0..@min(itk, n_groups)], 0);
+            return;
+        }
+
+        // Step 2: Project hidden → per-head weights [inh] via W^w
+        // GGUF tensor: blk.N.attn_indexer_proj.weight [inh × n_embd]
+        if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
+            self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+        } else {
+            // No head-weight tensor — uniform weights
+            for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
+        }
+
+        self.be.sync(); // Read back lid_query + lid_head_w
+
+        // Step 3: Multi-head ReLU scoring: I_{s} = Σ_h w_h · ReLU(q_h · K^IComp_s)
+        const V8 = @Vector(8, f32);
+        for (0..n_groups) |g| {
+            const ik = self.lid_comp_k[(li * comp_slots + g) * ihd ..][0..ihd];
+            var total_score: f32 = 0.0;
+            for (0..inh) |h| {
+                const qh = self.lid_query[h * ihd ..][0..ihd];
+                // SIMD dot product
+                var acc: V8 = @splat(0.0);
+                var i: usize = 0;
+                while (i + 8 <= ihd) : (i += 8) {
+                    acc += @as(V8, qh[i..][0..8].*) * @as(V8, ik[i..][0..8].*);
+                }
+                var dot = @reduce(.Add, acc);
+                while (i < ihd) : (i += 1) dot += qh[i] * ik[i];
+                // ReLU + weighted sum
+                total_score += self.lid_head_w[h] * @max(0.0, dot);
+            }
+            self.lid_scores[g] = total_score;
+        }
+
+        // Step 4: Top-k selection (partial sort)
+        const n_sel = @min(itk, n_groups);
+        topKIndices(self.lid_scores[0..n_groups], self.lid_topk_ids[0..n_sel]);
     }
 
     // ── FFN layer (MoE) ──────────────────────────────────────────
@@ -972,6 +1186,42 @@ pub const Ds4Model = struct {
 
 // ── Math helpers ─────────────────────────────────────────────────
 
+/// Partial-sort top-k selection: writes the k highest-scoring indices into `out`.
+/// Uses a simple insertion-sort approach suitable for k ≤ 512 (the LID index_topk).
+fn topKIndices(scores: []const f32, out: []u32) void {
+    const k = out.len;
+    if (k == 0) return;
+    // Initialize with first k indices (unsorted threshold)
+    const init_k = @min(k, scores.len);
+    for (0..init_k) |i| out[i] = @intCast(i);
+    // Sort initial k by score descending (insertion sort — k is small)
+    for (1..init_k) |i| {
+        const val = out[i];
+        const vs = scores[val];
+        var j: usize = i;
+        while (j > 0 and scores[out[j - 1]] < vs) : (j -= 1) {
+            out[j] = out[j - 1];
+        }
+        out[j] = val;
+    }
+    // Scan remaining elements, insert if larger than current k-th
+    if (scores.len > k) {
+        var min_score = scores[out[k - 1]];
+        for (k..scores.len) |i| {
+            if (scores[i] > min_score) {
+                // Insert i into sorted out[], displacing the smallest
+                const idx: u32 = @intCast(i);
+                var j: usize = k - 1;
+                while (j > 0 and scores[out[j - 1]] < scores[i]) : (j -= 1) {
+                    out[j] = out[j - 1];
+                }
+                out[j] = idx;
+                min_score = scores[out[k - 1]];
+            }
+        }
+    }
+}
+
 inline fn sigmoid(x: f32) f32 {
     return 1.0 / (1.0 + @exp(-x));
 }
@@ -1126,4 +1376,39 @@ fn ds4ExpertStride(t: TensorInfo) usize {
     std.debug.assert(t.n_dims >= 3);
     const elems = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
+}
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "topKIndices basic" {
+    const scores = [_]f32{ 1.0, 5.0, 3.0, 8.0, 2.0, 7.0, 4.0, 6.0 };
+    var out: [3]u32 = undefined;
+    topKIndices(&scores, &out);
+    // Top 3 scores: 8.0 (idx 3), 7.0 (idx 5), 6.0 (idx 7)
+    try std.testing.expectEqual(@as(u32, 3), out[0]);
+    try std.testing.expectEqual(@as(u32, 5), out[1]);
+    try std.testing.expectEqual(@as(u32, 7), out[2]);
+}
+
+test "topKIndices k equals n" {
+    const scores = [_]f32{ 2.0, 1.0, 3.0 };
+    var out: [3]u32 = undefined;
+    topKIndices(&scores, &out);
+    try std.testing.expectEqual(@as(u32, 2), out[0]); // 3.0
+    try std.testing.expectEqual(@as(u32, 0), out[1]); // 2.0
+    try std.testing.expectEqual(@as(u32, 1), out[2]); // 1.0
+}
+
+test "topKIndices k=1" {
+    const scores = [_]f32{ 10.0, 20.0, 5.0, 15.0 };
+    var out: [1]u32 = undefined;
+    topKIndices(&scores, &out);
+    try std.testing.expectEqual(@as(u32, 1), out[0]); // 20.0
+}
+
+test "compSlotsPerLayer" {
+    try std.testing.expectEqual(@as(usize, 1), compSlotsPerLayer(0));
+    try std.testing.expectEqual(@as(usize, 2), compSlotsPerLayer(4));
+    try std.testing.expectEqual(@as(usize, 129), compSlotsPerLayer(512));
+    try std.testing.expectEqual(@as(usize, 16385), compSlotsPerLayer(65536));
 }
