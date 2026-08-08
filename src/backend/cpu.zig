@@ -450,6 +450,7 @@ pub const CpuBackend = struct {
         activation_kernel.siluMul(a, b, out, n);
     }
 
+    /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *CpuBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |i| {
             const g = @min(gate[i], @as(f32, 10.0));
@@ -667,6 +668,7 @@ pub const CpuBackend = struct {
         awq_ops.awqGemv(x, qweight, scales, qzeros, y, n, k, group_size);
     }
 
+    /// HQQ (Half-Quadratic Quantization) GEMV: y = HQQ_dequant(w_q, scale, zero) @ x.
     pub fn gemvHqq(_: *CpuBackend, x: [*]const f32, w_q: [*]const u8, scale: [*]const u8, zero: [*]const u8, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         const hqq_ops = @import("../ops/hqq.zig");
         hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
@@ -1000,6 +1002,7 @@ pub const CpuBackend = struct {
         }
     };
 
+    /// SDPA with per-head max/sum statistics for online softmax (split-attention merge path).
     pub fn sdpaWithStats(self: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
 
