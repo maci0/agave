@@ -1,9 +1,11 @@
 //! DeepSeek V4 Flash 0731 inference model.
 //! Uses GGUF-style tensor names (blk.N.*).
-//! Architecture: 4-stream hyper connections, modified MLA (K=V compressed,
-//! no separate V projection), hash routing (layers 0-2), sqrt_softplus routing
-//! (layers 3+), grouped output LoRA (8 groups × 1024 rank).
-//! KV compressor / indexer attention not implemented (short-context only).
+//! Architecture: 4-stream hyper connections, modified MLA (K=V single compressed head,
+//! no separate V projection), hash routing (layers 0-2), sqrt_softplus routing (3+),
+//! grouped output LoRA (8 groups × 1024 rank).
+//! KV compressors: CSA (ratio=4, 21 layers) and HCA (ratio=128, 20 layers) implemented.
+//! LID (Learned Indexer): not implemented. Only relevant for >512 compressed CSA blocks
+//! which requires >2048 tokens of context. No effect on short-context inference.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
