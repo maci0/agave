@@ -54,7 +54,9 @@ pub const PFlashState = struct {
         const bs = @as(usize, cfg.block_size);
         const n_blocks = (max_tokens + bs - 1) / bs;
         const block_scores = try allocator.alloc(f32, n_blocks);
+        errdefer allocator.free(block_scores);
         const selected = try allocator.alloc(bool, n_blocks);
+        errdefer allocator.free(selected);
         const selected_tokens = try allocator.alloc(u32, max_tokens);
         return .{
             .config = cfg,
