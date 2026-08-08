@@ -744,6 +744,11 @@ pub const Ds4Model = struct {
 
             @memset(self.attn_out, 0.0);
             const kv_elem_bytes = kv_quant.kvByteOffset(kv_type, kd);
+            // Hoist sink tensor lookup outside per-head loop (avoids 128 hash lookups)
+            const sink_data: ?[*]const f32 = if (self.layerTensor(li, "attn_sinks.weight")) |st|
+                @ptrCast(@alignCast(st.data_ptr))
+            else
+                null;
             const V8 = @Vector(8, f32);
             for (0..nh) |h| {
                 const q_h = self.q_full[h * kd ..][0..kd];
@@ -769,16 +774,12 @@ pub const Ds4Model = struct {
                 {
                     var mx = self.scores_buf[0];
                     for (self.scores_buf[1..sl_total]) |v| if (v > mx) { mx = v; };
-                    if (self.layerTensor(li, "attn_sinks.weight")) |st| {
-                        const sd: [*]const f32 = @ptrCast(@alignCast(st.data_ptr));
+                    if (sink_data) |sd| {
                         if (sd[h] > mx) mx = sd[h];
                     }
                     var sm: f32 = 0;
                     for (self.scores_buf[0..sl_total]) |*v| { v.* = @exp(v.* - mx); sm += v.*; }
-                    if (self.layerTensor(li, "attn_sinks.weight")) |st| {
-                        const sd: [*]const f32 = @ptrCast(@alignCast(st.data_ptr));
-                        sm += @exp(sd[h] - mx);
-                    }
+                    if (sink_data) |sd| sm += @exp(sd[h] - mx);
                     const inv = 1.0 / sm;
                     for (self.scores_buf[0..sl_total]) |*v| v.* *= inv;
                 }
