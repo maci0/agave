@@ -483,39 +483,24 @@ pub const Ds4Model = struct {
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
-        // CSA: batched with Q+KV in same cmd buffer. HCA: computed after sync (separate).
+        // Both batched with Q+KV in same GPU command buffer — single sync covers all.
         const layer_stride = self.max_seq_len * comp_dim;
         var comp_kv_pos: []f32 = &.{};
         var comp_score_pos: []f32 = &.{};
         var actual_comp_dim: usize = 0;
         const ratio = self.compress_ratios[li];
-        if (ratio == csa_ratio_4) {
-            // CSA: batch with Q+KV (no extra sync)
-            comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * comp_dim ..][0..comp_dim];
-            comp_score_pos = self.csa_comp_score[li * layer_stride + pos * comp_dim ..][0..comp_dim];
-            actual_comp_dim = comp_dim;
-            if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
-                const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse @panic("CSA gate missing");
-                self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, comp_dim, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, comp_dim, e);
-            }
-        }
-
-        self.be.sync(); // sync: CPU reads q_full + kv_proj + CSA projections
-
-        if (ratio != 0 and ratio != csa_ratio_4) {
-            // HCA (ratio=128): separate GPU dispatch after main sync to avoid command buffer overflow.
-            // comp_dim for HCA is 512 (coff=1 vs coff=2 for CSA).
+        if (ratio != 0) {
             if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
                 const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse return error.MissingTensor;
-                actual_comp_dim = @intCast(wkv.dims[1]); // 512 for HCA
+                actual_comp_dim = @intCast(wkv.dims[1]); // 1024 for CSA, 512 for HCA
                 comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * comp_dim ..][0..actual_comp_dim];
                 comp_score_pos = self.csa_comp_score[li * layer_stride + pos * comp_dim ..][0..actual_comp_dim];
                 self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
                 self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, actual_comp_dim, e);
-                self.be.sync(); // HCA projections need separate sync
             }
         }
+
+        self.be.sync(); // single sync: CPU reads q_full + kv_proj + CSA/HCA projections
 
         // Pre-compute RoPE cos/sin table once for this (pos, rope_freq) — shared by all heads.
         const nd = rd / 2;
