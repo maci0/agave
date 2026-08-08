@@ -465,14 +465,25 @@ pub const Ds4Model = struct {
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
         self.be.sync(); // single sync: CPU reads q_full + kv_proj
 
-        // CPU: per-head Q RMS norm + Q RoPE
+        // Pre-compute RoPE cos/sin table once for this (pos, rope_freq) — shared by all heads.
+        const nd = rd / 2;
+        var rope_cos: [32]f32 = undefined;
+        var rope_sin: [32]f32 = undefined;
+        for (0..nd) |i| {
+            const freq = std.math.pow(f32, rope_freq, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rd)));
+            const theta = @as(f32, @floatFromInt(pos)) * freq;
+            rope_cos[i] = @cos(theta);
+            rope_sin[i] = @sin(theta);
+        }
+
+        // CPU: per-head Q RMS norm + Q RoPE (using pre-computed table)
         for (0..nh) |h| {
             const q_head = self.q_full[h * kd ..][0..kd];
             plainRmsNorm(q_head, self.rms_eps);
-            applyRope(q_head[nope..][0..rd], pos, rope_freq, rd);
+            applyRopeTable(q_head[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
         }
         // CPU: KV RoPE
-        applyRope(self.kv_proj[nope..][0..rd], pos, rope_freq, rd);
+        applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
 
         // SDPA: head_dim=512 exceeds Metal GPU limit (256), force CPU SIMD path via window.
         // K=V in DS4 MLA (single compressed head, GQA 64:1).
@@ -499,10 +510,9 @@ pub const Ds4Model = struct {
             kv_type,
         );
 
-        // Apply inverse RoPE (derope) to rope portion of each attention head output.
-        // llama.cpp applies ggml_rope_ext_back before the output LoRA projection.
+        // Apply inverse RoPE (derope) using the cached cos/sin table (same table, negate sin).
         for (0..nh) |h| {
-            applyRopeInverse(self.attn_out[h * kd + nope ..][0..rd], pos, rope_freq, rd);
+            applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
         }
 
         // Output LoRA: grouped wo_a [n_in=4096 per group, n_out=o_lora_rank] × 8 groups
@@ -604,9 +614,8 @@ pub const Ds4Model = struct {
             }
         }
 
-        // 3-phase batched FFN with GPU siluMul: all ops in one GPU command buffer.
-        // DS4 specifies SwiGLU clamp (gate ≤10, up ±10) but Metal has no clamp kernel;
-        // GPU siluMul (unclamped) is used for performance. Effect minimal on Q2_K quality.
+        // 3-phase batched FFN: all expert gate+up GEMVs, clamped siluMul, down GEMVs in one GPU cmd buffer.
+        // DS4 SwiGLU clamp (gate≤10, up±10) applied via clamped_silu_mul_f32 Metal kernel.
         var n_scratch: usize = 0;
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
@@ -786,6 +795,26 @@ fn siluMulClamped(gate: []f32, up: []f32, clamp: f32) void {
 
 fn siluMul(gate: []f32, up: []f32) void {
     for (gate, up) |*g, u| g.* = g.* * (1.0 / (1.0 + @exp(-g.*))) * u;
+}
+
+/// Apply RoPE using a pre-computed cos/sin table (avoids recomputing per head).
+fn applyRopeTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
+    for (cos_t, sin_t, 0..) |c, s, i| {
+        const x0 = x[i * 2];
+        const x1 = x[i * 2 + 1];
+        x[i * 2] = x0 * c - x1 * s;
+        x[i * 2 + 1] = x0 * s + x1 * c;
+    }
+}
+
+/// Inverse RoPE using pre-computed table (negate sin).
+fn applyRopeInverseTable(x: []f32, cos_t: []const f32, sin_t: []const f32) void {
+    for (cos_t, sin_t, 0..) |c, s, i| {
+        const x0 = x[i * 2];
+        const x1 = x[i * 2 + 1];
+        x[i * 2] = x0 * c + x1 * s;
+        x[i * 2 + 1] = -x0 * s + x1 * c;
+    }
 }
 
 fn applyRope(x: []f32, pos: usize, freq_base: f32, rope_dim: usize) void {
