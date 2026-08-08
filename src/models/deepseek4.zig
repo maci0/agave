@@ -560,15 +560,28 @@ pub const Ds4Model = struct {
 
         self.be.sync(); // single sync: CPU reads q_full + kv_proj + CSA/HCA projections
 
-        // RoPE cos/sin from pre-computed freq bases (no pow() per token).
+        // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
         const nd = rd / 2;
         const freqs = if (self.compress_ratios[li] != 0) &self.compress_rope_freqs else &self.rope_freqs;
         var rope_cos: [32]f32 = undefined;
         var rope_sin: [32]f32 = undefined;
-        for (0..nd) |i| {
-            const theta = @as(f32, @floatFromInt(pos)) * freqs[i];
-            rope_cos[i] = @cos(theta);
-            rope_sin[i] = @sin(theta);
+        {
+            const V8f = @Vector(8, f32);
+            const pos_v: V8f = @splat(@floatFromInt(pos));
+            var i: usize = 0;
+            while (i + 8 <= nd) : (i += 8) {
+                const fv: V8f = freqs[i..][0..8].*;
+                const theta: V8f = pos_v * fv;
+                const cv: V8f = @cos(theta);
+                const sv: V8f = @sin(theta);
+                rope_cos[i..][0..8].* = cv;
+                rope_sin[i..][0..8].* = sv;
+            }
+            while (i < nd) : (i += 1) {
+                const theta = @as(f32, @floatFromInt(pos)) * freqs[i];
+                rope_cos[i] = @cos(theta);
+                rope_sin[i] = @sin(theta);
+            }
         }
 
         // CPU: per-head Q RMS norm + Q RoPE (using pre-computed table)
@@ -692,10 +705,21 @@ pub const Ds4Model = struct {
                     } else {
                         var cg_cos: [32]f32 = undefined;
                         var cg_sin: [32]f32 = undefined;
-                        for (0..nd) |i| {
-                            const theta = @as(f32, @floatFromInt(comp_pos)) * self.compress_rope_freqs[i];
-                            cg_cos[i] = @cos(theta);
-                            cg_sin[i] = @sin(theta);
+                        const V8f = @Vector(8, f32);
+                        const cp_v: V8f = @splat(@floatFromInt(comp_pos));
+                        var ci: usize = 0;
+                        while (ci + 8 <= nd) : (ci += 8) {
+                            const fv: V8f = self.compress_rope_freqs[ci..][0..8].*;
+                            const theta: V8f = cp_v * fv;
+                            const cv: V8f = @cos(theta);
+                            const sv: V8f = @sin(theta);
+                            cg_cos[ci..][0..8].* = cv;
+                            cg_sin[ci..][0..8].* = sv;
+                        }
+                        while (ci < nd) : (ci += 1) {
+                            const theta = @as(f32, @floatFromInt(comp_pos)) * self.compress_rope_freqs[ci];
+                            cg_cos[ci] = @cos(theta);
+                            cg_sin[ci] = @sin(theta);
                         }
                         applyRopeTable(comp_rope[0..rd], cg_cos[0..nd], cg_sin[0..nd]);
                     }
