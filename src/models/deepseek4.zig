@@ -1674,6 +1674,50 @@ test "compSlotsPerLayer" {
     try std.testing.expectEqual(@as(usize, 16385), compSlotsPerLayer(65536));
 }
 
+test "sigmoid boundaries" {
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), sigmoid(0.0), 1e-6);
+    try std.testing.expect(sigmoid(10.0) > 0.999);
+    try std.testing.expect(sigmoid(-10.0) < 0.001);
+    // Monotonicity
+    try std.testing.expect(sigmoid(1.0) > sigmoid(0.0));
+    try std.testing.expect(sigmoid(0.0) > sigmoid(-1.0));
+}
+
+test "sqrtSoftplus matches sqrt(log(1+exp(x)))" {
+    const vals = [_]f32{ -5.0, -1.0, 0.0, 1.0, 5.0, 10.0 };
+    for (vals) |x| {
+        const expected = @sqrt(@log(1.0 + @exp(x)));
+        try std.testing.expectApproxEqAbs(expected, sqrtSoftplus(x), 1e-5);
+    }
+}
+
+test "plainRmsNorm normalizes to unit RMS" {
+    var x = [_]f32{ 3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    plainRmsNorm(&x, 1e-6);
+    // RMS of result should be ~1.0
+    var ss: f32 = 0;
+    for (x) |v| ss += v * v;
+    const rms = @sqrt(ss / 8.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), rms, 1e-5);
+    // Relative magnitudes preserved: x[0]/x[1] should still be 3/4
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), x[0] / x[1], 1e-5);
+}
+
+test "applyRopeTable and inverse are inverses" {
+    var x = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    const original = x;
+    const cos_t = [_]f32{ 0.5403, -0.4161, -0.9900, -0.6536 }; // cos(1), cos(2), cos(3), cos(4)
+    const sin_t = [_]f32{ 0.8415, 0.9093, 0.1411, -0.7568 }; // sin(1), sin(2), sin(3), sin(4)
+    applyRopeTable(&x, &cos_t, &sin_t);
+    // Values should have changed
+    try std.testing.expect(x[0] != original[0]);
+    // Apply inverse to recover original
+    applyRopeInverseTable(&x, &cos_t, &sin_t);
+    for (x, original) |got, exp| {
+        try std.testing.expectApproxEqAbs(exp, got, 1e-3);
+    }
+}
+
 test "hcSinkhorn produces doubly stochastic matrix" {
     // Input: 4x4 matrix of log-scale values (n_hc=4)
     var m = [_]f32{

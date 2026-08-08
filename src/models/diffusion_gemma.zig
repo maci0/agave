@@ -600,11 +600,17 @@ pub const DiffusionGemmaModel = struct {
         const kv_view = self.getLayerKvView(li);
         if (self.isMultiBlock(li)) {
             self.be.sdpaPaged(
-                self.q_buf.ptr, self.getPagedKvView(li),
-                self.k_buf.ptr, self.v_buf.ptr, self.attn_out.ptr,
-                nh, nkv, hd,
+                self.q_buf.ptr,
+                self.getPagedKvView(li),
+                self.k_buf.ptr,
+                self.v_buf.ptr,
+                self.attn_out.ptr,
+                nh,
+                nkv,
+                hd,
                 1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
-                self.kv_type_k, self.kv_type_v,
+                self.kv_type_k,
+                self.kv_type_v,
             );
         } else {
             const sliding: usize = if (!is_global) self.sliding_window else 0;
@@ -612,11 +618,23 @@ pub const DiffusionGemmaModel = struct {
             // DiffusionGemma uses sliding window 1024 for sliding layers, but we use full
             // attention here since the encoder is short (prompt only).
             attn_ops.scaledDotProductAttention(
-                self.q_buf.ptr, kv_view.keys, kv_view.values,
-                self.k_buf, self.v_buf, self.attn_out.ptr, self.scores_buf.ptr,
-                nh, nkv, hd, self.kv_seq_len,
+                self.q_buf.ptr,
+                kv_view.keys,
+                kv_view.values,
+                self.k_buf,
+                self.v_buf,
+                self.attn_out.ptr,
+                self.scores_buf.ptr,
+                nh,
+                nkv,
+                hd,
+                self.kv_seq_len,
                 1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
-                self.be, null, 0, self.kv_type_k, self.kv_type_v,
+                self.be,
+                null,
+                0,
+                self.kv_type_k,
+                self.kv_type_v,
             );
             _ = sliding; // sliding window enforcement not needed for short prompts
         }
@@ -816,14 +834,21 @@ pub const DiffusionGemmaModel = struct {
             const q_ptr = self.q_buf.ptr + i * qd;
             attn_ops.scaledDotProductAttentionCanvas(
                 q_ptr,
-                kv_view.keys, kv_view.values,
-                canvas_k, canvas_v,
-                self.attn_out.ptr, self.scores_buf.ptr,
-                nh, nkv, hd,
-                self.kv_seq_len, cl,
+                kv_view.keys,
+                kv_view.values,
+                canvas_k,
+                canvas_v,
+                self.attn_out.ptr,
+                self.scores_buf.ptr,
+                nh,
+                nkv,
+                hd,
+                self.kv_seq_len,
+                cl,
                 1.0 / @sqrt(@as(f32, @floatFromInt(hd))),
                 self.be,
-                self.kv_type_k, self.kv_type_v,
+                self.kv_type_k,
+                self.kv_type_v,
             );
 
             // Output projection.
@@ -878,7 +903,10 @@ pub const DiffusionGemmaModel = struct {
         const n_sel = k;
 
         var w_sum: f32 = 0;
-        for (top_weights[0..n_sel]) |*w| { w.* = @exp(w.*); w_sum += w.*; }
+        for (top_weights[0..n_sel]) |*w| {
+            w.* = @exp(w.*);
+            w_sum += w.*;
+        }
         const inv_w = 1.0 / w_sum;
         for (top_weights[0..n_sel]) |*w| w.* *= inv_w;
 
@@ -930,3 +958,61 @@ pub const DiffusionGemmaModel = struct {
         self.be.add(out, self.hidden2.ptr, out, e);
     }
 };
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+test "isGlobalLayer pattern: every 6th layer" {
+    // global_attn_stride = 6, so global layers are at (li+1) % 6 == 0.
+    // Layer 5 (6th, 0-indexed): global. Layer 11: global. Layer 0-4: sliding.
+    try std.testing.expect(DiffusionGemmaModel.isGlobalLayer(5));
+    try std.testing.expect(DiffusionGemmaModel.isGlobalLayer(11));
+    try std.testing.expect(DiffusionGemmaModel.isGlobalLayer(17));
+    try std.testing.expect(DiffusionGemmaModel.isGlobalLayer(23));
+    try std.testing.expect(DiffusionGemmaModel.isGlobalLayer(29));
+
+    // Sliding-window layers:
+    try std.testing.expect(!DiffusionGemmaModel.isGlobalLayer(0));
+    try std.testing.expect(!DiffusionGemmaModel.isGlobalLayer(1));
+    try std.testing.expect(!DiffusionGemmaModel.isGlobalLayer(4));
+    try std.testing.expect(!DiffusionGemmaModel.isGlobalLayer(6));
+    try std.testing.expect(!DiffusionGemmaModel.isGlobalLayer(10));
+}
+
+test "architecture constants are consistent" {
+    // Default 30 layers with stride 6 → 5 global layers (5,11,17,23,29)
+    var n_global: u32 = 0;
+    for (0..default_n_layers) |li| {
+        if (DiffusionGemmaModel.isGlobalLayer(@intCast(li))) n_global += 1;
+    }
+    try std.testing.expectEqual(@as(u32, 5), n_global);
+
+    // Canvas length must be a power of 2 (for alignment in batch processing)
+    try std.testing.expect(std.math.isPowerOfTwo(default_canvas_length));
+
+    // Global head dim > sliding-window head dim (512 vs 256)
+    try std.testing.expect(default_gl_head_dim > default_sl_head_dim);
+
+    // Sliding-window rope theta < global rope theta
+    try std.testing.expect(default_sl_rope_theta < default_gl_rope_theta);
+}
+
+test "default model field defaults match constants" {
+    const m = DiffusionGemmaModel{
+        .fmt = undefined,
+        .be = undefined,
+        .allocator = undefined,
+    };
+    try std.testing.expectEqual(default_n_layers, m.n_layers);
+    try std.testing.expectEqual(default_n_embd, m.n_embd);
+    try std.testing.expectEqual(default_vocab_size, m.vocab_size);
+    try std.testing.expectEqual(default_canvas_length, m.canvas_length);
+    try std.testing.expectEqual(default_n_experts, m.n_experts);
+    try std.testing.expectEqual(default_top_k_experts, m.top_k_experts);
+    try std.testing.expectEqual(default_sl_n_head, m.sl_n_head);
+    try std.testing.expectEqual(default_gl_n_head, m.gl_n_head);
+}
+
+test "global_attn_stride divides default_n_layers" {
+    // Ensures the architecture has a clean global/sliding pattern with no remainder
+    try std.testing.expectEqual(@as(u32, 0), default_n_layers % global_attn_stride);
+}
