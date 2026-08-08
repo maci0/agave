@@ -358,7 +358,7 @@ pub const Ds4Model = struct {
 
     // ── KV cache helpers ──────────────────────────────────────────
 
-    const kv_type: KvQuantType = .f32;
+    const kv_type: KvQuantType = .q8_0;
 
     fn kvLayerBytes(self: *Ds4Model) usize {
         return kv_quant.kvByteOffset(kv_type, self.max_seq_len * self.kv_lora_rank);
@@ -743,31 +743,23 @@ pub const Ds4Model = struct {
             const sl_total = pos + 1 + n_attend_comp;
 
             @memset(self.attn_out, 0.0);
+            const kv_elem_bytes = kv_quant.kvByteOffset(kv_type, kd);
             const V8 = @Vector(8, f32);
             for (0..nh) |h| {
                 const q_h = self.q_full[h * kd ..][0..kd];
-                const q_v8: []const f32 = q_h;
-                const f32_k: [*]const f32 = @ptrCast(@alignCast(kv_k_layer.ptr));
-                // SIMD QK dot products for raw positions
+                // QK dot products for raw KV positions (supports any kv_type via kvDot)
                 for (0..pos + 1) |t| {
-                    const k_t = f32_k[t * kd ..][0..kd];
-                    var acc: V8 = @splat(0.0);
-                    var i: usize = 0;
-                    while (i + 8 <= kd) : (i += 8) {
-                        acc += @as(V8, q_v8[i..][0..8].*) * @as(V8, k_t[i..][0..8].*);
-                    }
-                    var dot = @reduce(.Add, acc);
-                    while (i < kd) : (i += 1) dot += q_h[i] * k_t[i];
-                    self.scores_buf[t] = dot * scale;
+                    const k_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
+                    self.scores_buf[t] = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * scale;
                 }
-                // SIMD QK for compressed positions (selected by LID or all)
+                // QK for compressed positions (always f32 — CSA cache is unquantized)
                 for (0..n_attend_comp) |gi| {
                     const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                     const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
                     var acc: V8 = @splat(0.0);
                     var i: usize = 0;
                     while (i + 8 <= kd) : (i += 8) {
-                        acc += @as(V8, q_v8[i..][0..8].*) * @as(V8, ck[i..][0..8].*);
+                        acc += @as(V8, q_h[i..][0..8].*) * @as(V8, ck[i..][0..8].*);
                     }
                     var dot = @reduce(.Add, acc);
                     while (i < kd) : (i += 1) dot += q_h[i] * ck[i];
@@ -777,7 +769,6 @@ pub const Ds4Model = struct {
                 {
                     var mx = self.scores_buf[0];
                     for (self.scores_buf[1..sl_total]) |v| if (v > mx) { mx = v; };
-                    // Sink virtual token included in denominator
                     if (self.layerTensor(li, "attn_sinks.weight")) |st| {
                         const sd: [*]const f32 = @ptrCast(@alignCast(st.data_ptr));
                         if (sd[h] > mx) mx = sd[h];
@@ -791,20 +782,13 @@ pub const Ds4Model = struct {
                     const inv = 1.0 / sm;
                     for (self.scores_buf[0..sl_total]) |*v| v.* *= inv;
                 }
-                // V accumulation: raw
+                // V accumulation: raw (supports any kv_type via kvMulAccum)
                 const ao_h = self.attn_out[h * kd ..][0..kd];
-                const f32_v: [*]const f32 = @ptrCast(@alignCast(kv_v_layer.ptr));
                 for (0..pos + 1) |t| {
-                    const v_t = f32_v[t * kd ..][0..kd];
-                    const wv: V8 = @splat(self.scores_buf[t]);
-                    var i: usize = 0;
-                    while (i + 8 <= kd) : (i += 8) {
-                        const cur: V8 = ao_h[i..][0..8].*;
-                        ao_h[i..][0..8].* = @mulAdd(V8, @as(V8, v_t[i..][0..8].*), wv, cur);
-                    }
-                    while (i < kd) : (i += 1) ao_h[i] += v_t[i] * self.scores_buf[t];
+                    const v_ptr = kv_v_layer[t * kv_elem_bytes ..].ptr;
+                    kv_quant.kvMulAccum(ao_h.ptr, self.scores_buf[t], v_ptr, kd, kv_type);
                 }
-                // V accumulation: compressed (selected or all)
+                // V accumulation: compressed (always f32)
                 for (0..n_attend_comp) |gi| {
                     const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                     const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
