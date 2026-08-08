@@ -836,7 +836,9 @@ pub const Ds4Model = struct {
                 }
             }
         } else {
-            // Standard attention (no compressed KVs)
+            // Standard attention (no compressed KVs) — GPU SDPA fast path.
+            // Metal now supports hd=512 (sdpa_fa2_hd512 kernel) and Q8_0 KV
+            // (dequant in sdpa_fa2_turbo kernel), so no CPU fallback needed.
             attn_ops.scaledDotProductAttention(
                 self.q_full.ptr,
                 kv_k_layer,
@@ -851,7 +853,7 @@ pub const Ds4Model = struct {
                 pos,
                 scale,
                 self.be,
-                .{ .start = 0, .len = pos + 1 },
+                null,
                 0,
                 kv_type,
                 kv_type,
