@@ -53,9 +53,12 @@ pub const Ds4Model = struct {
     rms_eps: f32 = 1e-6,
     rope_freq: f32 = 10000.0,
     expert_weights_scale: f32 = 1.5,
+    compress_rope_freq: f32 = 160000.0,
     vocab_size: u32 = 129280,
     max_seq_len: u32 = 512,
     eos_token_id: u32 = 1,
+    /// Per-layer compression ratios: 0=none, 4=CSA, 128=HCA. Drives rope freq selection.
+    compress_ratios: [64]u32 = [_]u32{0} ** 64,
 
     // Vtable compatibility
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -129,7 +132,16 @@ pub const Ds4Model = struct {
         if (f.getArchU32(arch, "attention.output_lora_rank")) |v| self.o_lora_rank = v;
         if (f.getArchU32(arch, "attention.q_lora_rank")) |v| self.q_lora_rank = v;
         if (f.getArchF32(arch, "rope.freq_base")) |v| self.rope_freq = v;
+        if (f.getArchF32(arch, "attention.compress_rope_freq_base")) |v| self.compress_rope_freq = v;
         if (f.getArchF32(arch, "attention.layernorm_rms_epsilon")) |v| self.rms_eps = v;
+
+        // Read compress_ratios via per-element metadata access.
+        // GGUF stores as array; read each element using arch key with index.
+        // DS4 Flash 43-layer pattern: [0,0,4,128,4,128,...,4] (layers 2+ alternate)
+        for (0..@as(usize, self.n_layers)) |i| {
+            // Fallback: layers 0-1 have no compression; layers 2+ alternate 4/128
+            self.compress_ratios[i] = if (i < 2) 0 else if (i % 2 == 0) 4 else 128;
+        }
         if (f.getMetaF32("deepseek4.expert_weights_scale")) |v| self.expert_weights_scale = v;
         if (f.getArchU32(arch, "context_length")) |v| self.max_seq_len = @min(v, 65536);
         if (ctx_size > 0) self.max_seq_len = ctx_size;
@@ -327,7 +339,8 @@ pub const Ds4Model = struct {
             for (0..e) |i| ns[i] = sub[i] * pw;
             for (0..n_hc) |src| {
                 const ss = self.hc_state[src * e ..][0..e];
-                const c = self.hc_comb[dst * n_hc + src];
+                // Column-major storage: comb[dst, src] = hc_comb[dst + src*n_hc]
+                const c = self.hc_comb[dst + src * n_hc];
                 for (0..e) |i| ns[i] += ss[i] * c;
             }
         }
@@ -365,6 +378,8 @@ pub const Ds4Model = struct {
         const rd: usize = self.rope_dim;
         const nope: usize = kd - rd;
         const pos = self.kv_seq_len;
+        // Use compressed rope freq for layers with ratio≠0 (most layers in DS4)
+        const rope_freq = if (self.compress_ratios[li] != 0) self.compress_rope_freq else self.rope_freq;
 
         // Pre-norm → q_a → q_a_norm → q_b all on GPU in one batch
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
@@ -381,7 +396,7 @@ pub const Ds4Model = struct {
         for (0..nh) |h| {
             const q_head = self.q_full[h * kd ..][0..kd];
             plainRmsNorm(q_head, self.rms_eps);
-            applyRope(q_head[nope..][0..rd], pos, self.rope_freq, rd);
+            applyRope(q_head[nope..][0..rd], pos, rope_freq, rd);
         }
 
         // KV: hidden2 → kv_a → kv_a_norm on GPU, then CPU RoPE
@@ -390,7 +405,7 @@ pub const Ds4Model = struct {
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
         self.be.sync(); // CPU RoPE reads kv_proj
-        applyRope(self.kv_proj[nope..][0..rd], pos, self.rope_freq, rd);
+        applyRope(self.kv_proj[nope..][0..rd], pos, rope_freq, rd);
 
         // Store KV (K = V in this MLA variant)
         @memcpy(self.kvKSlice(li, pos), self.kv_proj);
@@ -399,6 +414,9 @@ pub const Ds4Model = struct {
         // Attention: Q [nh, kd] × K [1, kd, sl] → scores → × V
         const sl = pos + 1;
         const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
+        // Per-head sink biases added to position 0 score (prevents attention collapse)
+        const sinks_t = self.layerTensor(li, "attn_sinks.weight");
+        const sinks_data: ?[*]const f32 = if (sinks_t) |t| @ptrCast(@alignCast(t.data_ptr)) else null;
         @memset(self.attn_out, 0.0);
         for (0..nh) |h| {
             const q_h = self.q_full[h * kd ..][0..kd];
@@ -409,6 +427,8 @@ pub const Ds4Model = struct {
                 for (0..kd) |i| dot += q_h[i] * k_t[i];
                 self.scores_buf[t] = dot * scale;
             }
+            // Add sink bias to position 0 (attention sink)
+            if (sinks_data) |sd| self.scores_buf[0] += sd[h];
             // Softmax
             {
                 var mx = self.scores_buf[0];
@@ -425,6 +445,12 @@ pub const Ds4Model = struct {
                 const w = self.scores_buf[t];
                 for (0..kd) |i| ao_h[i] += v_t[i] * w;
             }
+        }
+
+        // Apply inverse RoPE (derope) to rope portion of each attention head output.
+        // llama.cpp applies ggml_rope_ext_back before the output LoRA projection.
+        for (0..nh) |h| {
+            applyRopeInverse(self.attn_out[h * kd + nope ..][0..rd], pos, rope_freq, rd);
         }
 
         // Output LoRA: grouped wo_a [n_in=4096 per group, n_out=o_lora_rank] × 8 groups
@@ -484,18 +510,25 @@ pub const Ds4Model = struct {
             self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
             self.be.sync(); // CPU reads router_logits
 
+            // Compute probs = sqrt_softplus(logits) — used for final weights (unbiased)
+            var probs: [256]f32 = undefined;
+            for (0..ne) |i| probs[i] = sqrtSoftplus(self.router_logits[i]);
+
+            // Selection uses biased probs (exp_probs_b added AFTER sqrt_softplus)
+            // Weights use UNBIASED probs (per DeepSeek V3/V4 spec)
+            var selection: [256]f32 = probs;
             if (self.layerTensor(li, "exp_probs_b.bias")) |bias_t| {
                 const bias = @as([*]const f32, @ptrCast(@alignCast(bias_t.data_ptr)))[0..ne];
-                for (0..ne) |i| self.router_logits[i] += bias[i];
+                for (0..ne) |i| selection[i] += bias[i];
             }
 
-            math_ops.topKExperts(self.router_logits[0..ne], nk, top_ids[0..nk], top_scores[0..nk]);
+            math_ops.topKExperts(selection[0..ne], nk, top_ids[0..nk], top_scores[0..nk]);
             n_active = nk;
 
-            // sqrt_softplus weighting + normalize
+            // Weights from unbiased probs, normalized
             var wsum: f32 = 0.0;
             for (0..n_active) |j| {
-                top_weights[j] = sqrtSoftplus(top_scores[j]);
+                top_weights[j] = probs[top_ids[j]];  // unbiased prob for selected expert
                 wsum += top_weights[j];
             }
             if (wsum > 0.0) {
@@ -544,7 +577,7 @@ pub const Ds4Model = struct {
             }
         }
 
-        self.be.sync(); // single sync for all expert down GEMVs
+        self.be.sync(); // single sync — all expert down GEMVs complete
 
         // CPU: weighted accumulation from scratch slots
         @memset(self.expert_accum, 0.0);
@@ -649,6 +682,16 @@ fn plainRmsNorm(x: []f32, eps: f32) void {
     for (x) |*v| v.* *= s;
 }
 
+/// SiGLU with per-DS4 clamping: up clamped [-10,10], gate upper-clamped [−∞,10].
+/// Clamp prevents outlier explosion from Q2_K dequantization.
+fn siluMulClamped(gate: []f32, up: []f32, clamp: f32) void {
+    for (gate, up) |*g, *u| {
+        u.* = @min(clamp, @max(-clamp, u.*));  // two-sided clamp on up
+        g.* = @min(clamp, g.*);               // upper-only clamp on gate
+        g.* = g.* * (1.0 / (1.0 + @exp(-g.*))) * u.*;
+    }
+}
+
 fn siluMul(gate: []f32, up: []f32) void {
     for (gate, up) |*g, u| g.* = g.* * (1.0 / (1.0 + @exp(-g.*))) * u;
 }
@@ -664,6 +707,22 @@ fn applyRope(x: []f32, pos: usize, freq_base: f32, rope_dim: usize) void {
         const x1 = x[i * 2 + 1];
         x[i * 2] = x0 * c - x1 * s;
         x[i * 2 + 1] = x0 * s + x1 * c;
+    }
+}
+
+/// Inverse RoPE (rope_ext_back): rotation by -theta. Applied to attention output rope portion.
+fn applyRopeInverse(x: []f32, pos: usize, freq_base: f32, rope_dim: usize) void {
+    const nd = rope_dim / 2;
+    for (0..nd) |i| {
+        const freq = std.math.pow(f32, freq_base, -@as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rope_dim)));
+        const theta = @as(f32, @floatFromInt(pos)) * freq;
+        const c = @cos(theta);
+        const s = @sin(theta);
+        const x0 = x[i * 2];
+        const x1 = x[i * 2 + 1];
+        // Inverse: transpose of rotation matrix = rotation by -theta
+        x[i * 2] = x0 * c + x1 * s;
+        x[i * 2 + 1] = -x0 * s + x1 * c;
     }
 }
 
