@@ -68,6 +68,7 @@ pub const PngImage = struct {
     /// Allocator used for the pixel buffer — needed by `deinit()`.
     allocator: Allocator,
 
+    /// Free pixel buffer (zeroed first to avoid lingering image data in freelist).
     pub fn deinit(self: *PngImage) void {
         // Zero pixel bytes before free so image data does not linger in freelist.
         @memset(self.pixels, 0);

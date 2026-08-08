@@ -167,6 +167,7 @@ pub const ListResult = struct {
     /// `deinit()` to free.
     arena: std.heap.ArenaAllocator,
 
+    /// Free all memory owned by the list result (files, metadata, strings).
     pub fn deinit(self: *ListResult) void {
         self.arena.deinit();
     }
