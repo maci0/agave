@@ -396,16 +396,16 @@ pub const RocmBackend = struct {
 
     fn uploadToDevice(self: *RocmBackend, host_ptr: *const anyopaque, size: usize) DevicePtr {
         const dptr = self.deviceAlloc(size);
-        _ = self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice);
+        _ = hipCheck(self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice), "hipMemcpy(HtoD)");
         return dptr;
     }
 
     fn downloadFromDevice(self: *RocmBackend, dptr: DevicePtr, host_ptr: *anyopaque, size: usize) void {
-        _ = self.hipMemcpy(host_ptr, @ptrFromInt(dptr), size, hipMemcpyDeviceToHost);
+        _ = hipCheck(self.hipMemcpy(host_ptr, @ptrFromInt(dptr), size, hipMemcpyDeviceToHost), "hipMemcpy(DtoH)");
     }
 
     fn memcpyDtoD(self: *RocmBackend, dst: DevicePtr, src: DevicePtr, size: usize) void {
-        _ = self.hipMemcpy(@ptrFromInt(dst), @ptrFromInt(src), size, hipMemcpyDeviceToDevice);
+        _ = hipCheck(self.hipMemcpy(@ptrFromInt(dst), @ptrFromInt(src), size, hipMemcpyDeviceToDevice), "hipMemcpy(DtoD)");
     }
 
     // ── Weight cache (permanent, read-only) ─────────────────────
@@ -511,7 +511,7 @@ pub const RocmBackend = struct {
 
     /// Sync GPU, download dirty buffers to host, mark all entries stale.
     pub fn flushActivations(self: *RocmBackend) void {
-        _ = self.hipDeviceSynchronize();
+        _ = hipCheck(self.hipDeviceSynchronize(), "hipDeviceSynchronize");
         var it = self.act_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.state == .dirty) {
@@ -541,8 +541,15 @@ pub const RocmBackend = struct {
 
     // ── Launch helper ───────────────────────────────────────────
 
+    /// Check a HIP API return code and log errors. Returns true on success (rc == 0).
+    fn hipCheck(rc: c_int, comptime op: []const u8) bool {
+        if (rc == 0) return true;
+        std.log.err("ROCm {s} failed: error code {d}", .{ op, rc });
+        return false;
+    }
+
     fn launch(self: *RocmBackend, func: HipFunction, grid: u32, block: u32, smem: u32, params: [*]?*anyopaque) void {
-        _ = self.hipLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, null, params, null);
+        _ = hipCheck(self.hipLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, null, params, null), "hipLaunchKernel");
     }
 
     // ── Weight size helper ──────────────────────────────────────

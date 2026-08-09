@@ -342,7 +342,7 @@ SSM recurrence is **inherently sequential** — each timestep depends on the pre
 
 - **Prefill**: Cannot batch SSM layers across tokens (unlike attention with GEMM). Each token must be processed sequentially through SSM layers.
 - **Decode**: SSM layers are fast (one state update per token) — the bottleneck shifts to attention layers.
-- **GPU dispatch**: GPU backends (Metal, Vulkan, WebGPU, ROCm) run the full DeltaNet recurrence on the GPU. The CUDA backend falls back to the CPU SIMD kernel (V8-vectorized, not scalar). The state update loop is sequential across v-heads, not memory-bound.
+- **GPU dispatch**: GPU backends (Metal, Vulkan, WebGPU, ROCm) run the full DeltaNet recurrence on the GPU. The CUDA backend falls back to the CPU SIMD kernel (V8-vectorized, not scalar). The state update runs one head per thread (parallelized across v-heads) and is compute-bound, not memory-bound.
 
 ## Hybrid Layer Patterns
 

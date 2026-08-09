@@ -71,12 +71,12 @@ Once the 256-token canvas is fully denoised, it becomes part of the KV cache. A 
 DiffusionGemma is built on the Gemma 4 26B A4B backbone:
 - 30 layers: pattern of 5 sliding-window + 1 global attention (repeat 5×)
 - 128 experts MoE with top-8 routing
-- 2816 hidden dimension; dual attention: sliding-window heads (dim 256, 16/8 Q/KV) and global heads (dim 512)
+- 2816 hidden dimension; dual attention: sliding-window heads (dim 256, 16/8 Q/KV) and global heads (dim 512, 16/8 Q/KV)
 - BF16 SafeTensors only (no GGUF yet)
 - Tensor prefix: `model.decoder.layers.N.*`
 
 Key differences from standard Gemma 4:
-- **Fused expert weights**: `experts.gate_up_proj` stores gate+up concatenated in a single 3D tensor `[n_experts * 2*ff, hidden]` instead of separate tensors
+- **Fused expert weights**: `experts.gate_up_proj` stores gate+up concatenated in a single 2D tensor `[n_experts * 2*ff, hidden]` instead of separate tensors
 - **Per-layer scalar**: `layer_scalar` applied to attention output
 - **Canvas attention**: bidirectional within the 256-token canvas region (no causal mask)
 

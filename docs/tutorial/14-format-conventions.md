@@ -441,8 +441,7 @@ normAsF32(self, t, n):
 
     # cache miss: allocate, convert, store permanently
     if self.norm_cache_len >= max_norm_entries:
-        dequantToF32(self.dequant_buf, t.data_ptr, t.dtype, n)
-        return self.dequant_buf
+        @panic("norm cache overflow — increase max_norm_entries")
 
     buf = allocate f32[n]  # falls back to dequant_buf on allocation failure
     dequantToF32(buf, t.data_ptr, t.dtype, n)

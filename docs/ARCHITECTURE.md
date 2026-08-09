@@ -235,7 +235,7 @@ When you run `agave model.gguf "Hello"`:
 | `splitQGate(qg, q, g, hd, nh)` | Split concatenated Q+gate (Qwen3.5) | Yes |
 | `deltaNet(...)` | DeltaNet SSM recurrence | Yes |
 | `sdpaWithStats(q, keys, vals, ..., max, sum)` | SDPA returning softmax stats (split-attention) | Yes |
-| `sdpaPaged(q, page_table, kv_pool, ...)` | Paged SDPA with block table indirection (16-token blocks) | Yes |
+| `sdpaPaged(q, page_table, kv_pool, ...)` | Paged SDPA with block table indirection (256-token blocks) | Yes |
 | **Infrastructure** | | |
 | `sync()` | Flush GPU work | At sync points |
 | `beginBatch()` / `endBatch()` | Suppress/restore GPU memory barriers | GPU only |
@@ -283,6 +283,8 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/detokenize` | POST | Detokenize token IDs to text |
 | `/v1/chat` | POST | Built-in chat web UI endpoint |
 | `/v1/embeddings` | POST | Text embeddings (501 stub) |
+| `/v1/kv_cache` | GET/POST | KV prefix export/import |
+| `/v1/kv_cache/info` | GET | KV cache metadata |
 | `/health` | GET | Health check |
 | `/ready` | GET | Readiness check (model loaded) |
 | `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth) |
@@ -519,7 +521,7 @@ DDTree speculative decode -> output tokens
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
 
 **Paged KV cache and paged SDPA** (`src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
-- KV cache is organized into 16-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
+- KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
 - `PagedKvView` provides block table indirection, translating logical token positions to physical block locations.
 - `sdpaPagedHeads` computes attention over paged blocks with thread-pool parallelism across heads.
 - Every backend implements `sdpaPaged()` natively. GPU paths gather scattered host blocks into a flat staging buffer, then run a GPU paged SDPA kernel (no silent CPU compute fallback). Staging gather is host-side by design: the paged pool lives in CPU-visible memory for prefix sharing and tier demotion.

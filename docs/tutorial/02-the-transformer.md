@@ -624,12 +624,12 @@ flowchart TD
         PNAdd --> PNOut
     end
 
-    subgraph PostNorm["Post-norm placement (Gemma3 — added after sublayer)"]
+    subgraph PostNorm["Post-norm placement (Gemma3 — norm before residual add)"]
         direction TB
         PoResid --> PoSub
-        PoSub --> PoAdd
-        PoAdd --> PoNorm
-        PoNorm --> PoOut
+        PoSub --> PoNorm
+        PoNorm --> PoAdd
+        PoAdd --> PoOut
     end
 ```
 

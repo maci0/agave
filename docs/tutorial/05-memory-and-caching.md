@@ -104,7 +104,7 @@ flowchart TB
 
     F32["f32\n32 bits/elem\n600 MB baseline"]:::setup
     F16["f16\n16 bits/elem\n300 MB  (2× vs f32)"]:::setup
-    Q8["q8_0\n8.5 bits/elem\n159 MB  (3.5× vs f16)"]:::migration
+    Q8["q8_0\n8.5 bits/elem\n159 MB  (1.9× vs f16)"]:::migration
     TQ4["TurboQuant turbo4\nWalsh-Hadamard WHT-32\n~160 add/sub, no multiplies"]:::sync
     PQ4["PlanarQuant planar4\nGivens 2D rotation\n256 FMAs"]:::sync
     IQ4["IsoQuant iso4\nQuaternion 4D rotation\n512 FMAs"]:::sync
@@ -155,7 +155,7 @@ flowchart TB
 
 Four rotation-based quantizers are available, differing only in the decorrelation transform:
 - **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — ~160 add/sub ops (32-element blocks, no multiplies)
-- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (2.5x fewer)
+- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (2× fewer than IsoQuant)
 - **IsoQuant** (`iq2/3/4`): Quaternion 4D rotation — 512 FMAs
 - **RotorQuant** (`rq2/3/4`): Clifford Cl(3,0) rotor — ~2,400 FMAs
 

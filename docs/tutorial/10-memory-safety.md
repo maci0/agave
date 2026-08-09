@@ -229,7 +229,7 @@ processTokens(tokens):                        # FIX
     return embeddings                          # success: errdefer skipped, caller owns embeddings
 ```
 
-**Implementation:** [`src/models/model.zig`](../../src/models/model.zig) (allocate-then-validate pattern in embedding/token paths)
+**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (allocKvCache errdefer pattern)
 
 ### Example 2: Struct with Multiple Resources
 
@@ -237,7 +237,7 @@ processTokens(tokens):                        # FIX
 
 ```text
 KVCache:
-    fields: keys, values, block_table
+    fields: keys, values
 
     init(max_seq_len, kv_dim):
         keys = alloc(u8, max_seq_len * kv_dim)
@@ -246,18 +246,14 @@ KVCache:
         values = alloc(u8, max_seq_len * kv_dim)
         errdefer free(values)
 
-        block_table = alloc(u32, max_seq_len)
-        errdefer free(block_table)
+        return KVCache{ keys, values }
 
-        return KVCache{ keys, values, block_table }
-
-    deinit():
-        free(block_table)                     # reverse of allocation order
+    free(cache):
         free(values)
         free(keys)
 ```
 
-**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (`allocKvCache`, `KvCache.deinit`)
+**Implementation:** [`src/kvcache/manager.zig`](../../src/kvcache/manager.zig) (`allocKvCache`, `freeKvCache`)
 
 **Usage:**
 

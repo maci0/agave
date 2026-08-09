@@ -509,7 +509,7 @@ argmax(x) = 1    (x[1] = 0.8 is largest)
 
 **Usage**: Greedy decoding (temperature=0) — always pick the highest-scoring token.
 
-**Implementation**: Two-pass linear scan, O(n). First pass finds the maximum value (SIMD-vectorised); second pass finds its index.
+**Implementation**: Single-pass linear scan, O(n). SIMD-vectorised: each 8-element chunk finds the local max and its lane index in one sweep.
 
 ### Temperature Scaling
 
@@ -699,7 +699,7 @@ flowchart LR
 
 **In-place** (modifies input): `rope(x)` rotates x directly. Zero allocations.
 
-**Allocating** (creates output): `softmax(x)` operates **in-place** over two passes (find max, then exp+normalize). No allocation — the input buffer is reused as output.
+**In-place** (modifies input): `softmax(x)` operates **in-place** over three passes (find max, exp+sum, normalize). No allocation — the input buffer is reused as output.
 
 Inference hot path is allocation-free — all buffers pre-allocated, operations reuse scratch space.
 
@@ -712,7 +712,7 @@ Inference hot path is allocation-free — all buffers pre-allocated, operations 
 - Chapter 6 (convolution, outer product, SSM recurrence)
 - Chapter 7 (sampling operations)
 
-**In the code:** [src/ops/math.zig](../../src/ops/math.zig) (argmax, softmax, sampleToken), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/gemv.zig](../../src/backend/kernels/cpu/gemv.zig) (GEMV), [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU)
+**In the code:** [src/ops/math.zig](../../src/ops/math.zig) (argmax, sampleToken), [src/backend/kernels/cpu/softmax.zig](../../src/backend/kernels/cpu/softmax.zig) (softmaxSimd), [src/backend/kernels/cpu/norm.zig](../../src/backend/kernels/cpu/norm.zig) (RMSNorm, L2Norm), [src/backend/kernels/cpu/gemv.zig](../../src/backend/kernels/cpu/gemv.zig) (GEMV), [src/backend/kernels/cpu/activation.zig](../../src/backend/kernels/cpu/activation.zig) (SiLU, GELU)
 
 **Next:** [Appendix: Compile-Time Optimization →](appendix-compile-time.md) | **Back:** [Appendix: Troubleshooting ←](appendix-troubleshooting.md)
 

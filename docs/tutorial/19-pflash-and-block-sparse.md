@@ -88,7 +88,7 @@ flowchart LR
     K5["KV 5"]:::sync
     K6["KV 6"]:::sync
     K7["KV 7"]:::sync
-    Q0n["Q0: attends G0, G1"]:::setup
+    Q0n["Q0: attends G0"]:::setup
     Q3n["Q3: attends G0, G1, W1, W2, W3"]:::setup
     Q5n["Q5: attends G0, G1, W3, W4, W5"]:::setup
     Q7n["Q7: attends G0, G1, W5, W6, W7"]:::setup
@@ -122,7 +122,6 @@ flowchart LR
     end
 
     Q0n -->|"G"| K0
-    Q0n -->|"G"| K1
     Q3n -->|"G"| K0
     Q3n -->|"G"| K1
     Q3n -->|"W"| K2

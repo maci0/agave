@@ -335,10 +335,13 @@ parallelFor(total, grain, ctx, func):
   if n_workers == 0 or total <= effective_grain:
     func(ctx, 0, total)                     # too small, run inline
     return
+  task_counter.store(0, release)
+  if active.cmpxchgWeak(0, n_workers, acq_rel, monotonic) is Some(still_active):
+    log.err("concurrent parallelFor detected, running inline")
+    func(ctx, 0, total)
+    return
   task_func, task_ctx = func, ctx
   task_total, task_grain = total, effective_grain
-  task_counter.store(0, release)
-  active.store(n_workers, release)
   generation.fetchAdd(1, release)
   io.futexWake(&generation, n_workers)
   doWork()                                  # main thread participates

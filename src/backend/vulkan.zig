@@ -1714,11 +1714,18 @@ pub const VulkanBackend = struct {
         }
     }
 
+    /// Check a Vulkan API return code and log errors. Returns true on success (rc == 0/VK_SUCCESS).
+    fn vkCheck(rc: c_int, comptime op: []const u8) bool {
+        if (rc == 0) return true;
+        std.log.err("Vulkan {s} failed: VkResult {d}", .{ op, rc });
+        return false;
+    }
+
     fn submitPending(self: *VulkanBackend) void {
         if (!self.cmd_recording) return;
-        _ = self.vkEndCommandBuffer(self.cmd_buf);
+        _ = vkCheck(self.vkEndCommandBuffer(self.cmd_buf), "vkEndCommandBuffer");
         _ = self.vkResetFences(self.device, 1, &self.fence);
-        _ = self.vkQueueSubmit(self.queue, 1, &.{
+        _ = vkCheck(self.vkQueueSubmit(self.queue, 1, &.{
             .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .pNext = null,
             .waitSemaphoreCount = 0,
@@ -1728,8 +1735,8 @@ pub const VulkanBackend = struct {
             .pCommandBuffers = &self.cmd_buf,
             .signalSemaphoreCount = 0,
             .pSignalSemaphores = null,
-        }, self.fence);
-        _ = self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0));
+        }, self.fence), "vkQueueSubmit");
+        _ = vkCheck(self.vkWaitForFences(self.device, 1, &self.fence, VK_TRUE, ~@as(u64, 0)), "vkWaitForFences");
         self.cmd_recording = false;
         // Free all per-dispatch descriptor sets at once
         _ = self.vkResetDescriptorPool(self.device, self.desc_pool, 0);

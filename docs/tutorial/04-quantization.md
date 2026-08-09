@@ -357,7 +357,7 @@ flowchart LR
     end
 ```
 
-**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing — 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block size: 64 bytes total for 256 elements (`tq1_0_block_bytes = 64` in `backend.zig`).
+**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing — 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block size: 54 bytes total for 256 elements (`tq1_0_block_bytes = 54` in `backend.zig`).
 
 **TQ2_0** (2 bits/weight): Simpler binary packing — 4 values per byte using 2 bits each (bit patterns: `00`=−1, `01`=0, `10`=+1, `11`=unused). Block layout: 2 bytes f16 scale + 64 bytes packed = 66 bytes total for 256 elements.
 
@@ -374,7 +374,7 @@ This maps {0, 1, 2} → {-1, 0, +1} × scale, where encoded values are the store
 | | TQ1_0 | TQ2_0 |
 |---|---|---|
 | Bits per weight | 1.58 | 2.0 |
-| Bytes per 256-elem block | 64 | 66 |
+| Bytes per 256-elem block | 54 | 66 |
 | Decode complexity | Base-3 lookup table | Bitshift only |
 | CPU throughput | Slightly lower (table) | Highest (bitshift) |
 
@@ -528,7 +528,7 @@ Value = (-1)^0 × 1.75 × 2^2 = 7.0
 **Practical usage in Agave**:
 
 - **E4M3**: Weight quantization, gradient accumulation
-- **E4M3**: KV cache quantization (default: q8_0-K/turbo4-V, FP8 option available via `--kv-type fp8_e4m3`)
+- **E4M3**: KV cache quantization (default: f16, turbo preset: q8_0-K/turbo4-V, FP8 option via `--kv-type fp8_e4m3`)
 - **int8**: Alternative to FP8 for KV cache (simpler, slightly less accurate)
 
 ### Why FP8 instead of int8?

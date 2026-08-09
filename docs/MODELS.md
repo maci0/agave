@@ -26,7 +26,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 
 | Model | DDTree | Self-Spec | EAGLE/EAGLE-3 | MTP | N-gram | Suffix | Lookahead | PFlash | DSpark | Notes |
 |-------|--------|-----------|---------------|-----|--------|--------|-----------|--------|--------|-------|
-| Gemma 3 | ✅ `forwardTree` | ✅ | ✅/✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
+| Gemma 3 | ✅ `forwardTree` | ✅ | ✅/⚠️² | — | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
 | Gemma 4 | — | ✅ | —/✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
 | Qwen 3.5 | — | ✅ | ✅/— | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
 | DeepSeek V4 | — | ✅ `setLayerSkip` | —/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative |
@@ -37,7 +37,9 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Llama 4 | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | DiffusionGemma | — | — | — | — | — | — | — | — | — | Block diffusion (not autoregressive) |
 
-All autoregressive models support standard draft-verify, n-gram, suffix, lookahead, PFlash, and DSpark modes. DDTree tree verification requires `forwardTree`/`treeLogits` (currently Gemma 3 only). EAGLE-3 requires `hidden_pre_norm` (Gemma 3, Gemma 4, DiffusionGemma). MTP requires dedicated MTP heads in the model weights.
+All autoregressive models support standard draft-verify, n-gram, suffix, lookahead, PFlash, and DSpark modes. DDTree tree verification requires `forwardTree`/`treeLogits` (currently Gemma 3 only). EAGLE-3 requires `hidden_pre_norm` (Gemma 4, DiffusionGemma). MTP requires dedicated MTP heads in the model weights.
+
+² Gemma 3 lacks `hidden_pre_norm`, so EAGLE-3 falls back to post-norm hidden state (equivalent to regular EAGLE, no additional benefit).
 
 ## Model Parameters
 

@@ -102,7 +102,7 @@ PerfCounters:
 
     start():
         if not enabled: return 0
-        # reads CLOCK_REALTIME directly via the private nanoTimestamp() helper,
+        # reads CLOCK_MONOTONIC directly via the private nanoTimestamp() helper,
         # avoiding Io virtual dispatch overhead in the hot path
         return nanoTimestamp()
 
@@ -325,8 +325,8 @@ gemvMlxQ(...):
 **With @panic:**
 
 ```
-$ ./agave model-6bit-mlx.gguf "Hello"
-thread 1 panic: Metal MLX 6-bit GEMV not implemented — use --backend cpu or convert to 4-bit
+$ ./agave model-3bit-mlx.gguf "Hello"
+thread 1 panic: Metal MLX GEMV: unsupported bit width
 ```
 
 User **immediately knows** there's an issue and has clear next steps.
@@ -693,8 +693,8 @@ True megakernels show the most dramatic reduction -- dispatch count drops from h
 ./agave model-mlx.gguf --profile "Test" | grep "Token time"
 
 # Compare two backends
-./agave model.gguf --backend Metal --profile "Test" | grep "dispatches"
-./agave model.gguf --backend CPU --profile "Test" | grep "layer 0"
+./agave model.gguf --backend metal --profile "Test" | grep "dispatches"
+./agave model.gguf --backend cpu --profile "Test" | grep "layer 0"
 ```
 
 ## Performance Debugging Checklist

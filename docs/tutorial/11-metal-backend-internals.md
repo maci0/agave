@@ -459,7 +459,7 @@ kernel void sdpa(
 - Increasing to 32 positions → 32 KB (no room for other vars)
 - Increasing `max_head_dim` to 512 → 32 KB (also maxed out)
 
-**Trade-off:** Agave caps SDPA at 65536 seq_len and 256 head_dim to fit tile buffers in 32 KB threadgroup memory. Inputs that exceed those limits panic rather than silently falling back to another attention strategy.
+**Trade-off:** Agave caps SDPA at 65536 seq_len and 512 head_dim to fit tile buffers in 32 KB threadgroup memory (two-tier dispatch: head_dim ≤ 256 uses block_size=16, head_dim ≤ 512 uses block_size=8). Inputs that exceed those limits panic rather than silently falling back to another attention strategy.
 
 ### Threadgroup Memory Budget Breakdown
 
@@ -480,7 +480,7 @@ flowchart TD
     Shared["shared\nfloat[8]\n= 32 bytes\n(0.1% of budget)"]:::sync
     Free["headroom\n~13.4 KB remaining\n(42% of budget)"]:::success
     Constraint["Constraint: 16 positions × 256 head_dim\nIncreasing to 32 pos → 32 KB (maxed)\nIncreasing head_dim to 512 → 32 KB (maxed)"]:::migration
-    Fallback["seq_len > 65536 or head_dim > 256\npanics (no silent fallback)"]:::danger
+    Fallback["seq_len > 65536 or head_dim > 512\npanics (no silent fallback)"]:::danger
 
     Budget --> KV
     Budget --> Q
@@ -659,7 +659,7 @@ This interleaving is necessary because the vision encoder uses full (non-causal)
 1. **Batch independent ops:** Use `beginBatch()` / `endBatch()` to suppress intermediate barriers
 2. **Minimize syncs:** Only sync when CPU needs GPU data
 3. **Fuse kernels:** Combine sequential ops (e.g., `addRmsNorm`) to reduce dispatches
-4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **88 MSL pipelines** total (standard ops + fused FFN + 5 true megakernels + 1 runtime-composed). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
+4. **Megakernel pipelines:** The `--megakernel` flag enables a three-tier fusion system. **Tier 1** (fused FFN) combines gate GEMV + up GEMV + activation into a single dispatch (3->1 per FFN layer) via 11 kernels in `megakernel.metal` (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}). **Tier 2** (true megakernels) executes entire transformer layers in a single dispatch using 18 composable building blocks in `mega_common.metal` with atomic counter grid sync (`mega_grid_sync`). **Tier 3** (composed megakernels) auto-generates model-specific MSL at runtime via `mega_compose.zig`: the `composeMSL()` function produces MSL source from a `ModelDesc` struct, then `compileComposedMegakernel()` compiles it via `newLibraryWithSource`. This enables megakernel support for new models without writing any shader code -- just a `ModelDesc` definition. The Metal backend compiles **88 MSL pipelines** total (72 standard ops + 11 fused FFN + 5 true megakernels = 88 at init; +1 runtime-composed when `--megakernel` auto-composes). See [Chapter 13](13-batched-dispatch-and-fusion.md) for details.
 
 ```mermaid
 flowchart TD
@@ -674,7 +674,7 @@ flowchart TD
     T1Desc["3 dispatches → 1 dispatch per FFN layer\ngate GEMV + up GEMV + activation fused\n11 kernels: SiLU×6 dtypes + GELU×5 dtypes\nDtypes: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4"]:::sync
     T2Desc["Entire transformer layer = 1 dispatch\n18 composable building blocks\nAtomic counter grid sync (mega_grid_sync)\n5 pre-compiled megakernel pipelines"]:::setup
     T3Desc["MSL source generated at runtime\nfrom ModelDesc struct definition\ncomposeMSL() → compileComposedMegakernel()\nnewLibraryWithSource() JIT compilation\nNew models: zero shader code needed"]:::optional
-    Total["71 total MSL pipelines compiled\n(standard ops + Tier 1 + Tier 2 + Tier 3)"]:::migration
+    Total["88 total MSL pipelines compiled at init\n(72 standard ops + 11 Tier 1 + 5 Tier 2\n+1 Tier 3 runtime-composed)"]:::migration
     Benefit["Reduced dispatch overhead\nImproved GPU utilization\nLower CPU encoding cost per token"]:::success
 
     Flag --> T1

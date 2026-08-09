@@ -394,12 +394,12 @@ sequenceDiagram
 
 ```text
 # 1. detect architecture, backend, quantization
-arch = Arch.detect(fmt)
+arch_str = fmt.getMetaStr("general.architecture")
 backend_name = args.backend orelse detectDefaultBackend()
 quant = detectQuantization(fmt)
 
 # 2. match recipe
-recipe = Recipe.match(arch.displayName(), backend_name, quant) orelse Recipe.default
+recipe = Recipe.match(arch_str, backend_name, quant) orelse Recipe.default
 log("Using recipe: " + recipe.name)
 
 # 3. parse CLI args, track overrides

@@ -322,6 +322,13 @@ pub const CudaBackend = struct {
         state: BufState,
     };
 
+    /// Check a CUDA driver API return code and log errors. Returns true on success (rc == 0).
+    fn cuCheck(rc: c_int, comptime op: []const u8) bool {
+        if (rc == 0) return true;
+        std.log.err("CUDA {s} failed: error code {d}", .{ op, rc });
+        return false;
+    }
+
     // ── Init / Deinit ───────────────────────────────────────────
 
     /// Initialize the CUDA backend: load libcuda, create context, load PTX kernels.
@@ -574,13 +581,13 @@ pub const CudaBackend = struct {
 
     fn uploadToDevice(self: *CudaBackend, ptr: *const anyopaque, size: usize) CUdeviceptr {
         var dptr: CUdeviceptr = 0;
-        _ = self.cuMemAlloc(&dptr, @max(size, 4));
-        _ = self.cuMemcpyHtoD(dptr, ptr, size);
+        _ = cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc");
+        _ = cuCheck(self.cuMemcpyHtoD(dptr, ptr, size), "cuMemcpyHtoD");
         return dptr;
     }
 
     fn downloadFromDevice(self: *CudaBackend, dptr: CUdeviceptr, ptr: *anyopaque, size: usize) void {
-        _ = self.cuMemcpyDtoH(ptr, dptr, size);
+        _ = cuCheck(self.cuMemcpyDtoH(ptr, dptr, size), "cuMemcpyDtoH");
     }
 
     /// Make CUDA context current on the calling thread.
@@ -678,7 +685,7 @@ pub const CudaBackend = struct {
                 if (refresh_stale and act.state == .stale) {
                     // Re-upload entire parent buffer so all sub-regions are fresh
                     const host_ptr: *const anyopaque = @ptrFromInt(base);
-                    _ = self.cuMemcpyHtoD(act.dptr, host_ptr, act.size);
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, host_ptr, act.size), "cuMemcpyHtoD(act reupload)");
                     act.state = .clean;
                 }
                 if (mark_dirty) act.state = .dirty;
@@ -697,7 +704,7 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size);
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
@@ -735,7 +742,7 @@ pub const CudaBackend = struct {
         if (self.findContaining(addr, size, true, false)) |dptr| return dptr;
         // Allocate new device buffer (no upload — kernel will write)
         var dptr: CUdeviceptr = 0;
-        _ = self.cuMemAlloc(&dptr, @max(size, 4));
+        _ = cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc(output)");
         self.act_cache.put(addr, .{ .dptr = dptr, .size = size, .state = .dirty }) catch |err| {
             std.log.warn("activation cache put failed (output, size={d}): {}", .{ size, err });
         };
@@ -750,7 +757,7 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size);
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -770,7 +777,7 @@ pub const CudaBackend = struct {
     /// Sync GPU, download dirty buffers to host, then mark all entries stale.
     /// Called before CPU code that may read or modify activation buffers.
     pub fn flushActivations(self: *CudaBackend) void {
-        _ = self.cuCtxSynchronize();
+        _ = cuCheck(self.cuCtxSynchronize(), "cuCtxSynchronize");
         var it = self.act_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.state == .dirty) {
@@ -844,7 +851,7 @@ pub const CudaBackend = struct {
     }
 
     fn launch(self: *CudaBackend, func: CUfunction, grid: u32, block: u32, smem: u32, params: [*]?*anyopaque) void {
-        _ = self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, null, params, null);
+        _ = cuCheck(self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, null, params, null), "cuLaunchKernel");
     }
 
     // ── Weight size helper ──────────────────────────────────────
@@ -1823,10 +1830,10 @@ pub const CudaBackend = struct {
         if (self.kv_dev_cache.getPtr(addr)) |kv| return kv.dptr;
 
         var dptr: CUdeviceptr = 0;
-        _ = self.cuMemAlloc(&dptr, @max(capacity, 4));
+        _ = cuCheck(self.cuMemAlloc(&dptr, @max(capacity, 4)), "cuMemAlloc(KV)");
         // Upload any pre-existing host-side data so accumulated KV positions are visible.
         if (addr != 0 and capacity > 0) {
-            _ = self.cuMemcpyHtoD(dptr, @ptrFromInt(addr), capacity);
+            _ = cuCheck(self.cuMemcpyHtoD(dptr, @ptrFromInt(addr), capacity), "cuMemcpyHtoD(KV)");
         }
         self.kv_dev_cache.put(addr, .{
             .dptr = dptr,

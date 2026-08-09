@@ -850,7 +850,7 @@ Different model architectures use different special tokens for image placeholder
 | Gemma 3 | `<img>` (219) | `<img>` (219) | `<img>` (219) | Single token for all three roles |
 | Qwen 3.5 | `<\|vision_start\|>` (248053) | `<\|vision_end\|>` (248054) | `<\|image_pad\|>` (248056) | Three distinct tokens |
 
-When start equals pad (Gemma 4), `injectImageTokens()` omits the start wrapper to avoid the model consuming the start token as a visual embedding — it just injects `pad * N + end`:
+When start equals pad (Gemma 4), `injectImageTokens()` omits the start wrapper to avoid the model consuming the start token as a visual embedding — it just injects `pad × N` (no separate start or end):
 
 ```text
 # architecture-aware wrapping

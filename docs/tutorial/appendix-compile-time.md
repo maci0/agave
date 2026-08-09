@@ -667,7 +667,7 @@ comptime:
 # 4-bit nibble -> 16 possible values, stored as a literal constant table
 mxfp4Lookup(nibble):
     table = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-             0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
+             -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
     return table[nibble & 0xF]
 
 # for the scaled variant (nibble value x block scale), see nvfp4Dequant.
@@ -718,7 +718,7 @@ num_blocks = ceilDiv(total_bytes, backend.q4_0_block_bytes)
 | FP8 E4M3 LUT (256 × 4 bytes) | +1 KB |
 | MXFP4 LUT (16 × 4 bytes) | +64 bytes |
 | IQ4_NL LUT (16 × 1 byte) | +16 bytes |
-| Embedded Metal shaders (~50 KB source) | +50 KB |
+| Embedded Metal shaders (~278 KB source) | +278 KB |
 
 **Trade-off:** Small binary size increase for significant runtime speedup.
 
@@ -736,7 +736,7 @@ dotProduct(a, b):
         return dotProductScalar(a, b)
 ```
 
-**Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`dotProduct`, SIMD-vectorized reductions)
+**Implementation:** [`src/backend/kernels/cpu/gemv*.zig`](../../src/backend/kernels/cpu/) (SIMD-vectorized accumulation patterns)
 
 ### Type-Generic Containers
 

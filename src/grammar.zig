@@ -733,6 +733,10 @@ const Parser = struct {
             negate = true;
             self.pos += 1;
         }
+        // Collect all ranges in the character class first.
+        const RangePair = struct { lo: u32, hi: u32 };
+        var ranges: [64]RangePair = undefined;
+        var n_ranges: usize = 0;
         while (self.pos < self.input.len and self.input[self.pos] != ']') {
             const lo = self.input[self.pos];
             self.pos += 1;
@@ -742,10 +746,28 @@ const Parser = struct {
                 hi = self.input[self.pos];
                 self.pos += 1;
             }
-            const elem_type: ElementType = if (negate) .char_not else .char_range;
-            try self.elements.append(self.allocator, .{ .type = elem_type, .lo = lo, .hi = hi });
+            if (n_ranges < ranges.len) {
+                ranges[n_ranges] = .{ .lo = lo, .hi = hi };
+                n_ranges += 1;
+            }
         }
         if (self.pos < self.input.len) self.pos += 1;
+        // Single range: emit directly (no .alt needed).
+        // Negated classes: emit all ranges sequentially (acceptCharInner handles
+        // char_not by checking all consecutive char_not elements before accepting).
+        if (n_ranges <= 1 or negate) {
+            const elem_type: ElementType = if (negate) .char_not else .char_range;
+            for (ranges[0..n_ranges]) |r| {
+                try self.elements.append(self.allocator, .{ .type = elem_type, .lo = r.lo, .hi = r.hi });
+            }
+            return;
+        }
+        // Multi-range non-negated class: emit alternatives so the matcher
+        // accepts any single character from the union of ranges.
+        for (ranges[0..n_ranges], 0..) |r, i| {
+            if (i > 0) try self.elements.append(self.allocator, .{ .type = .alt, .lo = 0 });
+            try self.elements.append(self.allocator, .{ .type = .char_range, .lo = r.lo, .hi = r.hi });
+        }
     }
 
     fn parseRuleRef(self: *Parser) !void {

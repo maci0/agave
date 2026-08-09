@@ -94,7 +94,7 @@ The metric also reports **argmax accuracy**: the fraction of positions where the
 
 ---
 
-## 3. Expert Hotlist Profiling — library
+## 3. Expert Hotlist Profiling — CLI
 
 For MoE models, **expert profiling** tracks which routed experts are activated during inference. The resulting frequency data tells you:
 
@@ -160,7 +160,7 @@ The result is nearly as small as the aggressive quant but with higher quality in
 
 ---
 
-## 6. SSD Expert Streaming — library
+## 6. SSD Expert Streaming — CLI
 
 **SSD streaming** keeps a cache of hot MoE experts resident and streams cold experts from the mmap'd model file on demand.
 

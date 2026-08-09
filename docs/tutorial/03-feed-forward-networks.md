@@ -28,11 +28,11 @@ flowchart LR
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
     Input["Hidden State\n(e.g. 2304 floats)"]:::setup
-    Gate["gate_proj\n(2304 → 12288)"]:::sync
-    Up["up_proj\n(2304 → 12288)"]:::sync
+    Gate["gate_proj\n(2304 → 9216)"]:::sync
+    Up["up_proj\n(2304 → 9216)"]:::sync
     Act["SiLU activation\nx * sigmoid(x)"]:::migration
     Mul["Element-wise\nmultiply ⊗"]:::migration
-    Down["down_proj\n(12288 → 2304)"]:::sync
+    Down["down_proj\n(9216 → 2304)"]:::sync
     Output["FFN Output\n(2304 floats)"]:::success
 
     Input --> Gate
@@ -165,8 +165,9 @@ Input: hidden state for the word "Python" (after attention)
 2. Top-6 by score: experts [3, 1, 87, 120, 15, 42]
    Raw scores:     [0.91, 0.85, 0.78, 0.72, 0.68, 0.55]
 
-3. Normalize: weights = softmax([0.91, 0.85, 0.78, 0.72, 0.68, 0.55])
-              weights = [0.193, 0.182, 0.169, 0.160, 0.153, 0.134]
+3. Normalize + scale: weights = [s/Σs] × 2.5 (L1 norm, then routed_scaling_factor)
+              Σs = 0.91+0.85+0.78+0.72+0.68+0.55 = 4.49
+              weights = [0.507, 0.473, 0.434, 0.401, 0.379, 0.306]
 
 4. Run each expert's FFN:
    out = 0.193 × expert_3(hidden) + 0.182 × expert_1(hidden) + ...

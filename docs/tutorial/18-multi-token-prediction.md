@@ -142,7 +142,7 @@ flowchart TD
 - Pre-FFN RMSNorm
 - SwiGLU FFN (gate + up + SiLU×mul + down) + residual
 
-**5. Output head** — RMSNorm + GEMV → logits → argmax. The weights (**shared_head_norm** and **shared_head_head**) are specific to the MTP head, not shared with the main model's output projection
+**5. Output head** — RMSNorm + GEMV → logits → argmax. **shared_head_norm** is specific to the MTP head; **shared_head_head** falls back to the main model's output projection if a per-depth tensor is not present in the GGUF
 
 ### Offset RMSNorm: +1 vs Standard
 
@@ -243,7 +243,7 @@ flowchart TD
         Meta --> Main --> MTP
     end
 
-    Note["Loader detects MTP depth:\nn_mtp_layers = max_blk_idx - block_count\nHere: 64 - 64 = 1 MTP head"]:::optional
+    Note["Loader detects MTP depth:\nReads nextn_predict_layers from GGUF metadata,\nor probes for blk.{n_layers}.nextn.eh_proj.\n(max_blk_idx + 1) - block_count = 65 - 64 = 1 MTP head"]:::optional
     GGUF --> Note
 ```
 
@@ -326,6 +326,8 @@ flowchart TD
 
 Pure attention models (Qwen 3.6, Gemma 4) do not maintain recurrent state, so rejection only rolls back KV cache write pointers — essentially free. For Qwen 3.5, the 50 MiB SSM state copy on every token makes MTP a net negative unless the acceptance rate is extremely high.
 
+> **Note:** SSM checkpoint/restore (`saveSsmState`/`restoreSsmState`) is a theoretical concern for multi-depth MTP (depth > 1), where multiple draft steps would mutate recurrent state multiple times. For depth=1 (the only depth currently used in practice), no rollback of SSM state is needed because the single draft step's state is either accepted or discarded entirely. The checkpoint/restore path is not currently exercised in the codebase.
+
 ## Performance Characteristics
 
 MTP heads live inside the same checkpoint as the main model and share its learned representations. A separate draft model is an entirely independent model loaded alongside the main one. The structural difference explains why MTP achieves higher acceptance rates at lower memory cost.
@@ -384,7 +386,7 @@ Qwen 3.5 uses a hybrid architecture with **DeltaNet SSM** layers. SSM layers mai
 |-------|-----------|--------|
 | Qwen 3.5 (0.8B, 9B; MoE variants) | 1 | Supported (SSM overhead caveat) |
 | Qwen 3.6 (35B-A3B) | 1-3 | Architecture supported |
-| DeepSeek V3/R1 | 1 | Architecture supported |
+| DeepSeek V3/R1 | 1 | Not implemented |
 | Gemma 4 | Separate assistant checkpoint | Future |
 
 ## Usage
@@ -424,7 +426,7 @@ MTP GGUFs must include the nextn tensors. Look for "-MTP" in the filename (e.g.,
 
 ---
 
-**In the code:** [src/models/qwen35.zig](../../src/models/qwen35.zig) (`mtpForward`, `rmsNormPlusOne`, MTP buffer allocation), [src/models/model.zig](../../src/models/model.zig) (`mtpForward`, `getMtpDepth`, `resetMtpCache` VTable methods), [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (`draftMtp` function)
+**In the code:** [src/models/qwen35.zig](../../src/models/qwen35.zig) (`mtpForward`, `rmsNormPlusOne`, MTP buffer allocation), [src/models/model.zig](../../src/models/model.zig) (`mtpForward`, `getMtpDepth`, `getMtpLogits`, `resetMtpCache` VTable methods), [src/spec/spec_decode.zig](../../src/spec/spec_decode.zig) (`draftMtp` function)
 
 **Related:** [Chapter 2: The Transformer](02-the-transformer.md) (attention, RoPE, normalization), [Chapter 3: FFN](03-feed-forward-networks.md) (SwiGLU, MoE), [Chapter 7: Sampling](07-sampling.md) (argmax, temperature), [Chapter 17: Speculative Decoding](17-speculative-decoding.md) (DDTree, n-gram, verification)
 

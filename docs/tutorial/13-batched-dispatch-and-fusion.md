@@ -627,7 +627,7 @@ Each threadgroup computes one output element. It loads the same `x` vector once 
 - SiLU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4
 - GELU: Q8_0, Q4_K, Q5_K, Q6_K, Q4_0
 
-4 CUDA kernels: `fused_ffn_{q8_0,q4_k,q5_k,q6_k}.zig` (SiLU, compiled to PTX).
+5 CUDA kernels: SiLU × {Q8_0, Q4_K, Q5_K, Q6_K} + GELU × {Q8_0} (compiled to PTX).
 
 **Performance:**
 
@@ -648,7 +648,7 @@ Measured 2026-03-24 on Apple M4 Pro, full methodology in [BENCHMARKS.md](../BENC
 | Qwen3.5 0.8B Q8_0, profiled decode: 23.8 -> 25.5 tok/s (+7%) | BENCHMARKS Megakernel System, Tier 1 |
 | Largest gains come from mixed-quant models (Q4_K_M) where fused kernels cover every layer type | BENCHMARKS Megakernel System, Tier 1 |
 
-**Supported models:** Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), GLM-4 on Metal. Qwen 3.5 on CUDA (Q8_0, Q4_K, Q5_K, Q6_K) and ROCm (Q8_0).
+**Supported models:** Qwen 3.5, Gemma 3, Gemma 4 (dense+MoE), GLM-4 on Metal. Qwen 3.5 on CUDA (Q8_0, Q4_K, Q5_K, Q6_K).
 
 **Weight offset computation:** The megakernel needs to access both gate and up weight matrices in a single dispatch. `src/backend/megakernel.zig` computes per-layer byte offsets so the kernel can locate both weight tensors without separate buffer bindings.
 
@@ -709,7 +709,7 @@ Single GPU dispatch:
 
 **TurboQuant+ in megakernels:** The `mega_kv_append_tq` and `mega_sdpa_inline` building blocks integrate TurboQuant+ directly. KV values are quantized inline during append, and SDPA dequantizes them on-the-fly with sparse V optimization (positions with softmax weight below 1e-6 skip V dequantization).
 
-**Total megakernel code:** ~4,447 lines across 12 files (hand-written) plus ~1,050 lines in `mega_compose.zig` (auto-generator).
+**Total megakernel code:** ~4,923 lines across 16 files (hand-written) plus ~1,050 lines in `mega_compose.zig` (auto-generator).
 
 ### Tier 3: Composed Megakernels (Auto-Generated)
 
@@ -917,9 +917,9 @@ flowchart TD
 
 | Model | Backend | Quant Types | Enable |
 |-------|---------|-------------|--------|
-| Qwen 3.5 | Metal, CUDA, ROCm | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
-| Gemma 4 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
-| Gemma 3 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Qwen 3.5 | Metal, CUDA | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Gemma 4 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
+| Gemma 3 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
 | GLM-4 | Metal | Q8_0, Q4_K, Q5_K, Q6_K, Q4_0 | `--megakernel` |
 
 ### Debugging

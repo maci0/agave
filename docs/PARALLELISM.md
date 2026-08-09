@@ -1,6 +1,6 @@
 # Agave — Distributed Inference
 
-**Status**: Implemented  
+**Status**: PP implemented; TP weight sharding implemented, all-reduce incomplete (`--tp > 1` rejected at CLI)  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
 **Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU
@@ -13,6 +13,8 @@
 
 ```bash
 # Same-node TP (auto-selects POSIX shm)
+# NOTE: --tp > 1 is currently rejected at CLI (all-reduce not yet complete).
+# These examples show the intended usage once TP is fully wired.
 agave model.gguf --tp 2 --rank 0 --peers localhost "prompt"    # terminal 1
 agave model.gguf --tp 2 --rank 1 --peers localhost "prompt"    # terminal 2
 
@@ -20,11 +22,11 @@ agave model.gguf --tp 2 --rank 1 --peers localhost "prompt"    # terminal 2
 agave model.gguf --pp 2 --rank 0 --peers 10.0.1.2 "prompt"    # node A
 agave model.gguf --pp 2 --rank 1 --peers 10.0.1.1 "prompt"    # node B
 
-# Cross-node TP over NCCL RoCE RDMA
+# Cross-node TP over NCCL RoCE RDMA (requires all-reduce completion — future work)
 agave model.gguf --tp 2 --rank 0 --peers 10.0.1.2 --transport nccl "prompt"
 agave model.gguf --tp 2 --rank 1 --peers 10.0.1.1 --transport nccl "prompt"
 
-# Hybrid TP+PP (4 GPUs: 2 TP groups × 2 PP stages)
+# Hybrid TP+PP (4 GPUs: 2 TP groups × 2 PP stages; requires TP completion)
 agave model.gguf --tp 2 --pp 2 --rank 0 --peers 10.0.1.2 "prompt"
 
 # Disaggregated prefill/decode
@@ -68,12 +70,12 @@ All three operations dispatch to the active transport (TCP, shm, or NCCL) intern
 
 ### NCCL Integration
 
-NCCL is loaded at runtime via `std.DynLib` — no compile-time linking, no vendored C code. Function pointers resolved: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclAllReduce`, `ncclSend`, `ncclRecv`, `ncclCommDestroy`.
+NCCL is loaded at runtime via `std.DynLib` — no compile-time linking, no vendored C code. Function pointers resolved: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclAllReduce`, `ncclSend`, `ncclRecv`, `ncclGroupStart`, `ncclGroupEnd`, `ncclCommDestroy`.
 
 **Initialization sequence:**
 1. TCP connection established between ranks (standard `connect`/`accept`)
 2. Rank 0 calls `ncclGetUniqueId`, sends 128-byte ID over TCP to rank 1
-3. Both ranks call `ncclCommInitRank` — **deferred** to first `allReduceAdd` call (after CUDA kernels have initialized the primary context)
+3. Both ranks call `ncclCommInitRank` — **deferred** to the first NCCL operation (`allReduceAdd`, `sendBuf`, or `recvBuf`) (after CUDA kernels have initialized the primary context)
 4. After `ncclCommInitRank`, restore CUDA context via `cuCtxSetCurrent` (NCCL may change active context)
 
 **Critical requirement**: CUDA backend must use `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`). NCCL's runtime API uses the primary context; a separate driver API context causes context corruption and wrong results.

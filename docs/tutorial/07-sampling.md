@@ -211,8 +211,8 @@ flowchart TD
     Length["Match length L\n(tokens in common prefix)"]:::migration
     Penalty["Apply penalty\nlogit -= dry_multiplier × L"]:::danger
     Ex1["token 'sat' after 'cat'\nL=1 (just 'sat') → no penalty"]:::optional
-    Ex2["token 'on' after 'cat sat'\nL=2 (bigram) → penalty x1.5^2=2.25"]:::optional
-    Ex3["token 'mat' after 'cat sat on'\nL=3 → penalty x1.5^3=3.375"]:::optional
+    Ex2["token 'on' after 'cat sat'\nL=2 (bigram) → penalty 1.5×2=3.0"]:::optional
+    Ex3["token 'mat' after 'cat sat on'\nL=3 → penalty 1.5×3=4.5"]:::optional
     RP["repeat_penalty: penalizes\neach token individually\n'the' always penalized"]:::optional
     DRY2["DRY: penalizes token only\nwhen it continues a phrase\n'the' fine alone, penalized in repeated phrase"]:::optional
 
@@ -421,15 +421,15 @@ flowchart TD
     Logits --> Bias
     Bias --> Penalties
     Penalties --> Grammar
-    Grammar --> MinP
+    Grammar --> Mirostat{"Mirostat\nactive?"}
+    Mirostat -->|Yes - replaces top-k/p| MiroTrunc
+    Mirostat -->|No| MinP
     MinP --> XTC
     XTC --> Temp
     Temp --> TopK
     TopK --> Softmax
     Softmax --> TopP
-    TopP --> Mirostat{"Mirostat\nactive?"}
-    Mirostat -->|Yes - replaces top-k/p| MiroTrunc
-    Mirostat -->|No| FinalSample
+    TopP --> FinalSample
     MiroTrunc --> FinalSample
     FinalSample --> NextToken
 ```
@@ -441,9 +441,9 @@ logits (raw scores, one per vocab token)
   ├─ repeat/frequency/presence penalties      [per-token logit modification]
   ├─ DRY penalty (repeated n-gram sequences)  [sequence-aware penalty]
   ├─ grammar mask (set invalid tokens to -∞)  [hard constraint]
-  ├─ temperature scaling (logits /= temp)     [control sharpness]
-  ├─ XTC exclusion (drop top tokens randomly) [diversity injection]
   ├─ min-p filter (drop < min_p × max)        [adaptive threshold]
+  ├─ XTC exclusion (drop top tokens randomly) [diversity injection]
+  ├─ temperature scaling (logits /= temp)     [control sharpness]
   ├─ top-k filter (keep only top K tokens)    [hard cutoff]
   │
   ├─ softmax → probabilities                  [logits → probabilities]

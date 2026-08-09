@@ -622,8 +622,14 @@ counter.fetchAdd(1, .seq_cst)    # should be .monotonic
 **ThreadSanitizer (TSan)** detects data races at runtime:
 
 ```bash
-zig build -Dsanitize-thread
-./zig-out/bin/agave-test
+# Note: -Dsanitize-thread is not currently in build.zig — it would need to be
+# added as a build option before TSan can be used. The standard way to run
+# tests is `zig build test`, which produces zig-out/bin/agave-unit-test.
+zig build test
+
+# If TSan support is added to build.zig in the future:
+# zig build test -Dsanitize-thread
+# ./zig-out/bin/agave-unit-test
 
 # Output if race detected:
 # WARNING: ThreadSanitizer: data race
@@ -633,7 +639,7 @@ zig build -Dsanitize-thread
 #     #0 doWork thread_pool.zig:115
 ```
 
-**Use TSan in CI** to catch races before production.
+**Use TSan in CI** to catch races before production (once `-Dsanitize-thread` is added to `build.zig`).
 
 ---
 
