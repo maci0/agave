@@ -146,7 +146,7 @@ The composable megakernel generator (`src/backend/mega_compose.zig`) auto-genera
 **Layer type helpers:**
 - `ModelDesc.uniform(n, .attention)` -- all attention layers (Gemma 3, dense models)
 - `ModelDesc.qwenHybrid(n, interval)` -- DeltaNet + attention hybrid (Qwen 3.5)
-- Custom: populate `layer_types` array directly for mixed architectures (Nemotron-H)
+- Custom: populate `layer_types` array directly for mixed architectures (Nemotron-H, DeepSeek V4 with MLA + hyper connections + MoE)
 
 **Optional flags:** `has_gate`, `has_qk_norm`, `has_post_attn_norm`, `fuse_residual` -- set these for model-specific structural variations.
 
@@ -303,6 +303,14 @@ zig build test -Denable-webgpu=false    # skip WebGPU tests
 - **Leak detection**: All tests use `std.testing.allocator` — any unfreed allocation fails the test
 - **Golden tests**: Manual comparison against reference implementations (llama.cpp, HuggingFace)
 - **Model × Backend matrix**: See [TEST_MATRIX.md](TEST_MATRIX.md)
+
+### End-to-End Test Harness
+
+`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires a Python 3.8+ venv with no external dependencies.
+
+```bash
+python tests/harness.py --models-dir /path/to/models
+```
 
 ---
 

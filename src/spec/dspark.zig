@@ -26,10 +26,10 @@ pub const SpsProfile = struct {
     /// sps[i] = steps-per-second when batch has i+1 tokens (0-indexed by B-1).
     sps: []const f32,
 
-    /// Look up (or interpolate) SPS for a given batch size B.
-    pub fn stepsPerSec(self: SpsProfile, B: usize) f32 {
+    /// Look up (or interpolate) SPS for a given batch size.
+    pub fn stepsPerSec(self: SpsProfile, batch_size: usize) f32 {
         if (self.sps.len == 0) return 1.0;
-        const idx = if (B == 0) 0 else B - 1;
+        const idx = if (batch_size == 0) 0 else batch_size - 1;
         if (idx >= self.sps.len) return self.sps[self.sps.len - 1];
         return self.sps[idx];
     }
@@ -131,10 +131,10 @@ pub fn scheduleVerification(
 
     // Sort candidates descending by survival probability.
     std.sort.pdq(Candidate, scratch[0..n_cands], {}, struct {
-        fn lt(_: void, a: Candidate, b: Candidate) bool {
+        fn descendingSurvival(_: void, a: Candidate, b: Candidate) bool {
             return a.survival > b.survival;
         }
-    }.lt);
+    }.descendingSurvival);
 
     // Initialise per-request verification lengths to 0.
     @memset(result.lengths[0..R_clamped], 0);
@@ -287,7 +287,7 @@ pub const RnnHead = struct {
         @memcpy(z[2 * r .. 2 * r + d], h_k); // h_k
 
         // Apply W_gco: [z_dim, r*3] → [gate; cand; out] each R^r
-        std.debug.assert(r <= 4096); // stack buffers below are sized for r ≤ 4096
+        if (r > 4096) @panic("dspark: rank exceeds stack buffer limit (4096)");
         var gate_buf: [4096]f32 = undefined;
         var cand_buf: [4096]f32 = undefined;
         var out_buf: [4096]f32 = undefined;

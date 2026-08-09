@@ -134,6 +134,7 @@ pub const BpeTokenizer = struct {
         self.word_cache.deinit(self.allocator);
     }
 
+    /// Duplicate `s` into owned memory and track it for cleanup in `deinit`.
     fn own(self: *BpeTokenizer, s: []const u8) ![]const u8 {
         const d = try self.allocator.dupe(u8, s);
         errdefer self.allocator.free(d);
@@ -141,6 +142,9 @@ pub const BpeTokenizer = struct {
         return d;
     }
 
+    /// Build the GPT-2 byte↔unicode lookup tables (`byte_to_unicode` / `unicode_to_byte`).
+    /// Idempotent — subsequent calls are no-ops. On error, partially-allocated
+    /// entries are freed and `byte_mappings_init` is reset so the caller can retry.
     fn initByteMappings(self: *BpeTokenizer) !void {
         if (self.byte_mappings_init) return;
         self.byte_mappings_init = true;
@@ -188,6 +192,8 @@ pub const BpeTokenizer = struct {
         }
     }
 
+    /// Map raw bytes to their GPT-2 unicode representations.
+    /// Returns a caller-owned UTF-8 slice that must be freed with `self.allocator`.
     fn bytesToUnicode(self: *const BpeTokenizer, text: []const u8) ![]u8 {
         var result = std.ArrayList(u8).empty;
         for (text) |byte| {
@@ -196,6 +202,9 @@ pub const BpeTokenizer = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
+    /// Reverse the GPT-2 unicode mapping: convert unicode-encoded token text back
+    /// to raw bytes. Unmapped multi-byte sequences are replaced with `'?'`.
+    /// Returns a caller-owned slice that must be freed with `self.allocator`.
     fn unicodeToBytes(self: *const BpeTokenizer, text: []const u8) ![]u8 {
         var result = std.ArrayList(u8).empty;
         var i: usize = 0;
@@ -224,6 +233,8 @@ pub const BpeTokenizer = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
+    /// Split a UTF-8 string into individual codepoint slices (each pointing into `text`).
+    /// Invalid lead bytes are treated as single-byte sequences.
     fn splitUtfChars(self: *const BpeTokenizer, text: []const u8) !std.ArrayList([]const u8) {
         var chars: std.ArrayList([]const u8) = .empty;
         var i: usize = 0;
@@ -236,6 +247,9 @@ pub const BpeTokenizer = struct {
         return chars;
     }
 
+    /// Scan adjacent token pairs and return the position and priority of the
+    /// highest-priority (lowest numeric priority) merge. Returns `pos = -1`
+    /// when no applicable merge exists. Uses a stack buffer for the merge key.
     fn findBestMerge(self: *const BpeTokenizer, tokens: []const []const u8) struct { pos: i32, priority: u32 } {
         var best_pos: i32 = -1;
         var best_pri: u32 = std.math.maxInt(u32);
@@ -257,9 +271,17 @@ pub const BpeTokenizer = struct {
         return .{ .pos = best_pos, .priority = best_pri };
     }
 
+    /// Iteratively apply BPE merges to a list of unicode character slices until
+    /// no more merges are possible. Returns the merged token list; intermediate
+    /// allocations that are not part of the final result are freed before return.
     fn applyBpe(self: *const BpeTokenizer, chars: []const []const u8) !std.ArrayList([]const u8) {
         var current: std.ArrayList([]const u8) = .empty;
+        errdefer current.deinit(self.allocator);
         var allocated: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (allocated.items) |s| self.allocator.free(s);
+            allocated.deinit(self.allocator);
+        }
         try current.appendSlice(self.allocator, chars);
         while (current.items.len > 1) {
             const m = self.findBestMerge(current.items);
@@ -294,6 +316,7 @@ pub const BpeTokenizer = struct {
     pub fn encode(self: *BpeTokenizer, text: []const u8) ![]u32 {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
         var result: std.ArrayList(u32) = .empty;
+        errdefer result.deinit(self.allocator);
 
         // Split by special tokens first
         var segments: std.ArrayList([]const u8) = .empty;
@@ -317,13 +340,12 @@ pub const BpeTokenizer = struct {
                     var it = self.special_tokens.iterator();
                     while (it.next()) |entry| {
                         const st = entry.key_ptr.*;
-                        if (scan + st.len <= text.len and
+                        if (st.len > best_len and scan + st.len <= text.len and
                             std.mem.eql(u8, text[scan..][0..st.len], st))
                         {
                             best_pos = scan;
                             best_len = st.len;
                             best_tok = st;
-                            break;
                         }
                     }
                     if (best_tok != null) break;
@@ -335,7 +357,7 @@ pub const BpeTokenizer = struct {
                     try segments.append(self.allocator, text[start..best_pos]);
                     try is_special.append(self.allocator, false);
                 }
-                try segments.append(self.allocator, text[start + (best_pos - start) ..][0..best_len]);
+                try segments.append(self.allocator, text[best_pos..][0..best_len]);
                 try is_special.append(self.allocator, true);
                 start = best_pos + best_len;
             } else {
@@ -365,8 +387,12 @@ pub const BpeTokenizer = struct {
                         self.unlockWordCache();
                         try result.appendSlice(self.allocator, tmp_ids[0..n_ids]);
                     } else {
-                        const owned = try self.allocator.dupe(u32, cached_ids);
+                        // Copy pointer+len under lock, then unlock before allocating
+                        // to avoid deadlock if dupe() returns OOM.
+                        const src_ptr = cached_ids.ptr;
+                        const src_len = cached_ids.len;
                         self.unlockWordCache();
+                        const owned = try self.allocator.dupe(u32, src_ptr[0..src_len]);
                         defer self.allocator.free(owned);
                         try result.appendSlice(self.allocator, owned);
                     }
@@ -519,6 +545,7 @@ pub const BpeTokenizer = struct {
     fn encodeSpmInner(self: *const BpeTokenizer, text: []const u8, add_dummy_prefix: bool) ![]u32 {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
         var result: std.ArrayList(u32) = .empty;
+        errdefer result.deinit(self.allocator);
 
         // When add_dummy_prefix is true (traditional SPM), the first word and
         // every word after whitespace/special tokens/newlines gets a ▁ prefix.

@@ -709,7 +709,7 @@ Single GPU dispatch:
 
 **TurboQuant+ in megakernels:** The `mega_kv_append_tq` and `mega_sdpa_inline` building blocks integrate TurboQuant+ directly. KV values are quantized inline during append, and SDPA dequantizes them on-the-fly with sparse V optimization (positions with softmax weight below 1e-6 skip V dequantization).
 
-**Total megakernel code:** ~4,334 lines across 12 files (hand-written) plus ~1,036 lines in `mega_compose.zig` (auto-generator).
+**Total megakernel code:** ~4,447 lines across 12 files (hand-written) plus ~1,050 lines in `mega_compose.zig` (auto-generator).
 
 ### Tier 3: Composed Megakernels (Auto-Generated)
 

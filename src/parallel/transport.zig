@@ -72,6 +72,7 @@ const ShmHeader = extern struct {
     _pad: [56]u8 = [_]u8{0} ** 56,
 };
 
+/// Network transport for distributed inference (TCP, POSIX shared memory, or NCCL).
 pub const Transport = struct {
     kind: TransportKind,
     rank: u32,
@@ -122,11 +123,15 @@ pub const Transport = struct {
     /// Function to get device pointer: fn(backend, host_ptr) -> device_ptr.
     cuda_get_dev_ptr: ?*const fn (*anyopaque, [*]const f32) u64 = null,
 
+    /// Create a transport instance for the given backend kind, rank, and world size.
+    /// Returns `error.NotImplemented` for unsupported transport kinds (currently only tcp, shm, nccl).
     pub fn init(allocator: Allocator, kind: TransportKind, rank: u32, world_size: u32) !Transport {
         if (kind != .tcp and kind != .shm and kind != .nccl) return error.NotImplemented;
         return .{ .kind = kind, .rank = rank, .world_size = world_size, .allocator = allocator };
     }
 
+    /// Release all resources: NCCL communicator, device staging buffer, TCP sockets,
+    /// host receive buffer, and shared-memory mappings/regions.
     pub fn deinit(self: *Transport) void {
         if (self.nccl_dev_buf != 0) {
             if (self.cuda_mem_free) |free| _ = free(self.nccl_dev_buf);
@@ -151,6 +156,9 @@ pub const Transport = struct {
         }
     }
 
+    /// Open a TCP connection to a remote peer at `host`:`port` and register it.
+    /// Returns `error.TooManyPeers` if the maximum peer count is reached,
+    /// `error.SocketFailed` or `error.ConnectFailed` on socket/connect errors.
     pub fn connectPeer(self: *Transport, host: [4]u8, port: u16) !void {
         if (self.tcp_connected >= max_peers) return error.TooManyPeers;
         const fd = c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
@@ -168,6 +176,9 @@ pub const Transport = struct {
         self.tcp_connected += 1;
     }
 
+    /// Accept an incoming TCP peer connection on `listen_fd` and register it.
+    /// Returns `error.TooManyPeers` if the maximum peer count is reached,
+    /// or `error.AcceptFailed` if the underlying accept(2) call fails.
     pub fn acceptPeer(self: *Transport, listen_fd: c_int) !void {
         if (self.tcp_connected >= max_peers) return error.TooManyPeers;
         var addr: std.posix.sockaddr.in = undefined;
@@ -381,6 +392,9 @@ pub const Transport = struct {
         }
     }
 
+    /// Sum-reduce `n` floats in `buf` across all peers (in-place).
+    /// Dispatches to NCCL (GPU-direct or staging), SHM, or TCP depending on transport kind.
+    /// Falls back to TCP when the NCCL communicator is unavailable.
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.kind == .nccl) {
             self.ensureNcclComm();
@@ -527,7 +541,15 @@ pub const Transport = struct {
             if (self.nccl_dev_buf != 0) {
                 if (self.cuda_mem_free) |free| _ = free(self.nccl_dev_buf);
             }
-            if (self.cuda_mem_alloc) |alloc| _ = alloc(&self.nccl_dev_buf, byte_len);
+            if (self.cuda_mem_alloc) |alloc| {
+                const rc = alloc(&self.nccl_dev_buf, byte_len);
+                if (rc != 0) {
+                    std.log.err("ensureStagingBuf: cuda_mem_alloc failed: rc={d}", .{rc});
+                    self.nccl_dev_buf = 0;
+                    self.nccl_dev_buf_size = 0;
+                    return;
+                }
+            }
             self.nccl_dev_buf_size = byte_len;
         }
     }
@@ -547,6 +569,9 @@ pub const Transport = struct {
         }
     }
 
+    /// Receive `n` floats from the peer into `buf`.
+    /// Uses NCCL point-to-point recv (with device staging), SHM, or TCP
+    /// depending on transport kind. Falls back to TCP when NCCL is unavailable.
     pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) void {
         const byte_len = n * @sizeOf(f32);
         if (self.kind == .nccl and self.nccl_recv != null) {

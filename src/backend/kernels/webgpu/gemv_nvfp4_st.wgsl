@@ -1,3 +1,4 @@
+// GEMV for NVFP4 sub-tile quantized weights.
 struct Params {
     n: u32,
     k: u32,

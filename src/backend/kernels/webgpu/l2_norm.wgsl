@@ -1,3 +1,4 @@
+// L2 normalization.
 struct Params {
     n: u32,
     eps: f32,

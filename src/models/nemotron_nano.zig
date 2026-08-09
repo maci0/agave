@@ -61,7 +61,7 @@ const nvfp4_scale_group_size: usize = 16;
 /// MLX quantization group size (elements per scale/bias pair).
 const mlx_group_size: usize = mlx_ops.mlx_group_size;
 
-/// Nemotron-3 Nano 30B hybrid model state.
+/// Nemotron Nano 30B-A3B hybrid model state.
 pub const NemotronNanoModel = struct {
     fmt: Format,
     be: Backend,
@@ -186,8 +186,18 @@ pub const NemotronNanoModel = struct {
         if (f.getMetaU32("max_position_embeddings")) |v| self.max_seq_len = v;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
-        std.debug.assert(self.n_layers <= max_layers);
-        std.debug.assert(self.num_experts_per_tok <= max_active_experts);
+        if (self.ssm_n_groups == 0) {
+            std.log.err("nemotron_nano: ssm_n_groups must be non-zero", .{});
+            return error.MissingTensor;
+        }
+        if (self.n_layers > max_layers) {
+            std.log.err("nemotron_nano: n_layers ({d}) exceeds max_layers ({d})", .{ self.n_layers, max_layers });
+            return error.MissingTensor;
+        }
+        if (self.num_experts_per_tok > max_active_experts) {
+            std.log.err("nemotron_nano: num_experts_per_tok ({d}) exceeds max_active_experts ({d})", .{ self.num_experts_per_tok, max_active_experts });
+            return error.MissingTensor;
+        }
 
         // ── Layer type detection from hybrid_override_pattern ────
         if (f.getMetaStr("hybrid_override_pattern")) |pattern| {
@@ -342,6 +352,7 @@ pub const NemotronNanoModel = struct {
 
     /// Release all allocated buffers and per-layer state.
     pub fn deinit(self: *NemotronNanoModel) void {
+        self.be.sync();
         const nl: usize = self.n_layers;
         for (0..nl) |i| {
             if (self.conv_states[i].len > 0) self.allocator.free(self.conv_states[i]);
@@ -379,6 +390,11 @@ pub const NemotronNanoModel = struct {
     // ── Public interface ──────────────────────────────────────────
 
     /// Run one decode step. Returns the argmax next-token ID.
+    ///
+    /// Error conditions:
+    /// - `error.KVCacheFull`   — sequence length has reached `max_seq_len`.
+    /// - `error.MissingTensor` — a required weight tensor was not found in the model file.
+    /// - `error.Cancelled`     — the inference was cancelled via the `cancelled` flag.
     pub fn forward(self: *NemotronNanoModel, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
@@ -637,7 +653,7 @@ pub const NemotronNanoModel = struct {
         const bias_ptr: [*]const f32 = @ptrCast(@alignCast(bias_t.data_ptr));
 
         // Apply sigmoid to all router logits and save raw scores for weighting.
-        std.debug.assert(n_exp <= max_routed_experts);
+        if (n_exp > max_routed_experts) @panic("nemotron_nano: n_exp exceeds max_routed_experts");
         var raw_sigmoid: [max_routed_experts]f32 = undefined;
         for (0..n_exp) |i| {
             raw_sigmoid[i] = math_ops.sigmoid(self.router_buf[i]);

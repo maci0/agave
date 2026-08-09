@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-07-31
+**Last updated**: 2026-08-09
 
 ---
 
@@ -38,7 +38,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | CUDA | Complete | 61 kernels, fused FFN, 3 megakernels |
 | Vulkan | Complete | ~49 shaders, deferred dispatch |
 | WebGPU | Complete | ~48 shaders, lazy readback |
-| ROCm | Complete | 29 kernels, GPTQ, 1 megakernel |
+| ROCm | Complete | 49 kernels, GPTQ, 1 megakernel |
 
 ---
 
@@ -119,13 +119,13 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 23 | Nostr-based discovery | Mesh-LLM |
 | 24 | RDMA over Thunderbolt 5 | Exo |
 | 25 | Inter-model collaboration (MoM) | Mesh-LLM |
-| ~~26~~ | ~~Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured)~~ | Done (CPU +21%, Metal +12%) |
-| ~~27~~ | ~~DeepSeek V4 Flash 0731 full support~~ | Done | All components implemented: (1) hyper connections, (2) MLA with output LoRA, (3) CSA+HCA compressors (ratio=4/128), (4) Lightning Indexer (LID), (5) hash routing, (6) HC streams. Perf: KV q8_0, Metal SDPA hd=512+Q8_0, SIMD RoPE/routing/compressor, thread-pool parallel attention, sparse V, buffer elimination. |
-| ~~28~~ | ~~AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major — wrong packing)~~ | Done (all 6 backends + nibble order fix) |
-| ~~29~~ | ~~TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte)~~ | Done (all 6 backends) |
-| ~~30~~ | ~~TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2)~~ | Done (all 6 backends) |
+| 26 | Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured) | Done (CPU +21%, Metal +12%) |
+| 27 | DeepSeek V4 Flash 0731 full support | Done | All components implemented: (1) hyper connections, (2) MLA with output LoRA, (3) CSA+HCA compressors (ratio=4/128), (4) Lightning Indexer (LID), (5) hash routing, (6) HC streams. Perf: KV q8_0, Metal SDPA hd=512+Q8_0, SIMD RoPE/routing/compressor, thread-pool parallel attention, sparse V, buffer elimination. |
+| 28 | AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major — wrong packing) | Done (all 6 backends + nibble order fix) |
+| 29 | TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte) | Done (all 6 backends) |
+| 30 | TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2) | Done (all 6 backends) |
 | 31 | EXL2 mixed-precision codebook (NVIDIA only) | ExLlama |
-| ~~32~~ | ~~HQQ half-quadratic quantization~~ | Done (all 6 backends: Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) |
+| 32 | HQQ half-quadratic quantization | Done (all 6 backends: Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) |
 
 ---
 
@@ -138,7 +138,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Tensor/Pipeline parallelism (6 modes, TCP/shm/NCCL) | Working |
 | Grammar-constrained decoding (GBNF + JSON schema) | Working |
 | TriAttention KV eviction (norm + frequency) | Phase 1+2 |
-| Speculative decoding (DDTree, self-spec, draft, n-gram) | Working |
+| Speculative decoding (14 modes: standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, auto) | Working |
 | CUDA fused FFN megakernels | Done |
 | GPTQ SafeTensors support | Working |
 | Native FP4 on Blackwell SM121 | Working |
@@ -148,7 +148,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 ## Model Abstraction (Deferred)
 
-All 9 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
+All 10 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
 1. Models rarely change once working
 2. Each has unique quirks (Gemma scaling, GPT-OSS sinks, Qwen DeltaNet, GLM4 MLA)
 3. Self-contained files are easier to debug

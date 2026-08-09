@@ -35,6 +35,8 @@ const CacheSlot = struct {
     occupied: bool = false,
 };
 
+/// LRU cache for MoE expert weights, tracking residency and eviction
+/// across layers to minimize redundant GPU uploads.
 pub const ExpertCache = struct {
     slots: []CacheSlot,
     n_slots: u32,
@@ -48,6 +50,7 @@ pub const ExpertCache = struct {
     hits: u64 = 0,
     misses: u64 = 0,
 
+    /// Allocates cache slots and the `(layer, expert) → slot` lookup table, clamped to `max_cache_slots`.
     pub fn init(allocator: Allocator, n_layers: u32, n_experts: u32, n_cache_slots: u32) !ExpertCache {
         const n_slots = @min(n_cache_slots, @as(u32, @intCast(max_cache_slots)));
         if (n_slots == 0) return error.ZeroCacheSlots;
@@ -67,6 +70,7 @@ pub const ExpertCache = struct {
         };
     }
 
+    /// Frees the cache slots and the lookup table.
     pub fn deinit(self: *ExpertCache, allocator: Allocator) void {
         allocator.free(self.slots);
         allocator.free(self.lookup);

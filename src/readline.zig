@@ -13,8 +13,11 @@ const search_buf_size = 256;
 const leftover_buf_size = 128;
 const input_read_buf_size = 256;
 const ctrl_c_double_tap_ms: i64 = 1000;
+const poll_in: u16 = 0x0001;
 
 /// Millisecond timestamp via posix clock_gettime syscall (no libc).
+/// Uses REALTIME because this is for Ctrl-C double-tap detection where
+/// NTP skew over 1 second is negligible.
 fn milliTimestamp() i64 {
     var ts: posix.timespec = undefined;
     _ = posix.system.clock_gettime(posix.system.CLOCK.REALTIME, &ts);
@@ -136,7 +139,7 @@ pub const LineEditor = struct {
                         }
                         if (key.matches('d', .{ .ctrl = true })) {
                             if (input.buf.realLength() == 0) return null;
-                            input.update(.{ .key_press = key }) catch {};
+                            input.update(.{ .key_press = key }) catch {}; // best-effort: OOM drops this action
                             self.refreshLine(prompt, prompt_w, &input);
                             continue;
                         }
@@ -175,7 +178,7 @@ pub const LineEditor = struct {
                                 }
                                 hist_idx -= 1;
                                 input.clearRetainingCapacity();
-                                input.insertSliceAtCursor(self.history[hist_idx]) catch {};
+                                input.insertSliceAtCursor(self.history[hist_idx]) catch {}; // best-effort: OOM drops history recall
                                 self.refreshLine(prompt, prompt_w, &input);
                             }
                             continue;
@@ -186,12 +189,12 @@ pub const LineEditor = struct {
                                 input.clearRetainingCapacity();
                                 if (hist_idx == self.hist_len) {
                                     if (saved_text) |s| {
-                                        input.insertSliceAtCursor(s) catch {};
+                                        input.insertSliceAtCursor(s) catch {}; // best-effort: OOM drops saved text restore
                                         self.allocator.free(s);
                                         saved_text = null;
                                     }
                                 } else {
-                                    input.insertSliceAtCursor(self.history[hist_idx]) catch {};
+                                    input.insertSliceAtCursor(self.history[hist_idx]) catch {}; // best-effort: OOM drops history recall
                                 }
                                 self.refreshLine(prompt, prompt_w, &input);
                             }
@@ -200,7 +203,7 @@ pub const LineEditor = struct {
 
                         // All other keys — delegate to TextInput (handles cursor movement,
                         // word-wise ops, kill-line, backspace, delete, text insertion, etc.)
-                        input.update(.{ .key_press = key }) catch {};
+                        input.update(.{ .key_press = key }) catch {}; // best-effort: OOM drops this keystroke
                         self.refreshLine(prompt, prompt_w, &input);
                     },
                 }
@@ -239,7 +242,7 @@ pub const LineEditor = struct {
             searching.* = false;
             if (search_match.*) |mi| {
                 input.clearRetainingCapacity();
-                input.insertSliceAtCursor(self.history[mi]) catch {};
+                input.insertSliceAtCursor(self.history[mi]) catch {}; // best-effort: OOM drops search result paste
             }
             self.refreshLine(prompt, prompt_w, input);
             return;
@@ -359,7 +362,7 @@ pub const LineEditor = struct {
     fn pollInput(self: *LineEditor, timeout_ms: i32) bool {
         var fds = [1]posix.pollfd{.{
             .fd = self.fd,
-            .events = 0x0001, // POLLIN
+            .events = poll_in,
             .revents = 0,
         }};
         const nr = posix.poll(&fds, timeout_ms) catch return false;

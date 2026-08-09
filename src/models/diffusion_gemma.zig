@@ -229,8 +229,12 @@ pub const DiffusionGemmaModel = struct {
             f.getMetaU32("global_head_dim") orelse default_gl_head_dim;
         self.gl_rope_theta = f.getMetaF32("text_config.global_rope_theta") orelse
             f.getMetaF32("global_rope_theta") orelse default_gl_rope_theta;
-        self.gl_partial_rotary = f.getMetaF32("text_config.partial_rotary_factor") orelse
-            f.getMetaF32("partial_rotary_factor") orelse default_gl_partial_rotary;
+        self.gl_partial_rotary = std.math.clamp(
+            f.getMetaF32("text_config.partial_rotary_factor") orelse
+                f.getMetaF32("partial_rotary_factor") orelse default_gl_partial_rotary,
+            0.0,
+            1.0,
+        );
         self.gl_rope_dim = @as(u32, @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
 
         // MoE.
@@ -336,7 +340,9 @@ pub const DiffusionGemmaModel = struct {
         return self;
     }
 
+    /// Free all allocated buffers and release the paged KV cache.
     pub fn deinit(self: *DiffusionGemmaModel) void {
+        self.be.sync();
         const allocator = self.allocator;
         for (self.norm_cache[0..self.norm_cache_len]) |entry| allocator.free(entry.data);
         allocator.free(self.hidden);
@@ -449,23 +455,28 @@ pub const DiffusionGemmaModel = struct {
         model_mod.resetKvCache(self);
     }
 
+    /// Signal cancellation to abort in-flight forward passes.
     pub fn cancel(self: *DiffusionGemmaModel) void {
         model_mod.signalCancel(&self.cancelled);
     }
 
+    /// Return the most recent next-token logits (shape [vocab_size]).
     pub fn getLogits(self: *const DiffusionGemmaModel) []const f32 {
         return self.logits_buf;
     }
 
+    /// Return the last-layer hidden state after the final norm.
     pub fn getHiddenState(self: *const DiffusionGemmaModel) []const f32 {
         return self.hidden;
     }
 
+    /// Return the last-layer hidden state before the final RMS norm.
     pub fn getPreNormHiddenState(self: *const DiffusionGemmaModel) []const f32 {
         if (self.hidden_pre_norm.len > 0) return self.hidden_pre_norm;
         return self.hidden;
     }
 
+    /// Return the paged KV-cache block table for the current sequence.
     pub fn getBlockTable(self: *DiffusionGemmaModel) []const u32 {
         return self.seq_table.block_table[0];
     }

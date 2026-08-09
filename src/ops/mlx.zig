@@ -22,7 +22,9 @@ const bits_per_byte: u32 = 8;
 /// Maximum bit offset in a u32 where a 6-bit value fits without spanning two words.
 const u6_max_single_word_offset: u5 = 26; // 32 - 6
 
-/// Compute words (u32) per group for a given bit width.
+/// Compute words (u32) per group for a given bit width using the MLX group size (64).
+/// MLX-specific: assumes `mlx_group_size` (64). Do not use for MXFP4, which uses
+/// `mxfp4_group_size` (16) and computes words-per-group inline.
 pub fn wordsPerGroup(bits: u32) usize {
     return mlx_group_size * bits / bits_per_u32;
 }
@@ -90,7 +92,7 @@ pub fn mlxGemvRows(
     k: usize,
     bits: u32,
 ) void {
-    std.debug.assert(bits == 4 or bits == 6 or bits == 8);
+    if (bits != 4 and bits != 6 and bits != 8) @panic("MLX GEMV: unsupported bits per weight (expected 4, 6, or 8)");
     const gs = mlx_group_size;
     const gpr = (k + gs - 1) / gs;
     const wpg = wordsPerGroup(bits);
@@ -388,7 +390,7 @@ pub fn mlxEmbLookup(
     k: usize,
     bits: u32,
 ) void {
-    std.debug.assert(bits == 4 or bits == 6 or bits == 8);
+    if (bits != 4 and bits != 6 and bits != 8) @panic("MLX GEMV: unsupported bits per weight (expected 4, 6, or 8)");
     const gs = mlx_group_size;
     const gpr = (k + gs - 1) / gs;
     const wpg = wordsPerGroup(bits);

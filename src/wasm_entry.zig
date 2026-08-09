@@ -54,6 +54,9 @@ const InferenceContext = struct {
     model_name: []const u8 = "",
 };
 
+/// Loads a GGUF model from a raw byte buffer provided by the JS host.
+/// Returns a context pointer (as `usize`) on success, or 0 on allocation failure.
+/// On parse/init errors the context is still returned with a diagnostic in the output buffer.
 export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     const ctx = gpa.create(InferenceContext) catch return 0;
     ctx.* = .{
@@ -127,6 +130,10 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     return @intFromPtr(ctx);
 }
 
+/// Runs text generation for the given prompt using the loaded model context.
+/// Tokenizes the prompt, applies the model's chat template, and returns the
+/// number of tokens produced. The textual output is written into the context's
+/// internal buffer and can be retrieved with `agave_get_output`. Returns 0 on error.
 export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: usize, max_tokens: u32) u32 {
     if (ctx_ptr == 0) return 0;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
@@ -169,6 +176,9 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
     return @intCast(token_ids.len);
 }
 
+/// Copies the context's output string into the caller-supplied buffer.
+/// Returns the number of bytes actually written (capped to `buf_len`).
+/// Returns 0 if `ctx_ptr` is null.
 export fn agave_get_output(ctx_ptr: usize, buf_ptr: [*]u8, buf_len: usize) usize {
     if (ctx_ptr == 0) return 0;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
@@ -177,6 +187,9 @@ export fn agave_get_output(ctx_ptr: usize, buf_ptr: [*]u8, buf_len: usize) usize
     return copy_len;
 }
 
+/// Frees an inference context previously returned by `agave_init`.
+/// Releases the model, tokenizer, GGUF data, and the context allocation itself.
+/// Safe to call with `ctx_ptr == 0` (no-op).
 export fn agave_free(ctx_ptr: usize) void {
     if (ctx_ptr == 0) return;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
@@ -186,12 +199,17 @@ export fn agave_free(ctx_ptr: usize) void {
     gpa.destroy(ctx);
 }
 
+/// Allocates `len` bytes of linear memory for the WASM host (e.g. to pass a model buffer).
+/// Returns the address as `usize`, or 0 if `len` is zero or allocation fails.
+/// The caller must free the allocation with `agave_dealloc` using the same length.
 export fn agave_alloc(len: usize) usize {
     if (len == 0) return 0;
     const buf = gpa.alloc(u8, len) catch return 0;
     return @intFromPtr(buf.ptr);
 }
 
+/// Frees a WASM linear-memory allocation previously obtained from `agave_alloc`.
+/// `ptr` and `len` must match the original allocation. Safe to call with `ptr == 0`.
 export fn agave_dealloc(ptr: usize, len: usize) void {
     if (ptr == 0 or len == 0) return;
     const slice: [*]u8 = @ptrFromInt(ptr);

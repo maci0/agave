@@ -453,7 +453,7 @@ pub const CpuBackend = struct {
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *CpuBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |i| {
-            const g = @min(gate[i], @as(f32, 10.0));
+            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
             const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
             out[i] = (g / (1.0 + @exp(-g))) * u;
         }
@@ -534,12 +534,12 @@ pub const CpuBackend = struct {
         const Static = struct {
             var caches: CacheSizes = .{};
             var sys_mem: usize = 0;
-            var detected: bool = false;
+            var detected: std.atomic.Value(bool) = .init(false);
         };
-        if (!Static.detected) {
+        if (!Static.detected.load(.acquire)) {
             Static.caches = detectCacheSizes();
             Static.sys_mem = detectSystemMem();
-            Static.detected = true;
+            Static.detected.store(true, .release);
         }
         const avail = detectAvailMem();
         return .{

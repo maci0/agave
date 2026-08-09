@@ -229,7 +229,8 @@ pub const Qwen35Model = struct {
         };
         self.rope_dim = f.getArchU32(arch, "rope.dimension_count") orelse blk: {
             // SafeTensors: compute from head_dim × partial_rotary_factor
-            if (f.getArchF32(arch, "partial_rotary_factor")) |prf| {
+            if (f.getArchF32(arch, "partial_rotary_factor")) |raw_prf| {
+                const prf = std.math.clamp(raw_prf, 0.0, 1.0);
                 break :blk @intFromFloat(@as(f32, @floatFromInt(self.head_dim)) * prf);
             }
             break :blk self.head_dim;
@@ -363,13 +364,31 @@ pub const Qwen35Model = struct {
             self.n_layers = if (nc < self.n_layers) self.n_layers - nc else 0;
         }
 
-        std.debug.assert(self.n_head % self.n_head_kv == 0);
-        std.debug.assert(self.ssm_d_inner % self.ssm_dt_rank == 0);
-        std.debug.assert(self.rope_dim <= self.head_dim);
-        std.debug.assert(self.rope_dim % 2 == 0);
+        if (self.n_head_kv == 0 or self.n_head % self.n_head_kv != 0) {
+            std.log.err("qwen35: n_head ({d}) not divisible by n_head_kv ({d})", .{ self.n_head, self.n_head_kv });
+            return error.MissingTensor;
+        }
+        if (self.ssm_dt_rank == 0 or self.ssm_d_inner % self.ssm_dt_rank != 0) {
+            std.log.err("qwen35: ssm_d_inner ({d}) not divisible by ssm_dt_rank ({d})", .{ self.ssm_d_inner, self.ssm_dt_rank });
+            return error.MissingTensor;
+        }
+        if (self.rope_dim > self.head_dim) {
+            std.log.err("qwen35: rope_dim ({d}) exceeds head_dim ({d})", .{ self.rope_dim, self.head_dim });
+            return error.MissingTensor;
+        }
+        if (self.rope_dim % 2 != 0) {
+            std.log.err("qwen35: rope_dim ({d}) is not even", .{self.rope_dim});
+            return error.MissingTensor;
+        }
         if (self.is_moe) {
-            std.debug.assert(self.n_experts_active <= self.n_experts);
-            std.debug.assert(self.n_experts_active <= max_active_experts);
+            if (self.n_experts_active > self.n_experts) {
+                std.log.err("qwen35: n_experts_active ({d}) exceeds n_experts ({d})", .{ self.n_experts_active, self.n_experts });
+                return error.MissingTensor;
+            }
+            if (self.n_experts_active > max_active_experts) {
+                std.log.err("qwen35: n_experts_active ({d}) exceeds max_active_experts ({d})", .{ self.n_experts_active, max_active_experts });
+                return error.MissingTensor;
+            }
         }
 
         const qd: usize = self.n_head * self.head_dim;
@@ -568,6 +587,7 @@ pub const Qwen35Model = struct {
 
     /// Free all allocated buffers and KV cache.
     pub fn deinit(self: *Qwen35Model) void {
+        self.be.sync();
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         self.allocator.free(self.hidden);
         self.allocator.free(self.hidden2);
@@ -611,6 +631,7 @@ pub const Qwen35Model = struct {
         self.allocator.free(self.dn_dt_bias);
         self.allocator.free(self.dn_conv_w);
         self.allocator.free(self.dn_ssm_norm_w);
+        if (self.tp_row_shard_buf.len > 0) self.allocator.free(self.tp_row_shard_buf);
 
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
@@ -633,6 +654,24 @@ pub const Qwen35Model = struct {
             if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |t| _ = self.normAsF32(t, hd);
             if (self.fmt.layerTensor(li, "post_attention_norm.weight")) |t| _ = self.normAsF32(t, e);
             if (self.fmt.layerTensor(li, "ffn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.has_attn_bias) {
+                const kvd = @as(usize, self.n_head_kv) * hd;
+                const q_out = @as(usize, self.n_head) * hd * @as(usize, if (self.has_gate) 2 else 1);
+                if (self.fmt.layerTensor(li, "attn_q.bias")) |t| _ = self.normAsF32(t, q_out);
+                if (self.fmt.layerTensor(li, "attn_k.bias")) |t| _ = self.normAsF32(t, kvd);
+                if (self.fmt.layerTensor(li, "attn_v.bias")) |t| _ = self.normAsF32(t, kvd);
+            }
+        }
+        // MTP (multi-token prediction) layers live at indices beyond n_layers.
+        for (0..self.n_mtp_layers) |d| {
+            const mtp_lid: u32 = @intCast(self.n_layers + d);
+            if (self.fmt.layerTensor(mtp_lid, "nextn.enorm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(mtp_lid, "nextn.hnorm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(mtp_lid, "attn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(mtp_lid, "attn_q_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(mtp_lid, "attn_k_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(mtp_lid, "ffn_norm.weight")) |t| _ = self.normAsF32(t, e);
+            if (self.fmt.layerTensor(mtp_lid, "nextn.shared_head_norm.weight")) |t| _ = self.normAsF32(t, e);
         }
     }
 
@@ -1045,7 +1084,7 @@ pub const Qwen35Model = struct {
         const conv_ch: usize = self.ssmConvChannels();
         const d_conv: usize = self.ssm_d_conv;
 
-        std.debug.assert(num_v_heads <= max_ssm_v_heads);
+        if (num_v_heads > max_ssm_v_heads) @panic("qwen35: num_v_heads exceeds max_ssm_v_heads");
 
         // 1. Attention norm (fused with prior FFN residual when available)
         var t = self.perf.start();
@@ -1554,10 +1593,12 @@ pub const Qwen35Model = struct {
         return math_ops.argmax(self.mtp_logits_buf);
     }
 
+    /// Return the MTP head logits buffer (valid after mtpForward).
     pub fn getMtpLogits(self: *Qwen35Model) []f32 {
         return self.mtp_logits_buf;
     }
 
+    /// Reset MTP KV cache position for speculation rejection.
     pub fn resetMtpCache(self: *Qwen35Model) void {
         self.mtp_kv_seq_len = 0;
     }
@@ -1716,7 +1757,12 @@ pub const Qwen35Model = struct {
                 var result_token: [1]f32 = undefined;
                 transport.recvBuf(&result_token, 1);
                 self.kv_seq_len += 1;
-                return @intFromFloat(result_token[0]);
+                const raw = result_token[0];
+                if (raw >= 0 and raw < @as(f32, @floatFromInt(std.math.maxInt(u32))) and std.math.isFinite(raw)) {
+                    return @intFromFloat(raw);
+                } else {
+                    return error.Cancelled; // bad data from peer
+                }
             }
             // Last stage: runs output projection below, sends token back to rank 0
         }
@@ -1799,14 +1845,18 @@ pub const Qwen35Model = struct {
     }
 
     /// Receive KV cache from a peer via transport.
-    pub fn recvKvCache(self: *Qwen35Model, transport: *TransportMod.Transport) void {
+    pub fn recvKvCache(self: *Qwen35Model, transport: *TransportMod.Transport) !void {
         const kvd = self.paged_cache.kv_dim;
         const bs = self.paged_cache.block_size;
         const elems_per_block = @as(usize, bs) * kvd;
         // Receive seq_len and n_layers
         var meta: [3]f32 = undefined;
         transport.recvBuf(&meta, 3);
-        const seq_len: usize = @intFromFloat(meta[0]);
+        const raw_sl = meta[0];
+        const seq_len: usize = if (raw_sl >= 0 and raw_sl < @as(f32, @floatFromInt(self.max_seq_len)) and std.math.isFinite(raw_sl))
+            @intFromFloat(raw_sl)
+        else
+            return error.Cancelled;
         // Allocate blocks for the received sequence
         const n_blocks = (seq_len + bs - 1) / bs;
         // Ensure we have enough blocks
@@ -1830,7 +1880,6 @@ pub const Qwen35Model = struct {
         }
     }
 
-    /// Reset all KV cache and SSM state for a new conversation.
     /// Save all SSM states (conv + recurrence) for prefix caching.
     /// Returns owned memory that must be freed by the caller.
     pub fn saveSsmState(self: *const Qwen35Model, allocator: std.mem.Allocator) ![]u8 {
@@ -1874,6 +1923,7 @@ pub const Qwen35Model = struct {
         }
     }
 
+    /// Reset all KV cache and SSM state for a new conversation.
     pub fn resetCache(self: *Qwen35Model) void {
         for (0..self.n_layers) |i| {
             if (self.conv_states[i].len > 0) @memset(self.conv_states[i], 0);

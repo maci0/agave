@@ -49,7 +49,7 @@ pub fn advanceMs(delta: i64) void {
 fn milliNowWall() i64 {
     if (comptime is_freestanding) return 0;
     var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
@@ -67,7 +67,7 @@ pub fn nanoNow() i96 {
     if (t != no_override) return @as(i96, t) * 1_000_000;
     if (comptime is_freestanding) return 0;
     var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
     return @as(i96, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
@@ -85,7 +85,7 @@ pub fn sleepNs(ns: u64) void {
         .sec = @intCast(ns / std.time.ns_per_s),
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
-    _ = std.c.nanosleep(&ts, null);
+    _ = std.posix.system.nanosleep(&ts, null);
 }
 
 test "override freezes milliNow" {

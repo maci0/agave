@@ -8,7 +8,9 @@ const std = @import("std");
 const backend_mod = @import("../../backend.zig");
 const gemv_common = @import("gemv.zig");
 
+/// Number of quantized elements (ternary values) packed into one TQ2_0 block.
 pub const block_elems: usize = 256;
+/// Byte size of one TQ2_0 block: 64 bytes packed qs + 2-byte f16 scale.
 pub const block_bytes: usize = 66;
 const scale_bytes: usize = 2;
 const qs_bytes: usize = 64; // 256 × 2 bits / 8

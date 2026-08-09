@@ -1,3 +1,4 @@
+// GEMV for GPTQ INT4 quantized weights.
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : require
 

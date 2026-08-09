@@ -24,6 +24,7 @@ const beacon_prefix = "AGAVE-DISCOVER:";
 const join_prefix = "AGAVE-JOIN:";
 const max_msg_len: usize = 64;
 
+/// A peer node discovered via UDP broadcast, identified by IPv4 address and rank.
 pub const DiscoveredPeer = struct {
     addr: [4]u8,
     rank: u32,

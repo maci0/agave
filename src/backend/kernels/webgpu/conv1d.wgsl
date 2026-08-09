@@ -1,3 +1,4 @@
+// 1D causal convolution.
 struct Params {
     conv_ch: u32,
     d_conv: u32,

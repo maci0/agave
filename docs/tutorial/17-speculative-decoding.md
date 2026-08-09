@@ -4,7 +4,7 @@
 
 **Time:** ~29 min
 
-> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP, and all 14 speculative decoding modes.
+> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP overview, and all 14 speculative decoding modes.
 
 Standard autoregressive decoding generates one token per forward pass. For large models, each pass takes tens of milliseconds — the token generation rate is bottlenecked by model size, not memory bandwidth. Speculative decoding breaks this bottleneck by using a cheap draft model to propose multiple candidate tokens, then verifying them against the full target model.
 
@@ -240,7 +240,7 @@ EAGLE-3 is a refinement of EAGLE-1 that conditions on the **pre-output-norm** hi
 agave target.gguf --draft-model eagle-draft.gguf --spec-mode eagle3 "prompt"
 ```
 
-Currently, pre-norm state is saved by Gemma 4 (`hidden_pre_norm` field). For other models it falls back to the post-norm hidden (same as `--spec-mode eagle`). EAGLE-3 draft models trained specifically on pre-norm states would benefit most.
+Currently, pre-norm state is saved by Gemma 4 and DiffusionGemma (`hidden_pre_norm` field). Any model that exposes a `hidden_pre_norm` field gets EAGLE-3 support automatically via the generic vtable dispatch. For other models it falls back to the post-norm hidden (same as `--spec-mode eagle`). EAGLE-3 draft models trained specifically on pre-norm states would benefit most.
 
 ### MLP Speculator (`--spec-mode mlp`)
 

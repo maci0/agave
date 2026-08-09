@@ -113,7 +113,7 @@ pub const GGMLType = enum(u32) {
             .q5_1 => 24, // f16 scale + f16 min + 4 bytes high bits + 16 bytes
             .q8_0 => 34, // f16 scale + 32 bytes
             .q8_1 => 36, // f16 scale + f16 sum + 32 bytes
-            .q2_k => 256 / 16 * 2 + 256 / 4 + 2 + 2, // 84
+            .q2_k => 256 / 16 + 256 / 4 + 2 + 2, // 84
             .q3_k => 256 / 8 + 256 / 4 + 2 + 12, // 110 (hmask + qs + d + scales)
             .q4_k => 2 + 2 + 12 + 256 / 2, // 144
             .q5_k => 2 + 2 + 12 + 256 / 8 + 256 / 2, // 176
@@ -133,7 +133,7 @@ pub const GGMLType = enum(u32) {
             .iq1_m => 56, // 256 elements
             .iq4_nl => 18, // f16 scale + 16 bytes (32 nibbles, same as q4_0)
             .iq4_xs => 136, // f16 d (2) + u16 scales_h (2) + scales_l[4] (4) + qs[128] (128)
-            .tq1_0 => 64, // f16 scale (2) + qs[40] + qh[13] + padding[9]
+            .tq1_0 => 54, // f16 scale (2) + qs[48] (48) + qh[4] (4) = 54
             .tq2_0 => 66, // f16 scale (2) + qs[64] (256 elements × 2 bits = 64 bytes)
             .mxfp4 => 17, // 1 byte E8M0 scale + 16 bytes (32 FP4 nibbles)
             else => 1,
@@ -351,6 +351,9 @@ pub const GGUFFile = struct {
             var tot_raw_buf: [16]u8 = undefined;
             const idx_raw = std.fmt.bufPrint(&idx_raw_buf, "{d}", .{si}) catch continue;
             const tot_raw = std.fmt.bufPrint(&tot_raw_buf, "{d}", .{total}) catch continue;
+            // Skip if formatted index/total is wider than the first shard's padding width
+            // (e.g., shard "1-of-10" → idx_width=1, but shard 10 formats as "10" len=2).
+            if (idx_raw.len > idx_width or tot_raw.len > idx_width) continue;
             var idx_buf: [16]u8 = [_]u8{'0'} ** 16;
             var tot_buf: [16]u8 = [_]u8{'0'} ** 16;
             @memcpy(idx_buf[idx_width - idx_raw.len .. idx_width], idx_raw);
@@ -426,8 +429,17 @@ pub const GGUFFile = struct {
             shard_gguf.tensors.clearRetainingCapacity();
             shard_gguf.metadata.deinit();
             shard_gguf.tensors.deinit();
-            // Note: shard_gguf.owned_strings etc. not freed here — tensor names
-            // are pointers into smapped which stays alive via self.extra_shards.
+            // Transfer heap-allocated owned resources into self so deinit() frees them.
+            // Tensor names and metadata strings are heap copies (via allocator.dupe in own()),
+            // not mmap pointers, so they must be tracked for cleanup.
+            self.owned_strings.appendSlice(self.allocator, shard_gguf.owned_strings.items) catch {};
+            shard_gguf.owned_strings.deinit(self.allocator);
+            self.owned_arrays.appendSlice(self.allocator, shard_gguf.owned_arrays.items) catch {};
+            shard_gguf.owned_arrays.deinit(self.allocator);
+            self.owned_array_lens.appendSlice(self.allocator, shard_gguf.owned_array_lens.items) catch {};
+            shard_gguf.owned_array_lens.deinit(self.allocator);
+            self.owned_u32_arrays.appendSlice(self.allocator, shard_gguf.owned_u32_arrays.items) catch {};
+            shard_gguf.owned_u32_arrays.deinit(self.allocator);
 
             std.log.info("split GGUF: loaded shard {d}/{d} ({d} tensors)", .{ si, total, shard_gguf.tensor_count });
         }
@@ -468,6 +480,8 @@ pub const GGUFFile = struct {
         .get_merges = @ptrCast(&fmtGetMerges),
     };
 
+    /// Converts a GGML quantization type to the engine's unified `DType` enum.
+    /// Returns `.unknown` for GGML types that have no corresponding `DType` mapping.
     pub fn ggmlToDType(t: GGMLType) DType {
         return switch (t) {
             .f32 => .f32,
@@ -1064,7 +1078,7 @@ test "GGMLType bytesPerBlock" {
     try std.testing.expectEqual(@as(usize, 4), GGMLType.f32.bytesPerBlock());
     try std.testing.expectEqual(@as(usize, 2), GGMLType.f16.bytesPerBlock());
     try std.testing.expectEqual(@as(usize, 17), GGMLType.mxfp4.bytesPerBlock());
-    try std.testing.expectEqual(@as(usize, 64), GGMLType.tq1_0.bytesPerBlock());
+    try std.testing.expectEqual(@as(usize, 54), GGMLType.tq1_0.bytesPerBlock());
     try std.testing.expectEqual(@as(usize, 66), GGMLType.tq2_0.bytesPerBlock());
 }
 
@@ -1280,7 +1294,7 @@ test "GGMLType bytesPerBlock all types" {
         .{ .q5_1, 24 },
         .{ .q8_0, 34 },
         .{ .q8_1, 36 },
-        .{ .q2_k, 100 },
+        .{ .q2_k, 84 },
         .{ .q3_k, 110 },
         .{ .q4_k, 144 },
         .{ .q5_k, 176 },
@@ -1299,7 +1313,7 @@ test "GGMLType bytesPerBlock all types" {
         .{ .iq1_m, 56 },
         .{ .iq4_nl, 18 },
         .{ .iq4_xs, 136 },
-        .{ .tq1_0, 64 },
+        .{ .tq1_0, 54 },
         .{ .tq2_0, 66 },
         .{ .mxfp4, 17 },
     };

@@ -12,32 +12,40 @@ pub const FixedBufStream = struct {
     buf: []u8,
     pos: usize = 0,
 
+    /// Create a new stream backed by the given caller-owned buffer.
     pub fn init(buf: []u8) FixedBufStream {
         return .{ .buf = buf };
     }
 
+    /// Return a `Writer` that appends to this buffer.
     pub fn writer(self: *FixedBufStream) Writer {
         return .{ .fbs = self };
     }
 
+    /// Return the slice of the buffer that has been written so far.
     pub fn getWritten(self: *const FixedBufStream) []const u8 {
         return self.buf[0..self.pos];
     }
 
+    /// Writer interface that appends bytes into the fixed buffer, returning
+    /// `error.NoSpaceLeft` when the buffer is full.
     pub const Writer = struct {
         fbs: *FixedBufStream,
 
+        /// Append `data` to the buffer, or return `error.NoSpaceLeft` if it would overflow.
         pub fn writeAll(self: Writer, data: []const u8) !void {
             if (self.fbs.pos + data.len > self.fbs.buf.len) return error.NoSpaceLeft;
             @memcpy(self.fbs.buf[self.fbs.pos..][0..data.len], data);
             self.fbs.pos += data.len;
         }
 
+        /// Format `args` with `fmt` and append the result, or return `error.NoSpaceLeft`.
         pub fn print(self: Writer, comptime fmt: []const u8, args: anytype) !void {
             const written = std.fmt.bufPrint(self.fbs.buf[self.fbs.pos..], fmt, args) catch return error.NoSpaceLeft;
             self.fbs.pos += written.len;
         }
 
+        /// Append a single byte, or return `error.NoSpaceLeft` if the buffer is full.
         pub fn writeByte(self: Writer, byte: u8) !void {
             if (self.fbs.pos >= self.fbs.buf.len) return error.NoSpaceLeft;
             self.fbs.buf[self.fbs.pos] = byte;

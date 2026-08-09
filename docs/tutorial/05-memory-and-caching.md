@@ -565,6 +565,8 @@ The blob has no prompt token IDs, so a following OpenAI-style request still re-p
 
 Useful for shared system prompts: compute the prefix KV once on one instance, distribute to a fleet.
 
+> **Note:** Cross-node KV cache transfer requires `--api-key` (or `AGAVE_API_KEY`) for authentication when binding to non-loopback addresses.
+
 ## Gotchas
 
 **Cached K bakes in absolute position (inverse RoPE)**: RoPE rotates K by an angle derived from its *absolute* position before it's written to the cache ([Chapter 2](02-the-transformer.md#rope-rotary-position-encoding)). A cached K vector isn't position-neutral: reusing it at a different position requires either recomputing it from scratch or applying an inverse rotation followed by re-rotation to the new angle, neither of which Agave's paged cache does. This is why RadixAttention's prefix sharing only works because shared prefixes start at position 0 in every request that shares them: the cached K vectors' baked-in rotation is already correct for whoever reuses that block.

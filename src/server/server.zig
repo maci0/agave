@@ -41,10 +41,11 @@ const Mutex = Io.Mutex;
 const TcpStream = struct {
     handle: std.posix.fd_t,
 
+    /// Writes the entire contents of `data` to the socket, retrying on EINTR.
     pub fn writeAll(self: TcpStream, data: []const u8) !void {
         var written: usize = 0;
         while (written < data.len) {
-            const n = std.c.write(self.handle, data[written..].ptr, data[written..].len);
+            const n = std.posix.system.write(self.handle, data[written..].ptr, data[written..].len);
             if (n < 0) {
                 if (std.c.errno(n) == .INTR) continue;
                 return error.BrokenPipe;
@@ -53,6 +54,8 @@ const TcpStream = struct {
         }
     }
 
+    /// Reads up to `buf.len` bytes from the socket, retrying on EINTR.
+    /// Returns the number of bytes read (0 signals EOF).
     pub fn read(self: TcpStream, buf: []u8) !usize {
         while (true) {
             const n = std.c.read(self.handle, buf.ptr, buf.len);
@@ -64,6 +67,7 @@ const TcpStream = struct {
         }
     }
 
+    /// Closes the underlying socket file descriptor.
     pub fn close(self: TcpStream) void {
         _ = std.c.close(self.handle);
     }
@@ -601,10 +605,17 @@ var g_tool_replay_seq: u64 = 0;
 /// spinning is fine here).
 var g_tool_replay_lock: std.atomic.Value(u32) = .init(0);
 
+/// Store a tool call result keyed by its ID for later replay. Evicts the
+/// oldest entry when the cache is at capacity.
 fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     if (id_str.len == 0) return;
     const key = std.hash.XxHash64.hash(0, id_str);
     const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
+
+    // Acquire spinlock — protects g_tool_replay and g_tool_replay_seq.
+    while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
+        std.atomic.spinLoopHint();
+    defer g_tool_replay_lock.store(0, .release);
 
     // Evict oldest entry if at capacity.
     if (g_tool_replay.count() >= tool_replay_max) {
@@ -628,9 +639,15 @@ fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     if (put_result) |old| g_tool_replay_allocator.free(old.value.raw);
 }
 
+/// Look up a cached tool call output by its ID. Returns the raw result
+/// bytes, or null if the ID is empty or not found in the replay cache.
 fn toolReplayGet(id_str: []const u8) ?[]const u8 {
     if (id_str.len == 0) return null;
     const key = std.hash.XxHash64.hash(0, id_str);
+
+    while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
+        std.atomic.spinLoopHint();
+    defer g_tool_replay_lock.store(0, .release);
 
     const entry = g_tool_replay.get(key) orelse return null;
     return entry.raw;
@@ -645,16 +662,18 @@ threadlocal var log_request_id: u64 = 0;
 /// connection's count and inject bogus image pad tokens into the prompt.
 threadlocal var pending_visual_tokens: u32 = 0;
 
+/// Write a formatted log message to stderr under the server stdout mutex,
+/// ensuring concurrent handler threads do not interleave output.
 fn slog(comptime fmt: []const u8, args: anytype) void {
     g_server.stdout_mutex.lockUncancelable(g_server.io);
     defer g_server.stdout_mutex.unlock(g_server.io);
     var buf: [slog_buf_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch {
         const trunc = "[slog truncated]\n";
-        _ = std.c.write(stderr_file.handle, trunc.ptr, trunc.len);
+        _ = std.posix.system.write(stderr_file.handle, trunc.ptr, trunc.len);
         return;
     };
-    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
+    _ = std.posix.system.write(stderr_file.handle, text.ptr, text.len);
 }
 
 fn elapsedMs(start: i64) u64 {
@@ -1045,10 +1064,12 @@ fn sendResponse(stream: TcpStream, status: []const u8, content_type: []const u8,
     };
 }
 
+/// Send a 200 OK HTTP response with `application/json` content type.
 fn sendJson(stream: TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "application/json", body);
 }
 
+/// Send a 200 OK HTTP response with `text/html; charset=utf-8` content type.
 fn sendHtml(stream: TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
 }
@@ -1166,13 +1187,10 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
         };
         defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
 
-        if (call_idx > 0 and tc_pos < tc_buf.len) {
-            tc_buf[tc_pos] = ',';
-            tc_pos += 1;
-        }
-        const entry = std.fmt.bufPrint(tc_buf[tc_pos..],
+        const prefix: []const u8 = if (call_idx > 0) "," else "";
+        const entry = std.fmt.bufPrint(tc_buf[tc_pos..], "{s}" ++
             \\{{"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}
-        , .{ req_id, call_idx, escaped_name, escaped_args }) catch break;
+        , .{ prefix, req_id, call_idx, escaped_name, escaped_args }) catch break;
         tc_pos += entry.len;
         call_idx += 1;
     }
@@ -1303,6 +1321,10 @@ fn send503Retry(stream: TcpStream, body: []const u8, retry_after: u32) void {
 
 // ── Request handler ─────────────────────────────────────────────
 
+/// Main HTTP request dispatcher. Wakes the server from sleep mode if needed,
+/// enforces CORS policy and authentication, then routes the request by method
+/// and path to the appropriate endpoint handler (health, chat completions,
+/// models, metrics, etc.).
 fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const request_start = milliTimestamp();
     // Wake from sleep mode on any incoming request. Mutex serializes with
@@ -1895,6 +1917,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var tok_ids: [gen_ids_buf_size]u32 = undefined;
         defer @memset(std.mem.sliceAsBytes(&tok_ids), 0);
         const n_toks = parseDetokenizeTokens(req.body, &tok_ids);
+        if (n_toks >= gen_ids_buf_size) {
+            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Token array exceeds maximum of 4096 entries", "tokens", "invalid_value");
+            g_server.metrics.recordClientError();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return;
+        }
         if (n_toks == 0) {
             sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing or empty tokens array", "tokens", "missing_required_parameter");
             g_server.metrics.recordClientError();
@@ -2550,7 +2578,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 return;
             }
             const regen_result = chatStreamGeneratePre(stream, regen_formatted, true, regen_max_tokens, regen_sampling, regen_prompt_ids_owned);
-            defer g_server.allocator.free(regen_result.data);
+            defer wipeFree(g_server.allocator, regen_result.data);
             storeConversationResponse(regen_result.data, regen_result.stats);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
@@ -2558,7 +2586,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Non-streaming regeneration
         const regen_result = generateNPre(regen_formatted, true, regen_max_tokens, regen_sampling, regen_prompt_ids_owned);
-        defer g_server.allocator.free(regen_result.data);
+        defer wipeFree(g_server.allocator, regen_result.data);
 
         storeConversationResponse(regen_result.data, regen_result.stats);
 
@@ -2751,7 +2779,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 return;
             }
             const result = chatStreamGeneratePre(stream, formatted, need_reset, chat_max_tokens, chat_sampling, chat_prompt_ids_owned);
-            defer g_server.allocator.free(result.data);
+            defer wipeFree(g_server.allocator, result.data);
             storeConversationResponse(result.data, result.stats);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
@@ -4345,6 +4373,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             for (0..res.accepted) |i| {
                 const at = a_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
+                if (token_count >= max_tokens) break;
                 if (!streamAnthropicDelta(stream, tok, at)) {
                     anth_disconnected = true;
                     break;
@@ -4352,10 +4381,12 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
                 token_count += 1;
             }
             if (!anth_disconnected and !g_server.isEog(res.next_token)) {
-                if (!streamAnthropicDelta(stream, tok, res.next_token)) {
-                    anth_disconnected = true;
+                if (token_count < max_tokens) {
+                    if (!streamAnthropicDelta(stream, tok, res.next_token)) {
+                        anth_disconnected = true;
+                    }
+                    token_count += 1;
                 }
-                token_count += 1;
             }
             last = res.next_token;
             if (g_server.isEog(res.next_token)) break;
@@ -4763,6 +4794,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             for (0..res.accepted) |i| {
                 const at = r_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
+                if (token_count >= max_tokens) break;
                 if (!streamResponsesDelta(stream, tok, at)) {
                     resp_disconnected = true;
                     break;
@@ -4771,11 +4803,13 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
                 token_count += 1;
             }
             if (!resp_disconnected and !g_server.isEog(res.next_token)) {
-                if (!streamResponsesDelta(stream, tok, res.next_token)) {
-                    resp_disconnected = true;
+                if (token_count < max_tokens) {
+                    if (!streamResponsesDelta(stream, tok, res.next_token)) {
+                        resp_disconnected = true;
+                    }
+                    if (token_count < gen_ids_buf_size) gen_tokens[token_count] = res.next_token;
+                    token_count += 1;
                 }
-                if (token_count < gen_ids_buf_size) gen_tokens[token_count] = res.next_token;
-                token_count += 1;
             }
             last = res.next_token;
             if (g_server.isEog(res.next_token)) break;
@@ -4809,7 +4843,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
     // Send final events — skip if client already disconnected
     if (!resp_disconnected) {
-        const decoded = tok.decode(gen_tokens[0..token_count]) catch |err| d: {
+        const decoded = tok.decode(gen_tokens[0..@min(token_count, gen_ids_buf_size)]) catch |err| d: {
             std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, token_count, err });
             break :d g_server.allocator.dupe(u8, "") catch @as([]u8, &.{});
         };
@@ -4917,7 +4951,10 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             // First chunk: role + tool call header
             const role_chunk = std.fmt.bufPrint(&chunk_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","tool_calls":[{{"index":{d},"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}]}},"finish_reason":null}}]}}
-            , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, escaped_name, escaped_args }) catch continue;
+            , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, escaped_name, escaped_args }) catch {
+                slog("req={d} stream tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
+                continue;
+            };
             _ = sseWriteData(stream, role_chunk);
             call_idx += 1;
         }
@@ -4933,7 +4970,10 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
         // No tool calls — emit content as single delta chunk
         const chunk = std.fmt.bufPrint(&chunk_buf,
             \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}]}}
-        , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason }) catch "";
+        , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason }) catch blk: {
+            slog("req={d} stream tool chunk overflow: content too large for chunk buffer", .{log_request_id});
+            break :blk "";
+        };
         if (chunk.len > 0) {
             _ = sseWriteData(stream, chunk);
         }
@@ -5406,6 +5446,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             for (0..res.accepted) |i| {
                 const at = s_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
+                if (token_count >= max_tokens) break;
                 if (!streamChunk(stream, &chunk_buf, tok, at, req_id, created, is_chat)) {
                     stream_disconnected = true;
                     break;
@@ -5413,10 +5454,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 token_count += 1;
             }
             if (!stream_disconnected and !g_server.isEog(res.next_token)) {
-                if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat)) {
-                    stream_disconnected = true;
+                if (token_count < max_tokens) {
+                    if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat)) {
+                        stream_disconnected = true;
+                    }
+                    token_count += 1;
                 }
-                token_count += 1;
             }
             last = res.next_token;
             if (g_server.isEog(res.next_token)) break;
@@ -5838,7 +5881,7 @@ pub fn run(config: ServerConfig) !void {
     var tcp = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
         var buf: [error_body_buf_size]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error: failed to listen on port {d}: {s}\n", .{ port, @errorName(err) }) catch "";
-        _ = std.c.write(stderr_file.handle, msg.ptr, msg.len);
+        _ = std.posix.system.write(stderr_file.handle, msg.ptr, msg.len);
         return error.ListenError;
     };
 
@@ -5853,7 +5896,7 @@ pub fn run(config: ServerConfig) !void {
     const t = getTimeComponents();
     var buf: [hdr_buf_size]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://{d}.{d}.{d}.{d}:{d}\n  model={s} backend={s}\n  ctx_size={d} max_conn={d} batch={d} timeout={d}s auth={s} rate_limit={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, host[0], host[1], host[2], host[3], port, model_name, backend_name, ctx_size, max_concurrent_connections, effective_batch_size, scheduler_timeout_sec, if (api_key != null) "yes" else "no", if (server.rate_limiter != null) "yes" else "no" }) catch "";
-    _ = std.c.write(stdout_file.handle, msg.ptr, msg.len);
+    _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
 
     // Install graceful shutdown handlers for SIGTERM and SIGINT.
     // First signal: graceful shutdown (drain active connections).
@@ -5863,12 +5906,12 @@ pub fn run(config: ServerConfig) !void {
             if (g_server.shutdown_requested.load(.acquire)) {
                 // Second signal — force immediate exit
                 const force_msg = "\nForced shutdown.\n";
-                _ = std.c.write(stderr_file.handle, force_msg.ptr, force_msg.len);
+                _ = std.posix.system.write(stderr_file.handle, force_msg.ptr, force_msg.len);
                 std.process.exit(1);
             }
             // First signal — write immediately (async-signal-safe)
             const shutdown_msg = "\nShutting down (Ctrl+C again to force)...\n";
-            _ = std.c.write(stderr_file.handle, shutdown_msg.ptr, shutdown_msg.len);
+            _ = std.posix.system.write(stderr_file.handle, shutdown_msg.ptr, shutdown_msg.len);
             g_server.shutdown_requested.store(true, .release);
             g_server.scheduler_shutdown.store(true, .release);
             g_server.model.cancel();

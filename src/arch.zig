@@ -6,6 +6,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const ChatTemplate = @import("chat_template.zig").ChatTemplate;
+/// Re-exported `ImageTokens` type from `image_tokens.zig` for a stable public path.
 pub const ImageTokens = @import("image_tokens.zig").ImageTokens;
 
 /// Supported model architectures — used for dispatch, display, and build-time toggles.
@@ -171,7 +172,8 @@ pub const Arch = enum {
             .gpt_oss => "gpt-oss",
             .nemotron_h => "nemotron-h",
             .nemotron_nano => "nemotron-nano",
-            .glm4, .deepseek4 => "glm4",
+            .glm4 => "glm4",
+            .deepseek4 => "deepseek4",
             .llama4 => "llama4",
         };
     }

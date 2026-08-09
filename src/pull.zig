@@ -43,7 +43,7 @@ var mod_io: Io = undefined;
 /// REALTIME can jump under NTP and make the progress bar stutter or stall.
 fn nanoTimestamp() i128 {
     var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
@@ -210,12 +210,12 @@ pub const PullError = error{
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
+    _ = std.posix.system.write(stderr_file.handle, text.ptr, text.len);
 }
 
-/// Write bytes to a file handle via C write.
+/// Write bytes to a file handle via posix write.
 fn fileWrite(file: Io.File, bytes: []const u8) void {
-    _ = std.c.write(file.handle, bytes.ptr, bytes.len);
+    _ = std.posix.system.write(file.handle, bytes.ptr, bytes.len);
 }
 
 /// Get an environment variable (Zig 0.16 idiom via C getenv).

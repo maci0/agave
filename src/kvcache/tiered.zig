@@ -61,8 +61,6 @@ fn preadAll(file: anytype, buf: []u8, offset: usize) !usize {
 const manager = @import("manager.zig");
 const CacheBlock = manager.CacheBlock;
 
-/// VRAM usage threshold for triggering demotion (90% = evict at 10% free).
-const vram_eviction_threshold: f32 = 0.90;
 /// Integer numerator/denominator for threshold check without float division:
 /// vram_used/vram_total > 0.90  ⟺  vram_used * eviction_denom > vram_total * eviction_numer
 const eviction_numer: usize = 9;
@@ -73,8 +71,11 @@ const shared_prefix_cost: f32 = 100.0;
 
 /// Block tier enum: VRAM (T0), RAM (T1), SSD (T2).
 pub const BlockTier = enum {
+    /// Tier 0 — GPU video memory (fastest, capacity-limited).
     vram,
+    /// Tier 1 — host RAM (medium latency, larger capacity).
     ram,
+    /// Tier 2 — SSD-backed sparse file (highest latency, virtually unlimited).
     ssd,
 };
 
@@ -89,7 +90,8 @@ pub const TieredBlock = struct {
     /// Last access timestamp (milliseconds) for LRU within tier.
     last_access_ms: i64 = 0,
 
-    /// SSD tier support: file offset for spilled blocks.
+    /// Byte offset into the SSD sparse file where this block's KV data is stored.
+    /// `null` means the block has never been spilled to SSD (lives in VRAM or RAM only).
     ssd_offset: ?u64 = null,
 };
 
@@ -170,11 +172,15 @@ pub const TieredKvCache = struct {
     /// (microseconds) make spin-wait acceptable.
     tier_lock: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
+    /// Acquire the tier-mutation spinlock. Callers must hold this lock for
+    /// the duration of any promote/demote operation to prevent concurrent
+    /// tier migrations from corrupting block state. Always pair with `unlockTier`.
     pub fn lockTier(self: *TieredKvCache) void {
         while (self.tier_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
             std.atomic.spinLoopHint();
     }
 
+    /// Release the tier-mutation spinlock (store-release to publish writes).
     pub fn unlockTier(self: *TieredKvCache) void {
         self.tier_lock.store(0, .release);
     }
@@ -377,7 +383,7 @@ pub const TieredKvCache = struct {
                 return block_id;
             }
 
-            // VRAM exhausted — check if we can evict (trigger at vram_eviction_threshold)
+            // VRAM exhausted — check if we can evict (trigger at eviction_numer/eviction_denom).
             // Integer comparison avoids float division on allocation path.
             const vram_used = self.vram_used.load(.monotonic);
             const vram_total = self.vram_block_count;

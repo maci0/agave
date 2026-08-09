@@ -31,6 +31,7 @@ pub const Key = struct {
         ctrl: bool = false,
         _pad: u5 = 0,
 
+        /// Compare two modifier sets for equality via bitwise cast.
         pub fn eql(self: Modifiers, other: Modifiers) bool {
             return @as(u8, @bitCast(self)) == @as(u8, @bitCast(other));
         }
@@ -247,6 +248,7 @@ pub fn displayWidth(s: []const u8) usize {
 /// This enables minimal changes at call sites.
 pub const gwidth = struct {
     pub const Method = enum { unicode };
+    /// Return the display width of a UTF-8 string as a `u16`, delegating to `displayWidth`.
     pub fn gwidth(s: []const u8, _: Method) u16 {
         return @intCast(displayWidth(s));
     }
@@ -293,10 +295,12 @@ fn codepointWidth(cp: u21) usize {
 pub const TextInput = struct {
     buf: Buffer,
 
+    /// Create a new `TextInput` backed by a gap buffer using the given allocator.
     pub fn init(allocator: std.mem.Allocator) TextInput {
         return .{ .buf = Buffer.init(allocator) };
     }
 
+    /// Free the underlying gap buffer memory.
     pub fn deinit(self: *TextInput) void {
         self.buf.deinit();
     }
@@ -395,6 +399,7 @@ pub const TextInput = struct {
         cursor: usize,
         gap_size: usize,
 
+        /// Create an empty gap buffer. No memory is allocated until the first insert.
         pub fn init(allocator: std.mem.Allocator) Buffer {
             return .{
                 .allocator = allocator,
@@ -404,22 +409,27 @@ pub const TextInput = struct {
             };
         }
 
+        /// Free the backing allocation, if any.
         pub fn deinit(self: *Buffer) void {
             if (self.buffer.len > 0) self.allocator.free(self.buffer);
         }
 
+        /// Return the content before the cursor (gap start).
         pub fn firstHalf(self: Buffer) []const u8 {
             return self.buffer[0..self.cursor];
         }
 
+        /// Return the content after the cursor (gap end).
         pub fn secondHalf(self: Buffer) []const u8 {
             return self.buffer[self.cursor + self.gap_size ..];
         }
 
+        /// Logical content length excluding the internal gap.
         pub fn realLength(self: *const Buffer) usize {
             return self.firstHalf().len + self.secondHalf().len;
         }
 
+        /// Insert a byte slice at the current cursor position.
         pub fn insertSliceAtCursor(self: *Buffer, slice: []const u8) std.mem.Allocator.Error!void {
             if (slice.len == 0) return;
             if (self.gap_size <= slice.len) try self.grow(slice.len);
@@ -428,6 +438,7 @@ pub const TextInput = struct {
             self.gap_size -= slice.len;
         }
 
+        /// Move the cursor left by n positions.
         pub fn moveGapLeft(self: *Buffer, n: usize) void {
             const new_idx = self.cursor -| n;
             const dst = self.buffer[new_idx + self.gap_size ..];
@@ -436,6 +447,7 @@ pub const TextInput = struct {
             self.cursor = new_idx;
         }
 
+        /// Move the cursor right by n positions.
         pub fn moveGapRight(self: *Buffer, n: usize) void {
             const new_idx = self.cursor + n;
             const dst = self.buffer[self.cursor..];
@@ -444,20 +456,24 @@ pub const TextInput = struct {
             self.cursor = new_idx;
         }
 
+        /// Delete n characters to the left of the cursor.
         pub fn growGapLeft(self: *Buffer, n: usize) void {
             self.gap_size += n;
             self.cursor -|= n;
         }
 
+        /// Delete n characters to the right of the cursor.
         pub fn growGapRight(self: *Buffer, n: usize) void {
             self.gap_size = @min(self.gap_size + n, self.buffer.len - self.cursor);
         }
 
+        /// Reset the buffer content without freeing memory.
         pub fn clearRetainingCapacity(self: *Buffer) void {
             self.cursor = 0;
             self.gap_size = self.buffer.len;
         }
 
+        /// Compact the gap and return the content as an owned slice.
         pub fn toOwnedSlice(self: *Buffer) std.mem.Allocator.Error![]const u8 {
             const fh = self.firstHalf();
             const sh = self.secondHalf();

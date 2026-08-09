@@ -375,6 +375,7 @@ flowchart LR
         A5["glm4"]:::setup
         A6["llama4"]:::setup
         A7["nemotron_h\nnemotron_nano\n(else → chatml)"]:::setup
+        A8["deepseek4"]:::setup
     end
 
     subgraph Templates["ChatTemplate constants (chat_template.zig)"]
@@ -386,6 +387,7 @@ flowchart LR
         T5["ChatTemplate.glm4\n[gMASK]&lt;sop&gt; style"]:::migration
         T6["ChatTemplate.llama4\n&lt;|header_id|&gt; style"]:::migration
         T7["ChatTemplate.chatml\nstandard ChatML"]:::migration
+        T8["ChatTemplate.deepseek4\nDeepSeek V4 style"]:::migration
     end
 
     subgraph Downstream["Runtime usage (main.zig)"]
@@ -404,8 +406,9 @@ flowchart LR
     A5 -->|"chatTemplate()"| T5
     A6 -->|"chatTemplate()"| T6
     A7 -->|"chatTemplate()"| T7
+    A8 -->|"chatTemplate()"| T8
 
-    T1 & T2 & T3 & T4 & T5 & T6 & T7 --> Format
+    T1 & T2 & T3 & T4 & T5 & T6 & T7 & T8 --> Format
 ```
 
 **Architecture determines template:**
@@ -418,6 +421,7 @@ chatTemplate(self: Arch) -> ChatTemplate:
         gpt_oss               -> ChatTemplate.gpt_oss
         qwen35                -> ChatTemplate.qwen35
         glm4                  -> ChatTemplate.glm4
+        deepseek4             -> ChatTemplate.deepseek4
         llama4                -> ChatTemplate.llama4
         else                  -> ChatTemplate.chatml   # Nemotron-H, Nemotron-Nano
 

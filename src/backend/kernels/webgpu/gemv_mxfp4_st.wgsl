@@ -1,3 +1,4 @@
+// GEMV for MXFP4 sub-tile quantized weights.
 struct Params {
     n: u32,
     k: u32,

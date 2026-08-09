@@ -43,7 +43,7 @@ var mod_io: Io = undefined;
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
+    _ = std.posix.system.write(stderr_file.handle, text.ptr, text.len);
 }
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ pub fn printUsage() void {
         \\  agave calibrate ./safetensors-dir/ --output tri.cal
         \\
     ;
-    _ = std.c.write(stdout_file.handle, usage_text.ptr, usage_text.len);
+    _ = std.posix.system.write(stdout_file.handle, usage_text.ptr, usage_text.len);
 }
 
 /// Parse command-line arguments for the `calibrate` sub-command.
@@ -567,6 +567,7 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
 
     // Build TriCalibration entries
     var calibrations = try allocator.alloc(kv_evict.TriCalibration, total_heads);
+    errdefer allocator.free(calibrations);
     for (0..total_heads) |i| {
         const offset = i * n_bands;
         calibrations[i] = .{

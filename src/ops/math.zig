@@ -41,6 +41,7 @@ inline fn simdMaxF32(buf: []const f32) f32 {
 /// Return index of maximum element (first occurrence on ties).
 /// Single pass over `buf` (SIMD chunks + scalar tail) — avoids the prior
 /// max-then-rescan pattern that touched every logit twice on greedy decode.
+/// Returns 0 for empty input.
 pub fn argmax(buf: []const f32) u32 {
     if (buf.len == 0) return 0;
     var best_idx: u32 = 0;
@@ -253,15 +254,6 @@ pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed
     }
 }
 
-/// Sample a token from logits using temperature, top-k, and top-p (nucleus) filtering.
-///
-/// When temperature == 0, returns argmax (greedy). Otherwise:
-///   1. Scale logits by 1/temperature.
-///   2. If top_k > 0, keep only the top_k highest logits (rest set to -inf).
-///   3. Softmax over remaining candidates.
-///   4. If top_p < 1.0, keep smallest set of tokens with cumulative probability >= top_p.
-///   5. Sample from the filtered distribution.
-///
 /// Apply OpenAI-compatible frequency and presence penalties to logits.
 /// frequency_penalty: penalize by count(token_in_output) * penalty
 /// presence_penalty: penalize by 1 * penalty if token appeared at all
@@ -520,7 +512,18 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
     return chosen;
 }
 
+/// Sample a token from logits using temperature, top-k, and top-p (nucleus) filtering.
 /// Modifies the logits buffer in-place.
+///
+/// Returns 0 for empty input. When temperature == 0, returns argmax (greedy).
+/// Otherwise:
+///   1. Scale logits by 1/temperature.
+///   2. If top_k > 0, keep only the top_k highest logits (rest set to -inf),
+///      then fuse the mask with softmax in a single SIMD pass.
+///   3. Softmax over remaining candidates.
+///   4. If top_p < 1.0, keep the smallest set of tokens whose cumulative
+///      probability >= top_p (nucleus filtering), zero the rest, recompute sum.
+///   5. Weighted random sample from the (unnormalized) filtered distribution.
 pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng: std.Random) u32 {
     if (logits.len == 0) return 0;
     if (temperature == 0) return argmax(logits);

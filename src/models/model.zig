@@ -2,8 +2,9 @@
 //! Provides a type-erased interface via comptime vtable generation, allowing
 //! the engine to work with any model architecture through a uniform API.
 //!
-//! Implementations: gemma3.zig, gemma4.zig, qwen35.zig, gpt_oss.zig,
-//! nemotron_h.zig, nemotron_nano.zig, glm4.zig, llama4.zig, vision.zig
+//! Implementations: gemma3.zig, gemma4.zig, deepseek4.zig, diffusion_gemma.zig,
+//! qwen35.zig, gpt_oss.zig, nemotron_h.zig, nemotron_nano.zig, glm4.zig,
+//! llama4.zig, vision.zig
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -513,7 +514,7 @@ pub inline fn resetInferenceState(kv_seq_len: *usize, cancelled: *std.atomic.Val
 /// GGUF dims are reversed during parsing to [n_experts, rows, cols] (outermost-first).
 /// Per-expert stride = weightBytes(rows * cols) = dims[1] * dims[2].
 pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
-    std.debug.assert(t.n_dims >= 3);
+    if (t.n_dims < 3) @panic("expertWeightStride: expected >= 3D tensor for expert weights");
     // Compressed-tensors NVFP4: dims = [rows, cols_packed, n_experts] where
     // cols_packed = in_dim/2 (raw U8 bytes). Stride = rows × cols_packed bytes.
     // Unlike GGUF NVFP4 (interleaved blocks), weight and scale are separate arrays.
@@ -532,7 +533,7 @@ pub fn expertWeightStride(t: format_mod.TensorInfo) usize {
 pub fn expertStride(t: format_mod.TensorInfo) usize {
     if (t.dtype == .mlx_q) {
         // SafeTensors MLX dims (not reversed): [n_experts, rows, words_per_row] U32
-        std.debug.assert(t.n_dims >= 3);
+        if (t.n_dims < 3) @panic("expertStride: expected >= 3D tensor for MLX expert weights");
         return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
     }
     return expertWeightStride(t);
@@ -883,11 +884,11 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Receive KV cache via transport (disaggregated decode).
-    pub fn recvKvCache(self: *ModelStorage, transport: *Transport) void {
+    pub fn recvKvCache(self: *ModelStorage, transport: *Transport) !void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
-                    if (comptime @hasDecl(@TypeOf(m.*), "recvKvCache")) m.recvKvCache(transport);
+                    if (comptime @hasDecl(@TypeOf(m.*), "recvKvCache")) try m.recvKvCache(transport);
                 }
             },
         }
@@ -943,9 +944,9 @@ pub const ModelStorage = union(enum) {
         }
     }
 
-    /// Set TriAttention calibration data for frequency-domain KV eviction.
     const TriCalibration = @import("../ops/kv_evict.zig").TriCalibration;
 
+    /// Set TriAttention calibration data for frequency-domain KV eviction.
     pub fn setTriCalibration(self: *ModelStorage, cals: []const TriCalibration) void {
         switch (self.*) {
             inline else => |*m| {

@@ -165,13 +165,13 @@ var g_environ: *std.process.Environ.Map = undefined;
 fn print(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.c.write(stdout_file.handle, text.ptr, text.len);
+    _ = std.posix.system.write(stdout_file.handle, text.ptr, text.len);
 }
 
 fn eprint(comptime fmt: []const u8, args: anytype) void {
     var buf: [print_buf_size]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.c.write(stderr_file.handle, text.ptr, text.len);
+    _ = std.posix.system.write(stderr_file.handle, text.ptr, text.len);
 }
 
 /// Debug output. Only printed when --debug is active.
@@ -303,7 +303,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
             else
                 std.fmt.bufPrint(buf[pos..], "loading {d:.1} {s} ({d}%)", .{ fsize.val, fsize.unit, pct }) catch "";
             pos += text.len;
-            _ = std.c.write(stderr_file.handle, buf[0..pos].ptr, pos);
+            _ = std.posix.system.write(stderr_file.handle, buf[0..pos].ptr, pos);
         }
     }
 
@@ -640,6 +640,7 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
     return false;
 }
 
+/// Parses command-line arguments into a `CliArgs` struct, returning `null` on `--help`/`--version` or invalid input.
 fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     var res = cli_mod.parse(allocator, init_args, &cli_specs);
     defer res.deinit();
@@ -1366,7 +1367,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             .top_k = res.option("top-k") != null,
             .repeat_penalty = res.option("repeat-penalty") != null,
             .max_tokens = res.option("max-tokens") != null,
-            .ctx_size = res.option("ctx-size") != null,
+            .ctx_size = res.option("ctx-size") != null or res.flag("no-kv-cache"),
         },
     };
 }
@@ -1428,6 +1429,7 @@ fn resolveTransportKind(choice: TransportChoice, peers_str: []const u8) error{Tr
     };
 }
 
+/// Initializes and connects the distributed-inference transport (TCP, shared-memory, or NCCL) for the given rank and peers.
 fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32, world_size: u32, choice: TransportChoice, port_base: u16, be_union: anytype) ?*TransportMod.Transport {
     const t = allocator.create(TransportMod.Transport) catch return null;
     var transport_ok = false;
@@ -1534,11 +1536,11 @@ fn exchangeDeviceCaps(t: *TransportMod.Transport, rank: u32, local_mem: usize) u
     var remote_bytes: [8]u8 = undefined;
 
     if (rank == 0) {
-        _ = std.c.send(fd, &local_bytes, 8, 0);
-        _ = std.c.recv(fd, &remote_bytes, 8, 0);
+        _ = std.posix.system.send(fd, &local_bytes, 8, 0);
+        _ = std.posix.system.recv(fd, &remote_bytes, 8, 0);
     } else {
-        _ = std.c.recv(fd, &remote_bytes, 8, 0);
-        _ = std.c.send(fd, &local_bytes, 8, 0);
+        _ = std.posix.system.recv(fd, &remote_bytes, 8, 0);
+        _ = std.posix.system.send(fd, &local_bytes, 8, 0);
     }
     const peer_mem = std.mem.readInt(u64, &remote_bytes, .little);
     if (peer_mem > 0) {
@@ -1558,17 +1560,17 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
     var ts_start: std.posix.system.timespec = undefined;
     var ts_end: std.posix.system.timespec = undefined;
     if (rank == 0) {
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
-        _ = std.c.send(fd, &ping, 4, 0);
-        _ = std.c.recv(fd, &pong, 4, 0);
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts_end);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
+        _ = std.posix.system.send(fd, &ping, 4, 0);
+        _ = std.posix.system.recv(fd, &pong, 4, 0);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     } else {
-        _ = std.c.recv(fd, &pong, 4, 0);
-        _ = std.c.send(fd, &ping, 4, 0);
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
-        _ = std.c.send(fd, &ping, 4, 0);
-        _ = std.c.recv(fd, &pong, 4, 0);
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts_end);
+        _ = std.posix.system.recv(fd, &pong, 4, 0);
+        _ = std.posix.system.send(fd, &ping, 4, 0);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
+        _ = std.posix.system.send(fd, &ping, 4, 0);
+        _ = std.posix.system.recv(fd, &pong, 4, 0);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     }
     const start_us: u64 = @intCast(ts_start.sec * 1_000_000 + @divTrunc(ts_start.nsec, 1000));
     const end_us: u64 = @intCast(ts_end.sec * 1_000_000 + @divTrunc(ts_end.nsec, 1000));
@@ -1777,25 +1779,28 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
 
     // Prefill (batched when model supports it, sequential fallback)
     var ts_start: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts_start);
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
     _ = model.prefill(token_ids) catch {
         eprint("Benchmark: prefill failed\n", .{});
         return;
     };
     var ts_prefill: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts_prefill);
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_prefill);
 
     // Decode
     var last: u32 = math_ops.argmax(model.getLogits());
     var gen_count: u32 = 0;
     while (gen_count < n_gen) {
         if (isEogToken(last, eog)) break;
-        last = model.forward(last) catch break;
+        last = model.forward(last) catch |err| {
+            eprint("benchmark: decode forward failed: {}\n", .{err});
+            break;
+        };
         last = math_ops.argmax(model.getLogits());
         gen_count += 1;
     }
     var ts_end: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts_end);
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
 
     const prefill_us = (@as(i64, ts_prefill.sec) - @as(i64, ts_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_prefill.nsec) - @as(i64, ts_start.nsec), 1000);
     const decode_us = (@as(i64, ts_end.sec) - @as(i64, ts_prefill.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_end.nsec) - @as(i64, ts_prefill.nsec), 1000);
@@ -1845,7 +1850,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
     }
 
     // Build a prompt long enough to cover the largest frontier.
-    const max_ctx = frontiers_buf[0..n_frontiers][n_frontiers - 1];
+    const max_ctx = std.mem.max(u32, frontiers_buf[0..n_frontiers]);
     var tok_if = tok_state.*.tokenizer();
 
     // Repeat a filler sentence to fill max_ctx tokens.
@@ -1878,13 +1883,13 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         if (slice.len == 0) continue;
 
         var ts0: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts0);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts0);
         _ = model.prefill(slice) catch {
             eprint("frontier-bench: prefill failed at ctx={d}\n", .{ctx_len});
             break;
         };
         var ts1: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts1);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts1);
         cursor = @min(ctx_len, prompt.len);
 
         // Export KV snapshot before probe (64 MB should cover most models at frontier sizes).
@@ -1896,14 +1901,18 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         // Greedy probe starting from the last prefill logits.
         var last = math_ops.argmax(model.getLogits());
         var gen: u32 = 0;
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts1);
+        var ts_dec_start: std.posix.system.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_dec_start);
         while (gen < probe_tokens) : (gen += 1) {
             if (isEogToken(last, eog)) break;
-            last = model.forward(last) catch break;
+            last = model.forward(last) catch |err| {
+                eprint("benchmark: decode forward failed: {}\n", .{err});
+                break;
+            };
             last = math_ops.argmax(model.getLogits());
         }
         var ts2: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.REALTIME, &ts2);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts2);
 
         // Restore KV state to the snapshot so the next frontier continues cleanly.
         if (kv_snapshot_buf) |s| {
@@ -1911,7 +1920,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         }
 
         const pf_us: i64 = (@as(i64, ts1.sec) - @as(i64, ts0.sec)) * 1_000_000 + @divTrunc(@as(i64, ts1.nsec) - @as(i64, ts0.nsec), 1000);
-        const dec_us: i64 = (@as(i64, ts2.sec) - @as(i64, ts1.sec)) * 1_000_000 + @divTrunc(@as(i64, ts2.nsec) - @as(i64, ts1.nsec), 1000);
+        const dec_us: i64 = (@as(i64, ts2.sec) - @as(i64, ts_dec_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts2.nsec) - @as(i64, ts_dec_start.nsec), 1000);
         const pf_tps: f64 = if (pf_us > 0) @as(f64, @floatFromInt(slice.len)) / (@as(f64, @floatFromInt(pf_us)) / 1e6) else 0;
         const dec_tps: f64 = if (dec_us > 0 and gen > 0) @as(f64, @floatFromInt(gen)) / (@as(f64, @floatFromInt(dec_us)) / 1e6) else 0;
 
@@ -2037,6 +2046,13 @@ fn printUsage() void {
         \\
         \\OPTIMIZATION:
         \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
+        \\      --power <N>                  Target GPU utilisation percent (1-100)
+        \\
+        \\EXPERT STREAMING:
+        \\      --ssd-streaming              Stream MoE experts from SSD
+        \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
+        \\      --expert-profile-out <FILE>  Save expert activation profile
+        \\      --expert-profile-in <FILE>   Load expert activation profile for cache warming
         \\
         \\MULTIMODAL:
         \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
@@ -2051,6 +2067,8 @@ fn printUsage() void {
         \\      --model-info       Print model metadata and exit (supports --json)
         \\      --profile          Profile per-op timing (halves throughput)
         \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
+        \\      --frontier-bench             Frontier benchmark (snapshot KV at each context)
+        \\      --frontier-ctx <LIST>        Comma-separated context lengths for frontier bench
         \\
         \\ENVIRONMENT:
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
@@ -2094,11 +2112,11 @@ fn printUsage() void {
         \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
         \\
         \\SUPPORTED ARCHITECTURES:
-        \\  gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4
+        \\  gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4
         \\
         \\REPL COMMANDS:
     ++ repl_help;
-    _ = std.c.write(stdout_file.handle, usage.ptr, usage.len);
+    _ = std.posix.system.write(stdout_file.handle, usage.ptr, usage.len);
 }
 
 // ── Formatting helpers ───────────────────────────────────────────
@@ -2231,7 +2249,7 @@ pub fn main(init: std.process.Init) !void {
 
     var arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
-        eprint("  Supported: gemma3, gemma4, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, llama4\n", .{});
+        eprint("  Supported: gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4\n", .{});
         std.process.exit(1);
     };
 
@@ -2718,6 +2736,11 @@ fn initAndRun(
     }
     defer if (dir_steering) |*steer| steer.deinit(allocator);
 
+    // Peer discovery buffers — must outlive both TP and PP blocks because
+    // cli.tp_peers may borrow into them and be read by the PP setup path.
+    var tp_ip_buf: [16]u8 = undefined;
+    var pp_ip_buf: [16]u8 = undefined;
+
     // TP: allocate row-shard scratch buffer for weight column extraction
     if (cli.tp_degree > 1) {
         const n_embd = mdl.model().nEmbd();
@@ -2743,12 +2766,11 @@ fn initAndRun(
         }
         std.log.info("TP={d} rank={d} active", .{ cli.tp_degree, cli.tp_rank });
 
-        // Auto-discover peers via UDP broadcast if --peers not specified
+        // Auto-discover peers via UDP broadcast if --peers not specified.
         if (cli.tp_peers == null and cli.tp_degree > 1) {
             const peer_discovery = @import("parallel/peer_discovery.zig");
             if (peer_discovery.discoverPeer(cli.tp_rank, cli.tp_degree, tp_discovery_port)) |ip| {
-                var ip_buf: [16]u8 = undefined;
-                const ip_str = std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
+                const ip_str = std.fmt.bufPrint(&tp_ip_buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
                 if (ip_str.len > 0) cli.tp_peers = ip_str;
             }
         }
@@ -2764,12 +2786,11 @@ fn initAndRun(
     // PP: pipeline parallelism setup (uses --pp, --rank, --peers)
     if (cli.pp_degree > 1) {
         std.log.info("PP={d} rank={d}", .{ cli.pp_degree, cli.tp_rank });
-        // Auto-discover peers for PP if --peers not specified
+        // Auto-discover peers for PP if --peers not specified.
         if (cli.tp_peers == null) {
             const peer_discovery = @import("parallel/peer_discovery.zig");
             if (peer_discovery.discoverPeer(cli.tp_rank, cli.pp_degree, pp_discovery_port)) |ip| {
-                var ip_buf2: [16]u8 = undefined;
-                const ip_str = std.fmt.bufPrint(&ip_buf2, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
+                const ip_str = std.fmt.bufPrint(&pp_ip_buf, "{d}.{d}.{d}.{d}", .{ ip[0], ip[1], ip[2], ip[3] }) catch "";
                 if (ip_str.len > 0) cli.tp_peers = ip_str;
             }
         }
@@ -2782,12 +2803,13 @@ fn initAndRun(
 
     // TriAttention: load calibration data when --kv-eviction tri
     if (cli.kv_eviction == .tri) {
+        // cal_buf must outlive the blk: block because cal_path borrows into it.
+        var cal_buf: [1024]u8 = undefined;
         const cal_path = blk: {
             // Auto-detect .cal file next to model: model.gguf → model.cal
             if (std.mem.endsWith(u8, cli.model_path, ".gguf")) {
-                var buf: [1024]u8 = undefined;
                 const stem = cli.model_path[0 .. cli.model_path.len - 5];
-                const cal = std.fmt.bufPrint(&buf, "{s}.cal", .{stem}) catch break :blk @as(?[]const u8, null);
+                const cal = std.fmt.bufPrint(&cal_buf, "{s}.cal", .{stem}) catch break :blk @as(?[]const u8, null);
                 break :blk cal;
             }
             break :blk @as(?[]const u8, null);
@@ -2943,8 +2965,10 @@ fn initAndRun(
         };
         {
             const ve = &vision_enc.?;
-            std.debug.assert(ve.patch_size > 0);
-            std.debug.assert(ve.projection_dim > 0);
+            if (ve.patch_size == 0 or ve.projection_dim == 0) {
+                eprint("Error: vision encoder has invalid patch_size or projection_dim\n", .{});
+                return false;
+            }
         }
         if (!g_quiet) {
             const ve = &vision_enc.?;
@@ -2977,10 +3001,12 @@ fn initAndRun(
             };
             defer allocator.free(img_pixels);
 
-            // Update n_patches for the actual processing resolution
-            ve.n_patches = (target_size / ve.patch_size) * (target_size / ve.patch_size);
-            ve.n_output_patches = ve.n_patches / 4; // Qwen 4× merge
-            ve.image_size = target_size;
+            // Update n_patches for the actual processing resolution (Qwen VL native resolution)
+            if (ve.use_native_resolution) {
+                ve.n_patches = (target_size / ve.patch_size) * (target_size / ve.patch_size);
+                ve.n_output_patches = ve.n_patches / 4; // Qwen 4× merge
+                ve.image_size = target_size;
+            }
 
             const visual_tokens = ve.encode(img_pixels) catch |err| {
                 eprint("Error: vision encode failed: {}\n", .{err});
@@ -3043,7 +3069,10 @@ fn initAndRun(
 
             {
                 // Iterate extracted PNGs using Io.Dir
-                var scan_dir = Io.Dir.cwd().openDir(g_io, tmp_dir_slice, .{ .iterate = true }) catch Io.Dir.cwd();
+                var scan_dir = Io.Dir.cwd().openDir(g_io, tmp_dir_slice, .{ .iterate = true }) catch {
+                    eprint("Error: could not open video temp directory: {s}\n", .{tmp_dir_slice});
+                    return false;
+                };
                 var scan_buf: [Io.Dir.Reader.min_buffer_len]u8 align(@alignOf(usize)) = undefined;
                 var reader = Io.Dir.Reader.init(scan_dir, &scan_buf);
                 var frame_names: std.ArrayList([]u8) = .empty;
@@ -3296,6 +3325,7 @@ fn initAndRun(
                 if (effective_prompt) |prompt| {
                     const tmpl = arch.chatTemplateForLayers(minfo.n_layers);
                     const formatted = tmpl.format(allocator, null, prompt) catch prompt;
+                    defer if (formatted.ptr != prompt.ptr) allocator.free(@constCast(formatted));
                     const tok_iface = tok.tokenizer();
                     const token_ids = tok_iface.encode(formatted) catch break :disagg_blk;
                     defer allocator.free(token_ids);
@@ -3315,7 +3345,7 @@ fn initAndRun(
                 std.log.info("Disagg decode: connecting to prefill node...", .{});
                 dtr.connectPeer(host, port) catch break :disagg_blk;
                 std.log.info("Connected. Waiting for KV cache...", .{});
-                mdl.recvKvCache(dtr);
+                mdl.recvKvCache(dtr) catch break :disagg_blk;
                 const kv_len = mdl.model().kvSeqLen();
                 // Receive first generated token from prefill node
                 var first_tok_f32: [1]f32 = undefined;
@@ -3329,11 +3359,6 @@ fn initAndRun(
                 var gen_count: u32 = 0;
                 const max_gen: u32 = @intCast(cli.max_tokens);
                 while (gen_count < max_gen) {
-                    const tok_slice = [1]u32{next};
-                    const text = tok.tokenizer().decode(@constCast(&tok_slice)) catch break;
-                    defer allocator.free(text);
-                    _ = std.posix.system.write(1, text.ptr, text.len);
-                    gen_count += 1;
                     var is_eog = false;
                     for (eog.ids[0..eog.len]) |e_id| {
                         if (next == e_id) {
@@ -3342,9 +3367,14 @@ fn initAndRun(
                         }
                     }
                     if (is_eog) break;
+                    const tok_slice = [1]u32{next};
+                    const text = tok.tokenizer().decode(@constCast(&tok_slice)) catch break;
+                    defer allocator.free(text);
+                    _ = std.posix.system.write(stdout_file.handle, text.ptr, text.len);
+                    gen_count += 1;
                     next = mdl.model().forward(next) catch break;
                 }
-                _ = std.posix.system.write(1, "\n", 1);
+                _ = std.posix.system.write(stdout_file.handle, "\n", 1);
             }
         }
     } else if (effective_prompt) |prompt| {
@@ -3376,6 +3406,7 @@ fn initAndRun(
 
 // ── Interactive REPL ─────────────────────────────────────────────
 
+/// Runs the interactive read-eval-print loop, reading user prompts from the terminal and generating responses.
 fn runRepl(
     allocator: std.mem.Allocator,
     mdl: *Model,
@@ -3494,7 +3525,7 @@ fn runRepl(
                 display.printModelInfo(minfo);
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/help")) {
-                _ = std.c.write(stdout_file.handle, repl_help.ptr, repl_help.len);
+                _ = std.posix.system.write(stdout_file.handle, repl_help.ptr, repl_help.len);
                 continue;
             } else {
                 print("Unknown command: {s} (try /help)\n", .{trimmed});
@@ -3581,6 +3612,7 @@ fn generateDiffusion(
         eprint("Error: tokenization failed\n", .{});
         return;
     };
+    defer allocator.free(token_ids);
 
     if (!g_quiet) eprint("diffusion: prompt = {d} tokens\n", .{token_ids.len});
 
@@ -3688,7 +3720,7 @@ fn generateDiffusion(
         // Output the locked canvas tokens (use SPM decode for Gemma tokenizer).
         const canvas_text = tok.decodeSpm(canvas) catch tok.decode(canvas) catch null;
         if (canvas_text) |text| {
-            _ = std.posix.system.write(1, text.ptr, text.len);
+            _ = std.posix.system.write(stdout_file.handle, text.ptr, text.len);
             allocator.free(text);
         }
         total_generated += @intCast(canvas_len);
@@ -3708,7 +3740,7 @@ fn generateDiffusion(
         // Stop if max_tokens reached.
         if (total_generated >= cli.max_tokens) break;
     }
-    _ = std.posix.system.write(1, "\n", 1);
+    _ = std.posix.system.write(stdout_file.handle, "\n", 1);
 
     if (show_stats) {
         const gen_ms = milliTimestamp(g_io) - gen_start_ms;
@@ -3719,6 +3751,7 @@ fn generateDiffusion(
 
 // ── Shared generation logic ──────────────────────────────────────
 
+/// Top-level generation entry point: delegates to speculative decoding if a draft model is available, otherwise standard autoregressive generation.
 fn generateAndPrint(
     allocator: std.mem.Allocator,
     mdl: *Model,
@@ -3744,6 +3777,7 @@ fn generateAndPrint(
     }
 }
 
+/// Runs speculative decoding: tokenizes the prompt, prefills the target and draft models, then decodes with draft-verify speculation.
 fn generateSpeculative(
     allocator: std.mem.Allocator,
     target: *Model,
@@ -4058,6 +4092,7 @@ fn generateSpeculative(
         var hit_eog = false;
         for (0..result.accepted) |i| {
             const accepted_tok = spec_state.draft_tokens[i];
+            if (token_count >= cli.max_tokens -| 1) break;
             if (token_count >= gen_ids_buf.len) break;
             if (isEogToken(accepted_tok, eog)) {
                 hit_eog = true;
@@ -4068,7 +4103,7 @@ fn generateSpeculative(
         }
 
         // Emit correction/bonus token
-        if (!hit_eog and token_count < gen_ids_buf.len) {
+        if (!hit_eog and token_count < cli.max_tokens -| 1 and token_count < gen_ids_buf.len) {
             if (isEogToken(result.next_token, eog)) {
                 hit_eog = true;
             } else {
@@ -4144,15 +4179,14 @@ fn generateSpeculative(
         flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..token_count], &started_output);
     }
     if (!g_tty and started_output) {
-        _ = std.c.write(stdout_file.handle, "\n", 1);
+        _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
 
     const gen_ms = milliTimestamp(g_io) - gen_start;
-    if (show_stats) {
-        const gen_toks = if (token_count > 0) token_count else 1;
-        const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(gen_toks)) / @as(f32, @floatFromInt(gen_ms)) * ms_per_second else 0;
+    if (show_stats and token_count > 0) {
+        const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(token_count)) / @as(f32, @floatFromInt(gen_ms)) * ms_per_second else 0;
         eprint("\n{d} tok · {d:.1} tok/s · {d}ms prefill · spec: {d:.0}% accept ({d:.1} mean)\n", .{
-            gen_toks,
+            token_count,
             tok_per_sec,
             prefill_ms,
             spec_state.acceptanceRate() * 100,
@@ -4298,6 +4332,7 @@ fn generateAndPrintInner(
     // Grammar-constrained decoding
     var grammar: ?grammar_mod.Grammar = null;
     var grammar_state: ?grammar_mod.GrammarState = null;
+    var grammar_source_buf: ?[]u8 = null; // file buffer owned by Grammar (rules borrow into it)
     var json_depth: i32 = 0;
     const json_mode_active = cli.json_output;
     if (json_mode_active) {
@@ -4344,6 +4379,7 @@ fn generateAndPrintInner(
                             allocator.free(b);
                             break :blk null;
                         };
+                        if (grammar != null) grammar_source_buf = b; // Grammar borrows into b
                         if (grammar) |*g| grammar_state = g.initState() catch |err| blk: {
                             eprint("Error: grammar state init failed (OOM): {}\n", .{err});
                             break :blk null;
@@ -4359,6 +4395,7 @@ fn generateAndPrintInner(
     defer {
         if (grammar_state) |*gs| gs.deinit();
         if (grammar) |*g| g.deinit();
+        if (grammar_source_buf) |b| allocator.free(b);
     }
     if (token_ids.len > 0) {
         const first_logits = mdl.getLogits();
@@ -4453,12 +4490,13 @@ fn generateAndPrintInner(
                 if (grammar_state) |*gs| {
                     if (g.singleValidToken(gs, tok.id_to_token.items)) |jump_tok| {
                         const jt_slice = [1]u32{jump_tok};
-                        const jt_text = tok.decode(@constCast(&jt_slice)) catch |err| blk: {
+                        const jt_text = tok.decode(@constCast(&jt_slice)) catch |err| {
                             eprint("Warning: grammar jump token decode failed (id={d}): {}\n", .{ jump_tok, err });
-                            break :blk null;
+                            break;
                         };
-                        defer if (jt_text) |t| allocator.free(t);
-                        gs.acceptToken(jt_text orelse "");
+                        defer allocator.free(jt_text);
+                        gs.acceptToken(jt_text);
+                        if (token_count >= gen_ids_buf.len) break;
                         gen_ids_buf[token_count] = jump_tok;
                         token_count += 1;
                         last = jump_tok;
@@ -4488,13 +4526,13 @@ fn generateAndPrintInner(
             }
         }
         var power_ts0: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.REALTIME, &power_ts0);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts0);
         var next = mdl.forward(last) catch |e| {
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
         var power_ts1: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.REALTIME, &power_ts1);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts1);
         const power_delta_ns: i64 = (@as(i64, power_ts1.sec) - @as(i64, power_ts0.sec)) * 1_000_000_000 + (@as(i64, power_ts1.nsec) - @as(i64, power_ts0.nsec));
         power_last_forward_ns = @intCast(@max(0, power_delta_ns));
         // Apply repeat penalty to logits for recently generated tokens
@@ -4585,7 +4623,7 @@ fn generateAndPrintInner(
     }
     // Ensure a trailing newline for piped output (not TTY, not JSON)
     if (!g_tty and display.mode != .json and started_output) {
-        _ = std.c.write(stdout_file.handle, "\n", 1);
+        _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
     if (hit_eog and g_verbose) print("\n[EOG]\n", .{});
     const gen_ms = elapsedMs(gen_start);
@@ -4644,12 +4682,12 @@ fn flushTokenBatch(tok: *BpeTokenizer, tok_kind: TokenizerKind, allocator: std.m
         text = text[1..];
     }
     if (text.len > 0) started.* = true;
-    _ = std.c.write(stdout_file.handle, text.ptr, text.len);
+    _ = std.posix.system.write(stdout_file.handle, text.ptr, text.len);
 }
 
 test {
     // Force test discovery for all modules with test blocks.
-    // Zig 0.15 uses lazy test discovery — files imported at the top level
+    // Zig 0.16 uses lazy test discovery — files imported at the top level
     // but not referenced by any test block are silently excluded.
     _ = @import("cli.zig");
     _ = @import("display.zig");

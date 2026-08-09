@@ -23,6 +23,10 @@ const Allocator = std.mem.Allocator;
 /// so apply() stays a bounded, allocation-free walk of the direction vector.
 const max_embd_dim: usize = 16384;
 
+/// Applies pre-computed direction vectors to steer FFN and attention outputs
+/// at each transformer layer, enabling controllable generation without
+/// fine-tuning. Vectors are loaded once at init and applied in-place on the
+/// hot path with zero allocation.
 pub const DirectionalSteering = struct {
     /// Per-layer direction vectors, contiguous: [n_layers][n_embd] f32.
     directions: []const f32,
@@ -107,6 +111,7 @@ pub const DirectionalSteering = struct {
         };
     }
 
+    /// Frees the per-layer direction vectors.
     pub fn deinit(self: *DirectionalSteering, allocator: Allocator) void {
         if (self.directions.len > 0) {
             allocator.free(self.directions);

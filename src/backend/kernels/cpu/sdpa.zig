@@ -41,7 +41,7 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
     const hpg = nh / nkv;
     const kvh = h / hpg;
     const q_base = h * hd;
-    std.debug.assert(sl <= max_sdpa_seq_len);
+    if (sl > max_sdpa_seq_len) @panic("CPU SDPA: sequence length exceeds max_sdpa_seq_len");
     var scores_buf: [max_sdpa_seq_len]f32 = undefined;
 
     // Cache Q for this head
@@ -107,7 +107,7 @@ pub fn sdpaQuantHead(q: [*]const f32, keys: [*]const u8, values: [*]const u8, ou
     const hpg = nh / nkv;
     const kvh = h / hpg;
     const q_base = h * hd;
-    std.debug.assert(sl <= max_sdpa_seq_len);
+    if (sl > max_sdpa_seq_len) @panic("CPU SDPA: sequence length exceeds max_sdpa_seq_len");
     var scores_buf: [max_sdpa_seq_len]f32 = undefined;
 
     // Cache Q for this head
@@ -148,7 +148,7 @@ pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]con
     const hpg = nh / nkv;
     const kvh = h / hpg;
     const q_base = h * hd;
-    std.debug.assert(sl <= max_sdpa_seq_len);
+    if (sl > max_sdpa_seq_len) @panic("CPU SDPA: sequence length exceeds max_sdpa_seq_len");
     var scores_buf: [max_sdpa_seq_len]f32 = undefined;
 
     // Cache Q for this head
@@ -548,12 +548,13 @@ pub fn sdpaPagedHeads(q: [*]const f32, kv_view: PagedKvView, k_new: [*]const f32
     }
 }
 
+/// Per-head paged SDPA kernel: computes attention for a single head against a PagedKvView block table.
 pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: usize, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32) void {
     const kvd = nkv * hd;
     const hpg = nh / nkv;
     const kvh = h / hpg;
     const q_base = h * hd;
-    std.debug.assert(sl <= max_sdpa_seq_len);
+    if (sl > max_sdpa_seq_len) @panic("CPU SDPA: sequence length exceeds max_sdpa_seq_len");
     var scores_buf: [max_sdpa_seq_len]f32 = undefined;
 
     var q_cached: [max_head_dim]f32 = undefined;

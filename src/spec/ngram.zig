@@ -11,8 +11,14 @@
 
 const std = @import("std");
 
+/// Maximum number of tokens retained in the per-request history ring buffer.
+/// When full, the oldest half is discarded to make room (amortized O(1) push).
 const history_capacity: usize = 2048;
+/// Minimum n-gram length to search for when proposing draft tokens.
+/// Shorter n-grams produce too many false matches.
 const min_ngram: usize = 3;
+/// Maximum n-gram length to search for. The search starts at max_ngram and
+/// falls back to shorter lengths, so longer values prefer higher-quality matches.
 const max_ngram: usize = 10;
 
 /// N-gram proposal state. Maintains a ring buffer of generated tokens.
@@ -87,7 +93,9 @@ pub const NgramState = struct {
 /// Thread-safety: guarded by a plain Mutex; critical sections are short
 /// (ring-buffer push or linear scan), so contention is negligible.
 pub const SharedNgramPool = struct {
-    const pool_capacity: usize = 8192; // ~32 KB — larger than per-request 2 KB
+    /// Maximum number of tokens in the shared pool ring buffer (~32 KB).
+    /// Larger than the per-request history (2 KB) so cross-request matches span more context.
+    const pool_capacity: usize = 8192;
 
     history: [pool_capacity]u32 = undefined,
     len: usize = 0,
@@ -197,8 +205,10 @@ pub const SuffixState = struct {
         };
     }
 
-    /// Zero and free the suffix cache. Safe to call multiple times.
+    /// Zero and free the suffix cache. Safe to call multiple times —
+    /// subsequent calls are no-ops after the first free.
     pub fn deinit(self: *SuffixState) void {
+        if (self.history.len == 0) return;
         @memset(self.history, 0);
         self.len = 0;
         self.allocator.free(self.history);

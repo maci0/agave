@@ -307,6 +307,7 @@ const CachedBuf = struct {
 
 // ── WebGPU Backend ──────────────────────────────────────────────────
 
+/// WebGPU compute backend for cross-platform GPU inference via WGSL shaders.
 pub const WebGpuBackend = struct {
     const max_dirty_entries: usize = 512;
     const DirtyEntry = struct { buf: WGPUBuffer, ptr: [*]f32, count: usize };
@@ -437,6 +438,9 @@ pub const WebGpuBackend = struct {
 
     // ── Initialization ──────────────────────────────────────────
 
+    /// Initialize the WebGPU backend: load the wgpu-native dynamic library,
+    /// resolve function pointers, create the GPU instance/adapter/device, and
+    /// compile all compute shader pipelines.
     pub fn init(allocator: std.mem.Allocator) !WebGpuBackend {
         var self = WebGpuBackend{ .allocator = allocator, .lib = undefined };
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
@@ -451,7 +455,7 @@ pub const WebGpuBackend = struct {
             break std.DynLib.open(name) catch continue;
         } else return error.WebGpuNotAvailable;
         errdefer self.lib.close();
-        std.log.warn("WebGPU: library loaded", .{});
+        std.log.info("WebGPU: library loaded", .{});
 
         self.loadFunctions() catch |err| {
             std.log.warn("WebGPU: loadFunctions failed: {s}", .{@errorName(err)});
@@ -644,6 +648,7 @@ pub const WebGpuBackend = struct {
         return PipelineInfo{ .pipeline = pipeline, .bind_group_layout = bgl };
     }
 
+    /// Release all GPU resources, pipelines, and cached buffers.
     pub fn deinit(self: *WebGpuBackend) void {
         // Release pool buffers
         for (&self.act_pool) |*entry| {
@@ -858,6 +863,7 @@ pub const WebGpuBackend = struct {
 
     // ── Core Compute Operations ─────────────────────────────────
 
+    /// Element-wise SiLU activation: output[i] = input[i] * sigmoid(input[i]).
     pub fn silu(self: *WebGpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const in_buf = self.getOrUpload(@ptrCast(input), size);
@@ -876,6 +882,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, out_buf, size);
     }
 
+    /// Element-wise GELU activation: y = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))).
     pub fn gelu(self: *WebGpuBackend, input: [*]const f32, output: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const in_buf = self.getOrUpload(@ptrCast(input), size);
@@ -894,6 +901,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, out_buf, size);
     }
 
+    /// Element-wise addition: out[i] = a[i] + b[i].
     pub fn add(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const buf_a = self.getOrUpload(@ptrCast(a), size);
@@ -914,6 +922,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(out, out_buf, size);
     }
 
+    /// Element-wise multiplication: out[i] = a[i] * b[i].
     pub fn mul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const buf_a = self.getOrUpload(@ptrCast(a), size);
@@ -934,6 +943,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(out, out_buf, size);
     }
 
+    /// Fused SiLU×mul (SwiGLU): out[i] = silu(a[i]) * b[i].
     pub fn siluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const buf_a = self.getOrUpload(@ptrCast(a), size);
@@ -954,6 +964,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(out, out_buf, size);
     }
 
+    /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |idx| {
             const g = @min(gate[idx], @as(f32, 10.0));
@@ -962,6 +973,7 @@ pub const WebGpuBackend = struct {
         }
     }
 
+    /// Fused GELU×mul (GeGLU): out[i] = gelu(a[i]) * b[i].
     pub fn geluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const buf_a = self.getOrUpload(@ptrCast(a), size);
@@ -982,6 +994,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(out, out_buf, size);
     }
 
+    /// RMS normalization with learned scale.
     pub fn rmsNorm(self: *WebGpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const size = n * @sizeOf(f32);
         const in_buf = self.getOrUpload(@ptrCast(input), size);
@@ -1003,6 +1016,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, out_buf, size);
     }
 
+    /// Softmax over n elements in-place.
     pub fn softmax(self: *WebGpuBackend, data: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const data_buf = self.getOrUpload(@ptrCast(data), size);
@@ -1020,6 +1034,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(data, data_buf, size);
     }
 
+    /// Rotary position embedding (RoPE) applied in-place.
     pub fn rope(self: *WebGpuBackend, data: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const total_elems = n_heads * head_dim;
         const size = total_elems * @sizeOf(f32);
@@ -1052,6 +1067,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(data, data_buf, size);
     }
 
+    /// Embedding table lookup: copy row `token_id` from table into output.
     pub fn embLookup(self: *WebGpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         // For non-f32 tables, dequant the single row on host and upload f32.
         // This avoids uploading the entire multi-hundred-MB vocab table to GPU.
@@ -1089,6 +1105,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, out_buf, out_size);
     }
 
+    /// General matrix-vector multiply: y[n] = W[n,k] @ x[k]. Dispatches by quant type.
     pub fn gemv(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         const x_size = k * @sizeOf(f32);
         const y_size = n * @sizeOf(f32);
@@ -1118,17 +1135,27 @@ pub const WebGpuBackend = struct {
             .tq2_0 => self.pipe_gemv_tq2_0,
             // IQ2/IQ3/IQ1: no WebGPU shader — fail closed (no silent CPU fallback).
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("WebGPU gemv: IQ2/IQ3/IQ1 kernels not implemented"),
-            else => @panic("WebGPU gemv: unsupported weight dtype"),
+            else => std.debug.panic("WebGPU gemv: unsupported weight dtype {s}", .{@tagName(w.dtype)}),
         };
         const nb32 = (k + 31) / 32;
         const nb256 = (k + 255) / 256;
         const w_size = switch (w.dtype) {
             .f32 => n * k * @sizeOf(f32),
+            .bf16 => n * k * 2,
+            .f16 => n * k * 2,
+            .fp8_e4m3 => n * k,
+            .fp8_e5m2 => n * k,
             .q8_0 => n * nb32 * 34,
             .q4_0 => n * nb32 * 18,
+            .q4_1 => n * nb32 * 20,
+            .q5_0 => n * nb32 * 22,
+            .iq4_nl => n * nb32 * 18,
+            .q2_k => n * nb256 * 84,
+            .q3_k => n * nb256 * 110,
             .q4_k => n * nb256 * 144,
             .q5_k => n * nb256 * 176,
             .q6_k => n * nb256 * 210,
+            .iq4_xs => n * nb256 * 136,
             .tq1_0 => n * nb256 * 54,
             .tq2_0 => n * nb256 * 66,
             else => unreachable,
@@ -1154,12 +1181,14 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(y, out_buf, y_size);
     }
 
+    /// Batched GEMM via per-row GEMV: y[tok,n] = W[n,k] @ x[tok,k].
     pub fn gemm(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
         for (0..n_tok) |i| {
             self.gemv(x + i * n_in, w, y + i * n_out, n_out, n_in);
         }
     }
 
+    /// L2 normalization in-place: data[i] /= sqrt(sum(data^2) + eps).
     pub fn l2Norm(self: *WebGpuBackend, data: [*]f32, n: usize, eps: f32) void {
         const size = n * @sizeOf(f32);
         const data_buf = self.getOrUpload(@ptrCast(data), size);
@@ -1177,6 +1206,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(data, data_buf, size);
     }
 
+    /// Fused residual add + RMS norm: data[i] += residual[i], then out = rmsNorm(data, weight, eps).
     pub fn addRmsNorm(self: *WebGpuBackend, data: [*]f32, residual: [*]const f32, weight: [*]const f32, out: [*]f32, n: usize, eps: f32) void {
         const size = n * @sizeOf(f32);
         // data is read_write: add residual in-place, then normalize into out
@@ -1223,6 +1253,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(b, b_buf, size);
     }
 
+    /// Scaled addition: dst[i] += src[i] * scale.
     pub fn addScaled(self: *WebGpuBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const src_buf = self.getOrUpload(@ptrCast(src), size);
@@ -1240,6 +1271,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(dst, dst_buf, size);
     }
 
+    /// Element-wise sigmoid gating: data[i] *= sigmoid(gate[i]).
     pub fn sigmoidMul(self: *WebGpuBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         const size = n * @sizeOf(f32);
         // data is read_write (result written back in place)
@@ -1343,6 +1375,7 @@ pub const WebGpuBackend = struct {
         }
     }
 
+    /// Scaled dot-product attention (single-token decode). Appends k/v, computes QK^T, softmax, V lookup.
     pub fn sdpa(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         if (kv_type_k != .f32 or kv_type_v != .f32)
             @panic("WebGPU sdpa: only f32 KV supported — use --kv-type f32");
@@ -1392,6 +1425,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, o_buf, o_sz);
     }
 
+    /// SDPA with per-head max/sum statistics (for disaggregated attention merging).
     pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
         // Identity stats (max=0, sum=1) — GPU SDPA output is already normalized
@@ -1486,6 +1520,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, o_buf, o_sz);
     }
 
+    /// Tree-structured SDPA for speculative decoding with ancestor masks.
     pub fn sdpaTree(self: *WebGpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
             const kvd = nkv * hd;
@@ -1524,6 +1559,7 @@ pub const WebGpuBackend = struct {
         @panic("WebGPU sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
+    /// Multi-token prefill SDPA: processes n_tok query tokens against the full KV cache.
     pub fn sdpaPrefill(self: *WebGpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
         const qkv_dim = nh * hd;
@@ -1897,6 +1933,7 @@ pub const WebGpuBackend = struct {
         }
     }
 
+    /// Submit pending GPU work, download dirty buffers to CPU, and destroy deferred params.
     pub fn sync(self: *WebGpuBackend) void {
         self.submitPending();
         // Flush dirty buffers: download GPU results to CPU.

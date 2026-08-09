@@ -27,7 +27,7 @@ See [`src/pull.zig`](../../src/pull.zig) for the download implementation.
 
 ## 2. Architecture Detection and Weight Load
 
-Once the artifact is open, Agave reads an architecture string from its metadata (`general.architecture` for GGUF, `model_type` for SafeTensors config) and matches it against the model implementations it was compiled with: Gemma3, Gemma4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, or Llama 4. An unrecognized string is a hard, immediate error. A *misidentified* one is not: two architectures can share a metadata string family closely enough that detection guesses wrong, and the model will still build and run, just against the wrong tensor layout.
+Once the artifact is open, Agave reads an architecture string from its metadata (`general.architecture` for GGUF, `model_type` for SafeTensors config) and matches it against the model implementations it was compiled with: Gemma3, Gemma4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H/Nano, GLM-4, DeepSeek V4, or Llama 4. An unrecognized string is a hard, immediate error. A *misidentified* one is not: two architectures can share a metadata string family closely enough that detection guesses wrong, and the model will still build and run, just against the wrong tensor layout.
 
 With the architecture chosen, Agave picks a compute **backend** (CPU, Metal, CUDA, Vulkan, ROCm, or WebGPU; Chapter 8 covers selection) and loads weights into that backend's buffers.
 

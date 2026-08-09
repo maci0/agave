@@ -20,6 +20,8 @@ pub const max_budget: usize = 512;
 /// Maximum draft depth (number of draft positions).
 pub const max_depth: usize = 32;
 
+/// A single node in the DDTree draft tree, representing one candidate token
+/// at a given depth with its cumulative log-probability and parent link.
 pub const TreeNode = struct {
     token_id: u32,
     /// Index of parent in nodes array. -1 for children of the root prompt token.
@@ -33,6 +35,7 @@ pub const TreeNode = struct {
 /// Maximum children per node (for child index).
 const max_children_per_node: usize = 16;
 
+/// Compiled draft tree flattened for batched verification against the target model.
 pub const CompiledTree = struct {
     /// Token IDs in tree order.
     input_ids: [max_budget]u32 = undefined,

@@ -1,3 +1,4 @@
+// GEMV for MLX Q4 quantized weights.
 struct Params {
     n: u32,
     k: u32,

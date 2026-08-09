@@ -1,3 +1,4 @@
+// Fused add + RMS normalization.
 struct Params {
     n: u32,
     eps: f32,

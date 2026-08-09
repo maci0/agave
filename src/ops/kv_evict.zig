@@ -274,6 +274,7 @@ pub fn triScore(
 ///   n_q_heads: number of query heads (for GQA aggregation)
 ///   query_pos: current generation position
 ///   calibrations: [n_q_heads] calibration data (one per query head)
+///   scratch: [n_q_heads * seq_len] temporary buffer for per-head scores
 pub fn scorePositionsTri(
     k_cache: [*]const f32,
     scores: [*]f32,

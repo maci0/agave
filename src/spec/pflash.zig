@@ -50,6 +50,9 @@ pub const PFlashState = struct {
     /// Original sequence length.
     orig_len: usize,
 
+    /// Allocate scoring and selection buffers sized for up to `max_tokens` tokens.
+    /// The number of blocks is derived from `cfg.block_size`. On partial allocation
+    /// failure, previously allocated buffers are freed via `errdefer`.
     pub fn init(allocator: Allocator, cfg: PFlashConfig, max_tokens: usize) !PFlashState {
         const bs = @as(usize, cfg.block_size);
         const n_blocks = (max_tokens + bs - 1) / bs;
@@ -68,6 +71,7 @@ pub const PFlashState = struct {
         };
     }
 
+    /// Free the block_scores, selected, and selected_tokens buffers.
     pub fn deinit(self: *PFlashState, allocator: Allocator) void {
         allocator.free(self.block_scores);
         allocator.free(self.selected);

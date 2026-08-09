@@ -1,3 +1,4 @@
+// GEMV for FP8 E4M3 weights.
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : require
 

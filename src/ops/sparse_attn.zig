@@ -31,6 +31,7 @@ pub const BlockMask = struct {
     /// Block size in tokens.
     block_size: u32,
 
+    /// Free the block mask allocation.
     pub fn deinit(self: BlockMask, allocator: std.mem.Allocator) void {
         allocator.free(self.data);
     }

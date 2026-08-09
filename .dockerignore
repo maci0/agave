@@ -97,3 +97,4 @@ compose*.yml
 
 # Stray files
 pelorus-*.yaml
+*.dSYM

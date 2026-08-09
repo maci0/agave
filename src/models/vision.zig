@@ -36,6 +36,7 @@ const format_mod = @import("../format/format.zig");
 const quant = @import("../ops/quant.zig");
 const math_ops = @import("../ops/math.zig");
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
+const model_mod = @import("model.zig");
 
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
@@ -67,6 +68,8 @@ const vec_len: usize = 8;
 const gemma4_merge_kernel: u32 = 3;
 /// ViT RoPE theta for Gemma 4 SigLIP-2 (from llama.cpp hparams.rope_theta).
 const vit_rope_theta: f32 = 100.0;
+/// Qwen VL M-RoPE theta for multi-section rotary position embeddings.
+const qwen_rope_theta: f32 = 10000.0;
 /// Maximum half-head dimension for RoPE precomputation.
 const max_rope_half: usize = 128;
 /// Default Gemma 4 effective image size: 768 = 48 patches/side × 16 pixels/patch.
@@ -98,8 +101,8 @@ const VisionVariant = enum {
     qwen_vl,
 };
 
-/// Cached pointer-keyed entry for converted norm weights.
-const NormCacheEntry = struct { key: usize, data: []f32 };
+/// Cached pointer-keyed entry for converted norm weights (defined in model.zig).
+const NormCacheEntry = model_mod.NormCacheEntry;
 
 /// Vision encoder — loads from mmproj GGUF and produces visual token embeddings.
 /// Supports Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL architectures.
@@ -370,7 +373,25 @@ pub const VisionEncoder = struct {
             errdefer allocator.free(self.mlp_buf);
         }
 
+        self.warmNormCache();
         return self;
+    }
+
+    /// Pre-warm the norm cache so BF16→f32 conversion happens at init, not in the forward path.
+    fn warmNormCache(self: *VisionEncoder) void {
+        const ed: usize = self.embd_dim;
+        const hd: usize = self.head_dim;
+        if (self.fmt.getTensor("v.post_ln.weight")) |t| _ = self.normAsF32(t, ed);
+        if (self.fmt.getTensor("mm.soft_emb_norm.weight")) |t| _ = self.normAsF32(t, ed);
+        for (0..self.n_blocks) |i| {
+            const li: u32 = @intCast(i);
+            if (self.fmt.layerTensor(li, "ln1.weight")) |t| _ = self.normAsF32(t, ed);
+            if (self.fmt.layerTensor(li, "ln2.weight")) |t| _ = self.normAsF32(t, ed);
+            if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(li, "attn_k_norm.weight")) |t| _ = self.normAsF32(t, hd);
+            if (self.fmt.layerTensor(li, "attn_post_norm.weight")) |t| _ = self.normAsF32(t, ed);
+            if (self.fmt.layerTensor(li, "ffn_post_norm.weight")) |t| _ = self.normAsF32(t, ed);
+        }
     }
 
     /// Detect the vision encoder variant from available tensors in the mmproj file.
@@ -389,6 +410,7 @@ pub const VisionEncoder = struct {
 
     /// Release all heap allocations owned by this encoder.
     pub fn deinit(self: *VisionEncoder) void {
+        self.be.sync();
         // Free cached norm weight conversions
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         // Free working buffers
@@ -499,9 +521,9 @@ pub const VisionEncoder = struct {
             std.log.warn("vision debug: failed to create {s}: {s}", .{ filename, @errorName(err) });
             return;
         };
-        defer _ = std.c.close(fd);
+        defer _ = std.posix.system.close(fd);
         const bytes: []const u8 = @as([*]const u8, @ptrCast(data.ptr))[0 .. data.len * @sizeOf(f32)];
-        _ = std.c.write(fd, bytes.ptr, bytes.len);
+        _ = std.posix.system.write(fd, bytes.ptr, bytes.len);
         std.log.info("vision debug: dumped {s} ({d} floats, {d} bytes)", .{ filename, data.len, bytes.len });
     }
 
@@ -824,7 +846,6 @@ pub const VisionEncoder = struct {
                 applyRope2d(self.k_buf, np, nh, hd, pps, vit_rope_theta);
             } else if (self.variant == .qwen_vl) {
                 // Qwen VL: M-RoPE — 4 sections [temporal, height, height, width] (theta=10000)
-                const qwen_rope_theta: f32 = 10000.0;
                 applyMRope(self.q_buf, np, nh, hd, pps, qwen_rope_theta);
                 applyMRope(self.k_buf, np, nh, hd, pps, qwen_rope_theta);
             }
@@ -1581,8 +1602,8 @@ fn applyRope2d(buf: []f32, np: usize, nh: usize, hd: usize, pps: usize, theta: f
 
     // Precompute cos/sin tables for all needed positions (0..pps-1)
     // Each position needs half_half frequency pairs
-    std.debug.assert(half_half <= max_rope_half);
-    std.debug.assert(pps <= 256); // reasonable upper bound
+    if (half_half > max_rope_half) @panic("vision: rope half-dim exceeds max_rope_half");
+    if (pps > 256) @panic("vision: patches_per_side exceeds 256");
 
     for (0..np) |p| {
         const py = p / pps;

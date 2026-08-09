@@ -213,9 +213,10 @@ pub const iq4_xs_block_bytes: usize = quant_ops.iq4_xs_block_bytes;
 pub const mxfp4_block_bytes: usize = 17;
 /// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.
 pub const nvfp4_block_bytes: usize = 9;
-/// TQ1_0: 64 bytes per 256-element super-block.
-pub const tq1_0_block_bytes: usize = 64;
-/// TQ2_0: 130 bytes per 256-element super-block (f16 scale + 128 bytes data).
+/// TQ1_0: 54 bytes per 256-element super-block.
+/// Layout: f16 scale (2) + qs[48] (48) + qh[4] (4) = 54.
+pub const tq1_0_block_bytes: usize = 54;
+/// TQ2_0: 66 bytes per 256-element super-block (f16 scale + 64 bytes data).
 pub const tq2_0_block_bytes: usize = 66;
 /// IQ3_XXS: 98 bytes per 256-element super-block.
 pub const iq3_xxs_block_bytes: usize = 98;
@@ -2183,8 +2184,8 @@ test "NullBackend — all method signatures are consistent with Backend" {
 }
 
 test "weightBytes — TQ1_0 super-block" {
-    // TQ1_0: 64 bytes per 256-element super-block.
-    try std.testing.expectEqual(@as(usize, 64), weightBytes(.tq1_0, 1, 256));
+    // TQ1_0: 54 bytes per 256-element super-block.
+    try std.testing.expectEqual(@as(usize, 54), weightBytes(.tq1_0, 1, 256));
     try std.testing.expectEqual(@as(usize, 4 * 16 * tq1_0_block_bytes), weightBytes(.tq1_0, 4, 4096));
     // TQ2_0: 66 bytes per 256-element super-block.
     try std.testing.expectEqual(@as(usize, 66), weightBytes(.tq2_0, 1, 256));

@@ -1,3 +1,4 @@
+// Multi-head RMS normalization.
 struct Params {
     n_heads: u32,
     head_dim: u32,

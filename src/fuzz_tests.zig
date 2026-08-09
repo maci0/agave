@@ -1132,8 +1132,8 @@ test "fuzz: TQ1_0 GEMV no crash" {
     const gemv_tq1 = @import("backend/kernels/cpu/gemv_tq1_0.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            // TQ1_0: 256-elem blocks, 64 bytes each
-            var block: [64]u8 align(2) = undefined;
+            // TQ1_0: 256-elem blocks, 54 bytes each
+            var block: [54]u8 align(2) = undefined;
             smith.bytesWithHash(&block, 0);
             var x: [256]f32 = undefined;
             for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 100.0;

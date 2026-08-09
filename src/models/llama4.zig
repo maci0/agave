@@ -266,6 +266,10 @@ pub const Llama4Model = struct {
             self.moe_out = try allocator.alloc(f32, n_embd);
             errdefer allocator.free(self.moe_out);
         }
+        // Block-scoped errdefers above expire when the if-block ends normally.
+        // Re-register at function scope so later allocation failures still free these.
+        errdefer if (self.n_experts > 0) allocator.free(self.router_logits);
+        errdefer if (self.n_experts > 0) allocator.free(self.moe_out);
 
         // Prefill buffers use page allocator for GPU compatibility (Metal's
         // newBufferWithBytesNoCopy requires page-aligned pointers).
@@ -298,6 +302,7 @@ pub const Llama4Model = struct {
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Llama4Model) void {
+        self.be.sync();
         self.allocator.free(self.hidden);
         self.allocator.free(self.hidden2);
         self.allocator.free(self.q_buf);
@@ -833,9 +838,7 @@ pub const Llama4Model = struct {
         self.doGemv(self.attn_out.ptr, ow, self.hidden2.ptr, e, nh * hd);
         self.perf.end(.gemv_out, t);
 
-        t = self.perf.start();
         // Residual add deferred: feedForward/denseFFN fuses add(hidden, hidden2) + rmsNorm.
-        self.perf.end(.add, t);
     }
 
     /// Feed-forward layer: pre-FFN norm, then either dense SwiGLU or MoE routing.

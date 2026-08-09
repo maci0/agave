@@ -9,22 +9,37 @@ const ImageTokens = @import("image_tokens.zig").ImageTokens;
 const tool_format_overhead: usize = 64;
 
 /// Role in a conversation message.
-pub const Role = enum { user, assistant, tool };
+pub const Role = enum {
+    /// Human / end-user turn.
+    user,
+    /// Model-generated response turn.
+    assistant,
+    /// Tool-call result injected back into the conversation.
+    tool,
+};
 
 /// A single message in a conversation.
 pub const Message = struct {
+    /// Which participant produced this message.
     role: Role,
+    /// Raw text content of the message.
     content: []const u8,
+    /// Optional identifier linking a tool result back to the originating tool call.
     tool_call_id: ?[]const u8 = null,
 };
 
 /// Chat template definition for a model architecture.
 /// Each field pair (prefix/suffix) wraps a role's content in the prompt.
 pub const ChatTemplate = struct {
+    /// Text inserted before the system message content.
     system_prefix: []const u8,
+    /// Text inserted after the system message content.
     system_suffix: []const u8,
+    /// Text inserted before a user message content.
     user_prefix: []const u8,
+    /// Text inserted after a user message content.
     user_suffix: []const u8,
+    /// Text inserted before an assistant message content.
     assistant_prefix: []const u8,
     /// Suffix appended after an assistant response to close the turn.
     assistant_suffix: []const u8,

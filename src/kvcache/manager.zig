@@ -79,8 +79,10 @@ pub const CacheBlock = struct {
     /// Reference count for prefix sharing.
     ref_count: u16 = 1,
     /// Frequency tracking for eviction policy.
+    /// Unused in base CacheBlock — TieredBlock has its own copy that is actually used.
     access_count: u32 = 0,
     /// Last access timestamp for LRU within tier.
+    /// Unused in base CacheBlock — TieredBlock has its own copy that is actually used.
     last_access_ms: i64 = 0,
 };
 
@@ -158,11 +160,10 @@ pub const PagedKvCache = struct {
     free_list: std.ArrayList(u32),
     block_size: u16,
     kv_dim: usize,
-    n_layers: usize,
     allocator: Allocator,
 
     /// Allocate a paged KV cache with `num_blocks` blocks of `block_size` positions each.
-    pub fn init(allocator: Allocator, n_layers: usize, kv_dim: usize, num_blocks: usize, block_size: u16) !PagedKvCache {
+    pub fn init(allocator: Allocator, _: usize, kv_dim: usize, num_blocks: usize, block_size: u16) !PagedKvCache {
         const blocks = try allocator.alloc(CacheBlock, num_blocks);
         errdefer allocator.free(blocks);
 
@@ -197,7 +198,6 @@ pub const PagedKvCache = struct {
             .free_list = free_list,
             .block_size = block_size,
             .kv_dim = kv_dim,
-            .n_layers = n_layers,
             .allocator = allocator,
         };
     }

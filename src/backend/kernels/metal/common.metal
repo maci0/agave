@@ -1,3 +1,4 @@
+// Common Metal types and shared helpers for all MSL kernels.
 #include <metal_stdlib>
 using namespace metal;
 

@@ -19,11 +19,11 @@ const stderr_file = if (is_freestanding) {} else Io.File.stderr();
 
 /// Nanosecond timestamp via CLOCK_MONOTONIC.
 /// Interval timing must not use REALTIME (NTP/step adjustments corrupt deltas).
-/// Raw C call avoids Io virtual dispatch on the profiling hot path.
+/// Raw posix syscall avoids Io virtual dispatch on the profiling hot path.
 fn nanoTimestamp() i128 {
     if (comptime is_freestanding) return 0;
     var ts: std.posix.timespec = undefined;
-    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
@@ -52,9 +52,13 @@ const report_buf_size: usize = 4096;
 
 /// Accumulates wall-clock time per operation type across all tokens.
 pub const PerfCounters = struct {
+    /// Per-operation invocation counts, indexed by `@intFromEnum(Op)`.
     counts: [n_ops]u64 = [_]u64{0} ** n_ops,
+    /// Cumulative wall-clock microseconds per operation, indexed by `@intFromEnum(Op)`.
     times_us: [n_ops]u64 = [_]u64{0} ** n_ops,
+    /// Total tokens generated since last reset (used for per-token averaging).
     n_tokens: u64 = 0,
+    /// When false, `start`/`end` are no-ops and no timing overhead is incurred.
     enabled: bool = false,
 
     /// Begin timing an operation. Returns the current timestamp (or 0 if profiling is disabled).
@@ -92,7 +96,7 @@ pub const PerfCounters = struct {
         const eprintFn = struct {
             fn w(b: []u8, comptime fmt: []const u8, args: anytype) void {
                 const text = std.fmt.bufPrint(b, fmt, args) catch return;
-                _ = std.c.write(stderr_file.handle, text.ptr, text.len);
+                _ = std.posix.system.write(stderr_file.handle, text.ptr, text.len);
             }
         }.w;
 

@@ -1,3 +1,4 @@
+// RMS normalization with residual addition.
 struct Params {
     n: u32,
     eps: f32,

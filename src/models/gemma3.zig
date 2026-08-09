@@ -58,7 +58,7 @@ const default_max_seq_len: usize = 4096;
 /// Supports both GGUF and SafeTensors/MLX quantized weights.
 pub const Gemma3Model = struct {
     const NormCacheEntry = model_mod.NormCacheEntry;
-    const max_norm_entries: usize = 256;
+    const max_norm_entries: usize = 512;
 
     // Configuration (read from GGUF metadata)
     n_layers: u32,
@@ -246,6 +246,8 @@ pub const Gemma3Model = struct {
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
         }
+        errdefer if (self.split_gpu_out.len > 0) allocator.free(self.split_gpu_out);
+        errdefer if (self.split_cpu_out.len > 0) allocator.free(self.split_cpu_out);
 
         self.hidden = try allocator.alloc(f32, n_embd);
         errdefer allocator.free(self.hidden);
@@ -299,6 +301,7 @@ pub const Gemma3Model = struct {
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Gemma3Model) void {
+        self.be.sync();
         const bufs = .{
             &self.hidden,     &self.hidden2,  &self.q_buf,   &self.k_buf,
             &self.v_buf,      &self.attn_out, &self.ff_gate, &self.ff_up,

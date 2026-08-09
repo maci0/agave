@@ -164,6 +164,7 @@ inline fn simdGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
     return @reduce(.Add, @as(V8f32, @splat(dl)) * x_v * w_f32 * signs);
 }
 
+/// CPU GEMV for IQ2_XXS quantization (2.06 bits/weight).
 pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq2_xxs_block_bytes;
     const qk: usize = 256;
@@ -232,6 +233,7 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
 // 8 groups × 32 elements. Per group (8 bytes qs + 4 bytes aux):
 //   qs[0..7] = 8 codebook indices into iq3xxs_grid (pairs: grid1=qs[2l], grid2=qs[2l+1])
 //   gas[0..3] = uint32 aux: bits 28-31=sub-scale(0-15), bits 0-27=4×7-bit ksigns indices
+/// CPU GEMV for IQ3_XXS quantization (3.06 bits/weight).
 pub fn gemvIQ3_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq3_xxs_block_bytes;
     const qk: usize = 256;
@@ -439,6 +441,7 @@ const ksigns_iq2xs = [128]u8{
     240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255,
 };
 
+/// CPU GEMV for IQ2_XS quantization (2.31 bits/weight).
 pub fn gemvIQ2_XS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq2_xs_block_bytes; // 74
     const qk: usize = 256;
@@ -561,6 +564,7 @@ const iq3s_grid = [512]u32{
 //   4 pairs (l=0..3), each pair: 2 grid entries (4 values each = 8 elements)
 //   Grid index: qs[8*ib32+2*l+0/1] | (bit from qh[ib32] << shift) → 9-bit index
 //   Sign: signs[4*ib32+l] bit j/j+4 for grid1[j]/grid2[j]
+/// CPU GEMV for IQ3_S quantization (3.44 bits/weight).
 pub fn gemvIQ3_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq3_s_block_bytes; // 110
     const qk: usize = 256;
@@ -889,6 +893,7 @@ const iq2s_grid = [1024]u64{
 //   scales[ib32]: db[0]=d*(0.5+nibble_lo)*0.25, db[1]=d*(0.5+nibble_hi)*0.25
 //   grid_idx = qs[4*ib32+l] | ((qh[ib32] << (8-2*l)) & 0x300) → 10-bit
 //   signs = qs[32+4*ib32+l], bit j → sign for element j in group
+/// CPU GEMV for IQ2_S quantization (2.5 bits/weight).
 pub fn gemvIQ2_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     const bpb = backend_mod.iq2_s_block_bytes; // 82
     const qk: usize = 256;
@@ -1175,9 +1180,11 @@ test "fuzz: all IQ2/IQ3 GEMV functions produce finite output" {
     }.f, .{});
 }
 
+/// CPU GEMV for IQ1_S quantization (1.56 bits/weight).
 pub fn gemvIQ1_S(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     gemvStub(x, w, y, n, k, backend_mod.iq1_s_block_bytes);
 }
+/// CPU GEMV for IQ1_M quantization (1.75 bits/weight).
 pub fn gemvIQ1_M(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) void {
     gemvStub(x, w, y, n, k, backend_mod.iq1_m_block_bytes);
 }

@@ -877,7 +877,7 @@ pub const CudaBackend = struct {
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("CUDA GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
-            else => @panic("CUDA GEMV: unsupported dtype — add a GPU kernel"),
+            else => std.debug.panic("CUDA GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
         };
         if (func == null) @panic("CUDA GEMV: required kernel missing for dtype");
 
@@ -928,6 +928,7 @@ pub const CudaBackend = struct {
         self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
     }
 
+    /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *CudaBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |i| {
             const g = @min(gate[i], @as(f32, 10.0));
@@ -1002,6 +1003,7 @@ pub const CudaBackend = struct {
         }
     }
 
+    /// Fused FFN gate+up GEMV with SiLU for Q4_K weights.
     pub fn fusedFfnGateUpSiluQ4K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
         if (self.fn_fused_ffn_q4k) |func| {
             const w_bytes = weightBytes(.q4_k, n_ff, n_embd);
@@ -1019,6 +1021,7 @@ pub const CudaBackend = struct {
         }
     }
 
+    /// Fused FFN gate+up GEMV with SiLU for Q5_K weights.
     pub fn fusedFfnGateUpSiluQ5K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
         if (self.fn_fused_ffn_q5k) |func| {
             const w_bytes = weightBytes(.q5_k, n_ff, n_embd);
@@ -1036,6 +1039,7 @@ pub const CudaBackend = struct {
         }
     }
 
+    /// Fused FFN gate+up GEMV with SiLU for Q6_K weights.
     pub fn fusedFfnGateUpSiluQ6K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
         if (self.fn_fused_ffn_q6k) |func| {
             const w_bytes = weightBytes(.q6_k, n_ff, n_embd);

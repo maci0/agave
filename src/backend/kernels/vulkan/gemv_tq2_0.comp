@@ -1,3 +1,4 @@
+// GEMV for TQ2_0 ternary quantized weights.
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : require
 
@@ -22,12 +23,12 @@ float unpackF16(uint raw) {
     return unpackHalf2x16(raw).x;
 }
 
-/// Read a single byte from the raw u32 array at a given byte offset.
+// Read a single byte from the raw u32 array at a given byte offset.
 uint readByte(uint byte_off) {
     return (w_raw[byte_off / 4] >> ((byte_off % 4) * 8)) & 0xFF;
 }
 
-/// Read f16 scale from two bytes at byte_off (may straddle u32 boundary).
+// Read f16 scale from two bytes at byte_off (may straddle u32 boundary).
 float readScale(uint byte_off) {
     uint word_off     = byte_off / 4;
     uint byte_in_word = byte_off % 4;

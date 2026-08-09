@@ -82,11 +82,11 @@ const e2e_repeat_halt_threshold: u32 = 6;
 const stdout_file = std.Io.File.stdout();
 const stderr_file = std.Io.File.stderr();
 
-/// Writes all bytes to a file descriptor using raw C write.
+/// Writes all bytes to a file descriptor using raw posix write.
 fn fdWriteAll(fd: std.posix.fd_t, bytes: []const u8) void {
     var written: usize = 0;
     while (written < bytes.len) {
-        const result = std.c.write(fd, bytes[written..].ptr, bytes[written..].len);
+        const result = std.posix.system.write(fd, bytes[written..].ptr, bytes[written..].len);
         const n: isize = @bitCast(result);
         if (n <= 0) break;
         written += @intCast(n);
@@ -350,20 +350,20 @@ const NanoTimer = struct {
 
     fn start() NanoTimer {
         var ts: std.posix.timespec = undefined;
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
         return .{ .start_ts = ts };
     }
 
     fn read(self: *NanoTimer) u64 {
         var now_ts: std.posix.timespec = undefined;
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &now_ts);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &now_ts);
         const start_ns: i128 = @as(i128, self.start_ts.sec) * 1_000_000_000 + self.start_ts.nsec;
         const now_ns: i128 = @as(i128, now_ts.sec) * 1_000_000_000 + now_ts.nsec;
         return @intCast(now_ns - start_ns);
     }
 
     fn reset(self: *NanoTimer) void {
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &self.start_ts);
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &self.start_ts);
     }
 };
 
@@ -1011,7 +1011,7 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
     // ── Load model format ────────────────────────────────────────
     const is_dir = blk: {
         const fd = std.posix.openat(std.posix.AT.FDCWD, model_path, .{ .DIRECTORY = true }, 0) catch break :blk false;
-        _ = std.c.close(fd);
+        _ = std.posix.system.close(fd);
         break :blk true;
     };
 
@@ -1239,6 +1239,7 @@ const getQuantName = Format.getQuantName;
 
 // ── Entry point ──────────────────────────────────────────────────
 
+/// Entry point for the agave-bench micro-benchmark binary.
 pub fn main(init: std.process.Init.Minimal) u8 {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();

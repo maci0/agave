@@ -295,6 +295,8 @@ pub const Metrics = struct {
         _ = self.preemptions_total.fetchAdd(1, .monotonic);
     }
 
+    /// Record an inter-token latency sample into the ITL histogram buckets
+    /// and accumulate it into the running sum for mean calculation.
     pub fn recordInterTokenLatency(self: *Metrics, duration_ms: u64) void {
         self.recordToBuckets(duration_ms, .{
             "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
@@ -303,6 +305,7 @@ pub const Metrics = struct {
         _ = self.itl_sum.fetchAdd(duration_ms, .monotonic);
     }
 
+    /// Update the GPU KV cache block usage gauges (used / total).
     pub fn updateGpuKvBlocks(self: *Metrics, used: u32, total: u32) void {
         self.gpu_kv_blocks_used.store(used, .monotonic);
         self.gpu_kv_blocks_total.store(total, .monotonic);

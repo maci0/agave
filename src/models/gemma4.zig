@@ -420,8 +420,12 @@ pub const Gemma4Model = struct {
         const gl_rope_theta = getArchAny.f32_(f, arch, "rope.freq_base") orelse
             getArchAny.f32_(f, arch, "rope.freq_base_global") orelse
             f.getMetaF32("global_rope_theta") orelse default_gl_rope_theta;
-        const gl_partial_rotary = getArchAny.f32_(f, arch, "rope.partial_rotary_factor") orelse
-            f.getMetaF32("partial_rotary_factor") orelse default_gl_partial_rotary;
+        const gl_partial_rotary = std.math.clamp(
+            getArchAny.f32_(f, arch, "rope.partial_rotary_factor") orelse
+                f.getMetaF32("partial_rotary_factor") orelse default_gl_partial_rotary,
+            0.0,
+            1.0,
+        );
         const gl_rope_dim = getArchAny.u32_(f, arch, "rope.dimension_count") orelse gl_head_dim;
 
         // MoE params — detect dense variants by checking for expert tensors.
@@ -770,6 +774,16 @@ pub const Gemma4Model = struct {
                 }
             }
         }
+        errdefer {
+            for (0..nl) |i| {
+                if (self.kv_source[i] == @as(u32, @intCast(i))) {
+                    if (self.layer_keys[i].len > 0) allocator.free(self.layer_keys[i]);
+                    if (self.layer_values[i].len > 0) allocator.free(self.layer_values[i]);
+                }
+            }
+            allocator.free(self.layer_keys);
+            allocator.free(self.layer_values);
+        }
 
         // PagedKvCache still needed for Model vtable (ensureKvBlock, resetKvCache)
         // but actual KV data goes through layer_keys/layer_values.
@@ -790,6 +804,14 @@ pub const Gemma4Model = struct {
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
+        }
+        errdefer {
+            if (self.tiered_block_allocator) |*ta| {
+                ta.freeSeqTable(&self.seq_table);
+            } else {
+                self.block_allocator.freeSeqTable(&self.seq_table);
+                self.paged_cache.deinit();
+            }
         }
 
         // ── Working buffer allocation ────────────────────────────
@@ -840,6 +862,11 @@ pub const Gemma4Model = struct {
             self.ple_combined = try allocator.alloc(f32, nl * ple_dim);
             errdefer allocator.free(self.ple_combined);
         }
+        errdefer if (self.ple_dim > 0) {
+            allocator.free(self.ple_buf);
+            allocator.free(self.ple_gate_buf);
+            allocator.free(self.ple_combined);
+        };
 
         // Prefill buffers use page allocator for GPU compatibility (Metal's
         // newBufferWithBytesNoCopy requires page-aligned pointers).
@@ -900,6 +927,7 @@ pub const Gemma4Model = struct {
         // Free eviction scratch buffers
         if (self.eviction_scores.len > 0) self.allocator.free(self.eviction_scores);
         if (self.eviction_keep.len > 0) self.allocator.free(self.eviction_keep);
+        if (self.tri_scratch.len > 0) self.allocator.free(self.tri_scratch);
         // Free prefill buffers (page allocator)
         const pa = std.heap.page_allocator;
         const pf_bufs = .{
@@ -2208,7 +2236,7 @@ pub const Gemma4Model = struct {
 
         var top_experts: [max_active_experts]usize = undefined;
         var top_scores: [max_active_experts]f32 = undefined;
-        std.debug.assert(n_active <= max_active_experts);
+        if (n_active > max_active_experts) @panic("gemma4 moeFfn: n_active exceeds max_active_experts");
         math_ops.topKExperts(self.router_buf[0..n_exp], n_active, top_experts[0..n_active], top_scores[0..n_active]);
 
         // Normalize selected expert weights to sum to 1.

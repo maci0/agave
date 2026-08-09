@@ -37,8 +37,8 @@ const SeqBlockTable = kvcache.SeqBlockTable;
 const max_active_experts: usize = 8;
 /// Maximum attention heads for stack-allocated sink bias array.
 const max_sink_heads: usize = 64;
-/// Maximum cached norm weight entries (≥ 3 norms/layer × 24 layers + 1 output norm).
-const max_norm_entries: usize = 128;
+/// Maximum cached norm weight entries (≥ 3 norms/layer × max layers + 1 output norm).
+const max_norm_entries: usize = 256;
 const NormCacheEntry = model_mod.NormCacheEntry;
 
 const expertStride = model_mod.expertStride;
@@ -171,10 +171,22 @@ pub const GptOssModel = struct {
         if (f.getArchU32(arch, "context_length")) |cl| self.max_seq_len = cl;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
-        std.debug.assert(self.n_head % self.n_head_kv == 0);
-        std.debug.assert(self.n_experts_active <= self.n_experts);
-        std.debug.assert(self.n_experts_active <= max_active_experts);
-        std.debug.assert(self.head_dim % 2 == 0);
+        if (self.n_head_kv == 0 or self.n_head % self.n_head_kv != 0) {
+            std.log.err("gpt_oss: n_head ({d}) not divisible by n_head_kv ({d})", .{ self.n_head, self.n_head_kv });
+            return error.MissingTensor;
+        }
+        if (self.n_experts_active > self.n_experts) {
+            std.log.err("gpt_oss: n_experts_active ({d}) exceeds n_experts ({d})", .{ self.n_experts_active, self.n_experts });
+            return error.MissingTensor;
+        }
+        if (self.n_experts_active > max_active_experts) {
+            std.log.err("gpt_oss: n_experts_active ({d}) exceeds max_active_experts ({d})", .{ self.n_experts_active, max_active_experts });
+            return error.MissingTensor;
+        }
+        if (self.head_dim % 2 != 0) {
+            std.log.err("gpt_oss: head_dim ({d}) is not even", .{self.head_dim});
+            return error.MissingTensor;
+        }
 
         const qd: usize = @as(usize, self.n_head) * self.head_dim;
         const kvd: usize = @as(usize, self.n_head_kv) * self.head_dim;
@@ -664,7 +676,7 @@ pub const GptOssModel = struct {
         // 2. Top-k expert selection (stack-allocated, no heap).
         var top_experts: [max_active_experts]usize = undefined;
         var top_scores: [max_active_experts]f32 = undefined;
-        std.debug.assert(n_active <= max_active_experts);
+        if (n_active > max_active_experts) @panic("gpt_oss: n_active exceeds max_active_experts");
         math_ops.topKExperts(self.router_logits[0..n_exp], n_active, top_experts[0..n_active], top_scores[0..n_active]);
 
         // 3. Softmax over selected expert scores to get mixing weights.

@@ -143,6 +143,15 @@ pub const Glm4Model = struct {
         if (f.getMetaU32("context_length")) |cl| self.max_seq_len = cl;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
+        if (self.n_routed_experts > max_active_experts * 16) {
+            std.log.err("glm4: n_routed_experts ({d}) exceeds max_active_experts * 16 ({d})", .{ self.n_routed_experts, max_active_experts * 16 });
+            return error.MissingTensor;
+        }
+        if (self.num_experts_per_tok > max_active_experts) {
+            std.log.err("glm4: num_experts_per_tok ({d}) exceeds max_active_experts ({d})", .{ self.num_experts_per_tok, max_active_experts });
+            return error.MissingTensor;
+        }
+
         const nh: usize = self.n_head;
         const q_head_dim: usize = self.qk_nope_head_dim + self.qk_rope_head_dim;
         const k_head_dim: usize = q_head_dim; // K has same total dim as Q
@@ -221,6 +230,7 @@ pub const Glm4Model = struct {
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *Glm4Model) void {
+        self.be.sync();
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
@@ -248,6 +258,11 @@ pub const Glm4Model = struct {
     // ── Forward pass ─────────────────────────────────────────────
 
     /// Run one decode step, returning the argmax next-token ID.
+    ///
+    /// Error conditions:
+    /// - `error.KVCacheFull`   — sequence length has reached `max_seq_len`.
+    /// - `error.MissingTensor` — a required weight tensor was not found in the model file.
+    /// - `error.Cancelled`     — the inference was cancelled via the `cancelled` flag.
     pub fn forward(self: *Glm4Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
@@ -560,7 +575,7 @@ pub const Glm4Model = struct {
         self.be.sync();
 
         // Apply sigmoid to all router logits and save raw scores for weighting.
-        std.debug.assert(self.n_routed_experts <= max_active_experts * 16);
+        if (self.n_routed_experts > max_active_experts * 16) @panic("glm4: n_routed_experts exceeds stack buffer limit");
         var raw_sigmoid: [max_active_experts * 16]f32 = undefined;
         for (0..self.n_routed_experts) |i| {
             raw_sigmoid[i] = math_ops.sigmoid(self.router_logits[i]);
@@ -835,7 +850,7 @@ pub const Glm4Model = struct {
                 // Transposed non-Q8_0 — gemvT only supports Q8_0, so CPU dequant
                 // fallback until gemvT gains dtype support.
                 const head_elems = out_dim * in_dim;
-                std.debug.assert(head_elems <= self.mla_scratch.len);
+                if (head_elems > self.mla_scratch.len) @panic("glm4: head_elems exceeds mla_scratch buffer");
                 const scratch = self.mla_scratch[0..head_elems];
                 self.be.sync();
                 for (0..nh) |h| {
@@ -865,9 +880,9 @@ pub const Glm4Model = struct {
     /// Apply RoPE only to the rope portion of each head (at offset nope_dim).
     /// Frequencies are precomputed once and reused across all heads.
     fn ropePartial(self: *Glm4Model, x: [*]f32, n_heads: usize, head_dim: usize, nope_dim: usize, rope_dim: usize) void {
-        std.debug.assert(rope_dim % 2 == 0);
+        if (rope_dim % 2 != 0) @panic("glm4: rope_dim must be even");
         const half = rope_dim / 2;
-        std.debug.assert(half <= max_rope_half);
+        if (half > max_rope_half) @panic("glm4: rope half-dim exceeds max_rope_half");
         const p: f32 = @floatFromInt(self.kv_seq_len);
         const neg_log_theta: f32 = -@log(self.rope_theta);
         const inv_rd: f32 = 1.0 / @as(f32, @floatFromInt(rope_dim));

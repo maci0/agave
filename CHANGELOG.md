@@ -184,7 +184,7 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 ## 2026-06-12 — Feature Release
 
 ### Bug Fixes
-- tiered KV cache (`--kv-tiers vram+ram`) crash fixed: `isMultiBlock` now guards against `paged_cache.block_size == 0` (all 9 model architectures)
+- tiered KV cache (`--kv-tiers vram+ram`) crash fixed: `isMultiBlock` now guards against `paged_cache.block_size == 0` (all 10 model architectures)
 - Warning added: tiered SDPA split-attention only fully implemented for Gemma 3; other models will warn
 - CUDA: all 60 kernel files now in PTX build list (was 19); 61 kernels registered at runtime (was 44)
 - CUDA SDPA correctness: `getOrAllocKvBuf` now uploads host KV data on first GPU allocation

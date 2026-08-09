@@ -1,3 +1,4 @@
+// GEMV for MLX Q4 quantized weights.
 #version 450
 layout(local_size_x = 256) in;
 layout(set = 0, binding = 0) readonly buffer X { float x[]; };

@@ -95,13 +95,13 @@ Everything you need to add a new architecture to Agave:
 | --- | --------- | ------------------- | :---: |
 | 0 | [Getting Started](00-getting-started.md) | Pipeline from model file to sampled text tokens | 15 min |
 | 1 | [Tokens and Text](01-tokens-and-text.md) | How text becomes numbers the model can process | 12 min |
-| 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization | 21 min |
-| 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, MoE, megakernel fusion | 12 min |
-| 4 | [Quantization](04-quantization.md) | Compressing weights from 32 bits to 4 bits; MLX, TurboQuant, PlanarQuant | 28 min |
-| 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, paged SDPA, RadixAttention | 17 min |
-| 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 | 14 min |
+| 2 | [The Transformer](02-the-transformer.md) | The core architecture: attention, position encoding, normalization | 18 min |
+| 3 | [Feed-Forward Networks](03-feed-forward-networks.md) | Activation functions, SwiGLU, MoE, megakernel fusion | 15 min |
+| 4 | [Quantization](04-quantization.md) | Compressing weights from 32 bits to 4 bits; MLX, TurboQuant, PlanarQuant | 25 min |
+| 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, paged SDPA, RadixAttention | 20 min |
+| 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 | 20 min |
 | 7 | [Sampling](07-sampling.md) | Temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, grammar | 12 min |
-| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — dispatchers and paged SDPA | 15 min |
+| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — dispatchers and paged SDPA | 20 min |
 | 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV | 19 min |
 | 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection | 11 min |
 | 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits | 19 min |
@@ -112,12 +112,14 @@ Everything you need to add a new architecture to Agave:
 | 16 | [Recipe System](16-recipe-system.md) | Proven defaults per model+hardware, user override semantics | 15 min |
 | 17 | [Speculative Decoding & DDTree](17-speculative-decoding.md) | Draft models, DDTree, self-speculative, n-gram, EAGLE, DSpark, adaptive K | 29 min |
 | 18 | [Multi-Token Prediction](18-multi-token-prediction.md) | MTP heads, +1 offset norm, draft/verify with built-in heads | 16 min |
-| 19 | [PFlash and Block Sparse](19-pflash-and-block-sparse.md) | Block sparse attention, speculative prefill, alpha tuning | 18 min |
+| 19 | [PFlash and Block Sparse](19-pflash-and-block-sparse.md) | Block sparse attention, speculative prefill, alpha tuning | 16 min |
 | 20 | [Diffusion Language Models](20-diffusion-lm.md) | DiffusionGemma, block diffusion, bidirectional canvas | 14 min |
 | 21 | [LoRA Adapters](21-lora.md) | Load-time merge of low-rank adapter weights | 12 min |
 | 22 | [Distributed Inference](22-distributed-inference.md) | TP/PP, transport selection, weight sharding | 20 min |
 | 23 | [Server / HTTP API](23-server-http-api.md) | HTTP → session → generate → stream/JSON pipeline | 18 min |
 | 24 | [Advanced Features](24-advanced-features.md) | Steering (CLI); NLL/expert/KV-header/SSD (library); mixed-quant tooling | 20 min |
+
+**Total reading time: ~7.5 hours** (25 chapters + 5 appendices).
 
 ## Quick Reference
 

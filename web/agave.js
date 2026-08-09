@@ -21,6 +21,7 @@ class AgaveEngine {
   async init() {
     const response = await fetch('agave.wasm');
     const bytes = await response.arrayBuffer();
+    let wasmMemory = null;
     const importObject = {
       env: {
         // WebGPU API imports would go here for GPU backend
@@ -37,7 +38,7 @@ class AgaveEngine {
         environ_sizes_get: () => 0,
         clock_time_get: () => 0,
         random_get: (ptr, len) => {
-          const view = new Uint8Array(this.wasm.exports.memory.buffer, ptr, len);
+          const view = new Uint8Array(wasmMemory.buffer, ptr, len);
           crypto.getRandomValues(view);
           return 0;
         },
@@ -45,6 +46,7 @@ class AgaveEngine {
     };
 
     const result = await WebAssembly.instantiate(bytes, importObject);
+    wasmMemory = result.instance.exports.memory;
     this.wasm = result.instance;
     this.ready = true;
     console.log('Agave WASM engine initialized');
@@ -72,6 +74,7 @@ class AgaveEngine {
 
     // Initialize inference context
     this.ctx = this.wasm.exports.agave_init(ptr, data.byteLength);
+    // Model buffer is borrowed by GGUF — do NOT agave_dealloc until agave_free.
     if (this.ctx === 0) throw new Error('Failed to initialize model');
 
     // Read init status message

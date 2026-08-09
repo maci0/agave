@@ -21,6 +21,7 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const attn_ops = @import("../ops/attention.zig");
 const Backend = backend_mod.Backend;
 const KvQuantType = kv_quant.KvQuantType;
+const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
 const DType = format_mod.DType;
@@ -155,14 +156,18 @@ pub const Ds4Model = struct {
     norm_cache_len: usize = 0,
     name_buf: [name_buf_size]u8 = undefined,
 
+    /// Initialize the model from GGUF format metadata and allocate all working buffers.
+    /// Reads architecture hyperparameters (layers, heads, MoE experts, compress ratios),
+    /// pre-computes RoPE frequencies, allocates KV cache, compressor buffers, HC state,
+    /// and optionally sets up Lightning Indexer (LID) tensors when present.
     pub fn init(
         allocator: Allocator,
         f: Format,
         be: Backend,
         ctx_size: u32,
-        _: anytype, // kv_type_k (ignored, using f32)
-        _: anytype, // kv_type_v (ignored, using f32)
-        _: anytype, // tiered_cache (not supported yet)
+        _: kv_quant.KvQuantType, // kv_type_k (ignored, using q8_0)
+        _: kv_quant.KvQuantType, // kv_type_v (ignored, using q8_0)
+        _: ?*TieredKvCache, // tiered_cache (not supported yet)
     ) !Ds4Model {
         var self = Ds4Model{ .fmt = f, .be = be, .allocator = allocator };
 
@@ -222,47 +227,78 @@ pub const Ds4Model = struct {
         }
 
         self.hc_state = try allocator.alloc(f32, n_hc * e);
+        errdefer allocator.free(self.hc_state);
         self.new_hc = try allocator.alloc(f32, n_hc * e);
+        errdefer allocator.free(self.new_hc);
         self.hc_mixes = try allocator.alloc(f32, hc_mix_dim);
+        errdefer allocator.free(self.hc_mixes);
         self.hc_pre_w = try allocator.alloc(f32, n_hc);
+        errdefer allocator.free(self.hc_pre_w);
         self.hc_post_w = try allocator.alloc(f32, n_hc);
+        errdefer allocator.free(self.hc_post_w);
         self.hc_comb = try allocator.alloc(f32, n_hc * n_hc);
+        errdefer allocator.free(self.hc_comb);
         self.hidden = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.hidden);
         self.hidden2 = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.hidden2);
         self.flat_norm = try allocator.alloc(f32, n_hc * e);
+        errdefer allocator.free(self.flat_norm);
         self.q_compressed = try allocator.alloc(f32, ql);
+        errdefer allocator.free(self.q_compressed);
         self.q_full = try allocator.alloc(f32, nh * kd);
+        errdefer allocator.free(self.q_full);
         self.kv_proj = try allocator.alloc(f32, kd);
+        errdefer allocator.free(self.kv_proj);
         // scores_buf: per-head slices for parallel attention (64 heads × score_stride).
         self.score_stride = ctx + compSlotsPerLayer(ctx) + 1;
         self.scores_buf = try allocator.alloc(f32, nh * self.score_stride);
+        errdefer allocator.free(self.scores_buf);
         self.attn_out = try allocator.alloc(f32, nh * kd);
+        errdefer allocator.free(self.attn_out);
         self.lora_out = try allocator.alloc(f32, og * olr);
+        errdefer allocator.free(self.lora_out);
         self.attn_result = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.attn_result);
         self.ff_gate = try allocator.alloc(f32, ff);
+        errdefer allocator.free(self.ff_gate);
         self.ff_up = try allocator.alloc(f32, ff);
+        errdefer allocator.free(self.ff_up);
         self.ff_down = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.ff_down);
         self.expert_accum = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.expert_accum);
         // Scratch for batched expert down GEMVs (max_experts = n_expert_used + n_expert_shared)
         const max_experts: usize = @as(usize, self.n_expert_used) + @as(usize, self.n_expert_shared);
         self.expert_scratch = try allocator.alloc(f32, max_experts * e);
+        errdefer allocator.free(self.expert_scratch);
         self.ff_gate_scratch = try allocator.alloc(f32, max_experts * ff);
+        errdefer allocator.free(self.ff_gate_scratch);
         self.ff_up_scratch = try allocator.alloc(f32, max_experts * ff);
+        errdefer allocator.free(self.ff_up_scratch);
         self.router_logits = try allocator.alloc(f32, self.n_experts);
+        errdefer allocator.free(self.router_logits);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
+        errdefer allocator.free(self.logits_buf);
 
         // KV cache bytes: each layer stores ctx × nkv=1 × kd elements in kv_type format
         const kv_bytes_per_layer = kv_quant.kvByteOffset(kv_type, ctx * kd);
         self.kv_k_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
+        errdefer allocator.free(self.kv_k_bytes);
         self.kv_v_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
+        errdefer allocator.free(self.kv_v_bytes);
 
         // Compressor buffers: max_comp_dim = 2*kd (CSA=1024, HCA=512; stride uses max)
         const max_comp_dim: usize = 2 * kd;
         const comp_slots = compSlotsPerLayer(ctx);
         self.csa_comp_kv = try allocator.alloc(f32, nl * ctx * max_comp_dim);
+        errdefer allocator.free(self.csa_comp_kv);
         self.csa_comp_score = try allocator.alloc(f32, nl * ctx * max_comp_dim);
+        errdefer allocator.free(self.csa_comp_score);
         self.csa_k = try allocator.alloc(f32, nl * comp_slots * kd);
+        errdefer allocator.free(self.csa_k);
         self.csa_score_scratch = try allocator.alloc(f32, max_comp_dim);
+        errdefer allocator.free(self.csa_score_scratch);
 
         // Lightning Indexer: probe for tensors to detect availability.
         // Indexer is only used on CSA layers (ratio=4) when compressed block count > index_topk.
@@ -271,10 +307,15 @@ pub const Ds4Model = struct {
         const itk: usize = self.index_topk;
         if (f.getTensor("blk.2.attn_indexer_q_b.weight") != null) {
             self.lid_comp_k = try allocator.alloc(f32, nl * comp_slots * ihd);
+            errdefer allocator.free(self.lid_comp_k);
             self.lid_query = try allocator.alloc(f32, inh * ihd);
+            errdefer allocator.free(self.lid_query);
             self.lid_head_w = try allocator.alloc(f32, inh);
+            errdefer allocator.free(self.lid_head_w);
             self.lid_scores = try allocator.alloc(f32, comp_slots);
+            errdefer allocator.free(self.lid_scores);
             self.lid_topk_ids = try allocator.alloc(u32, itk);
+            errdefer allocator.free(self.lid_topk_ids);
             self.lid_enabled = true;
         }
 
@@ -298,10 +339,14 @@ pub const Ds4Model = struct {
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_attn_scale.weight"), 3);
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_ffn_base.weight"), hc_mix_dim);
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_ffn_scale.weight"), 3);
+            _ = self.normAsF32OrNull(self.layerTensor(li, "attn_compressor_norm.weight"), self.kv_lora_rank);
         }
     }
 
+    /// Release all heap allocations owned by this model, including norm cache,
+    /// working buffers, KV cache, compressor state, and LID indexer buffers.
     pub fn deinit(self: *Ds4Model) void {
+        self.be.sync();
         for (self.norm_cache[0..self.norm_cache_len]) |e| self.allocator.free(e.data);
         const a = self.allocator;
         inline for (.{
@@ -316,6 +361,7 @@ pub const Ds4Model = struct {
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
     }
 
+    /// Wrap this model in the generic `Model` vtable interface for backend-agnostic dispatch.
     pub fn model(self: *Ds4Model) Model {
         return Model.from(Ds4Model, self);
     }
@@ -1316,8 +1362,12 @@ pub const Ds4Model = struct {
 
     // ── Forward pass ─────────────────────────────────────────────
 
+    /// Run one decode step: embed the token, propagate through all layers with
+    /// hyper-connection pre/post mixing, MLA attention, and MoE FFN, then apply
+    /// the output HC head, final RMS norm, and LM head projection.
+    /// Returns the argmax next-token ID. Advances `kv_seq_len` by one.
     pub fn forward(self: *Ds4Model, token_id: u32) !u32 {
-        if (self.cancelled.load(.acquire)) return error.Cancelled;
+        if (self.cancelled.load(.monotonic)) return error.Cancelled;
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
         const e = self.n_embd;
@@ -1331,7 +1381,7 @@ pub const Ds4Model = struct {
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
         for (0..nl) |li| {
-            if (self.cancelled.load(.acquire)) return error.Cancelled;
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
 
             // Attn: HC pre → attn → HC post
             const af = try self.layerTensorReq(li, "hc_attn_fn.weight");
@@ -1367,31 +1417,41 @@ pub const Ds4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
+    /// Batched prefill: process all token IDs sequentially through forward().
+    /// Returns the argmax of the last token's logits.
     pub fn prefill(self: *Ds4Model, token_ids: []const u32) !u32 {
         var last: u32 = 0;
         for (token_ids) |tid| last = try self.forward(tid);
         return last;
     }
 
+    /// Reset the KV cache position for a new conversation and clear the cancellation flag.
     pub fn resetCache(self: *Ds4Model) void {
         self.kv_seq_len = 0;
         self.cancelled.store(false, .release);
     }
 
+    /// Signal an in-progress forward pass to abort. Thread-safe.
     pub fn cancel(self: *Ds4Model) void {
         self.cancelled.store(true, .release);
     }
 
+    /// Enable or disable the fused megakernel dispatch path.
     pub fn setMegakernel(self: *Ds4Model, en: bool) void {
         self.megakernel_enabled = en;
     }
+    /// Set the layer range to skip during self-speculative decoding.
+    /// Layers in `[s, end)` are bypassed in the draft pass.
     pub fn setLayerSkip(self: *Ds4Model, s: u32, end: u32) void {
         self.layer_skip_start = s;
         self.layer_skip_end = end;
     }
+    /// Return the current hidden state after the last forward pass.
     pub fn getHidden(self: *const Ds4Model) []const f32 {
         return self.hidden;
     }
+    /// Return physical block IDs for the paged KV cache. DeepSeek V4 uses a flat
+    /// KV layout (not paged), so this always returns an empty slice.
     pub fn getBlockTable(_: *const Ds4Model) []const u32 {
         return &.{};
     }
@@ -1634,7 +1694,7 @@ fn cpuGemvQ8_0(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
 
 /// Per-expert stride for ds4 expert tensors: dims=[input_dim, ff_dim, n_experts].
 fn ds4ExpertStride(t: TensorInfo) usize {
-    std.debug.assert(t.n_dims >= 3);
+    if (t.n_dims < 3) @panic("ds4ExpertStride: expected >= 3D tensor for expert weights");
     const elems = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
 }

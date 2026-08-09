@@ -1,6 +1,6 @@
 # Agave Test Matrix — Model × Backend × Quant
 
-**Date**: 2026-05-19 (last full re-run). **Status note (2026-07-21):** matrix coverage lags shipped features. Missing rows for Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H, full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
+**Date**: 2026-05-19 (last full re-run). **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for DeepSeek V4, Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested). Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
 
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
@@ -23,8 +23,13 @@
 | 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | — | |
 | 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | — | GGUF issue — also fails in llama.cpp |
 | 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | — | Prompt-sensitive; answers correctly with clear prompts |
+| 10 | DeepSeek V4 | — | — | Not tested | Not tested | — | MLA, CSA/HCA, LID |
+| 11 | Llama 4 | — | — | Not tested | Not tested | — | iRoPE, chunked attention, MoE |
+| 12 | DiffusionGemma | — | — | Not tested | Not tested | — | Block diffusion |
+| 13 | GPT-OSS Harmony | — | — | Not tested | Not tested | — | |
+| 14 | Nemotron-H | — | — | Not tested | Not tested | — | |
 
-**Result: 8/9 architectures pass on Metal+CPU. 1 failure (GLM-4) also broken in llama.cpp.**
+**Result: 8/14 architectures pass on Metal+CPU. 1 failure (GLM-4) also broken in llama.cpp. 5 architectures not yet tested.**
 
 ## KV Cache Quantization (Gemma 4 26B, Metal)
 

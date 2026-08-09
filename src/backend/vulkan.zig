@@ -540,7 +540,7 @@ fn saveVkCacheFile(data: []const u8) void {
     defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
     var off: usize = 0;
     while (off < data.len) {
-        const n = std.c.write(fd, data[off..].ptr, data.len - off);
+        const n = std.posix.system.write(fd, data[off..].ptr, data.len - off);
         if (n <= 0) break;
         off += @intCast(n);
     }
@@ -1763,7 +1763,7 @@ pub const VulkanBackend = struct {
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Vulkan GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
-            else => @panic("Vulkan GEMV: unsupported dtype — add a GPU shader"),
+            else => std.debug.panic("Vulkan GEMV: unsupported dtype {s} — add a GPU shader", .{@tagName(w.dtype)}),
         };
 
         const x_sz = k * @sizeOf(f32);
@@ -2210,6 +2210,7 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_silu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
 
+    /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |idx| {
             const g = @min(gate[idx], @as(f32, 10.0));
@@ -2313,6 +2314,7 @@ pub const VulkanBackend = struct {
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
+    /// Tree-structured scaled dot-product attention for speculative decoding verification.
     pub fn sdpaTree(self: *VulkanBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
             const kvd = nkv * hd;
@@ -2436,7 +2438,9 @@ pub const VulkanBackend = struct {
     pub fn sync(self: *VulkanBackend) void {
         self.flushActivations();
     }
+    /// Marks the start of a batch of dispatches (no-op for Vulkan).
     pub fn beginBatch(_: *VulkanBackend) void {}
+    /// Marks the end of a batch of dispatches (no-op for Vulkan).
     pub fn endBatch(_: *VulkanBackend) void {}
 
     /// Returns backend startup information for display.
@@ -2593,15 +2597,17 @@ pub const VulkanBackend = struct {
         const flat_elems = n_phys_blocks * block_stride;
         const flat_bytes = flat_elems * @sizeOf(f32);
 
-        // Reuse persistent staging buffers (grow as needed, never shrink)
+        // Reuse persistent staging buffers (grow 2x as needed, never shrink)
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
+            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_keys) |old| self.allocator.free(old);
-            self.sdpa_flat_keys = self.allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
                 @panic("Vulkan sdpaPaged: out of memory for flat key staging buffer");
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
+            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
             if (self.sdpa_flat_vals) |old| self.allocator.free(old);
-            self.sdpa_flat_vals = self.allocator.alloc(f32, flat_elems) catch
+            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
                 @panic("Vulkan sdpaPaged: out of memory for flat value staging buffer");
         }
         const flat_keys = self.sdpa_flat_keys.?;

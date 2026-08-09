@@ -58,7 +58,7 @@ The +93% short-decode result comes from Q4_K_M mixed quant — with Q5_K/Q6_K fu
 
 Single GPU dispatch for ALL layers. Uses composable building blocks with atomic grid sync between stages.
 
-### Composable Building Blocks (`mega_common.metal`, 732 lines)
+### Composable Building Blocks (`mega_common.metal`, 730 lines)
 
 | Block | Purpose |
 |-------|---------|
@@ -135,7 +135,7 @@ Model Metadata (GGUF/SafeTensors)
 | File | Role |
 |------|------|
 | `src/backend/mega_compose.zig` | `ModelDesc` struct, `composeMSL()` function, helper constructors |
-| `src/backend/kernels/metal/mega_common.metal` | 18 composable building blocks (732 lines) |
+| `src/backend/kernels/metal/mega_common.metal` | 18 composable building blocks (730 lines) |
 | `src/backend/metal.zig` | `compileComposedMegakernel()`, `dispatchMegakernelAuto()` |
 
 ### What the Composer Handles Automatically
@@ -235,9 +235,9 @@ Helper constructors simplify common patterns:
 
 | Backend | Pipelines/Kernels | Megakernel Files | Composed |
 |---------|:-----------------:|:----------------:|:--------:|
-| Metal | ~88 | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
-| CUDA | ~59 | 4 (3 true + fused FFN) | No |
-| ROCm | ~46 | 1 (true Qwen Q8_0) | No |
+| Metal | 88 | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
+| CUDA | 61 | 4 (3 true + fused FFN) | No |
+| ROCm | 49 | 1 (true Qwen Q8_0) | No |
 
 The composed megakernel (`mega_compose.zig`) generates an additional Metal pipeline at runtime via `compileComposedMegakernel()`. This pipeline is not counted in the static file totals above.
 

@@ -319,7 +319,7 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
 ///   - n: Number of output rows.
 ///   - k: Number of input columns (must be divisible by 16).
 pub fn gemvNvfp4St(x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-    std.debug.assert(k % 16 == 0);
+    if (k % 16 != 0) @panic("NVFP4 GEMV: k must be aligned to 16");
     const bytes_per_row = k / 2;
     const scales_per_row = k / 16;
     const V8 = @Vector(8, f32);

@@ -1,3 +1,4 @@
+// Split fused query-gate tensor for GLM-4 attention.
 struct Params {
     hd: u32,
     nh: u32,

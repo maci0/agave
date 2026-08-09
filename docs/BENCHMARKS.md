@@ -39,7 +39,7 @@ The megakernel system has three tiers (see [MEGAKERNEL.md](MEGAKERNEL.md)); meas
 
 ### Tier 1: Fused FFN
 
-Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 11 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 4 kernels (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K}). ROCm has 1 kernel (Q8_0 SiLU).
+Fuses gate+up GEMV + activation into a single GPU dispatch per FFN layer, reducing dispatch count by ~48 per token (24 layers x 2 saved dispatches). 11 Metal MSL kernels cover SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} and GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}. CUDA has 5 kernels (SiLU x {Q8_0, Q4_K, Q5_K, Q6_K} + GELU x {Q8_0}). ROCm has 0 fused FFN kernels (uses Tier 2 megakernels instead).
 
 | Model | Quant | Standard | Megakernel | Delta | Notes |
 |-------|-------|----------|------------|-------|-------|
@@ -53,9 +53,9 @@ Largest gains on models with mixed quantization (Q4_K_M = Q4_K + Q6_K layers) wh
 
 ### Tier 2: True Megakernels
 
-True megakernels execute an entire transformer layer in a single GPU dispatch using composable building blocks with atomic grid sync. 18 primitives in `mega_common.metal` (732 lines) include cooperative RMS norm, per-format GEMV, activations, RoPE, KV cache append with TurboQuant encoding, and inline SDPA with TQ+ dequant and sparse V.
+True megakernels execute an entire transformer layer in a single GPU dispatch using composable building blocks with atomic grid sync. 18 primitives in `mega_common.metal` (730 lines) include cooperative RMS norm, per-format GEMV, activations, RoPE, KV cache append with TurboQuant encoding, and inline SDPA with TQ+ dequant and sparse V.
 
-**Implementations**: 5 Metal (Qwen Q8/Q4K, Gemma Q4K/Q8, Nemotron-H Q8), 3 CUDA (Qwen Q8, Gemma Q4K/Q8), 1 ROCm (Qwen Q8). Total megakernel code: ~4,166 lines across 12 files.
+**Implementations**: 5 Metal (Qwen Q8/Q4K, Gemma Q4K/Q8, Nemotron-H Q8), 3 CUDA (Qwen Q8, Gemma Q4K/Q8), 1 ROCm (Qwen Q8). Total megakernel code: ~4,923 lines across 16 files.
 
 ## Prefill Throughput
 
@@ -104,6 +104,8 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 | GPT-OSS | 20B | ✅ Working | |
 | GLM-4 | 4.7B Flash | ⚠️ GGUF issue | Also broken in llama.cpp — model format problem |
 | Llama 4 | Scout | ✅ Working | iRoPE, chunked attention, MoE top-1 + shared expert |
+| DeepSeek V4 | — | ✅ Working | Hyper connections, MLA, CSA/HCA compressors, LID |
+| DiffusionGemma | 26B-A4B | ✅ Working | Block diffusion generation |
 
 ## KV Cache Quantization (Gemma 4 26B, Metal)
 
@@ -158,7 +160,7 @@ Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool
 Notes:
 - UMA zero-copy: mmap'd weights registered via `cuMemHostRegister`, accessed directly by GPU
 - Q4_K/Q6_K fall back to CPU (Zig LLVM nvptx aliasee bug prevents PTX recompilation)
-- 56 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
+- 61 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
 - Server mode (`--serve`) works correctly (cuCtxSetCurrent on scheduler thread)
 
 ## Distributed Inference (Multi-Node)

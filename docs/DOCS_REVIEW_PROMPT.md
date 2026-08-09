@@ -22,8 +22,8 @@ The codebase lives at `src/`. All ground truth comes from the Zig source files, 
 | Gemma 3 1B | gemma3 | 1152 | 4 | 1 | 256 | 6912 | 26 | — | 1M |
 | Gemma 3 4B | gemma3 | 2560 | 8 | 4 | 256 | 10240 | 34 | — | 1M |
 | Gemma 4 E2B | gemma4 | 2304 | 8 | 4 | 256 | 9216 | 35 | — | 10K |
-| Gemma 4 E4B | gemma4 | 2560 | 8 | 4 | 256 | — | — | — | — |
-| Gemma 4 26B-A4B | gemma4 | 2816 | 32 | 16 | 128 | — | — | — | — |
+| Gemma 4 E4B | gemma4 | 2816 | 16 | 8 | 256 | — | — | — | — |
+| Gemma 4 26B-A4B | gemma4 | 2816 | 16 | 8 | 256 | — | — | — | — |
 | Qwen 3.5 0.8B | qwen35 | 1536 | 16 | 4 | 128 | 4096 | 64 | 248320 | 10M |
 | Qwen 3.5 9B (default) | qwen35 | 4096 | 16 | 2 | 256 | 12288 | 32 | 248320 | 10M |
 | Qwen 3.6 35B-A3B | qwen35 | 2048 | 16 | 2 | 256 | 512×256 MoE | 40 | 248320 | 10M |

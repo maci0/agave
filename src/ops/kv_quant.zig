@@ -530,9 +530,9 @@ pub const KvQuantType = enum {
     /// Covers turbo variants and Q8_0 (34 bytes = f16 scale + 32 × i8).
     pub fn turboBlockByteSize(self: KvQuantType) u32 {
         return switch (self) {
-            .turbo2 => @intCast(turbo2_block_bytes),
-            .turbo3 => @intCast(turbo3_block_bytes),
-            .turbo4 => @intCast(turbo4_block_bytes),
+            .turbo2, .planar2, .iso2, .rotor2 => @intCast(turbo2_block_bytes),
+            .turbo3, .planar3, .iso3, .rotor3 => @intCast(turbo3_block_bytes),
+            .turbo4, .planar4, .iso4, .rotor4 => @intCast(turbo4_block_bytes),
             .q8_0 => @intCast(q8_0_block_bytes),
             else => 0,
         };
@@ -642,9 +642,7 @@ pub fn kvStorePerHead(dst: [*]u8, src: [*]const f32, n: usize, head_idx: usize, 
     // Update running scale (max over time for dynamic range tracking)
     const head_scale = &scales.scales[head_idx];
     head_scale.* = @max(head_scale.*, absmax);
-    // FP8 E4M3 max representable value = 448.0
-    const fp8_max: f32 = 448.0;
-    const inv_scale = fp8_max / head_scale.*;
+    const inv_scale = fp8_e4m3_max / head_scale.*;
     // Quantize: scale to FP8 range, convert
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
@@ -660,8 +658,7 @@ pub fn kvStorePerHead(dst: [*]u8, src: [*]const f32, n: usize, head_idx: usize, 
 /// Compute scaled dot product Q·K where K is stored as per-head FP8.
 /// Dequantizes K using scales[head_idx] then dots with q_vec (f32).
 pub fn kvDotPerHead(q_vec: [*]const f32, kv_data: [*]const u8, n: usize, head_idx: usize, scales: *const PerHeadKvScales) f32 {
-    const fp8_max: f32 = 448.0;
-    const scale = scales.scales[head_idx] / fp8_max;
+    const scale = scales.scales[head_idx] / fp8_e4m3_max;
     var acc: V8 = @splat(0.0);
     const sv: V8 = @splat(scale);
     var i: usize = 0;

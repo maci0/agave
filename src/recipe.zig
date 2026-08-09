@@ -86,12 +86,21 @@ pub const Recipe = struct {
 
     // ── Preset recipes ──────────────────────────────────────────
 
+    /// A preset binds a `Recipe` to a filter triple (architecture, backend, quantization).
+    /// Each filter field is a prefix match (or empty string to match any value).
+    /// `match()` iterates the `presets` array in order and returns the first hit,
+    /// so more-specific presets must come before broader ones.
     const Preset = struct {
-        arch_prefix: []const u8, // e.g. "gemma3", "" = any
-        backend: []const u8, // e.g. "Metal", "" = any
-        quant: []const u8, // e.g. "Q4_K", "" = any
+        /// Architecture name prefix to match (e.g. "gemma3"). Empty matches any arch.
+        arch_prefix: []const u8,
+        /// Backend name to match exactly (e.g. "Metal"). Empty matches any backend.
+        backend: []const u8,
+        /// Quantization prefix to match (e.g. "Q4_K"). Empty matches any quant.
+        quant: []const u8,
+        /// The recipe to apply when this preset matches.
         recipe: Recipe,
 
+        /// Returns true if the given arch/backend/quant satisfies all non-empty filters.
         fn matches(self: Preset, arch: []const u8, be: []const u8, q: []const u8) bool {
             if (self.arch_prefix.len > 0 and !std.mem.startsWith(u8, arch, self.arch_prefix)) return false;
             if (self.backend.len > 0 and !std.mem.eql(u8, be, self.backend)) return false;
@@ -100,6 +109,8 @@ pub const Recipe = struct {
         }
     };
 
+    /// Ordered list of preset recipes. First match wins, so place more-specific
+    /// entries (exact arch + backend + quant) before broader wildcards.
     const presets = [_]Preset{
         // ── Small models on Metal — responsive chat defaults ──
         .{

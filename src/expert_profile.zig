@@ -22,6 +22,9 @@ const max_layers: usize = 256;
 /// Maximum supported number of experts per layer.
 const max_experts: usize = 512;
 
+/// Tracks per-layer, per-expert activation counts across inference runs.
+/// Used to identify hot/cold experts for SSD streaming and expert caching
+/// decisions.
 pub const ExpertProfile = struct {
     /// Per-layer, per-expert activation counts: [n_layers][n_experts].
     counts: []u64,
@@ -30,6 +33,7 @@ pub const ExpertProfile = struct {
     /// Total tokens profiled (for computing frequencies).
     total_tokens: u64 = 0,
 
+    /// Allocates and zero-initializes a `[n_layers][n_experts]` activation-count matrix.
     pub fn init(allocator: Allocator, n_layers: u32, n_experts: u32) !ExpertProfile {
         if (n_layers > max_layers or n_experts > max_experts) return error.ProfileDimensionTooLarge;
         const total = @as(usize, n_layers) * @as(usize, n_experts);
@@ -42,6 +46,7 @@ pub const ExpertProfile = struct {
         };
     }
 
+    /// Frees the activation-count matrix.
     pub fn deinit(self: *ExpertProfile, allocator: Allocator) void {
         if (self.counts.len > 0) {
             allocator.free(self.counts);
@@ -125,7 +130,7 @@ pub const ExpertProfile = struct {
         defer _ = std.posix.system.close(fd);
         var off: usize = 0;
         while (off < buf.items.len) {
-            const n = std.c.write(fd, buf.items[off..].ptr, buf.items.len - off);
+            const n = std.posix.system.write(fd, buf.items[off..].ptr, buf.items.len - off);
             if (n <= 0) break;
             off += @intCast(n);
         }

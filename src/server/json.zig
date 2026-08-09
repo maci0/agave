@@ -259,7 +259,7 @@ pub fn extractObjectField(json_buf: []const u8, field: []const u8) ?[]const u8 {
                 }
             }
         }
-        return json_buf[pos..i];
+        return json_buf[pos..@min(i, json_buf.len)];
     }
     return null;
 }
@@ -359,7 +359,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
             break :blk true;
         },
         .user = null, // not ingested: OpenAI "user" is often email/username; unused by inference
-        .n = @intCast(@max(1, @min(extractIntField(body, "n") orelse 1, 1))),
+        .n = @intCast(@max(1, @min(extractIntField(body, "n") orelse 1, 128))),
         .json_mode = json_mode,
         .grammar_string = extractField(body, "grammar"),
         .json_schema = extractField(body, "json_schema") orelse schema_from_rf,
@@ -392,10 +392,10 @@ pub fn parseSampling(body: []const u8) SamplingParams {
                             si += 1;
                             const str_start = si;
                             while (si < body.len and body[si] != '"') {
-                                if (body[si] == '\\') si += 1;
+                                if (body[si] == '\\' and si + 1 < body.len) si += 1;
                                 si += 1;
                             }
-                            const seq = body[str_start..si];
+                            const seq = body[str_start..@min(si, body.len)];
                             if (seq.len > 0) {
                                 result.stop[result.n_stop] = seq;
                                 result.n_stop += 1;

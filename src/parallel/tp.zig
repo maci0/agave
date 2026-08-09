@@ -14,11 +14,15 @@ const format_mod = @import("../format/format.zig");
 const backend_mod = @import("../backend/backend.zig");
 const Arch = @import("../arch.zig").Arch;
 
+/// Tensor-parallelism group that shards model weights across multiple ranks.
 pub const TpGroup = struct {
     ranks: []ModelStorage,
     degree: u32,
     allocator: Allocator,
 
+    /// Initialize a tensor-parallelism group with `degree` model instances.
+    /// Each rank gets its own `ModelStorage` with sharded weights. On error,
+    /// all successfully initialized ranks are cleaned up via `errdefer`.
     pub fn init(
         allocator: Allocator,
         arch: Arch,
@@ -54,6 +58,7 @@ pub const TpGroup = struct {
         return .{ .ranks = ranks, .degree = degree, .allocator = allocator };
     }
 
+    /// Deinitialize all rank model instances and free the ranks slice.
     pub fn deinit(self: *TpGroup) void {
         for (self.ranks) |*r| r.deinit();
         self.allocator.free(self.ranks);

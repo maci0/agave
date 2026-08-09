@@ -198,7 +198,7 @@ pub const RocmBackend = struct {
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
     /// Number of AMDGCN kernels loaded at init.
-    pub const n_kernels: u32 = 29;
+    pub const n_kernels: u32 = 49;
 
     /// Library name loaded via dlopen at init.
     pub const lib_name = "libamdhip64.so";
@@ -574,7 +574,7 @@ pub const RocmBackend = struct {
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("ROCm GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
-            else => @panic("ROCm GEMV: unsupported dtype — add a GPU kernel"),
+            else => std.debug.panic("ROCm GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
         };
         if (func == null) @panic("ROCm GEMV: required kernel missing for dtype");
 
@@ -727,6 +727,9 @@ pub const RocmBackend = struct {
         self.launch(self.fn_add, grid, block_size, 0, &params);
     }
 
+    /// Fused add + RMS normalization: computes `a = a + b`, then RMS-normalizes the
+    /// result with `weight` into `output`. Falls back to separate add + rmsNorm when
+    /// the fused HSA kernel is unavailable.
     pub fn addRmsNorm(self: *RocmBackend, a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         if (self.fn_add_rms_norm == null) {
             self.add(a, b, a, n);
@@ -963,6 +966,7 @@ pub const RocmBackend = struct {
         self.launch(self.fn_silu_mul, grid, block_size, 0, &params);
     }
 
+    /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |idx| {
             const g = @min(gate[idx], @as(f32, 10.0));
@@ -1481,6 +1485,7 @@ pub const RocmBackend = struct {
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
+    /// Tree-structured scaled dot-product attention for speculative decoding verification.
     pub fn sdpaTree(self: *RocmBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
             self.flushActivations();
@@ -1696,7 +1701,7 @@ test "ROCm backend public function signatures compile" {
 }
 
 test "ROCm n_kernels and lib_name" {
-    try std.testing.expectEqual(@as(u32, 29), RocmBackend.n_kernels);
+    try std.testing.expectEqual(@as(u32, 49), RocmBackend.n_kernels);
     try std.testing.expectEqualStrings("libamdhip64.so", RocmBackend.lib_name);
 }
 

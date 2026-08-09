@@ -33,7 +33,7 @@ const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
 
 /// Layer variants in Nemotron-H.
-pub const LayerType = enum { ssm, attention, ffn_only };
+const LayerType = enum { ssm, attention, ffn_only };
 
 /// Maximum supported layer count (controls static array sizes for layer_types).
 const max_layers: usize = 128;
@@ -109,8 +109,6 @@ pub const NemotronHModel = struct {
     scores_buf: []f32 = &.{},
     /// FFN first half (gate or up).
     ff_buf1: []f32 = &.{},
-    /// FFN second half (up or intermediate).
-    ff_buf2: []f32 = &.{},
     /// SSM input projection output — [z(ssm_d_inner) | conv_in(conv_ch) | dt(ssm_dt_rank)].
     ssm_proj_buf: []f32 = &.{},
     /// Causal conv1d output — conv_ch elements.
@@ -189,11 +187,30 @@ pub const NemotronHModel = struct {
         if (f.getArchU32(arch, "context_length")) |cl| self.max_seq_len = cl;
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
-        std.debug.assert(self.n_head % self.n_head_kv == 0);
-        std.debug.assert(self.ssm_d_inner % self.ssm_dt_rank == 0);
-        std.debug.assert(self.rope_dim <= self.head_dim);
-        std.debug.assert(self.rope_dim % 2 == 0);
-        std.debug.assert(self.n_layers <= max_layers);
+        if (self.n_head_kv == 0 or self.n_head % self.n_head_kv != 0) {
+            std.log.err("nemotron_h: n_head ({d}) not divisible by n_head_kv ({d})", .{ self.n_head, self.n_head_kv });
+            return error.MissingTensor;
+        }
+        if (self.ssm_dt_rank == 0 or self.ssm_d_inner % self.ssm_dt_rank != 0) {
+            std.log.err("nemotron_h: ssm_d_inner ({d}) not divisible by ssm_dt_rank ({d})", .{ self.ssm_d_inner, self.ssm_dt_rank });
+            return error.MissingTensor;
+        }
+        if (self.rope_dim > self.head_dim) {
+            std.log.err("nemotron_h: rope_dim ({d}) exceeds head_dim ({d})", .{ self.rope_dim, self.head_dim });
+            return error.MissingTensor;
+        }
+        if (self.rope_dim % 2 != 0) {
+            std.log.err("nemotron_h: rope_dim ({d}) is not even", .{self.rope_dim});
+            return error.MissingTensor;
+        }
+        if (self.n_layers > max_layers) {
+            std.log.err("nemotron_h: n_layers ({d}) exceeds max_layers ({d})", .{ self.n_layers, max_layers });
+            return error.MissingTensor;
+        }
+        if (self.ssm_n_group == 0 or self.ssm_dt_rank % self.ssm_n_group != 0) {
+            std.log.err("nemotron_h: ssm_dt_rank ({d}) not divisible by ssm_n_group ({d})", .{ self.ssm_dt_rank, self.ssm_n_group });
+            return error.MissingTensor;
+        }
 
         // ── Layer type detection ──────────────────────────────────
         // Check tensor presence to classify each layer.
@@ -246,8 +263,6 @@ pub const NemotronHModel = struct {
         errdefer allocator.free(self.scores_buf);
         self.ff_buf1 = try allocator.alloc(f32, self.n_ff);
         errdefer allocator.free(self.ff_buf1);
-        self.ff_buf2 = try allocator.alloc(f32, self.n_ff);
-        errdefer allocator.free(self.ff_buf2);
         self.ssm_proj_buf = try allocator.alloc(f32, proj_size);
         errdefer allocator.free(self.ssm_proj_buf);
         self.ssm_conv_out = try allocator.alloc(f32, conv_ch);
@@ -321,6 +336,7 @@ pub const NemotronHModel = struct {
 
     /// Release all heap allocations owned by this model.
     pub fn deinit(self: *NemotronHModel) void {
+        self.be.sync();
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         const nl: usize = self.n_layers;
         for (0..nl) |i| {
@@ -338,11 +354,10 @@ pub const NemotronHModel = struct {
         }
 
         const bufs = .{
-            &self.hidden,       &self.hidden2,      &self.q_buf,
-            &self.k_buf,        &self.v_buf,        &self.attn_out,
-            &self.scores_buf,   &self.ff_buf1,      &self.ff_buf2,
-            &self.ssm_proj_buf, &self.ssm_conv_out, &self.ssm_y_buf,
-            &self.logits_buf,
+            &self.hidden,       &self.hidden2,   &self.q_buf,
+            &self.k_buf,        &self.v_buf,     &self.attn_out,
+            &self.scores_buf,   &self.ff_buf1,   &self.ssm_proj_buf,
+            &self.ssm_conv_out, &self.ssm_y_buf, &self.logits_buf,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
     }
@@ -485,7 +500,7 @@ pub const NemotronHModel = struct {
         const conv_ch: usize = self.convChannels();
         const d_conv: usize = self.ssm_d_conv; // 4
 
-        std.debug.assert(num_heads % n_group == 0);
+        if (num_heads % n_group != 0) @panic("nemotron_h: ssm_dt_rank must be divisible by ssm_n_group");
 
         // 1. Pre-norm (fused with previous layer's deferred residual when pending_residual=true).
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;

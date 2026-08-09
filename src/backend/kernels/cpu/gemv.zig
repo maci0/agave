@@ -54,23 +54,41 @@ const gemv_tq1_0 = @import("gemv_tq1_0.zig");
 const gemv_tq2_0 = @import("gemv_tq2_0.zig");
 
 // ── Re-exports for direct access ─────────────────────────────────
+/// GEMV kernel for Q4_0 quantization (4-bit, 32 elements per block).
 pub const gemvQ4_0 = gemv_q4_0.gemvQ4_0;
+/// GEMV kernel for Q8_0 quantization (8-bit, 32 elements per block).
 pub const gemvQ8_0 = gemv_q8_0.gemvQ8_0;
+/// GEMV kernel for Q4_K quantization (4-bit K-quant, super-block structure).
 pub const gemvQ4_K = gemv_q4_k.gemvQ4_K;
+/// GEMV kernel for Q5_K quantization (5-bit K-quant, super-block structure).
 pub const gemvQ5_K = gemv_q5_k.gemvQ5_K;
+/// GEMV kernel for Q6_K quantization (6-bit K-quant, super-block structure).
 pub const gemvQ6_K = gemv_q6_k.gemvQ6_K;
+/// GEMV kernel for F32 (single-precision float) weights.
 pub const gemvF32 = gemv_f32.gemvF32;
+/// GEMV kernel for F16 (IEEE half-precision float) weights.
 pub const gemvF16 = gemv_f16.gemvF16;
+/// GEMV kernel for BF16 (brain floating-point 16) weights.
 pub const gemvBF16 = gemv_bf16.gemvBF16;
+/// GEMV kernel for FP8 E4M3 (4-bit exponent, 3-bit mantissa) weights.
 pub const gemvFP8_E4M3 = gemv_fp8.gemvFP8_E4M3;
+/// GEMV kernel for FP8 E5M2 (5-bit exponent, 2-bit mantissa) weights.
 pub const gemvFP8_E5M2 = gemv_fp8.gemvFP8_E5M2;
+/// GEMV kernel for MXFP4 (microscaling 4-bit float) weights.
 pub const gemvMXFP4 = gemv_fp4.gemvMXFP4;
+/// GEMV kernel for NVFP4 (NVIDIA 4-bit float) weights.
 pub const gemvNVFP4 = gemv_fp4.gemvNVFP4;
+/// GEMV kernel for IQ4_NL (importance-quantized 4-bit, non-linear) weights.
 pub const gemvIQ4_NL = gemv_iq4.gemvIQ4_NL;
+/// GEMV kernel for IQ4_XS (importance-quantized 4-bit, extra-small blocks) weights.
 pub const gemvIQ4_XS = gemv_iq4.gemvIQ4_XS;
+/// GEMV kernel for Q4_1 quantization (4-bit with min offset, 32 elements per block).
 pub const gemvQ4_1 = gemv_q_small.gemvQ4_1;
+/// GEMV kernel for Q5_0 quantization (5-bit, 32 elements per block).
 pub const gemvQ5_0 = gemv_q_small.gemvQ5_0;
+/// GEMV kernel for Q2_K quantization (2-bit K-quant, super-block structure).
 pub const gemvQ2_K = gemv_q_small.gemvQ2_K;
+/// GEMV kernel for Q3_K quantization (3-bit K-quant, super-block structure).
 pub const gemvQ3_K = gemv_q_small.gemvQ3_K;
 
 const builtin = @import("builtin");
@@ -79,6 +97,7 @@ const backend_mod = @import("../../backend.zig");
 // Accelerate.framework only available when Metal is enabled (they're linked together).
 const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal) @import("../../../backend/accelerate.zig") else struct {};
 
+/// Computes the byte stride of one GEMV row for a given dtype and column count.
 pub const gemvRowBytes = backend_mod.gemvRowBytes;
 
 /// Sequential GEMV — dispatches to the appropriate quantized kernel.

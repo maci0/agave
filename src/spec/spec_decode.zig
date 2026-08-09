@@ -13,6 +13,7 @@ const Model = @import("../models/model.zig").Model;
 const math_ops = @import("../ops/math.zig");
 const ddtree = @import("ddtree.zig");
 const dspark = @import("dspark.zig");
+const ngram_mod = @import("ngram.zig");
 
 pub const max_draft_tokens: usize = 32;
 const log_softmax_eps: f32 = 1e-10;
@@ -163,8 +164,12 @@ pub const SpecState = struct {
     }
 };
 
+/// Result of speculative verification: how many draft tokens were accepted
+/// and the next token to emit after the accepted prefix.
 pub const SpecResult = struct {
+    /// Number of draft tokens accepted by the verifier.
     accepted: u32,
+    /// The next token to emit (first rejected position's target-model prediction).
     next_token: u32,
 };
 
@@ -329,8 +334,6 @@ pub fn draftEagle3WithLogits(state: *SpecState, target_model: Model, draft_model
     return n;
 }
 
-const ngram_mod = @import("ngram.zig");
-
 /// MLP Speculator (vLLM, Chen et al. 2023): lightweight 3-layer MLP draft model.
 ///
 /// Unlike EAGLE which autoregressively chains hidden states, the MLP Speculator uses
@@ -441,13 +444,13 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
 
     // Read file in 64KB chunks (no fstat — avoids platform ABI differences).
     const fd = try posix.openat(posix.AT.FDCWD, token_map_path, .{}, 0);
-    defer _ = std.c.close(fd);
+    defer _ = std.posix.system.close(fd);
     var content_list = std.ArrayList(u8).empty;
     defer content_list.deinit(allocator);
     var read_buf: [65536]u8 = undefined;
     var off: usize = 0;
     while (true) {
-        const result = std.c.pread(fd, &read_buf, read_buf.len, @intCast(off));
+        const result = std.posix.system.pread(fd, &read_buf, read_buf.len, @intCast(off));
         const n: isize = @bitCast(result);
         if (n <= 0) break;
         try content_list.appendSlice(allocator, read_buf[0..@intCast(n)]);

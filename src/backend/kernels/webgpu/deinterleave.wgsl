@@ -1,3 +1,4 @@
+// Deinterleave paired elements.
 struct Params {
     stride: u32,
     n_pairs: u32,

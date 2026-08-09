@@ -14,6 +14,7 @@ agave model.gguf --serve --port 9090        # custom port
 # Prefer AGAVE_API_KEY over --api-key (env wins if both set; avoids process-list exposure)
 AGAVE_API_KEY=mysecret agave model.gguf --serve
 agave model.gguf --serve --rate-limit-rpm 60 --rate-limit-tpm 100000  # token-bucket limits
+agave model.gguf --serve --ctx-size auto      # auto-fit context to available memory
 # Or: AGAVE_API_KEY=mysecret AGAVE_PORT=9090 agave model.gguf --serve
 ```
 
@@ -23,7 +24,26 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 
 ---
 
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `AGAVE_API_KEY` | API key for authentication (preferred over `--api-key` to avoid process-list exposure) |
+| `AGAVE_HOST` | Bind address (default: `127.0.0.1`) |
+| `AGAVE_PORT` | Listen port (default: `49453`) |
+| `HF_TOKEN` | Hugging Face token for private model downloads (`agave pull`) |
+| `HF_HOME` | Hugging Face cache directory (default: `~/.cache/huggingface`) |
+| `XDG_CACHE_HOME` | Base cache directory when `HF_HOME` is not set |
+| `AGAVE_VISION_DEBUG` | Enable vision encoder debug output |
+| `NO_COLOR` | Disable colored terminal output (respects [no-color.org](https://no-color.org) convention) |
+
+---
+
 ## Endpoints
+
+### GET /
+
+Serves the built-in web chat UI (single-page HTML). Requires authentication when `--api-key` is set. The UI communicates with the server via `POST /v1/chat` (streaming HTML responses).
 
 ### POST /v1/chat/completions
 

@@ -18,7 +18,7 @@ pub fn deltaNet(conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, al
     const num_k_heads: usize = p.num_k_heads;
     const head_k_dim: usize = p.head_k_dim;
     const conv_ch: usize = p.conv_ch;
-    std.debug.assert(num_v_heads <= max_deltanet_v_heads);
+    if (num_v_heads > max_deltanet_v_heads) @panic("deltanet: num_v_heads exceeds max_deltanet_v_heads");
 
     // 1. Gate & beta computation
     var gate_vals: [max_deltanet_v_heads]f32 = undefined;

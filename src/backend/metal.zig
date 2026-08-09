@@ -94,6 +94,8 @@ const mlx_words_per_group_q6: usize = 12;
 const mlx_words_per_group_q8: usize = 16;
 /// Words per group for MXFP4 quantization (16 nibbles / 8 per word = 2).
 const mxfp4_words_per_group: usize = mxfp4_group_size * 4 / 32;
+/// MTLGPUFamily value for Metal 4 (M5+ with macOS 26.2+).
+const metal4_gpu_family: u32 = 5002;
 
 /// Reference to a cached Metal buffer with a byte offset.
 /// Allows sub-region access (e.g. per-head slices) without creating separate
@@ -486,7 +488,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 71;
+    pub const n_pipelines: u32 = 88;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -512,14 +514,14 @@ pub const MetalBackend = struct {
     }
 
     /// Detect the highest supported Metal GPU family.
-    /// Metal 4 (value 5002) is available on M5 chips with macOS 26.2+.
+    /// Metal 4 (see `metal4_gpu_family`) is available on M5 chips with macOS 26.2+.
     /// Metal 4 adds TensorOps (neural accelerators) accessible via MTLTensorOp.
     /// Agave detects Metal 4 support and will route eligible operations to TensorOps
     /// when the API is stable. For now, Metal 4 is reported in --verbose output.
     fn detectMetalFamily(self: *const MetalBackend) []const u8 {
         // MTLGPUFamily enum values (Apple-defined)
         const families = [_]struct { val: c_long, name: []const u8 }{
-            .{ .val = 5002, .name = "Metal 4 (M5 TensorOps)" }, // macOS 26.2+
+            .{ .val = metal4_gpu_family, .name = "Metal 4 (M5 TensorOps)" }, // macOS 26.2+
             .{ .val = 5001, .name = "Metal 3" },
             .{ .val = 1009, .name = "Apple Family 9" },
             .{ .val = 1008, .name = "Apple Family 8" },
@@ -533,10 +535,11 @@ pub const MetalBackend = struct {
     }
 
     /// Returns true if the device supports Metal 4 TensorOps (M5+ with macOS 26.2+).
+    /// Checks the MTLGPUFamily value `metal4_gpu_family` (5002) via `-[MTLDevice supportsFamily:]`.
     /// When true, eligible linear algebra operations can use Neural Accelerators,
     /// providing 3-4x TTFT speedup for quantized LLM inference (Apple ML Research, 2026).
     pub fn supportsMetal4TensorOps(self: *const MetalBackend) bool {
-        return objc.msgSend(bool, self.device, objc.sel("supportsFamily:"), .{@as(c_long, 5002)});
+        return objc.msgSend(bool, self.device, objc.sel("supportsFamily:"), .{@as(c_long, metal4_gpu_family)});
     }
 
     /// Compile a named MSL kernel into a compute pipeline state.
@@ -895,7 +898,7 @@ pub const MetalBackend = struct {
             .tq2_0 => self.pipe_gemv_tq2_0,
             // IQ2/IQ3/IQ1: no GPU kernel yet — fail closed (no silent CPU fallback).
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
-            else => @panic("Metal GEMV: unsupported dtype — add a GPU kernel"),
+            else => std.debug.panic("Metal GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
         };
 
         const w_bytes = weightBytes(w.dtype, n, k);
@@ -1177,7 +1180,6 @@ pub const MetalBackend = struct {
         self.endEncodeThreadgroups(enc, n_ff, tg);
     }
 
-    /// Fused FFN with GELU for Q4_K (Gemma 3/4). gelu(gate) * up in 1 dispatch.
     /// Fused FFN with SiLU for MLX Q4 weights (GLM-4, Qwen MLX).
     /// 10 buffer args: x, gate_w/s/b, up_w/s/b, out, n_ff, n_embd.
     pub fn fusedFfnGateUpSiluMlxQ4(
@@ -2062,7 +2064,7 @@ pub const MetalBackend = struct {
         setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
         setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
         setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
-        self.endEncodeThreadgroups(enc, n, 256);
+        self.endEncodeThreadgroups(enc, n, threadgroup_size);
     }
 
     /// HQQ INT4 GEMV on Metal GPU.
@@ -2089,7 +2091,7 @@ pub const MetalBackend = struct {
         setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
         setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
         setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
-        self.endEncodeThreadgroups(enc, n, 256);
+        self.endEncodeThreadgroups(enc, n, threadgroup_size);
     }
 
     /// AWQ INT4 GEMV on Metal GPU.
@@ -2116,7 +2118,7 @@ pub const MetalBackend = struct {
         setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
         setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
         setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
-        self.endEncodeThreadgroups(enc, n, 256);
+        self.endEncodeThreadgroups(enc, n, threadgroup_size);
     }
 
     /// Batched GEMV: dispatches all ops sharing input x without inter-dispatch
@@ -2561,9 +2563,6 @@ pub const MetalBackend = struct {
         self.endEncode1D(enc, self.pipe_rope_batched, grid_size);
     }
 
-    /// Prefill SDPA: zero-flush GPU pipeline.
-    /// FA2 reads old K/V from cache, new K/V from pf_k/pf_v (no copy needed
-    /// for attention). Then GPU copy kernel writes pf_k/pf_v into the KV cache
     /// Tree-masked SDPA for DDTree verification. GPU-accelerated for f32 and TurboQuant KV.
     pub fn sdpaTree(self: *MetalBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         if (n_nodes == 0) return;
@@ -2637,6 +2636,9 @@ pub const MetalBackend = struct {
         @panic("Metal sdpaTree: unsupported KV type (need f32 or turbo); use --kv-type f32/turbo* or --backend cpu");
     }
 
+    /// Prefill SDPA: zero-flush GPU pipeline.
+    /// FA2 reads old K/V from cache, new K/V from pf_k/pf_v (no copy needed
+    /// for attention). Then GPU copy kernel writes pf_k/pf_v into the KV cache
     /// for future chunks/decode. All dispatches in one command buffer.
     ///
     /// For turbo KV types: CPU-side KV append + sequential GPU turbo SDPA per token.
@@ -3186,7 +3188,7 @@ test "Metal tuning constants are valid" {
 
 test "Metal n_pipelines count" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    try std.testing.expectEqual(@as(u32, 71), MetalBackend.n_pipelines);
+    try std.testing.expectEqual(@as(u32, 88), MetalBackend.n_pipelines);
 }
 
 // ── Helper to get a Metal backend or skip the test ──────────────
@@ -3215,7 +3217,7 @@ test "MetalBackend.backendInfo" {
     try std.testing.expectEqualStrings("Metal", info.name);
     try std.testing.expect(info.total_mem > 0);
     try std.testing.expect(info.is_uma);
-    try std.testing.expectEqual(@as(u32, 71), info.n_gpu_kernels);
+    try std.testing.expectEqual(@as(u32, 88), info.n_gpu_kernels);
     try std.testing.expectEqualStrings("MSL", info.kernel_type);
     try std.testing.expect(info.device_name.len > 0);
 }

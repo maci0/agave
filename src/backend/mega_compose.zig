@@ -129,7 +129,8 @@ pub const ModelDesc = struct {
     pub fn hasPerLayerVariation(self: ModelDesc) bool {
         for (0..self.n_layers) |i| {
             if (self.layer_n_head[i] != 0 or self.layer_head_dim[i] != 0 or
-                self.layer_rope_theta[i] != 0 or self.layer_n_ff[i] != 0) return true;
+                self.layer_rope_theta[i] != 0 or self.layer_n_ff[i] != 0 or
+                self.layer_n_kv[i] != 0 or self.layer_sliding_window[i] != 0) return true;
         }
         return false;
     }
@@ -170,9 +171,9 @@ const msl_header =
     \\
 ;
 
-/// Append `s` into `b` at `*p`, truncating silently if the buffer is full.
+/// Append `s` into `b` at `*p`, panicking if the buffer overflows.
 fn appendSlice(b: []u8, p: *usize, s: []const u8) void {
-    if (p.* + s.len > b.len) return;
+    if (p.* + s.len > b.len) @panic("megakernel MSL buffer overflow");
     @memcpy(b[p.*..][0..s.len], s);
     p.* += s.len;
 }
@@ -629,8 +630,20 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
             \\        mega_gemv_q8(hidden2, (device const block_q8_0*)(weights + lo.ffn_up),
             \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
-            else =>
+            .q4_k =>
             \\        mega_gemv_q4k(hidden2, weights + lo.ffn_up,
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            ,
+            .q5_k =>
+            \\        mega_gemv_q5k(hidden2, weights + lo.ffn_up,
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            ,
+            .q6_k =>
+            \\        mega_gemv_q6k(hidden2, weights + lo.ffn_up,
+            \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
+            ,
+            .q4_0 =>
+            \\        mega_gemv_q4_0(hidden2, (device const block_q4_0*)(weights + lo.ffn_up),
             \\            ff_gate, cur_n_ff, p.n_embd, shared, tgid, tid, tg_size);
             ,
         };

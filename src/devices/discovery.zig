@@ -17,6 +17,8 @@ const cc_buf_size: usize = 16;
 /// not a multi-device mesh. Inference still selects it via `BackendChoice.webgpu`.
 pub const BackendKind = enum { cpu, metal, cuda, rocm, vulkan };
 
+/// Describes a single compute device (GPU or CPU) discovered on the local host.
+/// Backends populate these during `enumerate` for `--list-devices` and TP/PP topology selection.
 pub const DeviceInfo = struct {
     backend: BackendKind,
     device_id: u32,
@@ -28,15 +30,20 @@ pub const DeviceInfo = struct {
     compute_cap: [cc_buf_size]u8 = .{0} ** cc_buf_size,
     cc_len: usize = 0,
 
+    /// Returns the human-readable device name (e.g. "Apple M2 Max") as a slice.
     pub fn displayName(self: *const DeviceInfo) []const u8 {
         return self.name[0..self.name_len];
     }
 
+    /// Returns the compute-capability string (e.g. "sm_90" for CUDA) as a slice.
+    /// Empty for backends that do not report a compute capability.
     pub fn ccString(self: *const DeviceInfo) []const u8 {
         return self.compute_cap[0..self.cc_len];
     }
 };
 
+/// Fixed-capacity list of discovered compute devices (up to 16).
+/// Populated by `enumerate` and consumed by `--list-devices` output and backend selection.
 pub const DeviceList = struct {
     devices: [max_devices]DeviceInfo = undefined,
     count: usize = 0,
@@ -54,11 +61,15 @@ pub const DeviceList = struct {
         }
     }
 
+    /// Returns the populated portion of the device array as a const slice.
     pub fn slice(self: *const DeviceList) []const DeviceInfo {
         return self.devices[0..self.count];
     }
 };
 
+/// Probes all enabled backends (Metal, CUDA, ROCm, Vulkan) and the CPU,
+/// returning a `DeviceList` of every device found on this host.
+/// Always includes at least one entry (CPU). Used by `--list-devices` and device selection.
 pub fn enumerate() DeviceList {
     var list = DeviceList{};
 
@@ -555,6 +566,8 @@ test "printDeviceTable — function signature comptime check" {
     }
 }
 
+/// Formats and writes a human-readable device table to stdout.
+/// Used by the `--list-devices` CLI flag to display backend, name, memory, UMA, and compute capability.
 pub fn printDeviceTable(list: *const DeviceList) void {
     var buf: [4096]u8 = undefined;
     var pos: usize = 0;

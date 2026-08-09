@@ -217,6 +217,7 @@ Implemented in `src/parallel/peer_discovery.zig`.
 - **K-quant CPU fallback on UMA**: Q4_K/Q5_K/Q6_K delegate to CPU on GB10 sm_121 (PTX register spilling). CPU allReduceAdd uploads to device staging buffer for NCCL
 - **PP bubble**: single-token decode has `1/pp_degree` utilization; only worthwhile for fitting larger models
 - **2 ranks only**: current transport supports rank 0 ↔ rank 1 pair. Multi-rank ring/tree not yet implemented
+- **Speculative decoding**: not tested with TP/PP — spec decode modes assume single-device inference
 
 ---
 

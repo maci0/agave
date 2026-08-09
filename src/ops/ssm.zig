@@ -52,6 +52,7 @@ fn conv1dImpl(
     d_conv: usize,
 ) void {
     const d = D orelse d_conv;
+    std.debug.assert(d >= 2); // d_conv=1 is degenerate (no history); all models use d_conv >= 2
     const hist = d - 1;
     for (0..conv_ch) |ch| {
         var sum: f32 = if (conv_b) |b| b[ch] else 0.0;
@@ -80,7 +81,9 @@ fn conv1dImpl(
             }
         }
     }
-    @memcpy(conv_state[(hist - 1) * conv_ch ..][0..conv_ch], conv_in[0..conv_ch]);
+    if (hist > 0) {
+        @memcpy(conv_state[(hist - 1) * conv_ch ..][0..conv_ch], conv_in[0..conv_ch]);
+    }
 }
 
 /// Mamba-2 autoregressive recurrence for one SSM layer.
@@ -182,7 +185,7 @@ pub fn groupRmsNormSiluGate(
     eps: f32,
 ) void {
     const V8 = @Vector(8, f32);
-    std.debug.assert(d_inner % n_groups == 0);
+    if (d_inner % n_groups != 0) @panic("mamba2: d_inner must be divisible by n_groups");
     const elem_per_group: usize = d_inner / n_groups;
     for (0..n_groups) |g| {
         const off = g * elem_per_group;

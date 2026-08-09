@@ -15,7 +15,7 @@ pub fn rope(x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: us
     const neg_log_theta: f32 = -@log(theta);
 
     // Precompute cos/sin for each frequency (shared across all heads)
-    std.debug.assert(half <= max_rope_half_dim);
+    if (half > max_rope_half_dim) @panic("rope: half-dim exceeds max_rope_half_dim");
     var cos_buf: [max_rope_half_dim]f32 = undefined;
     var sin_buf: [max_rope_half_dim]f32 = undefined;
     for (0..half) |i| {

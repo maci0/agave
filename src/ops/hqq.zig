@@ -26,6 +26,7 @@ pub fn hqqGemv(
     hqqGemvRows(x, w_q, scale, zero, y, 0, n_out, k_in, group_size);
 }
 
+/// HQQ row-major GEMV: processes a subset of output rows for parallel dispatch.
 pub fn hqqGemvRows(
     x: [*]const f32,
     w_q: [*]const u8,

@@ -48,6 +48,7 @@ pub const EvalResult = struct {
     /// Number of cases that failed (forward error, missing tokens, etc.).
     n_failed: u32,
 
+    /// Prints a summary line with case count, token count, mean NLL, argmax accuracy, and failure count.
     pub fn print(self: *const EvalResult) void {
         std.log.info("eval: {d} cases, {d} tokens, mean_nll={d:.4}, argmax_acc={d:.2}%, failed={d}", .{
             self.cases.len,
@@ -58,6 +59,7 @@ pub const EvalResult = struct {
         });
     }
 
+    /// Frees the per-case result slice.
     pub fn deinit(self: *EvalResult, allocator: Allocator) void {
         allocator.free(self.cases);
     }

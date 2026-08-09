@@ -798,7 +798,7 @@ kernel void sdpa_fa2_turbo(
                     device const uchar* bp = K_cache + byte_off;
                     float s = float(*((device const half*)bp));
                     for (uint d = 0; d < 32; d++) {
-                        kv_block[t * hd + blk * 32 + d] = s * float((device const char*)(bp + 2))[d];
+                        kv_block[t * hd + blk * 32 + d] = s * float(((device const char*)(bp + 2))[d]);
                     }
                 }
             } else {
@@ -901,7 +901,7 @@ kernel void sdpa_fa2_turbo(
                     device const uchar* bp = V_cache + byte_off;
                     float s = float(*((device const half*)bp));
                     for (uint d = 0; d < 32; d++) {
-                        kv_block[t * hd + blk * 32 + d] = s * float((device const char*)(bp + 2))[d];
+                        kv_block[t * hd + blk * 32 + d] = s * float(((device const char*)(bp + 2))[d]);
                     }
                 }
             } else {

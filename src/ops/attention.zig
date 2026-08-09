@@ -92,6 +92,7 @@ pub fn scaledDotProductAttention(
 
     const win_start = if (window) |w| w.start else 0;
     const win_len = if (window) |w| w.len else sl;
+    std.debug.assert(win_start + win_len <= sl);
     const hpg = nh / nkv;
 
     // f32 fast path for windowed attention — use existing SIMD code
@@ -258,7 +259,7 @@ const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
 ///   - nh, nkv, hd: Head configuration.
 ///   - seq_len: Current sequence position (before appending).
 ///   - scale: Attention scale factor.
-///   - be: Backend for softmax.
+///   - be: Backend — reserved for future GPU paged attention, currently unused.
 ///   - block_size: Positions per cache block.
 pub fn pagedAttention(
     q: [*]const f32,
@@ -655,12 +656,8 @@ test "sdpa windowed attention excludes tokens outside window" {
 ///   - n_cached: Number of prompt tokens in KV cache.
 ///   - cl: Canvas length (number of canvas tokens to attend to).
 ///   - scale: Attention scale (1/sqrt(hd)).
-///   - be: Backend for softmax.
+///   - be: Backend — reserved, currently uses CPU softmax directly.
 ///   - kv_type_k, kv_type_v: KV cache quantization types.
-/// Canvas attention for DiffusionGemma denoising: one query token attends to
-/// all cached prompt tokens (from kv cache) and all canvas tokens (bidirectional,
-/// no causal mask). CPU-only — canvas (256 tokens) is small enough that GPU
-/// dispatch overhead is not worth it.
 pub fn scaledDotProductAttentionCanvas(
     q: [*]const f32,
     kv_keys: []u8,

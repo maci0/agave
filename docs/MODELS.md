@@ -22,6 +22,23 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | **GLM-4 / DeepSeek V3** | `glm4` | MLA (compressed KV) | SiLU + SwiGLU | MoE (64/256 experts, top-4/top-8, sigmoid routing) |
 | **Llama 4** | `llama4` | iRoPE (local+global, chunked) | SiLU + SwiGLU | MoE (top-1) + shared expert, temperature scaling, 10M context |
 
+## Speculative Decoding Support
+
+| Model | DDTree | Self-Spec | EAGLE/EAGLE-3 | MTP | N-gram | Suffix | Lookahead | PFlash | DSpark | Notes |
+|-------|--------|-----------|---------------|-----|--------|--------|-----------|--------|--------|-------|
+| Gemma 3 | ✅ `forwardTree` | ✅ | ✅/✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
+| Gemma 4 | — | ✅ | —/✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
+| Qwen 3.5 | — | ✅ | ✅/— | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
+| DeepSeek V4 | — | ✅ `setLayerSkip` | —/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative |
+| GLM-4 | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| GPT-OSS | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Nemotron-H | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Nemotron Nano | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| Llama 4 | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
+| DiffusionGemma | — | — | — | — | — | — | — | — | — | Block diffusion (not autoregressive) |
+
+All autoregressive models support standard draft-verify, n-gram, suffix, lookahead, PFlash, and DSpark modes. DDTree tree verification requires `forwardTree`/`treeLogits` (currently Gemma 3 only). EAGLE-3 requires `hidden_pre_norm` (Gemma 3, Gemma 4, DiffusionGemma). MTP requires dedicated MTP heads in the model weights.
+
 ## Model Parameters
 
 | Model | n_embd | n_heads | n_kv_heads | head_dim | ff_dim | n_layers | theta | rope_dim |

@@ -1,3 +1,8 @@
+//! Build configuration for Agave — LLM inference engine.
+//! Targets: ReleaseFast (agave), Debug (agave-debug), WASM (agave.wasm),
+//! CUDA PTX kernels (zig build ptx), ROCm AMDGCN kernels (zig build amdgcn),
+//! micro-benchmarks (zig build bench).
+
 const std = @import("std");
 const builtin = @import("builtin");
 /// Product SemVer from build.zig.zon; injected into binaries via build_options.version.
@@ -170,7 +175,7 @@ pub fn build(b: *std.Build) void {
         const install_obj = b.addInstallFile(obj.getEmittedBin(), "rocm/kernels.o");
         amdgcn_step.dependOn(&install_obj.step);
 
-        // Workaround: two Zig 0.16 bugs for AMDGCN targets (ziglang/zig#XXXXX):
+        // Workaround: two Zig 0.16 bugs for AMDGCN targets (upstream Zig AMDGCN issues):
         //
         // Bug 1 — Wrong ISA string in metadata:
         //   Zig emits amdhsa.target = "amdgcn-amd-amdhsa5.0.0-unknown-gfx1100"

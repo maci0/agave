@@ -1,3 +1,4 @@
+// Tree-structured SDPA for speculative decoding verification.
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : require
 

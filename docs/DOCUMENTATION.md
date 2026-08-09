@@ -45,7 +45,7 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 
 - **[HTTP API](API.md)** — server endpoints, sampling parameters, structured output, streaming
 - **[Architecture](ARCHITECTURE.md)**: project structure, Design Decisions table, module reference, inference pipeline
-- **[Models](MODELS.md)** — supported models, parameters, per-model details, benchmarks
+- **[Models](MODELS.md)** — 10 supported architectures (incl. DeepSeek V4, DiffusionGemma), parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)** — per-backend kernel implementation status
 - **[Megakernel System](MEGAKERNEL.md)** — three-tier megakernel architecture (fused FFN, true megakernels, composed megakernels)
 - **[Benchmarks](BENCHMARKS.md)** — performance data across models, backends, and quantization types

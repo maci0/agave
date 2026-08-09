@@ -96,6 +96,8 @@ pub const SafeTensorsDir = struct {
     fused_tensors: std.StringHashMap(TensorEntry),
     /// Repacked f32 arrays (global_scale, input_scale) allocated during fusion.
     repacked_f32: std.ArrayList([]f32),
+    /// Repacked u8 buffers (non-contiguous expert weights/scales) allocated via page_allocator during fusion.
+    repacked_u8: std.ArrayList([]align(std.heap.page_size_min) u8),
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -111,6 +113,12 @@ pub const SafeTensorsDir = struct {
         errdefer {
             for (repacked_f32.items) |s| allocator.free(s);
             repacked_f32.deinit(allocator);
+        }
+        var repacked_u8: std.ArrayList([]align(std.heap.page_size_min) u8) = .empty;
+        errdefer {
+            const pa = std.heap.page_allocator;
+            for (repacked_u8.items) |buf| pa.free(buf);
+            repacked_u8.deinit(allocator);
         }
 
         var config_meta = std.StringHashMap(MetaValue).init(allocator);
@@ -183,7 +191,7 @@ pub const SafeTensorsDir = struct {
 
         var shards_mmapped: usize = 0;
         errdefer {
-            for (shard_data[0..shards_mmapped]) |s| std.posix.munmap(s.data);
+            for (shard_data[0..shards_mmapped]) |s| if (s.data.len > 0) std.posix.munmap(s.data);
         }
 
         for (shard_name_list.items, 0..) |shard_name, si| {
@@ -263,7 +271,7 @@ pub const SafeTensorsDir = struct {
         // --- 5. Fuse compressed-tensors NVFP4 per-expert tensors -------
         // Detects per-expert weight_packed/weight_scale/weight_global_scale
         // patterns and creates synthetic GGUF-named fused entries.
-        fuseNvfp4Experts(allocator, &tensors, &fused_tensors, &repacked_f32, shard_data, &config_meta, &owned_strings) catch |err| {
+        fuseNvfp4Experts(allocator, &tensors, &fused_tensors, &repacked_f32, &repacked_u8, shard_data, &config_meta, &owned_strings) catch |err| {
             std.log.warn("NVFP4 expert fusion failed (will use individual lookup): {}", .{err});
         };
         if (fused_tensors.count() > 0)
@@ -274,6 +282,7 @@ pub const SafeTensorsDir = struct {
             .tensors = tensors,
             .fused_tensors = fused_tensors,
             .repacked_f32 = repacked_f32,
+            .repacked_u8 = repacked_u8,
             .shard_data = shard_data,
             .config_meta = config_meta,
             .is_awq = if (config_meta.get("quant_method")) |v| switch (v) {
@@ -317,7 +326,7 @@ pub const SafeTensorsDir = struct {
 
     /// Release all resources: unmap shards, free owned strings, deinit maps.
     pub fn deinit(self: *SafeTensorsDir) void {
-        for (self.shard_data) |s| std.posix.munmap(s.data);
+        for (self.shard_data) |s| if (s.data.len > 0) std.posix.munmap(s.data);
         self.allocator.free(self.shard_data);
 
         if (self.vocab) |v| self.allocator.free(v);
@@ -330,6 +339,9 @@ pub const SafeTensorsDir = struct {
         self.fused_tensors.deinit();
         for (self.repacked_f32.items) |s| self.allocator.free(s);
         self.repacked_f32.deinit(self.allocator);
+        const pa = std.heap.page_allocator;
+        for (self.repacked_u8.items) |s| pa.free(s);
+        self.repacked_u8.deinit(self.allocator);
         self.config_meta.deinit();
     }
 
@@ -734,7 +746,6 @@ fn ggufKeyToHf(key: []const u8) ?[]const u8 {
 const gguf_hf_meta_aliases = [_]struct { []const u8, []const u8 }{
     .{ "expert_count", "num_local_experts" },
     .{ "expert_count", "num_experts" },
-    .{ "expert_count", "num_experts" },
     // DeepSeek V3/GLM-4 MLA attention dimensions (HF config.json keys)
     .{ "attention.q_lora_rank", "q_lora_rank" },
     .{ "attention.kv_lora_rank", "kv_lora_rank" },
@@ -814,6 +825,7 @@ fn fuseNvfp4Experts(
     tensors: *std.StringHashMap(TensorEntry),
     fused: *std.StringHashMap(TensorEntry),
     repacked_f32: *std.ArrayList([]f32),
+    repacked_u8: *std.ArrayList([]align(std.heap.page_size_min) u8),
     shard_data: []ShardInfo,
     config_meta: *std.StringHashMap(MetaValue),
     owned: *std.ArrayList([]u8),
@@ -869,7 +881,7 @@ fn fuseNvfp4Experts(
         // MoE expert projections (gate/up/down per expert)
         if (n_experts > 0 and n_experts <= max_nvfp4_experts) {
             for (ct_projections) |proj| {
-                try fuseOneProjection(allocator, tensors, fused, repacked_f32, shard_data, owned, prefix, @intCast(li), n_experts, proj.hf, proj.gguf_weight, proj.gguf_scales, true);
+                try fuseOneProjection(allocator, tensors, fused, repacked_f32, repacked_u8, shard_data, owned, prefix, @intCast(li), n_experts, proj.hf, proj.gguf_weight, proj.gguf_scales, true);
             }
             for (ct_shared_projections) |proj| {
                 try fuseSharedExpertProjection(allocator, tensors, fused, repacked_f32, shard_data, owned, prefix, @intCast(li), proj.hf, proj.gguf_weight, proj.gguf_scales);
@@ -990,6 +1002,7 @@ fn fuseOneProjection(
     tensors: *std.StringHashMap(TensorEntry),
     fused: *std.StringHashMap(TensorEntry),
     repacked_f32: *std.ArrayList([]f32),
+    repacked_u8_list: *std.ArrayList([]align(std.heap.page_size_min) u8),
     shard_data: []ShardInfo,
     owned: *std.ArrayList([]u8),
     prefix: []const u8,
@@ -1087,13 +1100,23 @@ fn fuseOneProjection(
         const pa = std.heap.page_allocator;
         const repacked_w = try pa.alloc(u8, total_w);
         errdefer pa.free(repacked_w);
+        @memset(repacked_w, 0); // zero-init: prevent uninitialized weights on bounds-check failure
+        repacked_u8_list.append(allocator, @alignCast(repacked_w)) catch {
+            pa.free(repacked_w);
+            return error.OutOfMemory;
+        };
         const repacked_s = try pa.alloc(u8, total_s);
         errdefer pa.free(repacked_s);
+        @memset(repacked_s, 0);
+        repacked_u8_list.append(allocator, @alignCast(repacked_s)) catch {
+            pa.free(repacked_s);
+            return error.OutOfMemory;
+        };
 
         for (0..n_experts) |ei| {
             // Copy weight_packed
-            const ei_w_name2 = std.fmt.bufPrint(&en_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_packed", .{ prefix, layer, ei, hf_proj }) catch return;
-            const ei_w2 = tensors.get(ei_w_name2) orelse return;
+            const ei_w_name2 = std.fmt.bufPrint(&en_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_packed", .{ prefix, layer, ei, hf_proj }) catch continue;
+            const ei_w2 = tensors.get(ei_w_name2) orelse continue;
             const w_shard = shard_data[ei_w2.shard_idx];
             if (w_shard.data.len > 0) {
                 const w_src_start = w_shard.tensor_base + ei_w2.data_start;
@@ -1103,8 +1126,8 @@ fn fuseOneProjection(
                 }
             }
             // Copy weight_scale
-            const ei_s_name2 = std.fmt.bufPrint(&sn_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_scale", .{ prefix, layer, ei, hf_proj }) catch return;
-            const ei_s2 = tensors.get(ei_s_name2) orelse return;
+            const ei_s_name2 = std.fmt.bufPrint(&sn_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_scale", .{ prefix, layer, ei, hf_proj }) catch continue;
+            const ei_s2 = tensors.get(ei_s_name2) orelse continue;
             const s_shard = shard_data[ei_s2.shard_idx];
             if (s_shard.data.len > 0) {
                 const s_src_start = s_shard.tensor_base + ei_s2.data_start;
@@ -1155,8 +1178,10 @@ fn fuseOneProjection(
         // Also repack global_scale for non-contiguous experts
         if (create_global_scale) {
             const gs_array2 = try allocator.alloc(f32, n_experts);
-            errdefer allocator.free(gs_array2);
-            try repacked_f32.append(allocator, gs_array2);
+            repacked_f32.append(allocator, gs_array2) catch |err| {
+                allocator.free(gs_array2);
+                return err;
+            };
             var gs_buf3: [fusion_name_buf_size]u8 = undefined;
             for (0..n_experts) |gi| {
                 const gi_gs = std.fmt.bufPrint(&gs_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
@@ -1183,8 +1208,10 @@ fn fuseOneProjection(
 
             // Also repack input_global_scale
             const is_array = try allocator.alloc(f32, n_experts);
-            errdefer allocator.free(is_array);
-            try repacked_f32.append(allocator, is_array);
+            repacked_f32.append(allocator, is_array) catch |err| {
+                allocator.free(is_array);
+                return err;
+            };
             var is_buf3: [fusion_name_buf_size]u8 = undefined;
             for (0..n_experts) |gi| {
                 const gi_is = std.fmt.bufPrint(&is_buf3, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
@@ -1242,8 +1269,10 @@ fn fuseOneProjection(
     // Create synthetic global_scale entry: blk.{l}.ffn_{proj}_exps.global_scale
     if (create_global_scale) {
         const gs_array = try allocator.alloc(f32, n_experts);
-        errdefer allocator.free(gs_array);
-        try repacked_f32.append(allocator, gs_array);
+        repacked_f32.append(allocator, gs_array) catch |err| {
+            allocator.free(gs_array);
+            return err;
+        };
         var gs_name_buf2: [fusion_name_buf_size]u8 = undefined;
         for (0..n_experts) |gi| {
             const gi_gs_name = std.fmt.bufPrint(&gs_name_buf2, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
@@ -1265,8 +1294,10 @@ fn fuseOneProjection(
 
         // Also repack input_global_scale (contiguous path)
         const is_array = try allocator.alloc(f32, n_experts);
-        errdefer allocator.free(is_array);
-        try repacked_f32.append(allocator, is_array);
+        repacked_f32.append(allocator, is_array) catch |err| {
+            allocator.free(is_array);
+            return err;
+        };
         var is_buf_c: [fusion_name_buf_size]u8 = undefined;
         for (0..n_experts) |gi| {
             const gi_is = std.fmt.bufPrint(&is_buf_c, "{s}layers.{d}.mlp.experts.{d}.{s}.input_global_scale", .{ prefix, layer, gi, hf_proj }) catch {
@@ -2976,8 +3007,14 @@ test "fuseNvfp4Experts creates synthetic entries" {
         for (repacked_f32.items) |s| allocator.free(s);
         repacked_f32.deinit(allocator);
     }
+    var repacked_u8: std.ArrayList([]align(std.heap.page_size_min) u8) = .empty;
+    defer {
+        const pa = std.heap.page_allocator;
+        for (repacked_u8.items) |buf| pa.free(buf);
+        repacked_u8.deinit(allocator);
+    }
 
-    try fuseNvfp4Experts(allocator, &tensors, &fused, &repacked_f32, &shard_data, &config_meta, &owned);
+    try fuseNvfp4Experts(allocator, &tensors, &fused, &repacked_f32, &repacked_u8, &shard_data, &config_meta, &owned);
 
     // Fused entries go into separate fused map, not tensors
     const fused_w = fused.get("blk.0.ffn_gate_exps.weight") orelse return error.MissingTensor;
@@ -3044,6 +3081,7 @@ test "fuzz: all safetensors functions" {
                 .tensors = tensors,
                 .fused_tensors = fused_tensors,
                 .repacked_f32 = repacked_f32,
+                .repacked_u8 = .empty,
                 .shard_data = &shard_info,
                 .is_awq = smith.valueWithHash(bool, 3),
                 .is_hqq = smith.valueWithHash(bool, 4),

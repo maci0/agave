@@ -1,3 +1,4 @@
+// Sigmoid-gated element-wise multiply.
 struct Params {
     n: u32,
 }

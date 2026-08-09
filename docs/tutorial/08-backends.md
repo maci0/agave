@@ -175,7 +175,7 @@ flowchart LR
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Model["Model code\nllama.zig / gemma.zig"]:::setup
+    Model["Model code\nllama4.zig / gemma3.zig"]:::setup
     Dispatcher["Backend dispatcher\nbackend.zig"]:::migration
     CPU["CpuBackend\ngemvQ4_0 / gemvBF16"]:::sync
     Metal["MetalBackend\nMSL compute shader"]:::sync
@@ -289,7 +289,7 @@ sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_ty
 
 Instead of flat `keys[t * kvd]` offset arithmetic, the kernel computes `block_table[t / block_size]` → physical block → `keys[pos_in_block * kvd]`. Models use 16-token blocks allocated on demand, so memory scales with actual sequence length rather than maximum context window.
 
-CPU backend has native paged SDPA with thread-pool parallelism across query heads. GPU backends use CPU fallback via `@hasDecl` detection.
+All backends (CPU, Metal, CUDA, Vulkan, ROCm, WebGPU) have native sdpaPaged implementations. CPU uses thread-pool parallelism across query heads; GPU backends use their respective compute shaders. No CPU fallback is needed.
 
 ```mermaid
 flowchart TD
@@ -387,7 +387,7 @@ flowchart TD
 
 ## Backend-Specific Notes
 
-**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 71 pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
+**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 88 pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
 
 **CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 61 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
 
@@ -397,7 +397,7 @@ flowchart TD
 
 **Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp — use `libvulkan.1.dylib` loader, not MoltenVK directly). `sdpa_turbo` (TurboQuant KV) requires `GroupNonUniform` subgroup ops and is skipped gracefully on drivers that lack it (e.g. lavapipe/KosmicKrisp). **Disk-backed VkPipelineCache** at `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 shaders); speeds up re-init on drivers that honour it. No megakernel support.
 
-**ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 29 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
+**ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 49 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 
 ---
 

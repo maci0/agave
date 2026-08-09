@@ -73,7 +73,7 @@ pub const WeightPack = struct {
 /// the earliest tensor data pointer. GGUF files memory-map weights contiguously,
 /// so no copying is needed — the kernel accesses `base_ptr + offset`.
 pub fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
-    std.debug.assert(n_layers <= max_layers);
+    if (n_layers > max_layers) @panic("megakernel: n_layers exceeds max_layers");
     var pack = WeightPack{
         .base_ptr = undefined,
         .layer_offsets = undefined,

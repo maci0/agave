@@ -43,6 +43,7 @@ research/kernels/golden/*.bin
 # OS-specific
 .DS_Store
 Thumbs.db
+*.dSYM
 *.swp
 *.swo
 *~
@@ -100,3 +101,4 @@ glossary-batch*.md
 outputs/
 progress.md
 .qwen/
+.pi-subagents/

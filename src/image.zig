@@ -222,7 +222,9 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
 pub const PpmImage = struct {
     /// Raw RGB pixel data (slice of the input buffer, not separately allocated).
     pixels: []const u8,
+    /// Image width in pixels.
     width: u32,
+    /// Image height in pixels.
     height: u32,
 };
 
@@ -295,7 +297,12 @@ pub fn detectFormat(data: []const u8) ImageFormat {
 }
 
 /// Image dimensions (width × height).
-pub const ImageDims = struct { width: u32, height: u32 };
+pub const ImageDims = struct {
+    /// Image width in pixels.
+    width: u32,
+    /// Image height in pixels.
+    height: u32,
+};
 
 /// Read image dimensions from a file without full decoding.
 /// Supports PNG (reads IHDR) and PPM (reads header).

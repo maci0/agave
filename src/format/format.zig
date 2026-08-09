@@ -89,12 +89,12 @@ pub const TensorInfo = struct {
             .iq2_s => std.math.mul(usize, n / 256, 82) catch std.math.maxInt(usize),
             .iq1_s => std.math.mul(usize, n / 256, 50) catch std.math.maxInt(usize),
             .iq1_m => std.math.mul(usize, n / 256, 56) catch std.math.maxInt(usize),
-            .tq1_0 => std.math.mul(usize, n / 256, 64) catch std.math.maxInt(usize),
+            .tq1_0 => std.math.mul(usize, n / 256, 54) catch std.math.maxInt(usize),
             .tq2_0 => std.math.mul(usize, n / 256, 66) catch std.math.maxInt(usize),
             .mxfp4 => std.math.mul(usize, n / 32, 17) catch std.math.maxInt(usize),
             .nvfp4 => std.math.mul(usize, n / 16, 9) catch std.math.maxInt(usize),
             // HQQ: 2 nibbles/byte → n/2 bytes; companion scale/zero are separate tensors.
-            .hqq => std.math.mul(usize, n, 1) catch std.math.maxInt(usize),
+            .hqq => n,
             .mlx_q, .gptq, .awq, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
         };
     }
@@ -406,7 +406,7 @@ test "TensorInfo dataByteLen all quantized dtypes" {
         .{ .q2_k, 84 },
         .{ .q3_k, 110 },
         .{ .iq4_xs, 136 },
-        .{ .tq1_0, 64 },
+        .{ .tq1_0, 54 },
         .{ .tq2_0, 66 },
         // NVFP4: 16-element group, 9 bytes per group
         .{ .nvfp4, (256 / 16) * 9 },

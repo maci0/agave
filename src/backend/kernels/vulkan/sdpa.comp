@@ -1,3 +1,4 @@
+// Scaled dot-product attention for single-token decode.
 #version 450
 #extension GL_KHR_shader_subgroup_arithmetic : require
 

@@ -24,11 +24,14 @@ const max_schema_depth: usize = 16;
 const max_grammar_input_size: usize = 64 * 1024;
 const max_rules: usize = 512;
 const max_accept_depth: u32 = 32;
+const max_stack_growth_per_token: usize = max_accept_depth + 1;
 const bpe_two_byte_prefix: u8 = 0xC4;
-const bpe_three_byte_prefix: u8 = 0xC3;
+const bpe_latin1_prefix: u8 = 0xC3;
 
 // ── Grammar Elements ────────────────────────────────────────────
 
+/// Categorizes grammar rule elements into character matches, rule references,
+/// and their repetition/optionality variants.
 pub const ElementType = enum {
     char_range, // Match character in range [lo..hi]
     char_not, // Match character NOT in range [lo..hi]
@@ -43,12 +46,16 @@ pub const ElementType = enum {
     end, // End of alternative/rule
 };
 
+/// A tagged element within a grammar rule, pairing an `ElementType` discriminator
+/// with operand fields (`lo`/`hi`) whose meaning depends on the element kind.
 pub const Element = struct {
     type: ElementType,
     lo: u32 = 0, // For char_range/char_not: low codepoint. For rule_ref: rule index.
     hi: u32 = 0, // For char_range/char_not: high codepoint (inclusive).
 };
 
+/// A named grammar production rule consisting of a sequence of `Element`s.
+/// Alternatives within the rule are separated by `Element.alt` sentinels.
 pub const Rule = struct {
     name: []const u8,
     elements: []Element,
@@ -56,6 +63,8 @@ pub const Rule = struct {
 
 // ── Grammar ─────────────────────────────────────────────────────
 
+/// A parsed GBNF grammar: a set of named `Rule`s with a designated root.
+/// Provides logit masking and jump-decoding for constrained generation.
 pub const Grammar = struct {
     allocator: std.mem.Allocator,
     rules: []Rule,
@@ -122,8 +131,8 @@ pub const Grammar = struct {
         if (state.stack.items.len == 0) return;
 
         // Pre-allocate a reusable test state — avoids per-token heap allocation.
-        // acceptCharInner recursion allows depth 0..32 (33 levels), each pushes at most 1 entry.
-        const required_cap = state.stack.items.len + 33;
+        // acceptCharInner recursion allows depth 0..max_accept_depth, each pushes at most 1 entry.
+        const required_cap = state.stack.items.len + max_stack_growth_per_token;
         var test_state = GrammarState{
             .grammar = self,
             .stack = std.ArrayList(StackEntry).empty,
@@ -187,7 +196,7 @@ pub const Grammar = struct {
         if (state.completed) return null;
         if (state.stack.items.len == 0) return null;
 
-        const required_cap = state.stack.items.len + 33;
+        const required_cap = state.stack.items.len + max_stack_growth_per_token;
         var test_state = GrammarState{
             .grammar = self,
             .stack = std.ArrayList(StackEntry).empty,
@@ -241,7 +250,7 @@ pub const Grammar = struct {
         if (text.len >= 2 and text[0] == bpe_two_byte_prefix) {
             return text[2..];
         }
-        if (text.len >= 2 and text[0] == bpe_three_byte_prefix) {
+        if (text.len >= 2 and text[0] == bpe_latin1_prefix) {
             return text[2..];
         }
         return text;
@@ -255,6 +264,8 @@ const StackEntry = struct {
     elem_idx: u32,
 };
 
+/// Tracks the constrained-decoding state machine: a stack of rule positions
+/// that advances as characters are accepted and detects grammar completion.
 pub const GrammarState = struct {
     grammar: *const Grammar,
     stack: std.ArrayList(StackEntry),
@@ -300,7 +311,7 @@ pub const GrammarState = struct {
         const elem = rule.elements[top.elem_idx];
         switch (elem.type) {
             .char_range => {
-                if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
+                if (@as(u32, c) >= elem.lo and @as(u32, c) <= elem.hi) {
                     top.elem_idx += 1;
                     self.advancePastEnd();
                     return true;
@@ -309,7 +320,7 @@ pub const GrammarState = struct {
                 return self.tryNextAlternative(c, depth);
             },
             .char_not => {
-                if (c < @as(u8, @intCast(elem.lo)) or c > @as(u8, @intCast(elem.hi))) {
+                if (@as(u32, c) < elem.lo or @as(u32, c) > elem.hi) {
                     top.elem_idx += 1;
                     self.advancePastEnd();
                     return true;
@@ -317,7 +328,7 @@ pub const GrammarState = struct {
                 return self.tryNextAlternative(c, depth);
             },
             .char_range_star => {
-                if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
+                if (@as(u32, c) >= elem.lo and @as(u32, c) <= elem.hi) {
                     return true; // match — stay at this element
                 }
                 // no match — advance past (zero matches ok)
@@ -328,7 +339,7 @@ pub const GrammarState = struct {
             .char_range_plus => unreachable, // decomposed to char_range + char_range_star by parser
             .char_range_opt => {
                 // ? = zero or one
-                if (c >= @as(u8, @intCast(elem.lo)) and c <= @as(u8, @intCast(elem.hi))) {
+                if (@as(u32, c) >= elem.lo and @as(u32, c) <= elem.hi) {
                     top.elem_idx += 1;
                     self.advancePastEnd();
                     return true;
@@ -797,7 +808,13 @@ const SchemaConverter = struct {
 
     const ConvertError = error{OutOfMemory};
     fn emitRule(self: *SchemaConverter, name: []const u8, schema: []const u8, depth: usize) ConvertError!void {
-        if (depth > max_schema_depth) return;
+        if (depth > max_schema_depth) {
+            // Emit a permissive catch-all so the rule name resolves instead of
+            // silently leaving it undefined (which maps to rule 0 via orelse 0).
+            try self.emit(name);
+            try self.emit(" ::= value\n");
+            return;
+        }
         const type_str = extractJsonStr(schema, "type");
 
         // Check for enum first
@@ -936,6 +953,31 @@ const SchemaConverter = struct {
                 first = false;
             } else if (content[ei] == ',') {
                 ei += 1;
+            } else if (content[ei] == '-' or (content[ei] >= '0' and content[ei] <= '9')) {
+                // Numeric literal (integer or float, possibly negative)
+                const lit_start = ei;
+                if (content[ei] == '-') ei += 1;
+                while (ei < content.len and ((content[ei] >= '0' and content[ei] <= '9') or content[ei] == '.' or content[ei] == 'e' or content[ei] == 'E' or content[ei] == '+' or content[ei] == '-')) : (ei += 1) {}
+                if (!first) try self.emit(" | ");
+                try self.emit("\"");
+                try self.emit(content[lit_start..ei]);
+                try self.emit("\"");
+                first = false;
+            } else if (ei + 4 <= content.len and std.mem.eql(u8, content[ei..][0..4], "true")) {
+                if (!first) try self.emit(" | ");
+                try self.emit("\"true\"");
+                ei += 4;
+                first = false;
+            } else if (ei + 5 <= content.len and std.mem.eql(u8, content[ei..][0..5], "false")) {
+                if (!first) try self.emit(" | ");
+                try self.emit("\"false\"");
+                ei += 5;
+                first = false;
+            } else if (ei + 4 <= content.len and std.mem.eql(u8, content[ei..][0..4], "null")) {
+                if (!first) try self.emit(" | ");
+                try self.emit("\"null\"");
+                ei += 4;
+                first = false;
             } else {
                 ei += 1;
             }
@@ -1016,7 +1058,7 @@ const SchemaConverter = struct {
             '"' => {
                 i += 1;
                 while (i < json.len and json[i] != '"') {
-                    if (json[i] == '\\') i += 1;
+                    if (json[i] == '\\' and i + 1 < json.len) i += 1;
                     i += 1;
                 }
                 if (i < json.len) i += 1;
@@ -1553,6 +1595,21 @@ test "Grammar.parse rejects oversized input" {
     @memset(big, 'a');
     const result = Grammar.parse(std.testing.allocator, big);
     try std.testing.expectError(error.GrammarTooLarge, result);
+}
+
+test "Grammar.fromJsonSchema enum with non-string values" {
+    // Regression test: emitEnum previously silently dropped numeric, boolean,
+    // and null enum values, producing empty/incomplete grammar rules.
+    const schema =
+        \\{"type":"string","enum":[1,"active",true,null,42]}
+    ;
+    var g = Grammar.fromJsonSchema(std.testing.allocator, schema) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return;
+    };
+    defer g.deinit();
+    // Must produce at least one rule with alternatives for all 5 values
+    try std.testing.expect(g.rules.len >= 1);
 }
 
 test "Grammar.fromJsonSchema basic object" {

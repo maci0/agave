@@ -422,7 +422,7 @@ pub const Display = struct {
                     p += s.len;
                 }
             }
-            if (info.rope_theta > 0) {
+            if (info.rope_theta > 0 and std.math.isFinite(info.rope_theta)) {
                 if (p > 0) {
                     @memcpy(line_bufs[n_lines][p..][0..sep.len], sep);
                     p += sep.len;
@@ -842,7 +842,7 @@ pub const Display = struct {
         if (info.vocab_size > 0) bufAppend(&buf, &pos, "  Vocab:    {d}\n", .{info.vocab_size});
         if (info.ctx_size > 0) bufAppend(&buf, &pos, "  Context:  {d}\n", .{info.ctx_size});
         bufAppend(&buf, &pos, "  KV type:  {s}\n", .{info.kv_type_name});
-        if (info.rope_theta > 0) bufAppend(&buf, &pos, "  RoPE:     {d}\n", .{@as(u64, @intFromFloat(info.rope_theta))});
+        if (info.rope_theta > 0 and std.math.isFinite(info.rope_theta)) bufAppend(&buf, &pos, "  RoPE:     {d}\n", .{@as(u64, @intFromFloat(info.rope_theta))});
         if (info.mtp_depth > 0) bufAppend(&buf, &pos, "  MTP:      {d} head(s)\n", .{info.mtp_depth});
         if (info.has_vision) bufAppend(&buf, &pos, "  Vision:   yes\n", .{});
         bufAppend(&buf, &pos, "  Size:     {d:.1} {s}\n", .{ fsize.val, fsize.unit });

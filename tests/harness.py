@@ -109,6 +109,9 @@ ARCH_PATTERNS: dict[str, list[str]] = {
     "nemotron_h": ["nemotron-h", "nemotron_h", "nemotron-3-nano-30b"],
     "nemotron_nano": ["nemotron-nano", "nemotron_nano", "nemotron-3-nano-4b"],
     "glm4": ["glm-4", "glm4"],
+    "deepseek4": ["deepseek-v4", "deepseek4"],
+    "llama4": ["llama-4", "llama4"],
+    "diffusion_gemma": ["diffusiongemma", "diffusion-gemma"],
 }
 
 # Quant detection from filename (order matters - check longer patterns first)
