@@ -1,6 +1,6 @@
 # Chapter 19: PFlash and Block Sparse Attention
 
-**Prerequisites:** [Chapter 5: Memory and Caching](05-memory-and-caching.md), [Chapter 17: Speculative Decoding](17-speculative-decoding.md)
+**Prerequisites:** [Chapter 2: The Transformer](02-the-transformer.md), [Chapter 5: Memory and Caching](05-memory-and-caching.md), [Chapter 17: Speculative Decoding](17-speculative-decoding.md)
 
 **Time:** ~16 min
 
@@ -14,8 +14,6 @@ This chapter covers two techniques that attack this waste directly:
 2. **PFlash** -- use a cheap scorer to identify which blocks matter, then prefill only those blocks through the full target model
 
 Both are implemented in `src/ops/sparse_attn.zig` and `src/spec/pflash.zig`.
-
-**Prerequisites**: [Chapter 2: The Transformer](02-the-transformer.md), [Chapter 5: Memory and Caching](05-memory-and-caching.md), [Chapter 17: Speculative Decoding](17-speculative-decoding.md)
 
 ---
 

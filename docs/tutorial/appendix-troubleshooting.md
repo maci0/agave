@@ -102,7 +102,7 @@ observe symptom → classify (OOM / garbage / backend / format / distributed / s
 → link to tutorial chapter or product doc → verify fix
 ```
 
-**Next:** [Appendix: Mathematical Operations Reference →](appendix-math.md) | **Back:** [Chapter 23: Server / HTTP API ←](23-server-http-api.md)
+**Next:** [Appendix: Mathematical Operations Reference →](appendix-math.md) | **Back:** [Chapter 24: Advanced Features ←](24-advanced-features.md)
 
 ---
 

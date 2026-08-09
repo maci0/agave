@@ -358,16 +358,29 @@ pub const RadixTree = struct {
         var pos: usize = 0;
 
         while (pos < tokens.len) {
-            const bucket = tokenBucket(tokens[pos]);
-            const child = node.children[bucket] orelse break;
+            const ideal_bucket = tokenBucket(tokens[pos]);
+            var child: ?*RadixNode = null;
+            // Linear probe: check ideal bucket and a few neighbors
+            // to find children displaced by collisions during insert.
+            var probe_bucket = ideal_bucket;
+            const max_probes: u8 = 4;
+            var probes: u8 = 0;
+            while (probes < max_probes) : (probes += 1) {
+                if (node.children[probe_bucket]) |c| {
+                    if (c.tokens.len <= tokens[pos..].len and
+                        std.mem.eql(u32, tokens[pos..][0..c.tokens.len], c.tokens))
+                    {
+                        child = c;
+                        break;
+                    }
+                }
+                probe_bucket +%= 1;
+            }
+            if (child == null) break;
 
-            const remaining = tokens[pos..];
-            if (remaining.len < child.tokens.len) break;
-            if (!std.mem.eql(u32, remaining[0..child.tokens.len], child.tokens)) break;
-
-            pos += child.tokens.len;
-            self.touchNode(child);
-            node = child;
+            pos += child.?.tokens.len;
+            self.touchNode(child.?);
+            node = child.?;
         }
 
         // Cache result for future lookups
@@ -390,9 +403,32 @@ pub const RadixTree = struct {
         var pos: usize = 0;
 
         while (pos < tokens.len) {
-            const bucket = tokenBucket(tokens[pos]);
+            const ideal_bucket = tokenBucket(tokens[pos]);
 
-            if (node.children[bucket]) |child| {
+            // Linear probe to find a child whose edge starts with tokens[pos],
+            // or the first free slot if no matching child exists.
+            var found_child: ?*RadixNode = null;
+            var child_bucket: u8 = ideal_bucket;
+            var first_free_bucket: ?u8 = null;
+            {
+                var probe_bucket = ideal_bucket;
+                var probes: u8 = 0;
+                const max_probes: u8 = 4;
+                while (probes < max_probes) : (probes += 1) {
+                    if (node.children[probe_bucket]) |c| {
+                        if (c.tokens[0] == tokens[pos]) {
+                            found_child = c;
+                            child_bucket = probe_bucket;
+                            break;
+                        }
+                    } else {
+                        if (first_free_bucket == null) first_free_bucket = probe_bucket;
+                    }
+                    probe_bucket +%= 1;
+                }
+            }
+
+            if (found_child) |child| {
                 // Check how many tokens match
                 const remaining = tokens[pos..];
                 const edge = child.tokens;
@@ -436,8 +472,16 @@ pub const RadixTree = struct {
                     if (new_remaining.len > 0) {
                         const new_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
                         const suffix_bucket = tokenBucket(new_child_tokens[0]);
-                        const leaf_bucket = tokenBucket(new_remaining[0]);
-                        if (leaf_bucket != suffix_bucket) {
+                        const leaf_ideal = tokenBucket(new_remaining[0]);
+                        // Linear probe for a free slot (max 4 probes to bound worst case)
+                        var leaf_bucket = leaf_ideal;
+                        const leaf_max_probes: u8 = 4;
+                        var leaf_probes: u8 = 0;
+                        while (leaf_probes < leaf_max_probes) : (leaf_probes += 1) {
+                            if (leaf_bucket != suffix_bucket and mid.children[leaf_bucket] == null) break;
+                            leaf_bucket +%= 1;
+                        }
+                        if (leaf_probes < leaf_max_probes) {
                             new_leaf = try RadixNode.init(self.allocator, new_remaining, new_blocks);
                         }
                     }
@@ -455,27 +499,36 @@ pub const RadixTree = struct {
                     self.allocator.free(old_blocks);
 
                     // Re-attach shortened child under intermediate node
-                    const child_bucket = tokenBucket(child.tokens[0]);
-                    mid.children[child_bucket] = child;
+                    const suffix_attach = tokenBucket(child.tokens[0]);
+                    mid.children[suffix_attach] = child;
 
                     // Attach new leaf if created
                     if (new_leaf) |nl| {
                         self.touchNode(nl);
-                        const leaf_bucket = tokenBucket(nl.tokens[0]);
-                        mid.children[leaf_bucket] = nl;
+                        const nl_bucket = tokenBucket(nl.tokens[0]);
+                        // Use same probing to find the slot (mirrors the pre-allocation probe)
+                        var attach_bucket = nl_bucket;
+                        const attach_max: u8 = 4;
+                        var attach_probes: u8 = 0;
+                        while (attach_probes < attach_max) : (attach_probes += 1) {
+                            if (attach_bucket != suffix_attach and mid.children[attach_bucket] == null) break;
+                            attach_bucket +%= 1;
+                        }
+                        mid.children[attach_bucket] = nl;
                     }
 
                     // Replace original child with intermediate node in parent
-                    node.children[bucket] = mid;
+                    node.children[child_bucket] = mid;
                     break;
                 }
             } else {
-                // No child — create one with remaining tokens
+                // No matching child — create one at first free slot
+                const free_bucket = first_free_bucket orelse ideal_bucket;
                 const remaining_tokens = tokens[pos..];
                 const remaining_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
-                const child = try RadixNode.init(self.allocator, remaining_tokens, remaining_blocks);
-                self.touchNode(child);
-                node.children[bucket] = child;
+                const new_child = try RadixNode.init(self.allocator, remaining_tokens, remaining_blocks);
+                self.touchNode(new_child);
+                node.children[free_bucket] = new_child;
                 break;
             }
         }
