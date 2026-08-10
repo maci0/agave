@@ -125,6 +125,24 @@ pub const NemotronNanoModel = struct {
     ssm_d_cache: []f32 = &.{},
     ssm_dt_bias_cache: []f32 = &.{},
 
+    // ── Batched-prefill buffers (page_allocator, chunk_size tokens) ──
+    /// Prefill chunk size (tokens per batch).
+    chunk_size: usize = 256,
+    /// Batched hidden states [chunk_size * n_embd].
+    pf_hidden: []f32 = &.{},
+    /// Batched scratch for norm/projection output [chunk_size * n_embd].
+    pf_hidden2: []f32 = &.{},
+    /// Batched Q projection [chunk_size * n_head * head_dim].
+    pf_q: []f32 = &.{},
+    /// Batched K projection [chunk_size * n_head_kv * head_dim].
+    pf_k: []f32 = &.{},
+    /// Batched V projection [chunk_size * n_head_kv * head_dim].
+    pf_v: []f32 = &.{},
+    /// Batched attention output [chunk_size * n_head * head_dim].
+    pf_attn_out: []f32 = &.{},
+    /// Position indices for batched RoPE [chunk_size].
+    pf_positions: []u32 = &.{},
+
     // ── Norm weight cache (avoids per-token BF16→f32 conversion) ──
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
@@ -344,6 +362,26 @@ pub const NemotronNanoModel = struct {
             }
         }
 
+        // ── Prefill buffers (page_allocator for GPU zero-copy) ─────
+        {
+            const pa = std.heap.page_allocator;
+            const cs = self.chunk_size;
+            self.pf_hidden = try pa.alloc(f32, cs * e);
+            errdefer pa.free(self.pf_hidden);
+            self.pf_hidden2 = try pa.alloc(f32, cs * e);
+            errdefer pa.free(self.pf_hidden2);
+            self.pf_q = try pa.alloc(f32, cs * qd);
+            errdefer pa.free(self.pf_q);
+            self.pf_k = try pa.alloc(f32, cs * kvd);
+            errdefer pa.free(self.pf_k);
+            self.pf_v = try pa.alloc(f32, cs * kvd);
+            errdefer pa.free(self.pf_v);
+            self.pf_attn_out = try pa.alloc(f32, cs * qd);
+            errdefer pa.free(self.pf_attn_out);
+            self.pf_positions = try pa.alloc(u32, cs);
+            errdefer pa.free(self.pf_positions);
+        }
+
         // Pre-populate norm cache so no BF16→f32 conversions happen during inference.
         self.warmNormCache();
 
@@ -380,6 +418,17 @@ pub const NemotronNanoModel = struct {
             &self.ssm_dt_bias_cache,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
+
+        // Prefill buffers (page_allocator — must match init allocation).
+        {
+            const pa = std.heap.page_allocator;
+            const pf_bufs = .{
+                &self.pf_hidden, &self.pf_hidden2, &self.pf_q,
+                &self.pf_k,      &self.pf_v,       &self.pf_attn_out,
+            };
+            inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
+            if (self.pf_positions.len > 0) pa.free(self.pf_positions);
+        }
     }
 
     /// Return a type-erased Model interface.
@@ -464,12 +513,53 @@ pub const NemotronNanoModel = struct {
         return result;
     }
 
-    /// Batched prefill — sequential. Hybrid SSM/MoE/attention pattern
-    /// requires sequential SSM state updates. MoE routing is per-token.
+    /// Batched prefill with chunked processing.
+    ///
+    /// Attention layers use batched GEMM (one dispatch per chunk).
+    /// SSM layers require sequential state updates, so within each chunk they
+    /// fall back to per-token ssmLayer.
+    /// MoE FFN layers use per-token routing, so they also fall back to per-token.
+    ///
+    /// Falls back to naive per-token forward when prefill buffers are absent
+    /// or the prompt is a single token.
     pub fn prefill(self: *NemotronNanoModel, token_ids: []const u32) !u32 {
-        var last: u32 = 0;
-        for (token_ids) |tid| last = try self.forward(tid);
-        return last;
+        if (token_ids.len == 0) return error.MissingTensor;
+        if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
+
+        const cs: usize = if (self.pf_hidden.len > 0) self.chunk_size else 1;
+        if (cs <= 1 or token_ids.len == 1) {
+            var last: u32 = 0;
+            for (token_ids) |tid| last = try self.forward(tid);
+            return last;
+        }
+
+        var offset: usize = 0;
+        while (offset < token_ids.len) {
+            const chunk_len = @min(cs, token_ids.len - offset);
+            try self.prefillChunk(token_ids[offset..][0..chunk_len], @intCast(offset));
+            offset += chunk_len;
+        }
+
+        // Final: rmsNorm + logits on the LAST token only.
+        const last_in_chunk = (token_ids.len - 1) % cs;
+        const e: usize = self.n_embd;
+        @memcpy(self.hidden, self.pf_hidden[last_in_chunk * e ..][0..e]);
+
+        const nf = self.fmt.getTensor("backbone.norm_f.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nf, e), self.hidden.ptr, e, self.rms_eps);
+
+        const lm = self.fmt.getTensor("lm_head.weight") orelse return error.MissingTensor;
+        if (lm.dtype == .mlx_q) {
+            const lm_s = self.fmt.getTensor("lm_head.scales") orelse return error.MissingTensor;
+            const lm_b = self.fmt.getTensor("lm_head.biases") orelse return error.MissingTensor;
+            self.be.gemvMlxQ(self.hidden.ptr, lm.data_ptr, lm_s.data_ptr, lm_b.data_ptr, self.logits_buf.ptr, self.vocab_size, e, self.mlx_bits);
+        } else {
+            self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
+        }
+
+        self.be.sync();
+        self.kv_seq_len = token_ids.len;
+        return math_ops.argmax(self.logits_buf);
     }
 
     /// Reset all SSM states, KV cache, and cancellation flag.
@@ -812,6 +902,148 @@ pub const NemotronNanoModel = struct {
 
         // 6. Defer residual add: will fuse with next layer's pre-norm via addRmsNorm.
         self.pending_residual = true;
+    }
+
+    // ── Batched prefill ──────────────────────────────────────────
+
+    /// Batched GEMM: n_tok rows × weight matrix.
+    /// For MLX quantized or NVFP4 tensors without a batched kernel, falls back
+    /// to per-token GEMV via doGemv.
+    fn doGemm(self: *NemotronNanoModel, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize, li: u32, comptime prefix: []const u8) !void {
+        if (t.dtype == .mlx_q) {
+            // No batched MLX kernel — fall back to per-token.
+            for (0..n_tok) |tok| {
+                try self.doGemv(x + tok * n_in, t, y + tok * n_out, n_out, n_in, li, prefix);
+            }
+        } else {
+            self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n_tok, n_out, n_in);
+        }
+    }
+
+    /// Process one chunk of tokens through all layers using batched GEMM
+    /// for attention layers, per-token fallback for SSM and MoE layers.
+    fn prefillChunk(self: *NemotronNanoModel, token_ids: []const u32, base_pos: u32) !void {
+        const n_tok = token_ids.len;
+        const e: usize = self.n_embd;
+
+        // Ensure KV blocks allocated for all new positions.
+        for (0..n_tok) |t| {
+            self.kv_seq_len = base_pos + t;
+            try model_mod.ensureKvBlock(self);
+        }
+
+        // Embedding lookup for all tokens into batched buffer.
+        const emb = self.fmt.getTensor("backbone.embeddings.weight") orelse return error.MissingTensor;
+        for (token_ids, 0..) |tid, t| {
+            if (emb.dtype == .mlx_q) {
+                const emb_s = self.fmt.getTensor("backbone.embeddings.scales") orelse return error.MissingTensor;
+                const emb_b = self.fmt.getTensor("backbone.embeddings.biases") orelse return error.MissingTensor;
+                mlx_ops.mlxEmbLookup(
+                    self.hidden.ptr,
+                    @ptrCast(@alignCast(emb.data_ptr)),
+                    @ptrCast(@alignCast(emb_s.data_ptr)),
+                    @ptrCast(@alignCast(emb_b.data_ptr)),
+                    tid,
+                    e,
+                    self.mlx_bits,
+                );
+            } else {
+                self.be.embLookup(
+                    .{ .data = emb.data_ptr, .dtype = emb.dtype },
+                    tid,
+                    self.hidden.ptr,
+                    e,
+                );
+            }
+            @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+        }
+
+        // Build position array.
+        for (0..n_tok) |t| {
+            self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
+        }
+
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
+
+            switch (self.layer_types[li]) {
+                .attention => {
+                    try self.prefillAttention(l, n_tok);
+                },
+                .ssm => {
+                    // SSM recurrence is inherently sequential — fall back to per-token.
+                    self.be.sync();
+                    for (0..n_tok) |t| {
+                        @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
+                        self.pending_residual = false;
+                        try self.ssmLayer(l);
+                        // ssmLayer defers residual; flush it now so pf_hidden stays complete.
+                        self.be.sync();
+                        if (self.pending_residual) {
+                            for (0..e) |j| self.hidden[j] += self.hidden2[j];
+                            self.pending_residual = false;
+                        }
+                        @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+                    }
+                },
+                .moe => {
+                    // MoE routing is per-token — fall back to per-token.
+                    self.be.sync();
+                    for (0..n_tok) |t| {
+                        @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
+                        self.pending_residual = false;
+                        try self.moeLayer(l);
+                        @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+                    }
+                },
+            }
+        }
+
+        self.kv_seq_len = base_pos + n_tok;
+    }
+
+    /// Batched attention for one layer: norm → QKV GEMM → partial RoPE →
+    /// sdpaPrefill → output GEMM → residual add.
+    /// NOTE: Does NOT run per-token MoE FFN — caller handles that after sync.
+    fn prefillAttention(self: *NemotronNanoModel, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nkv: usize = self.n_head_kv;
+        const hd: usize = self.head_dim;
+        const qd: usize = nh * hd;
+        const kvd: usize = nkv * hd;
+
+        // Pre-attention norm (batched).
+        const nw = self.stLayerTensor(li, "norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        // Q/K/V projections (batched GEMM).
+        const qw = self.stLayerTensor(li, "mixer.q_proj.weight") orelse return error.MissingTensor;
+        const kw = self.stLayerTensor(li, "mixer.k_proj.weight") orelse return error.MissingTensor;
+        const vw = self.stLayerTensor(li, "mixer.v_proj.weight") orelse return error.MissingTensor;
+        try self.doGemm(self.pf_hidden2.ptr, qw, self.pf_q.ptr, n_tok, qd, e, li, "mixer.q_proj");
+        try self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n_tok, kvd, e, li, "mixer.k_proj");
+        try self.doGemm(self.pf_hidden2.ptr, vw, self.pf_v.ptr, n_tok, kvd, e, li, "mixer.v_proj");
+
+        // Partial RoPE (batched).
+        self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, self.rope_dim, self.rope_theta);
+        self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, self.rope_dim, self.rope_theta);
+
+        // Fused causal attention (sdpaPrefill writes KV into cache and computes output).
+        const kv_view = self.getLayerKvView(li);
+        const prev_len: usize = self.pf_positions[0];
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+        self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_view.keys, kv_view.values, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, scale, .f32, .f32);
+
+        // Output projection (batched GEMM).
+        const ow = self.stLayerTensor(li, "mixer.o_proj.weight") orelse return error.MissingTensor;
+        try self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n_tok, e, qd, li, "mixer.o_proj");
+
+        // Residual add (no deferred residuals in batched mode).
+        self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n_tok * e);
     }
 
     // ── Helpers ───────────────────────────────────────────────────

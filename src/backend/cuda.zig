@@ -1874,8 +1874,8 @@ pub const CudaBackend = struct {
             const d_k_new = self.getInputBuf(k_new, kvd_bytes);
             const d_v_new = self.getInputBuf(v_new, kvd_bytes);
 
-            _ = self.cuMemcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes);
-            _ = self.cuMemcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes);
+            _ = cuCheck(self.cuMemcpyDtoD(d_keys + seq_len * kvd_bytes, d_k_new, kvd_bytes), "cuMemcpyDtoD(KV key append)");
+            _ = cuCheck(self.cuMemcpyDtoD(d_vals + seq_len * kvd_bytes, d_v_new, kvd_bytes), "cuMemcpyDtoD(KV val append)");
 
             var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
             var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
@@ -1911,8 +1911,8 @@ pub const CudaBackend = struct {
             var d_keys = self.getOrAllocKvBuf(@intFromPtr(keys.ptr), keys.len);
             var d_vals = self.getOrAllocKvBuf(@intFromPtr(values.ptr), values.len);
 
-            _ = self.cuMemcpyHtoD(d_keys + k_off, @ptrCast(keys.ptr + k_off), k_new_bytes);
-            _ = self.cuMemcpyHtoD(d_vals + v_off, @ptrCast(values.ptr + v_off), v_new_bytes);
+            _ = cuCheck(self.cuMemcpyHtoD(d_keys + k_off, @ptrCast(keys.ptr + k_off), k_new_bytes), "cuMemcpyHtoD(KV key)");
+            _ = cuCheck(self.cuMemcpyHtoD(d_vals + v_off, @ptrCast(values.ptr + v_off), v_new_bytes), "cuMemcpyHtoD(KV val)");
 
             var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));
             var d_out = self.getOutputBuf(output, nh * hd * @sizeOf(f32));
@@ -2161,8 +2161,8 @@ pub const CudaBackend = struct {
             const new_bytes_v = kv_quant.kvSliceBytes(kv_type_v, n_tok * kvd);
             var d_keys = self.getOrAllocKvBuf(@intFromPtr(kv_keys.ptr), kv_keys.len);
             var d_vals = self.getOrAllocKvBuf(@intFromPtr(kv_values.ptr), kv_values.len);
-            _ = self.cuMemcpyHtoD(d_keys + new_start_k, @ptrCast(kv_keys.ptr + new_start_k), new_bytes_k);
-            _ = self.cuMemcpyHtoD(d_vals + new_start_v, @ptrCast(kv_values.ptr + new_start_v), new_bytes_v);
+            _ = cuCheck(self.cuMemcpyHtoD(d_keys + new_start_k, @ptrCast(kv_keys.ptr + new_start_k), new_bytes_k), "cuMemcpyHtoD(KV turbo key)");
+            _ = cuCheck(self.cuMemcpyHtoD(d_vals + new_start_v, @ptrCast(kv_values.ptr + new_start_v), new_bytes_v), "cuMemcpyHtoD(KV turbo val)");
 
             // Sequential GPU SDPA per token (each uses turbo kernel over full history)
             for (0..n_tok) |t| {
@@ -2239,8 +2239,8 @@ pub const CudaBackend = struct {
 
         // Bulk copy new K/V to KV cache on device (for future decode steps)
         const kvd_bytes = kvd * @sizeOf(f32);
-        _ = self.cuMemcpyDtoD(d_k_cache + prev_len * kvd_bytes, d_k_new, n_tok * kvd_bytes);
-        _ = self.cuMemcpyDtoD(d_v_cache + prev_len * kvd_bytes, d_v_new, n_tok * kvd_bytes);
+        _ = cuCheck(self.cuMemcpyDtoD(d_k_cache + prev_len * kvd_bytes, d_k_new, n_tok * kvd_bytes), "cuMemcpyDtoD(prefill KV key)");
+        _ = cuCheck(self.cuMemcpyDtoD(d_v_cache + prev_len * kvd_bytes, d_v_new, n_tok * kvd_bytes), "cuMemcpyDtoD(prefill KV val)");
     }
 
     /// DeltaNet SSM recurrence — CPU fallback.

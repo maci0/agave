@@ -87,6 +87,19 @@ pub const Glm4Model = struct {
     /// Sized to max(nope_dim, v_head_dim) * kv_lora_rank to avoid corrupting logits_buf.
     mla_scratch: []f32 = &.{},
 
+    // Prefill buffers (allocated via page_allocator for GPU zero-copy)
+    chunk_size: usize = 256,
+    pf_hidden: []f32 = &.{},
+    pf_hidden2: []f32 = &.{},
+    pf_q_a: []f32 = &.{},
+    pf_q: []f32 = &.{},
+    pf_kv_proj: []f32 = &.{},
+    pf_kv_latent: []f32 = &.{},
+    pf_k: []f32 = &.{},
+    pf_v: []f32 = &.{},
+    pf_attn_out: []f32 = &.{},
+    pf_positions: []u32 = &.{},
+
     // KV cache (PagedAttention or TieredKvCache): store full reconstructed K and V per layer
     paged_cache: PagedKvCache = undefined,
     seq_table: SeqBlockTable = undefined,
@@ -198,6 +211,33 @@ pub const Glm4Model = struct {
         self.mla_scratch = try allocator.alloc(f32, mla_scratch_size);
         errdefer allocator.free(self.mla_scratch);
 
+        // Prefill buffers (page_allocator for GPU zero-copy — Metal's
+        // newBufferWithBytesNoCopy requires page-aligned pointers).
+        {
+            const pa = std.heap.page_allocator;
+            const cs = self.chunk_size;
+            self.pf_hidden = try pa.alloc(f32, cs * self.n_embd);
+            errdefer pa.free(self.pf_hidden);
+            self.pf_hidden2 = try pa.alloc(f32, cs * self.n_embd);
+            errdefer pa.free(self.pf_hidden2);
+            self.pf_q_a = try pa.alloc(f32, cs * self.q_lora_rank);
+            errdefer pa.free(self.pf_q_a);
+            self.pf_q = try pa.alloc(f32, cs * nh * q_head_dim);
+            errdefer pa.free(self.pf_q);
+            self.pf_kv_proj = try pa.alloc(f32, cs * (self.kv_lora_rank + self.qk_rope_head_dim));
+            errdefer pa.free(self.pf_kv_proj);
+            self.pf_kv_latent = try pa.alloc(f32, cs * self.kv_lora_rank);
+            errdefer pa.free(self.pf_kv_latent);
+            self.pf_k = try pa.alloc(f32, cs * kvd);
+            errdefer pa.free(self.pf_k);
+            self.pf_v = try pa.alloc(f32, cs * vd);
+            errdefer pa.free(self.pf_v);
+            self.pf_attn_out = try pa.alloc(f32, cs * vd);
+            errdefer pa.free(self.pf_attn_out);
+            self.pf_positions = try pa.alloc(u32, cs);
+            errdefer pa.free(self.pf_positions);
+        }
+
         // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
         // Note: GLM4 uses different k_head_dim and v_head_dim, use larger for cache.
         if (tiered_cache) |tc| {
@@ -248,6 +288,17 @@ pub const Glm4Model = struct {
             &self.logits_buf, &self.mla_scratch,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
+        // Prefill buffers (page_allocator — must match init allocation)
+        {
+            const pa = std.heap.page_allocator;
+            const pf_bufs = .{
+                &self.pf_hidden, &self.pf_hidden2, &self.pf_q_a,      &self.pf_q,
+                &self.pf_kv_proj, &self.pf_kv_latent, &self.pf_k,     &self.pf_v,
+                &self.pf_attn_out,
+            };
+            inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
+            if (self.pf_positions.len > 0) pa.free(self.pf_positions);
+        }
     }
 
     /// Wrap this model in the generic `Model` interface.
@@ -297,13 +348,50 @@ pub const Glm4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
-    /// Batched prefill — sequential. MLA attention could be batched but MoE
-    /// routing selects different experts per token, preventing batched FFN.
-    /// Sigmoid gating (independent expert scores) adds further complexity.
+    /// Batched prefill — MLA attention uses batched GEMM for projections
+    /// and sdpaPrefill for fused causal attention.  MoE FFN routing selects
+    /// different experts per token, so FFN is always per-token.
+    /// Falls back to per-token forward when prefill buffers are absent
+    /// or the prompt is a single token.
     pub fn prefill(self: *Glm4Model, token_ids: []const u32) !u32 {
-        var last: u32 = 0;
-        for (token_ids) |tid| last = try self.forward(tid);
-        return last;
+        if (token_ids.len == 0) return error.MissingTensor;
+        if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
+
+        // Guard: batched path requires equal Q/V head dims for sdpaPrefill.
+        const q_hd = self.qk_nope_head_dim + self.qk_rope_head_dim;
+        const cs: usize = if (self.pf_hidden.len > 0 and q_hd == self.v_head_dim)
+            self.chunk_size
+        else
+            1;
+        if (cs <= 1 or token_ids.len == 1) {
+            var last: u32 = 0;
+            for (token_ids) |tid| last = try self.forward(tid);
+            return last;
+        }
+
+        var offset: usize = 0;
+        while (offset < token_ids.len) {
+            const chunk_len = @min(cs, token_ids.len - offset);
+            try self.prefillChunk(token_ids[offset..][0..chunk_len], @intCast(offset));
+            offset += chunk_len;
+        }
+
+        // Final: rmsNorm + logits on the LAST token only.
+        // In batched mode, residuals are never deferred — pf_hidden has the
+        // complete residual stream, so plain rmsNorm suffices (no addRmsNorm).
+        const last_in_chunk = (token_ids.len - 1) % cs;
+        const e: usize = self.n_embd;
+        @memcpy(self.hidden, self.pf_hidden[last_in_chunk * e ..][0..e]);
+
+        const nw = self.fmt.getTensor("model.norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden.ptr, e, self.rms_eps);
+
+        self.be.sync();
+        try self.mlxGemv("lm_head", self.hidden, self.logits_buf, self.vocab_size, self.n_embd);
+
+        self.be.sync();
+        self.kv_seq_len = token_ids.len;
+        return math_ops.argmax(self.logits_buf);
     }
 
     /// Reset the KV cache position for a new conversation.
@@ -498,6 +586,206 @@ pub const Glm4Model = struct {
         try self.mlxLayerGemv(li, "self_attn.o_proj", self.attn_out, self.hidden2, e, nh * vhd);
 
         // 10. Residual add deferred: denseFfn/moeFfn fuses add(hidden, hidden2) + rmsNorm.
+    }
+
+    // ── Batched prefill ─────────────────────────────────────────────
+
+    /// Look up a layer weight tensor by HF prefix, with GGUF fallback.
+    fn layerWeight(self: *Glm4Model, li: u32, prefix: []const u8) ?TensorInfo {
+        var buf: [name_buf_size]u8 = undefined;
+        const w_name = std.fmt.bufPrint(&buf, "model.layers.{d}.{s}.weight", .{ li, prefix }) catch return null;
+        if (self.fmt.getTensor(w_name)) |t| return t;
+        if (hfToGgufAttnName(prefix)) |gguf_name| {
+            return self.fmt.layerTensor(li, gguf_name);
+        }
+        return null;
+    }
+
+    /// Return KV cache view as byte slices for sdpaPrefill compatibility.
+    fn getLayerKvViewBytes(self: *Glm4Model, layer: usize) struct { keys: []u8, values: []u8 } {
+        const num_blocks = self.seq_table.block_table[layer].len;
+        if (num_blocks == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
+        const block_id = self.seq_table.block_table[layer][0];
+        if (self.tiered_cache) |tc| {
+            return .{
+                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
+                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+            };
+        }
+        return .{
+            .keys = std.mem.sliceAsBytes(self.paged_cache.blocks[block_id].keys),
+            .values = std.mem.sliceAsBytes(self.paged_cache.blocks[block_id].values),
+        };
+    }
+
+    /// Batched GEMM: [n_tok, n_in] × W^T → [n_tok, n_out].
+    /// Falls back to per-token GEMV for MLX quantized weights.
+    fn doGemm(self: *Glm4Model, x: [*]const f32, w: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        if (w.dtype == .mlx_q) {
+            const wi = std.mem.lastIndexOf(u8, w.name, ".weight") orelse return;
+            const prefix = w.name[0..wi];
+            var sbuf: [name_buf_size]u8 = undefined;
+            var bbuf: [name_buf_size]u8 = undefined;
+            const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
+            const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
+            const s_t = self.fmt.getTensor(s_name) orelse return;
+            const b_t = self.fmt.getTensor(b_name) orelse return;
+            for (0..n_tok) |i| {
+                self.be.gemvMlxQ(x + i * n_in, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y + i * n_out, n_out, n_in, self.mlx_bits);
+            }
+            return;
+        }
+        self.be.gemm(x, .{ .data = w.data_ptr, .dtype = w.dtype }, y, n_tok, n_out, n_in);
+    }
+
+    /// Process one chunk of tokens through all layers using batched GEMM
+    /// for MLA attention, per-token fallback for MoE/dense FFN.
+    fn prefillChunk(self: *Glm4Model, token_ids: []const u32, base_pos: u32) !void {
+        const n_tok = token_ids.len;
+        const e: usize = self.n_embd;
+
+        // Ensure KV blocks allocated for all new positions.
+        for (0..n_tok) |t| {
+            self.kv_seq_len = base_pos + t;
+            try model_mod.ensureKvBlock(self);
+        }
+
+        // Embedding lookup for all tokens into batched buffer.
+        for (token_ids, 0..) |tid, t| {
+            try self.embLookup(tid);
+            @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+        }
+
+        // Build position array.
+        for (0..n_tok) |t| {
+            self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
+        }
+
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
+
+            // Batched MLA attention.
+            try self.prefillMlaAttention(l, n_tok);
+
+            // Per-token FFN (MoE routing is per-token — cannot batch).
+            // Residual is deferred: pf_hidden holds pre-attention residual,
+            // pf_hidden2 holds post-attention output.  denseFfn/moeFfn
+            // fuses the add internally via addRmsNorm.
+            self.be.sync();
+            for (0..n_tok) |t| {
+                @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
+                @memcpy(self.hidden2, self.pf_hidden2[t * e ..][0..e]);
+                if (li < self.first_k_dense_replace) {
+                    try self.denseFfn(l);
+                } else {
+                    try self.moeFfn(l);
+                }
+                @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+            }
+        }
+
+        self.kv_seq_len = base_pos + n_tok;
+    }
+
+    /// Batched MLA attention for one layer.
+    ///
+    /// Steps 1-5, 7: batched GEMM/norm for Q/KV projections.
+    /// Steps 6, 8-10: per-token multiLinearGemv for per-head K/V expansion,
+    ///   K assembly, and partial RoPE (rope at nope_dim offset).
+    /// Step 11: sdpaPrefill for fused causal attention.
+    /// Step 12-13: batched output projection, residual deferred to FFN.
+    fn prefillMlaAttention(self: *Glm4Model, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nope_dim: usize = self.qk_nope_head_dim;
+        const rope_dim: usize = self.qk_rope_head_dim;
+        const q_head_dim: usize = nope_dim + rope_dim;
+        const kv_rank: usize = self.kv_lora_rank;
+        const vhd: usize = self.v_head_dim;
+
+        // 1. Pre-norm (batched)
+        const nw = self.layerTensor(li, "input_layernorm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        // 2. Q path: hidden2 → q_a_proj → q_compressed (batched GEMM)
+        const qa_w = self.layerWeight(li, "self_attn.q_a_proj") orelse return error.MissingTensor;
+        self.doGemm(self.pf_hidden2.ptr, qa_w, self.pf_q_a.ptr, n_tok, self.q_lora_rank, e);
+
+        // 3. Q latent norm (batched)
+        const qn = self.layerTensor(li, "self_attn.q_a_layernorm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_q_a.ptr, self.normAsF32(qn, self.q_lora_rank), self.pf_q_a.ptr, n_tok, self.q_lora_rank, self.rms_eps);
+
+        // 4. Q expansion: q_compressed → q_full (batched GEMM)
+        const qb_w = self.layerWeight(li, "self_attn.q_b_proj") orelse return error.MissingTensor;
+        self.doGemm(self.pf_q_a.ptr, qb_w, self.pf_q.ptr, n_tok, nh * q_head_dim, self.q_lora_rank);
+
+        // 5. KV path: hidden2 → kv_a_proj (batched GEMM)
+        const kva_w = self.layerWeight(li, "self_attn.kv_a_proj_with_mqa") orelse return error.MissingTensor;
+        self.doGemm(self.pf_hidden2.ptr, kva_w, self.pf_kv_proj.ptr, n_tok, kv_rank + rope_dim, e);
+
+        // 6. Split kv_proj → kv_latent + k_pe (per-token memcpy)
+        self.be.sync();
+        for (0..n_tok) |t| {
+            @memcpy(
+                self.pf_kv_latent[t * kv_rank ..][0..kv_rank],
+                self.pf_kv_proj[t * (kv_rank + rope_dim) ..][0..kv_rank],
+            );
+        }
+
+        // 7. KV latent norm (batched)
+        const kvn = self.layerTensor(li, "self_attn.kv_a_layernorm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_kv_latent.ptr, self.normAsF32(kvn, kv_rank), self.pf_kv_latent.ptr, n_tok, kv_rank, self.rms_eps);
+
+        // 8-10. Per-token: multiLinearGemv (embed_q → K_nope, unembed_out → V),
+        //        K assembly, and partial RoPE.
+        self.be.sync();
+        for (0..n_tok) |t| {
+            const kv_lat = self.pf_kv_latent[t * kv_rank ..][0..kv_rank];
+            const k_pe = self.pf_kv_proj[t * (kv_rank + rope_dim) + kv_rank ..][0..rope_dim];
+
+            // embed_q: kv_latent → k_nope [nh * nope_dim] (per-token k_buf as scratch)
+            try self.multiLinearGemv(li, "self_attn.embed_q", kv_lat, self.k_buf.ptr, nh, nope_dim, kv_rank);
+            // unembed_out: kv_latent → v [nh * v_head_dim]
+            try self.multiLinearGemv(li, "self_attn.unembed_out", kv_lat, self.v_buf.ptr, nh, vhd, kv_rank);
+            self.be.sync();
+
+            // Assemble K per head: [k_nope(nope_dim) | k_pe(rope_dim)]
+            for (0..nh) |h| {
+                const dst = self.pf_k[t * nh * q_head_dim + h * q_head_dim ..];
+                @memcpy(dst[0..nope_dim], self.k_buf[h * nope_dim ..][0..nope_dim]);
+                @memcpy(dst[nope_dim ..][0..rope_dim], k_pe);
+            }
+
+            // Copy V into batched buffer
+            @memcpy(self.pf_v[t * nh * vhd ..][0..nh * vhd], self.v_buf[0..nh * vhd]);
+
+            // RoPE (partial — only rope portion at offset nope_dim within each head)
+            const saved_pos = self.kv_seq_len;
+            self.kv_seq_len = self.pf_positions[t];
+            self.ropePartial(self.pf_q.ptr + t * nh * q_head_dim, nh, q_head_dim, nope_dim, rope_dim);
+            self.ropePartial(self.pf_k.ptr + t * nh * q_head_dim, nh, q_head_dim, nope_dim, rope_dim);
+            self.kv_seq_len = saved_pos;
+        }
+
+        // 11. Fused causal attention (sdpaPrefill writes new K/V into cache
+        //     and computes attention against [cache + new] tokens)
+        const kv_view = self.getLayerKvViewBytes(li);
+        const prev_len: usize = self.pf_positions[0];
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(q_head_dim)));
+        self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_view.keys, kv_view.values, self.pf_attn_out.ptr, nh, nh, q_head_dim, prev_len, n_tok, scale, .f32, .f32);
+
+        // 12. Output projection (batched GEMM)
+        const ow = self.layerWeight(li, "self_attn.o_proj") orelse return error.MissingTensor;
+        self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n_tok, e, nh * vhd);
+
+        // 13. Residual deferred to denseFfn/moeFfn: pf_hidden holds the
+        // pre-attention residual, pf_hidden2 holds the post-attention output.
+        // The per-token FFN loop in prefillChunk copies both into the
+        // single-token working buffers (hidden, hidden2) before calling
+        // denseFfn/moeFfn, which fuses add(hidden, hidden2) + norm internally.
     }
 
     // ── Dense FFN (layers 0..first_k_dense_replace-1) ─────────────

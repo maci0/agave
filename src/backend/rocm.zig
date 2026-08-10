@@ -435,7 +435,7 @@ pub const RocmBackend = struct {
             const act = entry.value_ptr;
             if (addr >= base and addr + size <= base + act.size) {
                 if (refresh_stale and act.state == .stale) {
-                    _ = self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrFromInt(base)), act.size, hipMemcpyHostToDevice);
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrFromInt(base)), act.size, hipMemcpyHostToDevice), "hipMemcpy(act reupload)");
                     act.state = .clean;
                 }
                 if (mark_dirty) act.state = .dirty;
@@ -451,7 +451,7 @@ pub const RocmBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice);
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice), "hipMemcpy(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
@@ -494,7 +494,7 @@ pub const RocmBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice);
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice), "hipMemcpy(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -1348,8 +1348,8 @@ pub const RocmBackend = struct {
             var d_v_cache = self.getOrAllocKvBuf(@intFromPtr(values.ptr), v_cache_bytes, values.len);
             const k_new_bytes = kv_quant.kvSliceBytes(kv_type_k, kvd);
             const v_new_bytes = kv_quant.kvSliceBytes(kv_type_v, kvd);
-            _ = self.hipMemcpy(@ptrFromInt(d_k_cache + k_off), @as(?*const anyopaque, @ptrCast(keys.ptr + k_off)), k_new_bytes, hipMemcpyHostToDevice);
-            _ = self.hipMemcpy(@ptrFromInt(d_v_cache + v_off), @as(?*const anyopaque, @ptrCast(values.ptr + v_off)), v_new_bytes, hipMemcpyHostToDevice);
+            _ = hipCheck(self.hipMemcpy(@ptrFromInt(d_k_cache + k_off), @as(?*const anyopaque, @ptrCast(keys.ptr + k_off)), k_new_bytes, hipMemcpyHostToDevice), "hipMemcpy(KV key)");
+            _ = hipCheck(self.hipMemcpy(@ptrFromInt(d_v_cache + v_off), @as(?*const anyopaque, @ptrCast(values.ptr + v_off)), v_new_bytes, hipMemcpyHostToDevice), "hipMemcpy(KV val)");
 
             // Q from act_cache, output as activation
             var d_q = self.getInputBuf(q, nh * hd * @sizeOf(f32));

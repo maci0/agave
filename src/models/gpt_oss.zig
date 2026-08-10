@@ -139,6 +139,16 @@ pub const GptOssModel = struct {
     /// Enable fused megakernel for single-dispatch forward pass.
     megakernel_enabled: bool = false,
 
+    // ── Prefill working buffers (allocated once, chunk-sized) ──────
+    pf_hidden: []f32 = &.{},
+    pf_hidden2: []f32 = &.{},
+    pf_q: []f32 = &.{},
+    pf_k: []f32 = &.{},
+    pf_v: []f32 = &.{},
+    pf_attn_out: []f32 = &.{},
+    pf_positions: []u32 = &.{},
+    chunk_size: u32 = 0,
+
     // ── Norm weight cache (BF16 → f32, converted once) ────────────
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
@@ -247,6 +257,29 @@ pub const GptOssModel = struct {
             try self.block_allocator.appendBlock(&self.seq_table);
         }
 
+        // ── Prefill chunk buffers ──────────────────────────────────
+        // Allocate with page_allocator (one-time init, not hot path).
+        // Skip for MLX models — no batched GEMM kernel for MLX quantization.
+        if (self.mlx_bits == 0) {
+            const cs: u32 = 256;
+            self.chunk_size = cs;
+            const page = std.heap.page_allocator;
+            self.pf_hidden = try page.alloc(f32, cs * self.n_embd);
+            errdefer page.free(self.pf_hidden);
+            self.pf_hidden2 = try page.alloc(f32, cs * self.n_embd);
+            errdefer page.free(self.pf_hidden2);
+            self.pf_q = try page.alloc(f32, cs * qd);
+            errdefer page.free(self.pf_q);
+            self.pf_k = try page.alloc(f32, cs * kvd);
+            errdefer page.free(self.pf_k);
+            self.pf_v = try page.alloc(f32, cs * kvd);
+            errdefer page.free(self.pf_v);
+            self.pf_attn_out = try page.alloc(f32, cs * qd);
+            errdefer page.free(self.pf_attn_out);
+            self.pf_positions = try page.alloc(u32, cs);
+            errdefer page.free(self.pf_positions);
+        }
+
         // Pre-populate norm cache so no allocations happen during inference.
         self.warmNormCache();
 
@@ -262,6 +295,17 @@ pub const GptOssModel = struct {
         } else {
             self.block_allocator.freeSeqTable(&self.seq_table);
             self.paged_cache.deinit();
+        }
+        // Free prefill buffers (page_allocator — must match init allocation)
+        if (self.chunk_size > 0) {
+            const page = std.heap.page_allocator;
+            page.free(self.pf_hidden);
+            page.free(self.pf_hidden2);
+            page.free(self.pf_q);
+            page.free(self.pf_k);
+            page.free(self.pf_v);
+            page.free(self.pf_attn_out);
+            page.free(self.pf_positions);
         }
         // Free cached norm weight conversions
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
@@ -336,13 +380,162 @@ pub const GptOssModel = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
-    /// Batched prefill — sequential. MoE routing selects different experts
-    /// per token, preventing straightforward batched FFN. Attention layers
-    /// could be batched but MoE dominates compute.
+    /// Batched prefill: hybrid batched-attention + per-token MoE FFN.
+    /// Attention is batched via GEMM for the whole chunk (50-70% of compute).
+    /// MoE routing is per-token (different experts per token), so FFN remains sequential.
     pub fn prefill(self: *GptOssModel, token_ids: []const u32) !u32 {
-        var last: u32 = 0;
-        for (token_ids) |tid| last = try self.forward(tid);
-        return last;
+        if (token_ids.len == 0) return error.MissingTensor;
+
+        // Fall back to sequential if batched buffers not allocated (MLX) or single token.
+        if (self.chunk_size == 0 or token_ids.len == 1) {
+            var last: u32 = 0;
+            for (token_ids) |tid| last = try self.forward(tid);
+            return last;
+        }
+
+        const cs: usize = self.chunk_size;
+        var offset: usize = 0;
+        while (offset < token_ids.len) {
+            const chunk_len = @min(cs, token_ids.len - offset);
+            try self.prefillChunk(token_ids[offset..][0..chunk_len], @intCast(offset));
+            offset += chunk_len;
+        }
+
+        // Final: rmsNorm + logits on the LAST token only.
+        const last_in_chunk = (token_ids.len - 1) % cs;
+        const e: usize = self.n_embd;
+        @memcpy(self.hidden, self.pf_hidden[last_in_chunk * e ..][0..e]);
+
+        const nw = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden.ptr, e, self.rms_eps);
+        const ow = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
+        self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, e);
+        self.be.sync();
+        self.kv_seq_len = token_ids.len;
+        return math_ops.argmax(self.logits_buf);
+    }
+
+    /// Process one chunk of tokens through all layers using batched GEMM for attention.
+    fn prefillChunk(self: *GptOssModel, token_ids: []const u32, base_pos: u32) !void {
+        const n_tok = token_ids.len;
+        const e: usize = self.n_embd;
+
+        // Ensure KV blocks allocated for all new positions.
+        for (0..n_tok) |t| {
+            self.kv_seq_len = base_pos + t;
+            try model_mod.ensureKvBlock(self);
+        }
+
+        // Batch embed all tokens.
+        const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
+        for (token_ids, 0..) |tid, t| {
+            self.be.embLookup(
+                .{ .data = emb_t.data_ptr, .dtype = emb_t.dtype },
+                tid,
+                self.pf_hidden[t * e ..].ptr,
+                e,
+            );
+        }
+
+        // Build position array.
+        for (0..n_tok) |t| {
+            self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
+        }
+
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            const l: u32 = @intCast(li);
+            if (l >= self.layer_skip_start and l < self.layer_skip_end) continue;
+            self.fmt.prefetchLayer(@intCast(li + 1));
+
+            // Batched attention for the whole chunk.
+            try self.prefillAttention(l, n_tok);
+
+            // Per-token MoE FFN (different expert routing per token — cannot batch).
+            self.be.sync();
+            for (0..n_tok) |t| {
+                @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
+                @memcpy(self.hidden2, self.pf_hidden2[t * e ..][0..e]);
+                try self.moeLayer(l);
+                @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+            }
+        }
+
+        self.kv_seq_len = base_pos + n_tok;
+    }
+
+    /// Batched attention for prefill: RMS norm → QKV GEMM → bias → RoPE →
+    /// KV store → SDPA prefill → output GEMM → bias → post-norm → residual.
+    fn prefillAttention(self: *GptOssModel, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nkv: usize = self.n_head_kv;
+        const hd: usize = self.head_dim;
+        const qd: usize = nh * hd;
+        const kvd: usize = nkv * hd;
+
+        // 1. Batched RMS norm: pf_hidden2[t] = norm(pf_hidden[t])
+        const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        // 2. Batched QKV via GEMM.
+        const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
+        const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
+        const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_hidden2.ptr, qw, self.pf_q.ptr, n_tok, qd, e);
+        self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n_tok, kvd, e);
+        self.doGemm(self.pf_hidden2.ptr, vw, self.pf_v.ptr, n_tok, kvd, e);
+
+        // 3. Add projection biases (per-token).
+        const qb = self.fmt.layerTensor(li, "attn_q.bias") orelse return error.MissingTensor;
+        const kb = self.fmt.layerTensor(li, "attn_k.bias") orelse return error.MissingTensor;
+        const vb = self.fmt.layerTensor(li, "attn_v.bias") orelse return error.MissingTensor;
+        self.be.sync();
+        for (0..n_tok) |t| {
+            addBiasTyped(self.pf_q[t * qd ..][0..qd], qb.data_ptr, qd, qb.dtype);
+            addBiasTyped(self.pf_k[t * kvd ..][0..kvd], kb.data_ptr, kvd, kb.dtype);
+            addBiasTyped(self.pf_v[t * kvd ..][0..kvd], vb.data_ptr, kvd, vb.dtype);
+        }
+
+        // 4. Batched RoPE.
+        self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, hd, self.rope_theta);
+        self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, hd, self.rope_theta);
+
+        // 5. Store K/V into cache.
+        self.be.sync();
+        for (0..n_tok) |t| {
+            const pos: usize = @as(usize, self.pf_positions[0]) + t;
+            const kv_view = self.getLayerKvView(li);
+            @memcpy(kv_view.keys[pos * kvd ..][0..kvd], self.pf_k[t * kvd ..][0..kvd]);
+            @memcpy(kv_view.values[pos * kvd ..][0..kvd], self.pf_v[t * kvd ..][0..kvd]);
+        }
+
+        // 6. SDPA prefill (batched causal attention over stored KV).
+        const kv_view = self.getLayerKvView(li);
+        const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
+        const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
+        const prev_len: usize = self.pf_positions[0];
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+        self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, scale, .f32, .f32);
+
+        // 7. Output projection via GEMM (+ bias).
+        const ow = self.fmt.layerTensor(li, "attn_output.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n_tok, e, qd);
+        const ob = self.fmt.layerTensor(li, "attn_output.bias") orelse return error.MissingTensor;
+        self.be.sync();
+        for (0..n_tok) |t| {
+            addBiasTyped(self.pf_hidden2[t * e ..][0..e], ob.data_ptr, e, ob.dtype);
+        }
+
+        // 8. Post-attention norm on the attention output.
+        const pan = self.fmt.layerTensor(li, "post_attention_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden2.ptr, self.normAsF32(pan, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        // 9. Residual deferred to moeLayer: pf_hidden holds the pre-attention
+        // residual, pf_hidden2 holds the post-attention output with post-norm.
+        // The per-token FFN loop in prefillChunk copies both into the
+        // single-token working buffers (hidden, hidden2) before calling
+        // moeLayer, which does the fused add(hidden, hidden2) + FFN internally.
     }
 
     /// Reset the KV cache and cancellation flag for a new conversation.
@@ -432,6 +625,18 @@ pub const GptOssModel = struct {
             const s_stride = comp.expertScaleStrideAffine();
             self.be.gemvMlxQ(x, data, comp.scales + ei * s_stride, comp.biases + ei * s_stride, y, n, k, comp.bits);
         }
+    }
+
+    /// Batched GEMM: n_tok rows × weight matrix. Falls back to per-token
+    /// doGemv for MLX quantized weights (no batched MLX GEMM kernel).
+    fn doGemm(self: *GptOssModel, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        if (t.dtype == .mlx_q) {
+            for (0..n_tok) |i| {
+                self.doGemv(x + i * n_in, t, y + i * n_out, n_out, n_in);
+            }
+            return;
+        }
+        self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n_tok, n_out, n_in);
     }
 
     /// Companion tensor info for an MLX-quantized weight tensor.

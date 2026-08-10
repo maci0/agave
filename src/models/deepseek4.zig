@@ -151,6 +151,19 @@ pub const Ds4Model = struct {
     lid_topk_ids: []u32 = &.{},
     lid_enabled: bool = false,
 
+    // Prefill buffers (page_allocator for GPU zero-copy — Metal's
+    // newBufferWithBytesNoCopy requires page-aligned pointers).
+    // Allocated at init but not yet used: batched prefill is deferred
+    // for this model due to hyper connection complexity (see prefill()).
+    chunk_size: usize = 256,
+    pf_hidden: []f32 = &.{},
+    pf_hidden2: []f32 = &.{},
+    pf_q_a: []f32 = &.{}, // [cs * q_lora_rank]
+    pf_q: []f32 = &.{}, // [cs * n_head * kv_lora_rank]
+    pf_kv_proj: []f32 = &.{}, // [cs * kv_lora_rank]
+    pf_attn_out: []f32 = &.{}, // [cs * n_head * kv_lora_rank]
+    pf_positions: []u32 = &.{},
+
     // Norm weight cache (dequantized to f32)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
@@ -319,6 +332,27 @@ pub const Ds4Model = struct {
             self.lid_enabled = true;
         }
 
+        // Prefill buffers (page_allocator for GPU zero-copy — Metal's
+        // newBufferWithBytesNoCopy requires page-aligned pointers).
+        {
+            const pa = std.heap.page_allocator;
+            const cs = self.chunk_size;
+            self.pf_hidden = try pa.alloc(f32, cs * e);
+            errdefer pa.free(self.pf_hidden);
+            self.pf_hidden2 = try pa.alloc(f32, cs * e);
+            errdefer pa.free(self.pf_hidden2);
+            self.pf_q_a = try pa.alloc(f32, cs * ql);
+            errdefer pa.free(self.pf_q_a);
+            self.pf_q = try pa.alloc(f32, cs * nh * kd);
+            errdefer pa.free(self.pf_q);
+            self.pf_kv_proj = try pa.alloc(f32, cs * kd);
+            errdefer pa.free(self.pf_kv_proj);
+            self.pf_attn_out = try pa.alloc(f32, cs * nh * kd);
+            errdefer pa.free(self.pf_attn_out);
+            self.pf_positions = try pa.alloc(u32, cs);
+            errdefer pa.free(self.pf_positions);
+        }
+
         self.warmNormCache();
         return self;
     }
@@ -359,6 +393,16 @@ pub const Ds4Model = struct {
             &self.csa_score_scratch, &self.lid_comp_k,      &self.lid_query,     &self.lid_head_w,     &self.lid_scores,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
+        // Prefill buffers (page_allocator — must match init allocation)
+        {
+            const pa = std.heap.page_allocator;
+            const pf_bufs = .{
+                &self.pf_hidden,  &self.pf_hidden2, &self.pf_q_a,
+                &self.pf_q,       &self.pf_kv_proj, &self.pf_attn_out,
+            };
+            inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
+            if (self.pf_positions.len > 0) pa.free(self.pf_positions);
+        }
     }
 
     /// Wrap this model in the generic `Model` vtable interface for backend-agnostic dispatch.
@@ -1417,9 +1461,34 @@ pub const Ds4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
-    /// Batched prefill: process all token IDs sequentially through forward().
+    /// Prefill: process all token IDs sequentially through forward().
     /// Returns the argmax of the last token's logits.
+    ///
+    /// NOTE: Batched (chunked) prefill is deferred for DeepSeek V4.
+    /// Unlike standard transformers where layers are independent residual blocks,
+    /// DS4 has several features that make batched prefill a research-level task:
+    ///
+    /// 1. **4-stream Hyper Connections (HC):** Every layer is wrapped by hcPre/hcPost
+    ///    which mix 4 residual streams via learned combination matrices. Batching
+    ///    would require [4 × chunk_size × n_embd] HC state buffers and careful
+    ///    per-token sequential HC updates (the streams carry state across tokens).
+    ///
+    /// 2. **MoE routing is per-token:** 256-expert top-6 routing (with hash routing
+    ///    on layers 0-2) produces different expert sets per token — same as GLM-4
+    ///    and GPT-OSS, but combined with HC makes the bookkeeping much harder.
+    ///
+    /// 3. **CSA/HCA compressors have per-position state:** Compressed KV blocks
+    ///    accumulate over positions with softmax scoring. The write targets are
+    ///    sequential and position-dependent.
+    ///
+    /// 4. **Grouped output LoRA:** 8-group × 1024-rank attention output projection
+    ///    is non-standard and would need its own batched path.
+    ///
+    /// The pf_* buffers are allocated for forward compatibility — a future
+    /// implementation can batch the MLA attention within each layer (as GLM-4 does)
+    /// while keeping HC, MoE, and compressor passes per-token.
     pub fn prefill(self: *Ds4Model, token_ids: []const u32) !u32 {
+        // Sequential fallback — see doc comment above for rationale.
         var last: u32 = 0;
         for (token_ids) |tid| last = try self.forward(tid);
         return last;

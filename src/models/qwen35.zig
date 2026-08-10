@@ -125,6 +125,18 @@ pub const Qwen35Model = struct {
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
 
+    // Prefill buffers (allocated via page_allocator for GPU zero-copy)
+    chunk_size: usize = 256,
+    pf_hidden: []f32 = &.{},
+    pf_hidden2: []f32 = &.{},
+    pf_q: []f32 = &.{},
+    pf_k: []f32 = &.{},
+    pf_v: []f32 = &.{},
+    pf_attn_out: []f32 = &.{},
+    pf_ff_gate: []f32 = &.{},
+    pf_ff_up: []f32 = &.{},
+    pf_positions: []u32 = &.{},
+
     // MoE buffers (allocated only when is_moe == true)
     router_logits: []f32 = &.{},
     moe_out: []f32 = &.{},
@@ -437,6 +449,33 @@ pub const Qwen35Model = struct {
             errdefer allocator.free(self.moe_out);
         }
 
+        // Prefill buffers (page_allocator for GPU zero-copy — Metal's
+        // newBufferWithBytesNoCopy requires page-aligned pointers).
+        // Only allocated for dense non-MLX models that benefit from batched prefill.
+        if (!self.is_moe and !self.is_mlx) {
+            const pa = std.heap.page_allocator;
+            const cs = self.chunk_size;
+            const q_pf_dim: usize = if (self.has_gate) qd * 2 else qd;
+            self.pf_hidden = try pa.alloc(f32, cs * self.n_embd);
+            errdefer pa.free(self.pf_hidden);
+            self.pf_hidden2 = try pa.alloc(f32, cs * self.n_embd);
+            errdefer pa.free(self.pf_hidden2);
+            self.pf_q = try pa.alloc(f32, cs * q_pf_dim);
+            errdefer pa.free(self.pf_q);
+            self.pf_k = try pa.alloc(f32, cs * kvd);
+            errdefer pa.free(self.pf_k);
+            self.pf_v = try pa.alloc(f32, cs * kvd);
+            errdefer pa.free(self.pf_v);
+            self.pf_attn_out = try pa.alloc(f32, cs * qd);
+            errdefer pa.free(self.pf_attn_out);
+            self.pf_ff_gate = try pa.alloc(f32, cs * self.n_ff);
+            errdefer pa.free(self.pf_ff_gate);
+            self.pf_ff_up = try pa.alloc(f32, cs * self.n_ff);
+            errdefer pa.free(self.pf_ff_up);
+            self.pf_positions = try pa.alloc(u32, cs);
+            errdefer pa.free(self.pf_positions);
+        }
+
         // MTP buffers: flat KV cache for single transformer layer
         if (self.n_mtp_layers > 0) {
             self.mtp_hidden_pre_norm = try allocator.alloc(f32, self.n_embd);
@@ -608,6 +647,16 @@ pub const Qwen35Model = struct {
         if (self.is_moe) {
             self.allocator.free(self.router_logits);
             self.allocator.free(self.moe_out);
+        }
+        // Prefill buffers (page_allocator — must match init allocation)
+        {
+            const pa = std.heap.page_allocator;
+            const pf_bufs = .{
+                &self.pf_hidden, &self.pf_hidden2, &self.pf_q,       &self.pf_k,
+                &self.pf_v,      &self.pf_attn_out, &self.pf_ff_gate, &self.pf_ff_up,
+            };
+            inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
+            if (self.pf_positions.len > 0) pa.free(self.pf_positions);
         }
         if (self.n_mtp_layers > 0) {
             self.allocator.free(self.mtp_hidden_pre_norm);
@@ -858,6 +907,18 @@ pub const Qwen35Model = struct {
             self.makeOp(t2, y2, n2, k),
         };
         self.be.gemvMulti(x, &ops, k);
+    }
+
+    /// Batched GEMM: n_tok rows × weight matrix. Falls back to per-token
+    /// doGemv for MLX quantized weights (no batched MLX GEMM kernel).
+    fn doGemm(self: *Qwen35Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        if (t.dtype == .mlx_q) {
+            for (0..n_tok) |i| {
+                self.doGemv(x + i * n_in, t, y + i * n_out, n_out, n_in);
+            }
+            return;
+        }
+        self.be.gemm(x, .{ .data = t.data_ptr, .dtype = t.dtype }, y, n_tok, n_out, n_in);
     }
 
     /// Dispatch expert slice GEMV for MLX quantized expert tensors.
@@ -1813,14 +1874,228 @@ pub const Qwen35Model = struct {
         return result;
     }
 
-    /// Batched prefill — sequential. DeltaNet SSM layers require sequential
-    /// state updates (recurrence depends on previous token). Only every
-    /// full_attn_interval-th layer is pure attention — batching those alone
-    /// would add complexity for marginal gain.
+    /// Batched prefill using chunked GEMM for pure-attention dense models.
+    /// Falls back to sequential per-token processing when:
+    /// - MLX quantized weights (no batched MLX GEMM kernel)
+    /// - MoE models (per-token expert routing)
+    /// - Models with DeltaNet SSM layers (sequential recurrence)
+    /// - Tensor parallelism active (TP > 1)
+    /// - Single token or chunk_size ≤ 1
     pub fn prefill(self: *Qwen35Model, token_ids: []const u32) !u32 {
-        var last: u32 = 0;
-        for (token_ids) |tid| last = try self.forward(tid);
-        return last;
+        if (token_ids.len == 0) return error.MissingTensor;
+        if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
+
+        // Check if batched prefill is possible: buffers must be allocated
+        // (not MoE, not MLX), no DeltaNet layers, no TP.
+        const has_deltanet = for (self.layer_is_deltanet[0..self.n_layers]) |d| {
+            if (d) break true;
+        } else false;
+        const cs: usize = if (self.pf_hidden.len > 0 and !has_deltanet and self.tp_degree <= 1)
+            self.chunk_size
+        else
+            1;
+        if (cs <= 1 or token_ids.len == 1) {
+            var last: u32 = 0;
+            for (token_ids) |tid| last = try self.forward(tid);
+            return last;
+        }
+
+        var offset: usize = 0;
+        while (offset < token_ids.len) {
+            const chunk_len = @min(cs, token_ids.len - offset);
+            try self.prefillChunk(token_ids[offset..][0..chunk_len], @intCast(offset));
+            offset += chunk_len;
+        }
+
+        // Final: rmsNorm + logits on the LAST token only.
+        // In batched mode, residuals are never deferred — pf_hidden has the
+        // complete residual stream, so plain rmsNorm suffices (no addRmsNorm).
+        const last_in_chunk = (token_ids.len - 1) % cs;
+        const e: usize = self.n_embd;
+        @memcpy(self.hidden, self.pf_hidden[last_in_chunk * e ..][0..e]);
+
+        const nw = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden.ptr, e, self.rms_eps);
+
+        const ow = self.fmt.getTensor("output.weight") orelse
+            self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
+        self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, e);
+
+        self.be.sync();
+        self.kv_seq_len = token_ids.len;
+        self.perf.addToken();
+        return math_ops.argmax(self.logits_buf);
+    }
+
+    /// Process one chunk of tokens through all layers using batched GEMM.
+    fn prefillChunk(self: *Qwen35Model, token_ids: []const u32, base_pos: u32) !void {
+        const n_tok = token_ids.len;
+        const e: usize = self.n_embd;
+
+        // Ensure KV blocks allocated for all new positions
+        for (0..n_tok) |t| {
+            self.kv_seq_len = base_pos + t;
+            try model_mod.ensureKvBlock(self);
+        }
+
+        // Embedding lookup for all tokens (handles visual token injection)
+        for (token_ids, 0..) |tid, t| {
+            var is_image_token = false;
+            if (self.image_embeddings) |vis_embd| {
+                if (self.image_pad_token_id != 0 and tid == self.image_pad_token_id) {
+                    const idx = self.visual_token_idx;
+                    if (idx < self.n_visual_tokens) {
+                        const off = @as(usize, idx) * e;
+                        const end = off + e;
+                        if (end <= vis_embd.len) {
+                            @memcpy(self.pf_hidden[t * e ..][0..e], vis_embd[off..end]);
+                            is_image_token = true;
+                        }
+                        self.visual_token_idx = idx + 1;
+                    }
+                }
+            }
+            if (!is_image_token) {
+                try self.embLookup(tid);
+                @memcpy(self.pf_hidden[t * e ..][0..e], self.hidden);
+            }
+        }
+
+        // Build position array
+        for (0..n_tok) |t| {
+            self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
+        }
+
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            self.fmt.prefetchLayer(@intCast(li + 1));
+            try self.prefillAttention(@intCast(li), n_tok);
+            try self.prefillFeedForward(@intCast(li), n_tok);
+        }
+
+        self.kv_seq_len = base_pos + n_tok;
+    }
+
+    /// Batched attention for one layer: norm → QKV GEMM → optional gate/bias/QK-norm
+    /// → RoPE → sdpaPrefill → output GEMM → residual add.
+    fn prefillAttention(self: *Qwen35Model, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const nh: usize = self.n_head;
+        const nkv: usize = self.n_head_kv;
+        const hd: usize = self.head_dim;
+        const qd: usize = nh * hd;
+
+        // Pre-attention norm
+        const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        // Q/K/V projections — Q output size depends on gate presence
+        const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
+        const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
+        const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return error.MissingTensor;
+        const q_out: usize = if (self.has_gate) qd * 2 else qd;
+        self.doGemm(self.pf_hidden2.ptr, qw, self.pf_q.ptr, n_tok, q_out, e);
+        self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n_tok, nkv * hd, e);
+        self.doGemm(self.pf_hidden2.ptr, vw, self.pf_v.ptr, n_tok, nkv * hd, e);
+
+        // Attention Q/K/V biases (Qwen2/2.5 — per-token addScaled)
+        if (self.has_attn_bias) {
+            if (self.fmt.layerTensor(li, "attn_q.bias")) |qb| {
+                const bias = self.normAsF32(qb, q_out);
+                for (0..n_tok) |tok| self.be.addScaled(bias, self.pf_q.ptr + tok * q_out, 1.0, q_out);
+            }
+            const kvd = nkv * hd;
+            if (self.fmt.layerTensor(li, "attn_k.bias")) |kb| {
+                const kbias = self.normAsF32(kb, kvd);
+                for (0..n_tok) |tok| self.be.addScaled(kbias, self.pf_k.ptr + tok * kvd, 1.0, kvd);
+            }
+            if (self.fmt.layerTensor(li, "attn_v.bias")) |vb| {
+                const vbias = self.normAsF32(vb, kvd);
+                for (0..n_tok) |tok| self.be.addScaled(vbias, self.pf_v.ptr + tok * kvd, 1.0, kvd);
+            }
+        }
+
+        // Q processing: with gate → split Q+gate; without → use pf_q directly
+        const q_ptr: [*]f32 = if (self.has_gate) blk: {
+            // Deinterleave Q+gate into separate buffers.
+            // Q → pf_ff_up (scratch, sized cs*n_ff ≥ cs*qd), gate → pf_ff_gate.
+            // Treat n_tok*nh as total heads — splitQGate/deinterleave is per-head.
+            if (self.is_safetensors) {
+                self.be.splitQGate(self.pf_q.ptr, self.pf_ff_up.ptr, self.pf_ff_gate.ptr, hd, n_tok * nh);
+            } else {
+                self.be.deinterleave(self.pf_q.ptr, self.pf_ff_up.ptr, self.pf_ff_gate.ptr, hd, n_tok * nh);
+            }
+            break :blk self.pf_ff_up.ptr;
+        } else self.pf_q.ptr;
+
+        // Q/K norms — per-head rmsNorm (Qwen3/3.5); treat n_tok*heads as total heads
+        if (self.has_qk_norm) {
+            const qnw = self.fmt.layerTensor(li, "attn_q_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNormMulti(q_ptr, self.normAsF32(qnw, hd), n_tok * nh, hd, self.rms_eps);
+            const knw = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNormMulti(self.pf_k.ptr, self.normAsF32(knw, hd), n_tok * nkv, hd, self.rms_eps);
+        }
+
+        // RoPE
+        self.be.ropeBatched(q_ptr, self.pf_positions.ptr, n_tok, nh, hd, self.rope_dim, self.rope_theta);
+        self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, self.rope_dim, self.rope_theta);
+
+        // Fused causal attention
+        const kv_view = self.getLayerKvView(li);
+        const kv_keys_bytes: []u8 = kv_view.keys;
+        const kv_values_bytes: []u8 = kv_view.values;
+        const prev_len: usize = self.pf_positions[0];
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
+        self.be.sdpaPrefill(q_ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, scale, .f32, .f32);
+
+        // Gate: attn_out *= sigmoid(gate) — Qwen3.5 Q-projection gate
+        if (self.has_gate) {
+            self.be.sigmoidMul(self.pf_attn_out.ptr, self.pf_ff_gate.ptr, n_tok * qd);
+        }
+
+        // Full-attention output gate (Nex-N2-Pro): attn_out *= sigmoid(gate_proj(hidden2))
+        if (self.has_full_attn_output_gate) {
+            if (self.fmt.layerTensor(li, "attn_output_gate.weight")) |gw| {
+                // pf_hidden2 still holds pre-attention normed input at this point.
+                // Use pf_ff_up as scratch for gate output (cs*n_ff ≥ cs*qd).
+                self.doGemm(self.pf_hidden2.ptr, gw, self.pf_ff_up.ptr, n_tok, qd, e);
+                self.be.sigmoidMul(self.pf_attn_out.ptr, self.pf_ff_up.ptr, n_tok * qd);
+            }
+        }
+
+        // Output projection
+        const ow = self.fmt.layerTensor(li, "attn_output.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_attn_out.ptr, ow, self.pf_hidden2.ptr, n_tok, e, qd);
+
+        // Residual add (no deferred residuals in batched mode)
+        self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n_tok * e);
+    }
+
+    /// Batched feed-forward for one layer: norm → gate/up GEMM → SiLU → down GEMM → residual.
+    fn prefillFeedForward(self: *Qwen35Model, li: u32, n_tok: usize) !void {
+        const e: usize = self.n_embd;
+        const ff: usize = self.n_ff;
+
+        // Pre-FFN norm: Qwen3.5 uses post_attention_norm, Qwen3/2 uses ffn_norm.
+        const norm_name: []const u8 = if (self.has_post_attn_norm) "post_attention_norm.weight" else "ffn_norm.weight";
+        const norm_w = self.fmt.layerTensor(li, norm_name) orelse return error.MissingTensor;
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(norm_w, e), self.pf_hidden2.ptr, n_tok, e, self.rms_eps);
+
+        // SwiGLU FFN: gate + up projections
+        const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
+        const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_hidden2.ptr, gw, self.pf_ff_gate.ptr, n_tok, ff, e);
+        self.doGemm(self.pf_hidden2.ptr, uw, self.pf_ff_up.ptr, n_tok, ff, e);
+
+        // SiLU activation
+        self.be.siluMul(self.pf_ff_gate.ptr, self.pf_ff_up.ptr, self.pf_ff_gate.ptr, n_tok * ff);
+
+        // Down projection
+        const dw = self.fmt.layerTensor(li, "ffn_down.weight") orelse return error.MissingTensor;
+        self.doGemm(self.pf_ff_gate.ptr, dw, self.pf_hidden2.ptr, n_tok, e, ff);
+
+        // Residual add
+        self.be.add(self.pf_hidden.ptr, self.pf_hidden2.ptr, self.pf_hidden.ptr, n_tok * e);
     }
 
     /// Send KV cache to a peer via transport (for disaggregated prefill/decode).
