@@ -1530,6 +1530,18 @@ pub const Ds4Model = struct {
             const gs = ds4ExpertStride(ge);
             const us = ds4ExpertStride(ue);
             const ds = ds4ExpertStride(de);
+            // SSD streaming: prefetch selected expert weights before GPU dispatch.
+            // madvise(WILLNEED) starts background page-in from SSD while we're
+            // still setting up the GPU command buffer. Helps when the 109GB model
+            // doesn't fit in RAM and cold experts need paging.
+            if (comptime @import("builtin").os.tag == .macos or @import("builtin").os.tag == .linux) {
+                for (0..n_active) |j| {
+                    const eid = top_ids[j];
+                    prefetchRange(ge.data_ptr + eid * gs, gs);
+                    prefetchRange(ue.data_ptr + eid * us, us);
+                    prefetchRange(de.data_ptr + eid * ds, ds);
+                }
+            }
             if (use_fused and (ge.dtype == .q2_k or ge.dtype == .mxfp4)) {
                 // Fused path: 1 dispatch per expert (gate+up+clampedSiluMul)
                 switch (self.be) {
@@ -1976,6 +1988,16 @@ fn cpuGemvQ8_0(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
         }
         y[i] = @reduce(.Add, acc);
     }
+}
+
+/// Hint the OS to start paging in a memory range from the mmap'd model file.
+/// Non-blocking — the kernel reads pages in the background while we continue.
+fn prefetchRange(ptr: [*]const u8, len: usize) void {
+    const page_size: usize = std.heap.page_size_min;
+    const addr = @intFromPtr(ptr);
+    const aligned = addr & ~(page_size - 1);
+    const total = (addr - aligned) + len;
+    std.posix.madvise(@ptrFromInt(aligned), total, std.posix.system.MADV.WILLNEED) catch {};
 }
 
 /// Per-expert stride for ds4 expert tensors: dims=[input_dim, ff_dim, n_experts].
