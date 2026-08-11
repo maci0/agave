@@ -527,3 +527,57 @@ kernel void fused_ffn_gate_up_silu_mlx_q4(
         ff_out[tgid] = silu_gate * up_sum;
     }
 }
+
+// ── Fused Gate + Up + Clamped SiLU*Mul kernel (Q2_K) ────────
+// DeepSeek V4 variant: clamp both gate and up to [-10, 10] before SiLU.
+// Q2_K weights: 256 values per super-block, 84 bytes.
+// Replaces 3 dispatches (gate GEMV + up GEMV + clampedSiluMul) with 1.
+// Shares x[] loads between gate and up dot products for 2× cache efficiency.
+
+kernel void fused_ffn_gate_up_clamped_silu_q2_k(
+    device const float*  x       [[buffer(0)]],
+    device const uchar*  W_gate  [[buffer(1)]],
+    device const uchar*  W_up    [[buffer(2)]],
+    device float*        ff_out  [[buffer(3)]],
+    constant uint&       n_ff    [[buffer(4)]],
+    constant uint&       k       [[buffer(5)]],
+    uint tgid    [[threadgroup_position_in_grid]],
+    uint tid     [[thread_index_in_threadgroup]],
+    uint tg_size [[threads_per_threadgroup]])
+{
+    if (tgid >= n_ff) return;
+
+    const uint bpb = 84;
+    const uint bs = 256;
+    uint nb = (k + bs - 1) / bs;
+
+    float gate_sum = 0.0f;
+    float up_sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * bs;
+
+        // Sparse skip: shared across gate and up (same x input)
+        float bmax = 0.0f;
+        uint check_end = min(bs, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
+        gate_sum += q2_k_block_dot(W_gate + (tgid * nb + b) * bpb, x, k, bk);
+        up_sum   += q2_k_block_dot(W_up   + (tgid * nb + b) * bpb, x, k, bk);
+    }
+
+    threadgroup float shared_q2k[32];
+    gate_sum = threadgroup_reduce_sum(gate_sum, shared_q2k, tid, tg_size);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    up_sum = threadgroup_reduce_sum(up_sum, shared_q2k, tid, tg_size);
+
+    if (tid == 0) {
+        float g = clamp(gate_sum, -10.0f, 10.0f);
+        float u = clamp(up_sum,   -10.0f, 10.0f);
+        ff_out[tgid] = (g / (1.0f + exp(-g))) * u;
+    }
+}

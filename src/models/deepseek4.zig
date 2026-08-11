@@ -1397,22 +1397,44 @@ pub const Ds4Model = struct {
             }
         }
 
-        // 3-phase batched FFN: all expert gate+up GEMVs, clamped siluMul, down GEMVs in one GPU cmd buffer.
-        // DS4 SwiGLU clamp (gate≤10, up±10) applied via clamped_silu_mul_f32 Metal kernel.
+        // Batched FFN: gate+up+activation per expert, then down GEMVs.
+        // Try fused kernel (gate+up+clampedSiluMul in 1 dispatch per expert)
+        // when Q2_K weights on Metal. Falls back to 3-phase unfused path.
         var n_scratch: usize = 0;
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
-        // Phase 1: all gate+up GEMVs into scratch buffers (no siluMul yet)
+        // Detect fused-capable backend at comptime — avoids runtime dispatch overhead.
+        const use_fused = blk: {
+            switch (self.be) {
+                inline else => |be| {
+                    break :blk comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K");
+                },
+            }
+        };
+
+        // Phase 1: gate+up+activation per expert
         if (self.n_expert_shared > 0) {
             if (self.layerTensor(li, "ffn_gate_shexp.weight")) |gt| {
                 const ut = self.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
-                self.be.gemv(self.hidden2.ptr, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                if (use_fused and gt.dtype == .q2_k) {
+                    // Fused: gate GEMV + up GEMV + clampedSiluMul in 1 dispatch
+                    switch (self.be) {
+                        inline else => |be| {
+                            if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K")) {
+                                be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, gt.data_ptr, ut.data_ptr, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            }
+                        },
+                    }
+                } else {
+                    self.be.gemv(self.hidden2.ptr, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                    self.be.gemv(self.hidden2.ptr, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                }
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
             }
         }
         const shexp_slots = n_scratch;
+        var fused_experts = use_fused; // track if experts used fused path
 
         var de_ptrs: [9][*]const u8 = undefined;
         var de_dtype: DType = .f32;
@@ -1423,20 +1445,36 @@ pub const Ds4Model = struct {
             const gs = ds4ExpertStride(ge);
             const us = ds4ExpertStride(ue);
             const ds = ds4ExpertStride(de);
-            for (0..n_active) |j| {
-                const eid = top_ids[j];
-                self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
-                de_ptrs[n_scratch] = de.data_ptr + eid * ds;
-                slot_weights[n_scratch] = top_weights[j];
-                n_scratch += 1;
+            if (use_fused and ge.dtype == .q2_k) {
+                // Fused path: 1 dispatch per expert (gate+up+clampedSiluMul)
+                switch (self.be) {
+                    inline else => |be| {
+                        if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K")) {
+                            for (0..n_active) |j| {
+                                const eid = top_ids[j];
+                                be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                                de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                                slot_weights[n_scratch] = top_weights[j];
+                                n_scratch += 1;
+                            }
+                        }
+                    },
+                }
+            } else {
+                fused_experts = false;
+                for (0..n_active) |j| {
+                    const eid = top_ids[j];
+                    self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                    self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                    slot_weights[n_scratch] = top_weights[j];
+                    n_scratch += 1;
+                }
             }
         }
 
-        // Phase 2: clamped SiLU×mul (gate≤10, up±10) — single batched dispatch.
-        // All expert slots are contiguous in gate/up scratch buffers, so process
-        // n_scratch × ff elements in one GPU dispatch instead of n_scratch separate ones.
-        if (n_scratch > 0) {
+        // Phase 2: clampedSiluMul — skip when fused path already applied activation.
+        if (!fused_experts and n_scratch > 0) {
             self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
 

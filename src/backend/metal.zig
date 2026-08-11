@@ -207,6 +207,7 @@ pub const MetalBackend = struct {
     pipe_fused_ffn_gelu_q6_k: objc.id,
     pipe_fused_ffn_q5_k: objc.id,
     pipe_fused_ffn_gelu_q5_k: objc.id,
+    pipe_fused_ffn_clamped_silu_q2_k: objc.id,
     /// Scratch buffer for multi-pass reductions: 8 bytes = 2 × f32.
     /// Used by softmax (3-pass: max at offset 0, sum at offset 4)
     /// and l2Norm (2-pass: sum-of-squares at offset 0).
@@ -386,6 +387,7 @@ pub const MetalBackend = struct {
             .pipe_fused_ffn_gelu_q6_k = undefined,
             .pipe_fused_ffn_q5_k = undefined,
             .pipe_fused_ffn_gelu_q5_k = undefined,
+            .pipe_fused_ffn_clamped_silu_q2_k = undefined,
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
@@ -483,6 +485,7 @@ pub const MetalBackend = struct {
         self.pipe_fused_ffn_gelu_q6_k = try self.makePipeline("fused_ffn_gate_up_gelu_q6_k");
         self.pipe_fused_ffn_q5_k = try self.makePipeline("fused_ffn_gate_up_silu_q5_k");
         self.pipe_fused_ffn_gelu_q5_k = try self.makePipeline("fused_ffn_gate_up_gelu_q5_k");
+        self.pipe_fused_ffn_clamped_silu_q2_k = try self.makePipeline("fused_ffn_gate_up_clamped_silu_q2_k");
 
         return self;
     }
@@ -1427,6 +1430,35 @@ pub const MetalBackend = struct {
         setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
         setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
         const tg = gemvThreadgroupSize(.q5_k, n_embd);
+        self.endEncodeThreadgroups(enc, n_ff, tg);
+    }
+
+    /// Fused FFN for Q2_K weights with clamped SiLU (DeepSeek V4).
+    /// out[i] = clampedSilu(W_gate[i,:] @ x) * clamp(W_up[i,:] @ x, -10, 10).
+    pub fn fusedFfnGateUpClampedSiluQ2K(
+        self: *MetalBackend,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const w_bytes = weightBytes(.q2_k, n_ff, n_embd);
+        const x_ref = self.getBufRef(@ptrCast(x), n_embd * @sizeOf(f32));
+        const gate_ref = self.getBufRef(w_gate, w_bytes);
+        const up_ref = self.getBufRef(w_up, w_bytes);
+        const out_ref = self.getBufRef(@ptrCast(ff_out), n_ff * @sizeOf(f32));
+        const nf: u32 = @intCast(n_ff);
+        const ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_fused_ffn_clamped_silu_q2_k);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gate_ref, 1);
+        setBuf(enc, up_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nf), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        const tg = gemvThreadgroupSize(.q2_k, n_embd);
         self.endEncodeThreadgroups(enc, n_ff, tg);
     }
 
