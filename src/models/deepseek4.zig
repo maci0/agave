@@ -998,7 +998,8 @@ pub const Ds4Model = struct {
                     scores_h[pos + 1 + gi] = s;
                     running_max = @max(running_max, s);
                 }
-                // Softmax — max already known from scoring, skip max-finding pass.
+                // Softmax exp+sum — skip normalize pass, fold 1/sum into V weights.
+                var inline_sm: f32 = undefined;
                 {
                     const scores_sl = scores_h[0..sl_total];
                     var mx = running_max;
@@ -1011,25 +1012,19 @@ pub const Ds4Model = struct {
                         scores_sl[si..][0..8].* = ev;
                         sum_v += ev;
                     }
-                    var sm = @reduce(.Add, sum_v);
+                    inline_sm = @reduce(.Add, sum_v);
                     while (si < sl_total) : (si += 1) {
                         scores_sl[si] = @exp(scores_sl[si] - mx);
-                        sm += scores_sl[si];
+                        inline_sm += scores_sl[si];
                     }
-                    if (sink_data) |sd| sm += @exp(sd[h] - mx);
-                    const inv = 1.0 / sm;
-                    const inv_v: V8 = @splat(inv);
-                    si = 0;
-                    while (si + 8 <= sl_total) : (si += 8) {
-                        scores_sl[si..][0..8].* = @as(V8, scores_sl[si..][0..8].*) * inv_v;
-                    }
-                    while (si < sl_total) : (si += 1) scores_sl[si] *= inv;
+                    if (sink_data) |sd| inline_sm += @exp(sd[h] - mx);
                 }
-                // V accumulation — first-slot direct write avoids 2KB memset.
+                // V accumulation with unnormalized exp weights.
+                const sparse_thr_unnorm = sparse_v_threshold * inline_sm;
                 const ao_h = self.attn_out[h * kd ..][0..kd];
                 var first_written = false;
                 for (0..pos + 1) |t| {
-                    if (scores_h[t] < sparse_v_threshold) continue;
+                    if (scores_h[t] < sparse_thr_unnorm) continue;
                     const v_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr; // K=V shared
                     if (!first_written) {
                         kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
@@ -1046,7 +1041,6 @@ pub const Ds4Model = struct {
                     const wv: V8 = @splat(scores_h[pos + 1 + gi]);
                     var i: usize = 0;
                     if (!first_written) {
-                        // First accumulation: direct write
                         while (i + 8 <= kd) : (i += 8) {
                             ao_h[i..][0..8].* = @as(V8, ck[i..][0..8].*) * wv;
                         }
@@ -1059,6 +1053,16 @@ pub const Ds4Model = struct {
                         }
                         while (i < kd) : (i += 1) ao_h[i] += ck[i] * scores_h[pos + 1 + gi];
                     }
+                }
+                // Final normalize: divide accumulated output by softmax sum
+                {
+                    const inv_sm = 1.0 / inline_sm;
+                    const inv_sm_v: V8 = @splat(inv_sm);
+                    var ni: usize = 0;
+                    while (ni + 8 <= kd) : (ni += 8) {
+                        ao_h[ni..][0..8].* = @as(V8, ao_h[ni..][0..8].*) * inv_sm_v;
+                    }
+                    while (ni < kd) : (ni += 1) ao_h[ni] *= inv_sm;
                 }
             }
         } else {
