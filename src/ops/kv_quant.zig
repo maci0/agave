@@ -983,6 +983,40 @@ fn dotNvfp4(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
 // ── Weighted accumulation (acc += weight * dequant(kv)) ──────────
 
 /// Accumulate: acc[0..n] += weight * dequant(kv_data[0..n]).
+/// Dequantize kv_data and write weight * dequant(v) directly to out (no read of out).
+/// Used as a first-slot optimization to avoid memset + mulAccum for the first V position.
+pub fn kvScaledCopy(out: [*]f32, weight: f32, kv_data: [*]const u8, n: usize, kv_type: KvQuantType) void {
+    switch (kv_type) {
+        .q8_0 => scaledCopyQ8_0(out, weight, kv_data, n),
+        // Fallback for other types: zero + mulAccum
+        else => {
+            @memset(out[0..n], 0.0);
+            kvMulAccum(out, weight, kv_data, n, kv_type);
+        },
+    }
+}
+
+/// Q8_0 scaled copy: out[i] = weight * scale * i8_val (no read of out).
+fn scaledCopyQ8_0(out: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    const nb = (n + block_size - 1) / block_size;
+    for (0..nb) |b| {
+        const bp = kv_data + b * q8_0_block_bytes;
+        const scale: f32 = @floatCast(@as(f16, @bitCast(@as(*align(1) const u16, @ptrCast(bp)).*)));
+        const ws_v: V8 = @splat(weight * scale);
+        const base = b * block_size;
+        const count = @min(block_size, n - base);
+        var i: usize = 0;
+        while (i + 8 <= count) : (i += 8) {
+            const val_v: V8 = @floatFromInt(@as(@Vector(8, i8), @bitCast((bp + q8_0_scale_bytes + i)[0..8].*)));
+            out[base + i ..][0..8].* = ws_v * val_v;
+        }
+        const ws = weight * scale;
+        while (i < count) : (i += 1) {
+            out[base + i] = ws * @as(f32, @floatFromInt(@as(i8, @bitCast(bp[q8_0_scale_bytes + i]))));
+        }
+    }
+}
+
 pub fn kvMulAccum(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize, kv_type: KvQuantType) void {
     switch (kv_type) {
         .f32 => mulAccF32(acc, weight, kv_data, n),

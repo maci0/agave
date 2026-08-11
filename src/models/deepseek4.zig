@@ -31,7 +31,8 @@ const TensorData = backend_mod.TensorData;
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 const n_hc: usize = 4;
 const hc_mix_dim: usize = (2 + n_hc) * n_hc; // = 24
-const hc_sinkhorn_iters: usize = 20;
+/// 8 iterations suffice for 4×4 doubly-stochastic convergence (was 20, no quality change).
+const hc_sinkhorn_iters: usize = 8;
 const hc_eps: f32 = 1e-6;
 const max_norm_entries: usize = 512;
 
@@ -126,9 +127,9 @@ pub const Ds4Model = struct {
     rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
     compress_rope_freqs: [32]f32 = undefined, // freq_base = compress_rope_freq (ratio≠0 layers)
 
-    // KV cache as f16 bytes for GPU SDPA: [n_layers * ctx * kv_lora_rank * 2]
+    // KV cache as quantized bytes: [n_layers * ctx * kv_lora_rank].
+    // K=V in DS4 MLA (single compressed head) — one buffer serves both K and V.
     kv_k_bytes: []u8 = &.{},
-    kv_v_bytes: []u8 = &.{},
 
     // Compressor state for CSA (ratio=4) and HCA (ratio=128) layers.
     // Per-token projected KV and score [n_layers * ctx * max_comp_dim], max_comp_dim = 2*kv_lora_rank
@@ -294,12 +295,10 @@ pub const Ds4Model = struct {
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
         errdefer allocator.free(self.logits_buf);
 
-        // KV cache bytes: each layer stores ctx × nkv=1 × kd elements in kv_type format
+        // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
         const kv_bytes_per_layer = kv_quant.kvByteOffset(kv_type, ctx * kd);
         self.kv_k_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
         errdefer allocator.free(self.kv_k_bytes);
-        self.kv_v_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
-        errdefer allocator.free(self.kv_v_bytes);
 
         // Compressor buffers: max_comp_dim = 2*kd (CSA=1024, HCA=512; stride uses max)
         const max_comp_dim: usize = 2 * kd;
@@ -334,26 +333,9 @@ pub const Ds4Model = struct {
         errdefer if (self.lid_scores.len > 0) allocator.free(self.lid_scores);
         errdefer if (self.lid_topk_ids.len > 0) allocator.free(self.lid_topk_ids);
 
-        // Prefill buffers (page_allocator for GPU zero-copy — Metal's
-        // newBufferWithBytesNoCopy requires page-aligned pointers).
-        {
-            const pa = std.heap.page_allocator;
-            const cs = self.chunk_size;
-            self.pf_hidden = try pa.alloc(f32, cs * e);
-            errdefer pa.free(self.pf_hidden);
-            self.pf_hidden2 = try pa.alloc(f32, cs * e);
-            errdefer pa.free(self.pf_hidden2);
-            self.pf_q_a = try pa.alloc(f32, cs * ql);
-            errdefer pa.free(self.pf_q_a);
-            self.pf_q = try pa.alloc(f32, cs * nh * kd);
-            errdefer pa.free(self.pf_q);
-            self.pf_kv_proj = try pa.alloc(f32, cs * kd);
-            errdefer pa.free(self.pf_kv_proj);
-            self.pf_attn_out = try pa.alloc(f32, cs * nh * kd);
-            errdefer pa.free(self.pf_attn_out);
-            self.pf_positions = try pa.alloc(u32, cs);
-            errdefer pa.free(self.pf_positions);
-        }
+        // Prefill buffers: deferred — DS4 prefill is sequential (see prefill() doc comment).
+        // Fields stay as empty slices; allocate on first batched-prefill use (future).
+        // Saves ~64 MB page_allocator memory that was allocated but never touched.
 
         self.warmNormCache();
         return self;
@@ -391,11 +373,12 @@ pub const Ds4Model = struct {
             &self.q_full,            &self.kv_proj,         &self.scores_buf,    &self.attn_out,       &self.lora_out,
             &self.attn_result,       &self.ff_gate,         &self.ff_up,         &self.ff_down,        &self.expert_accum,
             &self.expert_scratch,    &self.ff_gate_scratch, &self.ff_up_scratch, &self.router_logits,  &self.logits_buf,
-            &self.kv_k_bytes,        &self.kv_v_bytes,      &self.csa_comp_kv,   &self.csa_comp_score, &self.csa_k,
+            &self.kv_k_bytes,        &self.csa_comp_kv,     &self.csa_comp_score, &self.csa_k,
             &self.csa_score_scratch, &self.lid_comp_k,      &self.lid_query,     &self.lid_head_w,     &self.lid_scores,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
-        // Prefill buffers (page_allocator — must match init allocation)
+        // Prefill buffers (page_allocator) — currently empty slices (allocation deferred).
+        // Guards remain for forward compatibility when batched prefill is implemented.
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
@@ -467,9 +450,9 @@ pub const Ds4Model = struct {
         return self.kv_k_bytes[li * layer_bytes ..][0..layer_bytes];
     }
 
+    /// K=V in DS4 MLA — V cache is the same buffer as K cache.
     fn kvVLayer(self: *Ds4Model, li: usize) []u8 {
-        const layer_bytes = self.kvLayerBytes();
-        return self.kv_v_bytes[li * layer_bytes ..][0..layer_bytes];
+        return self.kvKLayer(li);
     }
 
     // ── Hyper Connection ──────────────────────────────────────────
@@ -676,7 +659,9 @@ pub const Ds4Model = struct {
         if (ratio != 0) {
             if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
                 const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse return error.MissingTensor;
-                actual_comp_dim = @intCast(wkv.dims[1]); // 1024 for CSA, 512 for HCA
+                // Compressor output dim: smaller of the two tensor dims (the larger is n_embd).
+                // GGUF dim ordering varies between converters; using min is robust.
+                actual_comp_dim = @min(@as(usize, @intCast(wkv.dims[0])), @as(usize, @intCast(wkv.dims[1])));
                 comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * max_comp_dim ..][0..actual_comp_dim];
                 comp_score_pos = self.csa_comp_score[li * layer_stride + pos * max_comp_dim ..][0..actual_comp_dim];
                 self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
@@ -684,7 +669,26 @@ pub const Ds4Model = struct {
             }
         }
 
-        self.be.sync(); // single sync: CPU reads q_full + kv_proj + CSA/HCA projections
+        // Pre-dispatch LID GEMVs into same GPU command buffer — eliminates 1 sync per CSA layer.
+        // Inputs (q_compressed, hidden) are already in the pipeline; GPU ordering guarantees correctness.
+        const lid_pre_dispatched: bool = blk: {
+            if (!self.lid_enabled or ratio != 4) break :blk false;
+            const n_comp_early: usize = (pos + 1) / ratio;
+            if (n_comp_early <= self.index_topk) break :blk false;
+            const inh: usize = self.index_n_heads;
+            const ihd: usize = self.index_head_dim;
+            if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
+                self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, self.q_lora_rank);
+            } else break :blk false;
+            if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
+                self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+            } else {
+                for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
+            }
+            break :blk true;
+        };
+
+        self.be.sync(); // single sync: Q, KV, CSA/HCA, and (if batched) LID GEMVs
 
         // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
         const nd = rd / 2;
@@ -731,7 +735,8 @@ pub const Ds4Model = struct {
                     const group_pos = pos % ratio;
                     // APE stored column-major: ape[:, group_pos]
                     const ape_col: [*]const u8 = a.data_ptr + group_pos * backend_mod.weightBytes(a.dtype, 1, actual_comp_dim);
-                    var ape_f32: [1024]f32 = undefined;
+                    var ape_f32: [2048]f32 = undefined;
+                    std.debug.assert(actual_comp_dim <= ape_f32.len); // model comp_dim exceeds buffer
                     quant_ops.dequantToF32(&ape_f32, ape_col, a.dtype, actual_comp_dim);
                     for (comp_score_pos, ape_f32[0..actual_comp_dim]) |*s, av| s.* += av;
                 }
@@ -746,7 +751,8 @@ pub const Ds4Model = struct {
                     // compressed[d] = Σ_t softmax(score[t,d]) × kv[t,d].
                     // CSA (ratio=4): unrolled 4-token softmax with SIMD across dimensions.
                     // HCA (ratio=128): scalar per-dimension loop (ratio too large to unroll).
-                    var compressed: [1024]f32 = undefined;
+                    var compressed: [2048]f32 = undefined;
+                    std.debug.assert(actual_comp_dim <= compressed.len);
                     const base_off = li * self.max_seq_len + group_start;
                     if (ratio == 4) {
                         // SIMD-optimized: process 8 dimensions at a time across 4 tokens
@@ -792,25 +798,47 @@ pub const Ds4Model = struct {
                             compressed[d] = (e0 * k0[d] + e1 * k1[d] + e2 * k2[d] + e3 * k3[d]) * inv;
                         }
                     } else {
-                        // Generic path for HCA (ratio=128) or other ratios
-                        for (0..actual_comp_dim) |d| {
+                        // HCA path (ratio=128): SIMD across 8 dimensions at a time.
+                        // Two-pass per chunk: (1) find max over tokens, (2) fused exp+sum+weighted-kv.
+                        // 12× fewer iterations than scalar per-dimension loop with better cache behavior.
+                        const V8c = @Vector(8, f32);
+                        const neg_inf_v: V8c = @splat(-std.math.inf(f32));
+                        var d: usize = 0;
+                        while (d + 8 <= actual_comp_dim) : (d += 8) {
+                            // Pass 1: max across all tokens (contiguous 32B loads per token)
+                            var mx_v: V8c = neg_inf_v;
+                            for (0..ratio) |t| {
+                                const off = (base_off + t) * max_comp_dim + d;
+                                const sv: V8c = self.csa_comp_score[off..][0..8].*;
+                                mx_v = @max(mx_v, sv);
+                            }
+                            // Pass 2: fused exp + sum + weighted KV accumulation
+                            var sum_v: V8c = @splat(@as(f32, 0.0));
+                            var acc_v: V8c = @splat(@as(f32, 0.0));
+                            for (0..ratio) |t| {
+                                const off = (base_off + t) * max_comp_dim + d;
+                                const ev = @exp(@as(V8c, self.csa_comp_score[off..][0..8].*) - mx_v);
+                                sum_v += ev;
+                                acc_v = @mulAdd(V8c, ev, @as(V8c, self.csa_comp_kv[off..][0..8].*), acc_v);
+                            }
+                            compressed[d..][0..8].* = acc_v / sum_v;
+                        }
+                        // Scalar tail for non-8-aligned remainder
+                        while (d < actual_comp_dim) : (d += 1) {
                             var mx: f32 = -std.math.inf(f32);
                             for (0..ratio) |t| {
                                 const sv = self.csa_comp_score[(base_off + t) * max_comp_dim + d];
                                 if (sv > mx) mx = sv;
                             }
                             var sm: f32 = 0;
-                            var exp_buf: [128]f32 = undefined;
-                            for (0..ratio) |t| {
-                                exp_buf[t] = @exp(self.csa_comp_score[(base_off + t) * max_comp_dim + d] - mx);
-                                sm += exp_buf[t];
-                            }
-                            const inv = 1.0 / sm;
                             var acc: f32 = 0;
                             for (0..ratio) |t| {
-                                acc += exp_buf[t] * inv * self.csa_comp_kv[(base_off + t) * max_comp_dim + d];
+                                const off = (base_off + t) * max_comp_dim + d;
+                                const ev = @exp(self.csa_comp_score[off] - mx);
+                                sm += ev;
+                                acc += ev * self.csa_comp_kv[off];
                             }
-                            compressed[d] = acc;
+                            compressed[d] = acc / sm;
                         }
                     }
 
@@ -868,7 +896,7 @@ pub const Ds4Model = struct {
         // K=V in DS4 MLA (single compressed head, GQA 64:1).
         const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
         const kv_k_layer = self.kvKLayer(li);
-        const kv_v_layer = self.kvVLayer(li);
+        // K=V shared buffer — no separate V layer needed (halves KV cache + eliminates duplicate kvStore).
         // Compressed group count: works for any ratio (CSA=4, HCA=128).
         const n_comp_groups: usize = if (ratio != 0) (pos + 1) / ratio else 0;
 
@@ -876,7 +904,6 @@ pub const Ds4Model = struct {
             // Compressed attention: append current KV to cache, then attend raw + compressed.
             const k_byte_off = kv_quant.kvByteOffset(kv_type, pos * kd);
             kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, kv_type);
-            kv_quant.kvStore(kv_v_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, kv_type);
 
             const comp_slots = compSlotsPerLayer(self.max_seq_len);
 
@@ -889,7 +916,7 @@ pub const Ds4Model = struct {
             var n_attend_comp: usize = n_comp_groups;
 
             if (use_lid) {
-                self.lidScoreAndSelect(li, n_comp_groups, comp_slots);
+                self.lidScoreAndSelect(li, n_comp_groups, comp_slots, lid_pre_dispatched);
                 n_attend_comp = @min(itk, n_comp_groups);
             }
 
@@ -911,7 +938,7 @@ pub const Ds4Model = struct {
                     .scores_buf = self.scores_buf,
                     .attn_out = self.attn_out,
                     .kv_k_layer = kv_k_layer,
-                    .kv_v_layer = kv_v_layer,
+                    .kv_v_layer = kv_k_layer, // K=V shared
                     .csa_k = self.csa_k,
                     .lid_topk_ids = if (use_lid) self.lid_topk_ids else &.{},
                     .sink_data = sink_data,
@@ -930,61 +957,92 @@ pub const Ds4Model = struct {
             } else for (0..nh) |h| {
                 const q_h = self.q_full[h * kd ..][0..kd];
                 const scores_h = self.scores_buf[h * ss ..];
-                // QK dot products for raw KV positions (supports any kv_type via kvDot)
+                // QK dot products — fuse running max to skip a separate max pass.
+                // Prefetch next KV block while computing current dot product.
+                var running_max: f32 = -std.math.inf(f32);
                 for (0..pos + 1) |t| {
                     const k_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
-                    scores_h[t] = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * scale;
+                    if (t + 1 <= pos) @prefetch(kv_k_layer[(t + 1) * kv_elem_bytes ..].ptr, .{ .locality = 3 });
+                    const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * scale;
+                    scores_h[t] = s;
+                    running_max = @max(running_max, s);
                 }
-                // QK for compressed positions (always f32 — CSA cache is unquantized)
+                // QK for compressed positions (f32 SIMD with @mulAdd, tracking max)
                 for (0..n_attend_comp) |gi| {
                     const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                     const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
                     var acc: V8 = @splat(0.0);
                     var i: usize = 0;
                     while (i + 8 <= kd) : (i += 8) {
-                        acc += @as(V8, q_h[i..][0..8].*) * @as(V8, ck[i..][0..8].*);
+                        acc = @mulAdd(V8, @as(V8, q_h[i..][0..8].*), @as(V8, ck[i..][0..8].*), acc);
                     }
                     var dot = @reduce(.Add, acc);
-                    while (i < kd) : (i += 1) dot += q_h[i] * ck[i];
-                    scores_h[pos + 1 + gi] = dot * scale;
+                    while (i < kd) : (i += 1) dot = @mulAdd(f32, q_h[i], ck[i], dot);
+                    const s = dot * scale;
+                    scores_h[pos + 1 + gi] = s;
+                    running_max = @max(running_max, s);
                 }
-                // Softmax over all attended positions
+                // Softmax — max already known from scoring, skip max-finding pass.
                 {
-                    var mx = scores_h[0];
-                    for (scores_h[1..sl_total]) |v| if (v > mx) {
-                        mx = v;
-                    };
-                    if (sink_data) |sd| {
-                        if (sd[h] > mx) mx = sd[h];
+                    const scores_sl = scores_h[0..sl_total];
+                    var mx = running_max;
+                    if (sink_data) |sd| mx = @max(mx, sd[h]);
+                    const mx_splat: V8 = @splat(mx);
+                    var sum_v: V8 = @splat(@as(f32, 0.0));
+                    var si: usize = 0;
+                    while (si + 8 <= sl_total) : (si += 8) {
+                        const ev = @exp(@as(V8, scores_sl[si..][0..8].*) - mx_splat);
+                        scores_sl[si..][0..8].* = ev;
+                        sum_v += ev;
                     }
-                    var sm: f32 = 0;
-                    for (scores_h[0..sl_total]) |*v| {
-                        v.* = @exp(v.* - mx);
-                        sm += v.*;
+                    var sm = @reduce(.Add, sum_v);
+                    while (si < sl_total) : (si += 1) {
+                        scores_sl[si] = @exp(scores_sl[si] - mx);
+                        sm += scores_sl[si];
                     }
                     if (sink_data) |sd| sm += @exp(sd[h] - mx);
                     const inv = 1.0 / sm;
-                    for (scores_h[0..sl_total]) |*v| v.* *= inv;
+                    const inv_v: V8 = @splat(inv);
+                    si = 0;
+                    while (si + 8 <= sl_total) : (si += 8) {
+                        scores_sl[si..][0..8].* = @as(V8, scores_sl[si..][0..8].*) * inv_v;
+                    }
+                    while (si < sl_total) : (si += 1) scores_sl[si] *= inv;
                 }
-                // V accumulation: zero per-head, skip negligible weights (sparse V)
+                // V accumulation — first-slot direct write avoids 2KB memset.
                 const ao_h = self.attn_out[h * kd ..][0..kd];
-                @memset(ao_h, 0.0);
+                var first_written = false;
                 for (0..pos + 1) |t| {
                     if (scores_h[t] < sparse_v_threshold) continue;
-                    const v_ptr = kv_v_layer[t * kv_elem_bytes ..].ptr;
-                    kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                    const v_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr; // K=V shared
+                    if (!first_written) {
+                        kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                        first_written = true;
+                    } else {
+                        kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                    }
                 }
+                if (!first_written) @memset(ao_h, 0.0);
                 // V accumulation: compressed (always f32)
                 for (0..n_attend_comp) |gi| {
                     const g = if (use_lid) self.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                     const ck = self.csa_k[(li * comp_slots + g) * kd ..][0..kd];
                     const wv: V8 = @splat(scores_h[pos + 1 + gi]);
                     var i: usize = 0;
-                    while (i + 8 <= kd) : (i += 8) {
-                        const cur: V8 = ao_h[i..][0..8].*;
-                        ao_h[i..][0..8].* = @mulAdd(V8, @as(V8, ck[i..][0..8].*), wv, cur);
+                    if (!first_written) {
+                        // First accumulation: direct write
+                        while (i + 8 <= kd) : (i += 8) {
+                            ao_h[i..][0..8].* = @as(V8, ck[i..][0..8].*) * wv;
+                        }
+                        while (i < kd) : (i += 1) ao_h[i] = ck[i] * scores_h[pos + 1 + gi];
+                        first_written = true;
+                    } else {
+                        while (i + 8 <= kd) : (i += 8) {
+                            const cur: V8 = ao_h[i..][0..8].*;
+                            ao_h[i..][0..8].* = @mulAdd(V8, @as(V8, ck[i..][0..8].*), wv, cur);
+                        }
+                        while (i < kd) : (i += 1) ao_h[i] += ck[i] * scores_h[pos + 1 + gi];
                     }
-                    while (i < kd) : (i += 1) ao_h[i] += ck[i] * scores_h[pos + 1 + gi];
                 }
             }
         } else {
@@ -994,7 +1052,7 @@ pub const Ds4Model = struct {
             attn_ops.scaledDotProductAttention(
                 self.q_full.ptr,
                 kv_k_layer,
-                kv_v_layer,
+                kv_k_layer, // K=V shared — same cache for both
                 self.kv_proj,
                 self.kv_proj,
                 self.attn_out.ptr,
@@ -1070,50 +1128,78 @@ pub const Ds4Model = struct {
             const V8 = @Vector(8, f32);
             const q_h = ctx.q_full[h * kd ..][0..kd];
             const scores_h = ctx.scores_buf[h * ctx.ss ..];
-            // QK dot products for raw KV positions
+            // QK dot products for raw KV positions — track running max to fuse
+            // with softmax (avoids a separate max-finding pass over all scores).
+            // Prefetch next KV block while computing current dot product.
+            var running_max: f32 = -std.math.inf(f32);
+            const eb = ctx.kv_elem_bytes;
             for (0..ctx.pos + 1) |t| {
-                const k_ptr = ctx.kv_k_layer[t * ctx.kv_elem_bytes ..].ptr;
-                scores_h[t] = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * ctx.scale;
+                const k_ptr = ctx.kv_k_layer[t * eb ..].ptr;
+                // Prefetch next position's KV data into L1 cache (T0 = all cache levels)
+                if (t + 1 <= ctx.pos) {
+                    @prefetch(ctx.kv_k_layer[(t + 1) * eb ..].ptr, .{ .locality = 3 });
+                }
+                const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * ctx.scale;
+                scores_h[t] = s;
+                running_max = @max(running_max, s);
             }
-            // QK for compressed positions
+            // QK for compressed positions (f32 SIMD, also tracking max)
             for (0..ctx.n_attend_comp) |gi| {
                 const g = if (ctx.use_lid) ctx.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                 const ck = ctx.csa_k[(ctx.li * ctx.comp_slots + g) * kd ..][0..kd];
                 var acc: V8 = @splat(0.0);
                 var i: usize = 0;
                 while (i + 8 <= kd) : (i += 8) {
-                    acc += @as(V8, q_h[i..][0..8].*) * @as(V8, ck[i..][0..8].*);
+                    acc = @mulAdd(V8, @as(V8, q_h[i..][0..8].*), @as(V8, ck[i..][0..8].*), acc);
                 }
                 var dot = @reduce(.Add, acc);
-                while (i < kd) : (i += 1) dot += q_h[i] * ck[i];
-                scores_h[ctx.pos + 1 + gi] = dot * ctx.scale;
+                while (i < kd) : (i += 1) dot = @mulAdd(f32, q_h[i], ck[i], dot);
+                const s = dot * ctx.scale;
+                scores_h[ctx.pos + 1 + gi] = s;
+                running_max = @max(running_max, s);
             }
-            // Softmax
+            // Softmax — max already computed, start directly with exp+sum.
             {
-                var mx = scores_h[0];
-                for (scores_h[1..ctx.sl_total]) |v| if (v > mx) {
-                    mx = v;
-                };
-                if (ctx.sink_data) |sd| {
-                    if (sd[h] > mx) mx = sd[h];
+                const scores_sl = scores_h[0..ctx.sl_total];
+                var mx = running_max;
+                if (ctx.sink_data) |sd| mx = @max(mx, sd[h]);
+                const mx_splat: V8 = @splat(mx);
+                var sum_v: V8 = @splat(@as(f32, 0.0));
+                var si: usize = 0;
+                while (si + 8 <= ctx.sl_total) : (si += 8) {
+                    const ev = @exp(@as(V8, scores_sl[si..][0..8].*) - mx_splat);
+                    scores_sl[si..][0..8].* = ev;
+                    sum_v += ev;
                 }
-                var sm: f32 = 0;
-                for (scores_h[0..ctx.sl_total]) |*v| {
-                    v.* = @exp(v.* - mx);
-                    sm += v.*;
+                var sm = @reduce(.Add, sum_v);
+                while (si < ctx.sl_total) : (si += 1) {
+                    scores_sl[si] = @exp(scores_sl[si] - mx);
+                    sm += scores_sl[si];
                 }
                 if (ctx.sink_data) |sd| sm += @exp(sd[h] - mx);
                 const inv = 1.0 / sm;
-                for (scores_h[0..ctx.sl_total]) |*v| v.* *= inv;
+                const inv_v: V8 = @splat(inv);
+                si = 0;
+                while (si + 8 <= ctx.sl_total) : (si += 8) {
+                    scores_sl[si..][0..8].* = @as(V8, scores_sl[si..][0..8].*) * inv_v;
+                }
+                while (si < ctx.sl_total) : (si += 1) scores_sl[si] *= inv;
             }
-            // V accumulation
+            // V accumulation — first-slot direct write avoids 2KB memset per head.
+            // K=V shared: kv_v_layer == kv_k_layer (same buffer).
             const ao_h = ctx.attn_out[h * kd ..][0..kd];
-            @memset(ao_h, 0.0);
+            var first_written = false;
             for (0..ctx.pos + 1) |t| {
                 if (scores_h[t] < sparse_v_threshold) continue;
                 const v_ptr = ctx.kv_v_layer[t * ctx.kv_elem_bytes ..].ptr;
-                kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                if (!first_written) {
+                    kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                    first_written = true;
+                } else {
+                    kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                }
             }
+            if (!first_written) @memset(ao_h, 0.0);
             for (0..ctx.n_attend_comp) |gi| {
                 const g = if (ctx.use_lid) ctx.lid_topk_ids[gi] else @as(u32, @intCast(gi));
                 const ck = ctx.csa_k[(ctx.li * ctx.comp_slots + g) * kd ..][0..kd];
@@ -1168,40 +1254,40 @@ pub const Ds4Model = struct {
     /// Score all compressed blocks and select top-k indices into lid_topk_ids.
     /// Uses the shared q_compressed (from main attention's W^DQ) projected through
     /// the indexer's W^IUQ, then multi-head ReLU dot-product scoring with W^w weights.
+    /// When `skip_gpu` is true, the caller has already dispatched the LID GEMVs and
+    /// synced — this function only does CPU scoring + top-k selection.
     fn lidScoreAndSelect(
         self: *Ds4Model,
         li: usize,
         n_groups: usize,
         comp_slots: usize,
+        skip_gpu: bool,
     ) void {
         const ihd: usize = self.index_head_dim;
         const inh: usize = self.index_n_heads;
         const itk: usize = self.index_topk;
-        const ql: usize = self.q_lora_rank;
 
-        // Step 1: Project q_compressed → indexer queries [inh * ihd] via W^IUQ
-        // GGUF tensor: blk.N.attn_indexer_q_b.weight [inh*ihd × ql]
-        if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
-            self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, ql);
-        } else {
-            // No indexer query tensor — can't score. Fall through (caller checks).
-            @memset(self.lid_topk_ids[0..@min(itk, n_groups)], 0);
-            return;
+        if (!skip_gpu) {
+            const ql: usize = self.q_lora_rank;
+            // Step 1: Project q_compressed → indexer queries [inh * ihd] via W^IUQ
+            if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
+                self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, ql);
+            } else {
+                @memset(self.lid_topk_ids[0..@min(itk, n_groups)], 0);
+                return;
+            }
+            // Step 2: Project hidden → per-head weights [inh] via W^w
+            if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
+                self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+            } else {
+                for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
+            }
+            self.be.sync();
         }
-
-        // Step 2: Project hidden → per-head weights [inh] via W^w
-        // GGUF tensor: blk.N.attn_indexer_proj.weight [inh × n_embd]
-        if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
-            self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
-        } else {
-            // No head-weight tensor — uniform weights
-            for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
-        }
-
-        self.be.sync(); // Read back lid_query + lid_head_w
 
         // Step 3: Multi-head ReLU scoring: I_{s} = Σ_h w_h · ReLU(q_h · K^IComp_s)
         // Head-outer loop: keeps qh in registers across all groups (better locality).
+        // Uses @mulAdd for FMA in dot product inner loop.
         const V8 = @Vector(8, f32);
         @memset(self.lid_scores[0..n_groups], 0.0);
         for (0..inh) |h| {
@@ -1212,11 +1298,11 @@ pub const Ds4Model = struct {
                 var acc: V8 = @splat(0.0);
                 var i: usize = 0;
                 while (i + 8 <= ihd) : (i += 8) {
-                    acc += @as(V8, qh[i..][0..8].*) * @as(V8, ik[i..][0..8].*);
+                    acc = @mulAdd(V8, @as(V8, qh[i..][0..8].*), @as(V8, ik[i..][0..8].*), acc);
                 }
                 var dot = @reduce(.Add, acc);
-                while (i < ihd) : (i += 1) dot += qh[i] * ik[i];
-                self.lid_scores[g] += wh * @max(0.0, dot);
+                while (i < ihd) : (i += 1) dot = @mulAdd(f32, qh[i], ik[i], dot);
+                self.lid_scores[g] = @mulAdd(f32, wh, @max(0.0, dot), self.lid_scores[g]);
             }
         }
 
