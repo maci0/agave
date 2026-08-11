@@ -308,12 +308,17 @@ pub const Ds4Model = struct {
         self.kv_k_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
         errdefer allocator.free(self.kv_k_bytes);
 
-        // Compressor buffers: max_comp_dim = 2*kd (CSA=1024, HCA=512; stride uses max)
+        // Compressor buffers: per-token projections for the current compression group only.
+        // CSA groups have ratio=4, HCA groups have ratio=128. We use max_ratio=128 as a
+        // circular buffer per layer — completed groups are compressed into csa_k and the
+        // per-token slots are reused. This is O(layers × max_ratio) instead of O(layers × ctx),
+        // reducing memory from ~92GB to ~44MB at 256K context.
         const max_comp_dim: usize = 2 * kd;
         const comp_slots = compSlotsPerLayer(ctx);
-        self.csa_comp_kv = try allocator.alloc(f32, nl * ctx * max_comp_dim);
+        const max_ratio: usize = 128; // HCA max group size
+        self.csa_comp_kv = try allocator.alloc(f32, nl * max_ratio * max_comp_dim);
         errdefer allocator.free(self.csa_comp_kv);
-        self.csa_comp_score = try allocator.alloc(f32, nl * ctx * max_comp_dim);
+        self.csa_comp_score = try allocator.alloc(f32, nl * max_ratio * max_comp_dim);
         errdefer allocator.free(self.csa_comp_score);
         self.csa_k = try allocator.alloc(f32, nl * comp_slots * kd);
         errdefer allocator.free(self.csa_k);
@@ -657,7 +662,9 @@ pub const Ds4Model = struct {
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
         // Both batched with Q+KV in same GPU command buffer — single sync covers all.
-        const layer_stride = self.max_seq_len * max_comp_dim;
+        // Circular buffer: per-token projections indexed by pos % comp_buf_ratio (128).
+        const comp_buf_ratio: usize = 128; // circular buffer stride per layer
+        const comp_layer_stride = comp_buf_ratio * max_comp_dim;
         var comp_kv_pos: []f32 = &.{};
         var comp_score_pos: []f32 = &.{};
         var actual_comp_dim: usize = 0;
@@ -665,11 +672,10 @@ pub const Ds4Model = struct {
         if (ratio != 0) {
             if (self.layerTensor(li, "attn_compressor_kv.weight")) |wkv| {
                 const kwgate = self.layerTensor(li, "attn_compressor_gate.weight") orelse return error.MissingTensor;
-                // Compressor output dim: smaller of the two tensor dims (the larger is n_embd).
-                // GGUF dim ordering varies between converters; using min is robust.
                 actual_comp_dim = @min(@as(usize, @intCast(wkv.dims[0])), @as(usize, @intCast(wkv.dims[1])));
-                comp_kv_pos = self.csa_comp_kv[li * layer_stride + pos * max_comp_dim ..][0..actual_comp_dim];
-                comp_score_pos = self.csa_comp_score[li * layer_stride + pos * max_comp_dim ..][0..actual_comp_dim];
+                const circ_pos = pos % comp_buf_ratio;
+                comp_kv_pos = self.csa_comp_kv[li * comp_layer_stride + circ_pos * max_comp_dim ..][0..actual_comp_dim];
+                comp_score_pos = self.csa_comp_score[li * comp_layer_stride + circ_pos * max_comp_dim ..][0..actual_comp_dim];
                 self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
                 self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, actual_comp_dim, e);
             }
@@ -759,17 +765,20 @@ pub const Ds4Model = struct {
                     // HCA (ratio=128): scalar per-dimension loop (ratio too large to unroll).
                     var compressed: [2048]f32 = undefined;
                     std.debug.assert(actual_comp_dim <= compressed.len);
-                    const base_off = li * self.max_seq_len + group_start;
+                    // Circular buffer: group_start % comp_buf_ratio gives the start slot.
+                    // Groups are ratio-aligned, so slots within a group are consecutive
+                    // modulo comp_buf_ratio (which is >= max(ratio)=128).
+                    const circ_base = li * comp_layer_stride + (group_start % comp_buf_ratio) * max_comp_dim;
                     if (ratio == 4) {
                         // SIMD-optimized: process 8 dimensions at a time across 4 tokens
-                        const s0 = self.csa_comp_score[base_off * max_comp_dim ..][0..actual_comp_dim];
-                        const s1 = self.csa_comp_score[(base_off + 1) * max_comp_dim ..][0..actual_comp_dim];
-                        const s2 = self.csa_comp_score[(base_off + 2) * max_comp_dim ..][0..actual_comp_dim];
-                        const s3 = self.csa_comp_score[(base_off + 3) * max_comp_dim ..][0..actual_comp_dim];
-                        const k0 = self.csa_comp_kv[base_off * max_comp_dim ..][0..actual_comp_dim];
-                        const k1 = self.csa_comp_kv[(base_off + 1) * max_comp_dim ..][0..actual_comp_dim];
-                        const k2 = self.csa_comp_kv[(base_off + 2) * max_comp_dim ..][0..actual_comp_dim];
-                        const k3 = self.csa_comp_kv[(base_off + 3) * max_comp_dim ..][0..actual_comp_dim];
+                        const s0 = self.csa_comp_score[circ_base ..][0..actual_comp_dim];
+                        const s1 = self.csa_comp_score[circ_base + max_comp_dim ..][0..actual_comp_dim];
+                        const s2 = self.csa_comp_score[circ_base + 2 * max_comp_dim ..][0..actual_comp_dim];
+                        const s3 = self.csa_comp_score[circ_base + 3 * max_comp_dim ..][0..actual_comp_dim];
+                        const k0 = self.csa_comp_kv[circ_base ..][0..actual_comp_dim];
+                        const k1 = self.csa_comp_kv[circ_base + max_comp_dim ..][0..actual_comp_dim];
+                        const k2 = self.csa_comp_kv[circ_base + 2 * max_comp_dim ..][0..actual_comp_dim];
+                        const k3 = self.csa_comp_kv[circ_base + 3 * max_comp_dim ..][0..actual_comp_dim];
                         const V8 = @Vector(8, f32);
                         var d: usize = 0;
                         while (d + 8 <= actual_comp_dim) : (d += 8) {
@@ -814,7 +823,7 @@ pub const Ds4Model = struct {
                             // Pass 1: max across all tokens (contiguous 32B loads per token)
                             var mx_v: V8c = neg_inf_v;
                             for (0..ratio) |t| {
-                                const off = (base_off + t) * max_comp_dim + d;
+                                const off = circ_base + t * max_comp_dim + d;
                                 const sv: V8c = self.csa_comp_score[off..][0..8].*;
                                 mx_v = @max(mx_v, sv);
                             }
@@ -822,7 +831,7 @@ pub const Ds4Model = struct {
                             var sum_v: V8c = @splat(@as(f32, 0.0));
                             var acc_v: V8c = @splat(@as(f32, 0.0));
                             for (0..ratio) |t| {
-                                const off = (base_off + t) * max_comp_dim + d;
+                                const off = circ_base + t * max_comp_dim + d;
                                 const ev = @exp(@as(V8c, self.csa_comp_score[off..][0..8].*) - mx_v);
                                 sum_v += ev;
                                 acc_v = @mulAdd(V8c, ev, @as(V8c, self.csa_comp_kv[off..][0..8].*), acc_v);
@@ -833,13 +842,13 @@ pub const Ds4Model = struct {
                         while (d < actual_comp_dim) : (d += 1) {
                             var mx: f32 = -std.math.inf(f32);
                             for (0..ratio) |t| {
-                                const sv = self.csa_comp_score[(base_off + t) * max_comp_dim + d];
+                                const sv = self.csa_comp_score[circ_base + t * max_comp_dim + d];
                                 if (sv > mx) mx = sv;
                             }
                             var sm: f32 = 0;
                             var acc: f32 = 0;
                             for (0..ratio) |t| {
-                                const off = (base_off + t) * max_comp_dim + d;
+                                const off = circ_base + t * max_comp_dim + d;
                                 const ev = @exp(self.csa_comp_score[off] - mx);
                                 sm += ev;
                                 acc += ev * self.csa_comp_kv[off];
