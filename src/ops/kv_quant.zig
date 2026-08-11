@@ -281,17 +281,22 @@ inline fn rotorForward(buf: *[32]f32) void {
         //   y' = -2*s*b12*x + (s²-b12²)*y
         //   z' = z (unchanged — rotation is in xy plane)
         const ss = s * s;
-        const bb = b12 * b12;
+        const bb12 = b12 * b12;
         const sb2 = 2.0 * s * b12;
-        const diag = ss - bb;
 
-        // General 3D rotor (all bivector components)
+        // General 3D rotor: RvR̃ rotation matrix diagonal elements differ per axis.
+        // R₁₁ = s² + b12² - b13² - b23²   (x-diagonal)
+        // R₂₂ = s² - b12² + b13² - b23²   (y-diagonal)
+        // R₃₃ = s² - b12² - b13² + b23²   (z-diagonal)
         const bb13 = b13 * b13;
         const bb23 = b23 * b23;
+        const diag_x = ss + bb12 - bb13 - bb23;
+        const diag_y = ss - bb12 + bb13 - bb23;
+        const diag_z = ss - bb12 - bb13 + bb23;
 
-        buf[base] = diag * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
-        buf[base + 1] = -sb2 * x + diag * y + 2.0 * (s * b13 + b12 * b23) * z;
-        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + (ss + bb - bb13 - bb23) * z;
+        buf[base] = diag_x * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
+        buf[base + 1] = -sb2 * x + diag_y * y + 2.0 * (s * b13 + b12 * b23) * z;
+        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + diag_z * z;
     }
 }
 
@@ -310,15 +315,17 @@ inline fn rotorInverse(buf: *[32]f32) void {
         const z = buf[base + 2];
 
         const ss = s * s;
-        const bb = b12 * b12;
+        const bb12 = b12 * b12;
         const sb2 = 2.0 * s * b12;
-        const diag = ss - bb;
         const bb13 = b13 * b13;
         const bb23 = b23 * b23;
+        const diag_x = ss + bb12 - bb13 - bb23;
+        const diag_y = ss - bb12 + bb13 - bb23;
+        const diag_z = ss - bb12 - bb13 + bb23;
 
-        buf[base] = diag * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
-        buf[base + 1] = -sb2 * x + diag * y + 2.0 * (s * b13 + b12 * b23) * z;
-        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + (ss + bb - bb13 - bb23) * z;
+        buf[base] = diag_x * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
+        buf[base + 1] = -sb2 * x + diag_y * y + 2.0 * (s * b13 + b12 * b23) * z;
+        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + diag_z * z;
     }
 }
 
@@ -342,7 +349,7 @@ fn rotorStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
         const norm = @sqrt(@reduce(.Add, norm_acc));
         const bp = dst + blk_i * bb;
 
-        if (norm == 0) {
+        if (norm < absmax_epsilon) {
             @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
             @memset(bp[2..bb], 0);
             continue;
@@ -1153,8 +1160,8 @@ fn turboStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
         const norm = @sqrt(norm_sq);
         const bp = dst + blk * bb;
 
-        if (norm == 0) {
-            // Zero vector: store zero norm and zero indices
+        if (norm < absmax_epsilon) {
+            // Near-zero vector: store zero norm and zero indices
             @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
             @memset(bp[2..bb], 0);
             continue;
@@ -1208,7 +1215,7 @@ fn planarStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void 
         const norm = @sqrt(@reduce(.Add, norm_acc));
         const bp = dst + blk * bb;
 
-        if (norm == 0) {
+        if (norm < absmax_epsilon) {
             @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
             @memset(bp[2..bb], 0);
             continue;
@@ -1248,7 +1255,7 @@ fn isoStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
         const norm = @sqrt(@reduce(.Add, norm_acc));
         const bp = dst + blk * bb;
 
-        if (norm == 0) {
+        if (norm < absmax_epsilon) {
             @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
             @memset(bp[2..bb], 0);
             continue;
@@ -1612,15 +1619,26 @@ fn isoMulAccum(comptime bits: u3, acc: [*]f32, weight: f32, kv_data: [*]const u8
 
 // ── FP8 E4M3 f32→u8 conversion ──────────────────────────────────
 
+/// Log-once flag for NaN inputs to f32ToFp8E4M3. Avoids hot-path spam while
+/// still surfacing KV cache corruption on the first occurrence.
+var fp8_nan_warned: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 /// Convert f32 to FP8 E4M3 (clamp to representable range, round to nearest).
 /// E4M3: 1 sign + 4 exponent (bias=7) + 3 mantissa. Max value = 448.0.
+/// NaN inputs are clamped to max finite (448.0) and a warning is logged once.
 fn f32ToFp8E4M3(val: f32) u8 {
     const bits: u32 = @bitCast(val);
     const sign: u8 = @truncate(bits >> 31);
     const abs_val = @abs(val);
 
     if (abs_val == 0) return sign << 7;
-    if (!std.math.isFinite(abs_val)) return (sign << 7) | fp8_e4m3_max_finite;
+    if (!std.math.isFinite(abs_val)) {
+        if (std.math.isNan(val) and !fp8_nan_warned.load(.monotonic)) {
+            fp8_nan_warned.store(true, .monotonic);
+            std.log.warn("f32ToFp8E4M3: NaN input clamped to max finite — possible KV cache corruption", .{});
+        }
+        return (sign << 7) | fp8_e4m3_max_finite;
+    }
 
     const clamped = @min(abs_val, fp8_e4m3_max);
 

@@ -209,13 +209,23 @@ pub const PagedKvCache = struct {
     }
 
     /// Release a physical block back to the free list.
-    /// Guards against double-free (logs error and returns if all blocks already free).
+    /// Guards against double-free: checks both full-list overflow and per-block
+    /// scan of the free list in debug mode.
     pub fn freeBlock(self: *PagedKvCache, block_id: u32) void {
         std.debug.assert(block_id < self.blocks.len);
-        // Double-free guard: all blocks already free.
+        // Full-list guard (all blocks already free).
         if (self.free_list.items.len >= self.blocks.len) {
             std.log.err("freeBlock: free list full — double-free of block {d}", .{block_id});
             return;
+        }
+        // Debug-mode per-block double-free check: scan free list for this block.
+        if (std.debug.runtime_safety) {
+            for (self.free_list.items) |fid| {
+                if (fid == block_id) {
+                    std.log.err("freeBlock: block {d} already on free list (double-free)", .{block_id});
+                    return;
+                }
+            }
         }
         self.blocks[block_id].used = 0;
         self.blocks[block_id].ref_count = 1;
@@ -313,7 +323,7 @@ pub const RadixTree = struct {
     hash_cache: std.AutoHashMap(u64, HashCacheEntry) = undefined,
     hash_cache_inited: bool = false,
 
-    const HashCacheEntry = struct { matched: usize, node: *RadixNode };
+    const HashCacheEntry = struct { matched: usize, node: *RadixNode, query_len: usize };
     const hash_cache_max_entries: usize = 64;
 
     /// Create an empty radix tree with a root node.
@@ -345,8 +355,11 @@ pub const RadixTree = struct {
         if (self.hash_cache_inited and tokens.len > 0) {
             const h = hashTokens(tokens);
             if (self.hash_cache.get(h)) |entry| {
-                // Verify the cached node is still valid (tokens match)
-                if (entry.matched <= tokens.len) {
+                // Verify query length matches exactly to reduce xxHash64 collision risk.
+                // Note: a residual collision is still possible when two different token
+                // sequences of the same length produce the same hash, but this is
+                // astronomically unlikely with 64-bit hashes.
+                if (entry.query_len == tokens.len and entry.matched <= tokens.len) {
                     self.touchNode(entry.node);
                     return .{ .matched = entry.matched, .blocks = entry.node.block_ids };
                 }
@@ -387,7 +400,7 @@ pub const RadixTree = struct {
         if (self.hash_cache_inited and pos > 0 and tokens.len > 0) {
             const h = hashTokens(tokens);
             if (self.hash_cache.count() < hash_cache_max_entries) {
-                self.hash_cache.put(h, .{ .matched = pos, .node = node }) catch |err| {
+                self.hash_cache.put(h, .{ .matched = pos, .node = node, .query_len = tokens.len }) catch |err| {
                     std.log.debug("prefix cache hash insert failed: {s}", .{@errorName(err)});
                 };
             }
@@ -514,7 +527,13 @@ pub const RadixTree = struct {
                             if (attach_bucket != suffix_attach and mid.children[attach_bucket] == null) break;
                             attach_bucket +%= 1;
                         }
-                        mid.children[attach_bucket] = nl;
+                        if (attach_probes >= attach_max) {
+                            // Probe exhaustion — all slots occupied; free leaf to avoid
+                            // overwriting an existing child or leaking memory.
+                            nl.deinit(self.allocator);
+                        } else {
+                            mid.children[attach_bucket] = nl;
+                        }
                     }
 
                     // Replace original child with intermediate node in parent
@@ -523,7 +542,7 @@ pub const RadixTree = struct {
                 }
             } else {
                 // No matching child — create one at first free slot
-                const free_bucket = first_free_bucket orelse ideal_bucket;
+                const free_bucket = first_free_bucket orelse return error.RadixTreeFull;
                 const remaining_tokens = tokens[pos..];
                 const remaining_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
                 const new_child = try RadixNode.init(self.allocator, remaining_tokens, remaining_blocks);
@@ -984,4 +1003,17 @@ test "RadixTree multiple disjoint sequences" {
     // Neither should interfere with the other
     const m3 = tree.matchPrefix(&.{ 1, 200, 300 });
     try std.testing.expectEqual(@as(usize, 0), m3.matched);
+}
+
+test "freeBlock double-free guard" {
+    const allocator = std.testing.allocator;
+    var paged = try PagedKvCache.init(allocator, 1, 4, 4, 16);
+    defer paged.deinit();
+
+    const b0 = paged.allocBlock().?;
+    paged.freeBlock(b0);
+    // Second free should be caught by the debug guard and not crash.
+    paged.freeBlock(b0);
+    // Free list should have 4 blocks (3 original free + 1 freed), not 5.
+    try std.testing.expectEqual(@as(usize, 4), paged.freeCount());
 }

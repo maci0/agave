@@ -117,8 +117,14 @@ pub const LineEditor = struct {
                 };
                 if (result.n == 0) {
                     const remaining = total - i;
-                    @memcpy(leftover[0..remaining], read_buf[i..total]);
-                    leftover_len = remaining;
+                    if (remaining > leftover.len) {
+                        // Discard excess data to prevent overflow
+                        @memcpy(leftover[0..leftover.len], read_buf[i..][0..leftover.len]);
+                        leftover_len = leftover.len;
+                    } else {
+                        @memcpy(leftover[0..remaining], read_buf[i..total]);
+                        leftover_len = remaining;
+                    }
                     break;
                 }
                 i += result.n;

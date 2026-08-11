@@ -125,6 +125,19 @@ pub const Recipe = struct {
                 .max_tokens = 1024,
             },
         },
+        // ── Qwen 2 on Metal Q4 — older Qwen variant, similar tuning ──
+        .{
+            .arch_prefix = "qwen2",
+            .backend = "Metal",
+            .quant = "Q4",
+            .recipe = .{
+                .name = "Qwen2 Q4 Metal",
+                .temperature = 0.7,
+                .top_p = 0.8,
+                .repeat_penalty = 1.1,
+                .max_tokens = 1024,
+            },
+        },
         .{
             .arch_prefix = "gemma",
             .backend = "Metal",
@@ -160,6 +173,26 @@ pub const Recipe = struct {
                 .temperature = 0.7,
                 .repeat_penalty = 1.1,
                 .max_tokens = 1024,
+            },
+        },
+        // ── DeepSeek V2 — shares inference path with GLM-4, same repeat penalty ──
+        .{
+            .arch_prefix = "deepseek",
+            .backend = "",
+            .quant = "",
+            .recipe = .{
+                .name = "DeepSeek V2 generic",
+                .repeat_penalty = 1.1,
+            },
+        },
+        // ── Llama 4 — iRoPE + chunked attention, standard chat penalty ──
+        .{
+            .arch_prefix = "llama4",
+            .backend = "",
+            .quant = "",
+            .recipe = .{
+                .name = "Llama 4 generic",
+                .repeat_penalty = 1.1,
             },
         },
         // ── CPU-only — larger batches, lower context ──

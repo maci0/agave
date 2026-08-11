@@ -61,12 +61,17 @@ pub const NgramState = struct {
             if (self.len < n + 1) continue;
             const search_end = self.len - n;
 
-            var pos: usize = 0;
-            while (pos + n <= search_end) : (pos += 1) {
-                if (std.mem.eql(u32, hist[pos .. pos + n], pattern[0..n])) {
-                    best_match_pos = pos + n;
-                    best_match_len = n;
-                    break;
+            // Search backward — most recent occurrence is a better predictor
+            if (search_end > 0) {
+                var pos: usize = search_end - 1;
+                while (true) {
+                    if (std.mem.eql(u32, hist[pos .. pos + n], pattern[0..n])) {
+                        best_match_pos = pos + n;
+                        best_match_len = n;
+                        break;
+                    }
+                    if (pos == 0) break;
+                    pos -= 1;
                 }
             }
             if (best_match_len > 0) break;

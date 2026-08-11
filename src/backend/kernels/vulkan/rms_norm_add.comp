@@ -6,7 +6,7 @@ layout(set = 0, binding = 0) readonly buffer A { float a[]; };      // FFN outpu
 layout(set = 0, binding = 1) readonly buffer Wt { float wt[]; };    // norm weights
 layout(set = 0, binding = 2) buffer B { float b[]; };               // residual stream (accumulated)
 layout(push_constant) uniform Params { uint n; float eps; };
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 void main() {
     uint tid = gl_LocalInvocationID.x;
     uint tg_size = gl_WorkGroupSize.x;

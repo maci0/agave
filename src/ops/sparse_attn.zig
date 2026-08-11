@@ -114,7 +114,11 @@ const KvQuantType = kv_quant.KvQuantType;
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 const sparse_v_threshold: f32 = 1e-6;
+/// Maximum sequence length for stack-allocated score buffer.
+/// 65K positions × 4 bytes = 256KB — fits in default stack on most platforms.
+/// Sequences beyond this limit require the non-sparse SDPA path.
 const max_seq_len: usize = 65536;
+/// Maximum head dimension for stack-allocated query buffer.
 const max_hd: usize = 256;
 
 /// Compute block-sparse SDPA for a single head with f32 KV.
@@ -133,6 +137,9 @@ pub fn sdpaHeadSparse(
     scale: f32,
     mask: *const BlockMask,
 ) void {
+    if (sl > max_seq_len or hd > max_hd) {
+        @panic("sparse SDPA: sequence or head dim exceeds stack buffer limit");
+    }
     const kvd = nkv * hd;
     const hpg = nh / nkv;
     const kvh = h / hpg;
@@ -197,6 +204,9 @@ pub fn sdpaQuantHeadSparse(
     kv_type_v: KvQuantType,
     mask: *const BlockMask,
 ) void {
+    if (sl > max_seq_len or hd > max_hd) {
+        @panic("sparse SDPA quant: sequence or head dim exceeds stack buffer limit");
+    }
     const kvd = nkv * hd;
     const hpg = nh / nkv;
     const kvh = h / hpg;

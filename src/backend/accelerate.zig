@@ -20,7 +20,7 @@ const CblasTrans: c_int = 112;
 // Import Accelerate BLAS functions via C ABI (resolved at link time)
 extern "c" fn cblas_sgemm(order: c_int, transa: c_int, transb: c_int, m: c_int, n: c_int, k: c_int, alpha: f32, a: [*]const f32, lda: c_int, b: [*]const f32, ldb: c_int, beta: f32, c_ptr: [*]f32, ldc: c_int) void;
 extern "c" fn cblas_sdot(n: c_int, x: [*]const f32, incx: c_int, y: [*]const f32, incy: c_int) f32;
-extern "c" fn vDSP_dotpr(a: [*]const f32, ia: c_int, b: [*]const f32, ib: c_int, c_ptr: *f32, n: c_int) void;
+extern "c" fn vDSP_dotpr(a: [*]const f32, ia: c_long, b: [*]const f32, ib: c_long, c_ptr: *f32, n: c_ulong) void;
 
 /// Matrix multiply: C[m×n] = A[m×k] × B[k×n] (row-major, B transposed).
 /// Uses AMX on M1+ for ~4× speedup over NEON.

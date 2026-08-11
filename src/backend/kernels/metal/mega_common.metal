@@ -19,8 +19,16 @@ using namespace metal;
 
 // ── Grid Synchronization ─────────────────────────────────────────────────
 // Metal has no cooperative grid sync. We implement it with an atomic counter:
-// all threadgroups increment, then spin until the counter reaches n_threadgroups.
-// After sync, thread 0 of TG 0 resets the counter for the next sync point.
+// all threadgroups increment, then spin until the counter reaches the target.
+//
+// Phase-aware: the counter accumulates across consecutive calls without
+// requiring a reset between them. Each call auto-detects the current phase
+// from the counter value (phase = val / n_threadgroups) and waits for
+// (phase + 1) * n_threadgroups. This allows two back-to-back syncs on the
+// same counter (e.g. inside mega_rms_norm) to work correctly — the second
+// sync targets 2 * n_threadgroups instead of re-checking n_threadgroups.
+// Call mega_sync_reset after all syncs on a counter are done to prepare it
+// for reuse.
 //
 // SAFETY: This requires ALL dispatched threadgroups to be resident simultaneously.
 // On Apple Silicon, this holds when n_threadgroups ≤ device maxThreadgroupsPerGrid
@@ -34,11 +42,12 @@ inline void mega_grid_sync(
 ) {
     // Only thread 0 of each TG participates in the barrier
     if (tid == 0) {
-        // Signal arrival
-        uint arrived = atomic_fetch_add_explicit(sync_counter, 1, memory_order_relaxed) + 1;
-        // Spin until all TGs have arrived
-        if (arrived < n_threadgroups) {
-            while (atomic_load_explicit(sync_counter, memory_order_relaxed) < n_threadgroups) {
+        // Signal arrival and determine phase from accumulated count
+        uint val = atomic_fetch_add_explicit(sync_counter, 1, memory_order_relaxed);
+        uint target = (val / n_threadgroups + 1) * n_threadgroups;
+        // Spin until all TGs in this phase have arrived
+        if (val + 1 < target) {
+            while (atomic_load_explicit(sync_counter, memory_order_relaxed) < target) {
                 // spin — minimal overhead on Apple Silicon (single-cycle atomic reads)
             }
         }
@@ -91,11 +100,18 @@ inline void mega_rms_norm(
     }
     // Reduce within TG
     local_ss = threadgroup_reduce_sum(local_ss, shared, tid, tg_size);
-    // Atomically add to global sum
+    // Atomically add to global sum using CAS loop (correct float atomic add).
+    // NOTE: atomic_fetch_add on uint with as_type<uint>(float) is WRONG —
+    // integer addition of IEEE 754 bit patterns is not float addition.
     if (tid == 0 && local_ss != 0.0f) {
-        // Use atomic float add via reinterpret
-        atomic_fetch_add_explicit((device atomic_uint*)ss_scratch,
-            as_type<uint>(local_ss), memory_order_relaxed);
+        device atomic_uint* p = (device atomic_uint*)ss_scratch;
+        uint expected = atomic_load_explicit(p, memory_order_relaxed);
+        while (true) {
+            float sum = as_type<float>(expected) + local_ss;
+            if (atomic_compare_exchange_weak_explicit(p, &expected,
+                    as_type<uint>(sum), memory_order_relaxed, memory_order_relaxed))
+                break;
+        }
     }
 
     mega_grid_sync(sync_ctr, n_tgs, tgid, tid);
@@ -142,8 +158,14 @@ inline void mega_add_rms_norm(
     }
     local_ss = threadgroup_reduce_sum(local_ss, shared, tid, tg_size);
     if (tid == 0 && local_ss != 0.0f) {
-        atomic_fetch_add_explicit((device atomic_uint*)ss_scratch,
-            as_type<uint>(local_ss), memory_order_relaxed);
+        device atomic_uint* p = (device atomic_uint*)ss_scratch;
+        uint expected = atomic_load_explicit(p, memory_order_relaxed);
+        while (true) {
+            float sum = as_type<float>(expected) + local_ss;
+            if (atomic_compare_exchange_weak_explicit(p, &expected,
+                    as_type<uint>(sum), memory_order_relaxed, memory_order_relaxed))
+                break;
+        }
     }
 
     mega_grid_sync(sync_ctr, n_tgs, tgid, tid);
@@ -642,7 +664,7 @@ inline void mega_sdpa_inline(
 
     // Q vector for this head (read from device)
     thread float q_local[256]; // max head_dim = 256
-    for (uint d = tid; d < hd; d += tg_size) {
+    for (uint d = 0; d < hd; d++) {
         q_local[d] = q[h * hd + d] * scale;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);

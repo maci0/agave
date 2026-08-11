@@ -38,7 +38,7 @@ shared float scores[SDPA_MAX_SEQ_LEN];
 shared float q_local[SDPA_MAX_HEAD_DIM];
 shared float out_acc[SDPA_MAX_HEAD_DIM];
 shared float kv_block_data[KV_BLOCK_SIZE * SDPA_MAX_HEAD_DIM];
-shared float shared_vals[8];
+shared float shared_vals[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 // ── Lloyd-Max codebook constants ────────────────────────────────
 

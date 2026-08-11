@@ -21,10 +21,14 @@ inline fn q3kBlockDot(x: [*]const f32, bp: [*]const u8, k: u32, block_start: u32
         const base = block_start + g * 16;
         if (base >= k) break;
 
-        // Extract 4-bit scale and subtract bias
-        const scale_raw = raw_scales[if (g < 8) g else g - 8];
-        const scale_nibble: i8 = @intCast(if (g < 8) (scale_raw & 0x0F) else (scale_raw >> 4));
-        const scale: f32 = @floatFromInt(scale_nibble - 8);
+        // Decode 6-bit scale: low 4 bits from bytes 0-7 (nibble-packed),
+        // high 2 bits from bytes 8-11 (bitpacked, 4 per byte).
+        // Combined: (lo4 | (hi2 << 4)) - 32, range [-32, +31].
+        const lo_byte = raw_scales[if (g < 8) g else g - 8];
+        const lo4: u8 = if (g < 8) (lo_byte & 0x0F) else (lo_byte >> 4);
+        const hi2_shift: u3 = @intCast((g / 4) * 2);
+        const hi2: u8 = (raw_scales[8 + g % 4] >> hi2_shift) & 0x03;
+        const scale: f32 = @floatFromInt(@as(i8, @intCast(lo4 | (hi2 << 4))) - @as(i8, 32));
         const d_sc = d * scale;
 
         for (0..16) |l| {

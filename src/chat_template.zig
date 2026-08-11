@@ -131,7 +131,17 @@ pub const ChatTemplate = struct {
                         try result.appendSlice(allocator, "<|im_end|>\n");
                     } else {
                         try result.appendSlice(allocator, self.user_prefix);
-                        try result.appendSlice(allocator, "[Tool Result] ");
+                        if (msg.tool_call_id) |tcid| {
+                            if (tcid.len > 0) {
+                                try result.appendSlice(allocator, "[Tool Result: ");
+                                try result.appendSlice(allocator, tcid);
+                                try result.appendSlice(allocator, "] ");
+                            } else {
+                                try result.appendSlice(allocator, "[Tool Result] ");
+                            }
+                        } else {
+                            try result.appendSlice(allocator, "[Tool Result] ");
+                        }
                         try result.appendSlice(allocator, msg.content);
                         try result.appendSlice(allocator, self.user_suffix);
                     }
@@ -621,7 +631,9 @@ test "fuzz: all chat_template functions" {
                 ChatTemplate.qwen35,
                 ChatTemplate.gemma,
                 ChatTemplate.gemma4,
+                ChatTemplate.gemma4_unified,
                 ChatTemplate.glm4,
+                ChatTemplate.deepseek4,
                 ChatTemplate.gpt_oss,
                 ChatTemplate.llama4,
             };

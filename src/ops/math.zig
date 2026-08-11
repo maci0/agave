@@ -23,6 +23,9 @@ const nucleus_max_candidates: usize = 1024;
 pub const max_top_logprobs: usize = 20;
 /// Minimum probability floor for log-probability computation (prevents -inf from log(0)).
 const log_prob_epsilon: f32 = 1e-10;
+/// Mirostat mu clamp multiplier: mu is clamped to [0, mirostat_mu_clamp_factor * tau]
+/// after each update to prevent exp(-mu) overflow when mu drifts very negative.
+const mirostat_mu_clamp_factor: f32 = 2.0;
 /// 8-wide SIMD vector type for f32 — used across all SIMD helpers in this module.
 const V8 = @Vector(8, f32);
 
@@ -67,6 +70,10 @@ pub fn argmax(buf: []const f32) u32 {
             best_val = buf[i];
             best_idx = @intCast(i);
         }
+    }
+    if (std.math.isNan(best_val)) {
+        std.log.warn("argmax: NaN detected in logits", .{});
+        return 0;
     }
     return best_idx;
 }
@@ -430,6 +437,7 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
 pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: f32, rng: std.Random) u32 {
     const n = logits.len;
     if (n == 0) return 0;
+    if (temperature == 0) return argmax(logits);
 
     // Temperature scaling (needed for max computation)
     if (temperature > 0 and temperature != 1.0) {
@@ -508,6 +516,10 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
     const chosen_p = if (new_sum > 0) logits[chosen] / new_sum else log_prob_epsilon;
     const chosen_surprise = -@log(if (chosen_p > log_prob_epsilon) chosen_p else log_prob_epsilon);
     mu.* -= eta * (chosen_surprise - tau);
+
+    // Clamp mu to [0, 2*tau] to prevent exp(-mu) overflow when mu drifts very negative
+    // (which would zero all candidates and lock generation onto token 0).
+    mu.* = @max(0.0, @min(mu.*, mirostat_mu_clamp_factor * tau));
 
     return chosen;
 }
@@ -670,7 +682,10 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
         }
     }
 
-    // 5. Weighted random sampling (unnormalized — scale threshold by sum)
+    // 5. Weighted random sampling (unnormalized — scale threshold by sum).
+    // If sum <= 0 after filtering (all candidates zeroed), fall back to argmax
+    // of the original logits to avoid a biased return of the last token index.
+    if (sum <= 0) return argmax(logits);
     var cumulative: f32 = 0;
     const sample_threshold = rng.float(f32) * sum;
     for (logits, 0..) |p, i| {

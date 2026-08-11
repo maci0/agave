@@ -1263,6 +1263,8 @@ fn buildShardFilename(allocator: Allocator, shard1: []const u8, idx: u32, total:
     var tot_buf: [16]u8 = undefined;
     const idx_raw = std.fmt.bufPrint(&idx_buf, "{d}", .{idx}) catch return error.InvalidShardName;
     const tot_raw = std.fmt.bufPrint(&tot_buf, "{d}", .{total}) catch return error.InvalidShardName;
+    // Guard against malformed filenames where digit width is too narrow for the values.
+    if (idx_raw.len > width or tot_raw.len > width) return error.InvalidShardName;
     // Pad with leading zeros
     var idx_padded: [16]u8 = [_]u8{'0'} ** 16;
     @memcpy(idx_padded[width - idx_raw.len .. width], idx_raw);

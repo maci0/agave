@@ -58,7 +58,10 @@ const default_nope_interval: u32 = 4;
 /// Default chunk size for local (RoPE) chunked attention.
 const default_chunk_size: u32 = 8192;
 /// Default prefill chunk size (tokens per batched GEMM).
-const default_pf_chunk_size: u32 = 512;
+/// Must not exceed paged_block_size (256) — sdpaPrefill writes KV into a
+/// single-block view returned by getLayerKvView, so a larger chunk would
+/// overflow the block boundary.
+const default_pf_chunk_size: u32 = 256;
 /// Default fallback maximum sequence length.
 const default_max_seq_len: usize = 131072;
 /// Floor scale for NoPE temperature computation.
@@ -647,8 +650,8 @@ pub const Llama4Model = struct {
 
                 const down_data = down_exps.data_ptr + ei * down_stride;
                 self.be.gemv(self.ff_gate.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, expert_ff);
-                self.be.sync();
 
+                // GPU-side accumulation — no sync needed (same command queue).
                 self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
             }
 
@@ -664,8 +667,8 @@ pub const Llama4Model = struct {
                 self.be.endBatch();
                 self.be.siluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, shared_ff);
                 self.doGemv(self.ff_gate.ptr, sd, self.attn_out.ptr, e, shared_ff);
-                self.be.sync();
 
+                // GPU-side accumulation — no sync needed (same command queue).
                 self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
             }
 
@@ -972,10 +975,10 @@ pub const Llama4Model = struct {
             // Down projection -> attn_out (reused as scratch, >= n_embd)
             const down_data = down_exps.data_ptr + ei * down_stride;
             self.be.gemv(self.ff_gate.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, expert_ff);
-            self.be.sync();
             self.perf.end(.gemv_ffn, t);
 
-            // Weighted accumulation
+            // Weighted accumulation — GPU-side, no sync needed between gemv and
+            // addScaled (same command queue guarantees ordering).
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
         }
 

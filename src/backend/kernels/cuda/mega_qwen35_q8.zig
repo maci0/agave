@@ -125,13 +125,12 @@ fn rmsNormStage(
     // Intra-block reduction
     local_ss = cu.blockReduceAdd(local_ss);
 
-    // Atomic add to global sum (reinterpret as u32 for atomic)
+    // Atomic add to global sum (f32 atomic supported on sm_20+)
     if (tid == 0 and local_ss != 0.0) {
-        const bits: u32 = @bitCast(local_ss);
-        _ = asm volatile ("atom.global.add.u32 %[ret], [%[ptr]], %[val];"
-            : [ret] "=r" (-> u32),
+        _ = asm volatile ("atom.global.add.f32 %[ret], [%[ptr]], %[val];"
+            : [ret] "=f" (-> f32),
             : [ptr] "l" (ss_buf),
-              [val] "r" (bits),
+              [val] "f" (local_ss),
         );
     }
 
@@ -193,11 +192,10 @@ fn addRmsNormStage(
     local_ss = cu.blockReduceAdd(local_ss);
 
     if (tid == 0 and local_ss != 0.0) {
-        const bits: u32 = @bitCast(local_ss);
-        _ = asm volatile ("atom.global.add.u32 %[ret], [%[ptr]], %[val];"
-            : [ret] "=r" (-> u32),
+        _ = asm volatile ("atom.global.add.f32 %[ret], [%[ptr]], %[val];"
+            : [ret] "=f" (-> f32),
             : [ptr] "l" (ss_buf),
-              [val] "r" (bits),
+              [val] "f" (local_ss),
         );
     }
 

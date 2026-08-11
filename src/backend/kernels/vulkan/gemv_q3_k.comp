@@ -9,7 +9,7 @@ layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
 layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
 layout(push_constant) uniform Params { uint n; uint k; };
 
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 // Q3_K super-block: 110 bytes = 32B hmask + 64B qs + 12B scales + 2B f16 d
 // 256 values per super-block, 16 groups of 16 elements
@@ -59,10 +59,12 @@ void main() {
             uint base = bk + g * 16;
             if (base >= k) break;
 
-            // Extract 4-bit scale with bias
+            // Extract 6-bit scale: low 4 bits from bytes 0-7, high 2 bits from bytes 8-11
             uint scale_byte = readByte(bp + 96 + (g < 8 ? g : g - 8));
-            int scale_nibble = int(g < 8 ? (scale_byte & 0xF) : (scale_byte >> 4));
-            float d_sc = d * float(scale_nibble - 8);
+            uint lo4 = g < 8 ? (scale_byte & 0xFu) : (scale_byte >> 4);
+            uint hi_byte = readByte(bp + 96 + 8 + g / 4);
+            uint hi2 = (hi_byte >> ((g % 4) * 2)) & 0x3u;
+            float d_sc = d * float(int(lo4 | (hi2 << 4)) - 32);
 
             for (uint l = 0; l < 16 && base + l < k; l++) {
                 uint flat_idx = g * 16 + l;

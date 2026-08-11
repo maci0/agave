@@ -54,10 +54,13 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) lid:
             let base = bk + g * 16u;
             if (base >= params.k) { break; }
 
+            // Extract 6-bit scale: low 4 bits from bytes 0-7, high 2 bits from bytes 8-11
             let scale_idx = select(g, g - 8u, g >= 8u);
             let sc_byte = rb(bp + 96u + scale_idx);
-            let sn = select(sc_byte & 0xFu, sc_byte >> 4u, g >= 8u);
-            let d_sc = d * f32(i32(sn) - 8);
+            let lo4 = select(sc_byte & 0xFu, sc_byte >> 4u, g >= 8u);
+            let hi_byte = rb(bp + 96u + 8u + g / 4u);
+            let hi2 = (hi_byte >> ((g % 4u) * 2u)) & 0x3u;
+            let d_sc = d * f32(i32(lo4 | (hi2 << 4u)) - 32);
 
             for (var l: u32 = 0u; l < 16u; l++) {
                 if (base + l >= params.k) { break; }

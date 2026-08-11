@@ -38,6 +38,9 @@ pub const ElementType = enum {
     char_range_star, // Match character in range, zero or more times (*)
     char_range_plus, // Match character in range, one or more times (+)
     char_range_opt, // Match character in range, zero or one time (?)
+    char_not_star, // Match character NOT in range, zero or more times (*)
+    char_not_plus, // Match character NOT in range, one or more times (+)
+    char_not_opt, // Match character NOT in range, zero or one time (?)
     rule_ref, // Reference to another rule by index
     rule_ref_star, // Reference to another rule, zero or more times (*)
     rule_ref_plus, // Reference to another rule, one or more times (+)
@@ -78,8 +81,9 @@ pub const Grammar = struct {
         \\pair   ::= ws string ws ":" ws value
         \\array  ::= "[" ws (value ("," ws value)*)? ws "]"
         \\value  ::= string | number | object | array | "true" | "false" | "null"
-        \\string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
-        \\number ::= "-"? [0-9]+ ("." [0-9]+)?
+        \\string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt] | "\\u" hex hex hex hex)* "\""
+        \\hex    ::= [0-9] | [a-f] | [A-F]
+        \\number ::= "-"? [0-9]+ ("." [0-9]+)? (("e" | "E") ("-" | "+")? [0-9]+)?
         \\ws     ::= [ \t\n\r]*
     ;
 
@@ -130,6 +134,8 @@ pub const Grammar = struct {
         if (state.completed) return;
         if (state.stack.items.len == 0) return;
 
+
+
         // Pre-allocate a reusable test state — avoids per-token heap allocation.
         // acceptCharInner recursion allows depth 0..max_accept_depth, each pushes at most 1 entry.
         const required_cap = state.stack.items.len + max_stack_growth_per_token;
@@ -176,8 +182,13 @@ pub const Grammar = struct {
             test_state.completed = state.completed;
 
             var valid = true;
-            for (effective) |c| {
-                if (test_state.completed) break;
+            for (effective, 0..) |c, ci| {
+                if (test_state.completed) {
+                    // Grammar finished mid-token — remaining bytes after
+                    // this point are extra content that violates the grammar.
+                    if (ci < effective.len) valid = false;
+                    break;
+                }
                 if (!test_state.acceptChar(c)) {
                     valid = false;
                     break;
@@ -229,8 +240,11 @@ pub const Grammar = struct {
             test_state.completed = state.completed;
 
             var valid = true;
-            for (effective) |c| {
-                if (test_state.completed) break;
+            for (effective, 0..) |c, ci| {
+                if (test_state.completed) {
+                    if (ci < effective.len) valid = false;
+                    break;
+                }
                 if (!test_state.acceptChar(c)) {
                     valid = false;
                     break;
@@ -252,6 +266,12 @@ pub const Grammar = struct {
         }
         if (text.len >= 2 and text[0] == bpe_latin1_prefix) {
             return text[2..];
+        }
+        // Strip a leading ASCII space (0x20) — the decoded form of the BPE Ġ prefix.
+        // Some tokenizers store decoded text in id_to_token, so space-prefixed tokens
+        // appear as " word" rather than "Ġword".
+        if (text.len >= 2 and text[0] == ' ') {
+            return text[1..];
         }
         return text;
     }
@@ -348,6 +368,27 @@ pub const GrammarState = struct {
                 top.elem_idx += 1;
                 return self.acceptCharInner(c, depth + 1);
             },
+            .char_not_star => {
+                if (@as(u32, c) < elem.lo or @as(u32, c) > elem.hi) {
+                    return true; // match — stay at this element
+                }
+                // character is in excluded range — advance past (zero matches ok)
+                top.elem_idx += 1;
+                self.advancePastEnd();
+                return self.acceptCharInner(c, depth + 1);
+            },
+            .char_not_plus => unreachable, // decomposed to char_not + char_not_star by parser
+            .char_not_opt => {
+                // ? = zero or one: accept if NOT in range, else skip
+                if (@as(u32, c) < elem.lo or @as(u32, c) > elem.hi) {
+                    top.elem_idx += 1;
+                    self.advancePastEnd();
+                    return true;
+                }
+                // character in excluded range — skip (zero matches ok)
+                top.elem_idx += 1;
+                return self.acceptCharInner(c, depth + 1);
+            },
             .rule_ref => {
                 top.elem_idx += 1;
                 self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
@@ -439,6 +480,7 @@ pub const GrammarState = struct {
     pub fn acceptToken(self: *GrammarState, text: []const u8) void {
         const effective = Grammar.getEffectiveText(text);
         for (effective) |c| {
+            if (self.completed) break;
             if (!self.acceptChar(c)) break;
         }
     }
@@ -671,7 +713,7 @@ const Parser = struct {
                 if (self.elements.items.len > 0) {
                     const last = &self.elements.items[self.elements.items.len - 1];
                     switch (last.type) {
-                        .char_range, .char_not => {
+                        .char_range => {
                             if (mod == '+') {
                                 // x+ → x x* (one mandatory + zero or more)
                                 const lo = last.lo;
@@ -681,6 +723,20 @@ const Parser = struct {
                                 last.type = switch (mod) {
                                     '*' => .char_range_star,
                                     '?' => .char_range_opt,
+                                    else => last.type,
+                                };
+                            }
+                        },
+                        .char_not => {
+                            if (mod == '+') {
+                                // x+ → x x* (one mandatory + zero or more)
+                                const lo = last.lo;
+                                const hi = last.hi;
+                                try self.elements.append(self.allocator, .{ .type = .char_not_star, .lo = lo, .hi = hi });
+                            } else {
+                                last.type = switch (mod) {
+                                    '*' => .char_not_star,
+                                    '?' => .char_not_opt,
                                     else => last.type,
                                 };
                             }
@@ -738,13 +794,39 @@ const Parser = struct {
         var ranges: [64]RangePair = undefined;
         var n_ranges: usize = 0;
         while (self.pos < self.input.len and self.input[self.pos] != ']') {
-            const lo = self.input[self.pos];
+            var lo: u8 = self.input[self.pos];
             self.pos += 1;
+            // Handle escape sequences inside character class
+            if (lo == '\\' and self.pos < self.input.len) {
+                lo = switch (self.input[self.pos]) {
+                    'n' => 0x0A,
+                    't' => 0x09,
+                    'r' => 0x0D,
+                    '\\' => 0x5C,
+                    ']' => 0x5D,
+                    '-' => 0x2D,
+                    else => self.input[self.pos],
+                };
+                self.pos += 1;
+            }
             var hi = lo;
             if (self.pos + 1 < self.input.len and self.input[self.pos] == '-' and self.input[self.pos + 1] != ']') {
                 self.pos += 1;
                 hi = self.input[self.pos];
                 self.pos += 1;
+                // Handle escape sequences for range endpoint
+                if (hi == '\\' and self.pos < self.input.len) {
+                    hi = switch (self.input[self.pos]) {
+                        'n' => 0x0A,
+                        't' => 0x09,
+                        'r' => 0x0D,
+                        '\\' => 0x5C,
+                        ']' => 0x5D,
+                        '-' => 0x2D,
+                        else => self.input[self.pos],
+                    };
+                    self.pos += 1;
+                }
             }
             if (n_ranges < ranges.len) {
                 ranges[n_ranges] = .{ .lo = lo, .hi = hi };
@@ -1182,9 +1264,9 @@ test "json grammar parses" {
     const allocator = std.testing.allocator;
     var grammar = try Grammar.parse(allocator, Grammar.json_grammar);
     defer grammar.deinit();
-    // json_grammar defines 8 named rules (root, object, pair, array, value, string, number, ws)
+    // json_grammar defines 9 named rules (root, object, pair, array, value, string, hex, number, ws)
     // plus synthetic groups from repetition/optional expansions
-    try std.testing.expect(grammar.rules.len >= 8);
+    try std.testing.expect(grammar.rules.len >= 9);
     // Verify rule names include all core JSON rules
     var found_root = false;
     var found_object = false;

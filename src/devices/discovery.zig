@@ -116,6 +116,7 @@ fn enumerateMetal(list: *DeviceList) void {
         return;
     }
     const arr = devices_arr.?;
+    defer objc.msgSend(void, arr, objc.sel("release"), .{});
     const count: u64 = objc.msgSend(u64, arr, objc.sel("count"), .{});
     if (count == 0) return;
     var i: u64 = 0;

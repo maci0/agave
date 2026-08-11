@@ -45,8 +45,11 @@ pub fn applyLoraGguf(
         const base_suffix = lora_a_name[0 .. lora_a_name.len - ".lora_a".len];
 
         // Build lora_b name
-        var b_buf: [256]u8 = undefined;
-        const lora_b_name = std.fmt.bufPrint(&b_buf, "{s}.lora_b", .{base_suffix}) catch continue;
+        var b_buf: [512]u8 = undefined;
+        const lora_b_name = std.fmt.bufPrint(&b_buf, "{s}.lora_b", .{base_suffix}) catch {
+            std.log.warn("LoRA: tensor name too long, skipping: {s}", .{base_suffix});
+            continue;
+        };
         const lora_b_info = lora_file.tensors.get(lora_b_name) orelse continue;
         const lora_a_info = kv.value_ptr.*;
 
@@ -55,22 +58,34 @@ pub fn applyLoraGguf(
         const k: usize = @intCast(lora_a_info.dims[1]);
         const n: usize = @intCast(lora_b_info.dims[0]);
         const rank_b: usize = @intCast(lora_b_info.dims[1]);
-        if (rank == 0 or k == 0 or n == 0) continue;
-        if (rank_b != rank) continue; // inconsistent LoRA pair — skip to avoid OOB read
+        if (rank == 0 or k == 0 or n == 0) {
+            std.log.warn("LoRA: skipping '{s}' — zero dimension (rank={d}, k={d}, n={d})", .{ base_suffix, rank, k, n });
+            continue;
+        }
+        if (rank_b != rank) {
+            std.log.warn("LoRA: skipping '{s}' — rank mismatch between lora_a ({d}) and lora_b ({d})", .{ base_suffix, rank, rank_b });
+            continue;
+        }
 
         const scale = alpha / @as(f32, @floatFromInt(rank));
 
         // Find base tensor — try bare name, then with ".weight" suffix
         const base_ti: *gguf.TensorInfo = blk: {
             if (base_gguf.tensors.getPtr(base_suffix)) |p| break :blk p;
-            var w_buf: [256]u8 = undefined;
-            const w_name = std.fmt.bufPrint(&w_buf, "{s}.weight", .{base_suffix}) catch continue;
+            var w_buf: [512]u8 = undefined;
+            const w_name = std.fmt.bufPrint(&w_buf, "{s}.weight", .{base_suffix}) catch {
+                std.log.warn("LoRA: tensor name too long, skipping: {s}", .{base_suffix});
+                continue;
+            };
             break :blk base_gguf.tensors.getPtr(w_name) orelse continue;
         };
 
         const base_n: usize = @intCast(base_ti.dims[0]);
         const base_k: usize = @intCast(base_ti.dims[1]);
-        if (base_n != n or base_k != k) continue;
+        if (base_n != n or base_k != k) {
+            std.log.warn("LoRA: skipping '{s}' — dimension mismatch: base [{d}, {d}] vs LoRA [{d}, {d}]", .{ base_suffix, base_n, base_k, n, k });
+            continue;
+        }
 
         // Dequant lora_a [rank × k] and lora_b [n × rank] to F32
         const la = try allocator.alloc(f32, rank * k);

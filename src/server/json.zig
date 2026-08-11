@@ -18,8 +18,6 @@ fn quoteFieldKey(buf: *[extract_field_buf_size]u8, field: []const u8) ?[]const u
 const max_api_messages: usize = 128;
 /// Maximum valid sampling temperature (prevents numerical instability in softmax).
 const max_temperature: f32 = 100.0;
-/// Scan window (bytes after key) for response_format value detection.
-const response_format_scan_window: usize = 200;
 /// Maximum valid top_k value — must match math_ops stack buffer size.
 const max_top_k: u32 = math_ops.max_top_k;
 
@@ -291,17 +289,15 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     const raw_freq_pen = extractFloatField(body, "frequency_penalty") orelse 0;
     const raw_pres_pen = extractFloatField(body, "presence_penalty") orelse 0;
     // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", ...}
-    // Uses bounded text search because extractField only handles string values,
-    // not the nested object format that OpenAI clients send.
+    // Extract the response_format object using structural parsing (extractObjectField)
+    // to avoid false matches inside string values.
     var json_mode = false;
     var schema_from_rf: ?[]const u8 = null;
-    const rf_key = "\"response_format\"";
-    if (std.mem.indexOf(u8, body, rf_key)) |rf_pos| {
-        const rf_end = @min(rf_pos + rf_key.len + response_format_scan_window, body.len);
-        const rf_window = body[rf_pos..rf_end];
-        if (std.mem.indexOf(u8, rf_window, "json_object") != null) {
+    if (extractObjectField(body, "response_format")) |rf_obj| {
+        // Search within the extracted object only — not the full body.
+        if (std.mem.indexOf(u8, rf_obj, "json_object") != null) {
             json_mode = true;
-        } else if (std.mem.indexOf(u8, rf_window, "json_schema") != null) {
+        } else if (std.mem.indexOf(u8, rf_obj, "json_schema") != null) {
             if (extractObjectField(body, "schema")) |s| {
                 schema_from_rf = s;
             }
@@ -458,8 +454,10 @@ pub fn parseSampling(body: []const u8) SamplingParams {
     // or OpenAI-style "thinking_budget_tokens": N.
     if (extractIntField(body, "thinking_budget_tokens")) |b| {
         result.thinking_budget_tokens = @intCast(@max(0, b));
-    } else if (std.mem.indexOf(u8, body, "\"thinking\"")) |_| {
-        if (extractIntField(body, "budget_tokens")) |b| {
+    } else if (extractObjectField(body, "thinking")) |thinking_obj| {
+        // Search for budget_tokens within the thinking object only,
+        // not the full body — avoids false matches from unrelated fields.
+        if (extractIntField(thinking_obj, "budget_tokens")) |b| {
             result.thinking_budget_tokens = @intCast(@max(0, b));
         }
     }
@@ -1577,6 +1575,94 @@ test "parseTools multiple tools" {
     try std.testing.expectEqualStrings("sub", t1.name);
 }
 
+test "extractField grammar from API request body" {
+    // Reproduce: grammar-constrained generation works from CLI (--grammar-string)
+    // but NOT from the HTTP API ("grammar" field in POST /v1/chat/completions).
+    // Verify extractField correctly extracts the grammar string value.
+
+    // 1. Simple grammar in a realistic request body
+    {
+        const body =
+            \\{"grammar":"root ::= [0-9]+","messages":[{"role":"user","content":"count"}],"max_tokens":5}
+        ;
+        const result = extractField(body, "grammar");
+        try std.testing.expect(result != null);
+        try std.testing.expectEqualStrings("root ::= [0-9]+", result.?);
+    }
+
+    // 2. Grammar with escaped quotes (GBNF often contains quoted strings)
+    {
+        const body =
+            \\{"grammar":"root ::= \"hello\" | \"world\"","messages":[]}
+        ;
+        const result = extractField(body, "grammar");
+        try std.testing.expect(result != null);
+        // extractField returns raw JSON content — escapes intact
+        try std.testing.expectEqualStrings(
+            \\root ::= \"hello\" | \"world\"
+        , result.?);
+    }
+
+    // 3. Grammar field appears AFTER messages (field order shouldn't matter)
+    {
+        const body =
+            \\{"messages":[{"role":"user","content":"hi"}],"grammar":"root ::= [a-z]+"}
+        ;
+        const result = extractField(body, "grammar");
+        try std.testing.expect(result != null);
+        try std.testing.expectEqualStrings("root ::= [a-z]+", result.?);
+    }
+
+    // 4. No grammar field — should return null
+    {
+        const body =
+            \\{"messages":[{"role":"user","content":"hi"}],"max_tokens":5}
+        ;
+        try std.testing.expect(extractField(body, "grammar") == null);
+    }
+
+    // 5. The word "grammar" appears inside a content value (false match rejection)
+    {
+        const body =
+            \\{"messages":[{"role":"user","content":"use grammar rules"}],"grammar":"root ::= [0-9]+"}
+        ;
+        const result = extractField(body, "grammar");
+        try std.testing.expect(result != null);
+        // Must extract the actual field value, not the word inside content
+        try std.testing.expectEqualStrings("root ::= [0-9]+", result.?);
+    }
+
+    // 6. Grammar with whitespace around colon
+    {
+        const body =
+            \\{"grammar" : "root ::= [0-9]+"}
+        ;
+        const result = extractField(body, "grammar");
+        try std.testing.expect(result != null);
+        try std.testing.expectEqualStrings("root ::= [0-9]+", result.?);
+    }
+
+    // 7. Verify parseSampling propagates grammar_string
+    {
+        const body =
+            \\{"grammar":"root ::= [0-9]+","temperature":0.5}
+        ;
+        const sp = parseSampling(body);
+        try std.testing.expect(sp.grammar_string != null);
+        try std.testing.expectEqualStrings("root ::= [0-9]+", sp.grammar_string.?);
+    }
+
+    // 8. Complex multi-rule GBNF grammar with newlines (JSON-escaped)
+    {
+        const body =
+            \\{"grammar":"root ::= digit+\ndigit ::= [0-9]"}
+        ;
+        const result = extractField(body, "grammar");
+        try std.testing.expect(result != null);
+        try std.testing.expectEqualStrings("root ::= digit+\\ndigit ::= [0-9]", result.?);
+    }
+}
+
 test "fuzz: all json functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -1697,7 +1783,15 @@ test "fuzz: all json functions" {
 
             // 23. ExtractedMessages.deinit — tested via extractMessages above
 
-            // 24. Pub types exist and are usable
+            // 24. extractField finds grammar field
+            {
+                const body = "{\"grammar\":\"root ::= [0-9]+\",\"messages\":[],\"max_tokens\":5}";
+                const result = extractField(body, "grammar");
+                try std.testing.expect(result != null);
+                try std.testing.expectEqualStrings("root ::= [0-9]+", result.?);
+            }
+
+            // 25. Pub types exist and are usable
             comptime {
                 _ = ToolDef;
                 _ = ToolParams;

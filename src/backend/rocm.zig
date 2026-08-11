@@ -59,6 +59,9 @@ const block_size: u32 = 256;
 /// LDS bytes for block reductions (8 waves x 4 bytes).
 const reduction_smem: u32 = 32;
 
+/// LDS bytes for sdpa_tree: 8 wave-reduce + 16 scores + 1 broadcast = 100 bytes.
+const tree_sdpa_smem: u32 = 100;
+
 /// Size of the buffer for retrieving the HIP device name.
 const device_name_buf_size: usize = 256;
 
@@ -389,14 +392,15 @@ pub const RocmBackend = struct {
         const rc = self.hipMalloc(&ptr, @max(size, 4));
         if (rc != HIP_SUCCESS or ptr == null) {
             std.log.err("hipMalloc failed: size={d} ({d} MB) rc={d}", .{ size, size / (1024 * 1024), rc });
-            return 0;
+            @panic("hipMalloc failed — out of device memory");
         }
         return @intFromPtr(ptr.?);
     }
 
     fn uploadToDevice(self: *RocmBackend, host_ptr: *const anyopaque, size: usize) DevicePtr {
         const dptr = self.deviceAlloc(size);
-        _ = hipCheck(self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice), "hipMemcpy(HtoD)");
+        if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice), "hipMemcpy(HtoD)"))
+            @panic("hipMemcpy(HtoD) failed — device memory left uninitialized");
         return dptr;
     }
 
@@ -405,7 +409,8 @@ pub const RocmBackend = struct {
     }
 
     fn memcpyDtoD(self: *RocmBackend, dst: DevicePtr, src: DevicePtr, size: usize) void {
-        _ = hipCheck(self.hipMemcpy(@ptrFromInt(dst), @ptrFromInt(src), size, hipMemcpyDeviceToDevice), "hipMemcpy(DtoD)");
+        if (!hipCheck(self.hipMemcpy(@ptrFromInt(dst), @ptrFromInt(src), size, hipMemcpyDeviceToDevice), "hipMemcpy(DtoD)"))
+            @panic("hipMemcpy(DtoD) failed — device data corrupted");
     }
 
     // ── Weight cache (permanent, read-only) ─────────────────────
@@ -479,6 +484,7 @@ pub const RocmBackend = struct {
                 return act.dptr;
             }
             _ = self.hipFree(@ptrFromInt(act.dptr));
+            _ = self.act_cache.remove(addr);
         }
         if (self.findContaining(addr, size, true, false)) |dptr| return dptr;
         const dptr = self.deviceAlloc(size);
@@ -500,6 +506,7 @@ pub const RocmBackend = struct {
                 return act.dptr;
             }
             _ = self.hipFree(@ptrFromInt(act.dptr));
+            _ = self.act_cache.remove(addr);
         }
         if (self.findContaining(addr, size, true, true)) |dptr| return dptr;
         const dptr = self.uploadToDevice(@ptrCast(ptr), size);
@@ -920,20 +927,8 @@ pub const RocmBackend = struct {
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])
     pub fn sigmoidMul(self: *RocmBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
-        if (self.fn_sigmoid_mul == null) {
-            self.sync();
-            const V8 = @Vector(8, f32);
-            const one: V8 = @splat(1.0);
-            var i: usize = 0;
-            while (i + 8 <= n) : (i += 8) {
-                const g: V8 = gate[i..][0..8].*;
-                const sig = one / (one + @exp(-g));
-                data[i..][0..8].* = @as(V8, data[i..][0..8].*) * sig;
-            }
-            while (i < n) : (i += 1) data[i] *= 1.0 / (1.0 + @exp(-gate[i]));
-            self.invalidateAct(data);
-            return;
-        }
+        if (self.fn_sigmoid_mul == null)
+            @panic("ROCm sigmoidMul: kernel not loaded — rebuild HSACO");
         const sz = n * @sizeOf(f32);
         var d_data = self.getInPlaceBuf(data, sz);
         var d_gate = self.getInputBuf(gate, sz);
@@ -1242,12 +1237,10 @@ pub const RocmBackend = struct {
             var new_cap = kv.capacity;
             while (new_cap < required) new_cap = @min(new_cap * 2, max_capacity);
             const new_dptr = self.deviceAlloc(new_cap);
-            if (new_dptr != 0) {
-                self.memcpyDtoD(new_dptr, kv.dptr, kv.capacity);
-                _ = self.hipFree(@ptrFromInt(kv.dptr));
-                kv.dptr = new_dptr;
-                kv.capacity = new_cap;
-            }
+            self.memcpyDtoD(new_dptr, kv.dptr, kv.capacity);
+            _ = self.hipFree(@ptrFromInt(kv.dptr));
+            kv.dptr = new_dptr;
+            kv.capacity = new_cap;
             return kv.dptr;
         }
         // First allocation: allocate full capacity to avoid repeated growth.
@@ -1329,6 +1322,12 @@ pub const RocmBackend = struct {
 
             // LDS: sl+1 floats (scores + broadcast slot for wave-parallel softmax)
             const smem: u32 = (@as(u32, @intCast(sl)) + 1) * @sizeOf(f32);
+            // AMD LDS is typically 64KB; guard against oversize contexts.
+            const max_lds_bytes: u32 = 65536;
+            if (smem > max_lds_bytes) {
+                std.log.err("ROCm SDPA: seq_len={d} requires {d} bytes LDS (max {d}). Use paged attention or reduce context.", .{ sl, smem, max_lds_bytes });
+                @panic("ROCm SDPA LDS exceeded — context too long for non-paged kernel");
+            }
             self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
         } else {
             // ── Turbo/mixed path: CPU KV append + GPU turbo SDPA kernel ──
@@ -1385,6 +1384,11 @@ pub const RocmBackend = struct {
 
             // LDS: sl+1 floats (scores + broadcast slot for wave-parallel softmax)
             const smem: u32 = (@as(u32, @intCast(sl)) + 1) * @sizeOf(f32);
+            const max_lds_bytes: u32 = 65536;
+            if (smem > max_lds_bytes) {
+                std.log.err("ROCm SDPA turbo: seq_len={d} requires {d} bytes LDS (max {d}).", .{ sl, smem, max_lds_bytes });
+                @panic("ROCm SDPA LDS exceeded — context too long for non-paged kernel");
+            }
             self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
         }
     }
@@ -1466,6 +1470,11 @@ pub const RocmBackend = struct {
         };
 
         const smem: u32 = (sl + 1) * @sizeOf(f32);
+        const max_lds_bytes: u32 = 65536;
+        if (smem > max_lds_bytes) {
+            std.log.err("ROCm SDPA paged: seq_len={d} requires {d} bytes LDS (max {d}).", .{ sl, smem, max_lds_bytes });
+            @panic("ROCm SDPA LDS exceeded — context too long for paged kernel");
+        }
         self.launch(self.fn_sdpa_paged.?, @intCast(nh), block_size, smem, &params);
 
         _ = self.hipFree(@ptrFromInt(d_k));
@@ -1517,7 +1526,7 @@ pub const RocmBackend = struct {
                 @ptrCast(&hd_u),    @ptrCast(&pl_u), @ptrCast(&nn_u),
                 @ptrCast(&sc),
             };
-            self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, reduction_smem, &params);
+            self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, tree_sdpa_smem, &params);
             return;
         }
         @panic("ROCm sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");

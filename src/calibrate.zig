@@ -525,20 +525,23 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
     if (magic_n < 4 or !std.mem.eql(u8, &magic, &cal_magic)) return error.InvalidFormat;
 
     var version_buf: [4]u8 = undefined;
-    _ = try file.readPositionalAll(io, &version_buf, 4);
+    const version_n = try file.readPositionalAll(io, &version_buf, 4);
+    if (version_n != version_buf.len) return error.TruncatedFile;
     const version = std.mem.bytesAsValue(u32, &version_buf).*;
     if (version != cal_version) return error.UnsupportedVersion;
 
     var header_buf: [20]u8 = undefined;
-    _ = try file.readPositionalAll(io, &header_buf, 8);
+    const header_n = try file.readPositionalAll(io, &header_buf, 8);
+    if (header_n != header_buf.len) return error.TruncatedFile;
     const n_layers = std.mem.bytesAsValue(u32, header_buf[0..4]).*;
     const n_q_heads = std.mem.bytesAsValue(u32, header_buf[4..8]).*;
     _ = std.mem.bytesAsValue(u32, header_buf[8..12]).*; // head_dim
     const n_bands = std.mem.bytesAsValue(u32, header_buf[12..16]).*;
+    if (n_bands == 0) return error.InvalidFormat;
     const rope_theta = std.mem.bytesAsValue(f32, header_buf[16..20]).*;
 
-    const total_heads: usize = @as(usize, n_layers) * n_q_heads;
-    const band_count: usize = total_heads * n_bands;
+    const total_heads = std.math.mul(usize, @as(usize, n_layers), n_q_heads) catch return error.InvalidFormat;
+    const band_count = std.math.mul(usize, total_heads, n_bands) catch return error.InvalidFormat;
 
     // Read data arrays (header is 28 bytes: magic(4) + version(4) + fields(20))
     const data_offset: u64 = 28;
@@ -546,19 +549,23 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
 
     var q_center_norm = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_center_norm);
-    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_center_norm), data_offset);
+    const cn_n = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_center_norm), data_offset);
+    if (cn_n != array_bytes) return error.TruncatedFile;
 
     var q_center_phase = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_center_phase);
-    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_center_phase), data_offset + array_bytes);
+    const cp_n = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_center_phase), data_offset + array_bytes);
+    if (cp_n != array_bytes) return error.TruncatedFile;
 
     var q_expected_norm = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_expected_norm);
-    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_expected_norm), data_offset + array_bytes * 2);
+    const en_n = try file.readPositionalAll(io, std.mem.sliceAsBytes(q_expected_norm), data_offset + array_bytes * 2);
+    if (en_n != array_bytes) return error.TruncatedFile;
 
     var concentration_data = try allocator.alloc(f32, band_count);
     errdefer allocator.free(concentration_data);
-    _ = try file.readPositionalAll(io, std.mem.sliceAsBytes(concentration_data), data_offset + array_bytes * 3);
+    const cd_n = try file.readPositionalAll(io, std.mem.sliceAsBytes(concentration_data), data_offset + array_bytes * 3);
+    if (cd_n != array_bytes) return error.TruncatedFile;
 
     // Compute RoPE frequencies
     const head_dim: usize = @as(usize, n_bands) * 2;
@@ -928,4 +935,31 @@ test "fuzz: all calibrate functions" {
             }
         }
     }.f, .{});
+}
+
+test "readCalFile rejects header with overflow-inducing dimensions" {
+    const allocator = std.testing.allocator;
+    mod_io = std.testing.io;
+
+    // Build a minimal .cal file with valid magic + version but n_layers * n_q_heads
+    // that overflows usize when multiplied together.
+    var buf: [28]u8 = undefined;
+    @memcpy(buf[0..4], &cal_magic); // magic
+    std.mem.writeInt(u32, buf[4..8], cal_version, .little); // version
+    std.mem.writeInt(u32, buf[8..12], std.math.maxInt(u32), .little); // n_layers (huge)
+    std.mem.writeInt(u32, buf[12..16], std.math.maxInt(u32), .little); // n_q_heads (huge)
+    std.mem.writeInt(u32, buf[16..20], 64, .little); // head_dim
+    std.mem.writeInt(u32, buf[20..24], 32, .little); // n_bands
+    @as(*align(1) f32, @ptrCast(buf[24..28])).* = 10000.0; // rope_theta
+
+    // Write to temp file
+    var tmp_path_buf: [64]u8 = undefined;
+    const tmp_path = std.fmt.bufPrint(&tmp_path_buf, "test_overflow_{d}.cal", .{std.c.getpid()}) catch unreachable;
+    const file = try Io.Dir.cwd().createFile(std.testing.io, tmp_path, .{ .read = true });
+    try file.writePositionalAll(std.testing.io, &buf, 0);
+    file.close(std.testing.io);
+    defer Io.Dir.cwd().deleteFile(std.testing.io, tmp_path) catch {};
+
+    // readCalFile should catch the multiplication overflow and return InvalidFormat
+    try std.testing.expectError(error.InvalidFormat, readCalFile(allocator, std.testing.io, tmp_path));
 }

@@ -278,6 +278,12 @@ const workgroup_size: u32 = 256;
 const act_pool_capacity: u32 = 32;
 /// Max params buffers to defer-destroy per sync cycle.
 const max_deferred_destroy: u32 = 256;
+/// Max vocab rows uploaded to GPU for f32 embedding lookup.
+const emb_max_vocab: usize = 256000;
+/// Max heads for deltaNet stack arrays (gate, beta, gate_beta).
+const delta_net_max_heads: usize = 256;
+/// Max Q+K elements for deltaNet combined buffer (num_k_heads * head_k_dim * 2).
+const delta_net_max_qk_elems: usize = 32768;
 const max_bindings: u32 = 8;
 /// Maximum device poll iterations for buffer map completion.
 const max_map_poll_iterations: u32 = 10000;
@@ -650,6 +656,26 @@ pub const WebGpuBackend = struct {
 
     /// Release all GPU resources, pipelines, and cached buffers.
     pub fn deinit(self: *WebGpuBackend) void {
+        // Flush any pending command buffer so deferred buffers are safe to destroy.
+        if (self.batch_encoder != null) self.submitPending();
+
+        // Destroy deferred buffers that haven't been flushed yet.
+        for (self.deferred_destroy[0..self.deferred_count]) |buf| {
+            if (buf != null) self.fn_buffer_destroy(buf);
+        }
+        self.deferred_count = 0;
+
+        // Release all compute pipelines and their bind group layouts.
+        inline for (@typeInfo(WebGpuBackend).@"struct".fields) |field| {
+            if (comptime std.mem.startsWith(u8, field.name, "pipe_")) {
+                if (field.type == PipelineInfo) {
+                    const info = @field(self, field.name);
+                    if (info.pipeline != null) self.fn_pipeline_release(info.pipeline);
+                    if (info.bind_group_layout != null) self.fn_bind_group_layout_release(info.bind_group_layout);
+                }
+            }
+        }
+
         // Release pool buffers
         for (&self.act_pool) |*entry| {
             if (entry.buffer != null) self.fn_buffer_destroy(entry.buffer);
@@ -690,7 +716,16 @@ pub const WebGpuBackend = struct {
             if (cached.generation == self.upload_generation and cached.size >= size) {
                 return cached.buffer;
             }
-            self.uploadToBuffer(cached.buffer, ptr, @min(size, cached.size));
+            if (cached.size < size) {
+                self.fn_buffer_release(cached.buffer);
+                const new_buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
+                self.uploadToBuffer(new_buf, ptr, size);
+                cached.buffer = new_buf;
+                cached.size = size;
+                cached.generation = self.upload_generation;
+                return new_buf;
+            }
+            self.uploadToBuffer(cached.buffer, ptr, size);
             cached.generation = self.upload_generation;
             return cached.buffer;
         }
@@ -718,13 +753,17 @@ pub const WebGpuBackend = struct {
             self.act_pool_count += 1;
             return .{ .buf = buf, .idx = idx };
         }
-        return .{ .buf = buf, .idx = 0 };
+        // Pool is full — return buffer without a valid pool index.
+        // Use act_pool_capacity as a sentinel so releasePooledBuf is a no-op.
+        std.log.warn("webgpu: activation pool full (capacity={d}), buffer not tracked", .{act_pool_capacity});
+        return .{ .buf = buf, .idx = act_pool_capacity };
     }
 
     fn releasePooledBuf(self: *WebGpuBackend, idx: u32) void {
         if (idx < act_pool_capacity) {
             self.act_pool[idx].in_use = false;
         }
+        // idx == act_pool_capacity is the sentinel for untracked buffers — no-op.
     }
 
     fn downloadF32(self: *WebGpuBackend, src: WGPUBuffer, dst: [*]f32, count: usize) void {
@@ -965,9 +1004,11 @@ pub const WebGpuBackend = struct {
     }
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
-    pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+    pub fn clampedSiluMul(self: *WebGpuBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        // CPU fallback — sync first so GPU-written data is visible to CPU reads.
+        self.sync();
         for (0..n) |idx| {
-            const g = @min(gate[idx], @as(f32, 10.0));
+            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[idx]));
             const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[idx]));
             out[idx] = (g / (1.0 + @exp(-g))) * u;
         }
@@ -1085,7 +1126,7 @@ pub const WebGpuBackend = struct {
             quant.dequantToF32(output[0..dim], table.data + row_offset, row_dtype, dim);
             return;
         }
-        const emb_max_vocab: usize = 64000; // conservative to stay within 256MB buffer limit
+        std.debug.assert(token_id < emb_max_vocab); // vocab exceeds emb_max_vocab
         const table_size = dim * @sizeOf(f32) * emb_max_vocab;
         const table_buf = self.getOrUpload(table.data, table_size);
         const out_size = dim * @sizeOf(f32);
@@ -1623,7 +1664,7 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn gemvMlxQ(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        _ = bits;
+        std.debug.assert(bits == 4);
         const x_sz = k * @sizeOf(f32);
         const gpr = (k + 63) / 64;
         const wpr = gpr * 8;
@@ -1834,8 +1875,9 @@ pub const WebGpuBackend = struct {
 
         // 1. Gate & beta computation (small, on CPU)
         self.sync();
-        var gate_arr: [64]f32 = undefined;
-        var beta_arr: [64]f32 = undefined;
+        std.debug.assert(num_v_heads <= delta_net_max_heads); // num_v_heads exceeds delta_net_max_heads
+        var gate_arr: [delta_net_max_heads]f32 = undefined;
+        var beta_arr: [delta_net_max_heads]f32 = undefined;
         for (0..num_v_heads) |h| {
             const alpha_biased = alpha_buf[h] + dt_bias[h];
             gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_biased);
@@ -1867,7 +1909,8 @@ pub const WebGpuBackend = struct {
         const z_sz = v_sz;
 
         // Combine Q+K into one buffer to stay within 8 storage buffer limit
-        var qk_combined: [8192]f32 = undefined;
+        std.debug.assert(num_k_heads * head_k_dim * 2 <= delta_net_max_qk_elems); // Q+K exceeds delta_net_max_qk_elems
+        var qk_combined: [delta_net_max_qk_elems]f32 = undefined;
         const qk_elems = num_k_heads * head_k_dim;
         @memcpy(qk_combined[0..qk_elems], q_ptr[0..qk_elems]);
         @memcpy(qk_combined[qk_elems..][0..qk_elems], k_ptr[0..qk_elems]);
@@ -1877,7 +1920,7 @@ pub const WebGpuBackend = struct {
         self.uploadToBuffer(qk_pool.buf, @ptrCast(&qk_combined), qk_sz);
         const v_buf = self.getOrUpload(@ptrCast(v_ptr), v_sz);
         // Merge gate+beta into one buffer: [gates..., betas...]
-        var gate_beta_arr: [128]f32 = undefined;
+        var gate_beta_arr: [delta_net_max_heads * 2]f32 = undefined;
         @memcpy(gate_beta_arr[0..num_v_heads], gate_arr[0..num_v_heads]);
         @memcpy(gate_beta_arr[num_v_heads..][0..num_v_heads], beta_arr[0..num_v_heads]);
         const gb_sz = num_v_heads * 2 * @sizeOf(f32);
@@ -1929,7 +1972,15 @@ pub const WebGpuBackend = struct {
             self.deferred_destroy[self.deferred_count] = buf;
             self.deferred_count += 1;
         } else {
-            self.fn_buffer_destroy(buf);
+            // Array is full — flush pending GPU work so all referenced buffers
+            // are consumed, then clear the deferred array and add this buffer.
+            // sync() calls submitPending() which sets batch_encoder = null,
+            // and then iterates deferred_destroy[0..deferred_count] — it does
+            // not call deferDestroy, so there is no re-entrancy risk.
+            self.sync();
+            // sync() resets deferred_count to 0, so we can safely add now.
+            self.deferred_destroy[self.deferred_count] = buf;
+            self.deferred_count += 1;
         }
     }
 

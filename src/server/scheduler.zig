@@ -424,6 +424,7 @@ pub const RequestManager = struct {
                 if (req_w.is_cancelled.load(.acquire)) {
                     _ = self.waiting.swapRemove(j);
                     self.cancelled_total += 1;
+                    self.queue_dirty = true;
                     req_w.scheduler_done.store(true, .release);
                 } else {
                     j += 1;
@@ -432,6 +433,7 @@ pub const RequestManager = struct {
 
             // 2. Check timeout on running requests
             for (self.running.items) |req| {
+                if (req.is_cancelled.load(.acquire)) continue;
                 const elapsed = req.elapsedSeconds(now);
                 if (elapsed > self.timeout_sec) {
                     std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, elapsed, self.timeout_sec });
@@ -456,26 +458,30 @@ pub const RequestManager = struct {
             }
 
             // 4. Fill batch from waiting queue (ascending sort, pop takes highest priority).
-            // Skip the head until sampling_ready: handler may still be writing
-            // temperature/top_p/prng after enqueue returns.
-            while (self.running.items.len < self.max_batch_size and self.waiting.items.len > 0) {
-                const candidate = self.waiting.items[self.waiting.items.len - 1];
-                if (!candidate.sampling_ready.load(.acquire)) break;
-                const req = self.waiting.pop().?;
-                self.running.append(self.allocator, req) catch |err| {
-                    // Re-queue to prevent request loss on allocation failure.
-                    // If re-queue also fails (OOM), cancel the request so the
-                    // handler thread unblocks instead of spinning forever.
-                    self.waiting.append(self.allocator, req) catch {
-                        std.log.err("req={d} OOM re-queuing after batch-fill failure, cancelling", .{req.id});
-                        req.is_cancelled.store(true, .release);
-                        req.scheduler_done.store(true, .release);
+            // Reverse-iterate and skip non-ready entries so a single unready request
+            // at the head does not block admission of lower-priority ready requests.
+            {
+                var idx: usize = self.waiting.items.len;
+                while (idx > 0 and self.running.items.len < self.max_batch_size) {
+                    idx -= 1;
+                    const candidate = self.waiting.items[idx];
+                    if (!candidate.sampling_ready.load(.acquire)) continue;
+                    _ = self.waiting.orderedRemove(idx);
+                    self.running.append(self.allocator, candidate) catch |err| {
+                        // Re-queue to prevent request loss on allocation failure.
+                        // If re-queue also fails (OOM), cancel the request so the
+                        // handler thread unblocks instead of spinning forever.
+                        self.waiting.append(self.allocator, candidate) catch {
+                            std.log.err("req={d} OOM re-queuing after batch-fill failure, cancelling", .{candidate.id});
+                            candidate.is_cancelled.store(true, .release);
+                            candidate.scheduler_done.store(true, .release);
+                        };
+                        return err;
                     };
-                    return err;
-                };
-                // Record how long this request waited in the queue
-                const queue_ms: u64 = @intCast(@max(now - req.enqueued_at, 0));
-                self.metrics.recordQueueTime(queue_ms);
+                    // Record how long this request waited in the queue
+                    const queue_ms: u64 = @intCast(@max(now - candidate.enqueued_at, 0));
+                    self.metrics.recordQueueTime(queue_ms);
+                }
             }
 
             // Update Prometheus gauges
@@ -567,7 +573,7 @@ pub const RequestManager = struct {
                 const block_ids = model.getBlockTable();
                 self.mutex.lockUncancelable(self.io);
                 defer self.mutex.unlock(self.io);
-                self.radix_tree.insert(req.tokens.items, block_ids) catch |err| {
+                self.radix_tree.insert(req.prompt_tokens_slice, block_ids) catch |err| {
                     std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
                 };
                 if (self.ssm_cache_inited) {
@@ -688,6 +694,22 @@ pub fn runSchedulerLoop(
             manager.metrics.recordSchedulerError();
         };
         sleepNs(scheduler_poll_ns);
+    }
+
+    // Shutdown cleanup: mark all remaining requests so handler threads
+    // observe scheduler_done and stop spinning (prevents use-after-free
+    // when the scheduler's queues are freed in deinit).
+    {
+        manager.mutex.lockUncancelable(manager.io);
+        defer manager.mutex.unlock(manager.io);
+
+        for (manager.running.items) |req| {
+            req.scheduler_done.store(true, .release);
+        }
+        for (manager.waiting.items) |req| {
+            req.is_cancelled.store(true, .release);
+            req.scheduler_done.store(true, .release);
+        }
     }
 }
 

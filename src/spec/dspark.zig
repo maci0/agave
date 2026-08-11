@@ -17,6 +17,8 @@ const math = std.math;
 pub const max_block: usize = 32;
 /// Floor/ceil epsilon when mapping confidence into logit space (avoids log(0)).
 const logit_clamp_eps: f32 = 1e-7;
+/// Maximum RNN rank that fits in stack buffers for gate/candidate/output vectors.
+const max_rnn_rank: usize = 4096;
 
 /// Pre-profiled steps-per-second table indexed by forward-pass batch size.
 /// Entry sps_table[B] = expected steps/sec for a batch of B tokens.
@@ -106,10 +108,10 @@ pub fn scheduleVerification(
 ) void {
     const R = blocks.len;
     if (R == 0) return;
-    // Caller must supply scratch with capacity ≥ R × γ.
-    std.debug.assert(scratch.len >= R * max_block);
     // result.lengths / cur_len are [256]u32 — clamp to prevent OOB.
     const R_clamped = @min(R, 256);
+    // Caller must supply scratch with capacity ≥ R_clamped × γ.
+    std.debug.assert(scratch.len >= R_clamped * max_block);
 
     // Compute survival probabilities for all blocks.
     for (blocks) |*b| b.computeSurvival();
@@ -200,6 +202,7 @@ pub const MarkovHead = struct {
     /// Compute transition bias B(x_{k-1}, ·) → bias[0..vocab_size].
     /// bias must be pre-allocated to vocab_size floats.
     pub fn transitionBias(self: MarkovHead, prev_token: u32, bias: []f32) void {
+        std.debug.assert(prev_token < self.vocab_size);
         std.debug.assert(bias.len >= self.vocab_size);
         const r = self.rank;
         const v = self.vocab_size;
@@ -273,6 +276,7 @@ pub const RnnHead = struct {
         bias: []f32, // [vocab_size], output
         z_scratch: []f32, // [≥ 2*rank + hidden_dim], caller-owned scratch
     ) void {
+        std.debug.assert(prev_token < self.vocab_size);
         const r = self.rank;
         const d = self.hidden_dim;
         const v = self.vocab_size;
@@ -287,10 +291,10 @@ pub const RnnHead = struct {
         @memcpy(z[2 * r .. 2 * r + d], h_k); // h_k
 
         // Apply W_gco: [z_dim, r*3] → [gate; cand; out] each R^r
-        if (r > 4096) @panic("dspark: rank exceeds stack buffer limit (4096)");
-        var gate_buf: [4096]f32 = undefined;
-        var cand_buf: [4096]f32 = undefined;
-        var out_buf: [4096]f32 = undefined;
+        if (r > max_rnn_rank) @panic("dspark: rank exceeds stack buffer limit");
+        var gate_buf: [max_rnn_rank]f32 = undefined;
+        var cand_buf: [max_rnn_rank]f32 = undefined;
+        var out_buf: [max_rnn_rank]f32 = undefined;
         const gate = gate_buf[0..r];
         const cand = cand_buf[0..r];
         const out = out_buf[0..r];
@@ -336,11 +340,13 @@ pub const ConfidenceHead = struct {
     w: []const f32,
     /// Markov embedding W1 (shared, [vocab_size, rank]).
     w1: []const f32,
+    vocab_size: u32,
     hidden_dim: u32,
     rank: u32,
 
     /// Estimate confidence c_k = σ(w^T [h_k; W1[x_{k-1}]]).
     pub fn confidence(self: ConfidenceHead, h_k: []const f32, prev_token: u32) f32 {
+        std.debug.assert(prev_token < self.vocab_size);
         const d = self.hidden_dim;
         const r = self.rank;
         const emb = self.w1[prev_token * r ..][0..r];
@@ -460,7 +466,7 @@ test "ConfidenceHead.confidence is sigmoid of concat dot" {
     // dot = 1*1 + 0*1 + 2*0.5 = 2 → σ(2) ≈ 0.880797
     const w = [_]f32{ 1, 0, 2 };
     const w1 = [_]f32{ 0.5, 0, 0, 0 }; // vocab 4, rank 1
-    const head = ConfidenceHead{ .w = &w, .w1 = &w1, .hidden_dim = 2, .rank = 1 };
+    const head = ConfidenceHead{ .w = &w, .w1 = &w1, .vocab_size = 4, .hidden_dim = 2, .rank = 1 };
     const h = [_]f32{ 1, 1 };
     const c = head.confidence(&h, 0);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0 / (1.0 + @exp(-2.0))), c, 1e-5);

@@ -256,6 +256,16 @@ pub const GptOssModel = struct {
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
         }
+        // Function-scoped errdefer: covers try calls below the if/else block
+        // (block-scoped errdefers above only guard within their branch).
+        errdefer {
+            if (self.tiered_block_allocator) |*ta| {
+                ta.freeSeqTable(&self.seq_table);
+            } else {
+                self.block_allocator.freeSeqTable(&self.seq_table);
+                self.paged_cache.deinit();
+            }
+        }
 
         // ── Prefill chunk buffers ──────────────────────────────────
         // Allocate with page_allocator (one-time init, not hot path).

@@ -115,18 +115,16 @@ fn rmsNormStage(
     // Intra-workgroup reduction
     local_ss = cu.blockReduceAdd(local_ss);
 
-    // Atomic add to global sum (reinterpret as u32 for atomic)
+    // Atomic float add to global sum
     if (tid == 0 and local_ss != 0.0) {
-        const bits: u32 = @bitCast(local_ss);
-        _ = @atomicRmw(u32, ss_buf, .Add, bits, .monotonic);
+        _ = @atomicRmw(f32, @as(*f32, @ptrCast(ss_buf)), .Add, local_ss, .monotonic);
     }
 
     // Grid sync: wait for all workgroups to contribute
     gridSync(sync_ctr, n_blocks);
 
     // Phase 2: normalize (all workgroups read the shared sum)
-    const ss_bits = @atomicLoad(u32, ss_buf, .acquire);
-    const ss: f32 = @bitCast(ss_bits);
+    const ss: f32 = @atomicLoad(f32, @as(*const f32, @ptrCast(ss_buf)), .acquire);
     const inv_rms = cu.rsqrtf(ss / @as(f32, @floatFromInt(n_dim)) + eps);
 
     i = bid * bdim + tid;
@@ -173,14 +171,12 @@ fn addRmsNormStage(
     local_ss = cu.blockReduceAdd(local_ss);
 
     if (tid == 0 and local_ss != 0.0) {
-        const bits: u32 = @bitCast(local_ss);
-        _ = @atomicRmw(u32, ss_buf, .Add, bits, .monotonic);
+        _ = @atomicRmw(f32, @as(*f32, @ptrCast(ss_buf)), .Add, local_ss, .monotonic);
     }
 
     gridSync(sync_ctr, n_blocks);
 
-    const ss_bits = @atomicLoad(u32, ss_buf, .acquire);
-    const ss: f32 = @bitCast(ss_bits);
+    const ss: f32 = @atomicLoad(f32, @as(*const f32, @ptrCast(ss_buf)), .acquire);
     const inv_rms = cu.rsqrtf(ss / @as(f32, @floatFromInt(n_dim)) + eps);
 
     i = bid * bdim + tid;

@@ -28,7 +28,10 @@ const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
 
 /// Default prefill chunk size (tokens per batch).
-const default_chunk_size: u32 = 512;
+/// Must not exceed paged_block_size (256) — sdpaPrefill writes KV into a
+/// single-block view returned by getLayerKvView, so a larger chunk would
+/// overflow the block boundary.
+const default_chunk_size: u32 = 256;
 /// Default sliding window pattern (every Nth layer uses full attention).
 const default_sliding_window_pattern: u32 = 6;
 /// Default RoPE frequency base for global attention layers.
@@ -245,6 +248,16 @@ pub const Gemma3Model = struct {
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
+        }
+        // Function-scoped errdefer: covers try calls below the if/else block
+        // (block-scoped errdefers above only guard within their branch).
+        errdefer {
+            if (self.tiered_block_allocator) |*ta| {
+                ta.freeSeqTable(&self.seq_table);
+            } else {
+                self.block_allocator.freeSeqTable(&self.seq_table);
+                self.paged_cache.deinit();
+            }
         }
         errdefer if (self.split_gpu_out.len > 0) allocator.free(self.split_gpu_out);
         errdefer if (self.split_cpu_out.len > 0) allocator.free(self.split_cpu_out);

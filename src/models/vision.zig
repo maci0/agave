@@ -205,7 +205,7 @@ pub const VisionEncoder = struct {
         const embd_dim = fmt.getArchU32(arch, "embedding_length") orelse default_embd_dim;
         const ffn_dim = fmt.getArchU32(arch, "feed_forward_length") orelse default_ffn_dim;
         const n_blocks = fmt.getArchU32(arch, "block_count") orelse default_n_blocks;
-        const n_heads = fmt.getArchU32(arch, "attention.head_count") orelse default_n_heads;
+        const n_heads = @max(fmt.getArchU32(arch, "attention.head_count") orelse default_n_heads, 1);
         const projection_dim = fmt.getArchU32(arch, "projection_dim") orelse default_projection_dim;
         const norm_eps = fmt.getArchF32(arch, "attention.layer_norm_epsilon") orelse default_norm_eps;
 
@@ -341,7 +341,8 @@ pub const VisionEncoder = struct {
         errdefer allocator.free(self.patch_buf);
         self.hidden = try allocator.alloc(f32, np * ed);
         errdefer allocator.free(self.hidden);
-        self.norm_buf = try allocator.alloc(f32, np * ed);
+        const patch_elems_alloc: usize = @as(usize, patch_size) * patch_size * n_channels;
+        self.norm_buf = try allocator.alloc(f32, np * @max(ed, patch_elems_alloc));
         errdefer allocator.free(self.norm_buf);
         self.q_buf = try allocator.alloc(f32, np * ed);
         errdefer allocator.free(self.q_buf);
@@ -356,8 +357,10 @@ pub const VisionEncoder = struct {
         errdefer allocator.free(self.scores);
         if (ffn_has_gate) {
             self.ffn_gate = try allocator.alloc(f32, np * fd);
-            errdefer allocator.free(self.ffn_gate);
         }
+        // Function-scoped errdefer for conditional ffn_gate (block-scoped errdefer
+        // inside the if above would expire before subsequent try calls).
+        errdefer if (self.ffn_gate.len > 0) allocator.free(self.ffn_gate);
         self.ffn_up = try allocator.alloc(f32, np * fd);
         errdefer allocator.free(self.ffn_up);
         self.ffn_down = try allocator.alloc(f32, np * ed);
@@ -577,8 +580,8 @@ pub const VisionEncoder = struct {
             null;
 
         // Flatten all patches into norm_buf first, then batch the GEMV.
-        // norm_buf is [np * ed] and patch_elems <= ed (e.g. 768 vs 1152),
-        // so np * patch_elems fits in norm_buf.
+        // norm_buf is allocated as [np * @max(ed, patch_elems)], so
+        // np * patch_elems always fits even when patch_elems > ed.
         const np: usize = pps * pps;
         for (0..pps) |py| {
             for (0..pps) |px| {
@@ -751,6 +754,7 @@ pub const VisionEncoder = struct {
             // Qwen: fused QKV — single batched GEMV producing [np, 3*embd_dim],
             // then scatter into separate Q/K/V buffers.
             // ffn_up is [np * ffn_dim] which is >= [np * 3*ed] (ffn_dim > 3*embd_dim).
+            std.debug.assert(self.ffn_dim >= 3 * self.embd_dim);
             const qkv_w = self.blockTensor(bi, "attn_qkv.weight") orelse return error.MissingTensor;
             const qkv_bias: ?[*]const f32 = if (self.has_bias)
                 if (self.blockTensor(bi, "attn_qkv.bias")) |bt| tensorAsF32(bt) else null

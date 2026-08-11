@@ -843,7 +843,7 @@ kernel void gemv_q5_0(
 // 256 values per super-block, 110 bytes.
 // Layout: { uchar hmask[32]; uchar qs[64]; uchar scales_raw[12]; half d; }
 // Dequant: q3 = ((qs[qi/4] >> (qi%4)*2) & 3) | ((hmask[qi%32] >> (qi/32)) & 1) << 2) - 4
-// Per-sub-block (16 values) scale: decoded from scales_raw nibbles, biased by -8.
+// Per-sub-block (16 values) scale: 6-bit values decoded from scales_raw (lo4 + hi2), biased by -32.
 // NR=2: each threadgroup processes 2 output rows, sharing x vector loads.
 
 constant uint q3_k_nr = 2;
@@ -855,11 +855,15 @@ inline float q3_k_block_dot(device const uchar* bp, device const float* x, uint 
     device const uchar* raw_scales = bp + 96;
     float d = float(as_type<half>(ushort(bp[108] | (uint(bp[109]) << 8))));
 
-    // Decode 16 sub-block scales from 12 packed nibble bytes
+    // Decode 16 6-bit scales from 12 bytes: bytes 0-7 hold low 4 bits
+    // (nibble-packed), bytes 8-11 hold high 2 bits (bitpacked).
+    // Combined value = (lo4 | (hi2 << 4)) - 32, range [-32, +31].
     int scales[16];
-    for (uint j = 0; j < 8; j++) {
-        scales[j]     = int(raw_scales[j] & 0xF) - 8;
-        scales[8 + j] = int(raw_scales[j] >> 4) - 8;
+    for (uint j = 0; j < 4; j++) {
+        scales[j]      = (int(raw_scales[j]     & 0xF) | (int((raw_scales[8+j] >> 0) & 3) << 4)) - 32;
+        scales[4  + j] = (int(raw_scales[4+j]   & 0xF) | (int((raw_scales[8+j] >> 2) & 3) << 4)) - 32;
+        scales[8  + j] = (int(raw_scales[j]     >>  4) | (int((raw_scales[8+j] >> 4) & 3) << 4)) - 32;
+        scales[12 + j] = (int(raw_scales[4+j]   >>  4) | (int((raw_scales[8+j] >> 6) & 3) << 4)) - 32;
     }
 
     float sum = 0.0f;

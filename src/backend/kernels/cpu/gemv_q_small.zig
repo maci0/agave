@@ -9,8 +9,8 @@ const gemv_common = @import("gemv.zig");
 const q5_0_dequant_bias: i8 = -16;
 /// Q3_K dequant bias: 3-bit unsigned [0..7] centered to signed [-4..3].
 const q3_k_dequant_bias: i8 = -4;
-/// Q3_K scale bias: raw 4-bit scale [0..15] centered to signed [-8..7].
-const q3_k_scale_bias: i8 = -8;
+/// Q3_K scale bias: raw 6-bit scale [0..63] centered to signed [-32..31].
+const q3_k_scale_bias: i8 = -32;
 /// Q2_K 2-bit quantization mask.
 const q2_k_bit_mask: u8 = 0x03;
 /// Q3_K 2-bit quantization mask for low bits.
@@ -387,12 +387,23 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             var scales0: [16]i8 = undefined;
             var scales1: [16]i8 = undefined;
             for (0..8) |j| {
-                scales0[j] = @as(i8, @intCast(raw_scales0[j] & 0x0F)) + q3_k_scale_bias;
-                scales1[j] = @as(i8, @intCast(raw_scales1[j] & 0x0F)) + q3_k_scale_bias;
+                const lo4_0: u8 = raw_scales0[j] & 0x0F;
+                const lo4_1: u8 = raw_scales1[j] & 0x0F;
+                const hi_shift: u3 = @intCast((j % 4) * 2);
+                const hi2_0: u8 = (raw_scales0[8 + j / 4] >> hi_shift) & 0x03;
+                const hi2_1: u8 = (raw_scales1[8 + j / 4] >> hi_shift) & 0x03;
+                scales0[j] = @as(i8, @intCast(lo4_0 | (hi2_0 << 4))) + q3_k_scale_bias;
+                scales1[j] = @as(i8, @intCast(lo4_1 | (hi2_1 << 4))) + q3_k_scale_bias;
             }
             for (0..8) |j| {
-                scales0[8 + j] = @as(i8, @intCast(raw_scales0[j] >> 4)) + q3_k_scale_bias;
-                scales1[8 + j] = @as(i8, @intCast(raw_scales1[j] >> 4)) + q3_k_scale_bias;
+                const lo4_0: u8 = raw_scales0[j] >> 4;
+                const lo4_1: u8 = raw_scales1[j] >> 4;
+                const g = 8 + j;
+                const hi_shift: u3 = @intCast((g % 4) * 2);
+                const hi2_0: u8 = (raw_scales0[8 + g / 4] >> hi_shift) & 0x03;
+                const hi2_1: u8 = (raw_scales1[8 + g / 4] >> hi_shift) & 0x03;
+                scales0[8 + j] = @as(i8, @intCast(lo4_0 | (hi2_0 << 4))) + q3_k_scale_bias;
+                scales1[8 + j] = @as(i8, @intCast(lo4_1 | (hi2_1 << 4))) + q3_k_scale_bias;
             }
 
             if (bk + bs - 1 < k) {
@@ -468,10 +479,17 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 
             var scales: [16]i8 = undefined;
             for (0..8) |j| {
-                scales[j] = @as(i8, @intCast(raw_scales[j] & 0x0F)) + q3_k_scale_bias;
+                const lo4: u8 = raw_scales[j] & 0x0F;
+                const hi_shift: u3 = @intCast((j % 4) * 2);
+                const hi2: u8 = (raw_scales[8 + j / 4] >> hi_shift) & 0x03;
+                scales[j] = @as(i8, @intCast(lo4 | (hi2 << 4))) + q3_k_scale_bias;
             }
             for (0..8) |j| {
-                scales[8 + j] = @as(i8, @intCast(raw_scales[j] >> 4)) + q3_k_scale_bias;
+                const lo4: u8 = raw_scales[j] >> 4;
+                const g = 8 + j;
+                const hi_shift: u3 = @intCast((g % 4) * 2);
+                const hi2: u8 = (raw_scales[8 + g / 4] >> hi_shift) & 0x03;
+                scales[8 + j] = @as(i8, @intCast(lo4 | (hi2 << 4))) + q3_k_scale_bias;
             }
 
             if (bk + bs - 1 < k) {

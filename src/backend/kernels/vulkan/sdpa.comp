@@ -22,7 +22,7 @@ const uint SDPA_MAX_HEAD_DIM = 256;
 
 shared float scores[SDPA_MAX_SEQ_LEN];
 shared float q_local[SDPA_MAX_HEAD_DIM];
-shared float shared_vals[8];
+shared float shared_vals[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 void main() {
     uint h = gl_WorkGroupID.x;

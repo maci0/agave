@@ -237,6 +237,18 @@ pub const Glm4Model = struct {
             self.pf_positions = try pa.alloc(u32, cs);
             errdefer pa.free(self.pf_positions);
         }
+        // Function-scoped errdefer: covers try calls below the bare {} block
+        // (block-scoped errdefers above only guard within the block).
+        errdefer {
+            const pa = std.heap.page_allocator;
+            const pf_bufs = .{
+                &self.pf_hidden,   &self.pf_hidden2, &self.pf_q_a,       &self.pf_q,
+                &self.pf_kv_proj,  &self.pf_kv_latent, &self.pf_k,       &self.pf_v,
+                &self.pf_attn_out,
+            };
+            inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
+            if (self.pf_positions.len > 0) pa.free(self.pf_positions);
+        }
 
         // KV cache: use TieredKvCache if provided, otherwise flat PagedKvCache.
         // Note: GLM4 uses different k_head_dim and v_head_dim, use larger for cache.

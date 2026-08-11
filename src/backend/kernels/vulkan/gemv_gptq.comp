@@ -11,7 +11,7 @@ layout(set = 0, binding = 3) readonly buffer QZ { uint qzeros[]; };
 layout(set = 0, binding = 4) writeonly buffer Y { float y_data[]; };
 layout(push_constant) uniform Params { uint n; uint k; uint group_size; };
 
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 void main() {
     uint row = gl_WorkGroupID.x;

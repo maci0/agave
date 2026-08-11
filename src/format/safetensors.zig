@@ -189,9 +189,11 @@ pub const SafeTensorsDir = struct {
         const shard_data = try allocator.alloc(ShardInfo, shard_count);
         errdefer allocator.free(shard_data);
 
-        var shards_mmapped: usize = 0;
+        // Pre-initialize all entries so errdefer can safely iterate the full array.
+        // Skipped shards (missing visual/MTP) have .data = &.{} (len == 0).
+        @memset(shard_data, .{ .data = &.{}, .tensor_base = 0 });
         errdefer {
-            for (shard_data[0..shards_mmapped]) |s| if (s.data.len > 0) std.posix.munmap(s.data);
+            for (shard_data) |s| if (s.data.len > 0) std.posix.munmap(s.data);
         }
 
         for (shard_name_list.items, 0..) |shard_name, si| {
@@ -233,7 +235,6 @@ pub const SafeTensorsDir = struct {
                 .data = mapped,
                 .tensor_base = 8 + @as(usize, @intCast(json_len)),
             };
-            shards_mmapped += 1;
 
             const json_bytes = mapped[8 .. 8 + json_len];
             try parseShardHeader(allocator, json_bytes, si, &tensors, &owned_strings);
@@ -1099,14 +1100,12 @@ fn fuseOneProjection(
         // requires page-aligned pointers).
         const pa = std.heap.page_allocator;
         const repacked_w = try pa.alloc(u8, total_w);
-        errdefer pa.free(repacked_w);
         @memset(repacked_w, 0); // zero-init: prevent uninitialized weights on bounds-check failure
         repacked_u8_list.append(allocator, @alignCast(repacked_w)) catch {
             pa.free(repacked_w);
             return error.OutOfMemory;
         };
         const repacked_s = try pa.alloc(u8, total_s);
-        errdefer pa.free(repacked_s);
         @memset(repacked_s, 0);
         repacked_u8_list.append(allocator, @alignCast(repacked_s)) catch {
             pa.free(repacked_s);

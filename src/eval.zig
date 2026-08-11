@@ -93,19 +93,22 @@ pub fn scoreCase(
     var n_correct: u32 = 0;
     var n_scored: u32 = 0;
 
-    // Score each continuation token
-    // The model has just processed the prompt. Now feed continuation tokens
-    // one at a time, and for each, check the logits BEFORE feeding the token
-    // (i.e., the logits from the previous step predict this token).
-    var last_token: u32 = if (prompt_ids.len > 0) prompt_ids[prompt_ids.len - 1] else 0;
-    for (continuation_ids) |gt_token| {
-        // Forward the previous token to get logits for this position
-        _ = model.forward(last_token) catch return null;
+    // Score each continuation token.
+    // After prefill, logits already predict the first continuation token
+    // (position prompt_len). For subsequent tokens, forward the previous
+    // continuation token to advance the model and get fresh logits.
+    for (continuation_ids, 0..) |gt_token, ci| {
+        if (ci > 0 or prompt_ids.len == 0) {
+            // Forward the previous token to get logits for this position.
+            // Skip for ci==0 when prompt was prefilled — logits are already set.
+            const prev = if (ci > 0) continuation_ids[ci - 1] else 0;
+            _ = model.forward(prev) catch return null;
+        }
 
         const logits = model.getLogits();
         if (gt_token >= logits.len) {
-            n_scored += 1;
-            last_token = gt_token;
+            // OOV token — skip without counting toward scored total,
+            // to avoid diluting the mean NLL.
             continue;
         }
 
@@ -139,7 +142,6 @@ pub fn scoreCase(
         if (argmax_id == gt_token) n_correct += 1;
 
         n_scored += 1;
-        last_token = gt_token;
     }
 
     if (n_scored == 0) return CaseResult{
@@ -212,4 +214,56 @@ test "EvalResult print does not crash" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.7), result.accuracy, 1e-6);
     try std.testing.expectEqual(@as(u32, 0), result.n_failed);
     result.print();
+}
+
+test "scoreCase scores continuation tokens correctly" {
+    // Dummy model that returns fixed logits making token 2 the argmax.
+    const Model = struct {
+        cache_reset: bool = false,
+        forward_count: u32 = 0,
+
+        fn resetCache(self: *@This()) void {
+            self.cache_reset = true;
+        }
+        fn prefill(self: *@This(), _: []const u32) !void {
+            _ = self;
+        }
+        fn forward(self: *@This(), _: u32) !void {
+            self.forward_count += 1;
+        }
+        fn getLogits(_: *@This()) []const f32 {
+            // 4-token vocab; token 2 has the highest logit
+            return &[_]f32{ 0.0, 1.0, 5.0, 0.5 };
+        }
+    };
+    var model = Model{};
+
+    // Continuation is [2] — model's argmax matches, so n_correct_argmax = 1.
+    const r = scoreCase(&model, &.{10}, &.{2});
+    try std.testing.expect(r != null);
+    try std.testing.expectEqual(@as(u32, 1), r.?.n_tokens);
+    try std.testing.expectEqual(@as(u32, 1), r.?.n_correct_argmax);
+    // NLL should be finite and positive (- log_prob of correct token)
+    try std.testing.expect(r.?.mean_nll > 0);
+    try std.testing.expect(std.math.isFinite(r.?.mean_nll));
+    // Cache must have been reset
+    try std.testing.expect(model.cache_reset);
+}
+
+test "scoreCase returns null on forward failure" {
+    const Model = struct {
+        fn resetCache(_: *@This()) void {}
+        fn prefill(_: *@This(), _: []const u32) !void {}
+        fn forward(_: *@This(), _: u32) !void {
+            return error.ForwardFailed;
+        }
+        fn getLogits(_: *@This()) []const f32 {
+            return &[_]f32{ 0.0, 1.0 };
+        }
+    };
+    var model = Model{};
+    // ci=0 with prompt: logits already set, forward not called.
+    // ci=1: forward is called and fails → returns null.
+    const r = scoreCase(&model, &.{1}, &.{ 0, 1 });
+    try std.testing.expect(r == null);
 }

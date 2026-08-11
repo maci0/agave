@@ -152,7 +152,7 @@ pub const ExpertCache = struct {
 
         // madvise(WILLNEED) to trigger background page-in
         if (comptime builtin.os.tag == .linux or builtin.os.tag == .macos) {
-            const page_size: usize = 4096;
+            const page_size: usize = std.heap.page_size_min;
             const addr = @intFromPtr(base_ptr);
             const aligned_addr = addr & ~(page_size - 1);
             const offset = addr - aligned_addr;

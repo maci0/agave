@@ -32,7 +32,7 @@ const CpuBackend = backend_mod.CpuBackend;
 const tok_mod = @import("tokenizer/tokenizer.zig");
 const BpeTokenizer = tok_mod.BpeTokenizer;
 
-var gpa = std.heap.page_allocator;
+const gpa = std.heap.page_allocator;
 
 const max_output_bytes = 16384;
 
@@ -44,6 +44,7 @@ const InferenceContext = struct {
     output_buf: [max_output_bytes]u8 = undefined,
     output_len: usize = 0,
     ready: bool = false,
+    gguf_valid: bool = false,
     eos_id: u32 = 0,
     bos_id: u32 = 0,
     arch: Arch = .gemma3,
@@ -59,14 +60,19 @@ const InferenceContext = struct {
 /// On parse/init errors the context is still returned with a diagnostic in the output buffer.
 export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     const ctx = gpa.create(InferenceContext) catch return 0;
+    // Initialize with safe defaults BEFORE attempting fallible parse.
+    // gpa.create returns uninitialized memory — if fromBuffer fails and we
+    // return early, agave_free would deinit garbage fields.
     ctx.* = .{
-        .gguf = GGUFFile.fromBuffer(gpa, model_ptr[0..model_len]) catch |e| {
-            const msg = std.fmt.bufPrint(&ctx.output_buf, "GGUF parse error: {s}", .{@errorName(e)}) catch "";
-            ctx.output_len = msg.len;
-            return @intFromPtr(ctx);
-        },
+        .gguf = undefined,
         .tok = BpeTokenizer.init(gpa),
     };
+    ctx.gguf = GGUFFile.fromBuffer(gpa, model_ptr[0..model_len]) catch |e| {
+        const msg = std.fmt.bufPrint(&ctx.output_buf, "GGUF parse error: {s}", .{@errorName(e)}) catch "";
+        ctx.output_len = msg.len;
+        return @intFromPtr(ctx);
+    };
+    ctx.gguf_valid = true;
 
     const fmt = ctx.gguf.format();
     const arch_str = fmt.getMetaStr("general.architecture") orelse "unknown";
@@ -195,7 +201,7 @@ export fn agave_free(ctx_ptr: usize) void {
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     if (ctx.mdl) |*m| m.deinit();
     ctx.tok.deinit();
-    ctx.gguf.deinit();
+    if (ctx.gguf_valid) ctx.gguf.deinit();
     gpa.destroy(ctx);
 }
 

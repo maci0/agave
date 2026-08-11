@@ -108,7 +108,7 @@ const conv_title_max_len: usize = 48;
 const conv_list_buf_size: usize = 8192;
 const conv_msgs_buf_size: usize = 65536;
 const http_buf_size: usize = 1024 * 1024;
-const hdr_buf_size: usize = 1024;
+const hdr_buf_size: usize = 2048;
 const short_hdr_buf_size: usize = 512;
 const error_body_buf_size: usize = 512;
 const max_log_path_len: usize = 256;
@@ -385,9 +385,28 @@ const Conversation = struct {
 
     fn setTitle(self: *Conversation, text: []const u8) void {
         @memset(&self.title_buf, 0);
-        const len: u8 = @intCast(@min(text.len, conv_title_max_len));
-        @memcpy(self.title_buf[0..len], text[0..len]);
-        self.title_len = len;
+        var len: usize = @min(text.len, conv_title_max_len);
+        // Walk backwards to avoid truncating in the middle of a multi-byte UTF-8 sequence.
+        while (len > 0) {
+            const byte = text[len - 1];
+            if (byte & 0x80 == 0) break; // ASCII — clean boundary
+            if (byte & 0xC0 == 0xC0) {
+                // Start byte of a multi-byte sequence — check if the full sequence fits.
+                const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch 1;
+                if (len - 1 + seq_len > @min(text.len, conv_title_max_len)) {
+                    // Sequence would be incomplete; drop it.
+                    len -= 1;
+                } else {
+                    break; // Full sequence fits — clean boundary.
+                }
+                break;
+            }
+            // Continuation byte (10xxxxxx) — keep walking back.
+            len -= 1;
+        }
+        const safe_len: u8 = @intCast(len);
+        @memcpy(self.title_buf[0..safe_len], text[0..safe_len]);
+        self.title_len = safe_len;
     }
 
     fn freeMessageContents(self: *Conversation, allocator: Allocator) void {
@@ -553,7 +572,7 @@ const Server = struct {
         for (self.conversations.items, 0..) |*conv, i| {
             if (conv.id == id) {
                 conv.freeMessages(self.allocator);
-                _ = self.conversations.swapRemove(i);
+                _ = self.conversations.orderedRemove(i);
                 break;
             }
         }
@@ -1554,6 +1573,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
+
         // Reject n > 1 (multiple completions not supported)
         if ((json.extractIntField(body, "n") orelse 1) > 1) {
             sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n > 1 is not supported; only single completions are available", "n", "n_not_supported");
@@ -1563,6 +1583,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens"));
         const sampling = json.parseSampling(body);
+
         // Do not log sampling.user — OpenAI "user" field often holds email/username (PII).
 
         // 2. Parse tools and extract messages
@@ -1917,7 +1938,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var tok_ids: [gen_ids_buf_size]u32 = undefined;
         defer @memset(std.mem.sliceAsBytes(&tok_ids), 0);
         const n_toks = parseDetokenizeTokens(req.body, &tok_ids);
-        if (n_toks >= gen_ids_buf_size) {
+        if (n_toks > gen_ids_buf_size) {
             sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Token array exceeds maximum of 4096 entries", "tokens", "invalid_value");
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -3169,8 +3190,13 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     }
     const prompt_token_count: u32 = @intCast(token_ids.len);
 
-    // Scheduler path: enqueue and block until complete
-    if (g_server.request_manager) |rm| {
+    // Scheduler path: enqueue and block until complete.
+    // Grammar-constrained decoding and json_mode bypass the scheduler (grammar
+    // state is per-request and the scheduler loop has no grammar/JSON support —
+    // no first-token '{' forcing, no brace depth tracking).
+    const use_grammar_pre = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
+    if (g_server.request_manager != null and !use_grammar_pre and !sampling.json_mode) {
+        const rm = g_server.request_manager.?;
         const gen_start = milliTimestamp();
         const req = rm.enqueue(token_ids) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
@@ -3211,7 +3237,8 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 
         const gen_end = milliTimestamp();
         const time_ms = elapsedBetween(gen_start, gen_end);
-        const token_count: u32 = stop_token_count orelse req.visible_len.load(.acquire);
+        const raw_count: u32 = stop_token_count orelse req.visible_len.load(.acquire);
+        const token_count: u32 = @min(raw_count, @as(u32, @intCast(max_tokens)));
         const tokens_per_sec: f32 = tokensPerSec(token_count, time_ms);
 
         const safe_tokens = req.tokens.items[0..token_count];
@@ -3364,7 +3391,11 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             break :blk null;
         };
     } else if (sampling.grammar_string) |gs| {
-        grammar_storage = grammar_mod.Grammar.parse(g_server.allocator, gs) catch |err| blk: {
+        // JSON-unescape the grammar string: extractField returns raw JSON content
+        // with escape sequences intact (e.g., \" for literal quotes in GBNF).
+        const unescaped_gs = json.jsonUnescape(g_server.allocator, gs) catch gs;
+        defer if (unescaped_gs.ptr != gs.ptr) g_server.allocator.free(@constCast(unescaped_gs));
+        grammar_storage = grammar_mod.Grammar.parse(g_server.allocator, unescaped_gs) catch |err| blk: {
             std.log.err("req={d} grammar parse failed: {}", .{ log_request_id, err });
             break :blk null;
         };
@@ -3411,13 +3442,11 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         }
         // Accept first token in grammar state
         if (use_grammar and grammar_state_storage != null) {
-            const tok_slice = [1]u32{first_gen_token};
-            const text = g_server.tokenizer.decode(@constCast(&tok_slice)) catch |err| {
-                std.log.warn("req={d} grammar token decode failed (id={d}): {}", .{ log_request_id, first_gen_token, err });
-                return .{ .data = g_server.allocator.dupe(u8, "[grammar decode error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
-            };
-            defer g_server.allocator.free(text);
-            grammar_state_storage.?.acceptToken(text);
+            // Use raw vocab text — NOT decoded text — so getEffectiveText strips
+            // BPE prefixes consistently with maskLogits.
+            const vt = g_server.tokenizer.getVocabTexts();
+            const raw = if (first_gen_token < vt.len) vt[first_gen_token] else "";
+            grammar_state_storage.?.acceptToken(raw);
         }
         // Track JSON depth for first token
         if (sampling.json_mode) {
@@ -3546,14 +3575,8 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                 if (grammar_storage) |*g| {
                     if (grammar_state_storage) |*gs| {
                         if (g.singleValidToken(gs, vocab_texts)) |jump_tok| {
-                            const jt_slice = [1]u32{jump_tok};
-                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_slice)) catch |err| {
-                                std.log.warn("req={d} grammar jump decode failed (id={d}): {}", .{ log_request_id, jump_tok, err });
-                                forward_failed = true;
-                                break;
-                            };
-                            defer g_server.allocator.free(jt_text);
-                            gs.acceptToken(jt_text);
+                            const jt_raw = if (jump_tok < vocab_texts.len) vocab_texts[jump_tok] else "";
+                            gs.acceptToken(jt_raw);
                             gen_tokens[token_count] = jump_tok;
                             token_count += 1;
                             last = jump_tok;
@@ -3642,9 +3665,10 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                 break;
             }
             const tok_text: []const u8 = tok_text_alloc orelse "";
-            // Accept token in grammar state
+            // Accept token in grammar state — use raw vocab text for consistent BPE handling.
             if (use_grammar and grammar_state_storage != null) {
-                grammar_state_storage.?.acceptToken(tok_text);
+                const raw_tok = if (next < vocab_texts.len) vocab_texts[next] else "";
+                grammar_state_storage.?.acceptToken(raw_tok);
                 if (grammar_state_storage.?.isComplete()) {
                     token_count += 1;
                     hit_eog = true;
@@ -3778,8 +3802,10 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     const token_ids: []const u32 = if (injected_ids_cs) |ids| ids else raw_token_ids;
     const prompt_token_count: u32 = @intCast(token_ids.len);
 
-    // Scheduler path: enqueue and poll for streamed tokens
-    if (g_server.request_manager) |rm| {
+    // Scheduler path: grammar/json_schema/json_mode requests bypass (no grammar/JSON support in scheduler).
+    const use_grammar_cs = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
+    if (g_server.request_manager != null and !use_grammar_cs and !sampling.json_mode) {
+        const rm = g_server.request_manager.?;
         const gen_start = milliTimestamp();
         const req = rm.enqueue(token_ids) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
@@ -4183,8 +4209,10 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         \\{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
     )) return;
 
-    // Scheduler path: enqueue request and poll for tokens
-    if (g_server.request_manager) |rm| {
+    // Scheduler path: grammar/json_mode requests bypass (no grammar/JSON support in scheduler).
+    const use_grammar_anth = (sampling_a.grammar_string != null or sampling_a.json_schema != null) and !sampling_a.json_mode;
+    if (g_server.request_manager != null and !use_grammar_anth and !sampling_a.json_mode) {
+        const rm = g_server.request_manager.?;
         const req = rm.enqueue(token_ids) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
@@ -4584,8 +4612,10 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     // Send setup events
     sendResponsesStartEvents(stream, req_id, created);
 
-    // Scheduler path: enqueue request and poll for tokens
-    if (g_server.request_manager) |rm| {
+    // Scheduler path: grammar/json_mode requests bypass (no grammar/JSON support in scheduler).
+    const use_grammar_resp = (sampling_r.grammar_string != null or sampling_r.json_schema != null) and !sampling_r.json_mode;
+    if (g_server.request_manager != null and !use_grammar_resp and !sampling_r.json_mode) {
+        const rm = g_server.request_manager.?;
         const req = rm.enqueue(token_ids) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
@@ -5156,8 +5186,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         if (initial.len > 0) _ = sseWriteData(stream, initial);
     }
 
-    // Scheduler path: enqueue request and poll for tokens
-    if (g_server.request_manager) |rm| {
+    // Scheduler path: enqueue request and poll for tokens.
+    // Grammar-constrained/json_mode decoding bypasses the scheduler (grammar state
+    // is per-request and the scheduler loop has no grammar/JSON support).
+    const use_grammar_stream = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
+    if (g_server.request_manager != null and !use_grammar_stream and !sampling.json_mode) {
+        const rm = g_server.request_manager.?;
         const req = rm.enqueue(token_ids) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
@@ -5307,7 +5341,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             break :blk null;
         };
     } else if (sampling.grammar_string) |gs| {
-        s_grammar = grammar_mod.Grammar.parse(g_server.allocator, gs) catch |err| blk: {
+        const unescaped_gs_s = json.jsonUnescape(g_server.allocator, gs) catch gs;
+        defer if (unescaped_gs_s.ptr != gs.ptr) g_server.allocator.free(@constCast(unescaped_gs_s));
+        s_grammar = grammar_mod.Grammar.parse(g_server.allocator, unescaped_gs_s) catch |err| blk: {
             std.log.err("req={d} grammar parse failed: {}", .{ log_request_id, err });
             break :blk null;
         };
@@ -5372,18 +5408,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             first_gen_token = math_ops.sampleToken(s_first_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
         }
     }
-    // Accept first token in grammar
+    // Accept first token in grammar — use raw vocab text for consistent BPE handling.
     if (use_grammar_s and s_grammar_state != null and token_ids.len > 0) {
-        const ft_slice = [1]u32{first_gen_token};
-        const ft_text = g_server.tokenizer.decode(@constCast(&ft_slice)) catch |err| {
-            std.log.warn("req={d} stream grammar decode failed (id={d}): {}", .{ log_request_id, first_gen_token, err });
-            g_server.metrics.recordFailure();
-            _ = sseWriteData(stream, "{\"error\":\"grammar decode failed\"}");
-            _ = sseWriteData(stream, "[DONE]");
-            return;
-        };
-        defer g_server.allocator.free(ft_text);
-        s_grammar_state.?.acceptToken(ft_text);
+        const ft_raw = if (first_gen_token < s_vocab_texts.len) s_vocab_texts[first_gen_token] else "";
+        s_grammar_state.?.acceptToken(ft_raw);
     }
 
     // Generate and stream tokens
@@ -5504,14 +5532,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 if (s_grammar) |*g| {
                     if (s_grammar_state) |*gs| {
                         if (g.singleValidToken(gs, s_vocab_texts)) |jump_tok| {
-                            const jt_s = [1]u32{jump_tok};
-                            const jt_text = g_server.tokenizer.decode(@constCast(&jt_s)) catch |err| {
-                                std.log.warn("req={d} stream jump decode failed (id={d}): {}", .{ log_request_id, jump_tok, err });
-                                stream_forward_failed = true;
-                                break;
-                            };
-                            defer g_server.allocator.free(jt_text);
-                            gs.acceptToken(jt_text);
+                            const jt_raw_s = if (jump_tok < s_vocab_texts.len) s_vocab_texts[jump_tok] else "";
+                            gs.acceptToken(jt_raw_s);
                             if (!streamChunk(stream, &chunk_buf, tok, jump_tok, req_id, created, is_chat)) {
                                 stream_disconnected = true;
                                 break;
@@ -5583,14 +5605,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             if (g_server.isEog(next)) break;
             // Accept in grammar
             if (use_grammar_s and s_grammar_state != null) {
-                const stok_slice = [1]u32{next};
-                const stext = g_server.tokenizer.decode(@constCast(&stok_slice)) catch |err| {
-                    std.log.warn("req={d} stream grammar decode failed (id={d}): {}", .{ log_request_id, next, err });
-                    stream_forward_failed = true;
-                    break;
-                };
-                defer g_server.allocator.free(stext);
-                s_grammar_state.?.acceptToken(stext);
+                const s_raw_tok = if (next < s_vocab_texts.len) s_vocab_texts[next] else "";
+                s_grammar_state.?.acceptToken(s_raw_tok);
                 if (s_grammar_state.?.isComplete()) {
                     if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp)) stream_disconnected = true;
                     token_count += 1;

@@ -248,8 +248,9 @@ kernel void sdpa_fa2(
     }
 
     // ── Final normalization: output = out_acc / l_i ────────────────
+    const float inv_l = (l_i > 0.0f) ? (1.0f / l_i) : 0.0f;
     for (uint d = tid; d < hd; d += tg_sz) {
-        output[h * hd + d] = out_acc[d] / l_i;
+        output[h * hd + d] = out_acc[d] * inv_l;
     }
 }
 
@@ -390,8 +391,9 @@ kernel void sdpa_fa2_hd512(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
+    const float inv_l = (l_i > 0.0f) ? (1.0f / l_i) : 0.0f;
     for (uint d = tid; d < hd; d += tg_sz) {
-        output[h * hd + d] = out_acc[d] / l_i;
+        output[h * hd + d] = out_acc[d] * inv_l;
     }
 }
 
@@ -543,8 +545,9 @@ kernel void sdpa_fa2_paged(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
+    const float inv_l = (l_i > 0.0f) ? (1.0f / l_i) : 0.0f;
     for (uint d = tid; d < hd; d += tg_sz) {
-        output[h * hd + d] = out_acc[d] / l_i;
+        output[h * hd + d] = out_acc[d] * inv_l;
     }
 }
 

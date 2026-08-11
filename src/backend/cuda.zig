@@ -55,6 +55,13 @@ const block_size: u32 = 256;
 /// Shared memory for block reductions (8 warps × 4 bytes).
 const reduction_smem: u32 = 32;
 
+/// Shared memory for sdpa_tree: 8 warp-reduce + 16 scores + 1 broadcast = 100 bytes.
+const tree_sdpa_smem: u32 = 100;
+
+/// Max shared memory per block (48KB default on most NVIDIA GPUs).
+/// SDPA kernels that allocate `(seq_len+1)*4` bytes must check against this.
+const max_smem_bytes: u32 = 49152;
+
 /// SDPA prefill shared memory layout constants (must match sdpa_prefill.zig).
 const prefill_kv_tile: u32 = 32;
 const prefill_reduce_slots: u32 = 8;
@@ -581,8 +588,10 @@ pub const CudaBackend = struct {
 
     fn uploadToDevice(self: *CudaBackend, ptr: *const anyopaque, size: usize) CUdeviceptr {
         var dptr: CUdeviceptr = 0;
-        _ = cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc");
-        _ = cuCheck(self.cuMemcpyHtoD(dptr, ptr, size), "cuMemcpyHtoD");
+        if (!cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc"))
+            @panic("cuMemAlloc failed — out of device memory");
+        if (!cuCheck(self.cuMemcpyHtoD(dptr, ptr, size), "cuMemcpyHtoD"))
+            @panic("cuMemcpyHtoD failed — device memory left uninitialized");
         return dptr;
     }
 
@@ -737,6 +746,7 @@ pub const CudaBackend = struct {
                 return act.dptr;
             }
             _ = self.cuMemFree(act.dptr);
+            _ = self.act_cache.remove(addr);
         }
         // Sub-region of a cached buffer
         if (self.findContaining(addr, size, true, false)) |dptr| return dptr;
@@ -763,6 +773,7 @@ pub const CudaBackend = struct {
                 return act.dptr;
             }
             _ = self.cuMemFree(act.dptr);
+            _ = self.act_cache.remove(addr);
         }
         // Sub-region of a cached buffer
         if (self.findContaining(addr, size, true, true)) |dptr| return dptr;
@@ -936,12 +947,15 @@ pub const CudaBackend = struct {
     }
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
-    pub fn clampedSiluMul(_: *CudaBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+    /// CPU fallback — must sync GPU before reading and invalidate after writing.
+    pub fn clampedSiluMul(self: *CudaBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        self.flushActivations();
         for (0..n) |i| {
-            const g = @min(gate[i], @as(f32, 10.0));
+            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
             const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
             out[i] = (g / (1.0 + @exp(-g))) * u;
         }
+        self.invalidateAct(out);
     }
 
     /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].
@@ -1007,6 +1021,8 @@ pub const CudaBackend = struct {
                 @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
+        } else {
+            @panic("missing fused FFN kernel for this quant type");
         }
     }
 
@@ -1025,6 +1041,8 @@ pub const CudaBackend = struct {
                 @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
+        } else {
+            @panic("missing fused FFN kernel for this quant type");
         }
     }
 
@@ -1043,6 +1061,8 @@ pub const CudaBackend = struct {
                 @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
+        } else {
+            @panic("missing fused FFN kernel for this quant type");
         }
     }
 
@@ -1061,6 +1081,8 @@ pub const CudaBackend = struct {
                 @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
             };
             self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
+        } else {
+            @panic("missing fused FFN kernel for this quant type");
         }
     }
 
@@ -1808,7 +1830,10 @@ pub const CudaBackend = struct {
             if (result != 0) return error.CudaMemAllocFailed;
 
             const upload = self.cuMemcpyHtoD(dev_ptr, host_ptr, size);
-            if (upload != 0) return error.CudaMemcpyFailed;
+            if (upload != 0) {
+                _ = self.cuMemFree(dev_ptr);
+                return error.CudaMemcpyFailed;
+            }
 
             try self.act_cache.put(addr, .{
                 .dptr = dev_ptr,
@@ -1831,6 +1856,7 @@ pub const CudaBackend = struct {
 
         var dptr: CUdeviceptr = 0;
         _ = cuCheck(self.cuMemAlloc(&dptr, @max(capacity, 4)), "cuMemAlloc(KV)");
+        if (dptr == 0) @panic("cuMemAlloc failed for KV buffer");
         // Upload any pre-existing host-side data so accumulated KV positions are visible.
         if (addr != 0 and capacity > 0) {
             _ = cuCheck(self.cuMemcpyHtoD(dptr, @ptrFromInt(addr), capacity), "cuMemcpyHtoD(KV)");
@@ -1894,7 +1920,15 @@ pub const CudaBackend = struct {
             };
 
             const smem: u32 = (sl + 1) * @sizeOf(f32);
-            self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+            // For long sequences the GPU SDPA kernel can't hold all scores
+            // in shared memory. Panic with a clear message instead of
+            // launching with oversized smem (which silently produces garbage).
+            if (smem > max_smem_bytes) {
+                std.log.err("CUDA SDPA: seq_len={d} requires {d} bytes shared memory (max {d}). Use paged attention or reduce context.", .{ seq_len + 1, smem, max_smem_bytes });
+                @panic("CUDA SDPA shared memory exceeded — context too long for non-paged kernel");
+            } else {
+                self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
+            }
         } else {
             // Turbo or mixed path: CPU KV append + GPU turbo SDPA kernel.
             // KV append on CPU (one write per token per layer — not the hot path).
@@ -1936,6 +1970,10 @@ pub const CudaBackend = struct {
             };
 
             const smem: u32 = (sl + 1) * @sizeOf(f32);
+            if (smem > max_smem_bytes) {
+                std.log.err("CUDA SDPA turbo: seq_len={d} requires {d} bytes smem (max {d}).", .{ seq_len + 1, smem, max_smem_bytes });
+                @panic("CUDA SDPA shared memory exceeded — context too long for turbo kernel");
+            }
             self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
         }
     }
@@ -2043,7 +2081,7 @@ pub const CudaBackend = struct {
                 @ptrCast(&hd_u),    @ptrCast(&pl_u), @ptrCast(&nn_u),
                 @ptrCast(&sc),
             };
-            self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, reduction_smem, &params);
+            self.launch(self.fn_sdpa_tree, n_nodes * @as(u32, @intCast(nh)), block_size, tree_sdpa_smem, &params);
             return;
         }
         @panic("CUDA sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
@@ -2122,6 +2160,10 @@ pub const CudaBackend = struct {
         };
 
         const smem: u32 = (sl + 1) * @sizeOf(f32);
+        if (smem > max_smem_bytes) {
+            std.log.err("CUDA SDPA paged: seq_len={d} requires {d} bytes smem (max {d}).", .{ sl, smem, max_smem_bytes });
+            @panic("CUDA SDPA shared memory exceeded — context too long for paged kernel");
+        }
         self.launch(self.fn_sdpa_paged.?, @intCast(nh), block_size, smem, &params);
 
         // Free temporary device buffers (not cached — staging data changes every call)
@@ -2192,6 +2234,10 @@ pub const CudaBackend = struct {
                 };
 
                 const smem: u32 = (sl + 1) * @sizeOf(f32);
+                if (smem > max_smem_bytes) {
+                    std.log.err("CUDA SDPA tree: seq_len={d} requires {d} bytes smem (max {d}).", .{ sl, smem, max_smem_bytes });
+                    @panic("CUDA SDPA shared memory exceeded — context too long for tree kernel");
+                }
                 self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
             }
             return;

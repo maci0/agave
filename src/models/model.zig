@@ -844,7 +844,10 @@ pub const ModelStorage = union(enum) {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
-                    if (comptime @hasField(@TypeOf(m.*), "steering")) m.steering = steer;
+                    if (comptime @hasField(@TypeOf(m.*), "steering"))
+                        m.steering = steer
+                    else
+                        std.log.warn("steering not supported for this model architecture", .{});
                 }
             },
         }

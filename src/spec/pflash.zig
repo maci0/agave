@@ -180,6 +180,7 @@ pub fn selectBlocks(state: *PFlashState) void {
 pub fn buildCompressedPrompt(state: *PFlashState, token_ids: []const u32) []const u32 {
     const cfg = state.config;
     const bs = @as(usize, cfg.block_size);
+    std.debug.assert(token_ids.len >= state.orig_len);
     const n_blocks = (state.orig_len + bs - 1) / bs;
     // Force-select last block (tail context always needed)
     if (n_blocks > 0) state.selected[n_blocks - 1] = true;

@@ -561,6 +561,7 @@ pub const MetalBackend = struct {
             std.log.err("Metal kernel not found: {s}", .{name});
             return error.KernelNotFound;
         };
+        defer release(func); // newFunctionWithName: returns +1 retain; balance it.
 
         var err: ?objc.id = null;
         return objc.msgSend(
@@ -606,9 +607,19 @@ pub const MetalBackend = struct {
         );
     }
 
-    /// Release all cached buffers, the scratch buffer, and free the cache map.
+    /// Release all cached buffers, pipeline states, the scratch buffer, and free the cache map.
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
+        // Release all compute pipeline states created during init.
+        inline for (@typeInfo(MetalBackend).@"struct".fields) |field| {
+            if (comptime std.mem.startsWith(u8, field.name, "pipe_")) {
+                if (field.type == objc.id) {
+                    release(@field(self, field.name));
+                } else if (field.type == ?objc.id) {
+                    if (@field(self, field.name)) |p| release(p);
+                }
+            }
+        }
         release(self.scratch_buf);
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
@@ -1613,14 +1624,22 @@ pub const MetalBackend = struct {
     pub fn compileComposedMegakernel(self: *MetalBackend, composed_msl: []const u8) !void {
         const NSString = objc.getClass("NSString") orelse return error.NoFoundation;
 
-        // Concatenate base MSL (building blocks) + composed kernel
-        const full_source = msl_source ++ composed_msl;
+        // Concatenate base MSL (building blocks) + composed kernel at runtime.
+        // msl_source is a comptime-known sentinel-terminated string; composed_msl
+        // is a runtime slice, so we must allocate a joined null-terminated buffer.
+        const base: []const u8 = msl_source[0..msl_source.len];
+        const full_len = base.len + composed_msl.len;
+        const full_buf = self.allocator.alloc(u8, full_len + 1) catch return error.OutOfMemory;
+        defer self.allocator.free(full_buf);
+        @memcpy(full_buf[0..base.len], base);
+        @memcpy(full_buf[base.len..][0..composed_msl.len], composed_msl);
+        full_buf[full_len] = 0; // null-terminate for stringWithUTF8String:
 
         const source_ns = objc.msgSend(
             ?objc.id,
             NSString,
             objc.sel("stringWithUTF8String:"),
-            .{@as([*:0]const u8, @ptrCast(full_source.ptr))},
+            .{@as([*:0]const u8, @ptrCast(full_buf.ptr))},
         ) orelse return error.StringFailed;
 
         var compile_err: ?objc.id = null;

@@ -302,6 +302,16 @@ pub const NemotronNanoModel = struct {
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
         }
+        // Function-scoped errdefer: covers try calls below the if/else block
+        // (block-scoped errdefers above only guard within their branch).
+        errdefer {
+            if (self.tiered_block_allocator) |*ta| {
+                ta.freeSeqTable(&self.seq_table);
+            } else {
+                self.block_allocator.freeSeqTable(&self.seq_table);
+                self.paged_cache.deinit();
+            }
+        }
 
         self.conv_states = try allocator.alloc([]f32, nl);
         errdefer allocator.free(self.conv_states);
@@ -910,8 +920,9 @@ pub const NemotronNanoModel = struct {
     /// For MLX quantized or NVFP4 tensors without a batched kernel, falls back
     /// to per-token GEMV via doGemv.
     fn doGemm(self: *NemotronNanoModel, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize, li: u32, comptime prefix: []const u8) !void {
-        if (t.dtype == .mlx_q) {
-            // No batched MLX kernel — fall back to per-token.
+        if (t.dtype == .mlx_q or self.findScaleTensor(li, prefix) != null) {
+            // No batched MLX/NVFP4 kernel — fall back to per-token GEMV
+            // which handles MLX dequant, NVFP4 dequant, and global scaling.
             for (0..n_tok) |tok| {
                 try self.doGemv(x + tok * n_in, t, y + tok * n_out, n_out, n_in, li, prefix);
             }

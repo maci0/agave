@@ -749,31 +749,13 @@ pub const Gemma4Model = struct {
         // Gemma 4 has per-layer varying kvd (sliding and global layers use different nkv*hd).
         // Allocate raw KV buffers per layer with the correct dimensions.
         // Shared layers point to their source layer's buffers.
-        {
-            self.layer_keys = try allocator.alloc([]f32, nl);
-            errdefer allocator.free(self.layer_keys);
-            self.layer_values = try allocator.alloc([]f32, nl);
-            errdefer allocator.free(self.layer_values);
-
-            for (0..nl) |i| {
-                const is_gl = layer_is_global[i];
-                const lnkv: usize = per_layer_n_kv_head[i];
-                const lhd: usize = if (is_gl) gl_head_dim else sl_head_dim;
-                self.layer_kvd[i] = lnkv * lhd;
-
-                if (kv_source[i] != @as(u32, @intCast(i))) {
-                    // Shared layer — will be redirected to source in getLayerKvView
-                    self.layer_keys[i] = &.{};
-                    self.layer_values[i] = &.{};
-                } else {
-                    const slot_size = max_sl * self.layer_kvd[i];
-                    self.layer_keys[i] = try allocator.alloc(f32, slot_size);
-                    errdefer allocator.free(self.layer_keys[i]);
-                    self.layer_values[i] = try allocator.alloc(f32, slot_size);
-                    errdefer allocator.free(self.layer_values[i]);
-                }
-            }
-        }
+        // The comprehensive errdefer must cover mid-loop OOM: if iteration i
+        // fails, iterations 0..i-1 have already allocated per-layer buffers
+        // that would otherwise leak (for-body errdefers are scoped per iteration).
+        self.layer_keys = try allocator.alloc([]f32, nl);
+        self.layer_values = try allocator.alloc([]f32, nl);
+        @memset(self.layer_keys, &.{});
+        @memset(self.layer_values, &.{});
         errdefer {
             for (0..nl) |i| {
                 if (self.kv_source[i] == @as(u32, @intCast(i))) {
@@ -783,6 +765,23 @@ pub const Gemma4Model = struct {
             }
             allocator.free(self.layer_keys);
             allocator.free(self.layer_values);
+        }
+
+        for (0..nl) |i| {
+            const is_gl = layer_is_global[i];
+            const lnkv: usize = per_layer_n_kv_head[i];
+            const lhd: usize = if (is_gl) gl_head_dim else sl_head_dim;
+            self.layer_kvd[i] = lnkv * lhd;
+
+            if (kv_source[i] != @as(u32, @intCast(i))) {
+                // Shared layer — will be redirected to source in getLayerKvView
+                self.layer_keys[i] = &.{};
+                self.layer_values[i] = &.{};
+            } else {
+                const slot_size = max_sl * self.layer_kvd[i];
+                self.layer_keys[i] = try allocator.alloc(f32, slot_size);
+                self.layer_values[i] = try allocator.alloc(f32, slot_size);
+            }
         }
 
         // PagedKvCache still needed for Model vtable (ensureKvBlock, resetKvCache)

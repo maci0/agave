@@ -456,28 +456,42 @@ pub const Transport = struct {
         const buf_u8: [*]const u8 = @ptrCast(buf);
         const recv_u8: [*]u8 = @ptrCast(recv.ptr);
 
-        // Send
-        var sent: usize = 0;
-        while (sent < byte_len) {
-            const rc = c.send(fd, buf_u8 + sent, byte_len - sent, 0);
-            if (rc <= 0) {
-                std.log.err("tcpAllReduce: send failed at {d}/{d} bytes", .{ sent, byte_len });
-                return;
-            }
-            sent += @intCast(rc);
-        }
-        // Recv
-        var got: usize = 0;
-        while (got < byte_len) {
-            const rc = c.recv(fd, recv_u8 + got, byte_len - got, 0);
-            if (rc <= 0) {
-                std.log.err("tcpAllReduce: recv failed at {d}/{d} bytes", .{ got, byte_len });
-                return;
-            }
-            got += @intCast(rc);
+        // Rank-based ordering prevents deadlock: rank 0 sends first, rank 1
+        // recvs first. This ensures that for any payload size, one side is
+        // always draining data while the other is producing it.
+        if (self.rank == 0) {
+            self.tcpSendAll(fd, buf_u8, byte_len) catch return;
+            self.tcpRecvAll(fd, recv_u8, byte_len) catch return;
+        } else {
+            self.tcpRecvAll(fd, recv_u8, byte_len) catch return;
+            self.tcpSendAll(fd, buf_u8, byte_len) catch return;
         }
         // Sum
         simdAddF32(buf, recv.ptr, n);
+    }
+
+    fn tcpSendAll(_: *Transport, fd: c_int, data: [*]const u8, len: usize) !void {
+        var sent: usize = 0;
+        while (sent < len) {
+            const rc = c.send(fd, data + sent, len - sent, 0);
+            if (rc <= 0) {
+                std.log.err("tcpAllReduce: send failed at {d}/{d} bytes", .{ sent, len });
+                return error.SendFailed;
+            }
+            sent += @intCast(rc);
+        }
+    }
+
+    fn tcpRecvAll(_: *Transport, fd: c_int, data: [*]u8, len: usize) !void {
+        var got: usize = 0;
+        while (got < len) {
+            const rc = c.recv(fd, data + got, len - got, 0);
+            if (rc <= 0) {
+                std.log.err("tcpAllReduce: recv failed at {d}/{d} bytes", .{ got, len });
+                return error.RecvFailed;
+            }
+            got += @intCast(rc);
+        }
     }
 
     /// Point-to-point send: send buffer to peer.

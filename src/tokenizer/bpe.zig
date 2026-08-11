@@ -185,10 +185,7 @@ pub const BpeTokenizer = struct {
                     self.byte_to_unicode[b] = try self.allocator.dupe(u8, buf[0..3]);
                 }
             }
-            // HashMap put can fail on OOM; log and continue (non-fatal for tokenization).
-            self.unicode_to_byte.put(self.byte_to_unicode[b], byte) catch |err| {
-                std.log.warn("unicode_to_byte put failed: {}", .{err});
-            };
+            try self.unicode_to_byte.put(self.byte_to_unicode[b], byte);
         }
     }
 
@@ -379,20 +376,24 @@ pub const BpeTokenizer = struct {
                 self.lockWordCache();
                 const cached_opt = self.word_cache.get(seg);
                 if (cached_opt) |cached_ids| {
-                    // Copy under lock so concurrent deinit cannot free the slice.
-                    var tmp_ids: [256]u32 = undefined;
+                    // Copy data under lock so concurrent deinit cannot free the
+                    // slice between unlock and read. Stack buffer handles the
+                    // common case; oversized entries (>1024 tokens, extremely rare)
+                    // are duplicated under lock to avoid use-after-free.
+                    var tmp_ids: [1024]u32 = undefined;
                     const n_ids = cached_ids.len;
                     if (n_ids <= tmp_ids.len) {
                         @memcpy(tmp_ids[0..n_ids], cached_ids);
                         self.unlockWordCache();
                         try result.appendSlice(self.allocator, tmp_ids[0..n_ids]);
                     } else {
-                        // Copy pointer+len under lock, then unlock before allocating
-                        // to avoid deadlock if dupe() returns OOM.
-                        const src_ptr = cached_ids.ptr;
-                        const src_len = cached_ids.len;
+                        // Allocate and copy under lock — the slice must not be
+                        // read after unlock (concurrent deinit could free it).
+                        const owned = self.allocator.dupe(u32, cached_ids) catch {
+                            self.unlockWordCache();
+                            return error.OutOfMemory;
+                        };
                         self.unlockWordCache();
-                        const owned = try self.allocator.dupe(u32, src_ptr[0..src_len]);
                         defer self.allocator.free(owned);
                         try result.appendSlice(self.allocator, owned);
                     }
@@ -471,7 +472,9 @@ pub const BpeTokenizer = struct {
             const owned_tok = try self.own(tok);
             try self.token_to_id.put(owned_tok, id);
             try self.id_to_token.append(self.allocator, owned_tok);
-            if (tok.len > 0 and tok[0] == '<' and tok[tok.len - 1] == '>') {
+            if (tok.len > 0 and ((tok[0] == '<' and tok[tok.len - 1] == '>') or
+                (tok[0] == '[' and tok[tok.len - 1] == ']')))
+            {
                 special_count += 1;
                 if (std.mem.indexOf(u8, tok, "im_start") != null or std.mem.indexOf(u8, tok, "im_end") != null) {
                     std.log.info("[bpe] Found ChatML special token: '{s}' = {}", .{ tok, i });
@@ -517,7 +520,9 @@ pub const BpeTokenizer = struct {
             const owned_tok = try self.own(tok);
             try self.token_to_id.put(owned_tok, id);
             try self.id_to_token.append(self.allocator, owned_tok);
-            if (tok.len > 0 and tok[0] == '<' and tok[tok.len - 1] == '>') {
+            if (tok.len > 0 and ((tok[0] == '<' and tok[tok.len - 1] == '>') or
+                (tok[0] == '[' and tok[tok.len - 1] == ']')))
+            {
                 special_count += 1;
                 try self.special_tokens.put(owned_tok, id);
             }
@@ -684,6 +689,15 @@ pub const BpeTokenizer = struct {
         for (tokens) |id| {
             if (id >= self.id_to_token.items.len) continue;
             const tok = self.id_to_token.items[id];
+            // Handle <0xNN> hex-byte tokens — emit raw byte
+            if (tok.len == 6 and tok[0] == '<' and tok[1] == '0' and tok[2] == 'x' and tok[5] == '>') {
+                const byte = std.fmt.parseUnsigned(u8, tok[3..5], 16) catch {
+                    try result.appendSlice(self.allocator, tok);
+                    continue;
+                };
+                try result.append(self.allocator, byte);
+                continue;
+            }
             // Replace ▁ (U+2581) with space, bulk-copy non-prefix segments
             var i: usize = 0;
             while (i < tok.len) {

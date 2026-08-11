@@ -9,7 +9,7 @@ layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
 layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
 layout(push_constant) uniform Params { uint n; uint k; };
 
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 // Q4_1 block: 20 bytes = f16 d (2B) + f16 m (2B) + 16 nibble bytes (32 elems)
 // Dequant: value = nibble * d + m

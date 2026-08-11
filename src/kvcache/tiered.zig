@@ -53,7 +53,8 @@ fn preadAll(file: anytype, buf: []u8, offset: usize) !usize {
     while (total < buf.len) {
         const result = std.c.pread(file.handle, buf[total..].ptr, buf[total..].len, @intCast(offset + total));
         const n: isize = @bitCast(result);
-        if (n <= 0) break;
+        if (n < 0) return error.ReadError; // I/O error — do not treat as EOF
+        if (n == 0) break; // true EOF
         total += @intCast(n);
     }
     return total;
@@ -219,10 +220,13 @@ pub const TieredKvCache = struct {
         var ssd_free: std.ArrayList(u32) = .empty;
         errdefer ssd_free.deinit(allocator);
 
-        // Reserve capacity for free lists
-        try vram_free.ensureTotalCapacity(allocator, vram_blocks);
-        try ram_free.ensureTotalCapacity(allocator, ram_blocks);
-        try ssd_free.ensureTotalCapacity(allocator, ssd_blocks);
+        // Reserve capacity for free lists — use total_blocks for each list because
+        // blocks can migrate between tiers (e.g., a RAM block promoted to VRAM and
+        // then freed pushes to vram_free_list). Tier-specific capacity would overflow
+        // appendAssumeCapacity in freeBlockInner.
+        try vram_free.ensureTotalCapacity(allocator, total_blocks);
+        try ram_free.ensureTotalCapacity(allocator, total_blocks);
+        try ssd_free.ensureTotalCapacity(allocator, total_blocks);
 
         // Calculate block bytes (keys + values)
         const slot_size = std.math.mul(usize, @as(usize, block_size), kv_dim) catch return error.OutOfMemory;
@@ -263,8 +267,9 @@ pub const TieredKvCache = struct {
         var init_count: usize = 0;
         errdefer {
             for (0..init_count) |i| {
-                allocator.free(blocks[i].base.keys);
-                allocator.free(blocks[i].base.values);
+                // Only free non-empty slices (SSD blocks have empty slices, never allocated)
+                if (blocks[i].base.keys.len > 0) allocator.free(blocks[i].base.keys);
+                if (blocks[i].base.values.len > 0) allocator.free(blocks[i].base.values);
             }
         }
 
@@ -333,8 +338,9 @@ pub const TieredKvCache = struct {
 
     /// Free all cache blocks and free lists.
     pub fn deinit(self: *TieredKvCache) void {
-        // Close SSD file if open
+        // Clean up SSD sparse file: unlink before close to avoid leaking temp files.
         if (self.ssd_file) |f| {
+            if (self.ssd_path.len > 0) deleteFileByPath(self.ssd_path);
             _ = std.c.close(f.handle);
         }
 
@@ -413,10 +419,22 @@ pub const TieredKvCache = struct {
         // Fallback to SSD tier (promote from SSD to RAM before use)
         if (self.ssd_free_list.items.len > 0) {
             const block_id = self.ssd_free_list.pop().?;
-            // Promote from SSD to RAM before use (inner: lock already held)
-            try self.promoteFromSsdInner(block_id);
+            if (self.blocks[block_id].ssd_offset == null) {
+                // Fresh block never spilled to SSD — allocate RAM backing directly
+                const slot_size = std.math.mul(usize, @as(usize, self.block_size), self.kv_dim) catch return error.OutOfMemory;
+                const keys = try self.allocator.alloc(f32, slot_size);
+                errdefer self.allocator.free(keys);
+                const values = try self.allocator.alloc(f32, slot_size);
+                self.blocks[block_id].base.keys = keys;
+                self.blocks[block_id].base.values = values;
+                self.blocks[block_id].tier = .ram;
+            } else {
+                // Promote from SSD to RAM before use (inner: lock already held)
+                try self.promoteFromSsdInner(block_id);
+            }
             self.blocks[block_id].base.ref_count = 1;
             self.blocks[block_id].base.used = 0;
+            _ = self.ram_used.fetchAdd(1, .monotonic);
             return block_id;
         }
 
@@ -446,7 +464,10 @@ pub const TieredKvCache = struct {
         var victim_id: u32 = 0;
         var found = false;
 
-        for (self.blocks[0..self.vram_block_count], 0..) |*blk, id| {
+        // Scan ALL blocks — after promoteToVram, blocks at indices >= vram_block_count
+        // can have tier .vram. Restricting to [0..vram_block_count] makes them invisible
+        // to eviction.
+        for (self.blocks, 0..) |*blk, id| {
             if (blk.tier != .vram) continue; // Only demote from VRAM
             if (blk.base.ref_count == 0) continue; // Skip free blocks
 
@@ -465,11 +486,11 @@ pub const TieredKvCache = struct {
 
         // Download data from VRAM → RAM on discrete GPUs (no-op on UMA)
         if (self.transfer.isActive()) {
-            const vblk = &self.blocks[victim_id];
-            const key_bytes = std.mem.sliceAsBytes(vblk.base.keys);
-            const val_bytes = std.mem.sliceAsBytes(vblk.base.values);
-            self.transfer.download.?(self.transfer.ctx.?, key_bytes.ptr, key_bytes.ptr, key_bytes.len);
-            self.transfer.download.?(self.transfer.ctx.?, val_bytes.ptr, val_bytes.ptr, val_bytes.len);
+            // TODO(Plan 04): discrete GPU transfer requires separate host/device pointers.
+            // Current TieredBlock stores a single keys/values slice. On UMA this is shared
+            // memory (transfer is no-op). On discrete GPUs, device and host addresses differ
+            // and passing the same pointer as both src and dst would silently corrupt data.
+            std.debug.assert(false); // Plan 04: discrete GPU transfer not yet supported
         }
 
         self.blocks[victim_id].tier = .ram;
@@ -486,10 +507,10 @@ pub const TieredKvCache = struct {
         var victim_id: u32 = 0;
         var found = false;
 
-        const ram_start = self.vram_block_count;
-        const ram_end = ram_start + self.ram_block_count;
-
-        for (self.blocks[ram_start..ram_end], ram_start..) |*blk, id| {
+        // Scan ALL blocks — after demoteToRam, blocks at indices < vram_block_count
+        // can have tier .ram. Restricting to the original RAM range misses them,
+        // causing premature NoRamBlocksToEvict → OutOfKvMemory.
+        for (self.blocks, 0..) |*blk, id| {
             if (blk.tier != .ram) continue; // Only select RAM blocks
             if (blk.base.ref_count == 0) continue; // Skip free blocks
 
@@ -642,9 +663,35 @@ pub const TieredKvCache = struct {
     }
 
     /// Free without acquiring tier_lock. Caller must hold tier_lock.
+    /// Guards against double-free: checks full-list overflow and per-block
+    /// scan of the appropriate free list in debug mode (mirrors PagedKvCache).
     fn freeBlockInner(self: *TieredKvCache, block_id: u32) void {
         std.debug.assert(block_id < self.blocks.len);
+
+        // Full-list guard: all blocks already free across all tiers.
+        const total_free = self.vram_free_list.items.len + self.ram_free_list.items.len + self.ssd_free_list.items.len;
+        if (total_free >= self.blocks.len) {
+            std.log.err("freeBlockInner: free lists full — double-free of block {d}", .{block_id});
+            return;
+        }
+
         var blk = &self.blocks[block_id];
+
+        // Debug-mode per-block double-free check: scan the tier's free list.
+        if (std.debug.runtime_safety) {
+            const tier_list = switch (blk.tier) {
+                .vram => self.vram_free_list.items,
+                .ram => self.ram_free_list.items,
+                .ssd => self.ssd_free_list.items,
+            };
+            for (tier_list) |fid| {
+                if (fid == block_id) {
+                    std.log.err("freeBlockInner: block {d} already on free list (double-free)", .{block_id});
+                    return;
+                }
+            }
+        }
+
         blk.base.ref_count = 0;
         blk.base.used = 0;
         blk.access_count = 0;
@@ -692,19 +739,21 @@ pub const TieredKvCache = struct {
             try self.promoteFromSsdInner(block_id);
         }
 
-        // Check if VRAM has space
-        if (self.vram_free_list.items.len == 0) {
-            // No free VRAM blocks — evict coldest
+        // Check if VRAM budget is exceeded (free list length can be non-zero
+        // even when usage has reached the budget due to tier migrations).
+        if (self.vram_used.load(.monotonic) >= self.vram_block_count) {
+            // VRAM budget full — evict coldest to make room
             const evicted = try self.demoteToRam();
             std.log.debug("Evicted block {d} to make room for promotion of {d}", .{ evicted, block_id });
         }
 
         // Transfer data from RAM → VRAM on discrete GPUs (no-op on UMA)
         if (self.transfer.isActive()) {
-            const key_bytes = std.mem.sliceAsBytes(blk.base.keys);
-            const val_bytes = std.mem.sliceAsBytes(blk.base.values);
-            self.transfer.upload.?(self.transfer.ctx.?, key_bytes.ptr, key_bytes.ptr, key_bytes.len);
-            self.transfer.upload.?(self.transfer.ctx.?, val_bytes.ptr, val_bytes.ptr, val_bytes.len);
+            // TODO(Plan 04): discrete GPU transfer requires separate host/device pointers.
+            // Current TieredBlock stores a single keys/values slice. On UMA this is shared
+            // memory (transfer is no-op). On discrete GPUs, device and host addresses differ
+            // and passing the same pointer as both src and dst would silently corrupt data.
+            std.debug.assert(false); // Plan 04: discrete GPU transfer not yet supported
         }
 
         std.debug.assert(blk.tier == .ram);
@@ -729,15 +778,13 @@ pub const TieredKvCache = struct {
             if (blk.tier == .vram) continue;
             if (blk.tier == .ssd) try self.promoteFromSsdInner(bid);
 
-            if (self.vram_free_list.items.len == 0) {
+            if (self.vram_used.load(.monotonic) >= self.vram_block_count) {
                 _ = try self.demoteToRam();
             }
 
             if (self.transfer.isActive()) {
-                const key_bytes = std.mem.sliceAsBytes(blk.base.keys);
-                const val_bytes = std.mem.sliceAsBytes(blk.base.values);
-                self.transfer.upload.?(self.transfer.ctx.?, key_bytes.ptr, key_bytes.ptr, key_bytes.len);
-                self.transfer.upload.?(self.transfer.ctx.?, val_bytes.ptr, val_bytes.ptr, val_bytes.len);
+                // TODO(Plan 04): discrete GPU transfer requires separate host/device pointers.
+                std.debug.assert(false); // Plan 04: discrete GPU transfer not yet supported
             }
 
             blk.tier = .vram;

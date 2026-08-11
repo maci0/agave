@@ -199,7 +199,7 @@ pub const Parser = struct {
                         const num_slice = if (semi) |s| param_slice[0..s] else param_slice;
                         const num = std.fmt.parseUnsigned(u16, num_slice, 10) catch break :blk @as(u21, 0);
                         break :blk switch (num) {
-                            2 => Key.delete, // Insert on some terminals, but we map common ones
+                            2 => 0, // Insert key — ignore (not used)
                             3 => Key.delete,
                             5 => 0, // Page Up — not used
                             6 => 0, // Page Down — not used
@@ -280,6 +280,12 @@ fn codepointWidth(cp: u21) usize {
     if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2; // Fullwidth symbols
     if (cp >= 0x20000 and cp <= 0x2FA1F) return 2; // CJK Extension B-F + Supplement
     if (cp >= 0x30000 and cp <= 0x323AF) return 2; // CJK Extension G-I
+
+    // Emoji: misc technical, misc symbols, dingbats, pictographs, supplemental
+    if ((cp >= 0x231A and cp <= 0x23FF) or
+        (cp >= 0x2600 and cp <= 0x27BF) or
+        (cp >= 0x1F300 and cp <= 0x1F9FF) or
+        (cp >= 0x1FA00 and cp <= 0x1FAFF)) return 2;
 
     // Control characters
     if (cp < 0x20 or cp == 0x7F) return 0;

@@ -154,11 +154,10 @@ fn rmsNormStage(
     local_ss = cu.blockReduceAdd(local_ss);
 
     if (tid == 0 and local_ss != 0.0) {
-        const bits: u32 = @bitCast(local_ss);
-        _ = asm volatile ("atom.global.add.u32 %[ret], [%[ptr]], %[val];"
-            : [ret] "=r" (-> u32),
+        _ = asm volatile ("atom.global.add.f32 %[ret], [%[ptr]], %[val];"
+            : [ret] "=f" (-> f32),
             : [ptr] "l" (ss_buf),
-              [val] "r" (bits),
+              [val] "f" (local_ss),
         );
     }
 

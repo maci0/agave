@@ -9,7 +9,7 @@ layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };  // raw bytes 
 layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
 layout(push_constant) uniform Params { uint n; uint k; };
 
-shared float shared_sums[8];  // one slot per subgroup (256 threads / 32 lanes)
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 // TQ2_0 block: 66 bytes = 2 bytes f16 scale + 64 bytes qs (4 values per byte, 256 elems).
 // Values are {-1, 0, +1}: decoded as ((byte >> (slot*2)) & 3) - 1.

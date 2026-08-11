@@ -126,7 +126,7 @@ pub const DiffusionGemmaModel = struct {
     // ── Working buffers ───────────────────────────────────────────
     hidden: []f32 = &.{},
     hidden2: []f32 = &.{},
-    /// Q projection buffer: sl_n_head * sl_head_dim (max) elements.
+    /// Q projection buffer: canvas_length * max(sl_n_head * sl_head_dim, gl_n_head * gl_head_dim) for batched canvas GEMM.
     q_buf: []f32 = &.{},
     /// K projection buffer: sl_n_kv_head * max(sl_head_dim, gl_head_dim) elements.
     k_buf: []f32 = &.{},
@@ -284,6 +284,16 @@ pub const DiffusionGemmaModel = struct {
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
             try self.block_allocator.appendBlock(&self.seq_table);
         }
+        // Function-scoped errdefer: covers try calls below the if/else block
+        // (block-scoped errdefers above only guard within their branch).
+        errdefer {
+            if (self.tiered_block_allocator) |*ta| {
+                ta.freeSeqTable(&self.seq_table);
+            } else {
+                self.block_allocator.freeSeqTable(&self.seq_table);
+                self.paged_cache.deinit();
+            }
+        }
 
         const e: usize = self.n_embd;
         const qd_sl: usize = self.sl_n_head * self.sl_head_dim;
@@ -297,7 +307,8 @@ pub const DiffusionGemmaModel = struct {
         errdefer allocator.free(self.hidden2);
         self.hidden_pre_norm = try allocator.alloc(f32, e);
         errdefer allocator.free(self.hidden_pre_norm);
-        self.q_buf = try allocator.alloc(f32, @max(qd_sl, self.gl_n_head * self.gl_head_dim));
+        const max_single_qd: usize = @max(qd_sl, self.gl_n_head * self.gl_head_dim);
+        self.q_buf = try allocator.alloc(f32, @max(max_single_qd, cl * max_single_qd));
         errdefer allocator.free(self.q_buf);
         self.k_buf = try allocator.alloc(f32, kvd_sl);
         errdefer allocator.free(self.k_buf);
@@ -307,9 +318,9 @@ pub const DiffusionGemmaModel = struct {
         errdefer allocator.free(self.attn_out);
         self.scores_buf = try allocator.alloc(f32, max_seq + cl + 16); // prompt + canvas
         errdefer allocator.free(self.scores_buf);
-        self.gate_buf = try allocator.alloc(f32, self.moe_ff);
+        self.gate_buf = try allocator.alloc(f32, self.moe_ff * 2);
         errdefer allocator.free(self.gate_buf);
-        self.up_buf = try allocator.alloc(f32, self.moe_ff);
+        self.up_buf = try allocator.alloc(f32, self.moe_ff * 2);
         errdefer allocator.free(self.up_buf);
         self.expert_out = try allocator.alloc(f32, e);
         errdefer allocator.free(self.expert_out);
@@ -324,9 +335,7 @@ pub const DiffusionGemmaModel = struct {
         errdefer allocator.free(self.pf_hidden);
         self.pf_scratch = try allocator.alloc(f32, cl * e);
         errdefer allocator.free(self.pf_scratch);
-        // pf_logits: allocated lazily in forwardCanvas (canvas_length * vocab_size can be large).
-        self.pf_logits = try allocator.alloc(f32, cl * self.vocab_size);
-        errdefer allocator.free(self.pf_logits);
+
         const max_kv_dim = @max(
             @as(usize, self.sl_n_kv_head) * @as(usize, self.sl_head_dim),
             @as(usize, self.gl_n_kv_head) * @as(usize, self.gl_head_dim),
@@ -360,7 +369,6 @@ pub const DiffusionGemmaModel = struct {
         allocator.free(self.logits_buf);
         allocator.free(self.pf_hidden);
         allocator.free(self.pf_scratch);
-        allocator.free(self.pf_logits);
         allocator.free(self.canvas_k_buf);
         allocator.free(self.canvas_v_buf);
         allocator.free(self.canvas_tokens);
@@ -418,11 +426,16 @@ pub const DiffusionGemmaModel = struct {
     /// The prompt KV cache (from prior prefill) is used for attention.
     pub fn forwardCanvas(self: *DiffusionGemmaModel, canvas: []const u32, logits_out: []f32) !void {
         const e: usize = self.n_embd;
-        const cl: usize = canvas.len;
+        const max_cl: usize = self.canvas_length;
+        const cl: usize = if (canvas.len > max_cl) blk: {
+            std.log.warn("diffusion_gemma: canvas length ({d}) exceeds canvas_length ({d}), clamping", .{ canvas.len, max_cl });
+            break :blk max_cl;
+        } else canvas.len;
         const emb_t = self.fmt.getTensor("model.decoder.embed_tokens.weight") orelse return error.MissingTensor;
 
         // Embed each canvas token into pf_hidden[0..cl*e] with Gemma scaling.
-        for (canvas, 0..) |tok, i| {
+        const canvas_clamped = canvas[0..cl];
+        for (canvas_clamped, 0..) |tok, i| {
             const out = self.pf_hidden[i * e ..][0..e];
             self.be.embLookup(.{ .data = emb_t.data_ptr, .dtype = emb_t.dtype }, tok, out.ptr, e);
             self.be.sync();
@@ -711,10 +724,14 @@ pub const DiffusionGemmaModel = struct {
         math_ops.topKExperts(self.router_logits[0..n_exp], k, top_ids[0..k], top_weights[0..k]);
         const n_sel = k;
 
-        // Softmax over selected weights.
+        // Softmax over selected weights (with max subtraction for numerical stability).
+        var max_w: f32 = -std.math.inf(f32);
+        for (top_weights[0..n_sel]) |w| {
+            max_w = @max(max_w, w);
+        }
         var w_sum: f32 = 0;
         for (top_weights[0..n_sel]) |*w| {
-            w.* = @exp(w.*);
+            w.* = @exp(w.* - max_w);
             w_sum += w.*;
         }
         const inv_w = 1.0 / w_sum;
@@ -913,9 +930,14 @@ pub const DiffusionGemmaModel = struct {
         math_ops.topKExperts(self.router_logits[0..n_exp], k, top_ids[0..k], top_weights[0..k]);
         const n_sel = k;
 
+        // Softmax over selected weights (with max subtraction for numerical stability).
+        var max_w: f32 = -std.math.inf(f32);
+        for (top_weights[0..n_sel]) |w| {
+            max_w = @max(max_w, w);
+        }
         var w_sum: f32 = 0;
         for (top_weights[0..n_sel]) |*w| {
-            w.* = @exp(w.*);
+            w.* = @exp(w.* - max_w);
             w_sum += w.*;
         }
         const inv_w = 1.0 / w_sum;

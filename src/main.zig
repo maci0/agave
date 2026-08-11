@@ -485,6 +485,8 @@ const CliArgs = struct {
     backend_choice: BackendChoice,
     device_id: u32,
     ctx_size: u32,
+    /// --no-kv-cache: disable KV cache allocation (prefill-only / embedding mode).
+    no_kv_cache: bool = false,
     kv_type_k: KvQuantType,
     kv_type_v: KvQuantType,
     /// Number of boundary layers (first N + last N) that use f16 for V cache
@@ -1111,6 +1113,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.option("pflash-scorer")) |p| validateFileExists(p, "--pflash-scorer");
     if (res.option("spec-token-map")) |p| validateFileExists(p, "--spec-token-map");
     if (res.option("dir-steering-file")) |p| validateFileExists(p, "--dir-steering-file");
+    if (res.option("expert-profile-in")) |p| validateFileExists(p, "--expert-profile-in");
 
     // JSON mode + interactive REPL would corrupt the JSON output stream
     if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
@@ -1196,6 +1199,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 std.process.exit(2);
             };
         },
+        .no_kv_cache = res.flag("no-kv-cache"),
         .seed = parseU64(res.option("seed"), "seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
         .kv_type_k = blk: {
             if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
@@ -1308,7 +1312,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk 0.85;
         },
-        .pflash_block_size = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64,
+        .pflash_block_size = blk: {
+            const v = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64;
+            if (v == 0) {
+                eprint("Warning: --pflash-block-size must be > 0, using default 64\n", .{});
+                break :blk 64;
+            }
+            break :blk v;
+        },
         .pflash_scorer_path = res.option("pflash-scorer"),
         .spec_token_map = res.option("spec-token-map"),
         .dir_steering_file = res.option("dir-steering-file"),
@@ -1331,8 +1342,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             }
             break :blk 0;
         },
-        .diffusion_steps = parseU32(res.option("diffusion-steps"), "diffusion-steps") orelse 16,
-        .diffusion_canvas = parseU32(res.option("diffusion-canvas"), "diffusion-canvas") orelse 256,
+        .diffusion_steps = @max(1, parseU32(res.option("diffusion-steps"), "diffusion-steps") orelse 16),
+        .diffusion_canvas = @max(1, parseU32(res.option("diffusion-canvas"), "diffusion-canvas") orelse 256),
         .diffusion_confidence = blk: {
             if (res.option("diffusion-confidence")) |s| {
                 const v = std.fmt.parseFloat(f32, s) catch {
@@ -1348,7 +1359,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             break :blk 0.5;
         },
         .ssd_streaming = res.flag("ssd-streaming"),
-        .ssd_cache_slots = parseU32(res.option("ssd-cache-slots"), "ssd-cache-slots") orelse 256,
+        .ssd_cache_slots = blk: {
+            const v = parseU32(res.option("ssd-cache-slots"), "ssd-cache-slots") orelse 256;
+            if (v == 0) {
+                eprint("Warning: --ssd-cache-slots is 0; no experts will be cached\n", .{});
+            }
+            break :blk v;
+        },
         .expert_profile_out = res.option("expert-profile-out"),
         .expert_profile_in = res.option("expert-profile-in"),
         .power_pct = blk: {
@@ -1565,11 +1582,9 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
         _ = std.posix.system.recv(fd, &pong, 4, 0);
         _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     } else {
-        _ = std.posix.system.recv(fd, &pong, 4, 0);
-        _ = std.posix.system.send(fd, &ping, 4, 0);
         _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
-        _ = std.posix.system.send(fd, &ping, 4, 0);
         _ = std.posix.system.recv(fd, &pong, 4, 0);
+        _ = std.posix.system.send(fd, &ping, 4, 0);
         _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     }
     const start_us: u64 = @intCast(ts_start.sec * 1_000_000 + @divTrunc(ts_start.nsec, 1000));
@@ -2358,8 +2373,11 @@ pub fn main(init: std.process.Init) !void {
         const hd = disp_info.head_dim;
         const nl = disp_info.n_layers;
         if (n_kv > 0 and hd > 0 and nl > 0 and avail_mem > 0) {
+            // Use float arithmetic for per-token KV bytes — bitsPerElement() returns
+            // fractional values (e.g. Q8_0 = 8.5). @intFromFloat on a non-integer
+            // is UB in ReleaseFast, so compute in float and round up.
             const kv_bpe = cli.kv_type_k.bitsPerElement() + cli.kv_type_v.bitsPerElement();
-            const per_token_bytes: usize = @as(usize, nl) * @as(usize, n_kv) * @as(usize, hd) * @as(usize, @intFromFloat(kv_bpe)) / 8;
+            const per_token_bytes: usize = @intFromFloat(@ceil(@as(f64, @floatFromInt(@as(usize, nl) * @as(usize, n_kv) * @as(usize, hd))) * @as(f64, kv_bpe) / 8.0));
             const model_bytes = disp_info.file_size_bytes;
             const usable = if (avail_mem > model_bytes * 2) avail_mem - model_bytes * 2 else avail_mem / 4;
             const fit_ctx = if (per_token_bytes > 0) usable * 8 / (per_token_bytes * 10) else default_ctx_size;
@@ -2374,7 +2392,7 @@ pub fn main(init: std.process.Init) !void {
             cli.ctx_size = default_ctx_size;
             std.log.info("ctx-size: auto → {d} (insufficient metadata for auto-fit)", .{cli.ctx_size});
         }
-    } else if (cli.ctx_size == 0) {
+    } else if (cli.ctx_size == 0 and !cli.no_kv_cache) {
         if (cli.user_set.ctx_size) {
             // User explicitly passed --ctx-size 0 → use model's full context
             cli.ctx_size = if (model_native_ctx > 0) model_native_ctx else default_ctx_size;
@@ -2993,7 +3011,12 @@ fn initAndRun(
                 const grid: u32 = ve.patch_size * 2;
                 const orig = image.getImageDimensions(allocator, g_io, image_path) catch break :blk ve.image_size;
                 const side = @max(orig.width, orig.height);
-                break :blk ((side + grid - 1) / grid) * grid;
+                const rounded = ((side + grid - 1) / grid) * grid;
+                if (rounded > ve.image_size) {
+                    std.log.warn("Qwen VL: native resolution {d}×{d} exceeds allocated buffer size {d}, capping to {d}", .{ rounded, rounded, ve.image_size, ve.image_size });
+                    break :blk ve.image_size;
+                }
+                break :blk rounded;
             } else ve.image_size;
             const img_pixels = loadImage(allocator, image_path, target_size) catch |err| {
                 eprint("Error: failed to load image '{s}': {}\n", .{ image_path, err });
@@ -3296,7 +3319,10 @@ fn initAndRun(
             eprint("Error: disaggregated inference transport allocation failed: {}\n", .{err});
             break :blk null;
         }) |dtr| disagg_blk: {
-            defer allocator.destroy(dtr);
+            defer {
+                dtr.deinit();
+                allocator.destroy(dtr);
+            }
             const peers_str = cli.tp_peers orelse break :disagg_blk;
             dtr.* = TransportMod.Transport.init(allocator, .tcp, cli.tp_rank, 2) catch |err| {
                 eprint("Error: disaggregated transport init failed: {}\n", .{err});
@@ -3717,25 +3743,30 @@ fn generateDiffusion(
             if (n_locked >= canvas_len) break;
         }
 
-        // Output the locked canvas tokens (use SPM decode for Gemma tokenizer).
-        const canvas_text = tok.decodeSpm(canvas) catch tok.decode(canvas) catch null;
+        // Truncate canvas at first EOS token before output.
+        const eos_id = model.eosId();
+        var eos_pos: usize = canvas_len;
+        for (canvas, 0..) |t, i| {
+            if (t == eos_id) {
+                eos_pos = i;
+                break;
+            }
+        }
+        const output_canvas = canvas[0..eos_pos];
+
+        // Output the (possibly truncated) canvas tokens.
+        const canvas_text = tok.decodeSpm(output_canvas) catch tok.decode(output_canvas) catch null;
         if (canvas_text) |text| {
             _ = std.posix.system.write(stdout_file.handle, text.ptr, text.len);
             allocator.free(text);
         }
-        total_generated += @intCast(canvas_len);
+        total_generated += @intCast(output_canvas.len);
+
+        // Stop if EOS was found in this block.
+        if (eos_pos < canvas_len) break;
 
         // Prefill the canvas into the KV cache for the next block.
         _ = model.prefill(canvas) catch break;
-
-        // Stop if canvas contains EOS token (generation complete).
-        const eos_id = model.eosId();
-        var has_eos = false;
-        for (canvas) |t| if (t == eos_id) {
-            has_eos = true;
-            break;
-        };
-        if (has_eos) break;
 
         // Stop if max_tokens reached.
         if (total_generated >= cli.max_tokens) break;
@@ -4489,13 +4520,9 @@ fn generateAndPrintInner(
             if (grammar) |*g| {
                 if (grammar_state) |*gs| {
                     if (g.singleValidToken(gs, tok.id_to_token.items)) |jump_tok| {
-                        const jt_slice = [1]u32{jump_tok};
-                        const jt_text = tok.decode(@constCast(&jt_slice)) catch |err| {
-                            eprint("Warning: grammar jump token decode failed (id={d}): {}\n", .{ jump_tok, err });
-                            break;
-                        };
-                        defer allocator.free(jt_text);
-                        gs.acceptToken(jt_text);
+                        // Use raw vocab text for grammar state — consistent with maskLogits.
+                        const jt_raw = if (jump_tok < tok.id_to_token.items.len) tok.id_to_token.items[jump_tok] else "";
+                        gs.acceptToken(jt_raw);
                         if (token_count >= gen_ids_buf.len) break;
                         gen_ids_buf[token_count] = jump_tok;
                         token_count += 1;
@@ -4569,15 +4596,12 @@ fn generateAndPrintInner(
         }
         if (token_count >= gen_ids_buf.len) break;
         gen_ids_buf[token_count] = next;
-        // Update grammar state with accepted token
+        // Update grammar state with accepted token.
+        // Use raw vocab text (id_to_token) — NOT decoded text — so that
+        // getEffectiveText strips BPE prefixes consistently with maskLogits.
         if (grammar_state) |*gs| {
-            const tok_slice = [1]u32{next};
-            const text = tok.decode(&tok_slice) catch |err| blk: {
-                eprint("Warning: grammar token decode failed (id={d}): {}\n", .{ next, err });
-                break :blk null;
-            };
-            defer if (text) |t| allocator.free(t);
-            gs.acceptToken(text orelse "");
+            const raw_text = if (next < tok.id_to_token.items.len) tok.id_to_token.items[next] else "";
+            gs.acceptToken(raw_text);
             if (gs.isComplete()) {
                 hit_eog = true;
                 token_count += 1;

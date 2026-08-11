@@ -30,6 +30,14 @@ pub fn softmaxSimd(comptime W: comptime_int, data: [*]f32, n: usize) void {
         s += data[i];
     }
 
+    // Guard: all-negative-infinity inputs (e.g. after grammar masking) produce
+    // NaN sums because -inf - (-inf) = NaN → exp(NaN) = NaN. Zero the output
+    // so no position receives attention weight.
+    if (!math.isFinite(s) or s == 0.0) {
+        @memset(data[0..n], 0.0);
+        return;
+    }
+
     // SIMD divide
     const inv_s = 1.0 / s;
     const inv_v: VW = @splat(inv_s);
@@ -158,6 +166,35 @@ test "softmax two elements verifies exact ratio" {
     softmaxSimd(4, &data, 2);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), data[0], 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 2.0 / 3.0), data[1], 1e-5);
+}
+
+test "softmax all-negative-infinity produces zeros" {
+    // After grammar masking every logit may be -inf. Must not produce NaN.
+    const neg_inf = -math.inf(f32);
+    var data = [_]f32{ neg_inf, neg_inf, neg_inf, neg_inf };
+    softmaxSimd(4, &data, 4);
+    for (0..4) |i| {
+        try std.testing.expect(!std.math.isNan(data[i]));
+        try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[i], 1e-6);
+    }
+}
+
+test "softmax partial-negative-infinity keeps valid distribution" {
+    // Mix of -inf and finite: only finite entries share the probability mass.
+    const neg_inf = -math.inf(f32);
+    var data = [_]f32{ neg_inf, 0.0, neg_inf, 0.0 };
+    softmaxSimd(4, &data, 4);
+    var sum: f32 = 0;
+    for (0..4) |i| {
+        try std.testing.expect(!std.math.isNan(data[i]));
+        sum += data[i];
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-5);
+    // -inf entries should be 0, finite entries should share equally
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), data[1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[2], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), data[3], 1e-5);
 }
 
 test "fuzz: all softmax functions" {

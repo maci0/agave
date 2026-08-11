@@ -33,7 +33,7 @@ pub const TreeNode = struct {
 
 /// Compiled tree ready for verification.
 /// Maximum children per node (for child index).
-const max_children_per_node: usize = 16;
+const max_children_per_node: usize = 32;
 
 /// Compiled draft tree flattened for batched verification against the target model.
 pub const CompiledTree = struct {
@@ -234,6 +234,8 @@ pub const DDTreeBuilder = struct {
                 result.child_tokens[pidx][cc] = node.token_id;
                 result.child_indices[pidx][cc] = @intCast(i);
                 result.child_counts[pidx] = cc + 1;
+            } else {
+                std.log.warn("DDTree: node {d} exceeds max_children_per_node ({d}), dropping child token {d}", .{ pidx, max_children_per_node, node.token_id });
             }
         }
 

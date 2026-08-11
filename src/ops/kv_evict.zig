@@ -124,9 +124,12 @@ pub fn selectVictims(
     }
 
     // Binary search for threshold that keeps exactly middle_budget positions.
-    // Positions with score >= threshold are kept.
+    // Positions with score >= threshold are kept. We converge `lo` upward
+    // until count(>= lo) is <= middle_budget, then use `lo` as the threshold.
+    // This ensures positions tied at the boundary are included (not excluded
+    // by an epsilon offset), and the `kept < middle_budget` guard below
+    // limits to exactly the budget when ties cause count > budget.
     const max_iters: usize = 64;
-    var threshold: f32 = lo;
     for (0..max_iters) |_| {
         const mid = (lo + hi) * 0.5;
         var count: usize = 0;
@@ -137,15 +140,17 @@ pub fn selectVictims(
             lo = mid;
         } else {
             hi = mid;
-            threshold = mid;
         }
         if (hi - lo < 1e-10) break;
     }
 
-    // Apply threshold: keep positions with score >= threshold, up to middle_budget
+    // Apply threshold: keep positions with score >= lo, up to middle_budget.
+    // Using `lo` (not `hi`) ensures tied positions at the boundary pass the
+    // check. The `kept < middle_budget` guard handles the case where ties
+    // cause more positions to pass than the budget allows.
     var kept: usize = 0;
     for (middle_start..middle_end) |i| {
-        if (scores[i] >= threshold and kept < middle_budget) {
+        if (scores[i] >= lo and kept < middle_budget) {
             keep[i] = true;
             kept += 1;
         }

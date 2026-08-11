@@ -9,7 +9,7 @@ layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };
 layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
 layout(push_constant) uniform Params { uint n; uint k; };
 
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 // Q5_K: 256 values per super-block, 176 bytes.
 // Layout: { half d; half dmin; uchar scales[12]; uchar qh[32]; uchar qs[128]; }

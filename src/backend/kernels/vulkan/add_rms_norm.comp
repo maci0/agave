@@ -7,7 +7,7 @@ layout(set = 0, binding = 1) readonly buffer Residual { float residual[]; };
 layout(set = 0, binding = 2) readonly buffer Wt { float wt[]; };
 layout(set = 0, binding = 3) writeonly buffer Out { float out_buf[]; };
 layout(push_constant) uniform Params { uint n; float eps; };
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 void main() {
     uint tid = gl_LocalInvocationID.x;
     uint tg_size = gl_WorkGroupSize.x;

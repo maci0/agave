@@ -55,7 +55,7 @@ pub const SpecState = struct {
     /// are set to -inf before argmax, restricting proposals to frequent tokens only.
     /// Improves acceptance rate by biasing draft toward tokens the target model prefers.
     /// Built from --spec-token-map <file> (one token ID per line) via buildTokenMask().
-    /// Owned by caller (allocator.free(mask) in deinit).
+    /// Caller-owned — must be freed separately (not freed by deinit).
     token_mask: ?[]bool = null,
 
     /// Allocate draft log-prob and sampling buffers for speculative decoding.
@@ -783,7 +783,7 @@ fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u
         buf[i] = diff;
         sum += diff;
     }
-    if (sum <= 0) return 0;
+    if (sum <= 0) return math_ops.argmax(target_probs);
     var r = rng.float(f32) * sum;
     for (0..n) |j| {
         r -= buf[j];
@@ -806,6 +806,14 @@ fn logSoftmax(logits: []f32) void {
     }
     var max_val = @reduce(.Max, max_v);
     while (i < n) : (i += 1) max_val = @max(max_val, logits[i]);
+
+    // All logits are -inf (e.g. after FR-Spec masking with empty intersection):
+    // exp(-inf - (-inf)) = exp(NaN) → NaN propagation. Fill uniform instead.
+    if (max_val == -std.math.inf(f32)) {
+        const uniform = -@log(@as(f32, @floatFromInt(n)));
+        @memset(logits, uniform);
+        return;
+    }
 
     const mv: V8 = @splat(max_val);
     var sum_v: V8 = @splat(@as(f32, 0.0));
@@ -1033,15 +1041,15 @@ test "softmaxWithTemp SIMD path with >8 elements" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
 }
 
-test "sampleResidual all mass on draft returns 0 fallback" {
-    // When target <= draft everywhere, residual is all zeros
+test "sampleResidual all mass on draft returns target argmax fallback" {
+    // When target <= draft everywhere, residual is all zeros → fallback to argmax(target)
     const target = [_]f32{ 0.1, 0.3, 0.6 };
     const draft_lp = [_]f32{ @log(@as(f32, 0.2)), @log(@as(f32, 0.4)), @log(@as(f32, 0.7)) };
     var buf: [3]f32 = undefined;
     var prng = std.Random.DefaultPrng.init(42);
     const tok = sampleResidual(&target, &draft_lp, 3, prng.random(), &buf);
-    // Sum of residual is 0, function returns 0
-    try std.testing.expectEqual(@as(u32, 0), tok);
+    // Sum of residual is 0, function returns argmax(target) = 2 (0.6 is largest)
+    try std.testing.expectEqual(@as(u32, 2), tok);
 }
 
 test "sampleResidual returns valid token" {

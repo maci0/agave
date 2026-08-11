@@ -653,7 +653,7 @@ const sdpa_max_seq_len: usize = 4096;
 const sdpa_max_head_dim: usize = 256;
 
 /// Assumed maximum vocabulary size for embedding table caching.
-const emb_max_vocab_size: usize = 65536;
+const emb_max_vocab_size: usize = 256000;
 
 // ── Backend struct ───────────────────────────────────────────────
 
@@ -1380,11 +1380,11 @@ pub const VulkanBackend = struct {
 
     fn downloadBuf(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]u8, size: usize) void {
         var mapped: ?*anyopaque = null;
-        _ = self.vkMapMemory(self.device, mem, 0, size, 0, &mapped);
-        if (mapped) |ptr| {
-            @memcpy(data[0..size], @as([*]const u8, @ptrCast(ptr))[0..size]);
-            self.vkUnmapMemory(self.device, mem);
-        }
+        if (!vkCheck(self.vkMapMemory(self.device, mem, 0, size, 0, &mapped), "vkMapMemory(download)"))
+            @panic("vkMapMemory failed");
+        const ptr = mapped orelse @panic("vkMapMemory returned null");
+        @memcpy(data[0..size], @as([*]const u8, @ptrCast(ptr))[0..size]);
+        self.vkUnmapMemory(self.device, mem);
     }
 
     /// Release all Vulkan resources: cached buffers, pipelines, descriptor pool, device, and instance.
@@ -1412,11 +1412,15 @@ pub const VulkanBackend = struct {
             // Elementwise
             &self.pipe_silu,          &self.pipe_gelu,
             &self.pipe_add,           &self.pipe_mul,
+            &self.pipe_silu_mul,      &self.pipe_gelu_mul,
+            &self.pipe_sigmoid_mul,   &self.pipe_deinterleave,
+            &self.pipe_split_qgate,   &self.pipe_add_scaled,
+            &self.pipe_add_rms_norm,  &self.pipe_rms_norm_add,
             // Normalization
-            &self.pipe_rms_norm,      &self.pipe_softmax,
-            &self.pipe_l2_norm,
-                // Position
-                  &self.pipe_rope,
+            &self.pipe_rms_norm,      &self.pipe_rms_norm_multi,
+            &self.pipe_softmax,       &self.pipe_l2_norm,
+            // Position
+            &self.pipe_rope,
             // GEMV
             &self.pipe_gemv_f32,      &self.pipe_gemv_q8_0,
             &self.pipe_gemv_q4_0,     &self.pipe_gemv_q4_1,
@@ -1426,15 +1430,18 @@ pub const VulkanBackend = struct {
             &self.pipe_gemv_f16,      &self.pipe_gemv_q4_k,
             &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
             &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
-            &self.pipe_gemv_t_q8_0,   &self.pipe_gemv_tq1_0,
-            &self.pipe_gemv_tq2_0,    &self.pipe_gemv_hqq,
+            &self.pipe_gemv_t_q8_0,   &self.pipe_gemv_nvfp4_st,
+            &self.pipe_gemv_mlx_q4,   &self.pipe_gemv_mxfp4_st,
+            &self.pipe_gemv_gptq,     &self.pipe_gemv_awq,
+            &self.pipe_gemv_hqq,      &self.pipe_gemv_tq1_0,
+            &self.pipe_gemv_tq2_0,
             // Attention
             &self.pipe_sdpa,          &self.pipe_sdpa_turbo,
-            &self.pipe_sdpa_paged,
-                // Embedding
-               &self.pipe_embedding,
+            &self.pipe_sdpa_paged,    &self.pipe_sdpa_tree,
+            // Embedding
+            &self.pipe_embedding,
             // SSM
-            &self.pipe_conv1d,
+            &self.pipe_conv1d,        &self.pipe_deltanet,
         };
         for (pipelines) |p| {
             if (p.pipeline != null) self.vkDestroyPipeline(self.device, p.pipeline, null);
@@ -1464,9 +1471,10 @@ pub const VulkanBackend = struct {
         var shader_mod: VkShaderModule = null;
         if (self.vkCreateShaderModule(self.device, &mod_ci, null, &shader_mod) != VK_SUCCESS)
             return error.ShaderCompileFailed;
+        errdefer self.vkDestroyShaderModule(self.device, shader_mod, null);
 
         // Descriptor set layout
-        var bindings: [4]VkDescriptorSetLayoutBinding = undefined;
+        var bindings: [16]VkDescriptorSetLayoutBinding = undefined;
         for (0..n_bindings) |i| {
             bindings[i] = .{
                 .binding = @intCast(i),
@@ -1487,6 +1495,7 @@ pub const VulkanBackend = struct {
         var desc_layout: VkDescriptorSetLayout = null;
         if (self.vkCreateDescriptorSetLayout(self.device, &dsl_ci, null, &desc_layout) != VK_SUCCESS)
             return error.VulkanInitFailed;
+        errdefer self.vkDestroyDescriptorSetLayout(self.device, desc_layout, null);
 
         // Pipeline layout with push constants
         const push_range = VkPushConstantRange{
@@ -1506,6 +1515,7 @@ pub const VulkanBackend = struct {
         var pipe_layout: VkPipelineLayout = null;
         if (self.vkCreatePipelineLayout(self.device, &pl_ci, null, &pipe_layout) != VK_SUCCESS)
             return error.VulkanInitFailed;
+        errdefer self.vkDestroyPipelineLayout(self.device, pipe_layout, null);
 
         // Compute pipeline
         const stage = VkPipelineShaderStageCreateInfo{
@@ -1555,7 +1565,8 @@ pub const VulkanBackend = struct {
             .pQueueFamilyIndices = null,
         };
         var buf: VkBuffer = null;
-        _ = self.vkCreateBuffer(self.device, &buf_ci, null, &buf);
+        if (!vkCheck(self.vkCreateBuffer(self.device, &buf_ci, null, &buf), "vkCreateBuffer"))
+            @panic("vkCreateBuffer failed");
 
         var mem_req: VkMemoryRequirements = undefined;
         self.vkGetBufferMemoryRequirements(self.device, buf, &mem_req);
@@ -1567,8 +1578,10 @@ pub const VulkanBackend = struct {
             .memoryTypeIndex = self.host_mem_type,
         };
         var mem: VkDeviceMemory = null;
-        _ = self.vkAllocateMemory(self.device, &alloc_info, null, &mem);
-        _ = self.vkBindBufferMemory(self.device, buf, mem, 0);
+        if (!vkCheck(self.vkAllocateMemory(self.device, &alloc_info, null, &mem), "vkAllocateMemory"))
+            @panic("vkAllocateMemory failed — out of device memory");
+        if (!vkCheck(self.vkBindBufferMemory(self.device, buf, mem, 0), "vkBindBufferMemory"))
+            @panic("vkBindBufferMemory failed");
 
         return .{ .buf = buf, .mem = mem };
     }
@@ -1603,11 +1616,11 @@ pub const VulkanBackend = struct {
 
     fn uploadBuffer(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]const u8, size: usize) void {
         var mapped: ?*anyopaque = null;
-        _ = self.vkMapMemory(self.device, mem, 0, size, 0, &mapped);
-        if (mapped) |ptr| {
-            @memcpy(@as([*]u8, @ptrCast(ptr))[0..size], data[0..size]);
-            self.vkUnmapMemory(self.device, mem);
-        }
+        if (!vkCheck(self.vkMapMemory(self.device, mem, 0, size, 0, &mapped), "vkMapMemory(upload)"))
+            @panic("vkMapMemory failed");
+        const ptr = mapped orelse @panic("vkMapMemory returned null");
+        @memcpy(@as([*]u8, @ptrCast(ptr))[0..size], data[0..size]);
+        self.vkUnmapMemory(self.device, mem);
     }
 
     fn downloadF32(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]f32, count: usize) void {
@@ -1616,12 +1629,12 @@ pub const VulkanBackend = struct {
         // from a pooled buffer's host-mapped memory without a sync returns stale data.
         if (self.cmd_recording) self.submitPending();
         var mapped: ?*anyopaque = null;
-        _ = self.vkMapMemory(self.device, mem, 0, count * @sizeOf(f32), 0, &mapped);
-        if (mapped) |ptr| {
-            const src: [*]const f32 = @ptrCast(@alignCast(ptr));
-            @memcpy(data[0..count], src[0..count]);
-            self.vkUnmapMemory(self.device, mem);
-        }
+        if (!vkCheck(self.vkMapMemory(self.device, mem, 0, count * @sizeOf(f32), 0, &mapped), "vkMapMemory(downloadF32)"))
+            @panic("vkMapMemory failed");
+        const ptr = mapped orelse @panic("vkMapMemory returned null");
+        const src: [*]const f32 = @ptrCast(@alignCast(ptr));
+        @memcpy(data[0..count], src[0..count]);
+        self.vkUnmapMemory(self.device, mem);
     }
 
     // ── Dispatch helper ──────────────────────────────────────────
@@ -1686,7 +1699,7 @@ pub const VulkanBackend = struct {
                 self.submitPending();
                 _ = self.vkResetDescriptorPool(self.device, self.desc_pool, 0);
                 if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
-                    return;
+                    @panic("Vulkan descriptor pool exhausted");
             }
             for (0..bufs.len) |i| writes[i].dstSet = desc_set;
             self.vkUpdateDescriptorSets(self.device, @intCast(bufs.len), &writes, 0, null);

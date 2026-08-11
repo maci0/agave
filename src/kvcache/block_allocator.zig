@@ -58,6 +58,7 @@ pub const BlockAllocator = struct {
 
         for (seq_table.block_table) |*layer_table| {
             const block_id = self.cache.allocBlock() orelse return error.OutOfBlocks;
+            errdefer self.cache.freeBlock(block_id);
             const new_table = try self.allocator.realloc(layer_table.*, layer_table.len + 1);
             new_table[new_table.len - 1] = block_id;
             layer_table.* = new_table;
@@ -127,6 +128,7 @@ pub const TieredBlockAllocator = struct {
 
         for (seq_table.block_table) |*layer_table| {
             const block_id = self.cache.allocBlock() catch return error.OutOfBlocks;
+            errdefer self.cache.freeBlock(block_id);
             const new_table = try self.allocator.realloc(layer_table.*, layer_table.len + 1);
             new_table[new_table.len - 1] = block_id;
             layer_table.* = new_table;

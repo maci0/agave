@@ -13,7 +13,7 @@ layout(push_constant) uniform Params { uint n; uint k; uint group_size; };
 
 const uint awq_reverse[8] = uint[8](0, 4, 1, 5, 2, 6, 3, 7);
 
-shared float shared_sums[8];
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 void main() {
     uint col = gl_WorkGroupID.x;

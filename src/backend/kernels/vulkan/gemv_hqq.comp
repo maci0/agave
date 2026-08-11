@@ -33,7 +33,7 @@ layout(push_constant) uniform Params {
     uint group_size; // quantization group size (typically 64)
 };
 
-shared float shared_sums[8]; // one slot per subgroup (256 threads / 32 lanes = 8)
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 // Decode bf16 (u16) to float32 by placing the 16 bits in the upper half of a u32.
 // bf16 == float32 with the low 16 mantissa bits truncated.

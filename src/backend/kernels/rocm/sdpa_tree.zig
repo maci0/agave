@@ -1,10 +1,19 @@
 //! Tree-Masked SDPA kernel for CUDA — FlashAttention-2 with ancestor bitmask.
 //! One block per (node, head) pair. Threads cooperate on KV block processing.
 //! Used during DDTree speculative decoding batch verification.
+//!
+//! Dynamic shared memory layout (all f32):
+//!   [0..8)   = warp workspace (used internally by blockReduceMax/Add)
+//!   [8..24)  = score_buf (tree_block_size = 16 entries)
+//!   [24]     = broadcast slot
 
 const cu = @import("common.zig");
 
 const tree_block_size: u32 = 16;
+
+/// Shared memory offsets (f32 indices into dynamic smem).
+const sc_off: u32 = 8; // after 8 warp-reduce slots
+const bcast_off: u32 = sc_off + tree_block_size; // = 24
 
 export fn sdpa_tree_kernel(
     q_all: [*]const f32,
@@ -50,10 +59,9 @@ export fn sdpa_tree_kernel(
         const block_start = block * tree_block_size;
         const block_len = @min(tree_block_size, prefix_len - block_start);
 
-        // Compute scores for this block
+        // Compute scores for this block — store in shared memory
         var t: u32 = tid;
         var block_max: f32 = -3.402823e+38;
-        var score_buf: [16]f32 = undefined;
 
         while (t < block_len) : (t += tg_sz) {
             const t_global = block_start + t;
@@ -63,11 +71,16 @@ export fn sdpa_tree_kernel(
             while (d < hd) : (d += 1) {
                 dot_val += q_all[q_base + d] * prefix_k[k_base + d];
             }
-            score_buf[t] = dot_val * scale;
-            block_max = @max(block_max, score_buf[t]);
+            const s = dot_val * scale;
+            cu.sharedStore(sc_off + t, s);
+            block_max = @max(block_max, s);
         }
 
+        // Reduce max across block, then broadcast to all threads
         block_max = cu.blockReduceMax(block_max);
+        if (tid == 0) cu.sharedStore(bcast_off, block_max);
+        cu.syncthreads();
+        block_max = cu.sharedLoad(bcast_off);
 
         // Rescale
         const m_prev = m_i;
@@ -81,17 +94,20 @@ export fn sdpa_tree_kernel(
         var block_sum: f32 = 0.0;
         t = tid;
         while (t < block_len) : (t += tg_sz) {
-            const w = @exp(score_buf[t] - m_i);
-            score_buf[t] = w;
+            const w = @exp(cu.sharedLoad(sc_off + t) - m_i);
+            cu.sharedStore(sc_off + t, w);
             block_sum += w;
         }
+        // Reduce sum across block, then broadcast to all threads
         block_sum = cu.blockReduceAdd(block_sum);
-        l_i += block_sum;
+        if (tid == 0) cu.sharedStore(bcast_off, block_sum);
+        cu.syncthreads();
+        l_i += cu.sharedLoad(bcast_off);
 
-        // V accumulate
+        // V accumulate — all threads read shared scores
         t = 0;
         while (t < block_len) : (t += 1) {
-            const w = score_buf[t];
+            const w = cu.sharedLoad(sc_off + t);
             if (w < 1e-6) continue;
             const t_global = block_start + t;
             const v_base = t_global * kvd + kvh * hd;
@@ -104,6 +120,7 @@ export fn sdpa_tree_kernel(
                 out_acc[out_i] += w * prefix_v[v_base + d2];
             }
         }
+        cu.syncthreads(); // Barrier before next block overwrites shared scores
     }
 
     // Phase 2: Tree nodes (masked by ancestor bitmask)
@@ -112,15 +129,17 @@ export fn sdpa_tree_kernel(
         const mask_word = ancestor_masks[node_i * 8 + j / 64];
         if ((mask_word & (@as(u64, 1) << @as(u6, @intCast(j % 64)))) == 0) continue;
 
-        // Score
-        var dot_val: f32 = 0.0;
+        // Score — thread 0 computes dot product, then broadcast via shared memory
         if (tid == 0) {
+            var dot_val: f32 = 0.0;
             var d: u32 = 0;
             while (d < hd) : (d += 1) {
                 dot_val += q_all[q_base + d] * tree_k[j * kvd + kvh * hd + d];
             }
+            cu.sharedStore(bcast_off, dot_val * scale);
         }
-        const tree_score = dot_val * scale;
+        cu.syncthreads();
+        const tree_score = cu.sharedLoad(bcast_off);
 
         // Online softmax update
         const m_prev = m_i;

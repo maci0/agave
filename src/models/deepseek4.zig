@@ -320,17 +320,19 @@ pub const Ds4Model = struct {
         const itk: usize = self.index_topk;
         if (f.getTensor("blk.2.attn_indexer_q_b.weight") != null) {
             self.lid_comp_k = try allocator.alloc(f32, nl * comp_slots * ihd);
-            errdefer allocator.free(self.lid_comp_k);
             self.lid_query = try allocator.alloc(f32, inh * ihd);
-            errdefer allocator.free(self.lid_query);
             self.lid_head_w = try allocator.alloc(f32, inh);
-            errdefer allocator.free(self.lid_head_w);
             self.lid_scores = try allocator.alloc(f32, comp_slots);
-            errdefer allocator.free(self.lid_scores);
             self.lid_topk_ids = try allocator.alloc(u32, itk);
-            errdefer allocator.free(self.lid_topk_ids);
             self.lid_enabled = true;
         }
+        // Block-scoped errdefers above expire when the if-block ends normally.
+        // Re-register at function scope so later allocation failures still free these.
+        errdefer if (self.lid_comp_k.len > 0) allocator.free(self.lid_comp_k);
+        errdefer if (self.lid_query.len > 0) allocator.free(self.lid_query);
+        errdefer if (self.lid_head_w.len > 0) allocator.free(self.lid_head_w);
+        errdefer if (self.lid_scores.len > 0) allocator.free(self.lid_scores);
+        errdefer if (self.lid_topk_ids.len > 0) allocator.free(self.lid_topk_ids);
 
         // Prefill buffers (page_allocator for GPU zero-copy — Metal's
         // newBufferWithBytesNoCopy requires page-aligned pointers).
@@ -982,7 +984,7 @@ pub const Ds4Model = struct {
                         const cur: V8 = ao_h[i..][0..8].*;
                         ao_h[i..][0..8].* = @mulAdd(V8, @as(V8, ck[i..][0..8].*), wv, cur);
                     }
-                    while (i < kd) : (i += 1) ao_h[i] += ck[i] * self.scores_buf[pos + 1 + gi];
+                    while (i < kd) : (i += 1) ao_h[i] += ck[i] * scores_h[pos + 1 + gi];
                 }
             }
         } else {

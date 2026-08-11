@@ -64,41 +64,51 @@ pub const TensorInfo = struct {
 
     /// Compute the raw byte size of this tensor's data on disk.
     /// Accounts for quantization block structure (e.g., Q4_K = 144 bytes per
-    /// 256-element super-block). Used by prefetchLayer to size madvise hints.
+    /// 256-element super-block). Uses ceiling division to match gguf.zig's
+    /// tensorBytes — correctly handles non-block-aligned element counts.
+    /// Used by prefetchLayer to size madvise hints.
     pub fn dataByteLen(self: *const TensorInfo) usize {
         const n = self.numElements();
         if (n == 0) return 0;
+        const maxInt = std.math.maxInt(usize);
         return switch (self.dtype) {
-            .f32 => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
-            .f16, .bf16 => std.math.mul(usize, n, 2) catch std.math.maxInt(usize),
+            .f32 => std.math.mul(usize, n, 4) catch maxInt,
+            .f16, .bf16 => std.math.mul(usize, n, 2) catch maxInt,
             .fp8_e4m3, .fp8_e5m2 => n,
-            .q8_0 => std.math.mul(usize, n / 32, 34) catch std.math.maxInt(usize),
-            .q4_0, .iq4_nl => std.math.mul(usize, n / 32, 18) catch std.math.maxInt(usize),
-            .q4_1 => std.math.mul(usize, n / 32, 20) catch std.math.maxInt(usize),
-            .q5_0 => std.math.mul(usize, n / 32, 22) catch std.math.maxInt(usize),
-            .q4_k => std.math.mul(usize, n / 256, 144) catch std.math.maxInt(usize),
-            .q5_k => std.math.mul(usize, n / 256, 176) catch std.math.maxInt(usize),
-            .q6_k => std.math.mul(usize, n / 256, 210) catch std.math.maxInt(usize),
-            .q2_k => std.math.mul(usize, n / 256, 84) catch std.math.maxInt(usize),
-            .q3_k => std.math.mul(usize, n / 256, 110) catch std.math.maxInt(usize),
-            .iq4_xs => std.math.mul(usize, n / 256, 136) catch std.math.maxInt(usize),
-            .iq3_xxs => std.math.mul(usize, n / 256, 98) catch std.math.maxInt(usize),
-            .iq3_s => std.math.mul(usize, n / 256, 110) catch std.math.maxInt(usize),
-            .iq2_xxs => std.math.mul(usize, n / 256, 66) catch std.math.maxInt(usize),
-            .iq2_xs => std.math.mul(usize, n / 256, 74) catch std.math.maxInt(usize),
-            .iq2_s => std.math.mul(usize, n / 256, 82) catch std.math.maxInt(usize),
-            .iq1_s => std.math.mul(usize, n / 256, 50) catch std.math.maxInt(usize),
-            .iq1_m => std.math.mul(usize, n / 256, 56) catch std.math.maxInt(usize),
-            .tq1_0 => std.math.mul(usize, n / 256, 54) catch std.math.maxInt(usize),
-            .tq2_0 => std.math.mul(usize, n / 256, 66) catch std.math.maxInt(usize),
-            .mxfp4 => std.math.mul(usize, n / 32, 17) catch std.math.maxInt(usize),
-            .nvfp4 => std.math.mul(usize, n / 16, 9) catch std.math.maxInt(usize),
-            // HQQ: 2 nibbles/byte → n/2 bytes; companion scale/zero are separate tensors.
+            .q8_0 => std.math.mul(usize, ceilDiv(n, 32), 34) catch maxInt,
+            .q4_0, .iq4_nl => std.math.mul(usize, ceilDiv(n, 32), 18) catch maxInt,
+            .q4_1 => std.math.mul(usize, ceilDiv(n, 32), 20) catch maxInt,
+            .q5_0 => std.math.mul(usize, ceilDiv(n, 32), 22) catch maxInt,
+            .q4_k => std.math.mul(usize, ceilDiv(n, 256), 144) catch maxInt,
+            .q5_k => std.math.mul(usize, ceilDiv(n, 256), 176) catch maxInt,
+            .q6_k => std.math.mul(usize, ceilDiv(n, 256), 210) catch maxInt,
+            .q2_k => std.math.mul(usize, ceilDiv(n, 256), 84) catch maxInt,
+            .q3_k => std.math.mul(usize, ceilDiv(n, 256), 110) catch maxInt,
+            .iq4_xs => std.math.mul(usize, ceilDiv(n, 256), 136) catch maxInt,
+            .iq3_xxs => std.math.mul(usize, ceilDiv(n, 256), 98) catch maxInt,
+            .iq3_s => std.math.mul(usize, ceilDiv(n, 256), 110) catch maxInt,
+            .iq2_xxs => std.math.mul(usize, ceilDiv(n, 256), 66) catch maxInt,
+            .iq2_xs => std.math.mul(usize, ceilDiv(n, 256), 74) catch maxInt,
+            .iq2_s => std.math.mul(usize, ceilDiv(n, 256), 82) catch maxInt,
+            .iq1_s => std.math.mul(usize, ceilDiv(n, 256), 50) catch maxInt,
+            .iq1_m => std.math.mul(usize, ceilDiv(n, 256), 56) catch maxInt,
+            .tq1_0 => std.math.mul(usize, ceilDiv(n, 256), 54) catch maxInt,
+            .tq2_0 => std.math.mul(usize, ceilDiv(n, 256), 66) catch maxInt,
+            .mxfp4 => std.math.mul(usize, ceilDiv(n, 32), 17) catch maxInt,
+            .nvfp4 => std.math.mul(usize, ceilDiv(n, 16), 9) catch maxInt,
+            // HQQ: tensor dims already account for nibble packing ([n_out, k_in/2] uint8),
+            // so numElements() returns the packed count. Each element = 1 byte.
             .hqq => n,
-            .mlx_q, .gptq, .awq, .unknown => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
+            .mlx_q, .gptq, .awq, .unknown => std.math.mul(usize, n, 4) catch maxInt,
         };
     }
 };
+
+/// Ceiling division with overflow-safe addition, matching gguf.zig's tensorBytes pattern.
+/// Returns `ceil(n / bs)`, saturating to maxInt(usize) on overflow.
+fn ceilDiv(n: usize, comptime bs: usize) usize {
+    return (std.math.add(usize, n, bs - 1) catch std.math.maxInt(usize)) / bs;
+}
 
 /// Model format interface — all model loading goes through this
 pub const Format = struct {

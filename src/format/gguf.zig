@@ -413,6 +413,16 @@ pub const GGUFFile = struct {
             shard_gguf.parseHeader() catch {
                 shard_gguf.metadata.deinit();
                 shard_gguf.tensors.deinit();
+                for (shard_gguf.owned_strings.items) |s| self.allocator.free(s);
+                shard_gguf.owned_strings.deinit(self.allocator);
+                for (shard_gguf.owned_arrays.items, shard_gguf.owned_array_lens.items) |ptr, len| {
+                    const slice: []const []const u8 = @as([*]const []const u8, @ptrCast(@alignCast(ptr)))[0..len];
+                    self.allocator.free(slice);
+                }
+                shard_gguf.owned_arrays.deinit(self.allocator);
+                shard_gguf.owned_array_lens.deinit(self.allocator);
+                for (shard_gguf.owned_u32_arrays.items) |s| self.allocator.free(s);
+                shard_gguf.owned_u32_arrays.deinit(self.allocator);
                 continue;
             };
             // Merge tensors: move all entries into self, computing absolute pointers
@@ -432,13 +442,15 @@ pub const GGUFFile = struct {
             // Transfer heap-allocated owned resources into self so deinit() frees them.
             // Tensor names and metadata strings are heap copies (via allocator.dupe in own()),
             // not mmap pointers, so they must be tracked for cleanup.
-            self.owned_strings.appendSlice(self.allocator, shard_gguf.owned_strings.items) catch {};
+            // These must propagate OOM — silently dropping would leak the individual
+            // heap-allocated strings/arrays that are already referenced by self.tensors.
+            try self.owned_strings.appendSlice(self.allocator, shard_gguf.owned_strings.items);
             shard_gguf.owned_strings.deinit(self.allocator);
-            self.owned_arrays.appendSlice(self.allocator, shard_gguf.owned_arrays.items) catch {};
+            try self.owned_arrays.appendSlice(self.allocator, shard_gguf.owned_arrays.items);
             shard_gguf.owned_arrays.deinit(self.allocator);
-            self.owned_array_lens.appendSlice(self.allocator, shard_gguf.owned_array_lens.items) catch {};
+            try self.owned_array_lens.appendSlice(self.allocator, shard_gguf.owned_array_lens.items);
             shard_gguf.owned_array_lens.deinit(self.allocator);
-            self.owned_u32_arrays.appendSlice(self.allocator, shard_gguf.owned_u32_arrays.items) catch {};
+            try self.owned_u32_arrays.appendSlice(self.allocator, shard_gguf.owned_u32_arrays.items);
             shard_gguf.owned_u32_arrays.deinit(self.allocator);
 
             std.log.info("split GGUF: loaded shard {d}/{d} ({d} tensors)", .{ si, total, shard_gguf.tensor_count });

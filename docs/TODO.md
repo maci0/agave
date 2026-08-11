@@ -34,7 +34,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 | Backend | Status | Notes |
 |---------|:------:|-------|
-| Metal | Complete | 71 pipelines, GPTQ, paged SDPA |
+| Metal | Complete | 88 pipelines, GPTQ, paged SDPA |
 | CUDA | Complete | 61 kernels, fused FFN, 3 megakernels |
 | Vulkan | Complete | ~49 shaders, deferred dispatch |
 | WebGPU | Complete | ~48 shaders, lazy readback |

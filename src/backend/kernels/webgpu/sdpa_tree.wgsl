@@ -20,7 +20,7 @@ struct Params {
 @group(0) @binding(7) var<uniform> params: Params;
 
 const BLOCK_SIZE: u32 = 16u;
-var<workgroup> sdata: array<f32, 8>;
+var<workgroup> sdata: array<f32, 256>;
 var<workgroup> scores: array<f32, 16>;
 
 @compute @workgroup_size(256)
@@ -66,14 +66,14 @@ fn main(
         for (var t = tid; t < block_len; t = t + 256u) {
             block_max = max(block_max, scores[t]);
         }
-        sdata[tid % 8u] = block_max;
+        sdata[tid] = block_max;
         workgroupBarrier();
-        if (tid < 8u) {
-            var v = sdata[tid];
-            for (var i = 0u; i < 8u; i = i + 1u) { v = max(v, sdata[i]); }
-            sdata[0] = v;
+        for (var stride = 128u; stride > 0u; stride = stride >> 1u) {
+            if (tid < stride) {
+                sdata[tid] = max(sdata[tid], sdata[tid + stride]);
+            }
+            workgroupBarrier();
         }
-        workgroupBarrier();
         let m_new = sdata[0];
 
         let m_prev = m_i;
@@ -93,14 +93,14 @@ fn main(
             scores[t] = w;
             block_sum = block_sum + w;
         }
-        sdata[tid % 8u] = block_sum;
+        sdata[tid] = block_sum;
         workgroupBarrier();
-        if (tid < 8u) {
-            var v = sdata[tid];
-            for (var i = 0u; i < 8u; i = i + 1u) { v = v + sdata[i]; }
-            sdata[0] = v;
+        for (var stride = 128u; stride > 0u; stride = stride >> 1u) {
+            if (tid < stride) {
+                sdata[tid] = sdata[tid] + sdata[tid + stride];
+            }
+            workgroupBarrier();
         }
-        workgroupBarrier();
         l_i = l_i + sdata[0];
 
         // V accumulate

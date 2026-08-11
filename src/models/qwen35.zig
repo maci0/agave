@@ -444,10 +444,12 @@ pub const Qwen35Model = struct {
         // MoE-specific buffers
         if (self.is_moe) {
             self.router_logits = try allocator.alloc(f32, self.n_experts);
-            errdefer allocator.free(self.router_logits);
             self.moe_out = try allocator.alloc(f32, self.n_embd);
-            errdefer allocator.free(self.moe_out);
         }
+        // Block-scoped errdefers above expire when the if-block ends normally.
+        // Re-register at function scope so later allocation failures still free these.
+        errdefer if (self.router_logits.len > 0) allocator.free(self.router_logits);
+        errdefer if (self.moe_out.len > 0) allocator.free(self.moe_out);
 
         // Prefill buffers (page_allocator for GPU zero-copy — Metal's
         // newBufferWithBytesNoCopy requires page-aligned pointers).
@@ -457,39 +459,41 @@ pub const Qwen35Model = struct {
             const cs = self.chunk_size;
             const q_pf_dim: usize = if (self.has_gate) qd * 2 else qd;
             self.pf_hidden = try pa.alloc(f32, cs * self.n_embd);
-            errdefer pa.free(self.pf_hidden);
             self.pf_hidden2 = try pa.alloc(f32, cs * self.n_embd);
-            errdefer pa.free(self.pf_hidden2);
             self.pf_q = try pa.alloc(f32, cs * q_pf_dim);
-            errdefer pa.free(self.pf_q);
             self.pf_k = try pa.alloc(f32, cs * kvd);
-            errdefer pa.free(self.pf_k);
             self.pf_v = try pa.alloc(f32, cs * kvd);
-            errdefer pa.free(self.pf_v);
             self.pf_attn_out = try pa.alloc(f32, cs * qd);
-            errdefer pa.free(self.pf_attn_out);
             self.pf_ff_gate = try pa.alloc(f32, cs * self.n_ff);
-            errdefer pa.free(self.pf_ff_gate);
             self.pf_ff_up = try pa.alloc(f32, cs * self.n_ff);
-            errdefer pa.free(self.pf_ff_up);
             self.pf_positions = try pa.alloc(u32, cs);
-            errdefer pa.free(self.pf_positions);
         }
+        // Re-register at function scope so later allocation failures still free these.
+        errdefer if (self.pf_hidden.len > 0) std.heap.page_allocator.free(self.pf_hidden);
+        errdefer if (self.pf_hidden2.len > 0) std.heap.page_allocator.free(self.pf_hidden2);
+        errdefer if (self.pf_q.len > 0) std.heap.page_allocator.free(self.pf_q);
+        errdefer if (self.pf_k.len > 0) std.heap.page_allocator.free(self.pf_k);
+        errdefer if (self.pf_v.len > 0) std.heap.page_allocator.free(self.pf_v);
+        errdefer if (self.pf_attn_out.len > 0) std.heap.page_allocator.free(self.pf_attn_out);
+        errdefer if (self.pf_ff_gate.len > 0) std.heap.page_allocator.free(self.pf_ff_gate);
+        errdefer if (self.pf_ff_up.len > 0) std.heap.page_allocator.free(self.pf_ff_up);
+        errdefer if (self.pf_positions.len > 0) std.heap.page_allocator.free(self.pf_positions);
 
         // MTP buffers: flat KV cache for single transformer layer
         if (self.n_mtp_layers > 0) {
             self.mtp_hidden_pre_norm = try allocator.alloc(f32, self.n_embd);
-            errdefer allocator.free(self.mtp_hidden_pre_norm);
             self.mtp_concat_buf = try allocator.alloc(f32, self.n_embd * 2);
-            errdefer allocator.free(self.mtp_concat_buf);
             self.mtp_logits_buf = try allocator.alloc(f32, self.vocab_size);
-            errdefer allocator.free(self.mtp_logits_buf);
             const kvd_bytes = @as(usize, self.n_head_kv) * @as(usize, self.head_dim) * @sizeOf(f32);
             self.mtp_kv_keys = try allocator.alloc(u8, self.max_seq_len * kvd_bytes);
-            errdefer allocator.free(self.mtp_kv_keys);
             self.mtp_kv_values = try allocator.alloc(u8, self.max_seq_len * kvd_bytes);
-            errdefer allocator.free(self.mtp_kv_values);
         }
+        // Re-register at function scope so later allocation failures still free these.
+        errdefer if (self.mtp_hidden_pre_norm.len > 0) allocator.free(self.mtp_hidden_pre_norm);
+        errdefer if (self.mtp_concat_buf.len > 0) allocator.free(self.mtp_concat_buf);
+        errdefer if (self.mtp_logits_buf.len > 0) allocator.free(self.mtp_logits_buf);
+        errdefer if (self.mtp_kv_keys.len > 0) allocator.free(self.mtp_kv_keys);
+        errdefer if (self.mtp_kv_values.len > 0) allocator.free(self.mtp_kv_values);
 
         const nl: usize = self.n_layers;
         const num_v_heads: usize = self.ssm_dt_rank;
@@ -2150,7 +2154,7 @@ pub const Qwen35Model = struct {
                 const blk = &self.paged_cache.blocks[block_id];
                 transport.recvBuf(blk.keys.ptr, elems_per_block);
                 transport.recvBuf(blk.values.ptr, elems_per_block);
-                blk.used = if (bi < n_blocks - 1) bs else @intCast(seq_len % bs);
+                blk.used = if (bi < n_blocks - 1) bs else @intCast(((seq_len - 1) % bs) + 1);
             }
         }
     }

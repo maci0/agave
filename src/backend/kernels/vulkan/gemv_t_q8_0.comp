@@ -15,7 +15,7 @@ layout(set = 0, binding = 1) readonly buffer W { uint w_raw[]; };  // raw bytes 
 layout(set = 0, binding = 2) writeonly buffer Y { float y[]; };
 layout(push_constant) uniform Params { uint out_dim; uint in_dim; };
 
-shared float shared_sums[8];  // one slot per subgroup (256 threads / 32 lanes)
+shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 void main() {
     uint col = gl_WorkGroupID.x;  // output element index

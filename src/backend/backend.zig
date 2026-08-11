@@ -388,8 +388,8 @@ pub const NullBackend = struct {
 
     pub fn clampedSiluMul(_: *NullBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         for (0..n) |i| {
-            const g = @min(gate[i], 10.0);
-            const u = @min(10.0, @max(-10.0, up[i]));
+            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
+            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
             out[i] = (g / (1.0 + @exp(-g))) * u;
         }
     }

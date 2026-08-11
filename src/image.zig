@@ -364,6 +364,7 @@ pub fn resize(allocator: Allocator, src: []const u8, src_w: u32, src_h: u32, dst
     const dh: usize = dst_h;
     const sw: usize = src_w;
     const sh: usize = src_h;
+    if (src.len < sw * sh * rgb_channels) return error.InvalidImageSize;
     const out_size = std.math.mul(usize, std.math.mul(usize, dw, dh) catch return error.InvalidImageSize, rgb_channels) catch return error.InvalidImageSize;
     const out = try allocator.alloc(u8, out_size);
     errdefer allocator.free(out);
@@ -843,4 +844,18 @@ test "fuzz: all image functions" {
             }
         }
     }.f, .{});
+}
+
+test "resize rejects undersized source" {
+    const allocator = std.testing.allocator;
+    // 2x2 image needs 12 bytes (2*2*3), but we provide only 3
+    try std.testing.expectError(error.InvalidImageSize, resize(allocator, &[_]u8{ 0, 0, 0 }, 2, 2, 1, 1));
+}
+
+test "resize rejects zero dimensions" {
+    const allocator = std.testing.allocator;
+    try std.testing.expectError(error.InvalidImageSize, resize(allocator, &[_]u8{ 0, 0, 0 }, 0, 1, 1, 1));
+    try std.testing.expectError(error.InvalidImageSize, resize(allocator, &[_]u8{ 0, 0, 0 }, 1, 0, 1, 1));
+    try std.testing.expectError(error.InvalidImageSize, resize(allocator, &[_]u8{ 0, 0, 0 }, 1, 1, 0, 1));
+    try std.testing.expectError(error.InvalidImageSize, resize(allocator, &[_]u8{ 0, 0, 0 }, 1, 1, 1, 0));
 }
