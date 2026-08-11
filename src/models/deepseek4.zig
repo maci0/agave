@@ -1433,9 +1433,11 @@ pub const Ds4Model = struct {
             }
         }
 
-        // Phase 2: clamped SiLU×mul (gate≤10, up±10) — no sync needed (same cmd buffer)
-        for (0..n_scratch) |slot| {
-            self.be.clampedSiluMul(self.ff_gate_scratch.ptr + slot * ff, self.ff_up_scratch.ptr + slot * ff, self.ff_gate_scratch.ptr + slot * ff, ff);
+        // Phase 2: clamped SiLU×mul (gate≤10, up±10) — single batched dispatch.
+        // All expert slots are contiguous in gate/up scratch buffers, so process
+        // n_scratch × ff elements in one GPU dispatch instead of n_scratch separate ones.
+        if (n_scratch > 0) {
+            self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
 
         // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
