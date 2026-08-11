@@ -793,7 +793,7 @@ kernel void gemv_q2_k(
             sum1 += q2_k_block_dot(W + ((row_base + 1) * nb + b) * bpb, x, k, bk);
     }
 
-    threadgroup float tg_shared[8];
+    threadgroup float tg_shared[32];
     sum0 = threadgroup_reduce_sum(sum0, tg_shared, tid, tg_size);
     if (tid == 0) y[row_base] = sum0;
 
