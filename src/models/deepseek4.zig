@@ -90,6 +90,7 @@ pub const Ds4Model = struct {
     layer_skip_end: u32 = 0,
     pool: ?*@import("../thread_pool.zig").ThreadPool = null,
     kv_seq_len: usize = 0,
+    kv_type: KvQuantType = .q8_0,
 
     // HC buffers
     hc_state: []f32 = &.{}, // [n_hc * n_embd]
@@ -179,11 +180,18 @@ pub const Ds4Model = struct {
         f: Format,
         be: Backend,
         ctx_size: u32,
-        _: kv_quant.KvQuantType, // kv_type_k (ignored, using q8_0)
-        _: kv_quant.KvQuantType, // kv_type_v (ignored, using q8_0)
+        kv_type_k: kv_quant.KvQuantType,
+        _: kv_quant.KvQuantType, // kv_type_v (K=V shared, use kv_type_k for both)
         _: ?*TieredKvCache, // tiered_cache (not supported yet)
     ) !Ds4Model {
-        var self = Ds4Model{ .fmt = f, .be = be, .allocator = allocator };
+        // DS4 MLA compressed attention uses kvDot/kvMulAccum which require block-quantized
+        // KV types. f16/f32 are unsupported (no block structure for the dequant inner loop).
+        // Default to q8_0 for maximum quality; accept any block-quantized type from CLI.
+        const effective_kv = switch (kv_type_k) {
+            .f16, .f32 => .q8_0, // unsupported → fall back to q8_0
+            else => kv_type_k,
+        };
+        var self = Ds4Model{ .fmt = f, .be = be, .allocator = allocator, .kv_type = effective_kv };
 
         const arch = "deepseek4";
         if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
@@ -296,7 +304,7 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.logits_buf);
 
         // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
-        const kv_bytes_per_layer = kv_quant.kvByteOffset(kv_type, ctx * kd);
+        const kv_bytes_per_layer = kv_quant.kvByteOffset(self.kv_type, ctx * kd);
         self.kv_k_bytes = try allocator.alloc(u8, nl * kv_bytes_per_layer);
         errdefer allocator.free(self.kv_k_bytes);
 
@@ -439,10 +447,8 @@ pub const Ds4Model = struct {
 
     // ── KV cache helpers ──────────────────────────────────────────
 
-    const kv_type: KvQuantType = .q8_0;
-
     fn kvLayerBytes(self: *Ds4Model) usize {
-        return kv_quant.kvByteOffset(kv_type, self.max_seq_len * self.kv_lora_rank);
+        return kv_quant.kvByteOffset(self.kv_type, self.max_seq_len * self.kv_lora_rank);
     }
 
     fn kvKLayer(self: *Ds4Model, li: usize) []u8 {
@@ -902,8 +908,8 @@ pub const Ds4Model = struct {
 
         if (n_comp_groups > 0) {
             // Compressed attention: append current KV to cache, then attend raw + compressed.
-            const k_byte_off = kv_quant.kvByteOffset(kv_type, pos * kd);
-            kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, kv_type);
+            const k_byte_off = kv_quant.kvByteOffset(self.kv_type, pos * kd);
+            kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, self.kv_type);
 
             const comp_slots = compSlotsPerLayer(self.max_seq_len);
 
@@ -922,7 +928,7 @@ pub const Ds4Model = struct {
 
             const sl_total = pos + 1 + n_attend_comp;
 
-            const kv_elem_bytes = kv_quant.kvByteOffset(kv_type, kd);
+            const kv_elem_bytes = kv_quant.kvByteOffset(self.kv_type, kd);
             // Hoist sink tensor lookup outside per-head loop (avoids 128 hash lookups)
             const sink_data: ?[*]const f32 = if (self.layerTensor(li, "attn_sinks.weight")) |st|
                 @ptrCast(@alignCast(st.data_ptr))
@@ -952,6 +958,7 @@ pub const Ds4Model = struct {
                     .li = li,
                     .scale = scale,
                     .use_lid = use_lid,
+                    .kv_quant_type = self.kv_type,
                 };
                 pool.parallelFor(nh, 1, @ptrCast(&ctx), CompressedAttnCtx.perHeadFn);
             } else for (0..nh) |h| {
@@ -963,7 +970,7 @@ pub const Ds4Model = struct {
                 for (0..pos + 1) |t| {
                     const k_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
                     if (t + 1 <= pos) @prefetch(kv_k_layer[(t + 1) * kv_elem_bytes ..].ptr, .{ .locality = 3 });
-                    const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * scale;
+                    const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, self.kv_type) * scale;
                     scores_h[t] = s;
                     running_max = @max(running_max, s);
                 }
@@ -1016,10 +1023,10 @@ pub const Ds4Model = struct {
                     if (scores_h[t] < sparse_v_threshold) continue;
                     const v_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr; // K=V shared
                     if (!first_written) {
-                        kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                        kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
                         first_written = true;
                     } else {
-                        kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                        kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
                     }
                 }
                 if (!first_written) @memset(ao_h, 0.0);
@@ -1046,28 +1053,84 @@ pub const Ds4Model = struct {
                 }
             }
         } else {
-            // Standard attention (no compressed KVs) — GPU SDPA fast path.
-            // Metal now supports hd=512 (sdpa_fa2_hd512 kernel) and Q8_0 KV
-            // (dequant in sdpa_fa2_turbo kernel), so no CPU fallback needed.
-            attn_ops.scaledDotProductAttention(
-                self.q_full.ptr,
-                kv_k_layer,
-                kv_k_layer, // K=V shared — same cache for both
-                self.kv_proj,
-                self.kv_proj,
-                self.attn_out.ptr,
-                self.scores_buf.ptr,
-                nh,
-                1,
-                kd,
-                pos,
-                scale,
-                self.be,
-                null,
-                0,
-                kv_type,
-                kv_type,
-            );
+            // Standard attention (no compressed KVs).
+            // GPU SDPA supports f32, q8_0, turbo2/3/4. For other KV types,
+            // use the CPU compressed attention path with n_comp_groups=0.
+            const sdpa_ok = switch (self.kv_type) {
+                .f32, .q8_0, .turbo2, .turbo3, .turbo4 => true,
+                else => false,
+            };
+            if (sdpa_ok) {
+                attn_ops.scaledDotProductAttention(
+                    self.q_full.ptr,
+                    kv_k_layer,
+                    kv_k_layer, // K=V shared
+                    self.kv_proj,
+                    self.kv_proj,
+                    self.attn_out.ptr,
+                    self.scores_buf.ptr,
+                    nh,
+                    1,
+                    kd,
+                    pos,
+                    scale,
+                    self.be,
+                    null,
+                    0,
+                    self.kv_type,
+                    self.kv_type,
+                );
+            } else {
+                // CPU fallback for KV types not supported by GPU SDPA
+                const k_byte_off = kv_quant.kvByteOffset(self.kv_type, pos * kd);
+                kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, self.kv_type);
+                const kv_elem_bytes = kv_quant.kvByteOffset(self.kv_type, kd);
+                const V8 = @Vector(8, f32);
+                for (0..nh) |h| {
+                    const q_h = self.q_full[h * kd ..][0..kd];
+                    const ao_h = self.attn_out[h * kd ..][0..kd];
+                    const scores_h = self.scores_buf[h * self.score_stride ..];
+                    var running_max: f32 = -std.math.inf(f32);
+                    for (0..pos + 1) |t| {
+                        const k_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
+                        const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, self.kv_type) * scale;
+                        scores_h[t] = s;
+                        running_max = @max(running_max, s);
+                    }
+                    const mx_splat: V8 = @splat(running_max);
+                    var sum_v: V8 = @splat(@as(f32, 0.0));
+                    var si: usize = 0;
+                    while (si + 8 <= pos + 1) : (si += 8) {
+                        const ev = @exp(@as(V8, scores_h[si..][0..8].*) - mx_splat);
+                        scores_h[si..][0..8].* = ev;
+                        sum_v += ev;
+                    }
+                    var sm = @reduce(.Add, sum_v);
+                    while (si < pos + 1) : (si += 1) {
+                        scores_h[si] = @exp(scores_h[si] - running_max);
+                        sm += scores_h[si];
+                    }
+                    const inv = 1.0 / sm;
+                    const inv_v: V8 = @splat(inv);
+                    si = 0;
+                    while (si + 8 <= pos + 1) : (si += 8) {
+                        scores_h[si..][0..8].* = @as(V8, scores_h[si..][0..8].*) * inv_v;
+                    }
+                    while (si < pos + 1) : (si += 1) scores_h[si] *= inv;
+                    var first_written = false;
+                    for (0..pos + 1) |t| {
+                        if (scores_h[t] < sparse_v_threshold) continue;
+                        const v_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
+                        if (!first_written) {
+                            kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
+                            first_written = true;
+                        } else {
+                            kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
+                        }
+                    }
+                    if (!first_written) @memset(ao_h, 0.0);
+                }
+            }
         }
 
         // Apply inverse RoPE (derope) using the cached cos/sin table (same table, negate sin).
@@ -1115,6 +1178,7 @@ pub const Ds4Model = struct {
         li: usize,
         scale: f32,
         use_lid: bool,
+        kv_quant_type: KvQuantType,
 
         fn perHeadFn(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *CompressedAttnCtx = @ptrCast(@alignCast(ctx_ptr));
@@ -1139,7 +1203,7 @@ pub const Ds4Model = struct {
                 if (t + 1 <= ctx.pos) {
                     @prefetch(ctx.kv_k_layer[(t + 1) * eb ..].ptr, .{ .locality = 3 });
                 }
-                const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, kv_type) * ctx.scale;
+                const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, ctx.kv_quant_type) * ctx.scale;
                 scores_h[t] = s;
                 running_max = @max(running_max, s);
             }
@@ -1193,10 +1257,10 @@ pub const Ds4Model = struct {
                 if (scores_h[t] < sparse_v_threshold) continue;
                 const v_ptr = ctx.kv_v_layer[t * ctx.kv_elem_bytes ..].ptr;
                 if (!first_written) {
-                    kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                    kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, ctx.kv_quant_type);
                     first_written = true;
                 } else {
-                    kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, kv_type);
+                    kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, ctx.kv_quant_type);
                 }
             }
             if (!first_written) @memset(ao_h, 0.0);
