@@ -1498,6 +1498,22 @@ pub const Ds4Model = struct {
     /// hyper-connection pre/post mixing, MLA attention, and MoE FFN, then apply
     /// the output HC head, final RMS norm, and LM head projection.
     /// Returns the argmax next-token ID. Advances `kv_seq_len` by one.
+    // Profiling accumulators (nanoseconds). Only active in Debug builds.
+    var prof_attn_gpu_ns: u64 = 0; // Attention GPU projections (pre-sync)
+    var prof_attn_cpu_ns: u64 = 0; // Attention CPU (RoPE, compressor, QK/V)
+    var prof_attn_lora_ns: u64 = 0; // Output LoRA GPU (pre-sync)
+    var prof_ffn_ns: u64 = 0; // FFN (routing + expert dispatch + accum)
+    var prof_hc_ns: u64 = 0; // HC pre+post
+    var prof_token_count: u64 = 0;
+    const profiling_enabled = @import("builtin").mode == .Debug;
+
+    inline fn profTimestamp() u64 {
+        if (!profiling_enabled) return 0;
+        var ts: std.posix.system.timespec = undefined;
+        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+        return @intCast(@as(i128, ts.sec) * 1_000_000_000 + ts.nsec);
+    }
+
     pub fn forward(self: *Ds4Model, token_id: u32) !u32 {
         if (self.cancelled.load(.monotonic)) return error.Cancelled;
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
@@ -1515,21 +1531,38 @@ pub const Ds4Model = struct {
         for (0..nl) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
 
+            const t0 = profTimestamp();
             // Attn: HC pre → attn → HC post
             const af = try self.layerTensorReq(li, "hc_attn_fn.weight");
             const ab = try self.layerTensorReq(li, "hc_attn_base.weight");
             const as_ = try self.layerTensorReq(li, "hc_attn_scale.weight");
             self.hcPre(af, ab, as_);
+            const t1 = profTimestamp();
+
             try self.attentionLayer(li);
+            const t2 = profTimestamp();
+
             self.hcPost();
+            const t3 = profTimestamp();
 
             // FFN: HC pre → ffn → HC post
             const ff = try self.layerTensorReq(li, "hc_ffn_fn.weight");
             const fb = try self.layerTensorReq(li, "hc_ffn_base.weight");
             const fs = try self.layerTensorReq(li, "hc_ffn_scale.weight");
             self.hcPre(ff, fb, fs);
+            const t4 = profTimestamp();
+
             try self.ffnLayer(li, token_id);
+            const t5 = profTimestamp();
+
             self.hcPost();
+            const t6 = profTimestamp();
+
+            if (profiling_enabled) {
+                prof_hc_ns += (t1 - t0) + (t3 - t2) + (t4 - t3) + (t6 - t5);
+                prof_attn_cpu_ns += (t2 - t1); // attentionLayer includes GPU proj + sync + CPU work
+                prof_ffn_ns += (t5 - t4);
+            }
         }
 
         // Output HC head
@@ -1546,6 +1579,25 @@ pub const Ds4Model = struct {
         self.be.sync();
 
         self.kv_seq_len += 1;
+
+        if (profiling_enabled) {
+            prof_token_count += 1;
+            if (prof_token_count % 32 == 0) {
+                const total = prof_attn_cpu_ns + prof_ffn_ns + prof_hc_ns;
+                if (total > 0) {
+                    std.log.info("PROFILE ({d} tok): attn={d}ms ({d}%) ffn={d}ms ({d}%) hc={d}ms ({d}%)", .{
+                        prof_token_count,
+                        prof_attn_cpu_ns / 1_000_000,
+                        prof_attn_cpu_ns * 100 / total,
+                        prof_ffn_ns / 1_000_000,
+                        prof_ffn_ns * 100 / total,
+                        prof_hc_ns / 1_000_000,
+                        prof_hc_ns * 100 / total,
+                    });
+                }
+            }
+        }
+
         return math_ops.argmax(self.logits_buf);
     }
 

@@ -710,6 +710,8 @@ kernel void gemv_q4_k(
 constant uint q2_k_nr = 2;
 
 // Inline: compute one Q2_K superblock's dot product for a single row.
+// Vectorized: processes 4 Q2_K values per iteration using float4 dot product.
+// Each byte holds 4 packed 2-bit values — extract all 4 with masks, do float4 dot.
 inline float q2_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
     device const uchar* scales = bp;
     device const uchar* qs = bp + 16;
@@ -724,14 +726,32 @@ inline float q2_k_block_dot(device const uchar* bp, device const float* x, uint 
         float dm_m = dmin * m;
         uint gi_base = bk + sb * 16;
 
-        for (uint l = 0; l < 16; l++) {
-            uint gi = gi_base + l;
-            if (gi >= k) break;
-            uint qi = sb * 16 + l;
-            uint byte_idx = qi / 4;
-            uint shift = (qi % 4) * 2;
-            float q = float((qs[byte_idx] >> shift) & 0x03);
-            sum += x[gi] * (d_sc * q - dm_m);
+        if (gi_base + 16 <= k) {
+            // Fast path: all 16 elements valid — process 4 at a time with float4 dot
+            float4 dm_v = float4(-dm_m);
+            float4 ds_v = float4(d_sc);
+            for (uint l = 0; l < 16; l += 4) {
+                uchar byte_val = qs[(sb * 16 + l) / 4];
+                float4 qv = float4(
+                    float(byte_val & 0x03),
+                    float((byte_val >> 2) & 0x03),
+                    float((byte_val >> 4) & 0x03),
+                    float((byte_val >> 6) & 0x03)
+                );
+                float4 xv = *(device const float4*)(x + gi_base + l);
+                sum += dot(xv, fma(ds_v, qv, dm_v));
+            }
+        } else {
+            // Tail path: bounds check per element
+            for (uint l = 0; l < 16; l++) {
+                uint gi = gi_base + l;
+                if (gi >= k) break;
+                uint qi = sb * 16 + l;
+                uint byte_idx = qi / 4;
+                uint shift = (qi % 4) * 2;
+                float q = float((qs[byte_idx] >> shift) & 0x03);
+                sum += x[gi] * (d_sc * q - dm_m);
+            }
         }
     }
     return sum;
