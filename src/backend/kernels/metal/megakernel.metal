@@ -581,3 +581,92 @@ kernel void fused_ffn_gate_up_clamped_silu_q2_k(
         ff_out[tgid] = (g / (1.0f + exp(-g))) * u;
     }
 }
+
+
+// ── Fused Gate + Up + Clamped SiLU*Mul kernel (MXFP4 GGUF) ─────
+// Same pattern as Q2_K fused kernel but for MXFP4 blocks (32 values, 17 bytes).
+// Split-half packing: low nibble → position j, high nibble → position j+16.
+
+kernel void fused_ffn_gate_up_clamped_silu_mxfp4(
+    device const float*  x       [[buffer(0)]],
+    device const uchar*  W_gate  [[buffer(1)]],
+    device const uchar*  W_up    [[buffer(2)]],
+    device float*        ff_out  [[buffer(3)]],
+    constant uint&       n_ff    [[buffer(4)]],
+    constant uint&       k       [[buffer(5)]],
+    uint tgid    [[threadgroup_position_in_grid]],
+    uint tid     [[thread_index_in_threadgroup]],
+    uint tg_size [[threads_per_threadgroup]])
+{
+    if (tgid >= n_ff) return;
+
+    const uint qk = 32;
+    const uint bpb = 17;
+    uint nb = (k + qk - 1) / qk;
+
+    float gate_sum = 0.0f;
+    float up_sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * qk;
+        uint g_bp = tgid * nb * bpb + b * bpb;
+        uint u_bp = g_bp; // same layout stride for up weights
+        // Note: up weights are in a separate buffer, so u_bp is relative to W_up
+        float g_d = e8m0_to_f32(W_gate[g_bp]);
+        float u_d = e8m0_to_f32(W_up[g_bp]);
+
+        if (bk + qk <= k) {
+            // Fast path: full block, float4 vectorized
+            float g_dot = 0.0f;
+            float u_dot = 0.0f;
+            for (uint j = 0; j < qk / 2; j += 4) {
+                float4 x_lo = *(device const float4*)(x + bk + j);
+                float4 x_hi = *(device const float4*)(x + bk + j + qk / 2);
+
+                uchar gb0 = W_gate[g_bp + 1 + j], gb1 = W_gate[g_bp + 1 + j + 1];
+                uchar gb2 = W_gate[g_bp + 1 + j + 2], gb3 = W_gate[g_bp + 1 + j + 3];
+                float4 gq_lo = float4(mxfp4_lut[gb0 & 0xF], mxfp4_lut[gb1 & 0xF],
+                                       mxfp4_lut[gb2 & 0xF], mxfp4_lut[gb3 & 0xF]);
+                float4 gq_hi = float4(mxfp4_lut[gb0 >> 4], mxfp4_lut[gb1 >> 4],
+                                       mxfp4_lut[gb2 >> 4], mxfp4_lut[gb3 >> 4]);
+                g_dot += dot(gq_lo, x_lo) + dot(gq_hi, x_hi);
+
+                uchar ub0 = W_up[g_bp + 1 + j], ub1 = W_up[g_bp + 1 + j + 1];
+                uchar ub2 = W_up[g_bp + 1 + j + 2], ub3 = W_up[g_bp + 1 + j + 3];
+                float4 uq_lo = float4(mxfp4_lut[ub0 & 0xF], mxfp4_lut[ub1 & 0xF],
+                                       mxfp4_lut[ub2 & 0xF], mxfp4_lut[ub3 & 0xF]);
+                float4 uq_hi = float4(mxfp4_lut[ub0 >> 4], mxfp4_lut[ub1 >> 4],
+                                       mxfp4_lut[ub2 >> 4], mxfp4_lut[ub3 >> 4]);
+                u_dot += dot(uq_lo, x_lo) + dot(uq_hi, x_hi);
+            }
+            gate_sum += g_d * g_dot;
+            up_sum   += u_d * u_dot;
+        } else {
+            // Tail: scalar with bounds checks
+            for (uint j = 0; j < qk / 2; j++) {
+                uchar gv = W_gate[g_bp + 1 + j];
+                uchar uv = W_up[g_bp + 1 + j];
+                uint gi0 = bk + j, gi1 = bk + j + qk / 2;
+                if (gi0 < k) {
+                    gate_sum += x[gi0] * mxfp4_lut[gv & 0xF] * g_d;
+                    up_sum   += x[gi0] * mxfp4_lut[uv & 0xF] * u_d;
+                }
+                if (gi1 < k) {
+                    gate_sum += x[gi1] * mxfp4_lut[gv >> 4] * g_d;
+                    up_sum   += x[gi1] * mxfp4_lut[uv >> 4] * u_d;
+                }
+            }
+        }
+    }
+
+    threadgroup float shared_mxfp[32];
+    gate_sum = threadgroup_reduce_sum(gate_sum, shared_mxfp, tid, tg_size);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    up_sum = threadgroup_reduce_sum(up_sum, shared_mxfp, tid, tg_size);
+
+    if (tid == 0) {
+        float g = clamp(gate_sum, -10.0f, 10.0f);
+        float u = clamp(up_sum,   -10.0f, 10.0f);
+        ff_out[tgid] = (g / (1.0f + exp(-g))) * u;
+    }
+}

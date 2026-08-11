@@ -1489,11 +1489,14 @@ pub const Ds4Model = struct {
         if (self.n_expert_shared > 0) {
             if (self.layerTensor(li, "ffn_gate_shexp.weight")) |gt| {
                 const ut = self.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
-                if (use_fused and gt.dtype == .q2_k) {
+                if (use_fused and (gt.dtype == .q2_k or gt.dtype == .mxfp4)) {
                     // Fused: gate GEMV + up GEMV + clampedSiluMul in 1 dispatch
                     switch (self.be) {
                         inline else => |be| {
-                            if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K")) {
+                            if (gt.dtype == .mxfp4) {
+                                if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluMxfp4"))
+                                    be.fusedFfnGateUpClampedSiluMxfp4(self.hidden2.ptr, gt.data_ptr, ut.data_ptr, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            } else if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K")) {
                                 be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, gt.data_ptr, ut.data_ptr, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                             }
                         },
@@ -1518,18 +1521,22 @@ pub const Ds4Model = struct {
             const gs = ds4ExpertStride(ge);
             const us = ds4ExpertStride(ue);
             const ds = ds4ExpertStride(de);
-            if (use_fused and ge.dtype == .q2_k) {
+            if (use_fused and (ge.dtype == .q2_k or ge.dtype == .mxfp4)) {
                 // Fused path: 1 dispatch per expert (gate+up+clampedSiluMul)
                 switch (self.be) {
                     inline else => |be| {
-                        if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K")) {
-                            for (0..n_active) |j| {
-                                const eid = top_ids[j];
-                                be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                                de_ptrs[n_scratch] = de.data_ptr + eid * ds;
-                                slot_weights[n_scratch] = top_weights[j];
-                                n_scratch += 1;
+                        for (0..n_active) |j| {
+                            const eid = top_ids[j];
+                            if (ge.dtype == .mxfp4) {
+                                if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluMxfp4"))
+                                    be.fusedFfnGateUpClampedSiluMxfp4(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            } else {
+                                if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K"))
+                                    be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                             }
+                            de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                            slot_weights[n_scratch] = top_weights[j];
+                            n_scratch += 1;
                         }
                     },
                 }
