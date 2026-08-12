@@ -703,6 +703,7 @@ pub const Ds4Model = struct {
 
         self.be.sync(); // single sync: Q, KV, CSA/HCA, and (if batched) LID GEMVs
 
+
         // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
         const nd = rd / 2;
         // Compressed layers (ratio != 0) use compress_rope_freq (160000) for main attention
@@ -1152,6 +1153,7 @@ pub const Ds4Model = struct {
             }
         }
 
+
         // Apply inverse RoPE (derope) using the cached cos/sin table (same table, negate sin).
         for (0..nh) |h| {
             applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
@@ -1174,6 +1176,7 @@ pub const Ds4Model = struct {
         // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
         self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.hidden.ptr, e, og * olr);
         self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
+
     }
 
     // ── Compressed attention parallel dispatch context ─────────
@@ -1536,9 +1539,9 @@ pub const Ds4Model = struct {
             const ue = self.layerTensor(li, "ffn_up_exps.weight") orelse return error.MissingTensor;
             const de = self.layerTensor(li, "ffn_down_exps.weight") orelse return error.MissingTensor;
             de_dtype = de.dtype;
-            const gs = ds4ExpertStride(ge);
-            const us = ds4ExpertStride(ue);
-            const ds = ds4ExpertStride(de);
+            const gs = ds4ExpertStride(ge, ne);
+            const us = ds4ExpertStride(ue, ne);
+            const ds = ds4ExpertStride(de, ne);
             // SSD streaming: prefetch selected expert weights before GPU dispatch.
             // madvise(WILLNEED) starts background page-in from SSD while we're
             // still setting up the GPU command buffer. Helps when the 109GB model
@@ -1670,16 +1673,47 @@ pub const Ds4Model = struct {
             const ab = try self.layerTensorReq(li, "hc_attn_base.weight");
             const as_ = try self.layerTensorReq(li, "hc_attn_scale.weight");
             self.hcPre(af, ab, as_);
+            if (self.kv_seq_len == 0 and li == 0) {
+                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
+                std.log.info("ds4 L0: after hcPre(attn) hidden L2={d:.3}", .{@sqrt(hs)});
+            }
             try self.attentionLayer(li);
+            if (self.kv_seq_len == 0 and li == 0) {
+                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
+                std.log.info("ds4 L0: after attn hidden L2={d:.3}", .{@sqrt(hs)});
+            }
             self.hcPost();
+            if (self.kv_seq_len == 0 and li == 0) {
+                var hs: f32 = 0; for (self.hc_state[0..e]) |v| hs += v * v;
+                std.log.info("ds4 L0: after hcPost(attn) hc[0] L2={d:.3}", .{@sqrt(hs)});
+            }
 
             // FFN: HC pre → ffn → HC post
             const ff = try self.layerTensorReq(li, "hc_ffn_fn.weight");
             const fb = try self.layerTensorReq(li, "hc_ffn_base.weight");
             const fs = try self.layerTensorReq(li, "hc_ffn_scale.weight");
             self.hcPre(ff, fb, fs);
+            if (self.kv_seq_len == 0 and li == 0) {
+                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
+                std.log.info("ds4 L0: after hcPre(ffn) hidden L2={d:.3}", .{@sqrt(hs)});
+            }
             try self.ffnLayer(li, token_id);
+            if (self.kv_seq_len == 0 and li == 0) {
+                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
+                std.log.info("ds4 L0: after ffn hidden L2={d:.3}", .{@sqrt(hs)});
+            }
             self.hcPost();
+
+            if (self.kv_seq_len == 0 and li == 0) {
+                var ss: f32 = 0;
+                for (self.hc_state[0..e]) |v| ss += v * v;
+                var max_v: f32 = 0;
+                for (self.hc_state[0..e]) |v| max_v = @max(max_v, @abs(v));
+                std.log.info("ds4 layer {d}: hc[0] L2={d:.2} max={d:.4} first=[{d:.4},{d:.4},{d:.4}]", .{
+                    li, @sqrt(ss), max_v,
+                    self.hc_state[0], self.hc_state[1], self.hc_state[2],
+                });
+            }
         }
 
         // Output HC head
@@ -1728,14 +1762,6 @@ pub const Ds4Model = struct {
     /// implementation can batch the MLA attention within each layer (as GLM-4 does)
     /// while keeping HC, MoE, and compressor passes per-token.
     pub fn prefill(self: *Ds4Model, token_ids: []const u32) !u32 {
-        // Debug: print prefill token IDs (first call only)
-        if (self.kv_seq_len == 0 and token_ids.len > 0) {
-            std.log.info("ds4 prefill: {d} tokens, ids[0..{d}] = {any}", .{
-                token_ids.len,
-                @min(token_ids.len, 16),
-                token_ids[0..@min(token_ids.len, 16)],
-            });
-        }
         var last: u32 = 0;
         for (token_ids) |tid| last = try self.forward(tid);
         return last;
@@ -2018,14 +2044,23 @@ fn prefetchRange(ptr: [*]const u8, len: usize) void {
     std.posix.madvise(@ptrFromInt(aligned), total, std.posix.system.MADV.WILLNEED) catch {};
 }
 
-/// Per-expert stride for ds4 expert tensors: dims=[input_dim, ff_dim, n_experts].
 /// Per-expert stride for ds4 expert tensors.
-/// GGUF raw dims are [n_in, n_ff, n_experts]; after gguf.zig reversal: [n_experts, n_ff, n_in].
-/// The stride per expert is n_ff × n_in = dims[1] × dims[2] (the last two reversed dims).
-fn ds4ExpertStride(t: TensorInfo) usize {
-    if (t.n_dims < 3) @panic("ds4ExpertStride: expected >= 3D tensor for expert weights");
-    const elems = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
-    return backend_mod.weightBytes(t.dtype, 1, elems);
+/// 3D tensors: GGUF raw [n_in, n_ff, n_experts] → reversed [n_experts, n_ff, n_in].
+///   Stride = dims[1] × dims[2] = n_ff × n_in.
+/// 2D tensors (some converters flatten): raw [n_in, n_ff * n_experts] → reversed [n_ff * n_experts, n_in].
+///   Stride = dims[0] / n_experts × dims[1] — but we don't know n_experts here.
+///   Instead, use the total bytes / n_experts where n_experts comes from the model config.
+fn ds4ExpertStride(t: TensorInfo, n_experts: usize) usize {
+    if (t.n_dims >= 3) {
+        // 3D: stride = dims[1] × dims[2] (per-expert weight size)
+        const elems = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
+        return backend_mod.weightBytes(t.dtype, 1, elems);
+    } else {
+        // 2D: total elements / n_experts
+        const total = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
+        const per_expert = total / n_experts;
+        return backend_mod.weightBytes(t.dtype, 1, per_expert);
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
