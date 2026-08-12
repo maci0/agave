@@ -1462,18 +1462,33 @@ kernel void gemv_mxfp4(
         float d = e8m0_to_f32(W[bp]);
         uint bk = b * qk;
 
-        // Scalar inner loop with scale hoisted outside — matches CPU kernel exactly.
-        // Float4 vectorization was tested but produces incorrect results (likely
-        // a Metal compiler issue with LUT indexing in float4 constructors).
-        float gdot = 0.0f;
-        for (uint j = 0; j < qk / 2; j++) {
-            uchar byte_val = W[bp + 1 + j];
-            uint gi0 = bk + j;
-            uint gi1 = bk + j + qk / 2;
-            if (gi0 < k) gdot += x[gi0] * mxfp4_lut[byte_val & 0xF];
-            if (gi1 < k) gdot += x[gi1] * mxfp4_lut[byte_val >> 4];
+        if (bk + qk <= k) {
+            // Fast path: 2 bytes (4 values) per iteration. Pre-extract nibbles
+            // into locals to avoid Metal compiler issues with LUT indexing
+            // inside float4 constructors (which caused incorrect results).
+            float gdot = 0.0f;
+            for (uint j = 0; j < qk / 2; j += 2) {
+                uchar bv0 = W[bp + 1 + j], bv1 = W[bp + 1 + j + 1];
+                // Extract nibbles into scalars first, then do LUT lookup
+                float lo0 = mxfp4_lut[bv0 & 0xF];
+                float hi0 = mxfp4_lut[bv0 >> 4];
+                float lo1 = mxfp4_lut[bv1 & 0xF];
+                float hi1 = mxfp4_lut[bv1 >> 4];
+                gdot += x[bk + j]          * lo0
+                      + x[bk + j + 1]      * lo1
+                      + x[bk + j + qk / 2]     * hi0
+                      + x[bk + j + qk / 2 + 1] * hi1;
+            }
+            sum += d * gdot;
+        } else {
+            for (uint j = 0; j < qk / 2; j++) {
+                uchar byte_val = W[bp + 1 + j];
+                uint gi0 = bk + j;
+                uint gi1 = bk + j + qk / 2;
+                if (gi0 < k) sum += x[gi0] * mxfp4_lut[byte_val & 0xF] * d;
+                if (gi1 < k) sum += x[gi1] * mxfp4_lut[byte_val >> 4] * d;
+            }
         }
-        sum += d * gdot;
     }
 
     threadgroup float shared[8];
