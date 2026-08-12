@@ -31,8 +31,8 @@ const TensorData = backend_mod.TensorData;
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 const n_hc: usize = 4;
 const hc_mix_dim: usize = (2 + n_hc) * n_hc; // = 24
-/// 8 iterations suffice for 4×4 doubly-stochastic convergence (was 20, no quality change).
-const hc_sinkhorn_iters: usize = 8;
+/// Must match GGUF deepseek4.hyper_connection.sinkhorn_iterations (default 20).
+const hc_sinkhorn_iters: usize = 20;
 const hc_eps: f32 = 1e-6;
 const max_norm_entries: usize = 512;
 
@@ -226,7 +226,8 @@ pub const Ds4Model = struct {
         if (ctx_size > 0) self.max_seq_len = ctx_size;
 
         if (f.getTensor("token_embd.weight")) |t| {
-            if (t.n_dims >= 2) self.vocab_size = @intCast(t.dims[1]);
+            // Vocab size is the larger dimension (GGUF dim ordering varies by converter).
+            if (t.n_dims >= 2) self.vocab_size = @intCast(@max(t.dims[0], t.dims[1]));
         }
         if (f.getMetaU32("tokenizer.ggml.eos_token_id")) |v| self.eos_token_id = v;
 
@@ -704,6 +705,9 @@ pub const Ds4Model = struct {
 
         // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
         const nd = rd / 2;
+        // Compressed layers (ratio != 0) use compress_rope_freq (160000) for main attention
+        // Q and KV RoPE. Non-compressed layers use the standard rope_freq (10000).
+        // This matches llama.cpp's use_compress_rope logic.
         const freqs = if (self.compress_ratios[li] != 0) &self.compress_rope_freqs else &self.rope_freqs;
         var rope_cos: [32]f32 = undefined;
         var rope_sin: [32]f32 = undefined;
@@ -1067,10 +1071,12 @@ pub const Ds4Model = struct {
             }
         } else {
             // Standard attention (no compressed KVs).
-            // GPU SDPA supports f32, q8_0, turbo2/3/4. For other KV types,
-            // use the CPU compressed attention path with n_comp_groups=0.
+            // GPU SDPA: f32 supports hd≤512 (sdpa_fa2_hd512), but the turbo/Q8_0
+            // kernel only supports hd≤256 (its threadgroup buffers are 256-element).
+            // DS4 has hd=512 (kv_lora_rank), so Q8_0/turbo overflow — use CPU fallback.
             const sdpa_ok = switch (self.kv_type) {
-                .f32, .q8_0, .turbo2, .turbo3, .turbo4 => true,
+                .f32 => true, // f32 path uses sdpa_fa2_hd512 which supports 512
+                .q8_0, .turbo2, .turbo3, .turbo4 => kd <= 256, // turbo kernel max hd=256
                 else => false,
             };
             if (sdpa_ok) {
@@ -1419,9 +1425,10 @@ pub const Ds4Model = struct {
             // NO sync here — gate_inp GEMV batched with expert GEMVs below
 
             // Hash lookup: determines which experts are selected (CPU-only, no GPU data needed)
+            // GGUF raw dims [n_expert_used, n_vocab]; after reversal: [n_vocab, n_expert_used].
             const t2e = try self.layerTensorReq(li, "ffn_gate_tid2eid.weight");
-            const n_slots: usize = @intCast(t2e.dims[0]);
-            const vocab: usize = @intCast(t2e.dims[1]);
+            const n_slots: usize = @intCast(t2e.dims[1]); // n_expert_used (inner dim after reversal)
+            const vocab: usize = @intCast(t2e.dims[0]); // n_vocab (outer dim after reversal)
             const data: [*]const i32 = @ptrCast(@alignCast(t2e.data_ptr));
             const safe_tid: usize = @min(@as(usize, token_id), vocab - 1);
             for (0..nk) |j| {
@@ -1467,14 +1474,16 @@ pub const Ds4Model = struct {
             math_ops.topKExperts(selection[0..ne], nk, top_ids[0..nk], top_scores[0..nk]);
             n_active = nk;
 
-            // Weights from unbiased probs, normalized
-            var wsum: f32 = 0.0;
+            // Weights from unbiased probs, L2-normalized (expert_weights_norm=true).
+            // L2 norm: scale = expert_weights_scale / sqrt(Σ w²)
+            // This preserves weight direction while scaling magnitude.
+            var wss: f32 = 0.0;
             for (0..n_active) |j| {
                 top_weights[j] = probs[top_ids[j]]; // unbiased prob for selected expert
-                wsum += top_weights[j];
+                wss += top_weights[j] * top_weights[j];
             }
-            if (wsum > 0.0) {
-                const inv = self.expert_weights_scale / wsum;
+            if (wss > 0.0) {
+                const inv = self.expert_weights_scale / @sqrt(wss);
                 for (0..n_active) |j| top_weights[j] *= inv;
             }
         }
@@ -1593,13 +1602,13 @@ pub const Ds4Model = struct {
 
         // Deferred hash-layer weight computation: gate logits now available after sync.
         if (li < self.hash_layer_count) {
-            var wsum: f32 = 0.0;
+            var wss: f32 = 0.0;
             for (0..n_active) |j| {
                 top_weights[j] = sqrtSoftplus(self.router_logits[top_ids[j]]);
-                wsum += top_weights[j];
+                wss += top_weights[j] * top_weights[j];
             }
-            if (wsum > 0.0) {
-                const inv = self.expert_weights_scale / wsum;
+            if (wss > 0.0) {
+                const inv = self.expert_weights_scale / @sqrt(wss);
                 for (0..n_active) |j| top_weights[j] *= inv;
             }
             // Update slot_weights for expert slots (shared expert weight=1.0 already set)
@@ -1683,10 +1692,12 @@ pub const Ds4Model = struct {
         const norm_w = try self.getTensorReq("output_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
         const lm = try self.getTensorReq("output.weight");
+        // (Debug prints removed — dims are [n_out, n_in] due to gguf.zig reversal)
         self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
 
         self.kv_seq_len += 1;
+
         return math_ops.argmax(self.logits_buf);
     }
 
@@ -1717,7 +1728,14 @@ pub const Ds4Model = struct {
     /// implementation can batch the MLA attention within each layer (as GLM-4 does)
     /// while keeping HC, MoE, and compressor passes per-token.
     pub fn prefill(self: *Ds4Model, token_ids: []const u32) !u32 {
-        // Sequential fallback — see doc comment above for rationale.
+        // Debug: print prefill token IDs (first call only)
+        if (self.kv_seq_len == 0 and token_ids.len > 0) {
+            std.log.info("ds4 prefill: {d} tokens, ids[0..{d}] = {any}", .{
+                token_ids.len,
+                @min(token_ids.len, 16),
+                token_ids[0..@min(token_ids.len, 16)],
+            });
+        }
         var last: u32 = 0;
         for (token_ids) |tid| last = try self.forward(tid);
         return last;
@@ -2001,9 +2019,12 @@ fn prefetchRange(ptr: [*]const u8, len: usize) void {
 }
 
 /// Per-expert stride for ds4 expert tensors: dims=[input_dim, ff_dim, n_experts].
+/// Per-expert stride for ds4 expert tensors.
+/// GGUF raw dims are [n_in, n_ff, n_experts]; after gguf.zig reversal: [n_experts, n_ff, n_in].
+/// The stride per expert is n_ff × n_in = dims[1] × dims[2] (the last two reversed dims).
 fn ds4ExpertStride(t: TensorInfo) usize {
     if (t.n_dims < 3) @panic("ds4ExpertStride: expected >= 3D tensor for expert weights");
-    const elems = @as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1]));
+    const elems = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
     return backend_mod.weightBytes(t.dtype, 1, elems);
 }
 
