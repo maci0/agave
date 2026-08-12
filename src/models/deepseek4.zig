@@ -703,6 +703,20 @@ pub const Ds4Model = struct {
 
         self.be.sync(); // single sync: Q, KV, CSA/HCA, and (if batched) LID GEMVs
 
+        // Debug: compare GPU vs CPU — check key tensors after sync
+        if (self.kv_seq_len == 0 and li == 0) {
+            var h2s: f32 = 0;
+            for (self.hidden2[0..e]) |v| h2s += v * v;
+            var qcs: f32 = 0;
+            for (self.q_compressed[0..ql]) |v| qcs += v * v;
+            var qfs: f32 = 0;
+            for (self.q_full[0..@min(nh * kd, 4096)]) |v| qfs += v * v;
+            var kvs: f32 = 0;
+            for (self.kv_proj[0..kd]) |v| kvs += v * v;
+            std.log.info("ds4 L0: hidden2 L2={d:.2} q_comp L2={d:.2} q_full(0..4K) L2={d:.2} kv L2={d:.2}", .{
+                @sqrt(h2s), @sqrt(qcs), @sqrt(qfs), @sqrt(kvs),
+            });
+        }
 
         // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
         const nd = rd / 2;
@@ -1498,7 +1512,10 @@ pub const Ds4Model = struct {
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
         // Detect fused-capable backend at comptime — avoids runtime dispatch overhead.
-        const use_fused = blk: {
+        // Fused gate+up+clampedSiluMul kernels disabled — they produce incorrect results
+        // compared to the unfused path (separate gate GEMV + up GEMV + clampedSiluMul).
+        // TODO: debug and fix the fused Metal kernels before re-enabling.
+        const use_fused = false and blk: {
             switch (self.be) {
                 inline else => |be| {
                     break :blk comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluQ2K");

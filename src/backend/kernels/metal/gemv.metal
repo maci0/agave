@@ -1462,35 +1462,14 @@ kernel void gemv_mxfp4(
         float d = e8m0_to_f32(W[bp]);
         uint bk = b * qk;
 
-        if (bk + qk <= k) {
-            // Fast path: full block, no bounds checks — process 4 bytes (8 values) at a time.
-            // Split-half packing: byte j has lo nibble → position j, hi nibble → position j+16.
-            float gdot = 0.0f;
-            for (uint j = 0; j < qk / 2; j += 4) {
-                uchar b0 = W[bp + 1 + j];
-                uchar b1 = W[bp + 1 + j + 1];
-                uchar b2 = W[bp + 1 + j + 2];
-                uchar b3 = W[bp + 1 + j + 3];
-                float4 q_lo = float4(mxfp4_lut[b0 & 0xF], mxfp4_lut[b1 & 0xF],
-                                      mxfp4_lut[b2 & 0xF], mxfp4_lut[b3 & 0xF]);
-                float4 q_hi = float4(mxfp4_lut[b0 >> 4], mxfp4_lut[b1 >> 4],
-                                      mxfp4_lut[b2 >> 4], mxfp4_lut[b3 >> 4]);
-                float4 x_lo = *(device const float4*)(x + bk + j);
-                float4 x_hi = *(device const float4*)(x + bk + j + qk / 2);
-                gdot += dot(q_lo, x_lo) + dot(q_hi, x_hi);
-            }
-            sum += d * gdot;
-        } else {
-            // Tail: bounds check per element
-            for (uint j = 0; j < qk / 2; j++) {
-                uchar byte_val = W[bp + 1 + j];
-                float v0 = mxfp4_lut[byte_val & 0xF];
-                float v1 = mxfp4_lut[byte_val >> 4];
-                uint gi0 = bk + j;
-                uint gi1 = bk + j + qk / 2;
-                if (gi0 < k) sum += x[gi0] * v0 * d;
-                if (gi1 < k) sum += x[gi1] * v1 * d;
-            }
+        for (uint j = 0; j < qk / 2; j++) {
+            uchar byte_val = W[bp + 1 + j];
+            float v0 = mxfp4_lut[byte_val & 0xF];
+            float v1 = mxfp4_lut[byte_val >> 4];
+            uint gi0 = bk + j;
+            uint gi1 = bk + j + qk / 2;
+            if (gi0 < k) sum += x[gi0] * v0 * d;
+            if (gi1 < k) sum += x[gi1] * v1 * d;
         }
     }
 
