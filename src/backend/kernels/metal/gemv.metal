@@ -1462,15 +1462,18 @@ kernel void gemv_mxfp4(
         float d = e8m0_to_f32(W[bp]);
         uint bk = b * qk;
 
+        // Scalar inner loop with scale hoisted outside — matches CPU kernel exactly.
+        // Float4 vectorization was tested but produces incorrect results (likely
+        // a Metal compiler issue with LUT indexing in float4 constructors).
+        float gdot = 0.0f;
         for (uint j = 0; j < qk / 2; j++) {
             uchar byte_val = W[bp + 1 + j];
-            float v0 = mxfp4_lut[byte_val & 0xF];
-            float v1 = mxfp4_lut[byte_val >> 4];
             uint gi0 = bk + j;
             uint gi1 = bk + j + qk / 2;
-            if (gi0 < k) sum += x[gi0] * v0 * d;
-            if (gi1 < k) sum += x[gi1] * v1 * d;
+            if (gi0 < k) gdot += x[gi0] * mxfp4_lut[byte_val & 0xF];
+            if (gi1 < k) gdot += x[gi1] * mxfp4_lut[byte_val >> 4];
         }
+        sum += d * gdot;
     }
 
     threadgroup float shared[8];
