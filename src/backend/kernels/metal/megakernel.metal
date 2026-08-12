@@ -616,33 +616,20 @@ kernel void fused_ffn_gate_up_clamped_silu_mxfp4(
         float u_d = e8m0_to_f32(W_up[g_bp]);
 
         if (bk + qk <= k) {
-            // Fast path: full block, float4 vectorized
+            // Fast path: scalar LUT lookups (avoid float4 LUT constructor — Metal compiler bug).
             float g_dot = 0.0f;
             float u_dot = 0.0f;
-            for (uint j = 0; j < qk / 2; j += 4) {
-                float4 x_lo = *(device const float4*)(x + bk + j);
-                float4 x_hi = *(device const float4*)(x + bk + j + qk / 2);
-
-                uchar gb0 = W_gate[g_bp + 1 + j], gb1 = W_gate[g_bp + 1 + j + 1];
-                uchar gb2 = W_gate[g_bp + 1 + j + 2], gb3 = W_gate[g_bp + 1 + j + 3];
-                float4 gq_lo = float4(mxfp4_lut[gb0 & 0xF], mxfp4_lut[gb1 & 0xF],
-                                       mxfp4_lut[gb2 & 0xF], mxfp4_lut[gb3 & 0xF]);
-                float4 gq_hi = float4(mxfp4_lut[gb0 >> 4], mxfp4_lut[gb1 >> 4],
-                                       mxfp4_lut[gb2 >> 4], mxfp4_lut[gb3 >> 4]);
-                g_dot += dot(gq_lo, x_lo) + dot(gq_hi, x_hi);
-
-                uchar ub0 = W_up[g_bp + 1 + j], ub1 = W_up[g_bp + 1 + j + 1];
-                uchar ub2 = W_up[g_bp + 1 + j + 2], ub3 = W_up[g_bp + 1 + j + 3];
-                float4 uq_lo = float4(mxfp4_lut[ub0 & 0xF], mxfp4_lut[ub1 & 0xF],
-                                       mxfp4_lut[ub2 & 0xF], mxfp4_lut[ub3 & 0xF]);
-                float4 uq_hi = float4(mxfp4_lut[ub0 >> 4], mxfp4_lut[ub1 >> 4],
-                                       mxfp4_lut[ub2 >> 4], mxfp4_lut[ub3 >> 4]);
-                u_dot += dot(uq_lo, x_lo) + dot(uq_hi, x_hi);
+            for (uint j = 0; j < qk / 2; j++) {
+                uchar gv = W_gate[g_bp + 1 + j];
+                uchar uv = W_up[g_bp + 1 + j];
+                float xlo = x[bk + j];
+                float xhi = x[bk + j + qk / 2];
+                g_dot += xlo * mxfp4_lut[gv & 0xF] + xhi * mxfp4_lut[gv >> 4];
+                u_dot += xlo * mxfp4_lut[uv & 0xF] + xhi * mxfp4_lut[uv >> 4];
             }
             gate_sum += g_d * g_dot;
             up_sum   += u_d * u_dot;
         } else {
-            // Tail: scalar with bounds checks
             for (uint j = 0; j < qk / 2; j++) {
                 uchar gv = W_gate[g_bp + 1 + j];
                 uchar uv = W_up[g_bp + 1 + j];

@@ -1512,9 +1512,8 @@ pub const Ds4Model = struct {
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
         // Detect fused-capable backend at comptime — avoids runtime dispatch overhead.
-        // Fused gate+up+clampedSiluMul kernels disabled — they produce incorrect results
-        // compared to the unfused path (separate gate GEMV + up GEMV + clampedSiluMul).
-        // TODO: debug and fix the fused Metal kernels before re-enabling.
+        // Fused gate+up+clampedSiluMul: disabled for MXFP4 (Metal compiler issue).
+        // Q2_K fused works but Q2_K quantization is too aggressive for coherent output.
         const use_fused = false and blk: {
             switch (self.be) {
                 inline else => |be| {
