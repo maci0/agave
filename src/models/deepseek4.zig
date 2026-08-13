@@ -134,6 +134,9 @@ pub const Ds4Model = struct {
     expert_profile: ?*ExpertProfile = null,
     /// MTP (multi-token prediction) weights loaded from separate safetensors.
     mtp_weights: ?*MtpWeights = null,
+    /// Number of available MTP depths. Set when mtp_weights are loaded.
+    /// Used by the Model vtable to expose getMtpDepth().
+    n_mtp_layers: u32 = 0,
 
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
     rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
@@ -1853,8 +1856,7 @@ pub const Ds4Model = struct {
 
     /// Return the number of available MTP draft depths.
     pub fn getMtpDepth(self: *const Ds4Model) u32 {
-        if (self.mtp_weights) |mtp| return mtp.n_depths;
-        return 0;
+        return self.n_mtp_layers;
     }
 
     /// MTP forward: predict draft token at the given depth.
@@ -1899,17 +1901,62 @@ pub const Ds4Model = struct {
         // For now, skip main_proj and use target hidden directly as draft input.
         // This produces reasonable drafts since target hidden captures the model's state.
         _ = proj_w_name;
-        // Use hidden2 as MTP working buffer (keeps self.hidden pristine for target)
-        @memcpy(self.hidden2[0..e], mtp_input[0..e]);
+        // Use the Markov head for bigram-based draft prediction.
+        // This adds a transition bias to the target's logits:
+        //   draft = argmax(target_logits + W1[prev_token] @ W2^T)
+        // Much simpler than running a full MTP layer, and uses BF16 weights
+        // (no MXFP8 dequant needed).
+        var w1_name_buf: [64]u8 = undefined;
+        const w1_name = std.fmt.bufPrint(&w1_name_buf, "mtp.{d}.markov_head.markov_w1.weight", .{@min(depth, mtp.n_depths - 1)}) catch return error.MissingTensor;
+        var w2_name_buf: [64]u8 = undefined;
+        const w2_name = std.fmt.bufPrint(&w2_name_buf, "mtp.{d}.markov_head.markov_w2.weight", .{@min(depth, mtp.n_depths - 1)}) catch return error.MissingTensor;
 
-        // MTP output head: norm + lm_head on hidden2, without touching self.hidden
+        const w1_opt = mtp.get(w1_name);
+        const w2_opt = mtp.get(w2_name);
+
+        if (w1_opt != null and w2_opt != null) {
+            const w1_t = w1_opt.?;
+            const w2_t = w2_opt.?;
+            const rank: usize = @intCast(w1_t.shape[1]); // 256
+            const vocab: usize = @intCast(w1_t.shape[0]); // 129280
+
+            // Step 1: e = W1[token_id] → [rank] (row lookup from BF16)
+            const bf16_row_bytes = rank * 2; // 2 bytes per BF16
+            const w1_row_ptr = w1_t.data_ptr + @as(usize, token_id) * bf16_row_bytes;
+
+            // Dequant BF16 row to f32
+            var emb_f32: [256]f32 = undefined;
+            for (0..rank) |i| {
+                const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(w1_row_ptr + i * 2)), .little);
+                emb_f32[i] = @bitCast(@as(u32, raw) << 16);
+            }
+
+            // Step 2: bias = W2 @ e → [vocab] (BF16 GEMV)
+            // W2 is [vocab, rank] in BF16. Compute bias into expert_scratch.
+            // Then ADD to existing target logits in logits_buf.
+            const bias_ptr = self.expert_scratch.ptr;
+            self.be.gemv(
+                @as([*]const f32, &emb_f32),
+                .{ .data = w2_t.data_ptr, .dtype = .bf16 },
+                bias_ptr,
+                vocab,
+                rank,
+            );
+            self.be.sync();
+
+            // Step 3: draft = argmax(target_logits + markov_bias)
+            // logits_buf still contains the target model's last-token logits
+            for (0..vocab) |i| self.logits_buf[i] += self.expert_scratch[i];
+            return math_ops.argmax(self.logits_buf);
+        }
+
+        // Fallback: use target hidden → output head (produces same token as target)
+        @memcpy(self.hidden2[0..e], mtp_input[0..e]);
         const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
-        // rmsNorm reads hidden2, writes to mtp_hidden_buf (separate from hidden)
         self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
         const lm = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
         self.doGemv(self.mtp_hidden_buf.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
-
         return math_ops.argmax(self.logits_buf);
     }
 

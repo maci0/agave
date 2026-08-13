@@ -860,8 +860,10 @@ pub const ModelStorage = union(enum) {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
-                    if (comptime @hasField(@TypeOf(m.*), "mtp_weights"))
+                    if (comptime @hasField(@TypeOf(m.*), "mtp_weights")) {
                         m.mtp_weights = mtp;
+                        m.n_mtp_layers = mtp.n_depths;
+                    }
                 }
             },
         }
