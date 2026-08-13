@@ -58,7 +58,12 @@ mtpForward(token_id, depth):
 - Compressed-space attention scores: `kv_current · kv_cached[t] / sqrt(512)`
 - `resetMtpCache()`: rolls back `mtp_kv_len` on speculation rejection
 
-**Current status:** 0% acceptance rate. Root cause: compressed-space attention without Q head projection produces degenerate attention (same output across all 64 heads). Full MLA Q projection (wq_a + wq_b + RoPE)e single remaining piece for >0% acceptance.
+**Current status:** 0% acceptance rate. Architecture corrected: MTP is a 3-layer sequential
+decoder (mtp.0 → mtp.1 → mtp.2) producing ONE draft token, not 3 separate predictions.
+Full MLA Q projection implemented (wq_a → q_norm → wq_b → per-head attention).
+Grouped LoRA fixed for wo_a (8 groups × [1024,4096]). RMS norm stabilization added
+to prevent hidden state L2 explosion (was 921→1505, now 845→769).
+Remaining blocker: HC mixing needed for proper residual stream control.
 
 **Usage:**
 ```bash
@@ -127,17 +132,14 @@ Per-tile scaled FP8 dot product. Group size = 128. Scale tensor shape `[n/128, k
 ## Known Issues & Blockers
 
 ### P0: MTP Acceptance Rate (0%)
-**Status:** Root-caused, clear fix path.
+**Status:** Full MLA Q projection implemented. Grouped LoRA fixed. RMS stabilization added.
 
-Compressed-space attention (no Q heads) produces degenerate attention. Fix: implement full MLA Q projection in mtpForward:
-1. `wq_a[1024, 4096]` MXFP8 GEMV → q_compressed
-2. `q_a_norm` RMS norm
-3. `wq_b[32768, 1024]` MXFP8 GEMV → q_full (64 heads × 512)
-4. RoPE on q_full and kv_proj
-5. Per-head dot-product attention: `Q[h] · K[t]` for all cached positions
-6. Softmax → weighted V sum → inverse RoPE → wo_a → wo_b
+Remaining: HC (Hyper Connection) mixing in MTP layers. Without HC, the 4-stream
+residual state drifts from training distribution → hidden L2 explodes → degenerate drafts.
+HC weights are available (hc_attn/ffn fn/base/scale tensors, F32).
+Implementation: wrap MTP attention and FFN with hcPre/hcPost using MTP-specific HC weights.
 
-**Estimated:** ~90 lines of code, ~30ms per draft depth overhead.
+**Estimated:** ~50 lines using existing hcPre/hcPost infrastructure with MTP weight lookup.
 
 ### P1: Metal SSD Streaming
 **Status:** Root-caused, needs pread() refactor (~500 lines).
