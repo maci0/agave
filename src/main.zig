@@ -422,6 +422,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "video-fps", .kind = .option, .help = "Frames per second to sample from video (default: 1). Higher FPS = more visual tokens." },
     // Speculative decoding
     .{ .long = "draft-model", .kind = .option, .help = "Path to draft model for speculative decoding." },
+    .{ .long = "mtp-model", .kind = .option, .help = "Path to MTP weight file (safetensors) for multi-token prediction speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
     .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark [default: ddtree with --draft-model]." },
@@ -556,6 +557,8 @@ const CliArgs = struct {
     rate_limit_tpm: u32 = 0,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
+    /// Path to MTP weight file (safetensors) for multi-token prediction.
+    mtp_model_path: ?[]const u8 = null,
     spec_tokens: u32 = 5,
     tree_budget: u32 = 64,
     spec_mode: SpecMode = .none,
@@ -1277,6 +1280,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
         .draft_model_path = res.option("draft-model"),
+        .mtp_model_path = res.option("mtp-model"),
         .sleep_after_s = parseU32(res.option("sleep-after"), "sleep-after") orelse 0,
         .max_batch_size = parseU32(res.option("max-batch-size"), "max-batch-size") orelse 8,
         .rate_limit_rpm = parseU32(res.option("rate-limit-rpm"), "rate-limit-rpm") orelse 0,
@@ -3033,6 +3037,23 @@ fn initAndRun(
     if (expert_cache_opt) |*ec| {
         const prof_ptr = if (expert_profile_opt) |*ep| ep else null;
         mdl.setExpertCache(ec, prof_ptr);
+    }
+
+    // ── MTP weight loading ──────────────────────────────────────
+    const MtpWeights = @import("models/ds4_mtp.zig").MtpWeights;
+    var mtp_weights: ?MtpWeights = null;
+    defer if (mtp_weights) |*mw| mw.deinit(allocator);
+
+    if (cli.mtp_model_path) |mtp_path| {
+        var mtp = MtpWeights.init(allocator);
+        mtp.load(allocator, mtp_path) catch |e| {
+            eprint("Error: failed to load MTP weights from '{s}': {s}\n", .{ mtp_path, @errorName(e) });
+        };
+        if (mtp.n_depths > 0) {
+            mtp_weights = mtp;
+            mdl.setMtpWeights(&mtp_weights.?);
+            eprint("MTP: {d} draft depths available\n", .{mtp.n_depths});
+        }
     }
 
     var model_if = mdl.model();

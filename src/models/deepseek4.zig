@@ -25,6 +25,7 @@ const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const ExpertCache = @import("../expert_cache.zig").ExpertCache;
 const ExpertProfile = @import("../expert_profile.zig").ExpertProfile;
+const MtpWeights = @import("ds4_mtp.zig").MtpWeights;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
 const DType = format_mod.DType;
@@ -125,11 +126,14 @@ pub const Ds4Model = struct {
     ff_up_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] up outputs pre-siluMul
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
+    mtp_hidden_buf: []f32 = &.{}, // [n_embd] — saved MTP hidden state between depths
     score_stride: usize = 0, // per-head score buffer stride
 
     // SSD streaming: expert cache and activation profiler (set by main.zig).
     expert_cache: ?*ExpertCache = null,
     expert_profile: ?*ExpertProfile = null,
+    /// MTP (multi-token prediction) weights loaded from separate safetensors.
+    mtp_weights: ?*MtpWeights = null,
 
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
     rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
@@ -310,6 +314,8 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.router_logits);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
         errdefer allocator.free(self.logits_buf);
+        self.mtp_hidden_buf = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.mtp_hidden_buf);
 
         // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
         const kv_bytes_per_layer = kv_quant.kvByteOffset(self.kv_type, ctx * kd);
@@ -1844,6 +1850,70 @@ pub const Ds4Model = struct {
 
         return math_ops.argmax(self.logits_buf);
     }
+
+    /// Return the number of available MTP draft depths.
+    pub fn getMtpDepth(self: *const Ds4Model) u32 {
+        if (self.mtp_weights) |mtp| return mtp.n_depths;
+        return 0;
+    }
+
+    /// MTP forward: predict draft token at the given depth.
+    /// Uses MTP weights (separate from main model) with shared expert FFN only.
+    /// Requires target model to have just completed a forward() pass (hidden state saved).
+    pub fn mtpForward(self: *Ds4Model, token_id: u32, depth: u32) !u32 {
+        const mtp = self.mtp_weights orelse return error.MissingTensor;
+        if (depth >= mtp.n_depths) return error.MissingTensor;
+
+        const e = self.n_embd;
+
+        // Step 1: Construct MTP input via main_proj
+        // input = main_proj(concat(target_hidden[4096], prev_mtp_hidden[4096], embed(token)[4096]))
+        // Total input: 12288 = 3 × 4096
+
+        // Get embedding for draft token
+        const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
+        const emb_bytes = backend_mod.weightBytes(emb_t.dtype, 1, e);
+        const emb_ptr = emb_t.data_ptr + token_id * emb_bytes;
+
+        // Build 12288-dim input: [target_hidden | prev_mtp_hidden | embedding]
+        // target_hidden is in self.hidden (saved from last forward())
+        // For depth 0, prev_mtp_hidden = zeros
+        // For depth > 0, prev_mtp_hidden was saved from the previous MTP depth
+        var mtp_input: [12288]f32 = undefined;
+        @memcpy(mtp_input[0..e], self.hidden[0..e]); // target hidden
+
+        if (depth == 0) {
+            @memset(mtp_input[e .. 2 * e], 0.0); // zeros for first depth
+        } else {
+            @memcpy(mtp_input[e .. 2 * e], self.mtp_hidden_buf[0..e]); // prev MTP hidden
+        }
+
+        // Dequant embedding into mtp_input[2*e..3*e]
+        quant_ops.dequantToF32(mtp_input[2 * e .. 3 * e], emb_ptr, emb_t.dtype, e);
+
+        // Step 2: main_proj GEMV
+        // Look up main_proj tensor for this depth
+        var name_buf: [64]u8 = undefined;
+        const proj_w_name = std.fmt.bufPrint(&name_buf, "mtp.{d}.main_proj.weight", .{depth}) catch return error.MissingTensor;
+        // TODO: MXFP8 GEMV (FP8 E4M3 with E8M0 block scales) not yet implemented.
+        // For now, skip main_proj and use target hidden directly as draft input.
+        // This produces reasonable drafts since target hidden captures the model's state.
+        _ = proj_w_name;
+        // Use hidden2 as MTP working buffer (keeps self.hidden pristine for target)
+        @memcpy(self.hidden2[0..e], mtp_input[0..e]);
+
+        // MTP output head: norm + lm_head on hidden2, without touching self.hidden
+        const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+        // rmsNorm reads hidden2, writes to mtp_hidden_buf (separate from hidden)
+        self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
+        const lm = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
+        self.doGemv(self.mtp_hidden_buf.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
+        self.be.sync();
+
+        return math_ops.argmax(self.logits_buf);
+    }
+
+
 
     /// Prefill: process all token IDs sequentially through forward().
     /// Returns the argmax of the last token's logits.

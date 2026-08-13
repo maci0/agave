@@ -855,6 +855,18 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Set MTP (multi-token prediction) weights from a separate safetensors file.
+    pub fn setMtpWeights(self: *ModelStorage, mtp: *@import("ds4_mtp.zig").MtpWeights) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "mtp_weights"))
+                        m.mtp_weights = mtp;
+                }
+            },
+        }
+    }
+
     /// Set the thread pool reference for CPU parallelism.
     pub fn setPool(self: *ModelStorage, pool: ?*ThreadPool) void {
         switch (self.*) {
