@@ -131,6 +131,8 @@ pub const Ds4Model = struct {
     /// Shared across MTP depths. Positions 0..mtp_kv_len-1 are populated.
     mtp_kv_cache: []f32 = &.{}, // [max_seq_len * kv_lora_rank]
     mtp_kv_len: usize = 0, // number of populated positions
+    /// MTP HC state: 4 streams × n_embd. Initialized from target's hc_state.
+    mtp_hc_state: []f32 = &.{}, // [n_hc * n_embd]
     score_stride: usize = 0, // per-head score buffer stride
 
     // SSD streaming: expert cache and activation profiler (set by main.zig).
@@ -327,6 +329,9 @@ pub const Ds4Model = struct {
         self.mtp_kv_cache = try allocator.alloc(f32, @as(usize, self.max_seq_len) * self.kv_lora_rank);
         errdefer allocator.free(self.mtp_kv_cache);
         @memset(self.mtp_kv_cache, 0);
+        self.mtp_hc_state = try allocator.alloc(f32, n_hc * e);
+        errdefer allocator.free(self.mtp_hc_state);
+        @memset(self.mtp_hc_state, 0);
 
         // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
         const kv_bytes_per_layer = kv_quant.kvByteOffset(self.kv_type, ctx * kd);
@@ -1936,6 +1941,9 @@ pub const Ds4Model = struct {
         @memcpy(mtp_input[e .. 2 * e], self.mtp_hidden_buf[0..e]);
         quant_ops.dequantToF32(mtp_input[2 * e .. 3 * e], emb_ptr, emb_t.dtype, e);
 
+        // Initialize MTP HC state from target's last HC state
+        @memcpy(self.mtp_hc_state[0 .. n_hc * e], self.hc_state[0 .. n_hc * e]);
+
         // === MTP Layer 0: main_proj + main_norm + attention + FFN ===
         if (mtp.get("mtp.0.main_proj.weight")) |proj_w| {
             if (mtp.get("mtp.0.main_proj.scale")) |proj_s| {
@@ -1963,19 +1971,20 @@ pub const Ds4Model = struct {
             });
         }
 
-        // Run MTP layers 0, 1, 2 sequentially (hidden2 carries the state)
+        // Run MTP layers 0, 1, 2 with HC mixing (hidden2 carries the state)
         for (0..3) |layer| {
+            // HC pre (attn) → hidden2 = weighted sum of HC streams
+            self.mtpHcPre(mtp, layer, e);
             // Attention
             self.mtpAttentionLayer(mtp, layer, e, kd);
+            // HC post (attn) → update MTP HC state
+            self.mtpHcPost(e);
+            // HC pre (ffn) — use ffn HC weights
+            self.mtpHcPreFfn(mtp, layer, e);
             // FFN (shared expert only)
             self.mtpFfnLayer(mtp, layer, e);
-            if (true) {
-                var hs: f32 = 0; for (self.hidden2[0..e]) |v| hs += v * v;
-                std.log.info("MTP: after layer {d} L2={d:.3}", .{layer, @sqrt(hs)});
-            }
-            // Stabilize: plain RMS norm to prevent residual explosion
-            // (Correct architecture would use HC mixing here)
-            plainRmsNorm(self.hidden2[0..e], self.rms_eps);
+            // HC post (ffn)
+            self.mtpHcPost(e);
         }
 
         // Output head: mtp.2.norm → shared lm_head → argmax
@@ -2037,6 +2046,22 @@ pub const Ds4Model = struct {
             self.be.sync();
         }
 
+        // RoPE on KV (rope dims = last 64 of 512)
+        const rd: usize = self.rope_dim; // 64
+        const nd = rd / 2; // 32
+        const mtp_pos = self.mtp_kv_len;
+        const nope: usize = kd - rd; // 448
+        {
+            var rope_cos: [32]f32 = undefined;
+            var rope_sin: [32]f32 = undefined;
+            for (0..nd) |ri| {
+                const theta = @as(f32, @floatFromInt(mtp_pos)) * self.rope_freqs[ri];
+                rope_cos[ri] = @cos(theta);
+                rope_sin[ri] = @sin(theta);
+            }
+            applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
+        }
+
         // Append to MTP KV cache (only on layer 0 — shared cache)
         if (layer == 0 and self.mtp_kv_len < self.max_seq_len) {
             const pos = self.mtp_kv_len;
@@ -2068,6 +2093,22 @@ pub const Ds4Model = struct {
         const nh = self.n_head;
         gemv_mxfp8_fn(self.q_compressed.ptr, qb_w.?.data_ptr, qb_s.?.data_ptr,
             self.q_full.ptr, nh * kd, ql, @intCast(qb_s.?.shape[1]));
+
+        // Per-head Q RMS norm + RoPE
+        {
+            var rope_cos: [32]f32 = undefined;
+            var rope_sin: [32]f32 = undefined;
+            for (0..nd) |ri| {
+                const theta = @as(f32, @floatFromInt(mtp_pos)) * self.rope_freqs[ri];
+                rope_cos[ri] = @cos(theta);
+                rope_sin[ri] = @sin(theta);
+            }
+            for (0..nh) |h| {
+                const q_head = self.q_full[h * kd ..][0..kd];
+                plainRmsNorm(q_head, self.rms_eps);
+                applyRopeTable(q_head[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
+            }
+        }
 
         // Per-head attention against MTP KV cache
         const attn_scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
@@ -2106,6 +2147,20 @@ pub const Ds4Model = struct {
                     ao_h[vi..][0..8].* = @mulAdd(V8, @as(V8, kv_t[vi..][0..8].*), wv, cur);
                 }
                 while (vi < kd) : (vi += 1) ao_h[vi] += kv_t[vi] * w;
+            }
+        }
+
+        // Inverse RoPE on attention output
+        {
+            var rope_cos: [32]f32 = undefined;
+            var rope_sin: [32]f32 = undefined;
+            for (0..nd) |ri| {
+                const theta = @as(f32, @floatFromInt(mtp_pos)) * self.rope_freqs[ri];
+                rope_cos[ri] = @cos(theta);
+                rope_sin[ri] = @sin(theta);
+            }
+            for (0..nh) |h| {
+                applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
             }
         }
 
@@ -2295,6 +2350,154 @@ pub const Ds4Model = struct {
     pub fn getBlockTable(_: *const Ds4Model) []const u32 {
         return &.{};
     }
+    /// MTP HC pre: compute weighted sum of MTP HC streams → hidden2.
+    /// Uses MTP-specific HC weights from safetensors.
+    fn mtpHcPre(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize) void {
+        var b1: [64]u8 = undefined;
+        var b2: [64]u8 = undefined;
+        var b3: [64]u8 = undefined;
+        const fn_name = std.fmt.bufPrint(&b1, "mtp.{d}.hc_attn_fn", .{layer}) catch return;
+        const base_name = std.fmt.bufPrint(&b2, "mtp.{d}.hc_attn_base", .{layer}) catch return;
+        const scale_name = std.fmt.bufPrint(&b3, "mtp.{d}.hc_attn_scale", .{layer}) catch return;
+        const fn_t = mtp.get(fn_name) orelse return;
+        const base_t = mtp.get(base_name) orelse return;
+        const scale_t = mtp.get(scale_name) orelse return;
+
+        const flat_size = n_hc * e;
+        // RMS scale factor from mtp_hc_state
+        const V8 = @Vector(8, f32);
+        const rms_inv = blk: {
+            var acc: V8 = @splat(0.0);
+            var ri: usize = 0;
+            while (ri + 8 <= flat_size) : (ri += 8) {
+                const v: V8 = self.mtp_hc_state[ri..][0..8].*;
+                acc = @mulAdd(V8, v, v, acc);
+            }
+            var ss: f32 = @reduce(.Add, acc);
+            while (ri < flat_size) : (ri += 1) ss += self.mtp_hc_state[ri] * self.mtp_hc_state[ri];
+            break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
+        };
+
+        // mixes[24] = hc_fn @ mtp_hc_state (F32 GEMV, tiny)
+        var mixes: [hc_mix_dim]f32 = undefined;
+        cpuGemvF32(fn_t.data_ptr, self.mtp_hc_state, &mixes, flat_size);
+        for (&mixes) |*m| m.* *= rms_inv;
+
+        const base: [*]const f32 = @ptrCast(@alignCast(base_t.data_ptr));
+        const scale: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
+
+        // pre/post/comb weights
+        for (0..n_hc) |s| {
+            self.hc_pre_w[s] = sigmoid(mixes[s] * scale[0] + base[s]) + hc_eps;
+            self.hc_post_w[s] = sigmoid(mixes[n_hc + s] * scale[1] + base[n_hc + s]) * 2.0;
+        }
+        for (0..n_hc * n_hc) |s| {
+            self.hc_comb[s] = mixes[2 * n_hc + s] * scale[2] + base[2 * n_hc + s];
+        }
+        hcSinkhorn(self.hc_comb);
+
+        // Weighted sum: hidden2 = Σ pre_w[s] * mtp_hc_state[s]
+        var i: usize = 0;
+        while (i + 8 <= e) : (i += 8) {
+            var acc2: V8 = @splat(@as(f32, 0.0));
+            for (0..n_hc) |s| {
+                const w: V8 = @splat(self.hc_pre_w[s]);
+                acc2 = @mulAdd(V8, @as(V8, self.mtp_hc_state[s * e + i ..][0..8].*), w, acc2);
+            }
+            self.hidden2[i..][0..8].* = acc2;
+        }
+        while (i < e) : (i += 1) {
+            var v: f32 = 0.0;
+            for (0..n_hc) |s| v += self.mtp_hc_state[s * e + i] * self.hc_pre_w[s];
+            self.hidden2[i] = v;
+        }
+    }
+
+    /// MTP HC post: update MTP HC state from sublayer output in hidden2.
+    fn mtpHcPost(self: *Ds4Model, e: usize) void {
+        const sub = self.hidden2;
+        const V8 = @Vector(8, f32);
+        for (0..n_hc) |dst| {
+            const ns = self.new_hc[dst * e ..][0..e];
+            const pw: V8 = @splat(self.hc_post_w[dst]);
+            var cvec: [n_hc]V8 = undefined;
+            for (0..n_hc) |src| cvec[src] = @splat(self.hc_comb[dst + src * n_hc]);
+            var i: usize = 0;
+            while (i + 8 <= e) : (i += 8) {
+                var acc: V8 = @as(V8, sub[i..][0..8].*) * pw;
+                for (0..n_hc) |src| {
+                    acc = @mulAdd(V8, @as(V8, self.mtp_hc_state[src * e + i ..][0..8].*), cvec[src], acc);
+                }
+                ns[i..][0..8].* = acc;
+            }
+            while (i < e) : (i += 1) {
+                var v = sub[i] * self.hc_post_w[dst];
+                for (0..n_hc) |src| v += self.mtp_hc_state[src * e + i] * self.hc_comb[dst + src * n_hc];
+                ns[i] = v;
+            }
+        }
+        // Swap: mtp_hc_state ← new_hc
+        @memcpy(self.mtp_hc_state, self.new_hc[0 .. n_hc * e]);
+    }
+
+    /// MTP HC pre for FFN: same as mtpHcPre but uses hc_ffn_* weights.
+    fn mtpHcPreFfn(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize) void {
+        var b1: [64]u8 = undefined;
+        var b2: [64]u8 = undefined;
+        var b3: [64]u8 = undefined;
+        const fn_name = std.fmt.bufPrint(&b1, "mtp.{d}.hc_ffn_fn", .{layer}) catch return;
+        const base_name = std.fmt.bufPrint(&b2, "mtp.{d}.hc_ffn_base", .{layer}) catch return;
+        const scale_name = std.fmt.bufPrint(&b3, "mtp.{d}.hc_ffn_scale", .{layer}) catch return;
+        const fn_t = mtp.get(fn_name) orelse return;
+        const base_t = mtp.get(base_name) orelse return;
+        const scale_t = mtp.get(scale_name) orelse return;
+
+        const flat_size = n_hc * e;
+        const V8 = @Vector(8, f32);
+        const rms_inv = blk: {
+            var acc: V8 = @splat(0.0);
+            var ri: usize = 0;
+            while (ri + 8 <= flat_size) : (ri += 8) {
+                const v: V8 = self.mtp_hc_state[ri..][0..8].*;
+                acc = @mulAdd(V8, v, v, acc);
+            }
+            var ss: f32 = @reduce(.Add, acc);
+            while (ri < flat_size) : (ri += 1) ss += self.mtp_hc_state[ri] * self.mtp_hc_state[ri];
+            break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
+        };
+
+        var mixes: [hc_mix_dim]f32 = undefined;
+        cpuGemvF32(fn_t.data_ptr, self.mtp_hc_state, &mixes, flat_size);
+        for (&mixes) |*m| m.* *= rms_inv;
+
+        const base: [*]const f32 = @ptrCast(@alignCast(base_t.data_ptr));
+        const scale: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
+
+        for (0..n_hc) |s| {
+            self.hc_pre_w[s] = sigmoid(mixes[s] * scale[0] + base[s]) + hc_eps;
+            self.hc_post_w[s] = sigmoid(mixes[n_hc + s] * scale[1] + base[n_hc + s]) * 2.0;
+        }
+        for (0..n_hc * n_hc) |s| {
+            self.hc_comb[s] = mixes[2 * n_hc + s] * scale[2] + base[2 * n_hc + s];
+        }
+        hcSinkhorn(self.hc_comb);
+
+        var i: usize = 0;
+        while (i + 8 <= e) : (i += 8) {
+            var acc2: V8 = @splat(@as(f32, 0.0));
+            for (0..n_hc) |s| {
+                const w: V8 = @splat(self.hc_pre_w[s]);
+                acc2 = @mulAdd(V8, @as(V8, self.mtp_hc_state[s * e + i ..][0..8].*), w, acc2);
+            }
+            self.hidden2[i..][0..8].* = acc2;
+        }
+        while (i < e) : (i += 1) {
+            var v: f32 = 0.0;
+            for (0..n_hc) |s| v += self.mtp_hc_state[s * e + i] * self.hc_pre_w[s];
+            self.hidden2[i] = v;
+        }
+    }
+
 };
 
 // ── Math helpers ─────────────────────────────────────────────────
