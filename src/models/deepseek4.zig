@@ -1934,6 +1934,89 @@ pub const Ds4Model = struct {
                 self.be.rmsNorm(self.hidden2.ptr, &norm_f32, self.hidden2.ptr, e, self.rms_eps);
                 self.be.sync();
             }
+            // MTP single-token attention (simplified MLA, no KV cache)
+            // With context length 1: softmax of one score = 1.0, so attn_out = V = K = kv_proj.
+            // Skip Q computation entirely; just compute kv_proj and pass through wo_a/wo_b.
+            {
+                // attn_norm → normed (into mtp_hidden_buf scratch)
+                var an_buf2: [64]u8 = undefined;
+                const atn_name = std.fmt.bufPrint(&an_buf2, "mtp.{d}.attn_norm.weight", .{depth}) catch "";
+                if (mtp.get(atn_name)) |atn_t| {
+                    var atn_f32: [4096]f32 = undefined;
+                    for (0..e) |ni| {
+                        const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(atn_t.data_ptr + ni * 2)), .little);
+                        atn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                    }
+                    self.be.rmsNorm(self.hidden2.ptr, &atn_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
+                    self.be.sync();
+
+                    // kv_proj = wkv @ normed → [512]
+                    var kv_buf2: [64]u8 = undefined;
+                    var kvs_buf2: [64]u8 = undefined;
+                    const kv_name2 = std.fmt.bufPrint(&kv_buf2, "mtp.{d}.attn.wkv.weight", .{depth}) catch "";
+                    const kvs_name2 = std.fmt.bufPrint(&kvs_buf2, "mtp.{d}.attn.wkv.scale", .{depth}) catch "";
+                    const kv_w = mtp.get(kv_name2);
+                    const kv_s = mtp.get(kvs_name2);
+                    if (kv_w != null and kv_s != null) {
+                        const kd: usize = self.kv_lora_rank; // 512
+                        const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                        gemv_mxfp8_fn(
+                            self.mtp_hidden_buf.ptr, kv_w.?.data_ptr, kv_s.?.data_ptr,
+                            self.kv_proj.ptr, kd, e, @intCast(kv_s.?.shape[1]),
+                        );
+                        // kv_a_norm
+                        var kvn_buf2: [64]u8 = undefined;
+                        const kvn_name = std.fmt.bufPrint(&kvn_buf2, "mtp.{d}.attn.kv_norm.weight", .{depth}) catch "";
+                        if (mtp.get(kvn_name)) |kvn_t| {
+                            var kvn_f32: [512]f32 = undefined;
+                            for (0..kd) |ni| {
+                                const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(kvn_t.data_ptr + ni * 2)), .little);
+                                kvn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                            }
+                            self.be.rmsNorm(self.kv_proj.ptr, &kvn_f32, self.kv_proj.ptr, kd, self.rms_eps);
+                            self.be.sync();
+                        }
+                        // Single-token: attn_out[h] = kv_proj for all 64 heads
+                        for (0..self.n_head) |h| {
+                            @memcpy(self.attn_out[h * kd ..][0..kd], self.kv_proj[0..kd]);
+                        }
+                        // wo_a (grouped LoRA) → wo_b → hidden2 += result
+                        var woa_buf: [64]u8 = undefined;
+                        var woas_buf: [64]u8 = undefined;
+                        var wob_buf: [64]u8 = undefined;
+                        var wobs_buf: [64]u8 = undefined;
+                        const woa_name = std.fmt.bufPrint(&woa_buf, "mtp.{d}.attn.wo_a.weight", .{depth}) catch "";
+                        const woas_name = std.fmt.bufPrint(&woas_buf, "mtp.{d}.attn.wo_a.scale", .{depth}) catch "";
+                        const wob_name = std.fmt.bufPrint(&wob_buf, "mtp.{d}.attn.wo_b.weight", .{depth}) catch "";
+                        const wobs_name = std.fmt.bufPrint(&wobs_buf, "mtp.{d}.attn.wo_b.scale", .{depth}) catch "";
+                        const woa_w = mtp.get(woa_name);
+                        const woa_s = mtp.get(woas_name);
+                        const wob_w = mtp.get(wob_name);
+                        const wob_s = mtp.get(wobs_name);
+                        if (woa_w != null and woa_s != null and wob_w != null and wob_s != null) {
+                            const og: usize = self.o_groups; // 8
+                            const olr: usize = self.o_lora_rank; // 1024
+                            // wo_a: [8192, 4096] FP8 grouped into 8 × [1024, 4096]
+                            // wo_a: [8192, 4096] MXFP8 → lora_out[8192]
+                            const gemv_mxfp8_attn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                            gemv_mxfp8_attn(
+                                self.attn_out.ptr, woa_w.?.data_ptr, woa_s.?.data_ptr,
+                                self.lora_out.ptr, og * olr, self.n_head * kd,
+                                @intCast(woa_s.?.shape[1]),
+                            );
+                            // wo_b: [4096, 8192] MXFP8 → expert_scratch[4096]
+                            gemv_mxfp8_attn(
+                                self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr,
+                                self.expert_scratch.ptr, e, og * olr,
+                                @intCast(wob_s.?.shape[1]),
+                            );
+                            // Residual add: hidden2 += attn_result
+                            for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
+                        }
+                    }
+                }
+            }
+
             // Shared expert FFN: gate_proj + up_proj → silu_mul → down_proj
             // Uses hidden2 as input, writes result back to hidden2 (residual add).
             var fn_buf: [64]u8 = undefined;
@@ -1999,9 +2082,22 @@ pub const Ds4Model = struct {
                 for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
             }
 
-            // Output: norm → lm_head → argmax (using hidden2)
-            const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
-            self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
+            // Output: use MTP-specific norm if available, then shared lm_head
+            var on_buf: [64]u8 = undefined;
+            const on_name = std.fmt.bufPrint(&on_buf, "mtp.{d}.norm.weight", .{depth}) catch "";
+            const mtp_norm_opt = if (on_name.len > 0) mtp.get(on_name) else null;
+            if (mtp_norm_opt) |mtp_norm_t| {
+                // Use MTP-specific output norm (BF16)
+                var mnorm_f32: [4096]f32 = undefined;
+                for (0..e) |ni| {
+                    const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(mtp_norm_t.data_ptr + ni * 2)), .little);
+                    mnorm_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                }
+                self.be.rmsNorm(self.hidden2.ptr, &mnorm_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
+            } else {
+                const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+                self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
+            }
             const lm = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
             self.doGemv(self.mtp_hidden_buf.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
             self.be.sync();
