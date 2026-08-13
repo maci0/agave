@@ -127,6 +127,10 @@ pub const Ds4Model = struct {
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
     mtp_hidden_buf: []f32 = &.{}, // [n_embd] — saved MTP hidden state between depths
+    /// MTP KV cache: stores kv_proj (kv_lora_rank=512 dims) per position.
+    /// Shared across MTP depths. Positions 0..mtp_kv_len-1 are populated.
+    mtp_kv_cache: []f32 = &.{}, // [max_seq_len * kv_lora_rank]
+    mtp_kv_len: usize = 0, // number of populated positions
     score_stride: usize = 0, // per-head score buffer stride
 
     // SSD streaming: expert cache and activation profiler (set by main.zig).
@@ -319,6 +323,10 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.logits_buf);
         self.mtp_hidden_buf = try allocator.alloc(f32, e);
         errdefer allocator.free(self.mtp_hidden_buf);
+        // MTP KV cache: max_seq_len positions × kv_lora_rank dims
+        self.mtp_kv_cache = try allocator.alloc(f32, @as(usize, self.max_seq_len) * self.kv_lora_rank);
+        errdefer allocator.free(self.mtp_kv_cache);
+        @memset(self.mtp_kv_cache, 0);
 
         // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
         const kv_bytes_per_layer = kv_quant.kvByteOffset(self.kv_type, ctx * kd);
@@ -1851,12 +1859,55 @@ pub const Ds4Model = struct {
 
         self.kv_seq_len += 1;
 
+        // Populate MTP KV cache: project target hidden through MTP's wkv
+        // so the MTP attention can see the full conversation context.
+        if (self.mtp_weights) |mtp| {
+            if (mtp.n_depths > 0 and self.mtp_kv_len < self.max_seq_len) {
+                const kd: usize = self.kv_lora_rank;
+                // Use depth 0's wkv weights (shared across depths for KV cache)
+                if (mtp.get("mtp.0.attn.wkv.weight")) |kv_w| {
+                    if (mtp.get("mtp.0.attn.wkv.scale")) |kv_s| {
+                        const gemv_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                        // hidden → kv_proj (using MTP weights, not target weights)
+                        gemv_fn(
+                            self.hidden.ptr, kv_w.data_ptr, kv_s.data_ptr,
+                            self.kv_proj.ptr, kd, e, @intCast(kv_s.shape[1]),
+                        );
+                        // kv_a_norm
+                        if (mtp.get("mtp.0.attn.kv_norm.weight")) |kvn_t| {
+                            var kvn_f32: [512]f32 = undefined;
+                            for (0..kd) |ni| {
+                                const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(kvn_t.data_ptr + ni * 2)), .little);
+                                kvn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                            }
+                            self.be.rmsNorm(self.kv_proj.ptr, &kvn_f32, self.kv_proj.ptr, kd, self.rms_eps);
+                            self.be.sync();
+                        }
+                        // Append to MTP KV cache
+                        const pos = self.mtp_kv_len;
+                        @memcpy(self.mtp_kv_cache[pos * kd ..][0..kd], self.kv_proj[0..kd]);
+                        self.mtp_kv_len = pos + 1;
+                    }
+                }
+            }
+        }
+
         return math_ops.argmax(self.logits_buf);
     }
 
     /// Return the number of available MTP draft depths.
     pub fn getMtpDepth(self: *const Ds4Model) u32 {
         return self.n_mtp_layers;
+    }
+
+    /// Reset MTP KV cache to match the target model's position.
+    /// Called after speculative rejection to discard stale MTP KV entries.
+    pub fn resetMtpCache(self: *Ds4Model) void {
+        // Reset MTP KV to the target model's current KV length.
+        // After rejection, only positions 0..kv_seq_len-1 are valid.
+        if (self.mtp_kv_len > self.kv_seq_len) {
+            self.mtp_kv_len = self.kv_seq_len;
+        }
     }
 
     /// MTP forward: predict draft token at the given depth.
@@ -1934,11 +1985,13 @@ pub const Ds4Model = struct {
                 self.be.rmsNorm(self.hidden2.ptr, &norm_f32, self.hidden2.ptr, e, self.rms_eps);
                 self.be.sync();
             }
-            // MTP single-token attention (simplified MLA, no KV cache)
-            // With context length 1: softmax of one score = 1.0, so attn_out = V = K = kv_proj.
-            // Skip Q computation entirely; just compute kv_proj and pass through wo_a/wo_b.
+            // MTP attention with KV cache (compressed-space dot product).
+            // Stores kv_proj[512] per position. Uses dot-product scores in
+            // compressed space — cheaper than full Q/K MLA attention.
             {
-                // attn_norm → normed (into mtp_hidden_buf scratch)
+                const kd: usize = self.kv_lora_rank; // 512
+                const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                // attn_norm → normed (into mtp_hidden_buf)
                 var an_buf2: [64]u8 = undefined;
                 const atn_name = std.fmt.bufPrint(&an_buf2, "mtp.{d}.attn_norm.weight", .{depth}) catch "";
                 if (mtp.get(atn_name)) |atn_t| {
@@ -1949,70 +2002,109 @@ pub const Ds4Model = struct {
                     }
                     self.be.rmsNorm(self.hidden2.ptr, &atn_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
                     self.be.sync();
-
-                    // kv_proj = wkv @ normed → [512]
-                    var kv_buf2: [64]u8 = undefined;
-                    var kvs_buf2: [64]u8 = undefined;
-                    const kv_name2 = std.fmt.bufPrint(&kv_buf2, "mtp.{d}.attn.wkv.weight", .{depth}) catch "";
-                    const kvs_name2 = std.fmt.bufPrint(&kvs_buf2, "mtp.{d}.attn.wkv.scale", .{depth}) catch "";
-                    const kv_w = mtp.get(kv_name2);
-                    const kv_s = mtp.get(kvs_name2);
-                    if (kv_w != null and kv_s != null) {
-                        const kd: usize = self.kv_lora_rank; // 512
-                        const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
-                        gemv_mxfp8_fn(
-                            self.mtp_hidden_buf.ptr, kv_w.?.data_ptr, kv_s.?.data_ptr,
-                            self.kv_proj.ptr, kd, e, @intCast(kv_s.?.shape[1]),
+                } else {
+                    @memcpy(self.mtp_hidden_buf[0..e], self.hidden2[0..e]);
+                }
+                // kv_proj = wkv @ normed → [512]
+                var kv_buf2: [64]u8 = undefined;
+                var kvs_buf2: [64]u8 = undefined;
+                const kv_name2 = std.fmt.bufPrint(&kv_buf2, "mtp.{d}.attn.wkv.weight", .{depth}) catch "";
+                const kvs_name2 = std.fmt.bufPrint(&kvs_buf2, "mtp.{d}.attn.wkv.scale", .{depth}) catch "";
+                const kv_w = mtp.get(kv_name2);
+                const kv_s = mtp.get(kvs_name2);
+                if (kv_w != null and kv_s != null) {
+                    gemv_mxfp8_fn(
+                        self.mtp_hidden_buf.ptr, kv_w.?.data_ptr, kv_s.?.data_ptr,
+                        self.kv_proj.ptr, kd, e, @intCast(kv_s.?.shape[1]),
+                    );
+                    // kv_a_norm
+                    var kvn_buf2: [64]u8 = undefined;
+                    const kvn_name = std.fmt.bufPrint(&kvn_buf2, "mtp.{d}.attn.kv_norm.weight", .{depth}) catch "";
+                    if (mtp.get(kvn_name)) |kvn_t| {
+                        var kvn_f32: [512]f32 = undefined;
+                        for (0..kd) |ni| {
+                            const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(kvn_t.data_ptr + ni * 2)), .little);
+                            kvn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                        }
+                        self.be.rmsNorm(self.kv_proj.ptr, &kvn_f32, self.kv_proj.ptr, kd, self.rms_eps);
+                        self.be.sync();
+                    }
+                    // Append kv_proj to MTP KV cache
+                    const pos = self.mtp_kv_len;
+                    if (pos < self.max_seq_len) {
+                        @memcpy(self.mtp_kv_cache[pos * kd ..][0..kd], self.kv_proj[0..kd]);
+                        self.mtp_kv_len = pos + 1;
+                    }
+                    // Compressed-space attention: score[t] = kv_proj · kv_cache[t] / sqrt(kd)
+                    const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
+                    const V8 = @Vector(8, f32);
+                    var max_score: f32 = -std.math.inf(f32);
+                    // Compute scores into scores_buf (reuse existing buffer)
+                    for (0..self.mtp_kv_len) |t| {
+                        const kv_t = self.mtp_kv_cache[t * kd ..][0..kd];
+                        var acc: V8 = @splat(0.0);
+                        var si: usize = 0;
+                        while (si + 8 <= kd) : (si += 8) {
+                            acc = @mulAdd(V8, @as(V8, self.kv_proj[si..][0..8].*), @as(V8, kv_t[si..][0..8].*), acc);
+                        }
+                        var s = @reduce(.Add, acc) * scale;
+                        while (si < kd) : (si += 1) s += self.kv_proj[si] * kv_t[si] * scale;
+                        self.scores_buf[t] = s;
+                        max_score = @max(max_score, s);
+                    }
+                    // Softmax
+                    var sum_exp: f32 = 0.0;
+                    for (0..self.mtp_kv_len) |t| {
+                        self.scores_buf[t] = @exp(self.scores_buf[t] - max_score);
+                        sum_exp += self.scores_buf[t];
+                    }
+                    const inv_sum: f32 = 1.0 / sum_exp;
+                    // Weighted sum: attn_out = Σ softmax[t] * kv_cache[t]
+                    @memset(self.kv_proj[0..kd], 0.0); // reuse as output
+                    for (0..self.mtp_kv_len) |t| {
+                        const w = self.scores_buf[t] * inv_sum;
+                        if (w < 1e-6) continue;
+                        const kv_t = self.mtp_kv_cache[t * kd ..][0..kd];
+                        const wv: V8 = @splat(w);
+                        var vi: usize = 0;
+                        while (vi + 8 <= kd) : (vi += 8) {
+                            const cur: V8 = self.kv_proj[vi..][0..8].*;
+                            self.kv_proj[vi..][0..8].* = @mulAdd(V8, @as(V8, kv_t[vi..][0..8].*), wv, cur);
+                        }
+                        while (vi < kd) : (vi += 1) self.kv_proj[vi] += kv_t[vi] * w;
+                    }
+                    // Expand to all heads: attn_out[h] = compressed_attn_out
+                    for (0..self.n_head) |h| {
+                        @memcpy(self.attn_out[h * kd ..][0..kd], self.kv_proj[0..kd]);
+                    }
+                    // wo_a → wo_b → residual add to hidden2
+                    var woa_buf: [64]u8 = undefined;
+                    var woas_buf: [64]u8 = undefined;
+                    var wob_buf: [64]u8 = undefined;
+                    var wobs_buf: [64]u8 = undefined;
+                    const woa_name = std.fmt.bufPrint(&woa_buf, "mtp.{d}.attn.wo_a.weight", .{depth}) catch "";
+                    const woas_name = std.fmt.bufPrint(&woas_buf, "mtp.{d}.attn.wo_a.scale", .{depth}) catch "";
+                    const wob_name = std.fmt.bufPrint(&wob_buf, "mtp.{d}.attn.wo_b.weight", .{depth}) catch "";
+                    const wobs_name = std.fmt.bufPrint(&wobs_buf, "mtp.{d}.attn.wo_b.scale", .{depth}) catch "";
+                    const woa_w = mtp.get(woa_name);
+                    const woa_s = mtp.get(woas_name);
+                    const wob_w = mtp.get(wob_name);
+                    const wob_s = mtp.get(wobs_name);
+                    if (woa_w != null and woa_s != null and wob_w != null and wob_s != null) {
+                        const og: usize = self.o_groups;
+                        const olr: usize = self.o_lora_rank;
+                        const gemv_mxfp8_attn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                        gemv_mxfp8_attn(
+                            self.attn_out.ptr, woa_w.?.data_ptr, woa_s.?.data_ptr,
+                            self.lora_out.ptr, og * olr, self.n_head * kd,
+                            @intCast(woa_s.?.shape[1]),
                         );
-                        // kv_a_norm
-                        var kvn_buf2: [64]u8 = undefined;
-                        const kvn_name = std.fmt.bufPrint(&kvn_buf2, "mtp.{d}.attn.kv_norm.weight", .{depth}) catch "";
-                        if (mtp.get(kvn_name)) |kvn_t| {
-                            var kvn_f32: [512]f32 = undefined;
-                            for (0..kd) |ni| {
-                                const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(kvn_t.data_ptr + ni * 2)), .little);
-                                kvn_f32[ni] = @bitCast(@as(u32, raw) << 16);
-                            }
-                            self.be.rmsNorm(self.kv_proj.ptr, &kvn_f32, self.kv_proj.ptr, kd, self.rms_eps);
-                            self.be.sync();
-                        }
-                        // Single-token: attn_out[h] = kv_proj for all 64 heads
-                        for (0..self.n_head) |h| {
-                            @memcpy(self.attn_out[h * kd ..][0..kd], self.kv_proj[0..kd]);
-                        }
-                        // wo_a (grouped LoRA) → wo_b → hidden2 += result
-                        var woa_buf: [64]u8 = undefined;
-                        var woas_buf: [64]u8 = undefined;
-                        var wob_buf: [64]u8 = undefined;
-                        var wobs_buf: [64]u8 = undefined;
-                        const woa_name = std.fmt.bufPrint(&woa_buf, "mtp.{d}.attn.wo_a.weight", .{depth}) catch "";
-                        const woas_name = std.fmt.bufPrint(&woas_buf, "mtp.{d}.attn.wo_a.scale", .{depth}) catch "";
-                        const wob_name = std.fmt.bufPrint(&wob_buf, "mtp.{d}.attn.wo_b.weight", .{depth}) catch "";
-                        const wobs_name = std.fmt.bufPrint(&wobs_buf, "mtp.{d}.attn.wo_b.scale", .{depth}) catch "";
-                        const woa_w = mtp.get(woa_name);
-                        const woa_s = mtp.get(woas_name);
-                        const wob_w = mtp.get(wob_name);
-                        const wob_s = mtp.get(wobs_name);
-                        if (woa_w != null and woa_s != null and wob_w != null and wob_s != null) {
-                            const og: usize = self.o_groups; // 8
-                            const olr: usize = self.o_lora_rank; // 1024
-                            // wo_a: [8192, 4096] FP8 grouped into 8 × [1024, 4096]
-                            // wo_a: [8192, 4096] MXFP8 → lora_out[8192]
-                            const gemv_mxfp8_attn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
-                            gemv_mxfp8_attn(
-                                self.attn_out.ptr, woa_w.?.data_ptr, woa_s.?.data_ptr,
-                                self.lora_out.ptr, og * olr, self.n_head * kd,
-                                @intCast(woa_s.?.shape[1]),
-                            );
-                            // wo_b: [4096, 8192] MXFP8 → expert_scratch[4096]
-                            gemv_mxfp8_attn(
-                                self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr,
-                                self.expert_scratch.ptr, e, og * olr,
-                                @intCast(wob_s.?.shape[1]),
-                            );
-                            // Residual add: hidden2 += attn_result
-                            for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
-                        }
+                        gemv_mxfp8_attn(
+                            self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr,
+                            self.expert_scratch.ptr, e, og * olr,
+                            @intCast(wob_s.?.shape[1]),
+                        );
+                        for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
                     }
                 }
             }
