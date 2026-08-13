@@ -1713,21 +1713,14 @@ pub const Ds4Model = struct {
 
         // Lookahead: prefetch next layer's popular experts (gate + up + down).
         // Overlaps SSD read latency with the weighted accumulation compute below.
-        // Prefetches all 3 weight types to avoid SSD reads during the next layer's dispatch.
+        // 1-layer ahead only — 2-layer was measured slower (scan overhead).
         if (self.expert_cache) |ec| {
             if (li + 1 < self.n_layers and li + 1 >= self.hash_layer_count) {
-                if (self.layerTensor(li + 1, "ffn_gate_exps.weight")) |next_ge| {
-                    const next_gs = ds4ExpertStride(next_ge, self.n_experts);
-                    ec.prefetchTopResidents(@intCast(li + 1), next_ge.data_ptr, next_gs, 6);
-                }
-                // Also prefetch up and down weights for next layer
-                if (self.layerTensor(li + 1, "ffn_up_exps.weight")) |next_ue| {
-                    const next_us = ds4ExpertStride(next_ue, self.n_experts);
-                    ec.prefetchTopResidents(@intCast(li + 1), next_ue.data_ptr, next_us, 6);
-                }
-                if (self.layerTensor(li + 1, "ffn_down_exps.weight")) |next_de| {
-                    const next_ds2 = ds4ExpertStride(next_de, self.n_experts);
-                    ec.prefetchTopResidents(@intCast(li + 1), next_de.data_ptr, next_ds2, 6);
+                inline for (.{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" }) |tensor_name| {
+                    if (self.layerTensor(li + 1, tensor_name)) |t| {
+                        const stride = ds4ExpertStride(t, self.n_experts);
+                        ec.prefetchTopResidents(@intCast(li + 1), t.data_ptr, stride, 6);
+                    }
                 }
             }
         }
