@@ -1893,14 +1893,122 @@ pub const Ds4Model = struct {
         // Dequant embedding into mtp_input[2*e..3*e]
         quant_ops.dequantToF32(mtp_input[2 * e .. 3 * e], emb_ptr, emb_t.dtype, e);
 
-        // Step 2: main_proj GEMV
-        // Look up main_proj tensor for this depth
+        // Step 2: main_proj GEMV [4096, 12288] — projects concat input to hidden dim
+        // Uses MXFP8: FP8 E4M3 weights with E8M0 per-tile block scales.
         var name_buf: [64]u8 = undefined;
         const proj_w_name = std.fmt.bufPrint(&name_buf, "mtp.{d}.main_proj.weight", .{depth}) catch return error.MissingTensor;
-        // TODO: MXFP8 GEMV (FP8 E4M3 with E8M0 block scales) not yet implemented.
-        // For now, skip main_proj and use target hidden directly as draft input.
-        // This produces reasonable drafts since target hidden captures the model's state.
-        _ = proj_w_name;
+        var scale_name_buf: [64]u8 = undefined;
+        const proj_s_name = std.fmt.bufPrint(&scale_name_buf, "mtp.{d}.main_proj.scale", .{depth}) catch return error.MissingTensor;
+        const proj_w = mtp.get(proj_w_name);
+        const proj_s = mtp.get(proj_s_name);
+
+        if (proj_w != null and proj_s != null) {
+            // MXFP8 GEMV: y[4096] = main_proj[4096, 12288] @ mtp_input[12288]
+            const gemv_mxfp8 = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+            const pw = proj_w.?;
+            const ps = proj_s.?;
+            const n_cols: usize = @intCast(pw.shape[1]); // 12288
+            const n_rows: usize = @intCast(pw.shape[0]); // 4096
+            const scale_cols: usize = @intCast(ps.shape[1]); // 96
+            gemv_mxfp8(
+                @as([*]const f32, &mtp_input),
+                pw.data_ptr,
+                ps.data_ptr,
+                self.hidden2.ptr, // output into hidden2
+                n_rows,
+                n_cols,
+                scale_cols,
+            );
+            // hidden2 now has the projected MTP input
+            // Apply main_norm before attention
+            var mn_buf: [64]u8 = undefined;
+            const mn_name = std.fmt.bufPrint(&mn_buf, "mtp.{d}.main_norm.weight", .{depth}) catch return error.MissingTensor;
+            if (mtp.get(mn_name)) |mn_t| {
+                // BF16 norm weights — dequant to f32 scratch
+                var norm_f32: [4096]f32 = undefined;
+                for (0..e) |ni| {
+                    const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(mn_t.data_ptr + ni * 2)), .little);
+                    norm_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                }
+                // RMS norm: hidden2 → hidden2 (in-place)
+                self.be.rmsNorm(self.hidden2.ptr, &norm_f32, self.hidden2.ptr, e, self.rms_eps);
+                self.be.sync();
+            }
+            // Shared expert FFN: gate_proj + up_proj → silu_mul → down_proj
+            // Uses hidden2 as input, writes result back to hidden2 (residual add).
+            var fn_buf: [64]u8 = undefined;
+            const ffn_norm_name = std.fmt.bufPrint(&fn_buf, "mtp.{d}.ffn_norm.weight", .{depth}) catch return error.MissingTensor;
+            if (mtp.get(ffn_norm_name)) |fn_t| {
+                // FFN norm: hidden2 → mtp_hidden_buf (normed for FFN input)
+                var fnorm_f32: [4096]f32 = undefined;
+                for (0..e) |ni| {
+                    const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(fn_t.data_ptr + ni * 2)), .little);
+                    fnorm_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                }
+                self.be.rmsNorm(self.hidden2.ptr, &fnorm_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
+                self.be.sync();
+            } else {
+                @memcpy(self.mtp_hidden_buf[0..e], self.hidden2[0..e]);
+            }
+
+            // gate = w1 @ normed, up = w3 @ normed (both FP8+E8M0)
+            var gn: [64]u8 = undefined;
+            var un: [64]u8 = undefined;
+            var dn: [64]u8 = undefined;
+            var gs: [64]u8 = undefined;
+            var us: [64]u8 = undefined;
+            var ds2: [64]u8 = undefined;
+            const gate_name = std.fmt.bufPrint(&gn, "mtp.{d}.ffn.shared_experts.w1.weight", .{depth}) catch return error.MissingTensor;
+            const up_name = std.fmt.bufPrint(&un, "mtp.{d}.ffn.shared_experts.w3.weight", .{depth}) catch return error.MissingTensor;
+            const down_name = std.fmt.bufPrint(&dn, "mtp.{d}.ffn.shared_experts.w2.weight", .{depth}) catch return error.MissingTensor;
+            const gate_s_name = std.fmt.bufPrint(&gs, "mtp.{d}.ffn.shared_experts.w1.scale", .{depth}) catch return error.MissingTensor;
+            const up_s_name = std.fmt.bufPrint(&us, "mtp.{d}.ffn.shared_experts.w3.scale", .{depth}) catch return error.MissingTensor;
+            const down_s_name = std.fmt.bufPrint(&ds2, "mtp.{d}.ffn.shared_experts.w2.scale", .{depth}) catch return error.MissingTensor;
+
+            const gate_w = mtp.get(gate_name);
+            const up_w = mtp.get(up_name);
+            const down_w = mtp.get(down_name);
+            const gate_sc = mtp.get(gate_s_name);
+            const up_sc = mtp.get(up_s_name);
+            const down_sc = mtp.get(down_s_name);
+
+            if (gate_w != null and up_w != null and down_w != null and
+                gate_sc != null and up_sc != null and down_sc != null)
+            {
+                const ff: usize = @intCast(gate_w.?.shape[0]); // 2048
+                const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+
+                // gate[ff] = w1[ff, e] @ normed[e]
+                gemv_mxfp8_fn(
+                    self.mtp_hidden_buf.ptr, gate_w.?.data_ptr, gate_sc.?.data_ptr,
+                    self.ff_gate_scratch.ptr, ff, e, @intCast(gate_sc.?.shape[1]),
+                );
+                // up[ff] = w3[ff, e] @ normed[e]
+                gemv_mxfp8_fn(
+                    self.mtp_hidden_buf.ptr, up_w.?.data_ptr, up_sc.?.data_ptr,
+                    self.ff_up_scratch.ptr, ff, e, @intCast(up_sc.?.shape[1]),
+                );
+                // mid = silu(gate) * up
+                self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, ff);
+                // down[e] = w2[e, ff] @ mid[ff]
+                gemv_mxfp8_fn(
+                    self.ff_gate_scratch.ptr, down_w.?.data_ptr, down_sc.?.data_ptr,
+                    self.expert_scratch.ptr, e, ff, @intCast(down_sc.?.shape[1]),
+                );
+                // Residual add: hidden2 += down_output
+                for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
+            }
+
+            // Output: norm → lm_head → argmax (using hidden2)
+            const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+            self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
+            const lm = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
+            self.doGemv(self.mtp_hidden_buf.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
+            self.be.sync();
+            // Save for next depth
+            @memcpy(self.mtp_hidden_buf[0..e], self.hidden2[0..e]);
+            return math_ops.argmax(self.logits_buf);
+        }
         // Use the Markov head for bigram-based draft prediction.
         // This adds a transition bias to the target's logits:
         //   draft = argmax(target_logits + W1[prev_token] @ W2^T)
