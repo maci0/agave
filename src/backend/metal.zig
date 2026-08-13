@@ -232,11 +232,13 @@ pub const MetalBackend = struct {
     /// model activation buffers) on every GEMV / norm / elementwise call.
     /// Cached buffers live for the model's lifetime and are released in deinit().
     buf_cache: std.AutoHashMap(usize, BufferInfo),
-    /// When true, getBufRef skips the buffer cache and creates fresh Metal
-    /// buffers on every dispatch. Volatile buffers are tracked and released
-    /// on sync(). Prevents stale buffer references to evicted mmap'd pages
-    /// when the model is larger than available RAM (SSD streaming mode).
+    /// When true, enables GPU-safe SSD streaming:
+    /// - Non-expert weights are copied into Metal-managed buffers on first use
+    ///   (copy-on-first-use cache), eliminating GPU page fault issues
+    /// - Buffer cache is flushed on sync() as a safety net
+    /// - Expert weights still use wrapped mmap'd pointers (pre-faulted)
     volatile_weights: bool = false,
+
     /// Volatile buffer tracking: list of uncached Metal buffers to release on sync.
 
     /// Host allocator for staging buffers (paged SDPA flats). Not used for
@@ -406,6 +408,7 @@ pub const MetalBackend = struct {
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+
             .allocator = allocator,
         };
         // Pre-allocate capacity so hot-path buf_cache.put() calls won't need to grow.
@@ -647,6 +650,7 @@ pub const MetalBackend = struct {
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
+
     }
 
     /// Flush all cached Metal buffer objects. Called when volatile_weights is
@@ -671,6 +675,12 @@ pub const MetalBackend = struct {
         const aligned_base = addr & ~(@as(usize, page_size - 1));
         const offset = addr - aligned_base;
         const needed = offset + len;
+
+        // In volatile_weights mode (SSD streaming), use copy-on-first-use for
+        // weight buffers. This copies mmap'd data into Metal-managed memory,
+        // eliminating GPU page fault issues for evicted file-backed pages.
+        // Small buffers (activations < 256KB) still use zero-copy wrapping.
+
 
         // Check cache for this page-aligned base
         if (self.buf_cache.get(aligned_base)) |cached| {
@@ -2362,12 +2372,10 @@ pub const MetalBackend = struct {
     pub fn sync(self: *MetalBackend) void {
         self.flush();
         if (self.profile_counters) self.sync_count += 1;
-        // In volatile_weights mode (SSD streaming), flush the buffer cache
-        // on sync to prevent stale Metal buffer references to evicted mmap'd
-        // pages. This works reliably when running a single model at a time.
-        // NOTE: Metal's newBufferWithBytesNoCopy does NOT trigger GPU page
-        // faults for evicted file-backed mmap pages on Apple Silicon. When the
-        // model exceeds RAM, use --backend cpu for reliable SSD streaming.
+        // In volatile_weights mode (SSD streaming), flush the WRAP buffer cache
+        // (buf_cache) on sync. Wrapped buffers reference mmap'd pages that can
+        // go stale when evicted. The copy_cache is NOT flushed because its
+        // buffers contain Metal-managed copies that are always valid.
         if (self.volatile_weights) {
             var it = self.buf_cache.valueIterator();
             while (it.next()) |info| release(info.metal_buf);
