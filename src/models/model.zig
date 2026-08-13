@@ -12,6 +12,7 @@ const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const Arch = @import("../arch.zig").Arch;
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
+const mlx_ops = @import("../ops/mlx.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -565,13 +566,24 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
             @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
         else
             fmt.getMetaU32("bits") orelse default_mlx_bits;
-        be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits);
+        const group_size = inferMlxGroupSize(st, k);
+        be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits, group_size);
     }
     return true;
 }
 
 /// MLX companion tensor lookup result.
-pub const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8, bits: u32 };
+pub const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8, bits: u32, group_size: u32 };
+
+/// Infer MLX group size from the scales tensor shape.
+/// Returns k / scales_last_dim, or default 64 if dims are unavailable.
+pub fn inferMlxGroupSize(st: format_mod.TensorInfo, k: usize) u32 {
+    if (st.n_dims >= 2 and k > 0) {
+        const n_groups: usize = @intCast(st.dims[st.n_dims - 1]);
+        if (n_groups > 0) return @intCast(k / n_groups);
+    }
+    return @intCast(mlx_ops.mlx_group_size);
+}
 
 /// Find MLX companion tensors (scales + biases) for an MLX-quantized weight.
 /// Returns null for non-MLX tensors, MXFP4 tensors, or when companions are missing.
@@ -590,7 +602,8 @@ pub fn findMlxCompanion(fmt: format_mod.Format, t: format_mod.TensorInfo, k: usi
         @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
     else
         fmt.getMetaU32("bits") orelse default_mlx_bits;
-    return .{ .scales = st.data_ptr, .biases = bt.data_ptr, .bits = bits };
+    const group_size = inferMlxGroupSize(st, k);
+    return .{ .scales = st.data_ptr, .biases = bt.data_ptr, .bits = bits, .group_size = group_size };
 }
 
 /// Dispatch GEMV — tries MLX path first, falls back to standard backend gemv.
@@ -824,6 +837,20 @@ pub const ModelStorage = union(enum) {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) m.deinit();
+            },
+        }
+    }
+
+    /// Set the SSD streaming expert cache and optional activation profiler.
+    pub fn setExpertCache(self: *ModelStorage, cache: *@import("../expert_cache.zig").ExpertCache, profile: ?*@import("../expert_profile.zig").ExpertProfile) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasField(@TypeOf(m.*), "expert_cache"))
+                        m.expert_cache = cache;
+                    if (comptime @hasField(@TypeOf(m.*), "expert_profile"))
+                        m.expert_profile = profile;
+                }
             },
         }
     }

@@ -110,7 +110,7 @@ const ple_combination_scale: f32 = 1.0 / @sqrt(2.0);
 const NormCacheEntry = model_mod.NormCacheEntry;
 
 /// MLX companion tensor pointers (scales + biases).
-const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8 };
+const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8, group_size: u32 = 64 };
 
 /// Gemma 4 model with dual attention, dual FFN (dense + MoE with top-8 softmax routing).
 pub const Gemma4Model = struct {
@@ -2435,7 +2435,7 @@ pub const Gemma4Model = struct {
             const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{base_name[0..prefix_len]}) catch return;
             const st = self.fmt.getTensor(s_name) orelse return;
             const bt = self.fmt.getTensor(b_name) orelse return;
-            companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr };
+            companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr, .group_size = model_mod.inferMlxGroupSize(st, k) };
             self.mlx_cc_keys[slot] = key;
             self.mlx_cc_vals[slot] = companion;
         }
@@ -2448,6 +2448,7 @@ pub const Gemma4Model = struct {
             n,
             k,
             self.mlx_bits,
+            companion.group_size,
         );
     }
 
@@ -2478,7 +2479,7 @@ pub const Gemma4Model = struct {
                     const bn = std.fmt.bufPrint(&bb, "{s}.biases", .{base[0..plen]}) catch return;
                     const st = self.fmt.getTensor(sn) orelse return;
                     const bt = self.fmt.getTensor(bn) orelse return;
-                    companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr };
+                    companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr, .group_size = model_mod.inferMlxGroupSize(st, k) };
                     self.mlx_cc_keys[slot] = key;
                     self.mlx_cc_vals[slot] = companion;
                 }
@@ -2489,6 +2490,7 @@ pub const Gemma4Model = struct {
                     .mlx_scales = companion.scales,
                     .mlx_biases = companion.biases,
                     .mlx_bits = self.mlx_bits,
+                    .mlx_group_size = companion.group_size,
                 };
             } else {
                 ops[i] = .{

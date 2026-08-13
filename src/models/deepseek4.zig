@@ -17,11 +17,14 @@ const model_mod = @import("model.zig");
 const math_ops = @import("../ops/math.zig");
 
 const quant_ops = @import("../ops/quant.zig");
+const mlx_ops = @import("../ops/mlx.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const attn_ops = @import("../ops/attention.zig");
 const Backend = backend_mod.Backend;
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const ExpertCache = @import("../expert_cache.zig").ExpertCache;
+const ExpertProfile = @import("../expert_profile.zig").ExpertProfile;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
 const DType = format_mod.DType;
@@ -123,6 +126,10 @@ pub const Ds4Model = struct {
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
     score_stride: usize = 0, // per-head score buffer stride
+
+    // SSD streaming: expert cache and activation profiler (set by main.zig).
+    expert_cache: ?*ExpertCache = null,
+    expert_profile: ?*ExpertProfile = null,
 
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
     rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
@@ -509,11 +516,20 @@ pub const Ds4Model = struct {
         };
 
         // mixes[24] = hc_fn @ hc_state — then post-scale by rms_inv
+        // CPU fast path for HC mixing: the matrix is tiny (24×16384) — CPU GEMV
+        // is faster than GPU dispatch overhead and avoids Metal buffer issues with
+        // small f32 tensors from mmap'd safetensors.
         if (hc_fn.dtype == .q8_0) {
             cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_mixes, flat_size);
+        } else if (hc_fn.dtype == .f32) {
+            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+        } else if (hc_fn.dtype == .bf16) {
+            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+        } else if (hc_fn.dtype == .f16) {
+            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else {
             @memcpy(self.flat_norm, self.hc_state); // GPU path still needs stable buffer
-            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_mixes.ptr, hc_mix_dim, flat_size);
+            self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_mixes.ptr, hc_mix_dim, flat_size);
             self.be.sync();
         }
         for (self.hc_mixes[0..hc_mix_dim]) |*m| m.* *= rms_inv;
@@ -615,9 +631,15 @@ pub const Ds4Model = struct {
         };
         if (hc_fn.dtype == .q8_0) {
             cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_pre_w, flat_size_h);
+        } else if (hc_fn.dtype == .f32) {
+            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+        } else if (hc_fn.dtype == .bf16) {
+            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+        } else if (hc_fn.dtype == .f16) {
+            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else {
             @memcpy(self.flat_norm, self.hc_state);
-            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_pre_w.ptr, n_hc, flat_size_h);
+            self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_pre_w.ptr, n_hc, flat_size_h);
             self.be.sync();
         }
         for (self.hc_pre_w[0..n_hc]) |*m| m.* *= rms_inv_h;
@@ -651,13 +673,13 @@ pub const Ds4Model = struct {
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
-        self.be.gemv(self.hidden2.ptr, .{ .data = q_a.data_ptr, .dtype = q_a.dtype }, self.q_compressed.ptr, ql, e);
+        self.doGemv(self.hidden2.ptr, q_a, self.q_compressed.ptr, ql, e);
         const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
         self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
         const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
-        self.be.gemv(self.q_compressed.ptr, .{ .data = q_b.data_ptr, .dtype = q_b.dtype }, self.q_full.ptr, nh * kd, ql);
+        self.doGemv(self.q_compressed.ptr, q_b, self.q_full.ptr, nh * kd, ql);
         const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
-        self.be.gemv(self.hidden2.ptr, .{ .data = kv_a.data_ptr, .dtype = kv_a.dtype }, self.kv_proj.ptr, kd, e);
+        self.doGemv(self.hidden2.ptr, kv_a, self.kv_proj.ptr, kd, e);
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
@@ -677,8 +699,8 @@ pub const Ds4Model = struct {
                 const circ_pos = pos % comp_buf_ratio;
                 comp_kv_pos = self.csa_comp_kv[li * comp_layer_stride + circ_pos * max_comp_dim ..][0..actual_comp_dim];
                 comp_score_pos = self.csa_comp_score[li * comp_layer_stride + circ_pos * max_comp_dim ..][0..actual_comp_dim];
-                self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, actual_comp_dim, e);
+                self.doGemv(self.hidden2.ptr, wkv, comp_kv_pos.ptr, actual_comp_dim, e);
+                self.doGemv(self.hidden2.ptr, kwgate, comp_score_pos.ptr, actual_comp_dim, e);
             }
         }
 
@@ -691,10 +713,10 @@ pub const Ds4Model = struct {
             const inh: usize = self.index_n_heads;
             const ihd: usize = self.index_head_dim;
             if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
-                self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, self.q_lora_rank);
+                self.doGemv(self.q_compressed.ptr, wiq, self.lid_query.ptr, inh * ihd, self.q_lora_rank);
             } else break :blk false;
             if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
-                self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+                self.doGemv(self.hidden.ptr, ww, self.lid_head_w.ptr, inh, self.n_embd);
             } else {
                 for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
             }
@@ -1178,17 +1200,22 @@ pub const Ds4Model = struct {
         const olr: usize = self.o_lora_rank;
         const group_in: usize = nh * kd / og; // = 64*512/8 = 4096
         const wo_a = try self.layerTensorReq(li, "attn_output_a.weight");
-        const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
+        // Per-group stride: MLX-Q packs as u32 words (dims-based), others use weightBytes.
+        const group_stride = if (wo_a.dtype == .mlx_q)
+            ds4ExpertStride(wo_a, og)
+        else blk: {
+            const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
+            break :blk olr * row_bytes;
+        };
         // wo_a groups + wo_b in one GPU command buffer: lora_out feeds directly into wo_b
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
-            const wp = wo_a.data_ptr + g * olr * row_bytes;
             const yp = self.lora_out.ptr + g * olr;
-            self.be.gemv(xp, .{ .data = wp, .dtype = wo_a.dtype }, yp, olr, group_in);
+            self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
         }
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
         // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
-        self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.hidden.ptr, e, og * olr);
+        self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
         self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
 
     }
@@ -1376,14 +1403,14 @@ pub const Ds4Model = struct {
             const ql: usize = self.q_lora_rank;
             // Step 1: Project q_compressed → indexer queries [inh * ihd] via W^IUQ
             if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
-                self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, ql);
+                self.doGemv(self.q_compressed.ptr, wiq, self.lid_query.ptr, inh * ihd, ql);
             } else {
                 @memset(self.lid_topk_ids[0..@min(itk, n_groups)], 0);
                 return;
             }
             // Step 2: Project hidden → per-head weights [inh] via W^w
             if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
-                self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+                self.doGemv(self.hidden.ptr, ww, self.lid_head_w.ptr, inh, self.n_embd);
             } else {
                 for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
             }
@@ -1438,7 +1465,7 @@ pub const Ds4Model = struct {
             // Hash routing: expert selection is by hash lookup (CPU, no GPU sync needed).
             // Gate GEMV deferred — batched with expert GEMVs, read after final sync.
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
-            self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
+            self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
             // NO sync here — gate_inp GEMV batched with expert GEMVs below
 
             // Hash lookup: determines which experts are selected (CPU-only, no GPU data needed)
@@ -1456,7 +1483,7 @@ pub const Ds4Model = struct {
         } else {
             // Learned routing: gate_inp GEMV → sync → top-k on CPU
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
-            self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
+            self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
             self.be.sync(); // CPU reads router_logits
 
             // Compute probs = sqrt_softplus(logits) — SIMD vectorized (3 transcendentals × 256)
@@ -1539,8 +1566,8 @@ pub const Ds4Model = struct {
                         },
                     }
                 } else {
-                    self.be.gemv(self.hidden2.ptr, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                    self.be.gemv(self.hidden2.ptr, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                    self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                 }
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
@@ -1551,23 +1578,46 @@ pub const Ds4Model = struct {
 
         var de_ptrs: [9][*]const u8 = undefined;
         var de_dtype: DType = .f32;
+        var de_exp_tensor: ?TensorInfo = null;
+        var de_exp_stride: usize = 0;
+        var de_slot_eids: [9]usize = [_]usize{0} ** 9;
         if (self.layerTensor(li, "ffn_gate_exps.weight")) |ge| {
             const ue = self.layerTensor(li, "ffn_up_exps.weight") orelse return error.MissingTensor;
             const de = self.layerTensor(li, "ffn_down_exps.weight") orelse return error.MissingTensor;
             de_dtype = de.dtype;
+            de_exp_tensor = de;
             const gs = ds4ExpertStride(ge, ne);
             const us = ds4ExpertStride(ue, ne);
             const ds = ds4ExpertStride(de, ne);
-            // SSD streaming: prefetch selected expert weights before GPU dispatch.
-            // madvise(WILLNEED) starts background page-in from SSD while we're
-            // still setting up the GPU command buffer. Helps when the 109GB model
-            // doesn't fit in RAM and cold experts need paging.
+            de_exp_stride = ds;
+            // SSD streaming: cache-aware expert prefetch.
+            // With expert cache: track residency via LRU, only madvise on misses.
+            // Without cache: unconditional madvise (original behavior).
             if (comptime @import("builtin").os.tag == .macos or @import("builtin").os.tag == .linux) {
-                for (0..n_active) |j| {
-                    const eid = top_ids[j];
-                    prefetchRange(ge.data_ptr + eid * gs, gs);
-                    prefetchRange(ue.data_ptr + eid * us, us);
-                    prefetchRange(de.data_ptr + eid * ds, ds);
+                if (self.expert_cache) |ec| {
+                    // Record activations for profiling
+                    if (self.expert_profile) |prof| {
+                        for (0..n_active) |j| prof.record(@intCast(li), @intCast(top_ids[j]));
+                        prof.recordToken();
+                    }
+                    // Only prefetch cache misses
+                    for (0..n_active) |j| {
+                        const eid = top_ids[j];
+                        if (!ec.touch(@intCast(li), @intCast(eid))) {
+                            // Cache miss — admit and prefetch
+                            _ = ec.admit(@intCast(li), @intCast(eid));
+                            prefetchRange(ge.data_ptr + eid * gs, gs);
+                            prefetchRange(ue.data_ptr + eid * us, us);
+                            prefetchRange(de.data_ptr + eid * ds, ds);
+                        }
+                    }
+                } else {
+                    for (0..n_active) |j| {
+                        const eid = top_ids[j];
+                        prefetchRange(ge.data_ptr + eid * gs, gs);
+                        prefetchRange(ue.data_ptr + eid * us, us);
+                        prefetchRange(de.data_ptr + eid * ds, ds);
+                    }
                 }
             }
             if (use_fused and (ge.dtype == .q2_k or ge.dtype == .mxfp4)) {
@@ -1584,6 +1634,7 @@ pub const Ds4Model = struct {
                                     be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                             }
                             de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                            de_slot_eids[n_scratch] = eid;
                             slot_weights[n_scratch] = top_weights[j];
                             n_scratch += 1;
                         }
@@ -1593,9 +1644,18 @@ pub const Ds4Model = struct {
                 fused_experts = false;
                 for (0..n_active) |j| {
                     const eid = top_ids[j];
-                    self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                    self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    // Use direct be.gemv() for GGUF quants (MXFP4, Q2_K, Q8_0, IQ2_XXS, etc.)
+                    // to avoid Metal buffer cache issues with the doGemvExpert wrapper.
+                    // doGemvExpert is only needed for MLX-Q safetensors (companion scales/biases).
+                    if (ge.dtype == .mlx_q) {
+                        self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    } else {
+                        self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    }
                     de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                    de_slot_eids[n_scratch] = eid;
                     slot_weights[n_scratch] = top_weights[j];
                     n_scratch += 1;
                 }
@@ -1610,14 +1670,38 @@ pub const Ds4Model = struct {
         // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
-                self.be.gemv(self.ff_gate_scratch.ptr, .{ .data = dt.data_ptr, .dtype = dt.dtype }, self.expert_scratch.ptr, e, ff);
+                self.doGemv(self.ff_gate_scratch.ptr, dt, self.expert_scratch.ptr, e, ff);
             }
         }
-        for (shexp_slots..n_scratch) |slot| {
-            self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+        if (de_exp_tensor) |de_t| {
+            for (shexp_slots..n_scratch) |slot| {
+                if (de_t.dtype == .mlx_q) {
+                    self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
+                } else {
+                    self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                }
+            }
+        } else {
+            for (shexp_slots..n_scratch) |slot| {
+                self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+            }
         }
 
         self.be.sync(); // all down GEMVs complete (+ gate_inp for hash layers)
+
+        // Lookahead: prefetch next layer's popular experts while CPU does
+        // the weighted accumulation below. Overlaps SSD latency with compute.
+        // Only gate weights for 1 layer ahead — more aggressive lookahead
+        // (2 layers, gate+up+down) was measured slower due to O(n_slots) scan
+        // overhead in prefetchTopResidents and wasted madvise on unpicked experts.
+        if (self.expert_cache) |ec| {
+            if (li + 1 < self.n_layers and li + 1 >= self.hash_layer_count) {
+                if (self.layerTensor(li + 1, "ffn_gate_exps.weight")) |next_ge| {
+                    const next_gs = ds4ExpertStride(next_ge, self.n_experts);
+                    ec.prefetchTopResidents(@intCast(li + 1), next_ge.data_ptr, next_gs, 6);
+                }
+            }
+        }
 
         // Deferred hash-layer weight computation: gate logits now available after sync.
         if (li < self.hash_layer_count) {
@@ -1677,8 +1761,18 @@ pub const Ds4Model = struct {
         // Embed → broadcast to all n_hc HC streams.
         // CPU-side dequant avoids GPU dispatch + sync for single-row read.
         const emb = try self.getTensorReq("token_embd.weight");
-        const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
-        quant_ops.dequantToF32(self.hc_state[0..e], emb.data_ptr + token_id * row_bytes, emb.dtype, e);
+        if (emb.dtype == .mlx_q) {
+            // MLX-Q: use dedicated embedding lookup with companion scales/biases.
+            const companion = model_mod.findMlxCompanion(self.fmt, emb, e);
+            if (companion) |c| {
+                mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(emb.data_ptr)), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
+            } else {
+                @memset(self.hc_state[0..e], 0); // fallback: no companion found
+            }
+        } else {
+            const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
+            quant_ops.dequantToF32(self.hc_state[0..e], emb.data_ptr + token_id * row_bytes, emb.dtype, e);
+        }
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
         for (0..nl) |li| {
@@ -1743,7 +1837,7 @@ pub const Ds4Model = struct {
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
         const lm = try self.getTensorReq("output.weight");
         // (Debug prints removed — dims are [n_out, n_in] due to gguf.zig reversal)
-        self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
+        self.doGemv(self.hidden.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
 
         self.kv_seq_len += 1;
@@ -1792,6 +1886,56 @@ pub const Ds4Model = struct {
     /// Signal an in-progress forward pass to abort. Thread-safe.
     pub fn cancel(self: *Ds4Model) void {
         self.cancelled.store(true, .release);
+    }
+
+    // ---- MLX-aware GEMV dispatch ----
+
+    /// Dispatch a single GEMV through the format-aware path.
+    /// Handles MLX-Q (affine with companion scales/biases), NVFP4, GPTQ, AWQ, HQQ,
+    /// and standard GGUF quantized weights transparently.
+    fn doGemv(self: *Ds4Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n: usize, k: usize) void {
+        model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
+    }
+
+    /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
+    /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
+    fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
+        const data = exp_t.data_ptr + ei * stride;
+        if (exp_t.dtype != .mlx_q) {
+            self.be.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
+            return;
+        }
+        const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return;
+        var sbuf: [name_buf_size]u8 = undefined;
+        const prefix = exp_t.name[0..wi];
+        const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
+        const st = self.fmt.getTensor(s_name) orelse return;
+        if (st.dtype == .unknown) {
+            // MXFP4: dims [n_experts, rows, groups_per_row], U8 — per-expert = dims[1]*dims[2]
+            // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row (U8, 1 byte)
+            const s_stride = if (st.n_dims >= 3)
+                @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2]))
+            else
+                n * @as(usize, @intCast(st.dims[st.n_dims - 1]));
+            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k);
+        } else {
+            // MLX affine: dims [n_experts, rows, groups_per_row], BF16 — per-expert = dims[1]*dims[2]*2
+            // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row * 2 (BF16)
+            var bbuf: [name_buf_size]u8 = undefined;
+            const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
+            const bt = self.fmt.getTensor(b_name) orelse return;
+            const s_stride = if (st.n_dims >= 3)
+                @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) * 2
+            else
+                n * @as(usize, @intCast(st.dims[st.n_dims - 1])) * 2;
+            // Infer bits from weight tensor: bits = words_per_row * 32 / k.
+            // This handles mixed-quant models (2-bit, 4-bit, 8-bit) correctly.
+            const bits: u32 = if (exp_t.n_dims >= 2 and k > 0)
+                @intCast(@as(u64, exp_t.dims[exp_t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+            else
+                8;
+            self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, bits, model_mod.inferMlxGroupSize(st, k));
+        }
     }
 
     /// Enable or disable the fused megakernel dispatch path.
@@ -1987,6 +2131,54 @@ fn hcSinkhorn(m: []f32) void {
     }
 }
 
+/// CPU f32 GEMV for small matrices (e.g. HC mixing weights from safetensors).
+/// y[n_out] += w[n_out × n_in] @ x[n_in]. Simple dot product, no quantization.
+fn cpuGemvF32(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const V8 = @Vector(8, f32);
+    const w: [*]const f32 = @ptrCast(@alignCast(w_ptr));
+    for (y, 0..) |*out, row| {
+        var acc: V8 = @splat(0);
+        const row_w = w + row * n_in;
+        var i: usize = 0;
+        while (i + 8 <= n_in) : (i += 8) {
+            const xv: V8 = x[i..][0..8].*;
+            const wv: V8 = row_w[i..][0..8].*;
+            acc = @mulAdd(V8, xv, wv, acc);
+        }
+        var sum: f32 = @reduce(.Add, acc);
+        while (i < n_in) : (i += 1) sum += x[i] * row_w[i];
+        out.* = sum;
+    }
+}
+
+/// CPU bf16 GEMV for small matrices (e.g. HC mixing weights from safetensors).
+/// y[n_out] += w_bf16[n_out × n_in] @ x[n_in].
+fn cpuGemvBf16(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const w: [*]const u16 = @ptrCast(@alignCast(w_ptr));
+    for (y, 0..) |*out, row| {
+        var sum: f32 = 0;
+        const row_w = w + row * n_in;
+        for (0..n_in) |i| {
+            sum += x[i] * quant_ops.bf16ToF32(row_w[i]);
+        }
+        out.* = sum;
+    }
+}
+
+/// CPU f16 GEMV for small matrices (e.g. HC mixing weights from ds4 GGUF).
+/// y[n_out] += w_f16[n_out × n_in] @ x[n_in].
+fn cpuGemvF16(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const w: [*]const f16 = @ptrCast(@alignCast(w_ptr));
+    for (y, 0..) |*out, row| {
+        var sum: f32 = 0;
+        const row_w = w + row * n_in;
+        for (0..n_in) |i| {
+            sum += x[i] * @as(f32, row_w[i]);
+        }
+        out.* = sum;
+    }
+}
+
 /// CPU Q8_0 GEMV: y[n_out] = w[n_out rows × n_in cols] @ x[n_in].
 /// Avoids Metal GPU dispatch overhead for tiny output dims (like HC pre's 24-output GEMV).
 /// Q8_0 block: 2-byte f16 scale + 32 i8 values = 34 bytes.
@@ -2067,8 +2259,16 @@ fn prefetchRange(ptr: [*]const u8, len: usize) void {
 ///   Stride = dims[0] / n_experts × dims[1] — but we don't know n_experts here.
 ///   Instead, use the total bytes / n_experts where n_experts comes from the model config.
 fn ds4ExpertStride(t: TensorInfo, n_experts: usize) usize {
+    if (t.dtype == .mlx_q) {
+        // MLX-Q: weights packed as u32 words. Shape is [n_experts, rows, words_per_row].
+        if (t.n_dims >= 3) return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
+        // 2D: total / n_experts
+        return (@as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1])) * @sizeOf(u32)) / n_experts;
+    }
     if (t.n_dims >= 3) {
-        // 3D: stride = dims[1] × dims[2] (per-expert weight size)
+        // 3D: dims are normalized to [outermost, ..., innermost] = [n_experts, n_out, n_in].
+        // (GGUF stores innermost-first but gguf.zig reverses at load time.)
+        // Per-expert slice = dims[1] × dims[2] elements (n_out × n_in).
         const elems = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
         return backend_mod.weightBytes(t.dtype, 1, elems);
     } else {

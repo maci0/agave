@@ -894,7 +894,7 @@ pub const CudaBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("CUDA GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("CUDA GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
             else => std.debug.panic("CUDA GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
         };
         if (func == null) @panic("CUDA GEMV: required kernel missing for dtype");
@@ -1602,7 +1602,7 @@ pub const CudaBackend = struct {
     }
 
     /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
-    pub fn gemvMlxQ(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+    pub fn gemvMlxQ(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
         const mlx_group_size: usize = mlx_ops.mlx_group_size;
         const gpr = (k + mlx_group_size - 1) / mlx_group_size;
         const wpg: usize = mlx_group_size * bits / bits_per_u32_word;

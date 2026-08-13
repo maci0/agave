@@ -874,6 +874,7 @@ pub const Qwen35Model = struct {
                 op.mlx_scales = c.scales;
                 op.mlx_biases = c.biases;
                 op.mlx_bits = c.bits;
+                op.mlx_group_size = c.group_size;
             }
         }
         return op;
@@ -947,7 +948,13 @@ pub const Qwen35Model = struct {
             const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
             const bt = self.fmt.getTensor(b_name) orelse return;
             const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) * 2 else st.numElements() * 2;
-            self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, 8);
+            // Infer bits from weight tensor: bits = words_per_row * 32 / k.
+            // This handles mixed-quant models (2-bit, 4-bit, 8-bit) correctly.
+            const bits: u32 = if (exp_t.n_dims >= 2 and k > 0)
+                @intCast(@as(u64, exp_t.dims[exp_t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+            else
+                8;
+            self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, bits, model_mod.inferMlxGroupSize(st, k));
         }
     }
 

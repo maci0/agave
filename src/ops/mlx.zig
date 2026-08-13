@@ -1,5 +1,5 @@
 //! MLX quantization kernels.
-//! Provides dequantization for MLX's affine quantized format (4-bit, 6-bit, or 8-bit, group_size=32/64).
+//! Provides dequantization for MLX's affine quantized format (2-bit, 4-bit, 6-bit, or 8-bit, group_size=32/64).
 //! Used by models loaded from safetensors with MLX quantization.
 
 const std = @import("std");
@@ -15,6 +15,8 @@ pub const mxfp4_group_size: usize = 16;
 
 /// Bit-packing constants for u32-packed quantized weights.
 const bits_per_u32: usize = 32;
+const crumbs_per_u32: usize = 16; // 32 / 2
+const bits_per_crumb: u32 = 2;
 const nibbles_per_u32: usize = 8; // 32 / 4
 const bits_per_nibble: u32 = 4;
 const bytes_per_u32: usize = 4; // 32 / 8
@@ -22,11 +24,17 @@ const bits_per_byte: u32 = 8;
 /// Maximum bit offset in a u32 where a 6-bit value fits without spanning two words.
 const u6_max_single_word_offset: u5 = 26; // 32 - 6
 
-/// Compute words (u32) per group for a given bit width using the MLX group size (64).
-/// MLX-specific: assumes `mlx_group_size` (64). Do not use for MXFP4, which uses
-/// `mxfp4_group_size` (16) and computes words-per-group inline.
-pub fn wordsPerGroup(bits: u32) usize {
-    return mlx_group_size * bits / bits_per_u32;
+/// Compute words (u32) per group for a given bit width and group size.
+/// Do not use for MXFP4, which uses `mxfp4_group_size` (16) and computes words-per-group inline.
+pub fn wordsPerGroup(bits: u32, gs: usize) usize {
+    return gs * bits / bits_per_u32;
+}
+
+/// Unpack a single 2-bit value from a packed u32 array. 16 crumbs per word, LSB-first.
+fn unpackU2(w: [*]const u32, idx: usize) u2 {
+    const wi = idx / crumbs_per_u32;
+    const bo: u5 = @intCast((idx % crumbs_per_u32) * bits_per_crumb);
+    return @truncate(w[wi] >> bo);
 }
 
 /// Unpack a single 4-bit value from a packed u32 array.
@@ -55,17 +63,18 @@ fn unpackU8(w: [*]const u32, idx: usize) u8 {
 }
 
 /// MLX affine GEMV: y[row] = sum_j(dequant(W[row,j]) * x[j])
-/// Dequant: float_val = scale * int_val + bias, per group of 64 elements.
+/// Dequant: float_val = scale * int_val + bias, per group of `gs` elements.
 ///
 /// Parameters:
 ///   x    — input vector [k]
-///   pw   — packed weight matrix (uint4/6/8 values stored in u32 words)
-///   sc   — per-group scales (bf16, one per 64-element group)
-///   bi   — per-group biases (bf16, one per 64-element group)
+///   pw   — packed weight matrix (uint2/4/6/8 values stored in u32 words)
+///   sc   — per-group scales (bf16, one per gs-element group)
+///   bi   — per-group biases (bf16, one per gs-element group)
 ///   y    — output vector [n]
 ///   n    — number of output rows
 ///   k    — input dimension (columns per row)
-///   bits — quantization width (4, 6, or 8)
+///   bits — quantization width (2, 4, 6, or 8)
+///   gs   — quantization group size (elements per scale/bias pair, e.g. 32 or 64)
 pub fn mlxGemvRaw(
     x: [*]const f32,
     pw: [*]const u32,
@@ -75,8 +84,9 @@ pub fn mlxGemvRaw(
     n: usize,
     k: usize,
     bits: u32,
+    gs: usize,
 ) void {
-    mlxGemvRows(x, pw, sc, bi, y, 0, n, k, bits);
+    mlxGemvRows(x, pw, sc, bi, y, 0, n, k, bits, gs);
 }
 
 /// Compute a range of rows [start_row, start_row + n_rows) for MLX affine GEMV.
@@ -91,19 +101,137 @@ pub fn mlxGemvRows(
     n_rows: usize,
     k: usize,
     bits: u32,
+    gs: usize,
 ) void {
-    if (bits != 4 and bits != 6 and bits != 8) @panic("MLX GEMV: unsupported bits per weight (expected 4, 6, or 8)");
-    const gs = mlx_group_size;
+    if (bits != 2 and bits != 4 and bits != 6 and bits != 8) @panic("MLX GEMV: unsupported bits per weight (expected 2, 4, 6, or 8)");
     const gpr = (k + gs - 1) / gs;
-    const wpg = wordsPerGroup(bits);
+    const wpg = wordsPerGroup(bits, gs);
     const wpr = gpr * wpg;
 
-    if (bits == 4) {
-        mlxGemvQ4Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpr);
+    if (bits == 2) {
+        mlxGemvQ2Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
+    } else if (bits == 4) {
+        mlxGemvQ4Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
     } else if (bits == 6) {
-        mlxGemvQ6Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr);
+        mlxGemvQ6Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
     } else {
-        mlxGemvQ8Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpr);
+        mlxGemvQ8Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
+    }
+}
+
+/// SIMD-optimized 2-bit MLX GEMV for a range of rows.
+/// 16 crumbs per u32 word, same factored scale/bias pattern as Q4.
+/// @mulAdd maps to NEON fmla (1 instruction vs fmul+fadd chain).
+/// 2-row batching reuses x vector loads across rows.
+fn mlxGemvQ2Rows(
+    x: [*]const f32,
+    pw: [*]const u32,
+    sc: [*]const u16,
+    bi: [*]const u16,
+    y: [*]f32,
+    start_row: usize,
+    n_rows: usize,
+    k: usize,
+    gpr: usize,
+    wpg: usize,
+    wpr: usize,
+    gs: usize,
+) void {
+    const V = crumbs_per_u32;
+    const VecF32 = @Vector(V, f32);
+    const VecU32 = @Vector(V, u32);
+    const crumb_shifts: VecU32 = .{ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30 };
+    const mask2: VecU32 = @splat(0x3);
+    const vzero: VecF32 = @splat(0.0);
+
+    // 2-row batching for x-vector cache reuse
+    var row = start_row;
+    while (row + 2 <= start_row + n_rows) : (row += 2) {
+        var sum0: f32 = 0.0;
+        var sum1: f32 = 0.0;
+        const wr0 = pw + row * wpr;
+        const wr1 = pw + (row + 1) * wpr;
+        const sr0 = sc + row * gpr;
+        const sr1 = sc + (row + 1) * gpr;
+        const br0 = bi + row * gpr;
+        const br1 = bi + (row + 1) * gpr;
+
+        for (0..gpr) |g| {
+            const scale0 = quant.bf16ToF32(sr0[g]);
+            const scale1 = quant.bf16ToF32(sr1[g]);
+            const bias0 = quant.bf16ToF32(br0[g]);
+            const bias1 = quant.bf16ToF32(br1[g]);
+            const xo = g * gs;
+            const wo = g * wpg;
+            const elems = @min(gs, k - xo);
+            const full_words = elems / V;
+
+            var q_acc0: VecF32 = vzero;
+            var q_acc1: VecF32 = vzero;
+            var x_acc: VecF32 = vzero;
+
+            for (0..full_words) |wi| {
+                const xv: VecF32 = (x + xo + wi * V)[0..V].*;
+                const w0: VecU32 = @splat(wr0[wo + wi]);
+                const vals0: VecF32 = @floatFromInt((w0 >> crumb_shifts) & mask2);
+                q_acc0 = @mulAdd(VecF32, xv, vals0, q_acc0);
+                const w1: VecU32 = @splat(wr1[wo + wi]);
+                const vals1: VecF32 = @floatFromInt((w1 >> crumb_shifts) & mask2);
+                q_acc1 = @mulAdd(VecF32, xv, vals1, q_acc1);
+                x_acc += xv;
+            }
+            const x_sum = @reduce(.Add, x_acc);
+            sum0 += scale0 * @reduce(.Add, q_acc0) + bias0 * x_sum;
+            sum1 += scale1 * @reduce(.Add, q_acc1) + bias1 * x_sum;
+
+            // Scalar tail
+            const done = full_words * V;
+            for (done..elems) |i| {
+                const xval = x[xo + i];
+                const val0: u32 = unpackU2(wr0 + wo, i);
+                const val1: u32 = unpackU2(wr1 + wo, i);
+                sum0 += xval * (scale0 * @as(f32, @floatFromInt(val0)) + bias0);
+                sum1 += xval * (scale1 * @as(f32, @floatFromInt(val1)) + bias1);
+            }
+        }
+        y[row] = sum0;
+        y[row + 1] = sum1;
+    }
+
+    // Remainder: single row
+    while (row < start_row + n_rows) : (row += 1) {
+        var sum: f32 = 0.0;
+        const wr = pw + row * wpr;
+        const sr = sc + row * gpr;
+        const br = bi + row * gpr;
+
+        for (0..gpr) |g| {
+            const scale = quant.bf16ToF32(sr[g]);
+            const bias = quant.bf16ToF32(br[g]);
+            const xo = g * gs;
+            const wo = g * wpg;
+            const elems = @min(gs, k - xo);
+            const full_words = elems / V;
+
+            var q_acc: VecF32 = vzero;
+            var x_acc: VecF32 = vzero;
+
+            for (0..full_words) |wi| {
+                const xv: VecF32 = (x + xo + wi * V)[0..V].*;
+                const word: VecU32 = @splat(wr[wo + wi]);
+                const vals: VecF32 = @floatFromInt((word >> crumb_shifts) & mask2);
+                q_acc = @mulAdd(VecF32, xv, vals, q_acc);
+                x_acc += xv;
+            }
+            sum += scale * @reduce(.Add, q_acc) + bias * @reduce(.Add, x_acc);
+
+            const done = full_words * V;
+            for (done..elems) |i| {
+                const val: u32 = unpackU2(wr + wo, i);
+                sum += x[xo + i] * (scale * @as(f32, @floatFromInt(val)) + bias);
+            }
+        }
+        y[row] = sum;
     }
 }
 
@@ -122,9 +250,10 @@ fn mlxGemvQ4Rows(
     n_rows: usize,
     k: usize,
     gpr: usize,
+    wpg: usize,
     wpr: usize,
+    gs: usize,
 ) void {
-    const gs = mlx_group_size;
     const V = nibbles_per_u32;
     const VecF32 = @Vector(V, f32);
     const VecU32 = @Vector(V, u32);
@@ -150,7 +279,7 @@ fn mlxGemvQ4Rows(
             const bias0 = quant.bf16ToF32(br0[g]);
             const bias1 = quant.bf16ToF32(br1[g]);
             const xo = g * gs;
-            const wo = g * wordsPerGroup(4);
+            const wo = g * wpg;
             const elems = @min(gs, k - xo);
             const full_words = elems / V;
 
@@ -197,7 +326,7 @@ fn mlxGemvQ4Rows(
             const scale = quant.bf16ToF32(sr[g]);
             const bias = quant.bf16ToF32(br[g]);
             const xo = g * gs;
-            const wo = g * wordsPerGroup(4);
+            const wo = g * wpg;
             const elems = @min(gs, k - xo);
             const full_words = elems / V;
 
@@ -236,8 +365,8 @@ fn mlxGemvQ6Rows(
     gpr: usize,
     wpg: usize,
     wpr: usize,
+    gs: usize,
 ) void {
-    const gs = mlx_group_size;
     for (start_row..start_row + n_rows) |row| {
         var sum: f32 = 0.0;
         const wr = pw + row * wpr;
@@ -270,9 +399,10 @@ fn mlxGemvQ8Rows(
     n_rows: usize,
     k: usize,
     gpr: usize,
+    wpg: usize,
     wpr: usize,
+    gs: usize,
 ) void {
-    const gs = mlx_group_size;
     const V = bytes_per_u32;
     const VecF32 = @Vector(V, f32);
     const VecU32 = @Vector(V, u32);
@@ -289,7 +419,7 @@ fn mlxGemvQ8Rows(
             const scale = quant.bf16ToF32(sr[g]);
             const bias = quant.bf16ToF32(br[g]);
             const xo = g * gs;
-            const wo = g * wordsPerGroup(8);
+            const wo = g * wpg;
             const elems = @min(gs, k - xo);
             const full_words = elems / V;
 
@@ -380,7 +510,7 @@ pub fn mlxMxfp4GemvRows(
 ///   - bi:    BF16 biases for the full table.
 ///   - row:   Row index (token ID).
 ///   - k:     Embedding dimension.
-///   - bits:  Quantization bit width (4, 6, or 8).
+///   - bits:  Quantization bit width (2, 4, 6, or 8).
 pub fn mlxEmbLookup(
     out: [*]f32,
     pw: [*]const u32,
@@ -390,10 +520,10 @@ pub fn mlxEmbLookup(
     k: usize,
     bits: u32,
 ) void {
-    if (bits != 4 and bits != 6 and bits != 8) @panic("MLX GEMV: unsupported bits per weight (expected 4, 6, or 8)");
+    if (bits != 2 and bits != 4 and bits != 6 and bits != 8) @panic("MLX GEMV: unsupported bits per weight (expected 2, 4, 6, or 8)");
     const gs = mlx_group_size;
     const gpr = (k + gs - 1) / gs;
-    const wpg = wordsPerGroup(bits);
+    const wpg = wordsPerGroup(bits, gs);
     const wpr = gpr * wpg;
     const wr = pw + row * wpr;
     const sr = sc + row * gpr;
@@ -405,7 +535,7 @@ pub fn mlxEmbLookup(
         const wo = g * wpg;
         const elems = @min(gs, k - xo);
         for (0..elems) |i| {
-            const val: u32 = if (bits == 4) unpackU4(wr + wo, i) else if (bits == 8) unpackU8(wr + wo, i) else unpackU6(wr + wo, i);
+            const val: u32 = if (bits == 2) unpackU2(wr + wo, i) else if (bits == 4) unpackU4(wr + wo, i) else if (bits == 8) unpackU8(wr + wo, i) else unpackU6(wr + wo, i);
             out[xo + i] = scale * @as(f32, @floatFromInt(val)) + bias;
         }
     }
@@ -414,9 +544,26 @@ pub fn mlxEmbLookup(
 // ── Tests ─────────────────────────────────────────────────────────
 
 test "wordsPerGroup" {
-    try std.testing.expectEqual(@as(usize, 8), wordsPerGroup(4)); // 64*4/32 = 8
-    try std.testing.expectEqual(@as(usize, 12), wordsPerGroup(6)); // 64*6/32 = 12
-    try std.testing.expectEqual(@as(usize, 16), wordsPerGroup(8)); // 64*8/32 = 16
+    try std.testing.expectEqual(@as(usize, 4), wordsPerGroup(2, 64)); // 64*2/32 = 4
+    try std.testing.expectEqual(@as(usize, 8), wordsPerGroup(4, 64)); // 64*4/32 = 8
+    try std.testing.expectEqual(@as(usize, 12), wordsPerGroup(6, 64)); // 64*6/32 = 12
+    try std.testing.expectEqual(@as(usize, 16), wordsPerGroup(8, 64)); // 64*8/32 = 16
+    // Variable group sizes
+    try std.testing.expectEqual(@as(usize, 4), wordsPerGroup(4, 32)); // 32*4/32 = 4
+    try std.testing.expectEqual(@as(usize, 8), wordsPerGroup(8, 32)); // 32*8/32 = 8
+}
+
+test "unpackU2" {
+    // Pack 16 crumbs into one u32: values 0,1,2,3,0,1,2,3,... (repeating)
+    // Bit layout: 00_01_10_11_00_01_10_11_00_01_10_11_00_01_10_11
+    // = 0b11_10_01_00_11_10_01_00_11_10_01_00_11_10_01_00 = 0xE4E4E4E4
+    const data = [_]u32{0xE4E4E4E4};
+    try std.testing.expectEqual(@as(u2, 0), unpackU2(&data, 0));
+    try std.testing.expectEqual(@as(u2, 1), unpackU2(&data, 1));
+    try std.testing.expectEqual(@as(u2, 2), unpackU2(&data, 2));
+    try std.testing.expectEqual(@as(u2, 3), unpackU2(&data, 3));
+    try std.testing.expectEqual(@as(u2, 0), unpackU2(&data, 4));
+    try std.testing.expectEqual(@as(u2, 3), unpackU2(&data, 15));
 }
 
 test "unpackU4" {
@@ -451,9 +598,62 @@ test "mlxGemvRaw 4-bit basic" {
     const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
     var y = [_]f32{0};
 
-    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 8, 4);
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 8, 4, mlx_group_size);
 
     try std.testing.expectApproxEqAbs(@as(f32, 28.0), y[0], 1e-3);
+}
+
+test "mlxGemvRaw 2-bit basic" {
+    // 1 output row, k=16, 2-bit quantization (16 crumbs fit in 1 u32 word)
+    // Weights: crumbs 0,1,2,3,0,1,2,3,... packed into first u32 word
+    // 0xE4E4E4E4 = repeating pattern 0,1,2,3
+    // scale=1.0 (bf16), bias=0.0 → dequant(val) = val
+    // x = all ones → y[0] = 4*(0+1+2+3) = 24
+    var pw: [4]u32 = .{0} ** 4; // 1 group × 4 words (only 1 word used for k=16)
+    pw[0] = 0xE4E4E4E4;
+    const sc = [_]u16{0x3F80}; // bf16(1.0)
+    const bi = [_]u16{0x0000}; // bf16(0.0)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{0};
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 16, 2, mlx_group_size);
+
+    // sum = 4*(0+1+2+3) = 24.0
+    try std.testing.expectApproxEqAbs(@as(f32, 24.0), y[0], 1e-3);
+}
+
+test "mlxGemvRaw 2-bit with bias" {
+    // Verify bias: all-zero weights + bias=1.0 → y = sum(x) * bias
+    var pw: [4]u32 = .{0} ** 4;
+    const sc = [_]u16{0x4000}; // bf16(2.0) — scale doesn't matter, weights are 0
+    const bi = [_]u16{0x3F80}; // bf16(1.0)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{0};
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 16, 2, mlx_group_size);
+
+    // Each element: x[j] * (scale*0 + bias) = 1.0 * 1.0 = 1.0, sum = 16.0
+    try std.testing.expectApproxEqAbs(@as(f32, 16.0), y[0], 1e-3);
+}
+
+test "mlxGemvRaw 2-bit two rows" {
+    // 2 output rows to exercise the 2-row batching path
+    // Row 0: all 3s (0xFF...), Row 1: all 1s (0x55...)
+    // scale=2.0, bias=0.5, x = all ones, k=16
+    // Row 0: sum(2.0*3 + 0.5) = 16 * 6.5 = 104.0
+    // Row 1: sum(2.0*1 + 0.5) = 16 * 2.5 = 40.0
+    var pw: [8]u32 = .{0} ** 8; // 2 rows × 4 words
+    pw[0] = 0xFFFFFFFF; // row 0: all crumbs = 3
+    pw[4] = 0x55555555; // row 1: all crumbs = 1
+    const sc = [_]u16{ 0x4000, 0x4000 }; // bf16(2.0)
+    const bi = [_]u16{ 0x3F00, 0x3F00 }; // bf16(0.5)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{ 0, 0 };
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 2, 16, 2, mlx_group_size);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 104.0), y[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 40.0), y[1], 1e-3);
 }
 
 test "mlxGemvRaw 4-bit with bias" {
@@ -464,10 +664,28 @@ test "mlxGemvRaw 4-bit with bias" {
     const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
     var y = [_]f32{0};
 
-    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 8, 4);
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 1, 8, 4, mlx_group_size);
 
     // Each element: x[j] * (scale*0 + bias) = 1.0 * 1.0 = 1.0, sum = 8.0
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-3);
+}
+
+test "mlxEmbLookup 2-bit basic" {
+    // 2 rows of k=16, look up row 1 (all 2s)
+    // Row 0: crumbs 0,1,2,3 repeating, Row 1: all 2s (0xAA...)
+    var pw: [8]u32 = .{0} ** 8; // 2 rows × 4 words per row
+    pw[0] = 0xE4E4E4E4; // row 0: 0,1,2,3 repeating
+    pw[4] = 0xAAAAAAAA; // row 1: all crumbs = 2 (0b10 = 2, 0xAA = 10_10_10_10)
+    const sc = [_]u16{ 0x3F80, 0x3F80 }; // bf16(1.0) per row
+    const bi = [_]u16{ 0x0000, 0x0000 }; // bf16(0.0)
+    var out: [16]f32 = undefined;
+
+    mlxEmbLookup(&out, &pw, &sc, &bi, 1, 16, 2);
+
+    // Row 1: dequant = 1.0 * 2 + 0.0 = 2.0 for all elements
+    for (0..16) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 2.0), out[i], 1e-6);
+    }
 }
 
 test "mlxEmbLookup 4-bit basic" {
@@ -497,7 +715,7 @@ test "fuzz: wordsPerGroup and mlxEmbLookup" {
             // wordsPerGroup: test with valid bit widths.
             const bits_choices = [_]u32{ 4, 6, 8 };
             const bits = bits_choices[raw[0] % 3];
-            const wpg = wordsPerGroup(bits);
+            const wpg = wordsPerGroup(bits, mlx_group_size);
             // Invariant: words per group must be positive.
             try std.testing.expect(wpg > 0);
             // Invariant: wpg * 32 / bits == group_size (64).

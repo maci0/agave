@@ -43,6 +43,8 @@ pub const GemvOp = struct {
     mlx_scales: ?[*]const u8 = null,
     mlx_biases: ?[*]const u8 = null,
     mlx_bits: u32 = 0,
+    /// MLX quantization group size (elements per scale/bias pair). Defaults to 64.
+    mlx_group_size: u32 = 64,
 };
 
 /// Supported tensor data types — canonical definition in format/format.zig,
@@ -449,7 +451,7 @@ pub const NullBackend = struct {
         unreachable;
     }
 
-    pub fn gemvMlxQ(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32) void {
+    pub fn gemvMlxQ(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32, _: u32) void {
         unreachable;
     }
 
@@ -773,6 +775,21 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Enable volatile weight mode (SSD streaming). Metal flushes its buffer
+    /// cache on each sync to prevent stale references to evicted mmap'd pages.
+    /// No-op on non-Metal backends.
+    pub inline fn setVolatileWeights(self: Backend, v: bool) void {
+        switch (self) {
+            .metal => |be| {
+                be.volatile_weights = v;
+                // Immediately flush any existing cached buffers that may hold
+                // stale references from a previous mmap'd model or process.
+                if (v) be.flushBufferCache();
+            },
+            else => {},
+        }
+    }
+
     /// Scaled dot-product attention with KV cache append.
     /// Appends `k_new`/`v_new` at position `seq_len` in the KV cache, then
     /// computes softmax((Q @ K^T) * scale) @ V over `seq_len + 1` positions.
@@ -859,8 +876,8 @@ pub const Backend = union(enum) {
 
     /// Compute y[n] = W[n,k] @ x[k] for MLX affine quantized layout.
     ///
-    /// MLX quantization stores weights as packed integer nibbles (4-bit or 6-bit)
-    /// in u32 words, with per-group bf16 scales and biases (group_size=64).
+    /// MLX quantization stores weights as packed integer nibbles (2/4/6/8-bit)
+    /// in u32 words, with per-group bf16 scales and biases.
     /// Dequant: float_val = scale * int_val + bias.
     ///
     /// Parameters:
@@ -871,10 +888,11 @@ pub const Backend = union(enum) {
     ///   - y: Output vector [n].
     ///   - n: Number of output rows.
     ///   - k: Number of input columns.
-    ///   - bits: Quantization bit width (4, 6, or 8).
-    pub inline fn gemvMlxQ(self: Backend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+    ///   - bits: Quantization bit width (2, 4, 6, or 8).
+    ///   - group_size: Elements per quantization group (e.g. 32 or 64).
+    pub inline fn gemvMlxQ(self: Backend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, group_size: u32) void {
         switch (self) {
-            inline else => |be| be.gemvMlxQ(x, weight, scales, biases, y, n, k, bits),
+            inline else => |be| be.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, group_size),
         }
     }
 

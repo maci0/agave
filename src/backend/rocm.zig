@@ -587,7 +587,7 @@ pub const RocmBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("ROCm GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("ROCm GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
             else => std.debug.panic("ROCm GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
         };
         if (func == null) @panic("ROCm GEMV: required kernel missing for dtype");
@@ -890,7 +890,7 @@ pub const RocmBackend = struct {
     }
 
     /// MLX affine quantized GEMV — uses existing ROCm MLX Q4 kernel.
-    pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+    pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
         _ = bits;
         const gpr = (k + 63) / 64;
         const wpr = gpr * 8;

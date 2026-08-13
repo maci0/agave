@@ -228,7 +228,7 @@ When you run `agave model.gguf "Hello"`:
 | **Specialized** | | |
 | `gemvT(x, W, y, out_dim, in_dim)` | Transposed GEMV for Q8_0 3D weights (MLA) | Yes |
 | `gemvNvfp4St(x, w, scale, y, n, k)` | NVFP4 SafeTensors GEMV (separate scale tensor) | Yes |
-| `gemvMlxQ(x, w, scales, biases, y, n, k, bits)` | MLX affine quantized GEMV (4/6/8-bit) | Yes |
+| `gemvMlxQ(x, w, scales, biases, y, n, k, bits, group_size)` | MLX affine quantized GEMV (2/4/6/8-bit, variable group_size) | Yes |
 | `gemvMxfp4St(x, w, scale, y, n, k)` | MXFP4 SafeTensors GEMV | Yes |
 | `rmsNormMulti(data, w, n_heads, hd, eps)` | Per-head RMS norm (QK norm) | Yes |
 | `deinterleave(in, out_a, out_b, stride, n)` | Split interleaved Q/K pairs | Yes |

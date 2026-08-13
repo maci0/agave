@@ -1364,6 +1364,85 @@ kernel void gemv_mlx_q8(
     if (tid == 0) y[tgid] = sum;
 }
 
+// ── MLX Q2 GEMV ─────────────────────────────────────────────
+// MLX affine 2-bit quantization: group_size=64, 4 u32 words per group.
+// Each u32 word packs 16 two-bit values (bits 0-1, 2-3, ..., 30-31).
+// Dequant: float_val = scale * uint2_val + bias (per-group bf16 scale and bias).
+
+kernel void gemv_mlx_q2(
+    device const float* x              [[buffer(0)]],
+    device const packed_uchar4* W      [[buffer(1)]],
+    device const packed_uchar2* scales [[buffer(2)]],
+    device const packed_uchar2* biases [[buffer(3)]],
+    device float* y                    [[buffer(4)]],
+    constant uint& n                   [[buffer(5)]],
+    constant uint& k                   [[buffer(6)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint gs = 64;
+    const uint wpg = 4;    // u32 words per group (64 * 2 bits / 32 = 4)
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+    float sum = 0.0f;
+
+    for (uint g = tid; g < gpr; g += tg_size) {
+        // BF16 scale and bias — packed_uchar2 load, reconstruct ushort
+        uint sb_idx = tgid * gpr + g;
+        packed_uchar2 sb = scales[sb_idx];
+        float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
+        packed_uchar2 bb = biases[sb_idx];
+        float bias  = as_type<float>(uint(ushort(bb[0]) | (ushort(bb[1]) << 8)) << 16);
+
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+
+        float q_dot = 0.0f;
+        float x_sum = 0.0f;
+
+        for (uint w = 0; w < wpg; w++) {
+            uint xi = xo + w * 16;
+            // packed_uchar4 → reconstruct uint word (no alignment needed)
+            packed_uchar4 bytes = W[wg + w];
+            uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) | (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+            if (xi + 16 > k) {
+                // Partial word at end of row
+                for (uint i = 0; i < k - xi; i++) {
+                    float q = float((word >> (i * 2)) & 0x3);
+                    q_dot += q * x[xi + i];
+                    x_sum += x[xi + i];
+                }
+                break;
+            }
+            float4 q0 = float4(float(word & 0x3), float((word >> 2) & 0x3),
+                               float((word >> 4) & 0x3), float((word >> 6) & 0x3));
+            float4 q1 = float4(float((word >> 8) & 0x3), float((word >> 10) & 0x3),
+                               float((word >> 12) & 0x3), float((word >> 14) & 0x3));
+            float4 q2 = float4(float((word >> 16) & 0x3), float((word >> 18) & 0x3),
+                               float((word >> 20) & 0x3), float((word >> 22) & 0x3));
+            float4 q3 = float4(float((word >> 24) & 0x3), float((word >> 26) & 0x3),
+                               float((word >> 28) & 0x3), float((word >> 30) & 0x3));
+            float4 x0 = *(device const float4*)(x + xi);
+            float4 x1 = *(device const float4*)(x + xi + 4);
+            float4 x2 = *(device const float4*)(x + xi + 8);
+            float4 x3 = *(device const float4*)(x + xi + 12);
+            q_dot += dot(q0, x0) + dot(q1, x1) + dot(q2, x2) + dot(q3, x3);
+            x_sum += (x0.x + x0.y + x0.z + x0.w) +
+                     (x1.x + x1.y + x1.z + x1.w) +
+                     (x2.x + x2.y + x2.z + x2.w) +
+                     (x3.x + x3.y + x3.z + x3.w);
+        }
+        sum += scale * q_dot + bias * x_sum;
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
+}
+
 // ── MXFP4 SafeTensors GEMV ──────────────────────────────────
 // U32-packed 4-bit nibbles (8 per word), FP8 E4M3 per-group scale, group_size=16.
 // NVIDIA MXFP4 spec: 16-element groups with FP8 E4M3 block scales (bias=7).
@@ -2055,4 +2134,197 @@ kernel void gemv_hqq(
     threadgroup float shared[8];
     acc = threadgroup_reduce_sum(acc, shared, tid, tg_size);
     if (tid == 0) y[row] = acc;
+}
+
+// ── IQ2_XXS GEMV ────────────────────────────────────────────
+// 256 values per super-block, 66 bytes.
+// Layout: { half d (2); uchar qs[64]; }
+// 8 groups of 32 elements. Per group (8 bytes at qs[gi..gi+8]):
+//   qs[gi+0..gi+4] = 4 codebook indices into iq2xxs_grid (256 entries of u64, 8 int8 values each)
+//   qs[gi+4..gi+8] = uint32 aux: bits 28-31=sub-scale(0-15), 4×7-bit ksigns_iq2xs indices
+// Dequant: dl = d * (0.5 + sub_scale) * 0.25; grid values ∈ {8,25,43}; sign from ksigns_iq2xs lookup.
+// Dispatch: one threadgroup per output row, 256 threads.
+
+// IQ2_XXS codebook: 256 entries × 8 bytes. Each entry packs 8 int8 weight values.
+// Values ∈ {0x08=8, 0x19=25, 0x2b=43}. Signs applied separately via ksigns_iq2xs.
+constant ulong iq2xxs_grid[256] = {
+    0x0808080808080808UL, 0x080808080808082bUL, 0x0808080808081919UL, 0x0808080808082b08UL,
+    0x0808080808082b2bUL, 0x0808080808190819UL, 0x0808080808191908UL, 0x08080808082b0808UL,
+    0x08080808082b082bUL, 0x08080808082b2b08UL, 0x08080808082b2b2bUL, 0x0808080819080819UL,
+    0x0808080819081908UL, 0x0808080819190808UL, 0x0808080819192b08UL, 0x08080808192b0819UL,
+    0x08080808192b1908UL, 0x080808082b080808UL, 0x080808082b08082bUL, 0x080808082b082b2bUL,
+    0x080808082b2b082bUL, 0x0808081908080819UL, 0x0808081908081908UL, 0x0808081908190808UL,
+    0x0808081908191919UL, 0x0808081919080808UL, 0x080808192b081908UL, 0x080808192b192b08UL,
+    0x0808082b08080808UL, 0x0808082b0808082bUL, 0x0808082b082b082bUL, 0x0808082b2b08082bUL,
+    0x0808190808080819UL, 0x0808190808081908UL, 0x0808190808190808UL, 0x08081908082b0819UL,
+    0x08081908082b1908UL, 0x0808190819080808UL, 0x080819081908082bUL, 0x0808190819082b08UL,
+    0x08081908192b0808UL, 0x080819082b080819UL, 0x080819082b081908UL, 0x080819082b190808UL,
+    0x080819082b2b1908UL, 0x0808191908080808UL, 0x080819190808082bUL, 0x0808191908082b08UL,
+    0x08081919082b0808UL, 0x080819191908192bUL, 0x08081919192b2b19UL, 0x080819192b080808UL,
+    0x080819192b190819UL, 0x0808192b08082b19UL, 0x0808192b08190808UL, 0x0808192b19080808UL,
+    0x0808192b2b081908UL, 0x0808192b2b2b1908UL, 0x08082b0808080808UL, 0x08082b0808081919UL,
+    0x08082b0808082b08UL, 0x08082b0808191908UL, 0x08082b08082b2b08UL, 0x08082b0819080819UL,
+    0x08082b0819081908UL, 0x08082b0819190808UL, 0x08082b081919082bUL, 0x08082b082b082b08UL,
+    0x08082b1908081908UL, 0x08082b1919080808UL, 0x08082b2b0808082bUL, 0x08082b2b08191908UL,
+    0x0819080808080819UL, 0x0819080808081908UL, 0x0819080808190808UL, 0x08190808082b0819UL,
+    0x0819080819080808UL, 0x08190808192b0808UL, 0x081908082b081908UL, 0x081908082b190808UL,
+    0x081908082b191919UL, 0x0819081908080808UL, 0x0819081908082b08UL, 0x08190819082b0808UL,
+    0x0819081919190808UL, 0x0819081919192b2bUL, 0x081908192b080808UL, 0x0819082b082b1908UL,
+    0x0819082b19081919UL, 0x0819190808080808UL, 0x0819190808082b08UL, 0x08191908082b0808UL,
+    0x08191908082b1919UL, 0x0819190819082b19UL, 0x081919082b080808UL, 0x0819191908192b08UL,
+    0x08191919192b082bUL, 0x0819192b08080808UL, 0x0819192b0819192bUL, 0x08192b0808080819UL,
+    0x08192b0808081908UL, 0x08192b0808190808UL, 0x08192b0819080808UL, 0x08192b082b080819UL,
+    0x08192b1908080808UL, 0x08192b1908081919UL, 0x08192b192b2b0808UL, 0x08192b2b19190819UL,
+    0x082b080808080808UL, 0x082b08080808082bUL, 0x082b080808082b2bUL, 0x082b080819081908UL,
+    0x082b0808192b0819UL, 0x082b08082b080808UL, 0x082b08082b08082bUL, 0x082b0819082b2b19UL,
+    0x082b081919082b08UL, 0x082b082b08080808UL, 0x082b082b0808082bUL, 0x082b190808080819UL,
+    0x082b190808081908UL, 0x082b190808190808UL, 0x082b190819080808UL, 0x082b19081919192bUL,
+    0x082b191908080808UL, 0x082b191919080819UL, 0x082b1919192b1908UL, 0x082b192b2b190808UL,
+    0x082b2b0808082b08UL, 0x082b2b08082b0808UL, 0x082b2b082b191908UL, 0x082b2b2b19081908UL,
+    0x1908080808080819UL, 0x1908080808081908UL, 0x1908080808190808UL, 0x1908080808192b08UL,
+    0x19080808082b0819UL, 0x19080808082b1908UL, 0x1908080819080808UL, 0x1908080819082b08UL,
+    0x190808081919192bUL, 0x19080808192b0808UL, 0x190808082b080819UL, 0x190808082b081908UL,
+    0x190808082b190808UL, 0x1908081908080808UL, 0x19080819082b0808UL, 0x19080819192b0819UL,
+    0x190808192b080808UL, 0x190808192b081919UL, 0x1908082b08080819UL, 0x1908082b08190808UL,
+    0x1908082b19082b08UL, 0x1908082b1919192bUL, 0x1908082b192b2b08UL, 0x1908190808080808UL,
+    0x1908190808082b08UL, 0x19081908082b0808UL, 0x190819082b080808UL, 0x190819082b192b19UL,
+    0x190819190819082bUL, 0x19081919082b1908UL, 0x1908192b08080808UL, 0x19082b0808080819UL,
+    0x19082b0808081908UL, 0x19082b0808190808UL, 0x19082b0819080808UL, 0x19082b0819081919UL,
+    0x19082b1908080808UL, 0x19082b1919192b08UL, 0x19082b19192b0819UL, 0x19082b192b08082bUL,
+    0x19082b2b19081919UL, 0x19082b2b2b190808UL, 0x1919080808080808UL, 0x1919080808082b08UL,
+    0x1919080808190819UL, 0x1919080808192b19UL, 0x19190808082b0808UL, 0x191908082b080808UL,
+    0x191908082b082b08UL, 0x1919081908081908UL, 0x191908191908082bUL, 0x191908192b2b1908UL,
+    0x1919082b2b190819UL, 0x191919082b190808UL, 0x191919082b19082bUL, 0x1919191908082b2bUL,
+    0x1919192b08080819UL, 0x1919192b19191908UL, 0x19192b0808080808UL, 0x19192b0808190819UL,
+    0x19192b0808192b19UL, 0x19192b08192b1908UL, 0x19192b1919080808UL, 0x19192b2b08082b08UL,
+    0x192b080808081908UL, 0x192b080808190808UL, 0x192b080819080808UL, 0x192b0808192b2b08UL,
+    0x192b081908080808UL, 0x192b081919191919UL, 0x192b082b08192b08UL, 0x192b082b192b0808UL,
+    0x192b190808080808UL, 0x192b190808081919UL, 0x192b191908190808UL, 0x192b19190819082bUL,
+    0x192b19192b081908UL, 0x192b2b081908082bUL, 0x2b08080808080808UL, 0x2b0808080808082bUL,
+    0x2b08080808082b2bUL, 0x2b08080819080819UL, 0x2b0808082b08082bUL, 0x2b08081908081908UL,
+    0x2b08081908192b08UL, 0x2b08081919080808UL, 0x2b08082b08190819UL, 0x2b08190808080819UL,
+    0x2b08190808081908UL, 0x2b08190808190808UL, 0x2b08190808191919UL, 0x2b08190819080808UL,
+    0x2b081908192b0808UL, 0x2b08191908080808UL, 0x2b0819191908192bUL, 0x2b0819192b191908UL,
+    0x2b08192b08082b19UL, 0x2b08192b19080808UL, 0x2b08192b192b0808UL, 0x2b082b080808082bUL,
+    0x2b082b1908081908UL, 0x2b082b2b08190819UL, 0x2b19080808081908UL, 0x2b19080808190808UL,
+    0x2b190808082b1908UL, 0x2b19080819080808UL, 0x2b1908082b2b0819UL, 0x2b1908190819192bUL,
+    0x2b1908192b080808UL, 0x2b19082b19081919UL, 0x2b19190808080808UL, 0x2b191908082b082bUL,
+    0x2b19190819081908UL, 0x2b19191919190819UL, 0x2b192b082b080819UL, 0x2b192b19082b0808UL,
+    0x2b2b08080808082bUL, 0x2b2b080819190808UL, 0x2b2b08082b081919UL, 0x2b2b081908082b19UL,
+    0x2b2b082b08080808UL, 0x2b2b190808192b08UL, 0x2b2b2b0819190808UL, 0x2b2b2b1908081908UL,
+};
+
+// IQ2_XXS/IQ3_XXS sign lookup table: 128 entries.
+// Maps 7-bit index → 8-bit sign mask (bit j set → negate element j).
+constant uchar ksigns_iq2xs[128] = {
+    0,   129, 130, 3,   132, 5,   6,   135, 136, 9,   10,  139, 12,  141, 142, 15,
+    144, 17,  18,  147, 20,  149, 150, 23,  24,  153, 154, 27,  156, 29,  30,  159,
+    160, 33,  34,  163, 36,  165, 166, 39,  40,  169, 170, 43,  172, 45,  46,  175,
+    48,  177, 178, 51,  180, 53,  54,  183, 184, 57,  58,  187, 60,  189, 190, 63,
+    192, 65,  66,  195, 68,  197, 198, 71,  72,  201, 202, 75,  204, 77,  78,  207,
+    80,  209, 210, 83,  212, 85,  86,  215, 216, 89,  90,  219, 92,  221, 222, 95,
+    96,  225, 226, 99,  228, 101, 102, 231, 232, 105, 106, 235, 108, 237, 238, 111,
+    240, 113, 114, 243, 116, 245, 246, 119, 120, 249, 250, 123, 252, 125, 126, 255,
+};
+
+// Dot product of 8 x-elements against a u64 grid entry with sign mask.
+// Grid entry packs 8 int8 values; sign mask bit j set → negate element j.
+inline float iq2_dot8(device const float* x_ptr, ulong grid_val, uchar sign_byte, float dl) {
+    float sum = 0.0f;
+    for (uint j = 0; j < 8; j++) {
+        char w = char((grid_val >> (j * 8)) & 0xFF);
+        float sign = (sign_byte & (1u << j)) ? -1.0f : 1.0f;
+        sum += x_ptr[j] * float(w) * sign;
+    }
+    return sum * dl;
+}
+
+kernel void gemv_iq2_xxs(
+    device const float* x [[buffer(0)]],
+    device const uchar* W [[buffer(1)]],
+    device float* y       [[buffer(2)]],
+    constant uint& n      [[buffer(3)]],
+    constant uint& k      [[buffer(4)]],
+    uint tgid     [[threadgroup_position_in_grid]],
+    uint tid      [[thread_index_in_threadgroup]],
+    uint tg_size  [[threads_per_threadgroup]])
+{
+    if (tgid >= n) return;
+
+    const uint bpb = 66;   // bytes per block (f16 d + 64 bytes qs)
+    const uint qk  = 256;  // elements per super-block
+    uint nb = (k + qk - 1) / qk;
+    float sum = 0.0f;
+
+    for (uint b = tid; b < nb; b += tg_size) {
+        uint bk = b * qk;
+
+        // Sparse skip: check if all 256 input values are near-zero
+        float bmax = 0.0f;
+        uint check_end = min(qk, k - bk);
+        for (uint i = 0; i < check_end; i += 4) {
+            float4 v = abs(*(device const float4*)(x + bk + i));
+            bmax = max(bmax, max(max(v.x, v.y), max(v.z, v.w)));
+        }
+        if (bmax < 0.005f) continue;
+
+        device const uchar* bp = W + (tgid * nb + b) * bpb;
+
+        // Read f16 scale from first 2 bytes (little-endian)
+        float d = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
+        device const uchar* qs = bp + 2;
+
+        // 8 groups of 32 elements, each group uses 8 bytes of qs
+        for (uint group = 0; group < 8; group++) {
+            uint gi = group * 8;
+            uint yi = group * 32;
+
+            // Read aux u32 from qs[gi+4..gi+8] (little-endian)
+            uint aux = uint(qs[gi + 4]) | (uint(qs[gi + 5]) << 8) |
+                       (uint(qs[gi + 6]) << 16) | (uint(qs[gi + 7]) << 24);
+
+            // Sub-block scale: dl = d * (0.5 + sub_scale) * 0.25
+            float dl = d * (0.5f + float(aux >> 28)) * 0.25f;
+
+            // 4 codebook lookups, each producing 8 weights
+            uchar sb0 = ksigns_iq2xs[(aux >>  0) & 0x7F];
+            uchar sb1 = ksigns_iq2xs[(aux >>  7) & 0x7F];
+            uchar sb2 = ksigns_iq2xs[(aux >> 14) & 0x7F];
+            uchar sb3 = ksigns_iq2xs[(aux >> 21) & 0x7F];
+
+            ulong g0 = iq2xxs_grid[qs[gi + 0]];
+            ulong g1 = iq2xxs_grid[qs[gi + 1]];
+            ulong g2 = iq2xxs_grid[qs[gi + 2]];
+            ulong g3 = iq2xxs_grid[qs[gi + 3]];
+
+            uint base = bk + yi;
+            if (base + 32 <= k) {
+                // Full group: dot product for all 4×8=32 elements
+                sum += iq2_dot8(x + base,      g0, sb0, dl);
+                sum += iq2_dot8(x + base + 8,  g1, sb1, dl);
+                sum += iq2_dot8(x + base + 16, g2, sb2, dl);
+                sum += iq2_dot8(x + base + 24, g3, sb3, dl);
+            } else {
+                // Partial last group: bounds-checked scalar path
+                for (uint j = 0; j < 8; j++) {
+                    char w0 = char((g0 >> (j * 8)) & 0xFF);
+                    char w1 = char((g1 >> (j * 8)) & 0xFF);
+                    char w2 = char((g2 >> (j * 8)) & 0xFF);
+                    char w3 = char((g3 >> (j * 8)) & 0xFF);
+                    float s0 = (sb0 & (1u << j)) ? -1.0f : 1.0f;
+                    float s1 = (sb1 & (1u << j)) ? -1.0f : 1.0f;
+                    float s2 = (sb2 & (1u << j)) ? -1.0f : 1.0f;
+                    float s3 = (sb3 & (1u << j)) ? -1.0f : 1.0f;
+                    if (base + j      < k) sum += x[base + j]      * dl * float(w0) * s0;
+                    if (base + j + 8  < k) sum += x[base + j + 8]  * dl * float(w1) * s1;
+                    if (base + j + 16 < k) sum += x[base + j + 16] * dl * float(w2) * s2;
+                    if (base + j + 24 < k) sum += x[base + j + 24] * dl * float(w3) * s3;
+                }
+            }
+        }
+    }
+
+    threadgroup float shared[8];
+    sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
+    if (tid == 0) y[tgid] = sum;
 }

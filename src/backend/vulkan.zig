@@ -1,6 +1,6 @@
 //! Vulkan compute backend via KosmicKrisp (macOS) or native Vulkan (Linux).
 //! Uses SPIR-V compute shaders for GPU dispatch with subgroup reduction.
-//! Panics on unsupported quantization types (no silent CPU fallback).
+//! IQ2/IQ3/IQ1 codebook quantization types are not yet implemented (will @panic).
 //!
 //! The Vulkan library (libvulkan.so / libkosmickrisp.dylib) is loaded at runtime
 //! via std.DynLib — no link-time dependency. If the library is not available,
@@ -1782,7 +1782,7 @@ pub const VulkanBackend = struct {
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Vulkan GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Vulkan GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU shader"),
             else => std.debug.panic("Vulkan GEMV: unsupported dtype {s} — add a GPU shader", .{@tagName(w.dtype)}),
         };
 
@@ -2085,7 +2085,7 @@ pub const VulkanBackend = struct {
     }
 
     /// MLX affine quantized GEMV.
-    pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+    pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
         _ = bits;
         const x_sz = k * @sizeOf(f32);
         const gpr = (k + 63) / 64;

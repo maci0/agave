@@ -24,9 +24,6 @@ const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const builtin = @import("builtin");
 
-/// Maximum number of cached expert slots.
-const max_cache_slots: usize = 4096;
-
 /// One cache slot tracking a resident expert.
 const CacheSlot = struct {
     layer: u32 = 0,
@@ -35,9 +32,24 @@ const CacheSlot = struct {
     occupied: bool = false,
 };
 
+/// A page-aligned byte range pinned via mlock, tracked for munlock on shutdown.
+const PinnedRange = struct {
+    ptr: [*]align(std.heap.page_size_min) const u8,
+    len: usize,
+};
+
+/// Maximum number of pinned ranges (6 experts × 3 tensors × ~100 layers).
+const max_pin_ranges: usize = 2048;
+
+/// Maximum total bytes to pin (~30 GB — leave headroom for non-expert data).
+const max_pinned_bytes: u64 = 30 * 1024 * 1024 * 1024;
+
 /// LRU cache for MoE expert weights, tracking residency and eviction
 /// across layers to minimize redundant GPU uploads.
 pub const ExpertCache = struct {
+    /// Maximum number of cached expert slots.
+    pub const max_cache_slots: usize = 4096;
+
     slots: []CacheSlot,
     n_slots: u32,
     access_counter: u64 = 0,
@@ -50,7 +62,13 @@ pub const ExpertCache = struct {
     hits: u64 = 0,
     misses: u64 = 0,
 
-    /// Allocates cache slots and the `(layer, expert) → slot` lookup table, clamped to `max_cache_slots`.
+    /// Pinned expert ranges for munlock on shutdown.
+    pinned_ranges: []PinnedRange,
+    n_pinned: u32 = 0,
+    total_pinned_bytes: u64 = 0,
+
+    /// Allocates cache slots, the `(layer, expert) → slot` lookup table (clamped
+    /// to `max_cache_slots`), and the pinned-range tracking array.
     pub fn init(allocator: Allocator, n_layers: u32, n_experts: u32, n_cache_slots: u32) !ExpertCache {
         const n_slots = @min(n_cache_slots, @as(u32, @intCast(max_cache_slots)));
         if (n_slots == 0) return error.ZeroCacheSlots;
@@ -61,19 +79,25 @@ pub const ExpertCache = struct {
         const lookup = try allocator.alloc(?u32, lookup_size);
         @memset(lookup, null);
 
+        const pinned = try allocator.alloc(PinnedRange, max_pin_ranges);
+
         return ExpertCache{
             .slots = slots,
             .n_slots = n_slots,
             .lookup = lookup,
             .n_layers = n_layers,
             .n_experts = n_experts,
+            .pinned_ranges = pinned,
         };
     }
 
-    /// Frees the cache slots and the lookup table.
+    /// Unpins all mlocked ranges, then frees the cache slots and lookup table.
     pub fn deinit(self: *ExpertCache, allocator: Allocator) void {
+        self.unpinAll();
+        allocator.free(self.pinned_ranges);
         allocator.free(self.slots);
         allocator.free(self.lookup);
+        self.pinned_ranges = &.{};
         self.slots = &.{};
         self.lookup = &.{};
     }
@@ -174,6 +198,43 @@ pub const ExpertCache = struct {
         return admitted;
     }
 
+    /// Pin an expert's weight bytes in physical RAM via mlock.
+    /// The raw pointer and length are page-aligned internally.
+    /// Returns true if successfully pinned, false if the wire limit would
+    /// be exceeded, the pin table is full, or the mlock syscall fails.
+    /// Startup-only — never call on the hot path.
+    pub fn pinExpert(self: *ExpertCache, ptr: [*]const u8, len: usize) bool {
+        if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return false;
+        if (self.n_pinned >= self.pinned_ranges.len) return false;
+        if (self.total_pinned_bytes + len > max_pinned_bytes) return false;
+        if (len == 0) return false;
+
+        const page_size: usize = std.heap.page_size_min;
+        const addr = @intFromPtr(ptr);
+        const aligned = addr & ~(page_size - 1);
+        const total = len + (addr - aligned);
+        const aligned_ptr: [*]align(std.heap.page_size_min) const u8 = @ptrFromInt(aligned);
+        const memory = aligned_ptr[0..total];
+
+        std.process.lockMemory(memory, .{}) catch return false;
+
+        self.pinned_ranges[self.n_pinned] = .{ .ptr = aligned_ptr, .len = total };
+        self.n_pinned += 1;
+        self.total_pinned_bytes += total;
+        return true;
+    }
+
+    /// Unpin all previously mlocked expert ranges via munlock.
+    /// Called from `deinit` before freeing allocations.
+    pub fn unpinAll(self: *ExpertCache) void {
+        if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+        for (self.pinned_ranges[0..self.n_pinned]) |range| {
+            std.process.unlockMemory(range.ptr[0..range.len]) catch {};
+        }
+        self.n_pinned = 0;
+        self.total_pinned_bytes = 0;
+    }
+
     /// Report cache statistics.
     pub fn reportStats(self: *const ExpertCache) void {
         const total = self.hits + self.misses;
@@ -181,6 +242,59 @@ pub const ExpertCache = struct {
         std.log.info("expert cache: {d} slots, {d} hits, {d} misses, hit_rate={d:.1}%", .{
             self.n_slots, self.hits, self.misses, hit_rate * 100,
         });
+    }
+
+    /// Prefetch the K most-recently-used experts for a given layer.
+    /// Called speculatively after the current layer completes to overlap SSD reads
+    /// with CPU weighted accumulation. Some prefetched experts may not be selected
+    /// by the next layer's router, but the cost of a wasted madvise is negligible
+    /// compared to a cache miss on a needed expert.
+    pub fn prefetchTopResidents(self: *ExpertCache, layer: u32, base_ptr: [*]const u8, expert_bytes: usize, k: u32) void {
+        const actual_k = @min(k, max_prefetch_k);
+        var best_slots: [max_prefetch_k]u32 = .{0} ** max_prefetch_k;
+        var best_access: [max_prefetch_k]u64 = .{0} ** max_prefetch_k;
+        var found: u32 = 0;
+
+        for (self.slots[0..self.n_slots], 0..) |slot, idx| {
+            if (!slot.occupied or slot.layer != layer) continue;
+            // Insert into sorted top-k (descending by access time)
+            var insert_pos: u32 = found;
+            for (0..@min(found, actual_k)) |bi| {
+                if (slot.last_access > best_access[bi]) {
+                    insert_pos = @intCast(bi);
+                    break;
+                }
+            }
+            if (insert_pos < actual_k) {
+                // Shift down to make room
+                var j: u32 = @min(found, actual_k - 1);
+                while (j > insert_pos) : (j -= 1) {
+                    best_slots[j] = best_slots[j - 1];
+                    best_access[j] = best_access[j - 1];
+                }
+                best_slots[insert_pos] = @intCast(idx);
+                best_access[insert_pos] = slot.last_access;
+                if (found < actual_k) found += 1;
+            }
+        }
+
+        // Issue madvise for the top-k most recently used experts
+        for (0..found) |i| {
+            const eid = self.slots[best_slots[i]].expert_id;
+            const offset = @as(usize, eid) * expert_bytes;
+            prefetchRegion(base_ptr + offset, expert_bytes);
+        }
+    }
+
+    const max_prefetch_k = 8;
+
+    fn prefetchRegion(ptr: [*]const u8, len: usize) void {
+        if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+        const page_size: usize = std.heap.page_size_min;
+        const addr = @intFromPtr(ptr);
+        const aligned = addr & ~(page_size - 1);
+        const total = len + (addr - aligned);
+        posix.madvise(@ptrFromInt(aligned), total, posix.system.MADV.WILLNEED) catch {};
     }
 };
 

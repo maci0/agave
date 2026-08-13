@@ -197,6 +197,22 @@ fn detectFreeRam() usize {
     return if (avail > 0) avail else default_free_ram;
 }
 
+/// Estimate bytes per single MoE expert (gate + up + down projections).
+fn estimateExpertBytes(fmt: Format, n_experts: u32) usize {
+    // Use layer 3 (first learned-routed layer) as representative
+    const gate = fmt.getTensor("blk.3.ffn_gate_exps.weight") orelse return 0;
+    const gate_total = gate.dataByteLen();
+    const per_expert_gate = gate_total / @as(usize, n_experts);
+
+    const up = fmt.getTensor("blk.3.ffn_up_exps.weight") orelse return per_expert_gate;
+    const per_expert_up = up.dataByteLen() / @as(usize, n_experts);
+
+    const down = fmt.getTensor("blk.3.ffn_down_exps.weight") orelse return per_expert_gate + per_expert_up;
+    const per_expert_down = down.dataByteLen() / @as(usize, n_experts);
+
+    return per_expert_gate + per_expert_up + per_expert_down;
+}
+
 // ── Preload (fault-in mmap'd pages) ─────────────────────────────
 
 /// Touch every page of a mmap'd region to fault it into RAM.
@@ -2434,7 +2450,9 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // ── Preload weights into RAM (after banner so user sees info first) ──
-    const warmup_ms: u64 = if (!cli.use_mmap and !cli.model_info)
+    // Skip preload when SSD streaming is enabled — the whole point is demand-paged
+    // access. Preloading 90-155GB through a 48GB page cache just thrashes.
+    const warmup_ms: u64 = if (!cli.use_mmap and !cli.model_info and !cli.ssd_streaming)
         preloadModel(
             if (gguf_file != null) &gguf_file.? else null,
             if (st_dir != null) &st_dir.? else null,
@@ -2886,13 +2904,40 @@ fn initAndRun(
     const n_lay = minfo.n_layers;
 
     if (cli.ssd_streaming and n_exp > 0) {
-        expert_cache_opt = ExpertCache.init(allocator, n_lay, n_exp, cli.ssd_cache_slots) catch |e| blk: {
+        const cache_slots: u32 = if (cli.ssd_cache_slots != 256)
+            cli.ssd_cache_slots // user override
+        else blk: {
+            // Auto-size based on how many unique experts fit in the page cache.
+            // The ExpertCache tracks metadata (~20 bytes/slot), not expert data —
+            // expert weights live in the mmap'd GGUF. We estimate how many unique
+            // (layer, expert) pairs the OS can keep warm in physical RAM.
+            const expert_bytes = estimateExpertBytes(fmt, n_exp);
+            if (expert_bytes > 0) {
+                // Use total physical RAM (not free — mmap pages are reclaimable)
+                const total_ram = @import("backend/backend.zig").detectSystemMem();
+                // Budget: total RAM minus ~8GB for OS/KV/scratch, rest for page cache
+                const overhead: usize = 8 * 1024 * 1024 * 1024;
+                const page_cache = if (total_ram > overhead) total_ram - overhead else total_ram / 2;
+                const auto_slots = page_cache / expert_bytes;
+                const capped = @min(auto_slots, ExpertCache.max_cache_slots);
+                const slots: u32 = @intCast(@max(capped, 256));
+                eprint("ssd-streaming: auto-sized cache to {d} slots ({d} MB page cache est, {d} KB/expert)\n", .{
+                    slots, page_cache / (1024 * 1024), expert_bytes / 1024,
+                });
+                break :blk slots;
+            }
+            break :blk @as(u32, 1024); // fallback: generous default
+        };
+        expert_cache_opt = ExpertCache.init(allocator, n_lay, n_exp, cache_slots) catch |e| blk: {
             eprint("Warning: failed to init expert cache ({s}), SSD streaming disabled\n", .{@errorName(e)});
             break :blk null;
         };
         if (expert_cache_opt != null) {
-            eprint("ssd-streaming: expert cache {d} slots, {d} experts × {d} layers\n", .{ cli.ssd_cache_slots, n_exp, n_lay });
+            eprint("ssd-streaming: expert cache {d} slots, {d} experts × {d} layers\n", .{ cache_slots, n_exp, n_lay });
         }
+        // Enable volatile weight mode on Metal: flush buffer cache on each sync
+        // to prevent stale Metal buffer references to evicted mmap'd pages.
+        be.setVolatileWeights(true);
     }
 
     // Pre-pin hot experts from a prior profile run before first token.
@@ -2911,9 +2956,68 @@ fn initAndRun(
                     _ = k;
                 }
                 eprint("ssd-streaming: pre-pinned hot experts from '{s}'\n", .{prof_path});
+
+                // mlock the hot experts' weight ranges so the OS cannot evict them.
+                if (cli.ssd_streaming) {
+                    var pin_count: u32 = 0;
+                    var pin_buf: [128]u8 = undefined;
+                    for (0..@min(n_lay, p.n_layers)) |li| {
+                        const k_pinned = p.topExperts(@intCast(li), 6, &top_ids);
+                        for (0..k_pinned) |j| {
+                            const eid = top_ids[j];
+                            for ([_][]const u8{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" }) |suffix| {
+                                const name = std.fmt.bufPrint(&pin_buf, "blk.{d}.{s}", .{ li, suffix }) catch continue;
+                                if (fmt.getTensor(name)) |t| {
+                                    const stride = t.dataByteLen() / @as(usize, n_exp);
+                                    if (ec.pinExpert(t.data_ptr + eid * stride, stride))
+                                        pin_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    if (pin_count > 0) {
+                        eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB)\n", .{
+                            pin_count, ec.total_pinned_bytes / (1024 * 1024),
+                        });
+                    }
+                }
             }
         } else {
             eprint("Warning: --expert-profile-in requires --ssd-streaming, ignored\n", .{});
+        }
+    }
+
+    // Auto-pin: when --ssd-streaming is active but no --expert-profile-in,
+    // mlock the non-routed weights that are accessed every token (shared
+    // expert weights and router gate weights). Disabled by default on
+    // memory-constrained systems (≤64GB) — benchmarks show mlock reduces
+    // available page cache space and hurts overall throughput when model >> RAM.
+    const total_mem = @import("backend/backend.zig").detectSystemMem();
+    if (cli.expert_profile_in == null and cli.ssd_streaming and expert_cache_opt != null and total_mem > 64 * 1024 * 1024 * 1024) {
+        var ec = &expert_cache_opt.?;
+        var auto_pin: u32 = 0;
+        for (0..n_lay) |li| {
+            // Pin shared expert weights (always activated, every layer)
+            for ([_][]const u8{ "ffn_gate_shexp.weight", "ffn_up_shexp.weight", "ffn_down_shexp.weight" }) |suffix| {
+                var buf: [128]u8 = undefined;
+                const name = std.fmt.bufPrint(&buf, "blk.{d}.{s}", .{ li, suffix }) catch continue;
+                if (fmt.getTensor(name)) |t| {
+                    if (ec.pinExpert(t.data_ptr, t.dataByteLen())) auto_pin += 1;
+                }
+            }
+            // Pin router gate (small, always read for expert routing)
+            {
+                var buf: [128]u8 = undefined;
+                const name = std.fmt.bufPrint(&buf, "blk.{d}.ffn_gate_inp.weight", .{li}) catch continue;
+                if (fmt.getTensor(name)) |t| {
+                    if (ec.pinExpert(t.data_ptr, t.dataByteLen())) auto_pin += 1;
+                }
+            }
+        }
+        if (auto_pin > 0) {
+            eprint("ssd-streaming: auto-pinned {d} non-routed weight ranges ({d} MB)\n", .{
+                auto_pin, ec.total_pinned_bytes / (1024 * 1024),
+            });
         }
     }
 
@@ -2923,6 +3027,12 @@ fn initAndRun(
             eprint("Warning: failed to init expert profiler ({s})\n", .{@errorName(e)});
             break :blk null;
         };
+    }
+
+    // Wire expert cache + profiler into the model so ffnLayer() can use them.
+    if (expert_cache_opt) |*ec| {
+        const prof_ptr = if (expert_profile_opt) |*ep| ep else null;
+        mdl.setExpertCache(ec, prof_ptr);
     }
 
     var model_if = mdl.model();

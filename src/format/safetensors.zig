@@ -367,6 +367,15 @@ pub const SafeTensorsDir = struct {
             var iter = ggufToHfNameIter(name, pfx);
             while (iter.next(&buf)) |hf_name| {
                 if (self.lookupStable(hf_name)) |r| return self.entryToInfo(r.key, r.entry);
+                // DS V4: some HF tensors omit ".weight"/".bias" suffix (hc_* params, attn_sink, e_score_correction_bias)
+                if (std.mem.endsWith(u8, hf_name, ".weight")) {
+                    if (self.lookupStable(hf_name[0 .. hf_name.len - ".weight".len])) |r|
+                        return self.entryToInfo(r.key, r.entry);
+                }
+                if (std.mem.endsWith(u8, hf_name, ".bias")) {
+                    if (self.lookupStable(hf_name[0 .. hf_name.len - ".bias".len])) |r|
+                        return self.entryToInfo(r.key, r.entry);
+                }
                 // AWQ/GPTQ: try .qweight instead of .weight
                 if (std.mem.endsWith(u8, hf_name, ".weight")) {
                     var awq_buf: [name_buf_size]u8 = undefined;
@@ -560,6 +569,45 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "ssm_norm", "linear_attn.norm" },
     // Nex-N2-Pro: full-attention output gate (attn_output_gate: true)
     .{ "attn_output_gate", "self_attn.output_gate" },
+    // DeepSeek V4 MLA attention (different naming from V3/GLM-4)
+    .{ "attn_q_a", "attn.wq_a" },
+    .{ "attn_q_b", "attn.wq_b" },
+    .{ "attn_q_a_norm", "attn.q_norm" },
+    .{ "attn_kv", "attn.wkv" },
+    .{ "attn_kv_a_norm", "attn.kv_norm" },
+    .{ "attn_output_a", "attn.wo_a" },
+    .{ "attn_output_b", "attn.wo_b" },
+    .{ "attn_sinks", "attn.attn_sink" },
+    // DeepSeek V4 compressor (CSA/HCA)
+    .{ "attn_compressor_kv", "attn.compressor.wkv" },
+    .{ "attn_compressor_gate", "attn.compressor.wgate" },
+    .{ "attn_compressor_norm", "attn.compressor.norm" },
+    .{ "attn_compressor_ape", "attn.compressor.ape" },
+    // DeepSeek V4 LID indexer
+    .{ "attn_indexer_q_b", "attn.indexer.wq_b" },
+    .{ "attn_indexer_proj", "attn.indexer.weights_proj" },
+    // DeepSeek V4 hyper connections (layer-level, no .weight suffix in HF)
+    .{ "hc_attn_fn", "attn_hc.fn" },
+    .{ "hc_attn_base", "attn_hc.base" },
+    .{ "hc_attn_scale", "attn_hc.scale" },
+    .{ "hc_ffn_fn", "ffn_hc.fn" },
+    .{ "hc_ffn_base", "ffn_hc.base" },
+    .{ "hc_ffn_scale", "ffn_hc.scale" },
+    // DeepSeek V4 MoE (packed switch_mlp tensors)
+    .{ "ffn_gate_exps", "ffn.switch_mlp.gate_proj" },
+    .{ "ffn_up_exps", "ffn.switch_mlp.up_proj" },
+    .{ "ffn_down_exps", "ffn.switch_mlp.down_proj" },
+    .{ "ffn_gate_shexp", "ffn.shared_experts.gate_proj" },
+    .{ "ffn_up_shexp", "ffn.shared_experts.up_proj" },
+    .{ "ffn_down_shexp", "ffn.shared_experts.down_proj" },
+    // DeepSeek V4 identity-mapped norms (HF uses same names)
+    .{ "ffn_norm", "ffn_norm" },
+    .{ "attn_norm", "attn_norm" },
+    // DeepSeek V4 router
+    .{ "ffn_gate_inp", "ffn.gate" },
+    .{ "exp_probs_b", "ffn.gate.e_score_correction_bias" },
+    // DeepSeek V4 hash router
+    .{ "ffn_gate_tid2eid", "ffn.gate.tid2eid" },
 };
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
@@ -573,22 +621,32 @@ const hf_prefixes = [_][]const u8{
     "",
 };
 
+/// GGUF top-level tensor prefix → HuggingFace prefix mapping.
+/// Multiple entries per GGUF prefix allow alternate HF names (e.g., DS V4 uses
+/// "embed." instead of "embed_tokens.", "head." instead of "lm_head.").
+const gguf_hf_toplevel_map = [_]struct { []const u8, []const u8 }{
+    .{ "token_embd.", "embed_tokens." },
+    .{ "token_embd.", "embed." }, // DeepSeek V4
+    .{ "output_norm.", "norm." },
+    .{ "output.", "lm_head." },
+    .{ "output.", "head." }, // DeepSeek V4
+    // DeepSeek V4 hyper connection output tensors
+    .{ "output_hc_fn.", "hc_head.fn." },
+    .{ "output_hc_base.", "hc_head.base." },
+    .{ "output_hc_scale.", "hc_head.scale." },
+};
+
 /// Translate a GGUF-style tensor name to HuggingFace-style using a given prefix.
 /// Returns the translated name written into `buf`, or null if no mapping exists.
+/// For top-level tensors, returns only the FIRST matching translation;
+/// use `GgufHfNameIter` to iterate all alternatives.
 fn ggufToHfName(name: []const u8, buf: *[name_buf_size]u8, prefix: []const u8) ?[]const u8 {
-    // Top-level tensors
-    if (std.mem.startsWith(u8, name, "token_embd.")) {
-        const attr = name["token_embd.".len..];
-        return std.fmt.bufPrint(buf, "{s}embed_tokens.{s}", .{ prefix, attr }) catch null;
-    }
-    if (std.mem.startsWith(u8, name, "output_norm.")) {
-        const attr = name["output_norm.".len..];
-        return std.fmt.bufPrint(buf, "{s}norm.{s}", .{ prefix, attr }) catch null;
-    }
-    if (std.mem.startsWith(u8, name, "output.")) {
-        const attr = name["output.".len..];
-        // lm_head may be at top level or under a prefix (e.g. language_model.lm_head)
-        return std.fmt.bufPrint(buf, "{s}lm_head.{s}", .{ prefix, attr }) catch null;
+    // Top-level tensors (table-driven)
+    for (gguf_hf_toplevel_map) |entry| {
+        if (std.mem.startsWith(u8, name, entry[0])) {
+            const attr = name[entry[0].len..];
+            return std.fmt.bufPrint(buf, "{s}{s}{s}", .{ prefix, entry[1], attr }) catch null;
+        }
     }
 
     // Layer tensors: "blk.{i}.{component}.{attr}"
@@ -629,17 +687,22 @@ const GgufHfNameIter = struct {
     name: []const u8,
     prefix: []const u8,
     map_idx: usize = 0,
-    /// True if this is a top-level tensor (token_embd, output_norm, output).
-    /// Top-level tensors have exactly one translation, so we emit it once and stop.
+    /// True if this is a top-level tensor (token_embd, output_norm, output, etc.).
+    /// Top-level tensors iterate `gguf_hf_toplevel_map` for multiple alternatives.
     is_toplevel: bool = false,
-    toplevel_emitted: bool = false,
 
     fn next(self: *GgufHfNameIter, buf: *[name_buf_size]u8) ?[]const u8 {
-        // Top-level tensors: delegate to ggufToHfName (one translation only).
+        // Top-level tensors: iterate all matching entries in gguf_hf_toplevel_map.
         if (self.is_toplevel) {
-            if (self.toplevel_emitted) return null;
-            self.toplevel_emitted = true;
-            return ggufToHfName(self.name, buf, self.prefix);
+            while (self.map_idx < gguf_hf_toplevel_map.len) {
+                const entry = gguf_hf_toplevel_map[self.map_idx];
+                self.map_idx += 1;
+                if (std.mem.startsWith(u8, self.name, entry[0])) {
+                    const attr = self.name[entry[0].len..];
+                    return std.fmt.bufPrint(buf, "{s}{s}{s}", .{ self.prefix, entry[1], attr }) catch null;
+                }
+            }
+            return null;
         }
 
         // Layer tensors: iterate all matching entries in gguf_hf_layer_map.
@@ -681,9 +744,14 @@ const GgufHfNameIter = struct {
 
 /// Create an iterator over all possible GGUF→HF translations for a tensor name.
 fn ggufToHfNameIter(name: []const u8, prefix: []const u8) GgufHfNameIter {
-    const is_toplevel = std.mem.startsWith(u8, name, "token_embd.") or
-        std.mem.startsWith(u8, name, "output_norm.") or
-        std.mem.startsWith(u8, name, "output.");
+    // Check if this is a top-level tensor by matching against the toplevel map.
+    var is_toplevel = false;
+    for (gguf_hf_toplevel_map) |entry| {
+        if (std.mem.startsWith(u8, name, entry[0])) {
+            is_toplevel = true;
+            break;
+        }
+    }
     return .{ .name = name, .prefix = prefix, .is_toplevel = is_toplevel };
 }
 
@@ -716,6 +784,11 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "attn_output_gate", "attn_output_gate" },
     .{ "partial_rotary_factor", "partial_rotary_factor" },
     .{ "vocab_size", "vocab_size" },
+    // DeepSeek V4 specific
+    .{ "expert_shared_count", "n_shared_experts" },
+    .{ "rope.dimension_count", "qk_rope_head_dim" },
+    .{ "hash_layer_count", "num_hash_layers" },
+    .{ "attention.layernorm_rms_epsilon", "rms_norm_eps" },
 };
 
 /// Translate a GGUF-style metadata key to HuggingFace config.json key.
@@ -753,6 +826,14 @@ const gguf_hf_meta_aliases = [_]struct { []const u8, []const u8 }{
     .{ "attention.key_length_mla", "qk_nope_head_dim" },
     .{ "attention.rope_key_length", "qk_rope_head_dim" },
     .{ "attention.value_length_mla", "v_head_dim" },
+    // DeepSeek V4 specific config.json keys
+    .{ "attention.output_group_count", "o_groups" },
+    .{ "attention.output_lora_rank", "o_lora_rank" },
+    .{ "attention.index_head_dim", "index_head_dim" },
+    .{ "attention.index_n_heads", "index_n_heads" },
+    .{ "attention.index_topk", "index_topk" },
+    .{ "attention.compress_rope_freq_base", "compress_rope_theta" },
+    .{ "expert_weights_scale", "routed_scaling_factor" },
 };
 
 /// Try all possible GGUF→HF translations for a metadata key, including aliases.
@@ -2462,7 +2543,7 @@ test "dupeUnescaped basic escapes" {
 }
 
 test "ggufToHfNameIter multiple mappings" {
-    // ffn_gate_inp has two mappings: mlp.router and mlp.gate
+    // ffn_gate_inp has three mappings: mlp.router, mlp.gate, ffn.gate (DS V4)
     var buf: [name_buf_size]u8 = undefined;
     var iter = ggufToHfNameIter("blk.0.ffn_gate_inp.weight", "model.");
     const first = iter.next(&buf);
@@ -2471,6 +2552,10 @@ test "ggufToHfNameIter multiple mappings" {
     const second = iter.next(&buf);
     try std.testing.expect(second != null);
     try std.testing.expectEqualStrings("model.layers.0.mlp.gate.weight", second.?);
+    // DS V4 alternate
+    const third = iter.next(&buf);
+    try std.testing.expect(third != null);
+    try std.testing.expectEqualStrings("model.layers.0.ffn.gate.weight", third.?);
     // No more mappings
     try std.testing.expect(iter.next(&buf) == null);
 }
@@ -2664,13 +2749,17 @@ test "ggufToHfName returns null for unrecognized" {
     try std.testing.expect(ggufToHfName("blk..attn_q.weight", &buf, "model.") != null); // "blk." + rest, dot1 at 0 → layer=""
 }
 
-test "ggufToHfNameIter toplevel emits once" {
+test "ggufToHfNameIter toplevel emits alternatives" {
     var buf: [name_buf_size]u8 = undefined;
     var iter = ggufToHfNameIter("token_embd.weight", "model.");
     const first = iter.next(&buf);
     try std.testing.expect(first != null);
     try std.testing.expectEqualStrings("model.embed_tokens.weight", first.?);
-    // Should not emit again
+    // DS V4 alternate: embed.
+    const second = iter.next(&buf);
+    try std.testing.expect(second != null);
+    try std.testing.expectEqualStrings("model.embed.weight", second.?);
+    // No more alternatives
     try std.testing.expect(iter.next(&buf) == null);
 }
 
@@ -2908,7 +2997,7 @@ test "dupeUnescaped no escapes passthrough" {
 
 test "ggufToHfNameIter shared expert dual mappings" {
     var buf: [name_buf_size]u8 = undefined;
-    // ffn_gate_shexp has two HF mappings: shared_experts and shared_expert
+    // ffn_gate_shexp has multiple HF mappings: shared_experts, shared_expert, DS V4 w1
     var iter = ggufToHfNameIter("blk.0.ffn_gate_shexp.weight", "model.");
     const first = iter.next(&buf);
     try std.testing.expect(first != null);
@@ -2916,24 +3005,125 @@ test "ggufToHfNameIter shared expert dual mappings" {
     const second = iter.next(&buf);
     try std.testing.expect(second != null);
     try std.testing.expectEqualStrings("model.layers.0.mlp.shared_expert.gate_proj.weight", second.?);
+    // DS V4: ffn.shared_experts.w1
+    const third = iter.next(&buf);
+    try std.testing.expect(third != null);
+    try std.testing.expectEqualStrings("model.layers.0.ffn.shared_experts.w1.weight", third.?);
     // No more
     try std.testing.expect(iter.next(&buf) == null);
 }
 
 test "ggufToHfNameIter MLA attention" {
     var buf: [name_buf_size]u8 = undefined;
-    // MLA components should each have single mappings
+    // MLA attn_q_a has two mappings: V3/GLM-4 and V4
     var iter = ggufToHfNameIter("blk.0.attn_q_a.weight", "model.");
     const first = iter.next(&buf);
     try std.testing.expect(first != null);
     try std.testing.expectEqualStrings("model.layers.0.self_attn.q_a_proj.weight", first.?);
+    // DS V4 alternate
+    const ds4 = iter.next(&buf);
+    try std.testing.expect(ds4 != null);
+    try std.testing.expectEqualStrings("model.layers.0.attn.wq_a.weight", ds4.?);
     try std.testing.expect(iter.next(&buf) == null);
 
+    // attn_kv_a_mqa has only one mapping (V3/GLM-4 only)
     var iter2 = ggufToHfNameIter("blk.0.attn_kv_a_mqa.weight", "model.");
     const first2 = iter2.next(&buf);
     try std.testing.expect(first2 != null);
     try std.testing.expectEqualStrings("model.layers.0.self_attn.kv_a_proj_with_mqa.weight", first2.?);
     try std.testing.expect(iter2.next(&buf) == null);
+}
+
+test "ggufToHfNameIter DeepSeek V4 attention" {
+    var buf: [name_buf_size]u8 = undefined;
+    // DS V4 combined KV projection (attn_kv → attn.wkv)
+    var iter_kv = ggufToHfNameIter("blk.5.attn_kv.weight", "");
+    const kv = iter_kv.next(&buf);
+    try std.testing.expect(kv != null);
+    try std.testing.expectEqualStrings("layers.5.attn.wkv.weight", kv.?);
+    try std.testing.expect(iter_kv.next(&buf) == null);
+
+    // DS V4 grouped LoRA output (attn_output_a → attn.wo_a)
+    var iter_wo = ggufToHfNameIter("blk.0.attn_output_a.weight", "");
+    const wo = iter_wo.next(&buf);
+    try std.testing.expect(wo != null);
+    try std.testing.expectEqualStrings("layers.0.attn.wo_a.weight", wo.?);
+    try std.testing.expect(iter_wo.next(&buf) == null);
+
+    // DS V4 hyper connection (hc_attn_fn → hc_attn_fn, identity)
+    var iter_hc = ggufToHfNameIter("blk.0.hc_attn_fn.weight", "");
+    const hc = iter_hc.next(&buf);
+    try std.testing.expect(hc != null);
+    try std.testing.expectEqualStrings("layers.0.hc_attn_fn.weight", hc.?);
+    try std.testing.expect(iter_hc.next(&buf) == null);
+}
+
+test "ggufToHfNameIter DeepSeek V4 toplevel" {
+    var buf: [name_buf_size]u8 = undefined;
+    // DS V4 top-level: output_hc_fn → hc_fn
+    var iter = ggufToHfNameIter("output_hc_fn.weight", "");
+    const first = iter.next(&buf);
+    try std.testing.expect(first != null);
+    try std.testing.expectEqualStrings("hc_fn.weight", first.?);
+    try std.testing.expect(iter.next(&buf) == null);
+
+    // DS V4 top-level: output → lm_head then head
+    var iter2 = ggufToHfNameIter("output.weight", "");
+    const lm = iter2.next(&buf);
+    try std.testing.expect(lm != null);
+    try std.testing.expectEqualStrings("lm_head.weight", lm.?);
+    const hd = iter2.next(&buf);
+    try std.testing.expect(hd != null);
+    try std.testing.expectEqualStrings("head.weight", hd.?);
+    try std.testing.expect(iter2.next(&buf) == null);
+}
+
+test "ggufToHfNameIter DeepSeek V4 MoE w1/w2/w3" {
+    var buf: [name_buf_size]u8 = undefined;
+    // ffn_gate_exps has two sets of mappings: standard + DS V4
+    var iter = ggufToHfNameIter("blk.0.ffn_gate_exps.weight", "");
+    // Standard: mlp.experts.gate_proj
+    const std_map = iter.next(&buf);
+    try std.testing.expect(std_map != null);
+    try std.testing.expectEqualStrings("layers.0.mlp.experts.gate_proj.weight", std_map.?);
+    // DS V4: ffn.experts.w1
+    const ds4_map = iter.next(&buf);
+    try std.testing.expect(ds4_map != null);
+    try std.testing.expectEqualStrings("layers.0.ffn.experts.w1.weight", ds4_map.?);
+    try std.testing.expect(iter.next(&buf) == null);
+}
+
+test "ggufKeyToHf DeepSeek V4 meta keys" {
+    // DS V4: expert_shared_count → n_shared_experts
+    try std.testing.expectEqualStrings("n_shared_experts", ggufKeyToHf("deepseek4.expert_shared_count").?);
+    // DS V4: rope.dimension_count → qk_rope_head_dim
+    try std.testing.expectEqualStrings("qk_rope_head_dim", ggufKeyToHf("deepseek4.rope.dimension_count").?);
+    // DS V4: hash_layer_count → num_hash_layers
+    try std.testing.expectEqualStrings("num_hash_layers", ggufKeyToHf("deepseek4.hash_layer_count").?);
+    // DS V4: layernorm variant
+    try std.testing.expectEqualStrings("rms_norm_eps", ggufKeyToHf("deepseek4.attention.layernorm_rms_epsilon").?);
+}
+
+test "lookupMetaAllTranslations DeepSeek V4 aliases" {
+    var config = std.StringHashMap(MetaValue).init(std.testing.allocator);
+    defer config.deinit();
+    try config.put("o_groups", .{ .uint = 8 });
+    try config.put("o_lora_rank", .{ .uint = 1024 });
+    try config.put("compress_rope_theta", .{ .float = 160000.0 });
+    try config.put("routed_scaling_factor", .{ .float = 1.5 });
+
+    // attention.output_group_count → o_groups
+    const og = lookupMetaAllTranslations(&config, "deepseek4.attention.output_group_count") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 8), og.uint);
+    // attention.output_lora_rank → o_lora_rank
+    const olr = lookupMetaAllTranslations(&config, "deepseek4.attention.output_lora_rank") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 1024), olr.uint);
+    // attention.compress_rope_freq_base → compress_rope_theta
+    const crf = lookupMetaAllTranslations(&config, "deepseek4.attention.compress_rope_freq_base") orelse return error.Missing;
+    try std.testing.expectEqual(@as(f64, 160000.0), crf.float);
+    // expert_weights_scale → routed_scaling_factor
+    const ews = lookupMetaAllTranslations(&config, "deepseek4.expert_weights_scale") orelse return error.Missing;
+    try std.testing.expectEqual(@as(f64, 1.5), ews.float);
 }
 
 test "fuseNvfp4Experts creates synthetic entries" {
