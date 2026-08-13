@@ -299,3 +299,40 @@ test "fuzz: all gemv_fp8 functions" {
         }
     }.f, .{});
 }
+
+/// MXFP8 GEMV: FP8 E4M3 weights with E8M0 per-tile block scales.
+/// Scale tensor shape: [n_rows/group, n_cols/group] with group_size=128.
+/// y[n] = Σ fp8_to_f32(w[r][c]) * e8m0_to_f32(scale[r/128][c/128]) * x[c]
+pub fn gemvMXFP8(
+    x: [*]const f32,
+    w: [*]const u8,
+    scale: [*]const u8,
+    y: [*]f32,
+    n: usize,
+    k: usize,
+    scale_cols: usize,
+) void {
+    const group_size: usize = 128;
+    const n_col_groups = (k + group_size - 1) / group_size;
+    _ = scale_cols; // Should equal n_col_groups
+
+    for (0..n) |row| {
+        var sum: f32 = 0.0;
+        const row_group = row / group_size;
+        const w_row = w + row * k;
+
+        for (0..n_col_groups) |cg| {
+            const col_start = cg * group_size;
+            const col_end = @min(col_start + group_size, k);
+            const s = quant.e8m0ToF32(scale[row_group * n_col_groups + cg]);
+            if (s == 0.0) continue;
+
+            var block_sum: f32 = 0.0;
+            for (col_start..col_end) |c| {
+                block_sum += x[c] * quant.fp8e4m3ToF32(w_row[c]);
+            }
+            sum += block_sum * s;
+        }
+        y[row] = sum;
+    }
+}

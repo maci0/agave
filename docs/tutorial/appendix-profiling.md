@@ -288,7 +288,7 @@ Note: counters come from the `.metal` tagged-union variant, not a `g_profile` gl
 ### Enforcement
 
 ```text
-gemvMlxQ(x, weight, scales, biases, y, n, k, bits):
+gemvMlxQ(x, weight, scales, biases, y, n, k, bits, group_size):
     pipeline = switch bits:
         4 -> pipe_gemv_mlx_q4
         6 -> pipe_gemv_mlx_q6

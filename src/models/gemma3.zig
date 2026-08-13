@@ -1027,7 +1027,7 @@ pub const Gemma3Model = struct {
 
     /// Cached companion pointers for MLX quantized weight tensors.
     /// Avoids per-GEMV string formatting + HashMap lookups for .scales/.biases.
-    const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8 };
+    const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8, group_size: u32 = 64 };
     const mlx_companion_cache_size: usize = 256;
 
     /// GEMV dispatch that handles both regular and MLX-quantized weights.
@@ -1058,7 +1058,7 @@ pub const Gemma3Model = struct {
             const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{base_name[0..prefix_len]}) catch return;
             const st = self.fmt.getTensor(s_name) orelse return;
             const bt = self.fmt.getTensor(b_name) orelse return;
-            companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr };
+            companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr, .group_size = model_mod.inferMlxGroupSize(st, k) };
             self.mlx_cc_keys[slot] = key;
             self.mlx_cc_vals[slot] = companion;
         }
@@ -1071,6 +1071,7 @@ pub const Gemma3Model = struct {
             n,
             k,
             self.mlx_bits,
+            companion.group_size,
         );
     }
 

@@ -1663,7 +1663,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
-    pub fn gemvMlxQ(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+    pub fn gemvMlxQ(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
         std.debug.assert(bits == 4);
         const x_sz = k * @sizeOf(f32);
         const gpr = (k + 63) / 64;

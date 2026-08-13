@@ -86,6 +86,8 @@ const simd_width: usize = 32;
 /// GPU SDPA threadgroup size (threads per query head, smaller than general threadgroup_size
 /// to fit per-head accumulation state within threadgroup memory).
 const sdpa_threadgroup_size: usize = 128;
+/// Words per group for MLX 2-bit quantization (64 elems × 2 bits / 32 = 4 words).
+const mlx_words_per_group_q2: usize = 4;
 /// Words per group for MLX 4-bit quantization (64 elems / 8 nibbles per word).
 const mlx_words_per_group_q4: usize = 8;
 /// MLX 6-bit: 64 elements × 6 bits / 32 bits per word = 12 words per group.
@@ -145,6 +147,7 @@ pub const MetalBackend = struct {
     pipe_gemv_iq4_nl: objc.id,
     pipe_gemv_iq4_xs: objc.id,
     pipe_gemv_q5_k: objc.id,
+    pipe_gemv_mlx_q2: objc.id,
     pipe_gemv_mlx_q4: objc.id,
     pipe_gemv_mlx_q6: objc.id,
     pipe_gemv_mlx_q8: objc.id,
@@ -157,6 +160,7 @@ pub const MetalBackend = struct {
     pipe_gemv_hqq: objc.id,
     pipe_gemv_tq1_0: objc.id,
     pipe_gemv_tq2_0: objc.id,
+    pipe_gemv_iq2_xxs: objc.id,
     pipe_gemm_f32: objc.id,
     pipe_gemm_bf16: objc.id,
     pipe_gemm_q8_0: objc.id,
@@ -228,6 +232,20 @@ pub const MetalBackend = struct {
     /// model activation buffers) on every GEMV / norm / elementwise call.
     /// Cached buffers live for the model's lifetime and are released in deinit().
     buf_cache: std.AutoHashMap(usize, BufferInfo),
+    /// When true, enables GPU-safe SSD streaming:
+    /// - Weight buffers (>256KB) are copied into Metal-managed memory via
+    ///   newBufferWithBytes and stored in stable_cache (never flushed)
+    /// - Small activation buffers use normal wrap+cache (flushed on sync)
+    /// - GPU always reads from Metal-owned memory → no page eviction issues
+    volatile_weights: bool = false,
+    /// Persistent cache for Metal-managed buffer copies (not flushed on sync).
+    /// Used in volatile_weights mode for weight data copied from mmap.
+    /// These buffers contain copied data that is always valid regardless of
+    /// whether the source mmap pages are evicted by the OS.
+    stable_cache: std.AutoHashMap(usize, BufferInfo),
+
+    /// Volatile buffer tracking: list of uncached Metal buffers to release on sync.
+
     /// Host allocator for staging buffers (paged SDPA flats). Not used for
     /// page-aligned GPU zero-copy maps (those stay on page_allocator).
     allocator: std.mem.Allocator,
@@ -316,6 +334,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_q4_1 = undefined,
             .pipe_gemv_bf16 = undefined,
             .pipe_gemv_f16 = undefined,
+            .pipe_gemv_mlx_q2 = undefined,
             .pipe_gemv_mlx_q4 = undefined,
             .pipe_gemv_mlx_q6 = undefined,
             .pipe_gemv_mlx_q8 = undefined,
@@ -340,6 +359,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_hqq = undefined,
             .pipe_gemv_tq1_0 = undefined,
             .pipe_gemv_tq2_0 = undefined,
+            .pipe_gemv_iq2_xxs = undefined,
             .pipe_gemm_f32 = undefined,
             .pipe_gemm_bf16 = undefined,
             .pipe_gemm_q8_0 = undefined,
@@ -393,6 +413,8 @@ pub const MetalBackend = struct {
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+            .stable_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+
             .allocator = allocator,
         };
         // Pre-allocate capacity so hot-path buf_cache.put() calls won't need to grow.
@@ -415,6 +437,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_q4_1 = try self.makePipeline("gemv_q4_1");
         self.pipe_gemv_bf16 = try self.makePipeline("gemv_bf16");
         self.pipe_gemv_f16 = try self.makePipeline("gemv_f16");
+        self.pipe_gemv_mlx_q2 = try self.makePipeline("gemv_mlx_q2");
         self.pipe_gemv_mlx_q4 = try self.makePipeline("gemv_mlx_q4");
         self.pipe_gemv_mlx_q6 = try self.makePipeline("gemv_mlx_q6");
         self.pipe_gemv_mlx_q8 = try self.makePipeline("gemv_mlx_q8");
@@ -439,6 +462,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_hqq = try self.makePipeline("gemv_hqq");
         self.pipe_gemv_tq1_0 = try self.makePipeline("gemv_tq1_0");
         self.pipe_gemv_tq2_0 = try self.makePipeline("gemv_tq2_0");
+        self.pipe_gemv_iq2_xxs = try self.makePipeline("gemv_iq2_xxs");
         self.pipe_gemm_f32 = try self.makePipeline("gemm_f32");
         self.pipe_gemm_bf16 = try self.makePipeline("gemm_bf16");
         self.pipe_gemm_q8_0 = try self.makePipeline("gemm_q8_0");
@@ -494,7 +518,7 @@ pub const MetalBackend = struct {
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 88;
+    pub const n_pipelines: u32 = 90;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -632,6 +656,17 @@ pub const MetalBackend = struct {
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
+        var it_s = self.stable_cache.valueIterator();
+        while (it_s.next()) |info| release(info.metal_buf);
+        self.stable_cache.deinit();
+    }
+
+    /// Flush all cached Metal buffer objects. Called when volatile_weights is
+    /// first enabled to clear any stale references from prior model loads.
+    pub fn flushBufferCache(self: *MetalBackend) void {
+        var it = self.buf_cache.valueIterator();
+        while (it.next()) |info| release(info.metal_buf);
+        self.buf_cache.clearRetainingCapacity();
     }
 
     /// Return a BufRef (Metal buffer + byte offset) for `ptr`.
@@ -648,6 +683,24 @@ pub const MetalBackend = struct {
         const aligned_base = addr & ~(@as(usize, page_size - 1));
         const offset = addr - aligned_base;
         const needed = offset + len;
+
+        // In volatile_weights mode (SSD streaming), use newBufferWithBytes (copy)
+        // for weight-sized buffers. The copy reads from mmap (triggering CPU page
+        // faults for evicted pages), then stores in Metal-managed memory immune to
+        // OS page eviction. Uses stable_cache (not flushed on sync) so copies
+        // persist across tokens — only re-copied when buffer is too small.
+        if (self.volatile_weights and needed >= volatile_weight_threshold) {
+            if (self.stable_cache.get(aligned_base)) |cached| {
+                if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
+                release(cached.metal_buf);
+                _ = self.stable_cache.remove(aligned_base);
+            }
+            const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
+            const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
+            const buf = self.makeBuffer(aligned_ptr, aligned_len);
+            self.stable_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
+            return .{ .buf = buf, .offset = offset };
+        }
 
         // Check cache for this page-aligned base
         if (self.buf_cache.get(aligned_base)) |cached| {
@@ -866,8 +919,8 @@ pub const MetalBackend = struct {
 
     // ── GEMV ──────────────────────────────────────────────────
 
-    /// y[n] = W[n,k] @ x[k].  Dispatches a Metal kernel per supported dtype;
-    /// panics for unsupported dtypes (no silent CPU fallback).
+    /// y[n] = W[n,k] @ x[k].  Dispatches a Metal kernel per supported dtype.
+    /// IQ2_XXS uses a native Metal kernel. Other IQ2/IQ3/IQ1 codebook formats are not yet implemented.
     pub fn gemv(self: *MetalBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         // Label the encoder so kernel names appear in Metal System Trace (xctrace GPU profiling)
         self.active_pipeline_label = switch (w.dtype) {
@@ -890,7 +943,8 @@ pub const MetalBackend = struct {
             .mxfp4 => "gemv_mxfp4",
             .tq1_0 => "gemv_tq1_0",
             .tq2_0 => "gemv_tq2_0",
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => "gemv_iq_unimplemented",
+            .iq2_xxs => "gemv_iq2_xxs",
+            .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
             else => "gemv",
         };
         const pipeline: objc.id = switch (w.dtype) {
@@ -913,8 +967,8 @@ pub const MetalBackend = struct {
             .mxfp4 => self.pipe_gemv_mxfp4,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            // IQ2/IQ3/IQ1: no GPU kernel yet — fail closed (no silent CPU fallback).
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 kernels not implemented"),
+            .iq2_xxs => self.pipe_gemv_iq2_xxs,
+            .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
             else => std.debug.panic("Metal GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
         };
 
@@ -948,7 +1002,7 @@ pub const MetalBackend = struct {
             // 32-element block formats
             .q4_0, .q4_1, .q5_0, .q8_0, .iq4_nl => (k + quant_block_elems - 1) / quant_block_elems,
             // 256-element superblock formats
-            .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_xs => (k + quant_super_block_elems - 1) / quant_super_block_elems,
+            .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_xs, .iq2_xxs => (k + quant_super_block_elems - 1) / quant_super_block_elems,
             // MLX 4-bit: 64-element groups, each thread processes one group
             .mlx_q => (k + mlx_group_size - 1) / mlx_group_size,
             // Element-level formats — always fully utilized at 256 threads
@@ -2056,16 +2110,17 @@ pub const MetalBackend = struct {
         self.endEncodeThreadgroups(enc, n, threadgroup_size);
     }
 
-    /// MLX affine 4-bit quantized GEMV on GPU.
+    /// MLX affine quantized GEMV on GPU (2/4/6/8-bit).
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
-    pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
-        if (bits != 4 and bits != 6 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width");
+    pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
+        if (bits != 2 and bits != 4 and bits != 6 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width");
         const gpr = (k + mlx_group_size - 1) / mlx_group_size;
         const wpg: usize = switch (bits) {
             8 => mlx_words_per_group_q8,
             6 => mlx_words_per_group_q6,
-            else => mlx_words_per_group_q4,
+            4 => mlx_words_per_group_q4,
+            else => mlx_words_per_group_q2,
         };
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
         const sb_bytes = n * gpr * @sizeOf(u16); // bf16 scales/biases
@@ -2082,7 +2137,8 @@ pub const MetalBackend = struct {
         const pipe = switch (bits) {
             8 => self.pipe_gemv_mlx_q8,
             6 => self.pipe_gemv_mlx_q6,
-            else => self.pipe_gemv_mlx_q4,
+            4 => self.pipe_gemv_mlx_q4,
+            else => self.pipe_gemv_mlx_q2,
         };
         const enc = self.getEncoder(pipe);
         setBuf(enc, x_ref, 0);
@@ -2221,7 +2277,8 @@ pub const MetalBackend = struct {
                 const wpg: usize = switch (bits) {
                     8 => mlx_words_per_group_q8,
                     6 => mlx_words_per_group_q6,
-                    else => mlx_words_per_group_q4,
+                    4 => mlx_words_per_group_q4,
+                    else => mlx_words_per_group_q2,
                 };
                 const w_bytes_mlx = op.n * gpr * wpg * @sizeOf(u32);
                 const sb_bytes = op.n * gpr * @sizeOf(u16); // bf16 scales/biases
@@ -2235,7 +2292,8 @@ pub const MetalBackend = struct {
                 const pipe = switch (bits) {
                     8 => self.pipe_gemv_mlx_q8,
                     6 => self.pipe_gemv_mlx_q6,
-                    else => self.pipe_gemv_mlx_q4,
+                    4 => self.pipe_gemv_mlx_q4,
+                    else => self.pipe_gemv_mlx_q2,
                 };
                 const enc = self.getEncoder(pipe);
                 setBuf(enc, x_ref, 0);
@@ -2326,9 +2384,23 @@ pub const MetalBackend = struct {
     /// Call before CPU code reads from buffers written by GPU ops.
     /// On Apple Silicon's unified memory, this is the only synchronization
     /// needed — zero-copy buffers mean no data transfer, just a fence.
+    /// Minimum buffer size considered a "weight" buffer for volatile flush.
+    /// Activation buffers (hidden, q_full, norms) are heap-allocated and stable.
+    /// Weight buffers from mmap'd GGUF files can go stale when pages are evicted.
+    const volatile_weight_threshold: usize = 256 * 1024;
+
     pub fn sync(self: *MetalBackend) void {
         self.flush();
         if (self.profile_counters) self.sync_count += 1;
+        // In volatile_weights mode (SSD streaming), flush the WRAP buffer cache
+        // (buf_cache) on sync. Wrapped buffers reference mmap'd pages that can
+        // go stale when evicted. The copy_cache is NOT flushed because its
+        // buffers contain Metal-managed copies that are always valid.
+        if (self.volatile_weights) {
+            var it = self.buf_cache.valueIterator();
+            while (it.next()) |info| release(info.metal_buf);
+            self.buf_cache.clearRetainingCapacity();
+        }
     }
 
     /// Reset dispatch counters and enable counting (call at start of profiled token).
@@ -3106,7 +3178,7 @@ test "Metal backend gemvMlxQ4 basic" {
     // y = scale*sum(x*q) + bias*sum(x)
     //   = 1.0*(1.0*3 + 1.0*5) + 0.5*(1.0+1.0)
     //   = 8.0 + 1.0 = 9.0
-    metal.gemvMlxQ(&x, @ptrCast(&weight), @ptrCast(&sc), @ptrCast(&bi), &y, 1, 64, 4);
+    metal.gemvMlxQ(&x, @ptrCast(&weight), @ptrCast(&sc), @ptrCast(&bi), &y, 1, 64, 4, 64);
     metal.sync();
     try std.testing.expectApproxEqAbs(@as(f32, 9.0), y[0], 1e-4);
 }
@@ -3144,11 +3216,11 @@ test "Metal backend gemvMlxQ4 matches CPU" {
 
     // CPU reference
     var y_cpu: [n]f32 = undefined;
-    mlx_ops.mlxGemvRaw(&x, &weight, &sc16, &bi16, &y_cpu, n, k, 4);
+    mlx_ops.mlxGemvRaw(&x, &weight, &sc16, &bi16, &y_cpu, n, k, 4, mlx_group_size);
 
     // Metal
     var y_metal: [n]f32 = undefined;
-    metal.gemvMlxQ(&x, @ptrCast(&weight), @ptrCast(&sc16), @ptrCast(&bi16), &y_metal, n, k, 4);
+    metal.gemvMlxQ(&x, @ptrCast(&weight), @ptrCast(&sc16), @ptrCast(&bi16), &y_metal, n, k, 4, 64);
     metal.sync();
 
     for (0..n) |i| {
@@ -3190,8 +3262,8 @@ test "Metal backend gemvMlxQ4 large matrix" {
     const y_metal = try al.alloc(f32, n);
     defer al.free(y_metal);
 
-    mlx_ops.mlxGemvRaw(x.ptr, weight.ptr, sc16.ptr, bi16.ptr, y_cpu.ptr, n, k, 4);
-    metal.gemvMlxQ(x.ptr, @ptrCast(weight.ptr), @ptrCast(sc16.ptr), @ptrCast(bi16.ptr), y_metal.ptr, n, k, 4);
+    mlx_ops.mlxGemvRaw(x.ptr, weight.ptr, sc16.ptr, bi16.ptr, y_cpu.ptr, n, k, 4, mlx_group_size);
+    metal.gemvMlxQ(x.ptr, @ptrCast(weight.ptr), @ptrCast(sc16.ptr), @ptrCast(bi16.ptr), y_metal.ptr, n, k, 4, 64);
     metal.sync();
 
     for (0..n) |i| {
@@ -3262,6 +3334,7 @@ test "Metal tuning constants are valid" {
     try testing.expect(sdpa_threadgroup_size > 0);
     try testing.expect(sdpa_threadgroup_size <= threadgroup_size);
 
+    try testing.expect(mlx_words_per_group_q2 > 0);
     try testing.expect(mlx_words_per_group_q4 > 0);
     try testing.expect(mlx_words_per_group_q6 > 0);
     try testing.expect(mlx_words_per_group_q8 > 0);
@@ -3270,7 +3343,7 @@ test "Metal tuning constants are valid" {
 
 test "Metal n_pipelines count" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    try std.testing.expectEqual(@as(u32, 88), MetalBackend.n_pipelines);
+    try std.testing.expectEqual(@as(u32, 90), MetalBackend.n_pipelines);
 }
 
 // ── Helper to get a Metal backend or skip the test ──────────────
@@ -3299,7 +3372,7 @@ test "MetalBackend.backendInfo" {
     try std.testing.expectEqualStrings("Metal", info.name);
     try std.testing.expect(info.total_mem > 0);
     try std.testing.expect(info.is_uma);
-    try std.testing.expectEqual(@as(u32, 88), info.n_gpu_kernels);
+    try std.testing.expectEqual(@as(u32, 90), info.n_gpu_kernels);
     try std.testing.expectEqualStrings("MSL", info.kernel_type);
     try std.testing.expect(info.device_name.len > 0);
 }

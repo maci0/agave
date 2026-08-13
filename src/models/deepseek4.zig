@@ -17,11 +17,15 @@ const model_mod = @import("model.zig");
 const math_ops = @import("../ops/math.zig");
 
 const quant_ops = @import("../ops/quant.zig");
+const mlx_ops = @import("../ops/mlx.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const attn_ops = @import("../ops/attention.zig");
 const Backend = backend_mod.Backend;
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
+const ExpertCache = @import("../expert_cache.zig").ExpertCache;
+const ExpertProfile = @import("../expert_profile.zig").ExpertProfile;
+const MtpWeights = @import("ds4_mtp.zig").MtpWeights;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;
 const DType = format_mod.DType;
@@ -122,7 +126,21 @@ pub const Ds4Model = struct {
     ff_up_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] up outputs pre-siluMul
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
+    mtp_hidden_buf: []f32 = &.{}, // [n_embd] — saved MTP hidden state between depths
+    /// MTP KV cache: stores kv_proj (kv_lora_rank=512 dims) per position.
+    /// Shared across MTP depths. Positions 0..mtp_kv_len-1 are populated.
+    mtp_kv_cache: []f32 = &.{}, // [max_seq_len * kv_lora_rank]
+    mtp_kv_len: usize = 0, // number of populated positions
     score_stride: usize = 0, // per-head score buffer stride
+
+    // SSD streaming: expert cache and activation profiler (set by main.zig).
+    expert_cache: ?*ExpertCache = null,
+    expert_profile: ?*ExpertProfile = null,
+    /// MTP (multi-token prediction) weights loaded from separate safetensors.
+    mtp_weights: ?*MtpWeights = null,
+    /// Number of available MTP depths. Set when mtp_weights are loaded.
+    /// Used by the Model vtable to expose getMtpDepth().
+    n_mtp_layers: u32 = 0,
 
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
     rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
@@ -303,6 +321,12 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.router_logits);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
         errdefer allocator.free(self.logits_buf);
+        self.mtp_hidden_buf = try allocator.alloc(f32, e);
+        errdefer allocator.free(self.mtp_hidden_buf);
+        // MTP KV cache: max_seq_len positions × kv_lora_rank dims
+        self.mtp_kv_cache = try allocator.alloc(f32, @as(usize, self.max_seq_len) * self.kv_lora_rank);
+        errdefer allocator.free(self.mtp_kv_cache);
+        @memset(self.mtp_kv_cache, 0);
 
         // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
         const kv_bytes_per_layer = kv_quant.kvByteOffset(self.kv_type, ctx * kd);
@@ -509,11 +533,20 @@ pub const Ds4Model = struct {
         };
 
         // mixes[24] = hc_fn @ hc_state — then post-scale by rms_inv
+        // CPU fast path for HC mixing: the matrix is tiny (24×16384) — CPU GEMV
+        // is faster than GPU dispatch overhead and avoids Metal buffer issues with
+        // small f32 tensors from mmap'd safetensors.
         if (hc_fn.dtype == .q8_0) {
             cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_mixes, flat_size);
+        } else if (hc_fn.dtype == .f32) {
+            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+        } else if (hc_fn.dtype == .bf16) {
+            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+        } else if (hc_fn.dtype == .f16) {
+            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else {
             @memcpy(self.flat_norm, self.hc_state); // GPU path still needs stable buffer
-            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_mixes.ptr, hc_mix_dim, flat_size);
+            self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_mixes.ptr, hc_mix_dim, flat_size);
             self.be.sync();
         }
         for (self.hc_mixes[0..hc_mix_dim]) |*m| m.* *= rms_inv;
@@ -615,9 +648,15 @@ pub const Ds4Model = struct {
         };
         if (hc_fn.dtype == .q8_0) {
             cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_pre_w, flat_size_h);
+        } else if (hc_fn.dtype == .f32) {
+            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+        } else if (hc_fn.dtype == .bf16) {
+            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+        } else if (hc_fn.dtype == .f16) {
+            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else {
             @memcpy(self.flat_norm, self.hc_state);
-            self.be.gemv(self.flat_norm.ptr, .{ .data = hc_fn.data_ptr, .dtype = hc_fn.dtype }, self.hc_pre_w.ptr, n_hc, flat_size_h);
+            self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_pre_w.ptr, n_hc, flat_size_h);
             self.be.sync();
         }
         for (self.hc_pre_w[0..n_hc]) |*m| m.* *= rms_inv_h;
@@ -651,13 +690,13 @@ pub const Ds4Model = struct {
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
-        self.be.gemv(self.hidden2.ptr, .{ .data = q_a.data_ptr, .dtype = q_a.dtype }, self.q_compressed.ptr, ql, e);
+        self.doGemv(self.hidden2.ptr, q_a, self.q_compressed.ptr, ql, e);
         const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
         self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
         const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
-        self.be.gemv(self.q_compressed.ptr, .{ .data = q_b.data_ptr, .dtype = q_b.dtype }, self.q_full.ptr, nh * kd, ql);
+        self.doGemv(self.q_compressed.ptr, q_b, self.q_full.ptr, nh * kd, ql);
         const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
-        self.be.gemv(self.hidden2.ptr, .{ .data = kv_a.data_ptr, .dtype = kv_a.dtype }, self.kv_proj.ptr, kd, e);
+        self.doGemv(self.hidden2.ptr, kv_a, self.kv_proj.ptr, kd, e);
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
@@ -677,8 +716,8 @@ pub const Ds4Model = struct {
                 const circ_pos = pos % comp_buf_ratio;
                 comp_kv_pos = self.csa_comp_kv[li * comp_layer_stride + circ_pos * max_comp_dim ..][0..actual_comp_dim];
                 comp_score_pos = self.csa_comp_score[li * comp_layer_stride + circ_pos * max_comp_dim ..][0..actual_comp_dim];
-                self.be.gemv(self.hidden2.ptr, .{ .data = wkv.data_ptr, .dtype = wkv.dtype }, comp_kv_pos.ptr, actual_comp_dim, e);
-                self.be.gemv(self.hidden2.ptr, .{ .data = kwgate.data_ptr, .dtype = kwgate.dtype }, comp_score_pos.ptr, actual_comp_dim, e);
+                self.doGemv(self.hidden2.ptr, wkv, comp_kv_pos.ptr, actual_comp_dim, e);
+                self.doGemv(self.hidden2.ptr, kwgate, comp_score_pos.ptr, actual_comp_dim, e);
             }
         }
 
@@ -691,10 +730,10 @@ pub const Ds4Model = struct {
             const inh: usize = self.index_n_heads;
             const ihd: usize = self.index_head_dim;
             if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
-                self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, self.q_lora_rank);
+                self.doGemv(self.q_compressed.ptr, wiq, self.lid_query.ptr, inh * ihd, self.q_lora_rank);
             } else break :blk false;
             if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
-                self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+                self.doGemv(self.hidden.ptr, ww, self.lid_head_w.ptr, inh, self.n_embd);
             } else {
                 for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
             }
@@ -1178,17 +1217,22 @@ pub const Ds4Model = struct {
         const olr: usize = self.o_lora_rank;
         const group_in: usize = nh * kd / og; // = 64*512/8 = 4096
         const wo_a = try self.layerTensorReq(li, "attn_output_a.weight");
-        const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
+        // Per-group stride: MLX-Q packs as u32 words (dims-based), others use weightBytes.
+        const group_stride = if (wo_a.dtype == .mlx_q)
+            ds4ExpertStride(wo_a, og)
+        else blk: {
+            const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
+            break :blk olr * row_bytes;
+        };
         // wo_a groups + wo_b in one GPU command buffer: lora_out feeds directly into wo_b
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
-            const wp = wo_a.data_ptr + g * olr * row_bytes;
             const yp = self.lora_out.ptr + g * olr;
-            self.be.gemv(xp, .{ .data = wp, .dtype = wo_a.dtype }, yp, olr, group_in);
+            self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
         }
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
         // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
-        self.be.gemv(self.lora_out.ptr, .{ .data = wo_b.data_ptr, .dtype = wo_b.dtype }, self.hidden.ptr, e, og * olr);
+        self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
         self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
 
     }
@@ -1376,14 +1420,14 @@ pub const Ds4Model = struct {
             const ql: usize = self.q_lora_rank;
             // Step 1: Project q_compressed → indexer queries [inh * ihd] via W^IUQ
             if (self.layerTensor(li, "attn_indexer_q_b.weight")) |wiq| {
-                self.be.gemv(self.q_compressed.ptr, .{ .data = wiq.data_ptr, .dtype = wiq.dtype }, self.lid_query.ptr, inh * ihd, ql);
+                self.doGemv(self.q_compressed.ptr, wiq, self.lid_query.ptr, inh * ihd, ql);
             } else {
                 @memset(self.lid_topk_ids[0..@min(itk, n_groups)], 0);
                 return;
             }
             // Step 2: Project hidden → per-head weights [inh] via W^w
             if (self.layerTensor(li, "attn_indexer_proj.weight")) |ww| {
-                self.be.gemv(self.hidden.ptr, .{ .data = ww.data_ptr, .dtype = ww.dtype }, self.lid_head_w.ptr, inh, self.n_embd);
+                self.doGemv(self.hidden.ptr, ww, self.lid_head_w.ptr, inh, self.n_embd);
             } else {
                 for (self.lid_head_w[0..inh]) |*w| w.* = 1.0 / @as(f32, @floatFromInt(inh));
             }
@@ -1438,7 +1482,7 @@ pub const Ds4Model = struct {
             // Hash routing: expert selection is by hash lookup (CPU, no GPU sync needed).
             // Gate GEMV deferred — batched with expert GEMVs, read after final sync.
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
-            self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
+            self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
             // NO sync here — gate_inp GEMV batched with expert GEMVs below
 
             // Hash lookup: determines which experts are selected (CPU-only, no GPU data needed)
@@ -1456,7 +1500,7 @@ pub const Ds4Model = struct {
         } else {
             // Learned routing: gate_inp GEMV → sync → top-k on CPU
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
-            self.be.gemv(self.hidden2.ptr, .{ .data = gi.data_ptr, .dtype = gi.dtype }, self.router_logits.ptr, ne, e);
+            self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
             self.be.sync(); // CPU reads router_logits
 
             // Compute probs = sqrt_softplus(logits) — SIMD vectorized (3 transcendentals × 256)
@@ -1539,8 +1583,8 @@ pub const Ds4Model = struct {
                         },
                     }
                 } else {
-                    self.be.gemv(self.hidden2.ptr, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                    self.be.gemv(self.hidden2.ptr, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                    self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                 }
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
@@ -1551,23 +1595,46 @@ pub const Ds4Model = struct {
 
         var de_ptrs: [9][*]const u8 = undefined;
         var de_dtype: DType = .f32;
+        var de_exp_tensor: ?TensorInfo = null;
+        var de_exp_stride: usize = 0;
+        var de_slot_eids: [9]usize = [_]usize{0} ** 9;
         if (self.layerTensor(li, "ffn_gate_exps.weight")) |ge| {
             const ue = self.layerTensor(li, "ffn_up_exps.weight") orelse return error.MissingTensor;
             const de = self.layerTensor(li, "ffn_down_exps.weight") orelse return error.MissingTensor;
             de_dtype = de.dtype;
+            de_exp_tensor = de;
             const gs = ds4ExpertStride(ge, ne);
             const us = ds4ExpertStride(ue, ne);
             const ds = ds4ExpertStride(de, ne);
-            // SSD streaming: prefetch selected expert weights before GPU dispatch.
-            // madvise(WILLNEED) starts background page-in from SSD while we're
-            // still setting up the GPU command buffer. Helps when the 109GB model
-            // doesn't fit in RAM and cold experts need paging.
+            de_exp_stride = ds;
+            // SSD streaming: cache-aware expert prefetch.
+            // With expert cache: track residency via LRU, only madvise on misses.
+            // Without cache: unconditional madvise (original behavior).
             if (comptime @import("builtin").os.tag == .macos or @import("builtin").os.tag == .linux) {
-                for (0..n_active) |j| {
-                    const eid = top_ids[j];
-                    prefetchRange(ge.data_ptr + eid * gs, gs);
-                    prefetchRange(ue.data_ptr + eid * us, us);
-                    prefetchRange(de.data_ptr + eid * ds, ds);
+                if (self.expert_cache) |ec| {
+                    // Record activations for profiling
+                    if (self.expert_profile) |prof| {
+                        for (0..n_active) |j| prof.record(@intCast(li), @intCast(top_ids[j]));
+                        prof.recordToken();
+                    }
+                    // Only prefetch cache misses
+                    for (0..n_active) |j| {
+                        const eid = top_ids[j];
+                        if (!ec.touch(@intCast(li), @intCast(eid))) {
+                            // Cache miss — admit and prefetch
+                            _ = ec.admit(@intCast(li), @intCast(eid));
+                            prefetchRange(ge.data_ptr + eid * gs, gs);
+                            prefetchRange(ue.data_ptr + eid * us, us);
+                            prefetchRange(de.data_ptr + eid * ds, ds);
+                        }
+                    }
+                } else {
+                    for (0..n_active) |j| {
+                        const eid = top_ids[j];
+                        prefetchRange(ge.data_ptr + eid * gs, gs);
+                        prefetchRange(ue.data_ptr + eid * us, us);
+                        prefetchRange(de.data_ptr + eid * ds, ds);
+                    }
                 }
             }
             if (use_fused and (ge.dtype == .q2_k or ge.dtype == .mxfp4)) {
@@ -1584,6 +1651,7 @@ pub const Ds4Model = struct {
                                     be.fusedFfnGateUpClampedSiluQ2K(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                             }
                             de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                            de_slot_eids[n_scratch] = eid;
                             slot_weights[n_scratch] = top_weights[j];
                             n_scratch += 1;
                         }
@@ -1593,9 +1661,18 @@ pub const Ds4Model = struct {
                 fused_experts = false;
                 for (0..n_active) |j| {
                     const eid = top_ids[j];
-                    self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                    self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    // Use direct be.gemv() for GGUF quants (MXFP4, Q2_K, Q8_0, IQ2_XXS, etc.)
+                    // to avoid Metal buffer cache issues with the doGemvExpert wrapper.
+                    // doGemvExpert is only needed for MLX-Q safetensors (companion scales/biases).
+                    if (ge.dtype == .mlx_q) {
+                        self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    } else {
+                        self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    }
                     de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                    de_slot_eids[n_scratch] = eid;
                     slot_weights[n_scratch] = top_weights[j];
                     n_scratch += 1;
                 }
@@ -1610,14 +1687,38 @@ pub const Ds4Model = struct {
         // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
-                self.be.gemv(self.ff_gate_scratch.ptr, .{ .data = dt.data_ptr, .dtype = dt.dtype }, self.expert_scratch.ptr, e, ff);
+                self.doGemv(self.ff_gate_scratch.ptr, dt, self.expert_scratch.ptr, e, ff);
             }
         }
-        for (shexp_slots..n_scratch) |slot| {
-            self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+        if (de_exp_tensor) |de_t| {
+            for (shexp_slots..n_scratch) |slot| {
+                if (de_t.dtype == .mlx_q) {
+                    self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
+                } else {
+                    self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                }
+            }
+        } else {
+            for (shexp_slots..n_scratch) |slot| {
+                self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+            }
         }
 
         self.be.sync(); // all down GEMVs complete (+ gate_inp for hash layers)
+
+        // Lookahead: prefetch next layer's popular experts while CPU does
+        // the weighted accumulation below. Overlaps SSD latency with compute.
+        // Only gate weights for 1 layer ahead — more aggressive lookahead
+        // (2 layers, gate+up+down) was measured slower due to O(n_slots) scan
+        // overhead in prefetchTopResidents and wasted madvise on unpicked experts.
+        if (self.expert_cache) |ec| {
+            if (li + 1 < self.n_layers and li + 1 >= self.hash_layer_count) {
+                if (self.layerTensor(li + 1, "ffn_gate_exps.weight")) |next_ge| {
+                    const next_gs = ds4ExpertStride(next_ge, self.n_experts);
+                    ec.prefetchTopResidents(@intCast(li + 1), next_ge.data_ptr, next_gs, 6);
+                }
+            }
+        }
 
         // Deferred hash-layer weight computation: gate logits now available after sync.
         if (li < self.hash_layer_count) {
@@ -1677,8 +1778,18 @@ pub const Ds4Model = struct {
         // Embed → broadcast to all n_hc HC streams.
         // CPU-side dequant avoids GPU dispatch + sync for single-row read.
         const emb = try self.getTensorReq("token_embd.weight");
-        const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
-        quant_ops.dequantToF32(self.hc_state[0..e], emb.data_ptr + token_id * row_bytes, emb.dtype, e);
+        if (emb.dtype == .mlx_q) {
+            // MLX-Q: use dedicated embedding lookup with companion scales/biases.
+            const companion = model_mod.findMlxCompanion(self.fmt, emb, e);
+            if (companion) |c| {
+                mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(emb.data_ptr)), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
+            } else {
+                @memset(self.hc_state[0..e], 0); // fallback: no companion found
+            }
+        } else {
+            const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
+            quant_ops.dequantToF32(self.hc_state[0..e], emb.data_ptr + token_id * row_bytes, emb.dtype, e);
+        }
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
         for (0..nl) |li| {
@@ -1743,13 +1854,409 @@ pub const Ds4Model = struct {
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
         const lm = try self.getTensorReq("output.weight");
         // (Debug prints removed — dims are [n_out, n_in] due to gguf.zig reversal)
-        self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
+        self.doGemv(self.hidden.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
 
         self.kv_seq_len += 1;
 
+        // Populate MTP KV cache: project target hidden through MTP's wkv
+        // so the MTP attention can see the full conversation context.
+        if (self.mtp_weights) |mtp| {
+            if (mtp.n_depths > 0 and self.mtp_kv_len < self.max_seq_len) {
+                const kd: usize = self.kv_lora_rank;
+                // Use depth 0's wkv weights (shared across depths for KV cache)
+                if (mtp.get("mtp.0.attn.wkv.weight")) |kv_w| {
+                    if (mtp.get("mtp.0.attn.wkv.scale")) |kv_s| {
+                        const gemv_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                        // hidden → kv_proj (using MTP weights, not target weights)
+                        gemv_fn(
+                            self.hidden.ptr, kv_w.data_ptr, kv_s.data_ptr,
+                            self.kv_proj.ptr, kd, e, @intCast(kv_s.shape[1]),
+                        );
+                        // kv_a_norm
+                        if (mtp.get("mtp.0.attn.kv_norm.weight")) |kvn_t| {
+                            var kvn_f32: [512]f32 = undefined;
+                            for (0..kd) |ni| {
+                                const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(kvn_t.data_ptr + ni * 2)), .little);
+                                kvn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                            }
+                            self.be.rmsNorm(self.kv_proj.ptr, &kvn_f32, self.kv_proj.ptr, kd, self.rms_eps);
+                            self.be.sync();
+                        }
+                        // Append to MTP KV cache
+                        const pos = self.mtp_kv_len;
+                        @memcpy(self.mtp_kv_cache[pos * kd ..][0..kd], self.kv_proj[0..kd]);
+                        self.mtp_kv_len = pos + 1;
+                    }
+                }
+            }
+        }
+
         return math_ops.argmax(self.logits_buf);
     }
+
+    /// Return the number of available MTP draft depths.
+    pub fn getMtpDepth(self: *const Ds4Model) u32 {
+        return self.n_mtp_layers;
+    }
+
+    /// Reset MTP KV cache to match the target model's position.
+    /// Called after speculative rejection to discard stale MTP KV entries.
+    pub fn resetMtpCache(self: *Ds4Model) void {
+        // Reset MTP KV to the target model's current KV length.
+        // After rejection, only positions 0..kv_seq_len-1 are valid.
+        if (self.mtp_kv_len > self.kv_seq_len) {
+            self.mtp_kv_len = self.kv_seq_len;
+        }
+    }
+
+    /// MTP forward: predict draft token at the given depth.
+    /// Uses MTP weights (separate from main model) with shared expert FFN only.
+    /// Requires target model to have just completed a forward() pass (hidden state saved).
+    pub fn mtpForward(self: *Ds4Model, token_id: u32, depth: u32) !u32 {
+        const mtp = self.mtp_weights orelse return error.MissingTensor;
+        if (depth >= mtp.n_depths) return error.MissingTensor;
+
+        const e = self.n_embd;
+
+        // Step 1: Construct MTP input via main_proj
+        // input = main_proj(concat(target_hidden[4096], prev_mtp_hidden[4096], embed(token)[4096]))
+        // Total input: 12288 = 3 × 4096
+
+        // Get embedding for draft token
+        const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
+        const emb_bytes = backend_mod.weightBytes(emb_t.dtype, 1, e);
+        const emb_ptr = emb_t.data_ptr + token_id * emb_bytes;
+
+        // Build 12288-dim input: [target_hidden | prev_mtp_hidden | embedding]
+        // target_hidden is in self.hidden (saved from last forward())
+        // For depth 0, prev_mtp_hidden = zeros
+        // For depth > 0, prev_mtp_hidden was saved from the previous MTP depth
+        var mtp_input: [12288]f32 = undefined;
+        @memcpy(mtp_input[0..e], self.hidden[0..e]); // target hidden
+
+        if (depth == 0) {
+            @memset(mtp_input[e .. 2 * e], 0.0); // zeros for first depth
+        } else {
+            @memcpy(mtp_input[e .. 2 * e], self.mtp_hidden_buf[0..e]); // prev MTP hidden
+        }
+
+        // Dequant embedding into mtp_input[2*e..3*e]
+        quant_ops.dequantToF32(mtp_input[2 * e .. 3 * e], emb_ptr, emb_t.dtype, e);
+
+        // Step 2: main_proj GEMV [4096, 12288] — projects concat input to hidden dim
+        // Uses MXFP8: FP8 E4M3 weights with E8M0 per-tile block scales.
+        var name_buf: [64]u8 = undefined;
+        const proj_w_name = std.fmt.bufPrint(&name_buf, "mtp.{d}.main_proj.weight", .{depth}) catch return error.MissingTensor;
+        var scale_name_buf: [64]u8 = undefined;
+        const proj_s_name = std.fmt.bufPrint(&scale_name_buf, "mtp.{d}.main_proj.scale", .{depth}) catch return error.MissingTensor;
+        const proj_w = mtp.get(proj_w_name);
+        const proj_s = mtp.get(proj_s_name);
+
+        if (proj_w != null and proj_s != null) {
+            // MXFP8 GEMV: y[4096] = main_proj[4096, 12288] @ mtp_input[12288]
+            const gemv_mxfp8 = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+            const pw = proj_w.?;
+            const ps = proj_s.?;
+            const n_cols: usize = @intCast(pw.shape[1]); // 12288
+            const n_rows: usize = @intCast(pw.shape[0]); // 4096
+            const scale_cols: usize = @intCast(ps.shape[1]); // 96
+            gemv_mxfp8(
+                @as([*]const f32, &mtp_input),
+                pw.data_ptr,
+                ps.data_ptr,
+                self.hidden2.ptr, // output into hidden2
+                n_rows,
+                n_cols,
+                scale_cols,
+            );
+            // hidden2 now has the projected MTP input
+            // Apply main_norm before attention
+            var mn_buf: [64]u8 = undefined;
+            const mn_name = std.fmt.bufPrint(&mn_buf, "mtp.{d}.main_norm.weight", .{depth}) catch return error.MissingTensor;
+            if (mtp.get(mn_name)) |mn_t| {
+                // BF16 norm weights — dequant to f32 scratch
+                var norm_f32: [4096]f32 = undefined;
+                for (0..e) |ni| {
+                    const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(mn_t.data_ptr + ni * 2)), .little);
+                    norm_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                }
+                // RMS norm: hidden2 → hidden2 (in-place)
+                self.be.rmsNorm(self.hidden2.ptr, &norm_f32, self.hidden2.ptr, e, self.rms_eps);
+                self.be.sync();
+            }
+            // MTP attention with KV cache (compressed-space dot product).
+            // Stores kv_proj[512] per position. Uses dot-product scores in
+            // compressed space — cheaper than full Q/K MLA attention.
+            {
+                const kd: usize = self.kv_lora_rank; // 512
+                const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                // attn_norm → normed (into mtp_hidden_buf)
+                var an_buf2: [64]u8 = undefined;
+                const atn_name = std.fmt.bufPrint(&an_buf2, "mtp.{d}.attn_norm.weight", .{depth}) catch "";
+                if (mtp.get(atn_name)) |atn_t| {
+                    var atn_f32: [4096]f32 = undefined;
+                    for (0..e) |ni| {
+                        const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(atn_t.data_ptr + ni * 2)), .little);
+                        atn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                    }
+                    self.be.rmsNorm(self.hidden2.ptr, &atn_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
+                    self.be.sync();
+                } else {
+                    @memcpy(self.mtp_hidden_buf[0..e], self.hidden2[0..e]);
+                }
+                // kv_proj = wkv @ normed → [512]
+                var kv_buf2: [64]u8 = undefined;
+                var kvs_buf2: [64]u8 = undefined;
+                const kv_name2 = std.fmt.bufPrint(&kv_buf2, "mtp.{d}.attn.wkv.weight", .{depth}) catch "";
+                const kvs_name2 = std.fmt.bufPrint(&kvs_buf2, "mtp.{d}.attn.wkv.scale", .{depth}) catch "";
+                const kv_w = mtp.get(kv_name2);
+                const kv_s = mtp.get(kvs_name2);
+                if (kv_w != null and kv_s != null) {
+                    gemv_mxfp8_fn(
+                        self.mtp_hidden_buf.ptr, kv_w.?.data_ptr, kv_s.?.data_ptr,
+                        self.kv_proj.ptr, kd, e, @intCast(kv_s.?.shape[1]),
+                    );
+                    // kv_a_norm
+                    var kvn_buf2: [64]u8 = undefined;
+                    const kvn_name = std.fmt.bufPrint(&kvn_buf2, "mtp.{d}.attn.kv_norm.weight", .{depth}) catch "";
+                    if (mtp.get(kvn_name)) |kvn_t| {
+                        var kvn_f32: [512]f32 = undefined;
+                        for (0..kd) |ni| {
+                            const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(kvn_t.data_ptr + ni * 2)), .little);
+                            kvn_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                        }
+                        self.be.rmsNorm(self.kv_proj.ptr, &kvn_f32, self.kv_proj.ptr, kd, self.rms_eps);
+                        self.be.sync();
+                    }
+                    // Append kv_proj to MTP KV cache
+                    const pos = self.mtp_kv_len;
+                    if (pos < self.max_seq_len) {
+                        @memcpy(self.mtp_kv_cache[pos * kd ..][0..kd], self.kv_proj[0..kd]);
+                        self.mtp_kv_len = pos + 1;
+                    }
+                    // Compressed-space attention: score[t] = kv_proj · kv_cache[t] / sqrt(kd)
+                    const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
+                    const V8 = @Vector(8, f32);
+                    var max_score: f32 = -std.math.inf(f32);
+                    // Compute scores into scores_buf (reuse existing buffer)
+                    for (0..self.mtp_kv_len) |t| {
+                        const kv_t = self.mtp_kv_cache[t * kd ..][0..kd];
+                        var acc: V8 = @splat(0.0);
+                        var si: usize = 0;
+                        while (si + 8 <= kd) : (si += 8) {
+                            acc = @mulAdd(V8, @as(V8, self.kv_proj[si..][0..8].*), @as(V8, kv_t[si..][0..8].*), acc);
+                        }
+                        var s = @reduce(.Add, acc) * scale;
+                        while (si < kd) : (si += 1) s += self.kv_proj[si] * kv_t[si] * scale;
+                        self.scores_buf[t] = s;
+                        max_score = @max(max_score, s);
+                    }
+                    // Softmax
+                    var sum_exp: f32 = 0.0;
+                    for (0..self.mtp_kv_len) |t| {
+                        self.scores_buf[t] = @exp(self.scores_buf[t] - max_score);
+                        sum_exp += self.scores_buf[t];
+                    }
+                    const inv_sum: f32 = 1.0 / sum_exp;
+                    // Weighted sum: attn_out = Σ softmax[t] * kv_cache[t]
+                    @memset(self.kv_proj[0..kd], 0.0); // reuse as output
+                    for (0..self.mtp_kv_len) |t| {
+                        const w = self.scores_buf[t] * inv_sum;
+                        if (w < 1e-6) continue;
+                        const kv_t = self.mtp_kv_cache[t * kd ..][0..kd];
+                        const wv: V8 = @splat(w);
+                        var vi: usize = 0;
+                        while (vi + 8 <= kd) : (vi += 8) {
+                            const cur: V8 = self.kv_proj[vi..][0..8].*;
+                            self.kv_proj[vi..][0..8].* = @mulAdd(V8, @as(V8, kv_t[vi..][0..8].*), wv, cur);
+                        }
+                        while (vi < kd) : (vi += 1) self.kv_proj[vi] += kv_t[vi] * w;
+                    }
+                    // Expand to all heads: attn_out[h] = compressed_attn_out
+                    for (0..self.n_head) |h| {
+                        @memcpy(self.attn_out[h * kd ..][0..kd], self.kv_proj[0..kd]);
+                    }
+                    // wo_a → wo_b → residual add to hidden2
+                    var woa_buf: [64]u8 = undefined;
+                    var woas_buf: [64]u8 = undefined;
+                    var wob_buf: [64]u8 = undefined;
+                    var wobs_buf: [64]u8 = undefined;
+                    const woa_name = std.fmt.bufPrint(&woa_buf, "mtp.{d}.attn.wo_a.weight", .{depth}) catch "";
+                    const woas_name = std.fmt.bufPrint(&woas_buf, "mtp.{d}.attn.wo_a.scale", .{depth}) catch "";
+                    const wob_name = std.fmt.bufPrint(&wob_buf, "mtp.{d}.attn.wo_b.weight", .{depth}) catch "";
+                    const wobs_name = std.fmt.bufPrint(&wobs_buf, "mtp.{d}.attn.wo_b.scale", .{depth}) catch "";
+                    const woa_w = mtp.get(woa_name);
+                    const woa_s = mtp.get(woas_name);
+                    const wob_w = mtp.get(wob_name);
+                    const wob_s = mtp.get(wobs_name);
+                    if (woa_w != null and woa_s != null and wob_w != null and wob_s != null) {
+                        const og: usize = self.o_groups;
+                        const olr: usize = self.o_lora_rank;
+                        const gemv_mxfp8_attn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                        gemv_mxfp8_attn(
+                            self.attn_out.ptr, woa_w.?.data_ptr, woa_s.?.data_ptr,
+                            self.lora_out.ptr, og * olr, self.n_head * kd,
+                            @intCast(woa_s.?.shape[1]),
+                        );
+                        gemv_mxfp8_attn(
+                            self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr,
+                            self.expert_scratch.ptr, e, og * olr,
+                            @intCast(wob_s.?.shape[1]),
+                        );
+                        for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
+                    }
+                }
+            }
+
+            // Shared expert FFN: gate_proj + up_proj → silu_mul → down_proj
+            // Uses hidden2 as input, writes result back to hidden2 (residual add).
+            var fn_buf: [64]u8 = undefined;
+            const ffn_norm_name = std.fmt.bufPrint(&fn_buf, "mtp.{d}.ffn_norm.weight", .{depth}) catch return error.MissingTensor;
+            if (mtp.get(ffn_norm_name)) |fn_t| {
+                // FFN norm: hidden2 → mtp_hidden_buf (normed for FFN input)
+                var fnorm_f32: [4096]f32 = undefined;
+                for (0..e) |ni| {
+                    const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(fn_t.data_ptr + ni * 2)), .little);
+                    fnorm_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                }
+                self.be.rmsNorm(self.hidden2.ptr, &fnorm_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
+                self.be.sync();
+            } else {
+                @memcpy(self.mtp_hidden_buf[0..e], self.hidden2[0..e]);
+            }
+
+            // gate = w1 @ normed, up = w3 @ normed (both FP8+E8M0)
+            var gn: [64]u8 = undefined;
+            var un: [64]u8 = undefined;
+            var dn: [64]u8 = undefined;
+            var gs: [64]u8 = undefined;
+            var us: [64]u8 = undefined;
+            var ds2: [64]u8 = undefined;
+            const gate_name = std.fmt.bufPrint(&gn, "mtp.{d}.ffn.shared_experts.w1.weight", .{depth}) catch return error.MissingTensor;
+            const up_name = std.fmt.bufPrint(&un, "mtp.{d}.ffn.shared_experts.w3.weight", .{depth}) catch return error.MissingTensor;
+            const down_name = std.fmt.bufPrint(&dn, "mtp.{d}.ffn.shared_experts.w2.weight", .{depth}) catch return error.MissingTensor;
+            const gate_s_name = std.fmt.bufPrint(&gs, "mtp.{d}.ffn.shared_experts.w1.scale", .{depth}) catch return error.MissingTensor;
+            const up_s_name = std.fmt.bufPrint(&us, "mtp.{d}.ffn.shared_experts.w3.scale", .{depth}) catch return error.MissingTensor;
+            const down_s_name = std.fmt.bufPrint(&ds2, "mtp.{d}.ffn.shared_experts.w2.scale", .{depth}) catch return error.MissingTensor;
+
+            const gate_w = mtp.get(gate_name);
+            const up_w = mtp.get(up_name);
+            const down_w = mtp.get(down_name);
+            const gate_sc = mtp.get(gate_s_name);
+            const up_sc = mtp.get(up_s_name);
+            const down_sc = mtp.get(down_s_name);
+
+            if (gate_w != null and up_w != null and down_w != null and
+                gate_sc != null and up_sc != null and down_sc != null)
+            {
+                const ff: usize = @intCast(gate_w.?.shape[0]); // 2048
+                const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+
+                // gate[ff] = w1[ff, e] @ normed[e]
+                gemv_mxfp8_fn(
+                    self.mtp_hidden_buf.ptr, gate_w.?.data_ptr, gate_sc.?.data_ptr,
+                    self.ff_gate_scratch.ptr, ff, e, @intCast(gate_sc.?.shape[1]),
+                );
+                // up[ff] = w3[ff, e] @ normed[e]
+                gemv_mxfp8_fn(
+                    self.mtp_hidden_buf.ptr, up_w.?.data_ptr, up_sc.?.data_ptr,
+                    self.ff_up_scratch.ptr, ff, e, @intCast(up_sc.?.shape[1]),
+                );
+                // mid = silu(gate) * up
+                self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, ff);
+                // down[e] = w2[e, ff] @ mid[ff]
+                gemv_mxfp8_fn(
+                    self.ff_gate_scratch.ptr, down_w.?.data_ptr, down_sc.?.data_ptr,
+                    self.expert_scratch.ptr, e, ff, @intCast(down_sc.?.shape[1]),
+                );
+                // Residual add: hidden2 += down_output
+                for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
+            }
+
+            // Output: use MTP-specific norm if available, then shared lm_head
+            var on_buf: [64]u8 = undefined;
+            const on_name = std.fmt.bufPrint(&on_buf, "mtp.{d}.norm.weight", .{depth}) catch "";
+            const mtp_norm_opt = if (on_name.len > 0) mtp.get(on_name) else null;
+            if (mtp_norm_opt) |mtp_norm_t| {
+                // Use MTP-specific output norm (BF16)
+                var mnorm_f32: [4096]f32 = undefined;
+                for (0..e) |ni| {
+                    const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(mtp_norm_t.data_ptr + ni * 2)), .little);
+                    mnorm_f32[ni] = @bitCast(@as(u32, raw) << 16);
+                }
+                self.be.rmsNorm(self.hidden2.ptr, &mnorm_f32, self.mtp_hidden_buf.ptr, e, self.rms_eps);
+            } else {
+                const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+                self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
+            }
+            const lm = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
+            self.doGemv(self.mtp_hidden_buf.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
+            self.be.sync();
+            // Save for next depth
+            @memcpy(self.mtp_hidden_buf[0..e], self.hidden2[0..e]);
+            return math_ops.argmax(self.logits_buf);
+        }
+        // Use the Markov head for bigram-based draft prediction.
+        // This adds a transition bias to the target's logits:
+        //   draft = argmax(target_logits + W1[prev_token] @ W2^T)
+        // Much simpler than running a full MTP layer, and uses BF16 weights
+        // (no MXFP8 dequant needed).
+        var w1_name_buf: [64]u8 = undefined;
+        const w1_name = std.fmt.bufPrint(&w1_name_buf, "mtp.{d}.markov_head.markov_w1.weight", .{@min(depth, mtp.n_depths - 1)}) catch return error.MissingTensor;
+        var w2_name_buf: [64]u8 = undefined;
+        const w2_name = std.fmt.bufPrint(&w2_name_buf, "mtp.{d}.markov_head.markov_w2.weight", .{@min(depth, mtp.n_depths - 1)}) catch return error.MissingTensor;
+
+        const w1_opt = mtp.get(w1_name);
+        const w2_opt = mtp.get(w2_name);
+
+        if (w1_opt != null and w2_opt != null) {
+            const w1_t = w1_opt.?;
+            const w2_t = w2_opt.?;
+            const rank: usize = @intCast(w1_t.shape[1]); // 256
+            const vocab: usize = @intCast(w1_t.shape[0]); // 129280
+
+            // Step 1: e = W1[token_id] → [rank] (row lookup from BF16)
+            const bf16_row_bytes = rank * 2; // 2 bytes per BF16
+            const w1_row_ptr = w1_t.data_ptr + @as(usize, token_id) * bf16_row_bytes;
+
+            // Dequant BF16 row to f32
+            var emb_f32: [256]f32 = undefined;
+            for (0..rank) |i| {
+                const raw = std.mem.readInt(u16, @as(*const [2]u8, @ptrCast(w1_row_ptr + i * 2)), .little);
+                emb_f32[i] = @bitCast(@as(u32, raw) << 16);
+            }
+
+            // Step 2: bias = W2 @ e → [vocab] (BF16 GEMV)
+            // W2 is [vocab, rank] in BF16. Compute bias into expert_scratch.
+            // Then ADD to existing target logits in logits_buf.
+            const bias_ptr = self.expert_scratch.ptr;
+            self.be.gemv(
+                @as([*]const f32, &emb_f32),
+                .{ .data = w2_t.data_ptr, .dtype = .bf16 },
+                bias_ptr,
+                vocab,
+                rank,
+            );
+            self.be.sync();
+
+            // Step 3: draft = argmax(target_logits + markov_bias)
+            // logits_buf still contains the target model's last-token logits
+            for (0..vocab) |i| self.logits_buf[i] += self.expert_scratch[i];
+            return math_ops.argmax(self.logits_buf);
+        }
+
+        // Fallback: use target hidden → output head (produces same token as target)
+        @memcpy(self.hidden2[0..e], mtp_input[0..e]);
+        const norm_w = self.fmt.getTensor("output_norm.weight") orelse return error.MissingTensor;
+        self.be.rmsNorm(self.hidden2.ptr, self.normAsF32(norm_w, e), self.mtp_hidden_buf.ptr, e, self.rms_eps);
+        const lm = self.fmt.getTensor("output.weight") orelse return error.MissingTensor;
+        self.doGemv(self.mtp_hidden_buf.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
+        self.be.sync();
+        return math_ops.argmax(self.logits_buf);
+    }
+
+
 
     /// Prefill: process all token IDs sequentially through forward().
     /// Returns the argmax of the last token's logits.
@@ -1792,6 +2299,56 @@ pub const Ds4Model = struct {
     /// Signal an in-progress forward pass to abort. Thread-safe.
     pub fn cancel(self: *Ds4Model) void {
         self.cancelled.store(true, .release);
+    }
+
+    // ---- MLX-aware GEMV dispatch ----
+
+    /// Dispatch a single GEMV through the format-aware path.
+    /// Handles MLX-Q (affine with companion scales/biases), NVFP4, GPTQ, AWQ, HQQ,
+    /// and standard GGUF quantized weights transparently.
+    fn doGemv(self: *Ds4Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n: usize, k: usize) void {
+        model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
+    }
+
+    /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
+    /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
+    fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
+        const data = exp_t.data_ptr + ei * stride;
+        if (exp_t.dtype != .mlx_q) {
+            self.be.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
+            return;
+        }
+        const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return;
+        var sbuf: [name_buf_size]u8 = undefined;
+        const prefix = exp_t.name[0..wi];
+        const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
+        const st = self.fmt.getTensor(s_name) orelse return;
+        if (st.dtype == .unknown) {
+            // MXFP4: dims [n_experts, rows, groups_per_row], U8 — per-expert = dims[1]*dims[2]
+            // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row (U8, 1 byte)
+            const s_stride = if (st.n_dims >= 3)
+                @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2]))
+            else
+                n * @as(usize, @intCast(st.dims[st.n_dims - 1]));
+            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k);
+        } else {
+            // MLX affine: dims [n_experts, rows, groups_per_row], BF16 — per-expert = dims[1]*dims[2]*2
+            // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row * 2 (BF16)
+            var bbuf: [name_buf_size]u8 = undefined;
+            const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
+            const bt = self.fmt.getTensor(b_name) orelse return;
+            const s_stride = if (st.n_dims >= 3)
+                @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) * 2
+            else
+                n * @as(usize, @intCast(st.dims[st.n_dims - 1])) * 2;
+            // Infer bits from weight tensor: bits = words_per_row * 32 / k.
+            // This handles mixed-quant models (2-bit, 4-bit, 8-bit) correctly.
+            const bits: u32 = if (exp_t.n_dims >= 2 and k > 0)
+                @intCast(@as(u64, exp_t.dims[exp_t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+            else
+                8;
+            self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, bits, model_mod.inferMlxGroupSize(st, k));
+        }
     }
 
     /// Enable or disable the fused megakernel dispatch path.
@@ -1987,6 +2544,54 @@ fn hcSinkhorn(m: []f32) void {
     }
 }
 
+/// CPU f32 GEMV for small matrices (e.g. HC mixing weights from safetensors).
+/// y[n_out] += w[n_out × n_in] @ x[n_in]. Simple dot product, no quantization.
+fn cpuGemvF32(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const V8 = @Vector(8, f32);
+    const w: [*]const f32 = @ptrCast(@alignCast(w_ptr));
+    for (y, 0..) |*out, row| {
+        var acc: V8 = @splat(0);
+        const row_w = w + row * n_in;
+        var i: usize = 0;
+        while (i + 8 <= n_in) : (i += 8) {
+            const xv: V8 = x[i..][0..8].*;
+            const wv: V8 = row_w[i..][0..8].*;
+            acc = @mulAdd(V8, xv, wv, acc);
+        }
+        var sum: f32 = @reduce(.Add, acc);
+        while (i < n_in) : (i += 1) sum += x[i] * row_w[i];
+        out.* = sum;
+    }
+}
+
+/// CPU bf16 GEMV for small matrices (e.g. HC mixing weights from safetensors).
+/// y[n_out] += w_bf16[n_out × n_in] @ x[n_in].
+fn cpuGemvBf16(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const w: [*]const u16 = @ptrCast(@alignCast(w_ptr));
+    for (y, 0..) |*out, row| {
+        var sum: f32 = 0;
+        const row_w = w + row * n_in;
+        for (0..n_in) |i| {
+            sum += x[i] * quant_ops.bf16ToF32(row_w[i]);
+        }
+        out.* = sum;
+    }
+}
+
+/// CPU f16 GEMV for small matrices (e.g. HC mixing weights from ds4 GGUF).
+/// y[n_out] += w_f16[n_out × n_in] @ x[n_in].
+fn cpuGemvF16(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
+    const w: [*]const f16 = @ptrCast(@alignCast(w_ptr));
+    for (y, 0..) |*out, row| {
+        var sum: f32 = 0;
+        const row_w = w + row * n_in;
+        for (0..n_in) |i| {
+            sum += x[i] * @as(f32, row_w[i]);
+        }
+        out.* = sum;
+    }
+}
+
 /// CPU Q8_0 GEMV: y[n_out] = w[n_out rows × n_in cols] @ x[n_in].
 /// Avoids Metal GPU dispatch overhead for tiny output dims (like HC pre's 24-output GEMV).
 /// Q8_0 block: 2-byte f16 scale + 32 i8 values = 34 bytes.
@@ -2067,8 +2672,16 @@ fn prefetchRange(ptr: [*]const u8, len: usize) void {
 ///   Stride = dims[0] / n_experts × dims[1] — but we don't know n_experts here.
 ///   Instead, use the total bytes / n_experts where n_experts comes from the model config.
 fn ds4ExpertStride(t: TensorInfo, n_experts: usize) usize {
+    if (t.dtype == .mlx_q) {
+        // MLX-Q: weights packed as u32 words. Shape is [n_experts, rows, words_per_row].
+        if (t.n_dims >= 3) return @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2])) * @sizeOf(u32);
+        // 2D: total / n_experts
+        return (@as(usize, @intCast(t.dims[0])) * @as(usize, @intCast(t.dims[1])) * @sizeOf(u32)) / n_experts;
+    }
     if (t.n_dims >= 3) {
-        // 3D: stride = dims[1] × dims[2] (per-expert weight size)
+        // 3D: dims are normalized to [outermost, ..., innermost] = [n_experts, n_out, n_in].
+        // (GGUF stores innermost-first but gguf.zig reverses at load time.)
+        // Per-expert slice = dims[1] × dims[2] elements (n_out × n_in).
         const elems = @as(usize, @intCast(t.dims[1])) * @as(usize, @intCast(t.dims[2]));
         return backend_mod.weightBytes(t.dtype, 1, elems);
     } else {

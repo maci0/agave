@@ -213,9 +213,12 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     if (max_depth == 0) return 0;
     var n: u32 = 0;
     const effective_k = @min(state.k, max_depth);
+    var prev_tok = last_token;
     while (n < effective_k and n < max_draft_tokens) {
-        const tok = model.mtpForward(last_token, n) catch break;
+        const tok = model.mtpForward(prev_tok, n) catch break;
         state.draft_tokens[n] = tok;
+        std.log.info("MTP draft[{d}]: token {d} (prev={d})", .{ n, tok, prev_tok });
+        prev_tok = tok; // Chain: each draft uses the previous draft token
         n += 1;
     }
     state.n_draft = n;

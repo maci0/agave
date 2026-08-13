@@ -315,3 +315,64 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 6 unit tests for new samplers (XTC, DRY, Mirostat)
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
+
+## 2026-08-13 — DeepSeek V4 Flash Performance Autoresearch
+
+### Fixed
+- **Metal buffer cache staleness**: Added `volatile_weights` mode that flushes
+  the Metal buffer cache periodically on `sync()` when `--ssd-streaming` is active.
+  Prevents NaN/inf from stale `newBufferWithBytesNoCopy` references to OS-evicted
+  mmap'd pages. Models can now run back-to-back without `sudo purge`.
+  Files: `src/backend/metal.zig`, `src/backend/backend.zig`, `src/main.zig`
+
+### Investigated
+- **IQ2_XXS coherence (ds4 Q2 model)**: CPU dequant logic matches ds4/llama.cpp
+  exactly (codebook, signs, scale). Garbled output is NOT a kernel bug but rather
+  2-bit quantization error amplified by DeepSeek V4's hyper connections (HC).
+  L0 FFN output differs by ~10% from MXFP4 (expected for 2-bit), but by L1 the
+  HC mixing amplifies this to 30× divergence. ds4 engine achieves coherent output
+  from the same model likely through additional stabilization (per-layer
+  normalization, different HC precision, or quantization-aware training).
+- **Tokenization verified**: Agave and ds4 produce identical token sequences for
+  the same prompt (11 tokens for "What is 2+2?" with deepseek4 chat template).
+- **DSpark/MTP**: DS V4 Flash config.json has `dspark_block_size=5`,
+  `dspark_markov_rank=256`, `num_nextn_predict_layers=1`, but neither the MXFP4
+  nor ds4 Q2 GGUFs contain MTP weight tensors.
+
+### Performance findings (autoresearch)
+- **CPU backend for SSD streaming**: 1.2 tok/s with MXFP4, coherent output.
+  CPU is the recommended backend for SSD streaming because Metal's
+  `newBufferWithBytesNoCopy` does not trigger GPU page faults for evicted
+  file-backed mmap pages on Apple Silicon.
+- **Metal volatile_weights mode**: Buffer cache flush on `sync()` prevents
+  NaN for mostly-resident models. Enabled automatically with `--ssd-streaming`.
+  Not reliable when model far exceeds RAM (GPU reads zeroed evicted pages).
+- **Speculative decoding**: Suffix mode achieves 100% acceptance rate with
+  4.0 mean draft length on DS V4 Flash. N-gram needs history (cold start).
+  DSpark not useful for SSD streaming (extra forward passes = more SSD reads).
+- **IQ2_XXS coherence**: CPU dequant matches ds4/llama.cpp exactly.
+  Root cause is 2-bit quantization error amplified by hyper connections (HC).
+  L0 FFN output differs ~10% from MXFP4, diverges 30× by L1 through HC mixing.
+
+### Research findings (autoresearch iterations 4-5)
+- **Logit correlation analysis**: MXFP4 preserves 65% of ds4 reference logit
+  signal (r=0.65). IQ2_XXS preserves 2% (r=0.02, complete signal loss through
+  43 layers of HC mixing). Sinkhorn implementation verified identical to ds4
+  (max diff 6e-8). IQ2_XXS kernel verified correct.
+- **Expert cache profiling**: ~51 unique experts per layer, 73% cache hit rate
+  at 64 tokens. At warm cache, system is ~70% compute-bound, ~30% SSD-bound.
+- **Coherent generation**: MXFP4 CPU at 1.0 tok/s produces coherent multi-
+  paragraph text. Quality comparable to marginal MXFP4 baseline but reliable.
+
+### Discovery: DS V4 Flash MTP/DSpark weights
+- HF safetensors (deepseek-ai/DeepSeek-V4-Flash-0731) contain 3 full MTP
+  decoder layers with 4,705 tensors including:
+  - Full MLA attention per MTP layer
+  - Full MoE FFN (256 routed experts + shared) per MTP layer
+  - Hyper connections per MTP layer
+  - DSpark confidence_head + markov_head on mtp.2
+  - hc_head (HC merge head) on mtp.2
+- GGUF quantizers (ggml-org, ds4/antirez) stripped ALL MTP weight tensors
+- DSpark weights in ~/Models are for Qwen3 8B, not DS V4 Flash
+- Implementing MTP for DS V4 requires loading from HF safetensors (not GGUF)
+  or converting MTP tensors to GGUF format

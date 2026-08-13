@@ -511,7 +511,7 @@ pub const NemotronNanoModel = struct {
         if (lm.dtype == .mlx_q) {
             const lm_s = self.fmt.getTensor("lm_head.scales") orelse return error.MissingTensor;
             const lm_b = self.fmt.getTensor("lm_head.biases") orelse return error.MissingTensor;
-            self.be.gemvMlxQ(self.hidden.ptr, lm.data_ptr, lm_s.data_ptr, lm_b.data_ptr, self.logits_buf.ptr, self.vocab_size, e, self.mlx_bits);
+            self.be.gemvMlxQ(self.hidden.ptr, lm.data_ptr, lm_s.data_ptr, lm_b.data_ptr, self.logits_buf.ptr, self.vocab_size, e, self.mlx_bits, model_mod.inferMlxGroupSize(lm_s, e));
         } else {
             self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
         }
@@ -562,7 +562,7 @@ pub const NemotronNanoModel = struct {
         if (lm.dtype == .mlx_q) {
             const lm_s = self.fmt.getTensor("lm_head.scales") orelse return error.MissingTensor;
             const lm_b = self.fmt.getTensor("lm_head.biases") orelse return error.MissingTensor;
-            self.be.gemvMlxQ(self.hidden.ptr, lm.data_ptr, lm_s.data_ptr, lm_b.data_ptr, self.logits_buf.ptr, self.vocab_size, e, self.mlx_bits);
+            self.be.gemvMlxQ(self.hidden.ptr, lm.data_ptr, lm_s.data_ptr, lm_b.data_ptr, self.logits_buf.ptr, self.vocab_size, e, self.mlx_bits, model_mod.inferMlxGroupSize(lm_s, e));
         } else {
             self.be.gemv(self.hidden.ptr, .{ .data = lm.data_ptr, .dtype = lm.dtype }, self.logits_buf.ptr, self.vocab_size, e);
         }
@@ -1146,7 +1146,7 @@ pub const NemotronNanoModel = struct {
         if (w.dtype == .mlx_q) {
             if (self.stLayerTensor(li, prefix ++ ".biases")) |b_t| {
                 const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
-                self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
+                self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits, model_mod.inferMlxGroupSize(s_t, k));
             } else if (self.findScaleTensor(li, prefix)) |s_t| {
                 self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);
                 self.be.sync();
@@ -1182,14 +1182,14 @@ pub const NemotronNanoModel = struct {
             // MLX path: U32 packed weights + BF16 scales + BF16 biases
             const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
             const b_t = self.stLayerTensor(li, prefix ++ ".biases").?;
-            const gs = mlx_group_size;
+            const gs: usize = model_mod.inferMlxGroupSize(s_t, k);
             const gpr = (k + gs - 1) / gs;
-            const wpg = mlx_ops.wordsPerGroup(self.mlx_bits);
+            const wpg = mlx_ops.wordsPerGroup(self.mlx_bits, gs);
             const wpr = gpr * wpg;
             // Byte offsets: weights are u32 words, scales/biases are u16 (bf16)
             const w_byte_offset = exp_idx * n * wpr * @sizeOf(u32);
             const s_byte_offset = exp_idx * n * gpr * @sizeOf(u16);
-            self.be.gemvMlxQ(x, w.data_ptr + w_byte_offset, s_t.data_ptr + s_byte_offset, b_t.data_ptr + s_byte_offset, y, n, k, self.mlx_bits);
+            self.be.gemvMlxQ(x, w.data_ptr + w_byte_offset, s_t.data_ptr + s_byte_offset, b_t.data_ptr + s_byte_offset, y, n, k, self.mlx_bits, @intCast(gs));
         } else {
             const s_t = self.findScaleTensor(li, prefix) orelse return error.MissingTensor;
             const w_stride = n * (k / nvfp4_values_per_byte);
@@ -1248,7 +1248,7 @@ pub const NemotronNanoModel = struct {
         if (w.dtype == .mlx_q and self.stLayerTensor(li, prefix ++ ".biases") != null) {
             const s_t = self.stLayerTensor(li, prefix ++ ".scales") orelse return error.MissingTensor;
             const b_t = self.stLayerTensor(li, prefix ++ ".biases").?;
-            self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits);
+            self.be.gemvMlxQ(x, w.data_ptr, s_t.data_ptr, b_t.data_ptr, y, n, k, self.mlx_bits, model_mod.inferMlxGroupSize(s_t, k));
         } else {
             const s_t = self.findScaleTensor(li, prefix) orelse return error.MissingTensor;
             self.be.gemvNvfp4St(x, w.data_ptr, s_t.data_ptr, y, n, k);

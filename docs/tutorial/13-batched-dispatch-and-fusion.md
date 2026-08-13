@@ -161,6 +161,7 @@ GemvOp:
   mlx_scales: ?[*]const u8 = null   # optional MLX companions
   mlx_biases: ?[*]const u8 = null
   mlx_bits: u32 = 0
+  mlx_group_size: u32 = 64          # elements per scale/bias pair
 ```
 
 **Implementation:** [src/backend/backend.zig](../../src/backend/backend.zig) (`GemvOp`).

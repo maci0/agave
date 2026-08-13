@@ -562,8 +562,9 @@ pub const CpuBackend = struct {
 
     /// MLX affine quantized GEMV: packed integer weights + bf16 scales/biases.
     /// When a thread pool is available, parallelizes across output rows.
-    pub fn gemvMlxQ(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32) void {
+    pub fn gemvMlxQ(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, group_size: u32) void {
         const mlx_ops = @import("../ops/mlx.zig");
+        const gs: usize = group_size;
         if (self.pool) |pool| {
             if (n >= parallel_min_rows) {
                 var ctx = MlxGemvCtx{
@@ -574,12 +575,13 @@ pub const CpuBackend = struct {
                     .y = y,
                     .k = k,
                     .bits = bits,
+                    .gs = gs,
                 };
                 pool.parallelFor(n, parallel_grain, @ptrCast(&ctx), MlxGemvCtx.work);
                 return;
             }
         }
-        mlx_ops.mlxGemvRows(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), y, 0, n, k, bits);
+        mlx_ops.mlxGemvRows(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), y, 0, n, k, bits, gs);
     }
 
     /// Context for parallel MLX GEMV dispatch.
@@ -591,11 +593,12 @@ pub const CpuBackend = struct {
         y: [*]f32,
         k: usize,
         bits: u32,
+        gs: usize,
 
         fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *const MlxGemvCtx = @ptrCast(@alignCast(ctx_ptr));
             const mlx = @import("../ops/mlx.zig");
-            mlx.mlxGemvRows(ctx.x, ctx.pw, ctx.sc, ctx.bi, ctx.y, start, end - start, ctx.k, ctx.bits);
+            mlx.mlxGemvRows(ctx.x, ctx.pw, ctx.sc, ctx.bi, ctx.y, start, end - start, ctx.k, ctx.bits, ctx.gs);
         }
     };
 
@@ -707,7 +710,7 @@ pub const CpuBackend = struct {
         for (ops) |op| {
             if (op.mlx_scales != null) {
                 const mlx_ops = @import("../ops/mlx.zig");
-                mlx_ops.mlxGemvRaw(x, @ptrCast(@alignCast(op.w.data)), @ptrCast(@alignCast(op.mlx_scales.?)), @ptrCast(@alignCast(op.mlx_biases.?)), op.y, op.n, k, op.mlx_bits);
+                mlx_ops.mlxGemvRaw(x, @ptrCast(@alignCast(op.w.data)), @ptrCast(@alignCast(op.mlx_scales.?)), @ptrCast(@alignCast(op.mlx_biases.?)), op.y, op.n, k, op.mlx_bits, op.mlx_group_size);
             } else {
                 self.gemv(x, op.w, op.y, op.n, k);
             }

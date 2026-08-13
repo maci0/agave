@@ -613,7 +613,7 @@ pub const GptOssModel = struct {
         if (comp.is_mxfp4) {
             self.be.gemvMxfp4St(x, t.data_ptr, comp.scales, y, n, k);
         } else {
-            self.be.gemvMlxQ(x, t.data_ptr, comp.scales, comp.biases, y, n, k, comp.bits);
+            self.be.gemvMlxQ(x, t.data_ptr, comp.scales, comp.biases, y, n, k, comp.bits, comp.group_size);
         }
     }
 
@@ -633,7 +633,7 @@ pub const GptOssModel = struct {
         } else {
             // MLX affine: BF16 scales + biases (2 bytes/group each)
             const s_stride = comp.expertScaleStrideAffine();
-            self.be.gemvMlxQ(x, data, comp.scales + ei * s_stride, comp.biases + ei * s_stride, y, n, k, comp.bits);
+            self.be.gemvMlxQ(x, data, comp.scales + ei * s_stride, comp.biases + ei * s_stride, y, n, k, comp.bits, comp.group_size);
         }
     }
 
@@ -657,6 +657,7 @@ pub const GptOssModel = struct {
         bias_t: TensorInfo, // undefined for MXFP4
         is_mxfp4: bool,
         bits: u32,
+        group_size: u32 = 64,
 
         /// Per-expert stride for U8 MXFP4 scales: rows × groups_per_row × 1 byte.
         /// Dims are [n_experts, rows, groups_per_row] — per-expert = dims[1]*dims[2].
@@ -711,6 +712,7 @@ pub const GptOssModel = struct {
             // Detect bits per-tensor from weight words: bits = last_dim * 32 / k
             // where last_dim is words_per_row. Handles mixed-quant (8-bit attn + 4-bit experts).
             .bits = inferMlxBits(t, self.n_embd),
+            .group_size = model_mod.inferMlxGroupSize(st, self.n_embd),
         };
     }
 
