@@ -195,7 +195,7 @@ pub const SuffixState = struct {
     const cache_capacity: usize = 10_000;
     const min_suffix: usize = 2; // minimum suffix length to attempt
     const max_suffix: usize = 32; // maximum suffix length to search
-    const default_max_k: usize = 24; // vLLM default max tree depth
+    const default_max_k: usize = 48; // vLLM default max tree depth
 
     history: []u32,
     len: usize = 0,
