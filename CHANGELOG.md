@@ -363,3 +363,16 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
   at 64 tokens. At warm cache, system is ~70% compute-bound, ~30% SSD-bound.
 - **Coherent generation**: MXFP4 CPU at 1.0 tok/s produces coherent multi-
   paragraph text. Quality comparable to marginal MXFP4 baseline but reliable.
+
+### Discovery: DS V4 Flash MTP/DSpark weights
+- HF safetensors (deepseek-ai/DeepSeek-V4-Flash-0731) contain 3 full MTP
+  decoder layers with 4,705 tensors including:
+  - Full MLA attention per MTP layer
+  - Full MoE FFN (256 routed experts + shared) per MTP layer
+  - Hyper connections per MTP layer
+  - DSpark confidence_head + markov_head on mtp.2
+  - hc_head (HC merge head) on mtp.2
+- GGUF quantizers (ggml-org, ds4/antirez) stripped ALL MTP weight tensors
+- DSpark weights in ~/Models are for Qwen3 8B, not DS V4 Flash
+- Implementing MTP for DS V4 requires loading from HF safetensors (not GGUF)
+  or converting MTP tensors to GGUF format
