@@ -1,6 +1,6 @@
 # DeepSeek V4 Flash — Performance & MTP Handoff
 
-*Last updated: 2026-08-14. Covers 15 autoresearch iterations + 5-iteration MTP ralph loop.*
+*Last updated: 2026-08-14. Covers 22 autoresearch iterations + 5-iteration MTP ralph loop.*
 
 ---
 
@@ -211,6 +211,9 @@ ls ~/Models/dspark_qwen3_8b/  # 4.7GB safetensors, 5-layer backbone
 6. **SSD streaming at 73% cache hit is compute-bound.** GEMV optimization > cache optimization.
 7. **Expert usage is uniform.** ~51/256 per layer, no hot/cold split. LRU is fine.
 8. **Sinkhorn is axis-invariant.** Row-first vs column-first converge identically after 20 iterations.
+9. **Suffix max_k=48 is transformative.** Longer suffix matches (19+ mean draft) reduce target forward passes dramatically. For structured output: 10+ tok/s on CPU.
+10. **Metal+CPU hybrid per-layer is too slow.** CPU↔GPU sync overhead (~5ms × 129 syncs = 645ms) exceeds compute savings. Need batched Metal dispatch (graph capture) not per-layer switching.
+11. **Full expert prefetch (gate+up+down) gives 20-33% speedup.** Previously only gate was prefetched; up/down caused cold SSD reads.
 
 ---
 
