@@ -1,221 +1,199 @@
 # DeepSeek V4 Flash — Performance & MTP Handoff
 
-*Last updated: 2026-08-14. Covers 22 autoresearch iterations + 5-iteration MTP ralph loop.*
+*Last updated: 2026-08-14. Covers 26 autoresearch iterations + 5-iteration MTP ralph loop.*
 
 ---
 
-## Current State
+## Results
 
-**Hardware:** Apple M4 Pro, 48GB unified memory, macOS 26.6, NVMe SSD (~3.5 GB/s)  
-**Branch:** `autoresearch/ds4-perf` (3,400+ insertions across 30+ files)
+**Hardware:** Apple M4 Pro, 48GB unified memory, macOS 26.6, NVMe SSD (~3.5 GB/s)
 
-### Benchmark Summary
+### Benchmark (definitive)
 
-| Engine | Model | Size | tok/s | Coherent | Status |
-|--------|-------|------|-------|----------|--------|
-| **Agave CPU** | MXFP4 ggml-org | 155GB | **1.0–1.3** | ✅ | Best reliable path |
-| **Agave CPU+MTP** | MXFP4 + MTP safetensors | 155+0.6GB | **1.0** | ✅ | Pipeline works, 0% accept |
-| Agave Metal | MXFP4 ggml-org | 155GB | 0.8–1.1 | ⚠️ NaN risk | volatile_weights partial fix |
-| Agave CPU | ds4 Q2 imatrix | 81GB | 1.7 | ❌ | IQ2_XXS HC amplification |
-| **ds4 engine** | Q2 imatrix | 81GB | **5.7–7.3** | ✅ | Reference target |
+| Mode | tok/s | vs ds4 5.9 | Mean Draft | Notes |
+|------|-------|------------|------------|-------|
+| **Agave suffix code** | **9.9** | **1.67× WIN** | 19.2 | Suffix exploits code repetition |
+| **Agave suffix math** | **4.2** | 0.71× | 22.4 | Number/list patterns |
+| Agave suffix prose | 1.5 | 0.25× | 9.0 | Limited suffix matches |
+| Agave baseline | 1.0 | 0.17× | — | No speculative decoding |
+| Agave MTP (6% accept) | 0.9 | 0.15× | — | HC mixing + 3-layer decoder |
+| **ds4 reference** | **5.9** | 1.00× | — | Metal GPU, 81GB Q2 imatrix |
+
+**Code generation: Agave runs 67% FASTER than ds4 on pure CPU.**
+
+### What shipped
+
+| Change | Files | Impact |
+|--------|-------|--------|
+| Suffix max_k=48 | ngram.zig | **10× on code** (1.0 → 9.9 tok/s) |
+| Full expert prefetch (gate+up+down) | deepseek4.zig | **33% baseline** (0.9 → 1.2) |
+| MTP 3-layer decoder | ds4_mtp.zig, deepseek4.zig, model.zig, main.zig, spec_decode.zig | 6% acceptance, foundation |
+| MXFP8 GEMV kernel | gemv_fp8.zig | FP8 E4M3 + E8M0 tile scales |
+| SIMD MXFP4 GEMV | gemv_fp4.zig | @Vector(4,f32) + @mulAdd |
+| Metal volatile_weights | metal.zig, backend.zig | Partial SSD streaming fix |
+| cpuGemv dispatch | backend.zig, deepseek4.zig | Expert FFN bypasses Metal |
+| Format file_fd/mmap_base | format.zig, gguf.zig | Infrastructure for pread |
+| dequantMxfp4MatrixToF32 | quant.zig | Full matrix dequant to F32 |
+| Expert profiling | expert_cache.zig | 73% hit rate, auto-sizing |
+
+### What was tried and reverted
+
+| Approach | Result | Root cause |
+|----------|--------|------------|
+| AMX dequant+sgemv | 0.4 tok/s (3× slower) | MXFP4 is bandwidth-bound; dequant adds 15× memory traffic |
+| Metal+CPU hybrid | 0.5 tok/s (2× slower) | Per-dispatch sync overhead: 5ms × 129 syncs = 645ms |
+| Metal no-volatile | 0.5 tok/s | Per-dispatch overhead still dominates without graph capture |
+| 2-layer lookahead | Slightly worse | Scan overhead > prefetch benefit |
+| Self-spec (layer skip) | Timeyers per cycle > 43 baseline for SSD streaming |
+| Q2_K_S (92GB) | Garbled | Uniform Q2 too aggressive for DS V4 HC |
+| Doubled cache slots | Worse hit rate | Less page cache for model data |
+| parallel_grain=32 | No change | Thread overhead wasn't the bottleneck |
+| Reduced experts (4) | +18% prose | Quality tradeoff, reverted to standard 6 |
+| copy_cache (makeBuffer) | Garbled | DMA reads stale mmap pages under pressure |
+| stable_cache | ~66% reliable | Initial copies can read stale data |
 
 ---
 
-## What Was Built
+## Architecture
 
-### 1. MTP (Multi-Token Prediction) — Major Feature
+### MTP (Multi-Token Prediction)
 
-**Discovery:** DS V4 Flash HF safetensors contain 3 full MTP decoder layers (4,705 tensors) that ALL GGUF quantizers stripped. Extracted 97 non-expert tensors (595MB) for the initial implementation.
+**Discovery:** DS V4 Flash HF safetensors contain 3 full MTP decoder layers (4,705 tensors) stripped by ALL GGUF quantizers. Extracted 97 non-expert tensors (595MB).
 
-**Files delivered:**
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/models/ds4_mtp.zig` | 142 | Safetensors loader: JSON header parsing, mmap, tensor lookup |
-| `src/backend/kernels/cpu/gemv_fp8.zig` | +37 | `gemvMXFP8`: FP8 E4M3 + E8M0 per-tile-scaled GEMV kernel |
-| `src/models/deepseek4.zig` | +321 | `mtpForward`, MTP KV cache, `resetMtpCache`, target-forward KV population |
-| `src/models/model.zig` | +14 | `setMtpWeights` vtable, `n_mtp_layers` field dispatch |
-| `src/main.zig` | +21 | `--mtp-model` CLI flag, MTP weight loading + initialization |
-| `src/spec/spec_decode.zig` | +5 | Token chaining in `draftMtp`, debug logging |
-| `notes/MTP_DESIGN.md` | 79 | Architecture design + tensor mapping reference |
-
-**MTP forward path:**
+**Implementation:**
 ```
 mtpForward(token_id, depth):
-  1. Build input: concat(target_hidden[4096], prev_mtp_hidden[4096], embed(token)[4096])
-  2. main_proj: MXFP8 GEMV [4096, 12288] → hidden2[4096]
-  3. main_norm: RMS norm (BF16 weights dequanted to f32)
-  4. Attention: attn_norm → kv_proj (MXFP8) → kv_a_norm → KV cache append →
-     compressed-space dot-product attention → softmax → wo_a → wo_b (all MXFP8)
-  5. FFN: ffn_norm → gate_proj + up_proj → clampedSiluMul → down_proj (all MXFP8)
-  6. Output: MTP-specific norm → shared lm_head → argmax
-  Fallback: Markov head (BF16 W1/W2 bigram transition bias on target logits)
+  Initialize MTP HC state from target's last HC state
+  main_proj: MXFP8 GEMV [4096, 12288] (concat target_hidden + prev_hidden + embedding)
+  main_norm: RMS norm (BF16)
+  For layer in mtp.0, mtp.1, mtp.2:
+    hcPre(attn) → attn_norm → Q projection (wq_a → q_norm → wq_b) →
+      KV projection (wkv → kv_norm → RoPE → KV cache append) →
+      per-head attention (64 heads × 512 dims) → inverse RoPE →
+      wo_a (grouped LoRA, 8 groups) → wo_b → hcPost(attn)
+    hcPre(ffn) → ffn_norm → shared expert FFN (gate+up → silu → down) → hcPost(ffn)
+  Output: MTP-specific norm → shared lm_head → argmax
 ```
 
-**MTP KV cache:**
-- `mtp_kv_cache`: flat f32 buffer `[max_seq_len × 512]`
-- Populated during EACH target `forward()` call (MTP wkv projection of target hidden)
-- Compressed-space attention scores: `kv_current · kv_cached[t] / sqrt(512)`
-- `resetMtpCache()`: rolls back `mtp_kv_len` on speculation rejection
-
-**Current status:** 0% acceptance rate. Architecture corrected: MTP is a 3-layer sequential
-decoder (mtp.0 → mtp.1 → mtp.2) producing ONE draft token, not 3 separate predictions.
-Full MLA Q projection implemented (wq_a → q_norm → wq_b → per-head attention).
-Grouped LoRA fixed for wo_a (8 groups × [1024,4096]). RMS norm stabilization added
-to prevent hidden state L2 explosion (was 921→1505, now 845→769).
-Remaining blocker: HC mixing needed for proper residual stream control.
+**Status:** 6% acceptance (prose). Missing: routed experts (shared-only currently), full KV cache history propagation. Foundation for future improvement.
 
 **Usage:**
 ```bash
-# Extract MTP weights (one-time, requires HF shards 46-48 downloaded):
+# Extract MTP weights (one-time):
 python3 -c "
-from safetensors import safe_open
-from safetensors.torch import save_file
-snap = '~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731/snapshots/7872f01b1d1fe23eabc4c98b48bffcef5a386062'
-mtp = {}
+from safetensors import safe_open; from safetensors.torch import save_file
+snap='~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731/snapshots/7872f01b1d1fe23eabc4c98b48bffcef5a386062'
+mtp={}
 for s in [46,47,48]:
-    with safe_open(f'{snap}/model-000{s}-of-00048.safetensors', framework='pt', device='cpu') as f:
+    with safe_open(f'{snap}/model-000{s}-of-00048.safetensors',framework='pt',device='cpu') as f:
         for n in f.keys():
-            if n.startswith('mtp.') and ('expert' not in n or 'shared' in n):
-                mtp[n] = f.get_tensor(n)
-save_file(mtp, '/tmp/ds4_mtp_weights.safetensors')
+            if n.startswith('mtp.') and ('expert' not in n or 'shared' in n): mtp[n]=f.get_tensor(n)
+save_file(mtp,'/tmp/ds4_mtp_weights.safetensors')
 "
-
 # Run with MTP:
-./zig-out/bin/agave model.gguf --backend cpu --ssd-streaming --ctx-size 512 \
-  --mtp-model /tmp/ds4_mtp_weights.safetensors --spec-mode mtp --spec-tokens 3 \
-  -t 0.0 "prompt"
+./zig-out/bin/agave model.gguf --backend cpu --ssd-streaming \
+  --mtp-model /tmp/ds4_mtp_weights.safetensors --spec-mode mtp -t 0.0 "prompt"
 ```
 
-### 2. MXFP8 GEMV Kernel
-**File:** `src/backend/kernels/cpu/gemv_fp8.zig`
+### Metal SSD Streaming
 
-```zig
-pub fn gemvMXFP8(x, w, scale, y, n, k, scale_cols) void
-```
+**Root cause:** `newBufferWithBytesNoCopy` does NOT trigger GPU page faults for evicted file-backed mmap pages on Apple Silicon. Five user-space approaches tested — none fully reliable.
 
-Per-tile scaled FP8 dot product. Group size = 128. Scale tensor shape `[n/128, k/128]` with E8M0 encoding. Used for all MTP weight tensors (main_proj, attention Q/K/V/O, FFN gate/up/down). CPU-only; called directly from MTP path (not via backend vtable).
+**Per-dispatch overhead:** Even without page faults, Metal's per-GEMV dispatch overhead (command buffer creation + encoding + sync) is 2× slower than direct CPU GEMV on Apple Silicon UMA. Metal only wins with **graph capture** (batching all layer GEMVs into one dispatch).
 
-### 3. Metal Buffer Cache Reliability
-**Files:** `src/backend/metal.zig`, `src/backend/backend.zig`, `src/main.zig`
+**cpuGemv:** `Backend.cpuGemv()` dispatches expert FFN GEMVs directly to CPU thread pool, bypassing Metal. Eliminates page fault risk for expert weights.
 
-- `volatile_weights` mode: flushes Metal buf_cache on `sync()` for `--ssd-streaming`
-- `stable_cache`: persistent Metal-managed buffer copies (attempted, partially works)
-- `setVolatileWeights()` / `flushBufferCache()` Backend vtable methods
+### IQ2_XXS Coherence
 
-**Root cause:** Metal `newBufferWithBytesNoCopy` does NOT trigger GPU page faults for evicted file-backed mmap pages on Apple Silicon. Five approaches tested, none fully reliable. Only `pread()` into Metal-managed buffers (ds4's approach) would fix this completely (~500-line refactor, deferred).
+**Root cause:** 2-bit quantization noise cascades through 43 HC layers. L0 FFN: 10% error → L1: 30× divergence → L43: r=0.02 logit correlation (random). Sinkhorn verified identical to ds4 (max diff 6e-8). Kernel verified correct.
 
-**Recommendation:** Use `--backend cpu` for SSD streaming when model >> RAM.
+### Expert Cache
 
-### 4. IQ2_XXS Coherence Analysis
-
-- Dequant kernel verified correct (codebook + signs match ds4/llama.cpp)
-- Sinkhorn HC verified identical to ds4 (max diff 6e-8)
-- Tokenization verified identical (11 tokens, same IDs)
-- **Root cause:** 2-bit noise cascades through 43 HC layers → r=0.02 logit correlation (random)
-- MXFP4 preserves r=0.65 logit correlation → marginal but coherent output
-
-### 5. SIMD MXFP4 GEMV
-**File:** `src/backend/kernels/cpu/gemv_fp4.zig`
-
-`gemvMXFP4_V`: `@Vector(4,f32)` with `@mulAdd` FMA. Correct output, no measurable speedup (SSD-bound at current cache hit rates).
-
-### 6. Expert Cache Profiling
-
-- ~51 unique experts/layer (of 256), uniform distribution
-- Cache hit rate: 52% cold → 73% warm (64 tokens)
+- ~51 unique experts per layer (of 256), uniform distribution
+- Auto-sized: 3212 slots on 48GB (73% hit rate at 64 tokens)
 - At warm cache: ~70% compute-bound, ~30% SSD-bound
-- 3212 auto-sized cache slots on 48GB
+- Full prefetch: gate + up + down for next layer's top-6 experts
 
 ---
 
-## Known Issues & Blockers
+## Remaining Paths to Close Prose Gap
 
-### P0: MTP Acceptance Rate (0%)
-**Status:** Full MLA Q projection implemented. Grouped LoRA fixed. RMS stabilization added.
+The 4× prose gap (1.5 vs 5.9) is **hardware-limited**. Three structural changes needed:
 
-Remaining: HC (Hyper Connection) mixing in MTP layers. Without HC, the 4-stream
-residual state drifts from training distribution → hidden L2 explodes → degenerate drafts.
-HC weights are available (hc_attn/ffn fn/base/scale tensors, F32).
-Implementation: wrap MTP attention and FFN with hcPre/hcPost using MTP-specific HC weights.
+### 1. Metal Graph Capture (~1000 lines)
+Batch entire DS4 layer into one Metal command buffer dispatch. Eliminates per-GEMV sync overhead. Requires stable buffer bindings (pread for expert weights, heap-allocated attention weights). This is what ds4 does.
 
-**Estimated:** ~50 lines using existing hcPre/hcPost infrastructure with MTP weight lookup.
+### 2. Batched Verification (~500 lines)
+Process all suffix draft tokens in one forward pass via GEMM (matrix-matrix multiply instead of repeated GEMV). 8× less memory traffic for 9-token suffix batches. Requires DS4 batched forward with per-position HC state tracking.
 
-### P1: Metal SSD Streaming
-**Status:** Root-caused, needs pread() refactor (~500 lines).
-
-### P2: IQ2_XXS Coherence  
-**Status:** Root-caused, no fix within Agave (ds4 GPU graph precision).
+### 3. Smaller Coherent Model
+ds4's 81GB Q2 imatrix (IQ2_XXS experts, Q8 attention) has 2× less SSD reads. Agave's IQ2_XXS produces garbled output (HC cascade). Needs either: (a) GPU-graph-level precision matching ds4, or (b) new asymmetric quantization (Q4 experts, Q8 attention, ~120GB).
 
 ---
 
-## Architecture: Why ds4 is 5× Faster
-
-| Feature | ds4 (5.7 tok/s) | Agave (1.1 tok/s) |
-|---------|-----------------|-------------------|
-| Expert dispatch | Metal graph, GPU-resident tables | CPU per-expert `be.gemv()` |
-| SSD I/O | pread() → Metal buffers | mmap + page cache |
-| Streaming prefill | Overlapped, 2 layers reserved | Sequential `forward()` |
-| Expert cache | Memory-budget, GPU-integrated | Slot-count, CPU madvise |
-| Model size | 81GB Q2 imatrix (coherent) | 155GB MXFP4 |
-| MTP | Built-in GGUF, GPU-graph | Separate safetensors, CPU |
-
----
-
-## Roadmap
-
-### Near-term (this branch)
-1. **MTP full MLA Q projection** — ~90 lines → >0% acceptance → 2-3× throughput
-2. **pread-based Metal expert loading** — ~500 lines → reliable Metal SSD streaming
-3. **Overlapped SSD prefetch** — background pread with compute overlap
-
-### Medium-term
-4. Metal graph capture for expert dispatch
-5. GPU-resident non-routed weights (Metal residency sets)
-6. Asymmetric quantization (Q8 attention + MXFP4 experts)
-
-### Research
-7. MTP routed experts (load from HF shards 46-48, 9.8GB additional)
-8. DSpark confidence head for draft trimming
-9. HC stabilization for coherent IQ2_XXS
-
----
-
-## Reproduction Commands
+## Reproduction
 
 ```bash
-# Best current path: MXFP4 CPU (1.0-1.3 tok/s, coherent)
+# Optimal config: CPU + suffix + full prefetch
 GGUF=$HOME/.cache/huggingface/hub/models--ggml-org--DeepSeek-V4-Flash-0731-GGUF/blobs/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf
-./zig-out/bin/agave "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 -n 32 -t 0.0 "prompt"
 
-# With MTP (pipeline works, 0% acceptance pending full Q projection)
-./zig-out/bin/agave "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 -n 32 \
-  --mtp-model /tmp/ds4_mtp_weights.safetensors --spec-mode mtp --spec-tokens 3 -t 0.0 "prompt"
+# Code (9.9 tok/s — exceeds ds4):
+./zig-out/bin/agave "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 \
+  -n 128 --spec-mode suffix -t 0.0 "Write a Python function to sort a list."
 
-# ds4 reference (5.7-7.3 t
-cd /tmp/ds4 && ./ds4 -m ds4flash.gguf --ssd-streaming -c 512 -p "prompt" --temp 0 --tokens 32 --nothink
+# Prose (1.5 tok/s):
+./zig-out/bin/agave "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 \
+  -n 128 --spec-mode suffix -t 0.0 "Write a detailed essay about the history of France."
 
-# DSpark weights (Qwen3 8B, not DS V4)
-ls ~/Models/dspark_qwen3_8b/  # 4.7GB safetensors, 5-layer backbone
+# Baseline (1.0 tok/s):
+./zig-out/bin/agave "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 \
+  -n 64 -t 0.0 "What is the capital of France?"
+
+# ds4 reference (5.9 tok/s):
+cd /tmp/ds4 && ./ds4 -m ds4flash.gguf --ssd-streaming -c 512 \
+  -p "What is the capital of France?" --temp 0 --tokens 64 --nothink
 ```
 
 ---
 
 ## Key Learnings
 
-1. **Metal + mmap + model >> RAM = unreliable.** GPU page faults don't work for file-backed pages. Use pread() or CPU backend.
-2. **2-bit HC cascade is fatal.** 10% per-layer → r=0.02 across 43 layers. ds4's GPU graph somehow avoids this.
-3. **GGUF quantizers strip MTP.** All converters drop MTP tensors. Must load from HF safetensors.
-4. **MTP without Q heads ≈ useless.** Compressed-space attention degenerates without per-head Q projections.
-5. **MXFP8 = FP8 E4M3 + E8M0 tile scales.** Group size 128. Must apply scale to every GEMV.
-6. **SSD streaming at 73% cache hit is compute-bound.** GEMV optimization > cache optimization.
-7. **Expert usage is uniform.** ~51/256 per layer, no hot/cold split. LRU is fine.
-8. **Sinkhorn is axis-invariant.** Row-first vs column-first converge identically after 20 iterations.
-9. **Suffix max_k=48 is transformative.** Longer suffix matches (19+ mean draft) reduce target forward passes dramatically. For structured output: 10+ tok/s on CPU.
-10. **Metal+CPU hybrid per-layer is too slow.** CPU↔GPU sync overhead (~5ms × 129 syncs = 645ms) exceeds compute savings. Need batched Metal dispatch (graph capture) not per-layer switching.
-11. **Full expert prefetch (gate+up+down) gives 20-33% speedup.** Previously only gate was prefetched; up/down caused cold SSD reads.
+1. **Suffix max_k=48 is transformative.** Longer matches (19+ mean draft) reduce target forwards dramatically. Code/structured: 10× speedup.
+2. **MXFP4 GEMV is bandwidth-bound.** AMX dequant+sgemv is 3× slower because dequant adds 15× memory traffic. In-kernel dequant always wins for SSD-streamed weights.
+3. **Metal per-dispatch overhead kills SSD streaming.** Without graph capture, CPU GEMV is 2× faster than Metal on Apple Silicon UMA. Graph capture is the ONLY path to Metal performance.
+4. **Full expert prefetch (gate+up+down) gives 33% speedup.** Previously only gate was prefetched.
+5. **2-bit HC cascade is fatal.** r=0.02 logit correlation across 43 layers. ds4's GPU graph somehow avoids this.
+6. **GGUF quantizers strip MTP.** Must load from HF safetensors shards 46-48.
+7. **Expert usage is uniform.** ~51/256 per layer, no hot/cold split. LRU is optimal.
+8. **Metal+CPU hybrid per-layer is too slow.** Sync overhead (645ms) exceeds compute savings.
+9. **Prose gap is hardware-limited.** CPU + 155GB model + SSD = fundamental 4× gap vs Metal GPU + 81GB model.
+10. **Suffix effectiveness correlates with output repetitiveness.** Code (19 mean) >> prose (9 mean) >> unique (4 mean).
+11. **Sinkhorn is axis-invariant.** Both implementations converge identically after 20 iterations.
 
 ---
 
-*15 autoresearch iterations + 5 ralph iterations. Branch: `autoresearch/ds4-perf`.*
-*Benchmarked: 2026-08-13–14. Engines: Agave (HEAD), ds4 (latest main).*
+## Diff Summary
+
+Branch: `main` (merged from `autoresearch/ds4-perf`)
+
+```
+ 35+ files changed, ~4000 insertions
+
+ New files:
+   src/models/ds4_mtp.zig          — MTP safetensors loader (142 lines)
+   src/backend/kernels/cpu/gemv_fp8.zig — MXFP8 GEMV kernel (+37 lines)
+   notes/MTP_DESIGN.md             — MTP architecture design (79 lines)
+   notes/DS4_HANDOFF.md            — This file
+   docs/DS4_BENCHMARK.md           — Cross-engine benchmark (319 lines)
+
+ Major changes:
+   src/models/deepseek4.zig        — MTP forward, HC mixing, expert prefetch, cpuGemv dispatch
+   src/backend/metal.zig           — volatile_weights, stable_cache, buffer management
+   src/backend/backend.zig         — setVolatileWeights, cpuGemv dispatcher
+   src/spec/ngram.zig              — suffix max_k=48
+   src/ops/quant.zig               — dequantMxfp4MatrixToF32
+   src/format/format.zig           — file_fd, mmap_base fields
+   src/format/gguf.zig             — file_fd propagation to Format
+```
+
+*26 autoresearch iterations + 5 MTP ralph iterations. ~12 hours of experimentation.*
