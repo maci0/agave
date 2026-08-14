@@ -10,6 +10,7 @@
 //! for sparse attention. Gracefully disabled when indexer tensors are absent.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
@@ -124,6 +125,9 @@ pub const Ds4Model = struct {
     expert_scratch: []f32 = &.{}, // [max_total_experts * n_embd] for batched down GEMVs
     ff_gate_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] gate outputs pre-siluMul
     ff_up_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] up outputs pre-siluMul
+    /// Scratch buffer for dequantized expert weights (AMX acceleration path).
+    /// Sized for one expert weight matrix: ff_exp × n_embd elements.
+    amx_dequant_buf: []f32 = &.{},
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
     mtp_hidden_buf: []f32 = &.{}, // [n_embd] — saved MTP hidden state between depths
@@ -317,6 +321,9 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.expert_scratch);
         self.ff_gate_scratch = try allocator.alloc(f32, max_experts * ff);
         errdefer allocator.free(self.ff_gate_scratch);
+        // AMX dequant scratch: one expert weight matrix (ff × e for gate/up, e × ff for down)
+        self.amx_dequant_buf = try allocator.alloc(f32, @max(ff * e, e * ff));
+        errdefer allocator.free(self.amx_dequant_buf);
         self.ff_up_scratch = try allocator.alloc(f32, max_experts * ff);
         errdefer allocator.free(self.ff_up_scratch);
         self.router_logits = try allocator.alloc(f32, self.n_experts);
@@ -1673,9 +1680,8 @@ pub const Ds4Model = struct {
                         self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else if (self.expert_cache != null) {
-                        // SSD streaming: use CPU-only GEMV to avoid Metal page faults
-                        // on mmap'd expert weights. Non-expert weights (attention, HC)
-                        // go through the normal backend (Metal or CPU).
+                        // SSD streaming: use CPU-only GEMV for expert weights.
+                        // Avoids Metal page faults on mmap'd expert data.
                         self.be.cpuGemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.be.cpuGemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else {

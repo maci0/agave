@@ -668,3 +668,38 @@ test "fuzz: all quant functions" {
         }
     }.f, .{});
 }
+
+/// Dequantize an MXFP4 weight matrix [n_rows, k] to F32.
+/// Output buffer must be pre-allocated with n_rows × k elements.
+/// Block size: 32 elements, 17 bytes per block (1 E8M0 scale + 16 nibble bytes).
+pub fn dequantMxfp4MatrixToF32(output: []f32, w: [*]const u8, n_rows: usize, k: usize) void {
+    const bpb: usize = 17; // bytes per block
+    const qk: usize = 32; // elements per block
+    const nb = (k + qk - 1) / qk; // blocks per row
+    const row_bytes = nb * bpb;
+
+    for (0..n_rows) |row| {
+        const rp = w + row * row_bytes;
+        const out_row = output[row * k ..][0..k];
+        for (0..nb) |b| {
+            const bp = rp + b * bpb;
+            const d = e8m0ToF32(bp[0]);
+            const bk = b * qk;
+            if (bk + qk <= k) {
+                // Full block: unpack 16 bytes → 32 f32 values
+                for (0..qk / 2) |j| {
+                    const byte = bp[1 + j];
+                    out_row[bk + j] = mxfp4Lookup(byte & 0x0F) * d;
+                    out_row[bk + j + qk / 2] = mxfp4Lookup(byte >> 4) * d;
+                }
+            } else {
+                // Partial block
+                for (0..qk / 2) |j| {
+                    const byte = bp[1 + j];
+                    if (bk + j < k) out_row[bk + j] = mxfp4Lookup(byte & 0x0F) * d;
+                    if (bk + j + qk / 2 < k) out_row[bk + j + qk / 2] = mxfp4Lookup(byte >> 4) * d;
+                }
+            }
+        }
+    }
+}

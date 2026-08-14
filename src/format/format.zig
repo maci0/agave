@@ -118,6 +118,12 @@ pub const Format = struct {
     /// False for GGUF (llama.cpp conventions). Models use this to select the
     /// correct Q/K/V split order, GQA head mapping, and weight pre-processing.
     is_safetensors: bool = false,
+    /// GGUF file descriptor for pread-based SSD streaming.
+    /// Set when loading from GGUF with SSD streaming enabled.
+    /// Used by expert cache to pread() weights into Metal buffers.
+    file_fd: i32 = -1,
+    /// Base address of the mmap'd data section (for computing file offsets).
+    mmap_base: ?[*]const u8 = null,
 
     /// Virtual function table for the Format dispatcher.
     /// Each format implementation (GGUF, SafeTensors) provides these function pointers

@@ -479,7 +479,12 @@ pub const GGUFFile = struct {
 
     /// Returns a Format interface backed by this GGUF file.
     pub fn format(self: *GGUFFile) Format {
-        return .{ .ptr = self, .vtable = &format_vtable };
+        return .{
+            .ptr = self,
+            .vtable = &format_vtable,
+            .file_fd = self.file_fd,
+            .mmap_base = if (self.data().len > 0) self.data().ptr else null,
+        };
     }
 
     const format_vtable = Format.VTable{
