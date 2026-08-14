@@ -2939,8 +2939,7 @@ fn initAndRun(
         if (expert_cache_opt != null) {
             eprint("ssd-streaming: expert cache {d} slots, {d} experts × {d} layers\n", .{ cache_slots, n_exp, n_lay });
         }
-        // Enable volatile weight mode on Metal: flush buffer cache on each sync
-        // to prevent stale Metal buffer references to evicted mmap'd pages.
+        // Enable volatile weight mode on Metal: flush buffer cache on each sync.
         be.setVolatileWeights(true);
     }
 

@@ -141,6 +141,10 @@ pub const Ds4Model = struct {
 
     // SSD streaming: expert cache and activation profiler (set by main.zig).
     expert_cache: ?*ExpertCache = null,
+    /// GGUF file descriptor for pread-based expert loading (SSD streaming).
+    gguf_fd: i32 = -1,
+    /// Base address of mmap'd GGUF data (for computing file offsets from data_ptr).
+    gguf_mmap_base: ?[*]const u8 = null,
     expert_profile: ?*ExpertProfile = null,
     /// MTP (multi-token prediction) weights loaded from separate safetensors.
     mtp_weights: ?*MtpWeights = null,
@@ -215,7 +219,14 @@ pub const Ds4Model = struct {
             .f16, .f32 => .q8_0, // unsupported → fall back to q8_0
             else => kv_type_k,
         };
-        var self = Ds4Model{ .fmt = f, .be = be, .allocator = allocator, .kv_type = effective_kv };
+        var self = Ds4Model{
+            .fmt = f,
+            .be = be,
+            .allocator = allocator,
+            .kv_type = effective_kv,
+            .gguf_fd = f.file_fd,
+            .gguf_mmap_base = f.mmap_base,
+        };
 
         const arch = "deepseek4";
         if (f.getArchU32(arch, "block_count")) |v| self.n_layers = v;
