@@ -1672,6 +1672,12 @@ pub const Ds4Model = struct {
                     if (ge.dtype == .mlx_q) {
                         self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    } else if (self.expert_cache != null) {
+                        // SSD streaming: use CPU-only GEMV to avoid Metal page faults
+                        // on mmap'd expert weights. Non-expert weights (attention, HC)
+                        // go through the normal backend (Metal or CPU).
+                        self.be.cpuGemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.be.cpuGemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else {
                         self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
@@ -1699,6 +1705,8 @@ pub const Ds4Model = struct {
             for (shexp_slots..n_scratch) |slot| {
                 if (de_t.dtype == .mlx_q) {
                     self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
+                } else if (self.expert_cache != null) {
+                    self.be.cpuGemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
                 } else {
                     self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
                 }
