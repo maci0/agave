@@ -193,7 +193,7 @@ pub var global_pool: ?SharedNgramPool = null;
 /// Dynamic depth: match_len == min_suffix → k=1; match_len >= max_suffix → k=max_k.
 pub const SuffixState = struct {
     const cache_capacity: usize = 10_000;
-    const min_suffix: usize = 2; // minimum suffix length to attempt
+    const min_suffix: usize = 1; // minimum suffix length to attempt
     const max_suffix: usize = 32; // maximum suffix length to search
     const default_max_k: usize = 48; // vLLM default max tree depth
 
