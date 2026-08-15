@@ -272,7 +272,7 @@ pub const SuffixState = struct {
         // Dynamic depth: scale proposed count by match quality
         const quality = @as(f32, @floatFromInt(result.match_len - min_suffix)) /
             @as(f32, @floatFromInt(max_suffix - min_suffix));
-        const dynamic_k = @as(usize, @intFromFloat(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality + 0.2)));
+        const dynamic_k = @as(usize, @intFromFloat(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality + 1.0)));
         return @min(result.n, @max(1, dynamic_k));
     }
 };
