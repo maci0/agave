@@ -148,6 +148,12 @@ pub const Ds4Model = struct {
     expert_cache: ?*ExpertCache = null,
     /// GGUF file descriptor for pread-based expert loading (SSD streaming).
     gguf_fd: i32 = -1,
+    /// Expert data pool: heap-allocated buffers for pread-loaded expert weights.
+    /// Pool holds one layer's worth of experts (7 × gate/up/down weights).
+    /// Metal can safely wrap these heap pointers (no page fault risk).
+    expert_pool: []u8 = &.{},
+    expert_pool_slots: u32 = 0,
+    expert_pool_slot_size: u32 = 0,
     /// Base address of mmap'd GGUF data (for computing file offsets from data_ptr).
     gguf_mmap_base: ?[*]const u8 = null,
     expert_profile: ?*ExpertProfile = null,
@@ -340,6 +346,19 @@ pub const Ds4Model = struct {
         // AMX dequant scratch: one expert weight matrix (ff × e for gate/up, e × ff for down)
         self.amx_dequant_buf = try allocator.alloc(f32, @max(ff * e, e * ff));
         errdefer allocator.free(self.amx_dequant_buf);
+
+        // Expert data pool for pread-based loading (Colibri-inspired).
+        // 21 slots (7 experts × 3 weights), each sized for max expert weight.
+        // Total: ~92MB on MXFP4. Heap-allocated → Metal-safe.
+        if (self.gguf_fd >= 0) {
+            const max_expert_bytes: u32 = @intCast(backend_mod.weightBytes(.mxfp4, 1, ff * e));
+            const n_pool_slots: u32 = (self.n_expert_used + self.n_expert_shared) * 3;
+            const pool_size = @as(usize, n_pool_slots) * max_expert_bytes;
+            self.expert_pool = try allocator.alloc(u8, pool_size);
+            errdefer allocator.free(self.expert_pool);
+            self.expert_pool_slots = n_pool_slots;
+            self.expert_pool_slot_size = max_expert_bytes;
+        }
         self.ff_up_scratch = try allocator.alloc(f32, max_experts * ff);
         errdefer allocator.free(self.ff_up_scratch);
         self.router_logits = try allocator.alloc(f32, self.n_experts);
@@ -1697,10 +1716,12 @@ pub const Ds4Model = struct {
                         self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else if (self.expert_cache != null) {
-                        // SSD streaming: use CPU-only GEMV for expert weights.
-                        // Avoids Metal page faults on mmap'd expert data.
-                        self.be.cpuGemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.be.cpuGemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        // SSD streaming: pread expert data into heap pool buffer.
+                        // Heap buffers are Metal-safe (no mmap page fault risk).
+                        const gate_data = self.preadExpert(ge.data_ptr + eid * gs, gs, @intCast(n_scratch * 3));
+                        const up_data = self.preadExpert(ue.data_ptr + eid * us, us, @intCast(n_scratch * 3 + 1));
+                        self.be.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.be.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else {
                         self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
@@ -1729,7 +1750,8 @@ pub const Ds4Model = struct {
                 if (de_t.dtype == .mlx_q) {
                     self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
                 } else if (self.expert_cache != null) {
-                    self.be.cpuGemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                    const down_data = self.preadExpert(de_ptrs[slot], @intCast(de_exp_stride), @intCast(slot * 3 + 2));
+                    self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
                 } else {
                     self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
                 }
@@ -2727,6 +2749,37 @@ pub const Ds4Model = struct {
         self.doGemv(self.pf_hidden2.ptr + @as(usize, node_i) * e, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
         return math_ops.argmax(self.logits_buf);
+    }
+
+    /// Read expert weight data via pread into a pool buffer slot.
+    /// Returns the pool buffer pointer (heap memory, Metal-safe).
+    /// Falls back to the original mmap pointer if pread is unavailable.
+    fn preadExpert(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
+        if (self.gguf_fd < 0 or self.expert_pool.len == 0 or self.gguf_mmap_base == null)
+            return data_ptr;
+        if (slot >= self.expert_pool_slots) return data_ptr;
+        
+        // Compute file offset from mmap pointer
+        const mmap_base = self.gguf_mmap_base.?;
+        const offset = @intFromPtr(data_ptr) - @intFromPtr(mmap_base);
+        const pool_ptr = self.expert_pool.ptr + @as(usize, slot) * self.expert_pool_slot_size;
+        
+        // pread: read directly from file into heap buffer
+        const actual_size = @min(size, self.expert_pool_slot_size);
+        var total_read: usize = 0;
+        while (total_read < actual_size) {
+            const n = std.posix.system.pread(
+                self.gguf_fd,
+                pool_ptr + total_read,
+                actual_size - total_read,
+                @intCast(offset + total_read),
+            );
+            if (n <= 0) break;
+            total_read += @intCast(n);
+        }
+        
+        if (total_read == actual_size) return pool_ptr;
+        return data_ptr; // fallback to mmap if pread failed
     }
 
     /// Pre-fault expert weights for ALL layers using PARALLEL page touching.

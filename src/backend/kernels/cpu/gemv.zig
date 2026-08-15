@@ -75,7 +75,7 @@ pub const gemvFP8_E4M3 = gemv_fp8.gemvFP8_E4M3;
 /// GEMV kernel for FP8 E5M2 (5-bit exponent, 2-bit mantissa) weights.
 pub const gemvFP8_E5M2 = gemv_fp8.gemvFP8_E5M2;
 /// GEMV kernel for MXFP4 (microscaling 4-bit float) weights.
-pub const gemvMXFP4 = gemv_fp4.gemvMXFP4_V;
+pub const gemvMXFP4 = gemv_fp4.gemvMXFP4_I8;
 /// GEMV kernel for NVFP4 (NVIDIA 4-bit float) weights.
 pub const gemvNVFP4 = gemv_fp4.gemvNVFP4;
 /// GEMV kernel for IQ4_NL (importance-quantized 4-bit, non-linear) weights.

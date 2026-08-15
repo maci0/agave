@@ -2939,7 +2939,9 @@ fn initAndRun(
         if (expert_cache_opt != null) {
             eprint("ssd-streaming: expert cache {d} slots, {d} experts × {d} layers\n", .{ cache_slots, n_exp, n_lay });
         }
-        // Enable volatile weight mode on Metal: flush buffer cache on each sync.
+        // Enable volatile weight mode on Metal for non-expert weights.
+        // Expert weights use pread (heap buffers, Metal-safe).
+        // Non-expert weights still need buf_cache flush for safety.
         be.setVolatileWeights(true);
     }
 
