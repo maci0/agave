@@ -296,6 +296,41 @@ pub const ExpertCache = struct {
         const total = len + (addr - aligned);
         posix.madvise(@ptrFromInt(aligned), total, posix.system.MADV.WILLNEED) catch {};
     }
+    /// Return the top-k most recently used expert IDs for a given layer.
+    /// Does NOT issue any madvise/prefetch — just returns the IDs.
+    pub fn getTopResidents(self: *ExpertCache, layer: u32, out_ids: []u32) u32 {
+        const k = @min(@as(u32, @intCast(out_ids.len)), max_prefetch_k);
+        var best_slots: [max_prefetch_k]u32 = .{0} ** max_prefetch_k;
+        var best_access: [max_prefetch_k]u64 = .{0} ** max_prefetch_k;
+        var found: u32 = 0;
+
+        for (self.slots[0..self.n_slots], 0..) |slot, idx| {
+            if (!slot.occupied or slot.layer != layer) continue;
+            var insert_pos: u32 = found;
+            for (0..@min(found, k)) |bi| {
+                if (slot.last_access > best_access[bi]) {
+                    insert_pos = @intCast(bi);
+                    break;
+                }
+            }
+            if (insert_pos < k) {
+                var j: u32 = @min(found, k - 1);
+                while (j > insert_pos) : (j -= 1) {
+                    best_slots[j] = best_slots[j - 1];
+                    best_access[j] = best_access[j - 1];
+                }
+                best_slots[insert_pos] = @intCast(idx);
+                best_access[insert_pos] = slot.last_access;
+                if (found < k) found += 1;
+            }
+        }
+
+        for (0..found) |i| {
+            out_ids[i] = self.slots[best_slots[i]].expert_id;
+        }
+        return found;
+    }
+
 };
 
 // ── Tests ────────────────────────────────────────────────────────
