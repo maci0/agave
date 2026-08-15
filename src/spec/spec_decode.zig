@@ -1288,3 +1288,68 @@ test "adaptive K V2 sliding window adjusts current_k" {
     }
     try std.testing.expect(s.current_k >= low_k);
 }
+
+/// Batched greedy verification: verify ALL draft tokens in one batched forward pass.
+/// Falls back to sequential verification if the model doesn't support forwardTree.
+/// Uses forwardTree with a causal (linear chain) mask: each position sees all previous.
+pub fn verifyBatched(
+    state: *SpecState,
+    target_model: *Model,
+    draft_model: *Model,
+    last_accepted_token: u32,
+    pre_draft_pos: usize,
+) SpecResult {
+    if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
+
+    // Build the verification token sequence: [last_accepted, draft0, draft1, ..., draftN-1]
+    const n = state.n_draft;
+    var verify_tokens: [max_draft_tokens + 1]u32 = undefined;
+    verify_tokens[0] = last_accepted_token;
+    for (0..n) |i| verify_tokens[i + 1] = state.draft_tokens[i];
+
+    // Position IDs: [pre_draft_pos, pre_draft_pos+1, ...]
+    var positions: [max_draft_tokens + 1]u32 = undefined;
+    for (0..n + 1) |i| positions[i] = @intCast(pre_draft_pos + i);
+
+    // Causal (linear chain) ancestor masks: position i sees positions 0..i
+    var masks: [max_draft_tokens + 1][8]u64 = undefined;
+    for (0..n + 1) |i| {
+        var mask: [8]u64 = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
+        // Set bits 0..i in the mask (causal: see all previous + self)
+        const n_bits = i + 1;
+        const full_words = n_bits / 64;
+        for (0..full_words) |w| mask[w] = ~@as(u64, 0);
+        if (n_bits % 64 != 0) mask[full_words] = (@as(u64, 1) << @intCast(n_bits % 64)) - 1;
+        masks[i] = mask;
+    }
+
+    // Reset KV position for verification
+    target_model.setKvSeqLen(pre_draft_pos);
+
+    // Try batched forward (forwardTree with causal masks)
+    target_model.forwardTree(
+        verify_tokens[0 .. n + 1],
+        positions[0 .. n + 1],
+        &masks,
+        @intCast(n + 1),
+    ) catch {
+        // Fall back to sequential verification
+        return verifySequential(state, target_model, draft_model, last_accepted_token, pre_draft_pos);
+    };
+
+    // Check each position: treeLogits(i) returns argmax at position i
+    // Position 0 predicts draft_tokens[0], position 1 predicts draft_tokens[1], etc.
+    var accepted: u32 = 0;
+    for (0..n) |i| {
+        const target_next = target_model.treeLogits(@intCast(i));
+        if (target_next == state.draft_tokens[i]) {
+            accepted += 1;
+        } else {
+            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, target_next);
+        }
+    }
+
+    // All accepted — bonus token (last position's prediction)
+    const bonus = target_model.treeLogits(@intCast(n));
+    return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
+}

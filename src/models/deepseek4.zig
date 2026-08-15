@@ -1883,7 +1883,6 @@ pub const Ds4Model = struct {
         const norm_w = try self.getTensorReq("output_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
         const lm = try self.getTensorReq("output.weight");
-        // (Debug prints removed — dims are [n_out, n_in] due to gguf.zig reversal)
         self.doGemv(self.hidden.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
 
@@ -2521,6 +2520,207 @@ pub const Ds4Model = struct {
             for (0..n_hc) |s| v += self.mtp_hc_state[s * e + i] * self.hc_pre_w[s];
             self.hidden2[i] = v;
         }
+    }
+
+    /// Batched forward for speculative verification.
+    /// Processes n_nodes tokens through all layers simultaneously.
+    /// Uses GEMM (matrix-matrix) instead of GEMV for weight projections.
+    /// Simplified: shared expert only, no HC mixing, no compressors.
+    pub fn forwardTree(
+        self: *Ds4Model,
+        token_ids: []const u32,
+        position_ids: []const u32,
+        _: [*]const [8]u64, // ancestor_masks (unused — we use standard causal attention)
+        n_nodes: u32,
+    ) !void {
+        if (n_nodes == 0) return;
+        const n: usize = n_nodes;
+        const e = self.n_embd;
+        const kd: usize = self.kv_lora_rank;
+        const ql: usize = self.q_lora_rank;
+        const nh: usize = self.n_head;
+        const ff: usize = self.ff_exp;
+        const rd: usize = self.rope_dim;
+        const nope: usize = kd - rd;
+        const nd = rd / 2;
+
+        // Lazy-allocate prefill buffers
+        if (self.pf_hidden.len == 0) {
+            const pa = std.heap.page_allocator;
+            const cs = self.chunk_size;
+            self.pf_hidden = try pa.alloc(f32, cs * e);
+            self.pf_hidden2 = try pa.alloc(f32, cs * e);
+            self.pf_q_a = try pa.alloc(f32, cs * ql);
+            self.pf_q = try pa.alloc(f32, cs * nh * kd);
+            self.pf_kv_proj = try pa.alloc(f32, cs * kd);
+            self.pf_attn_out = try pa.alloc(f32, cs * nh * kd);
+            self.pf_positions = try pa.alloc(u32, cs);
+        }
+
+        // Embedding: lookup each token
+        const emb_t = try self.getTensorReq("token_embd.weight");
+        const emb_bytes = backend_mod.weightBytes(emb_t.dtype, 1, e);
+        for (0..n) |t| {
+            const tid = token_ids[t];
+            quant_ops.dequantToF32(self.pf_hidden[t * e ..][0..e], emb_t.data_ptr + tid * emb_bytes, emb_t.dtype, e);
+        }
+        @memcpy(self.pf_positions[0..n], position_ids[0..n]);
+
+        // Process all layers
+        for (0..self.n_layers) |li| {
+            if (self.cancelled.load(.monotonic)) return error.Cancelled;
+
+            // Attention norm (batched)
+            const nw = try self.layerTensorReq(li, "attn_norm.weight");
+            self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
+
+            // Q projection: [n, e] → [n, ql] → norm → [n, nh*kd]
+            const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
+            self.be.gemm(self.pf_hidden2.ptr, .{ .data = q_a.data_ptr, .dtype = q_a.dtype }, self.pf_q_a.ptr, n, ql, e);
+            const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
+            self.be.rmsNormBatched(self.pf_q_a.ptr, self.normAsF32(q_an, ql), self.pf_q_a.ptr, n, ql, self.rms_eps);
+            const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
+            self.be.gemm(self.pf_q_a.ptr, .{ .data = q_b.data_ptr, .dtype = q_b.dtype }, self.pf_q.ptr, n, nh * kd, ql);
+
+            // KV projection: [n, e] → [n, kd]
+            const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
+            self.be.gemm(self.pf_hidden2.ptr, .{ .data = kv_a.data_ptr, .dtype = kv_a.dtype }, self.pf_kv_proj.ptr, n, kd, e);
+            const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
+            self.be.rmsNormBatched(self.pf_kv_proj.ptr, self.normAsF32(kv_an, kd), self.pf_kv_proj.ptr, n, kd, self.rms_eps);
+
+            self.be.sync();
+
+            // Per-position: RoPE on Q and KV, per-head Q norm
+            const freqs = if (self.compress_ratios[li] != 0) &self.compress_rope_freqs else &self.rope_freqs;
+            for (0..n) |t| {
+                const pos = position_ids[t];
+                var rope_cos: [32]f32 = undefined;
+                var rope_sin: [32]f32 = undefined;
+                for (0..nd) |i| {
+                    const theta = @as(f32, @floatFromInt(pos)) * freqs[i];
+                    rope_cos[i] = @cos(theta);
+                    rope_sin[i] = @sin(theta);
+                }
+                // Per-head Q norm + RoPE
+                for (0..nh) |h| {
+                    const q_head = self.pf_q[t * nh * kd + h * kd ..][0..kd];
+                    plainRmsNorm(q_head, self.rms_eps);
+                    applyRopeTable(q_head[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
+                }
+                // KV RoPE
+                applyRopeTable(self.pf_kv_proj[t * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
+
+                // Append to KV cache
+                const kv_k_layer = self.kv_k_bytes[li * self.kvLayerBytes() ..];
+                const k_byte_off = kv_quant.kvByteOffset(self.kv_type, (self.kv_seq_len + t) * kd);
+                kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.pf_kv_proj[t * kd ..].ptr, kd, self.kv_type);
+            }
+
+            // Simplified attention: for each position, standard dot-product against full KV cache
+            const kv_k_layer = self.kv_k_bytes[li * self.kvLayerBytes() ..];
+            const kv_elem_bytes = kv_quant.kvByteOffset(self.kv_type, kd);
+            const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(kd)));
+            for (0..n) |t| {
+                const pos = self.kv_seq_len + t;
+                for (0..nh) |h| {
+                    const q_h = self.pf_q[t * nh * kd + h * kd ..][0..kd];
+                    const ao_h = self.pf_attn_out[t * nh * kd + h * kd ..][0..kd];
+                    // Score against KV cache positions 0..pos (causal)
+                    var running_max: f32 = -std.math.inf(f32);
+                    for (0..pos + 1) |p| {
+                        const k_ptr = kv_k_layer[p * kv_elem_bytes ..].ptr;
+                        const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, self.kv_type) * scale;
+                        self.scores_buf[p] = s;
+                        running_max = @max(running_max, s);
+                    }
+                    var sm: f32 = 0;
+                    for (0..pos + 1) |p| {
+                        self.scores_buf[p] = @exp(self.scores_buf[p] - running_max);
+                        sm += self.scores_buf[p];
+                    }
+                    const inv = 1.0 / sm;
+                    @memset(ao_h, 0.0);
+                    for (0..pos + 1) |p| {
+                        const w = self.scores_buf[p] * inv;
+                        if (w < 1e-6) continue;
+                        kv_quant.kvMulAccum(ao_h.ptr, w, kv_k_layer[p * kv_elem_bytes ..].ptr, kd, self.kv_type);
+                    }
+                }
+                // Inverse RoPE
+                const pos_u = self.kv_seq_len + t;
+                var rope_cos2: [32]f32 = undefined;
+                var rope_sin2: [32]f32 = undefined;
+                for (0..nd) |i| {
+                    const theta = @as(f32, @floatFromInt(pos_u)) * freqs[i];
+                    rope_cos2[i] = @cos(theta);
+                    rope_sin2[i] = @sin(theta);
+                }
+                for (0..nh) |h| {
+                    applyRopeInverseTable(self.pf_attn_out[t * nh * kd + h * kd + nope ..][0..rd], rope_cos2[0..nd], rope_sin2[0..nd]);
+                }
+            }
+
+            // wo_a (grouped LoRA) + wo_b (batched per position)
+            const wo_a = try self.layerTensorReq(li, "attn_output_a.weight");
+            const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
+            const og: usize = self.o_groups;
+            const olr: usize = self.o_lora_rank;
+            const group_in: usize = nh * kd / og;
+            const wo_a_group_stride = if (wo_a.dtype == .mlx_q)
+                ds4ExpertStride(wo_a, og)
+            else blk: {
+                const row_bytes2 = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
+                break :blk olr * row_bytes2;
+            };
+            for (0..n) |t| {
+                for (0..og) |g| {
+                    const xp = self.pf_attn_out.ptr + t * nh * kd + g * group_in;
+                    const yp = self.lora_out.ptr + g * olr;
+                    self.be.gemv(xp, .{ .data = wo_a.data_ptr + g * wo_a_group_stride, .dtype = wo_a.dtype }, yp, olr, group_in);
+                }
+                self.doGemv(self.lora_out.ptr, wo_b, self.pf_hidden.ptr + t * e, e, og * olr);
+            }
+            self.be.sync();
+
+            // FFN: shared expert only (simplified for batched verification)
+            const fnw = try self.layerTensorReq(li, "ffn_norm.weight");
+            self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(fnw, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
+
+            if (self.layerTensor(li, "ffn_gate_shexp.weight")) |gt| {
+                const ut = self.layerTensor(li, "ffn_up_shexp.weight") orelse continue;
+                const dt = self.layerTensor(li, "ffn_down_shexp.weight") orelse continue;
+                for (0..n) |t| {
+                    self.be.gemv(self.pf_hidden2.ptr + t * e, .{ .data = gt.data_ptr, .dtype = gt.dtype }, self.ff_gate_scratch.ptr, ff, e);
+                    self.be.gemv(self.pf_hidden2.ptr + t * e, .{ .data = ut.data_ptr, .dtype = ut.dtype }, self.ff_up_scratch.ptr, ff, e);
+                    self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, ff);
+                    self.be.gemv(self.ff_gate_scratch.ptr, .{ .data = dt.data_ptr, .dtype = dt.dtype }, self.expert_scratch.ptr, e, ff);
+                    // Residual add
+                    for (0..e) |i| self.pf_hidden[t * e + i] += self.expert_scratch[i];
+                }
+            }
+            self.be.sync();
+        }
+
+        // Update KV sequence length
+        self.kv_seq_len += n;
+
+        // Final norm + lm_head for each position → store logits
+        const norm_w = try self.getTensorReq("output_norm.weight");
+        // Store per-position logits in a temporary: use pf_hidden2 to hold normed hidden,
+        // then compute logits position-by-position into logits_buf (overwritten each time,
+        // but treeLogits reads them one at a time anyway).
+        self.be.rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(norm_w, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
+        // Save the normed hidden states — treeLogits will compute logits on demand
+        // (pf_hidden2[t*e..] holds the normed hidden for position t)
+    }
+
+    /// Return argmax token for tree node i (after forwardTree).
+    pub fn treeLogits(self: *Ds4Model, node_i: u32) u32 {
+        const e = self.n_embd;
+        const lm = self.fmt.getTensor("output.weight") orelse return 0;
+        self.doGemv(self.pf_hidden2.ptr + @as(usize, node_i) * e, lm, self.logits_buf.ptr, self.vocab_size, e);
+        self.be.sync();
+        return math_ops.argmax(self.logits_buf);
     }
 
 };
