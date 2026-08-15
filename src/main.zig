@@ -4240,9 +4240,11 @@ fn generateSpeculative(
         // Warms page cache so sequential verification forwards hit cached pages.
         if (n_drafted > 0 and use_suffix) {
             target.prefetchAllLayers();
-            // MoE-Spec (arXiv 2602.16052): reduce expert count during verification.
-            // Top-4 captures 80%+ of routing weight. Fewer experts = fewer SSD reads.
+            // MoE-Spv 2602.16052): reduce expert count during verification.
             target.setExpertBudget(4);
+            // Colibri-inspired: freeze expert cache during verification.
+            // Prevents eviction of cached experts across sequential verify forwards.
+            // target.freezeExpertCache(); // disabled: hurts hit rate
         }
 
         const result = if (is_self_draft) blk: {

@@ -79,6 +79,8 @@ pub const Model = struct {
         get_kv_seq_len: *const fn (self: *anyopaque) usize,
         set_kv_seq_len: *const fn (self: *anyopaque, len: usize) void,
         prefetch_all_layers: *const fn (self: *anyopaque) void,
+        freeze_expert_cache: *const fn (self: *anyopaque) void,
+        thaw_expert_cache: *const fn (self: *anyopaque) void,
         set_expert_budget: *const fn (self: *anyopaque, budget: u32) void,
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
@@ -217,6 +219,18 @@ pub const Model = struct {
                 fn call(self: *T) void {
                     if (comptime @hasDecl(T, "prefetchAllLayers"))
                         self.prefetchAllLayers();
+                }
+            }.call),
+            .freeze_expert_cache = @ptrCast(&struct {
+                fn call(self: *T) void {
+                    if (comptime @hasField(T, "expert_cache"))
+                        if (self.expert_cache) |ec| ec.freeze();
+                }
+            }.call),
+            .thaw_expert_cache = @ptrCast(&struct {
+                fn call(self: *T) void {
+                    if (comptime @hasField(T, "expert_cache"))
+                        if (self.expert_cache) |ec| ec.thaw();
                 }
             }.call),
             .set_expert_budget = @ptrCast(&struct {
@@ -498,6 +512,16 @@ pub const Model = struct {
     /// budget = 0: normal mode (full n_expert_used).
     pub fn setExpertBudget(self: Model, budget: u32) void {
         self.vtable.set_expert_budget(self.ptr, budget);
+    }
+
+    /// Freeze expert cache (no evictions during verification).
+    pub fn freezeExpertCache(self: Model) void {
+        self.vtable.freeze_expert_cache(self.ptr);
+    }
+
+    /// Thaw expert cache (resume normal eviction).
+    pub fn thawExpertCache(self: Model) void {
+        self.vtable.thaw_expert_cache(self.ptr);
     }
 
     /// Pre-madvise expert weights for ALL layers before speculative verification.
