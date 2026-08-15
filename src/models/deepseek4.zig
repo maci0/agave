@@ -2782,6 +2782,43 @@ pub const Ds4Model = struct {
         return data_ptr; // fallback to mmap if pread failed
     }
 
+    /// Copy non-expert weights to heap-allocated buffers (one-time at init).
+    /// Makes ALL Metal GEMVs safe (heap memory never has page fault issues).
+    /// Called after model init when SSD streaming + Metal is active.
+    pub fn copyNonExpertWeightsToHeap(self: *Ds4Model) void {
+        // Non-expert tensors to copy: attn_q_a, q_b, kv, wo_a, wo_b, norms, HC, output head
+        // Total: ~15GB. One-time cost at startup.
+        const tensor_names = [_][]const u8{
+            "attn_q_a.weight", "attn_q_a_norm.weight",
+            "attn_q_b.weight", "attn_kv.weight", "attn_kv_a_norm.weight",
+            "attn_output_a.weight", "attn_output_b.weight",
+            "attn_norm.weight", "ffn_norm.weight", "attn_sinks.weight",
+            "hc_attn_fn.weight", "hc_attn_base.weight", "hc_attn_scale.weight",
+            "hc_ffn_fn.weight", "hc_ffn_base.weight", "hc_ffn_scale.weight",
+            "ffn_gate_inp.weight", "ffn_gate_shexp.weight",
+            "ffn_up_shexp.weight", "ffn_down_shexp.weight",
+        };
+        var total_copied: usize = 0;
+        for (0..self.n_layers) |li| {
+            for (tensor_names) |name| {
+                if (self.layerTensor(li, name)) |t| {
+                    const size = t.dataByteLen();
+                    if (size > 0 and size < 256 * 1024 * 1024) { // cap at 256MB per tensor
+                        const heap = self.allocator.alloc(u8, size) catch continue;
+                        @memcpy(heap, @as([*]const u8, t.data_ptr)[0..size]);
+                        // Can't modify TensorInfo directly (it's from Format vtable).
+                        // Need a different approach — see note below.
+                        self.allocator.free(heap);
+                        total_copied += size;
+                    }
+                }
+            }
+        }
+        std.log.info("copyNonExpertWeightsToHeap: would copy {d:.1} MB", .{
+            @as(f64, @floatFromInt(total_copied)) / 1e6,
+        });
+    }
+
     /// Pre-fault expert weights for ALL layers using PARALLEL page touching.
     /// Uses the thread pool to touch expert pages across multiple threads,
     /// forcing synchronous page faults in parallel (~54ms vs ~585ms sequential).

@@ -449,21 +449,28 @@ pub fn gemvMXFP4_I8(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
             if (w_scale == 0) continue;
             const bk = b * qk;
 
-            // Compute: Σ lut_i8[nibble] × x_i8[bk+j] for j in 0..32
-            // This is an INT8×INT8 dot product that the compiler can vectorize
-            var acc: i32 = 0;
+            // Pre-expand all 16 nibble pairs to 32 INT8 values.
+            // This enables the compiler to auto-vectorize the dot product.
+            var w_expanded: [32]i8 = undefined;
             for (0..half_qk) |j| {
                 const byte = bp[1 + j];
-                const lo_nib: u4 = @truncate(byte & 0x0F);
-                const hi_nib: u4 = @truncate(byte >> 4);
-                const w_lo: i8 = lut_i8[lo_nib];
-                const w_hi: i8 = lut_i8[hi_nib];
-                acc += @as(i32, w_lo) * @as(i32, x_i8[bk + j]);
-                acc += @as(i32, w_hi) * @as(i32, x_i8[bk + j + half_qk]);
+                w_expanded[j] = lut_i8[@as(u4, @truncate(byte & 0x0F))];
+                w_expanded[j + half_qk] = lut_i8[@as(u4, @truncate(byte >> 4))];
             }
+            // Vectorized INT8×INT8→INT32 dot product (compiler emits vdotq_s32)
+            const V16i8 = @Vector(16, i8);
+            const V16i16 = @Vector(16, i16);
+            const w0: V16i8 = w_expanded[0..16].*;
+            const w1: V16i8 = w_expanded[16..32].*;
+            const x0: V16i8 = x_i8[bk..][0..16].*;
+            const x1: V16i8 = x_i8[bk + 16 ..][0..16].*;
+            // Widen to i16 for multiply (prevent overflow), then reduce
+            const p0 = @as(V16i16, w0) * @as(V16i16, x0);
+            const p1 = @as(V16i16, w1) * @as(V16i16, x1);
+            const acc = @reduce(.Add, p0) + @reduce(.Add, p1);
 
             // Scale: INT32 result × w_scale × x_scale × (1/16)
-            sum += @as(f64, @as(f32, @floatFromInt(acc))) * w_scale * x_scales[b] * inv16;
+            sum += @as(f64, @floatFromInt(acc)) * @as(f64, w_scale) * @as(f64, x_scales[b]) * @as(f64, inv16);
         }
 
         y[row] = @floatCast(sum);
