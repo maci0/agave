@@ -1,29 +1,12 @@
 #!/bin/bash
-# Autoresearch benchmark runner — DeepSeek V4 Flash on Agave
-# Usage: ./autoresearch.sh [mxfp4|q2|both]
-
-set -euo pipefail
-
-MXFP4_GGUF="$HOME/.cache/huggingface/hub/models--ggml-org--DeepSeek-V4-Flash-0731-GGUF/blobs/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf"
-Q2_GGUF="/tmp/ds4/ds4flash.gguf"
+GGUF="$HOME/.cache/huggingface/hub/models--ggml-org--DeepSeek-V4-Flash-0731-GGUF/blobs/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf"
 AGAVE="./zig-out/bin/agave"
-PROMPT="What is the capital of France?"
 
-run_bench() {
-    local model="$1"
-    local label="$2"
-    echo "=== $label ==="
-    timeout 180 "$AGAVE" "$model" --ssd-streaming --ctx-size 512 -n 32 -t 0.0 "$PROMPT" 2>&1 | tail -20
-    echo ""
-}
+echo "=== Prose ==="
+timeout 180 $AGAVE "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 -n 64 --spec-mode suffix -t 0.0 "Explain the theory of general relativity in simple terms." 2>&1 | grep "tok/s"
 
-MODE="${1:-both}"
+echo "=== Code ==="
+timeout 120 $AGAVE "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 -n 128 --spec-mode suffix -t 0.0 "Write a Python function to sort a list." 2>&1 | grep "tok/s"
 
-case "$MODE" in
-    mxfp4) run_bench "$MXFP4_GGUF" "MXFP4" ;;
-    q2)    run_bench "$Q2_GGUF" "ds4 Q2 imatrix" ;;
-    both)
-        run_bench "$MXFP4_GGUF" "MXFP4"
-        run_bench "$Q2_GGUF" "ds4 Q2 imatrix"
-        ;;
-esac
+echo "=== Baseline (no spec) ==="
+timeout 120 $AGAVE "$GGUF" --backend cpu --ssd-streaming --ctx-size 512 -n 32 -t 0.0 "What is the capital of France?" 2>&1 | grep "tok/s"
