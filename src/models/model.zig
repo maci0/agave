@@ -79,6 +79,7 @@ pub const Model = struct {
         get_kv_seq_len: *const fn (self: *anyopaque) usize,
         set_kv_seq_len: *const fn (self: *anyopaque, len: usize) void,
         prefetch_all_layers: *const fn (self: *anyopaque) void,
+        set_expert_budget: *const fn (self: *anyopaque, budget: u32) void,
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
         set_thread_context: *const fn (self: *anyopaque) void,
@@ -216,6 +217,12 @@ pub const Model = struct {
                 fn call(self: *T) void {
                     if (comptime @hasDecl(T, "prefetchAllLayers"))
                         self.prefetchAllLayers();
+                }
+            }.call),
+            .set_expert_budget = @ptrCast(&struct {
+                fn call(self: *T, budget: u32) void {
+                    if (comptime @hasField(T, "expert_budget"))
+                        self.expert_budget = budget;
                 }
             }.call),
             .set_layer_skip = @ptrCast(&struct {
@@ -486,6 +493,13 @@ pub const Model = struct {
 
     /// Roll back KV cache position for speculative decoding rejection.
     /// Safe because paged blocks stay allocated and are overwritten on next forward().
+    /// Set expert budget for MoE-Spec verification mode (arXiv 2602.16052).
+    /// budget > 0: fewer experts per token during forward (reduces SSD reads).
+    /// budget = 0: normal mode (full n_expert_used).
+    pub fn setExpertBudget(self: Model, budget: u32) void {
+        self.vtable.set_expert_budget(self.ptr, budget);
+    }
+
     /// Pre-madvise expert weights for ALL layers before speculative verification.
     pub fn prefetchAllLayers(self: Model) void {
         self.vtable.prefetch_all_layers(self.ptr);

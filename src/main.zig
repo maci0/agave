@@ -4238,7 +4238,12 @@ fn generateSpeculative(
         // Verify phase
         // SP-MoE-inspired: blast prefetch ALL layers' experts before verification.
         // Warms page cache so sequential verification forwards hit cached pages.
-        if (n_drafted > 0 and use_suffix) target.prefetchAllLayers();
+        if (n_drafted > 0 and use_suffix) {
+            target.prefetchAllLayers();
+            // MoE-Spec (arXiv 2602.16052): reduce expert count during verification.
+            // Top-4 captures 80%+ of routing weight. Fewer experts = fewer SSD reads.
+            target.setExpertBudget(4);
+        }
 
         const result = if (is_self_draft) blk: {
             // Self-draft: draft == target, 100% acceptance. Get bonus token.
@@ -4252,6 +4257,9 @@ fn generateSpeculative(
             spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
+
+        // Reset expert budget after verification
+        if (use_suffix) target.setExpertBudget(0);
 
         // Emit accepted draft tokens
         var hit_eog = false;

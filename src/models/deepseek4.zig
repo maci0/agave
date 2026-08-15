@@ -70,6 +70,11 @@ pub const Ds4Model = struct {
     rope_dim: u32 = 64,
     n_experts: u32 = 256,
     n_expert_used: u32 = 6,
+    /// Expert budget for verification mode (MoE-Spec, arXiv 2602.16052).
+    /// When > 0: use this instead of n_expert_used during forward().
+    /// Reduces SSD reads during speculative verification by loading fewer experts.
+    /// Set to 0 for normal decode (uses n_expert_used).
+    expert_budget: u32 = 0,
     n_expert_shared: u32 = 1,
     ff_exp: u32 = 2048,
     hash_layer_count: u32 = 3,
@@ -1488,7 +1493,8 @@ pub const Ds4Model = struct {
     fn ffnLayer(self: *Ds4Model, li: usize, token_id: u32) !void {
         const e = self.n_embd;
         const ff: usize = self.ff_exp;
-        const nk: usize = self.n_expert_used;
+        // MoE-Spec: use reduced expert budget during verification for fewer SSD reads.
+        const nk: usize = if (self.expert_budget > 0) self.expert_budget else self.n_expert_used;
         const ne: usize = self.n_experts;
 
         // Pre-norm: GPU only (no sync — expert GEMVs and routing GEMV also GPU)
