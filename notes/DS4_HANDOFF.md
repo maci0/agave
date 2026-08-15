@@ -197,3 +197,36 @@ Branch: `main` (merged from `autoresearch/ds4-perf`)
 ```
 
 *26 autoresearch iterations + 5 MTP ralph iterations. ~12 hours of experimentation.*
+
+---
+
+## Research: Cross-Model KV Cache Transfer (arXiv 2608.03893)
+
+**Paper:** "Cross-Model KV Cache Transfer in LLM Families" (NVIDIA, Aug 2026)
+
+**Idea:** When switching between models in the same family (e.g., small→large for quality cascading), transfer the KV cache instead of re-prefilling. A closed-form ridge mapper converts source KV to target format per-head.
+
+### Key technique
+1. **Per-head ridge regression:** For each target (layer, head), select top-k most predictive source layers, concatenate their KV as input, fit ridge regression. Closed-form solve, no gradient training.
+2. **RoPE stripping:** Strip positional encoding before mapping, reapply target RoPE after. Makes mapper position-free → reusable across context lengths.
+3. **Cross-layer source selection:** Each target layer draws from k source layers (not 1:1 mapping). Multiple source layers explain up to 79% of target key variance.
+
+### Results
+- 73-98% retention of target accuracy on 4/6 matched-KV pairs
+- 2.7-25× faster than re-prefilling
+- Calibration: 500 FineWeb-Edu sequences of 1024 tokens, ~47-87 min on 8×H100
+- Nonlinear MLP extension: +37pp on hard pairs
+
+### Applicability to Agave DS4 optimization
+
+**Direct application (HIGH IMPACT):**
+- **Prefill caching across model swaps:** When Agave server swaps between DS V4 model sizes (or between main model and draft model), transfer KV cache instead of re-prefilling. With 20s prefill on DS4, saving even 50% is 10s saved.
+- **MTP KV reuse:** The MTP layers use different weights but same KV dimensions as the main model. A ridge mapper could transfer the main model's KV cache to MTP space, giving the MTP drafter full context without running its own attention on the full history. This could fix the 0% → 6% acceptance rate issue.
+
+**Indirect application:**
+- **Cross-quantization transfer:** When the same model is loaded at different quantization levels (MXFP4 vs Q8 attention), the KV representations are close but not identical. A ridge mapper could bridge quantization-induced KV differences.
+- **SSD streaming context transfer:** After loading a page-cached model, transfer KV cache from a previously-cached quantization to avoid re-prefilling.
+
+**Implementation cost:** Small. The mapper is a per-head matrix multiply (kd × kd per head). Fitting is a one-time offline ridge solve. Runtime: one GEMV per head per layer for the transfer = ~0.5ms per token of context.
+
+**Key insight for Agave MTP:** Our MTP attention currently runs with context=1 (no KV history) because the MTP uses different weights. Ridge-mapping the MAIN model's KV cache into MTP space would give MTP full conversation context → dramatically better draft quality → higher acceptance → faster inference.
