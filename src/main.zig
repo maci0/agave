@@ -4236,6 +4236,10 @@ fn generateSpeculative(
         }
 
         // Verify phase
+        // SP-MoE-inspired: blast prefetch ALL layers' experts before verification.
+        // Warms page cache so sequential verification forwards hit cached pages.
+        if (n_drafted > 0 and use_suffix) target.prefetchAllLayers();
+
         const result = if (is_self_draft) blk: {
             // Self-draft: draft == target, 100% acceptance. Get bonus token.
             spec_state.recordRound(spec_state.n_draft);

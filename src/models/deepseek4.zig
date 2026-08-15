@@ -2723,6 +2723,24 @@ pub const Ds4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
+    /// Pre-madvise expert weights for ALL layers (SP-MoE-inspired blast prefetch).
+    /// Called before speculative verification to warm the page cache for all layers.
+    /// Uses the current expert cache residency as a predictor: prefetches the
+    /// most-recently-used experts across all layers.
+    pub fn prefetchAllLayers(self: *Ds4Model) void {
+        const ec = self.expert_cache orelse return;
+        if (comptime @import("builtin").os.tag != .macos and @import("builtin").os.tag != .linux) return;
+        // Prefetch gate + up + down for all layers' top residents
+        for (self.hash_layer_count..self.n_layers) |li| {
+            inline for (.{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" }) |tensor_name| {
+                if (self.layerTensor(li, tensor_name)) |t| {
+                    const stride = ds4ExpertStride(t, self.n_experts);
+                    ec.prefetchTopResidents(@intCast(li), t.data_ptr, stride, 6);
+                }
+            }
+        }
+    }
+
 };
 
 // ── Math helpers ─────────────────────────────────────────────────

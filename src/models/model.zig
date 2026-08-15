@@ -78,6 +78,7 @@ pub const Model = struct {
         get_block_table: *const fn (self: *anyopaque) []const u32,
         get_kv_seq_len: *const fn (self: *anyopaque) usize,
         set_kv_seq_len: *const fn (self: *anyopaque, len: usize) void,
+        prefetch_all_layers: *const fn (self: *anyopaque) void,
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
         set_thread_context: *const fn (self: *anyopaque) void,
@@ -209,6 +210,12 @@ pub const Model = struct {
             .set_kv_seq_len = @ptrCast(&struct {
                 fn call(self: *T, len: usize) void {
                     self.kv_seq_len = len;
+                }
+            }.call),
+            .prefetch_all_layers = @ptrCast(&struct {
+                fn call(self: *T) void {
+                    if (comptime @hasDecl(T, "prefetchAllLayers"))
+                        self.prefetchAllLayers();
                 }
             }.call),
             .set_layer_skip = @ptrCast(&struct {
@@ -479,6 +486,11 @@ pub const Model = struct {
 
     /// Roll back KV cache position for speculative decoding rejection.
     /// Safe because paged blocks stay allocated and are overwritten on next forward().
+    /// Pre-madvise expert weights for ALL layers before speculative verification.
+    pub fn prefetchAllLayers(self: Model) void {
+        self.vtable.prefetch_all_layers(self.ptr);
+    }
+
     pub fn setKvSeqLen(self: Model, len: usize) void {
         self.vtable.set_kv_seq_len(self.ptr, len);
     }
@@ -842,6 +854,19 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Set the SSD streaming expert cache and optional activation profiler.
+    /// Pre-madvise expert weights for ALL layers before speculative verification.
+    /// Warms the page cache so verification forwards hit cached expert pages.
+    pub fn prefetchAllLayers(self: *ModelStorage) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasDecl(@TypeOf(m.*), "prefetchAllLayers"))
+                        m.prefetchAllLayers();
+                }
+            },
+        }
+    }
+
     pub fn setExpertCache(self: *ModelStorage, cache: *@import("../expert_cache.zig").ExpertCache, profile: ?*@import("../expert_profile.zig").ExpertProfile) void {
         switch (self.*) {
             inline else => |*m| {
