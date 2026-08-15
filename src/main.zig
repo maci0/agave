@@ -4259,7 +4259,7 @@ fn generateSpeculative(
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
 
         // Reset expert budget after verification
-        if (use_suffix) target.setExpertBudget(0);
+        if (use_suffix) target.setExpertBudget(4);
 
         // Emit accepted draft tokens
         var hit_eog = false;

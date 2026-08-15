@@ -193,7 +193,7 @@ pub var global_pool: ?SharedNgramPool = null;
 /// Dynamic depth: match_len == min_suffix → k=1; match_len >= max_suffix → k=max_k.
 pub const SuffixState = struct {
     const cache_capacity: usize = 10_000;
-    const min_suffix: usize = 1; // minimum suffix length to attempt
+    const min_suffix: usize = 2; // minimum suffix length to attempt
     const max_suffix: usize = 32; // maximum suffix length to search
     const default_max_k: usize = 48; // vLLM default max tree depth
 
@@ -272,7 +272,7 @@ pub const SuffixState = struct {
         // Dynamic depth: scale proposed count by match quality
         const quality = @as(f32, @floatFromInt(result.match_len - min_suffix)) /
             @as(f32, @floatFromInt(max_suffix - min_suffix));
-        const dynamic_k = @as(usize, @intFromFloat(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality + 1.0)));
+        const dynamic_k = @as(usize, @intFromFloat(@as(f32, @floatFromInt(self.max_k)) * @min(1.0, quality + 0.2)));
         return @min(result.n, @max(1, dynamic_k));
     }
 };
