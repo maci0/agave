@@ -148,6 +148,12 @@ pub const Ds4Model = struct {
     expert_cache: ?*ExpertCache = null,
     /// GGUF file descriptor for pread-based expert loading (SSD streaming).
     gguf_fd: i32 = -1,
+    /// Tensor data override table: maps tensor name → heap-copied data pointer.
+    /// Non-expert weights are heap-copied at first access for Metal safety.
+    /// Expert weights use the pread pool instead.
+    tensor_overrides: std.StringHashMap([*]const u8) = undefined,
+    tensor_overrides_inited: bool = false,
+
     /// Expert data pool: heap-allocated buffers for pread-loaded expert weights.
     /// Pool holds one layer's worth of experts (7 × gate/up/down weights).
     /// Metal can safely wrap these heap pointers (no page fault risk).
@@ -359,6 +365,8 @@ pub const Ds4Model = struct {
             self.expert_pool_slots = n_pool_slots;
             self.expert_pool_slot_size = max_expert_bytes;
         }
+        self.tensor_overrides = std.StringHashMap([*]const u8).init(allocator);
+        self.tensor_overrides_inited = true;
         self.ff_up_scratch = try allocator.alloc(f32, max_experts * ff);
         errdefer allocator.free(self.ff_up_scratch);
         self.router_logits = try allocator.alloc(f32, self.n_experts);
@@ -584,13 +592,13 @@ pub const Ds4Model = struct {
         // is faster than GPU dispatch overhead and avoids Metal buffer issues with
         // small f32 tensors from mmap'd safetensors.
         if (hc_fn.dtype == .q8_0) {
-            cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_mixes, flat_size);
+            cpuGemvQ8_0(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes, flat_size);
         } else if (hc_fn.dtype == .f32) {
-            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+            cpuGemvF32(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else if (hc_fn.dtype == .bf16) {
-            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+            cpuGemvBf16(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else if (hc_fn.dtype == .f16) {
-            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+            cpuGemvF16(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else {
             @memcpy(self.flat_norm, self.hc_state); // GPU path still needs stable buffer
             self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_mixes.ptr, hc_mix_dim, flat_size);
@@ -694,13 +702,13 @@ pub const Ds4Model = struct {
             break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size_h)) + self.rms_eps);
         };
         if (hc_fn.dtype == .q8_0) {
-            cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_pre_w, flat_size_h);
+            cpuGemvQ8_0(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w, flat_size_h);
         } else if (hc_fn.dtype == .f32) {
-            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+            cpuGemvF32(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else if (hc_fn.dtype == .bf16) {
-            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+            cpuGemvBf16(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else if (hc_fn.dtype == .f16) {
-            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+            cpuGemvF16(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else {
             @memcpy(self.flat_norm, self.hc_state);
             self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_pre_w.ptr, n_hc, flat_size_h);
@@ -1840,13 +1848,13 @@ pub const Ds4Model = struct {
             // MLX-Q: use dedicated embedding lookup with companion scales/biases.
             const companion = model_mod.findMlxCompanion(self.fmt, emb, e);
             if (companion) |c| {
-                mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(emb.data_ptr)), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
+                mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(self.heapTensorData(emb))), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
             } else {
                 @memset(self.hc_state[0..e], 0); // fallback: no companion found
             }
         } else {
             const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
-            quant_ops.dequantToF32(self.hc_state[0..e], emb.data_ptr + token_id * row_bytes, emb.dtype, e);
+            quant_ops.dequantToF32(self.hc_state[0..e], self.heapTensorData(emb) + token_id * row_bytes, emb.dtype, e);
         }
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
@@ -2338,14 +2346,18 @@ pub const Ds4Model = struct {
     /// Dispatch a single GEMV through the format-aware path.
     /// Handles MLX-Q (affine with companion scales/biases), NVFP4, GPTQ, AWQ, HQQ,
     /// and standard GGUF quantized weights transparently.
-    fn doGemv(self: *Ds4Model, x: [*]const f32, t: TensorInfo, y: [*]f32, n: usize, k: usize) void {
+    fn doGemv(self: *Ds4Model, x: [*]const f32, t_raw: TensorInfo, y: [*]f32, n: usize, k: usize) void {
+        // Auto-heapify non-expert tensors for Metal safety.
+        const t = self.heapTensor(t_raw);
         model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
     }
 
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
     /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
     fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
-        const data = exp_t.data_ptr + ei * stride;
+        // Auto-heapify for Metal safety (non-expert tensors like wo_a).
+        const base = self.heapTensorData(exp_t);
+        const data = base + ei * stride;
         if (exp_t.dtype != .mlx_q) {
             self.be.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
             return;
@@ -2749,6 +2761,56 @@ pub const Ds4Model = struct {
         self.doGemv(self.pf_hidden2.ptr + @as(usize, node_i) * e, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
         return math_ops.argmax(self.logits_buf);
+    }
+
+    /// Return a TensorInfo with heap-overridden data pointer (Metal-safe).
+    /// If the tensor has been heap-copied, returns a copy with the heap pointer.
+    /// Otherwise returns the original TensorInfo unchanged.
+    fn heapTensor(self: *Ds4Model, t: TensorInfo) TensorInfo {
+        if (!self.tensor_overrides_inited) return t;
+        const heap_ptr = self.heapTensorData(t);
+        if (heap_ptr == t.data_ptr) return t;
+        var result = t;
+        result.data_ptr = heap_ptr;
+        return result;
+    }
+
+    /// Get tensor data with heap override (Metal-safe).
+    /// On first access: copies mmap data to heap. Returns heap pointer.
+    /// On subsequent access: returns cached heap pointer.
+    /// Expert weights use preadExpert instead (separate pool).
+    fn heapTensorData(self: *Ds4Model, t: format_mod.TensorInfo) [*]const u8 {
+        if (!self.tensor_overrides_inited) return t.data_ptr;
+        
+        // Check override table
+        if (self.tensor_overrides.get(t.name)) |heap_ptr| {
+            return heap_ptr;
+        }
+        
+        // First access: copy to heap
+        const size = t.dataByteLen();
+        if (size == 0 or size > 256 * 1024 * 1024) return t.data_ptr; // skip huge/empty
+        
+        const heap = self.allocator.alloc(u8, size) catch return t.data_ptr;
+        // Pre-fault: touch every page from CPU before memcpy.
+        // Ensures page faults are resolved before Metal accesses the copy.
+        const src = @as([*]const u8, t.data_ptr);
+        {
+            const page_size: usize = 16384;
+            var off: usize = 0;
+            while (off < size) : (off += page_size) {
+                const p: *const volatile u8 = @ptrCast(src + off);
+                _ = p.*;
+            }
+        }
+        @memcpy(heap, src[0..size]);
+        
+        self.tensor_overrides.put(t.name, heap.ptr) catch {
+            self.allocator.free(heap);
+            return t.data_ptr;
+        };
+        
+        return heap.ptr;
     }
 
     /// Read expert weight data via pread into a pool buffer slot.

@@ -2939,9 +2939,9 @@ fn initAndRun(
         if (expert_cache_opt != null) {
             eprint("ssd-streaming: expert cache {d} slots, {d} experts × {d} layers\n", .{ cache_slots, n_exp, n_lay });
         }
-        // Enable volatile weight mode on Metal for non-expert weights.
-        // Expert weights use pread (heap buffers, Metal-safe).
-        // Non-expert weights still need buf_cache flush for safety.
+        // Enable volatile weights for Metal safety.
+        // Heapification handles expert + non-expert weights,
+        // but Metal SDPA/wo_a still has issues — needs investigation.
         be.setVolatileWeights(true);
     }
 
