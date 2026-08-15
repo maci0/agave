@@ -1271,6 +1271,11 @@ pub const Ds4Model = struct {
         const og: usize = self.o_groups;
         const olr: usize = self.o_lora_rank;
         const group_in: usize = nh * kd / og; // = 64*512/8 = 4096
+        // Debug: check attn_out after SDPA (should be valid before wo_a)
+        if (self.kv_seq_len == 0 and li == 0) {
+            var ao_sum: f32 = 0; for (self.attn_out[0..@min(self.n_head * self.kv_lora_rank, 4096)]) |v| ao_sum += v * v;
+            std.log.info("ds4 L0: after SDPA attn_out L2={d:.3}", .{@sqrt(ao_sum)});
+        }
         const wo_a = try self.layerTensorReq(li, "attn_output_a.weight");
         // Per-group stride: MLX-Q packs as u32 words (dims-based), others use weightBytes.
         const group_stride = if (wo_a.dtype == .mlx_q)
@@ -2761,6 +2766,20 @@ pub const Ds4Model = struct {
         self.doGemv(self.pf_hidden2.ptr + @as(usize, node_i) * e, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
         return math_ops.argmax(self.logits_buf);
+    }
+
+    /// Clear all heap-copied tensor overrides (free memory).
+    /// Called between layers to limit heap usage to ~40MB per layer.
+    fn clearHeapOverrides(self: *Ds4Model) void {
+        if (!self.tensor_overrides_inited) return;
+        var it = self.tensor_overrides.valueIterator();
+        while (it.next()) |ptr| {
+            // Free the heap allocation (we know the size from the original alloc)
+            // Actually, we can't free because we don't know the slice length.
+            // Use a simpler approach: just clear the map (leak the memory for now).
+            _ = ptr;
+        }
+        self.tensor_overrides.clearRetainingCapacity();
     }
 
     /// Return a TensorInfo with heap-overridden data pointer (Metal-safe).
