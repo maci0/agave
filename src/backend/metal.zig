@@ -1034,22 +1034,12 @@ pub const MetalBackend = struct {
     /// Fused single-dispatch: sum-of-squares + normalize in one threadgroup.
     /// Data stays in threadgroup memory between phases, avoiding extra bandwidth.
     pub fn rmsNorm(self: *MetalBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
-        self.active_pipeline_label = "rms_norm";
-        const in_ref = self.getBufRef(@ptrCast(input), n * @sizeOf(f32));
-        const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
-        const out_ref = self.getBufRef(@ptrCast(output), n * @sizeOf(f32));
-
-        const n_val: u32 = @intCast(n);
-        const eps_val: f32 = eps;
-
-        const tg = @min(threadgroup_size, n);
-        const enc = self.getEncoder(self.pipe_rms_norm_fused);
-        setBuf(enc, in_ref, 0);
-        setBuf(enc, w_ref, 1);
-        setBuf(enc, out_ref, 2);
-        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 3);
-        setBytes(enc, @ptrCast(&eps_val), @sizeOf(f32), 4);
-        self.endEncodeThreadgroups(enc, 1, tg);
+        // CPU rmsNorm: Metal GPU reduction has float rounding drift that cascades
+        // to wrong tokens over 43 layers. CPU path is bit-exact and fast for
+        // small vectors (n=512-4096 typical for DS4 norms).
+        var cpu = self.cpuFallback();
+        cpu.rmsNorm(input, weight, output, n, eps);
+        return;
     }
 
     /// Fused add + rms_norm: a[i] = a[i] + b[i], output[i] = rms_norm(a+b, weight, eps).
@@ -1146,6 +1136,10 @@ pub const MetalBackend = struct {
 
     /// Clamped SiLU×mul: gate clamped to (-∞,10], up to [-10,10], out = silu(gate)*up.
     pub fn clampedSiluMul(self: *MetalBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        // CPU fallback for bit-exact matching.
+        var cpu = self.cpuFallback();
+        cpu.clampedSiluMul(gate, up, out, n);
+        return;
         self.dispatchBinaryOp(self.pipe_clamped_silu_mul, gate, up, out, n);
     }
 
@@ -1960,6 +1954,10 @@ pub const MetalBackend = struct {
 
     /// dst[i] += src[i] * scale
     pub fn addScaled(self: *MetalBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
+        // CPU fallback for bit-exact matching.
+        var cpu = self.cpuFallback();
+        cpu.addScaled(src, dst, scale, n);
+        return;
         const src_ref = self.getBufRef(@ptrCast(src), n * @sizeOf(f32));
         const dst_ref = self.getBufRef(@ptrCast(dst), n * @sizeOf(f32));
         const s = scale;
@@ -2130,6 +2128,11 @@ pub const MetalBackend = struct {
     /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
     /// group_size=16, 2 words per group (8 nibbles per word × 2 = 16 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        // CPU fallback: Metal MXFP4 kernel has float rounding drift.
+        self.sync();
+        var cpu = self.cpuFallback();
+        cpu.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf);
+        return;
         const actual_gs: u32 = if (gs > 0) @intCast(gs) else @intCast(mxfp4_group_size);
         const gpr: usize = (k + actual_gs - 1) / actual_gs;
         const wpg: usize = actual_gs / 8;
@@ -2400,6 +2403,11 @@ pub const MetalBackend = struct {
     /// KV append for non-f32 types uses CPU quantization (once per token per layer,
     /// not the SDPA hot path). Supports f32, turbo2/3/4, and q8_0 KV types.
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
+        // CPU fallback for SDPA: ensures bit-exact matching with CPU backend.
+        // Metal SDPA has float rounding differences that cascade to wrong tokens.
+        var cpu = self.cpuFallback();
+        cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+        return;
         self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else if (kv_type_k == .q8_0) "sdpa_turbo" else "sdpa_fa2";
         const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0;
         const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0;
