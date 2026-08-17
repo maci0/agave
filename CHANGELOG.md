@@ -556,3 +556,19 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
   `<?Assistant?></think>`. Output now correctly says "Paris" at 9.5-10.6 tok/s.
 - Also removed min_match_gap and anti-repetition compaction (over-aggressive,
   caused 2-3× speed regression).
+
+## 2026-08-18 — Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
+
+### Fixed
+- **Metal MLX-Q GEMV CPU fallback**: Metal's native MLX-Q GEMV kernel produces wrong
+  output for SafeTensors weights (likely buffer offset or scale decode issue). Added
+  CPU fallback via `mlxGemvRaw` with `self.sync()` before CPU dispatch.
+- **cpuGemvExpert MXFP4 E8M0 handling**: Added MXFP4 path (was only handling MLX affine).
+  Expert weights with uint8 E8M0 scales now correctly dispatched to CPU `mlxMxfp4GemvRows`.
+- **Shared expert sync**: shared expert must go through `doGemv` (Metal → CPU fallback
+  with sync), not direct `cpuGemvExpert` (no sync → reads stale GPU buffers).
+
+### Result
+- **First coherent output on Metal for MLX 4-bit**: "The capital of France is Paris."
+- 0.4 tok/s (limited by 430 Metal syncs per forward — per-GEMV sync overhead)
+- L0 FFN L2=543.882 (matches CPU baseline exactly)

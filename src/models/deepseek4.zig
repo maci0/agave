@@ -1292,16 +1292,34 @@ pub const Ds4Model = struct {
             const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
             break :blk olr * row_bytes;
         };
-        // wo_a groups + wo_b in one GPU command buffer: lora_out feeds directly into wo_b
+        // wo_a groups + wo_b: use CPU dispatch for MLX-Q to avoid Metal NaN.
+        // Metal MLX-Q GEMV produces NaN for grouped LoRA slices (buffer offset issue).
+        // CPU fallback is fast because wo_a/wo_b weights are page-cached.
+        self.be.sync(); // flush pending Metal work before CPU dispatch
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
             const yp = self.lora_out.ptr + g * olr;
-            self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
+            // CPU dispatch for wo_a (grouped LoRA) — avoids Metal NaN
+            if (wo_a.dtype == .mlx_q) {
+                self.cpuGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
+            } else {
+                self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
+            }
         }
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
-        // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
-        self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
-        self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
+        if (wo_b.dtype == .mlx_q) {
+            // CPU dispatch for wo_b
+            const comp = model_mod.findMlxCompanion(self.fmt, wo_b, og * olr);
+            if (comp) |c| {
+                const mlx_ops2 = @import("../ops/mlx.zig");
+                mlx_ops2.mlxGemvRaw(self.lora_out.ptr, @ptrCast(@alignCast(wo_b.data_ptr)), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), self.hidden.ptr, e, og * olr, c.bits, c.group_size);
+            } else {
+                self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
+            }
+        } else {
+            self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
+        }
+        self.be.sync();
 
     }
 
@@ -1652,8 +1670,15 @@ pub const Ds4Model = struct {
                         },
                     }
                 } else {
-                    self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                    self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    // TEST: revert shared expert to Metal doGemv
+                    if (false and gt.dtype == .mlx_q) {
+                        self.be.sync();
+                        self.cpuGemvExpert(self.hidden2.ptr, gt, 0, 0, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.cpuGemvExpert(self.hidden2.ptr, ut, 0, 0, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    } else {
+                        self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    }
                 }
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
@@ -1728,14 +1753,17 @@ pub const Ds4Model = struct {
                 }
             } else {
                 fused_experts = false;
+                // Sync Metal before CPU expert dispatch to ensure hidden2 is ready.
+                self.be.sync();
                 for (0..n_active) |j| {
                     const eid = top_ids[j];
                     // Use direct be.gemv() for GGUF quants (MXFP4, Q2_K, Q8_0, IQ2_XXS, etc.)
                     // to avoid Metal buffer cache issues with the doGemvExpert wrapper.
                     // doGemvExpert is only needed for MLX-Q safetensors (companion scales/biases).
                     if (ge.dtype == .mlx_q) {
-                        self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        // CPU dispatch for MLX-Q experts (Metal MXFP4 kernel lacks E8M0 support)
+                        self.cpuGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.cpuGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else if (self.expert_cache != null) {
                         // SSD streaming: pread expert data into heap pool buffer.
                         // Heap buffers are Metal-safe (no mmap page fault risk).
@@ -1759,6 +1787,9 @@ pub const Ds4Model = struct {
         }
 
         // Phase 2: clampedSiluMul — skip when fused path already applied activation.
+        // Note: for MLX-Q models, expert GEMVs ran on CPU. The scratch buffers
+        // are in UMA shared memory but Metal may have stale cached copies.
+        // No explicit cache flush is needed on Apple Silicon UMA — coherency is automatic.
         if (!fused_experts and n_scratch > 0) {
             self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
@@ -1766,13 +1797,17 @@ pub const Ds4Model = struct {
         // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
-                self.doGemv(self.ff_gate_scratch.ptr, dt, self.expert_scratch.ptr, e, ff);
+                if (false and dt.dtype == .mlx_q) {
+                    self.cpuGemvExpert(self.ff_gate_scratch.ptr, dt, 0, 0, self.expert_scratch.ptr, e, ff);
+                } else {
+                    self.doGemv(self.ff_gate_scratch.ptr, dt, self.expert_scratch.ptr, e, ff);
+                }
             }
         }
         if (de_exp_tensor) |de_t| {
             for (shexp_slots..n_scratch) |slot| {
                 if (de_t.dtype == .mlx_q) {
-                    self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
+                    self.cpuGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
                 } else if (self.expert_cache != null) {
                     const down_data = self.preadExpert(de_ptrs[slot], @intCast(de_exp_stride), @intCast(slot * 3 + 2));
                     const down_dt: DType = if (de_exp_tensor) |det| (if (self.mlxExpertIsMxfp4(det)) .mxfp4 else de_dtype) else de_dtype;
@@ -1880,6 +1915,10 @@ pub const Ds4Model = struct {
 
             // Layer skip: skip layers in [layer_skip_start, layer_skip_end) for self-speculative draft.
             if (li >= self.layer_skip_start and li < self.layer_skip_end) continue;
+
+            // Sync Metal before CPU-dispatched MLX-Q GEMVs read from GPU-written buffers.
+            // Single per-layer sync replaces per-GEMV syncs (86 vs 430 total).
+            self.be.sync();
 
             // Attn: HC pre → attn → HC post
             const af = try self.layerTensorReq(li, "hc_attn_fn.weight");
@@ -2386,6 +2425,48 @@ pub const Ds4Model = struct {
 
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
     /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
+    /// CPU-only GEMV for a single expert slice (bypasses Metal for MLX-Q).
+    /// CPU-only GEMV for a single expert slice. Handles both MLX affine (bf16 scales+biases)
+    /// and MXFP4/E8M0 (uint8 scales, no biases) expert formats.
+    fn cpuGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
+        if (exp_t.dtype != .mlx_q) {
+            self.doGemvExpert(x, exp_t, ei, stride, y, n, k);
+            return;
+        }
+        const data = exp_t.data_ptr + ei * stride;
+        const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return;
+        var sbuf: [name_buf_size]u8 = undefined;
+        const prefix = exp_t.name[0..wi];
+        const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
+        const st = self.fmt.getTensor(s_name) orelse return;
+        const mlx_ops2 = @import("../ops/mlx.zig");
+
+        if (st.dtype == .unknown or st.dtype == .nvfp4) {
+            // MXFP4/E8M0: uint8 scales, no biases, E2M1 value lookup
+            const s_stride2 = if (st.n_dims >= 3)
+                @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2]))
+            else
+                n * @as(usize, @intCast(st.dims[st.n_dims - 1]));
+            const mxfp4_gs = model_mod.inferMxfp4GroupSize(st, k);
+            const sf: mlx_ops2.Mxfp4ScaleFormat = if (self.fmt.is_safetensors and mxfp4_gs >= 32) .e8m0 else .fp8_e4m3;
+            mlx_ops2.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(data)), st.data_ptr + ei * s_stride2, @ptrCast(y), 0, n, k, mxfp4_gs, sf);
+        } else {
+            // MLX affine: bf16 scales + biases
+            var bbuf: [name_buf_size]u8 = undefined;
+            const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
+            const bt = self.fmt.getTensor(b_name) orelse return;
+            const s_stride2 = if (st.n_dims >= 3)
+                @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) * 2
+            else
+                n * @as(usize, @intCast(st.dims[st.n_dims - 1])) * 2;
+            const bits: u32 = if (exp_t.n_dims >= 2 and k > 0)
+                @intCast(@as(u64, exp_t.dims[exp_t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
+            else 8;
+            const gs2 = model_mod.inferMlxGroupSize(st, k);
+            mlx_ops2.mlxGemvRaw(@ptrCast(x), @ptrCast(@alignCast(data)), @ptrCast(@alignCast(st.data_ptr + ei * s_stride2)), @ptrCast(@alignCast(bt.data_ptr + ei * s_stride2)), @ptrCast(y), n, k, bits, gs2);
+        }
+    }
+
     fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
         // Auto-heapify for Metal safety (non-expert tensors like wo_a).
         const base = self.heapTensorData(exp_t);
@@ -2409,8 +2490,15 @@ pub const Ds4Model = struct {
             const mxfp4_gs = model_mod.inferMxfp4GroupSize(st, k);
             // MLX community models use E8M0 (OCP Microscaling) scales for experts.
             // GGUF MXFP4 models use FP8 E4M3. Detect: SafeTensors with gs>=32 → E8M0.
-            const sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat = if (self.fmt.is_safetensors and mxfp4_gs >= 32) .e8m0 else .fp8_e4m3;
-            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, sf);
+            const mlx_mod2 = @import("../ops/mlx.zig");
+            const sf: mlx_mod2.Mxfp4ScaleFormat = if (self.fmt.is_safetensors and mxfp4_gs >= 32) .e8m0 else .fp8_e4m3;
+            // Metal MXFP4 kernel doesn't support E8M0 scales or gs!=16.
+            // Fall back to CPU for E8M0 expert weights.
+            if (sf == .e8m0 or mxfp4_gs != 16) {
+                mlx_mod2.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(data)), st.data_ptr + ei * s_stride, @ptrCast(y), 0, n, k, mxfp4_gs, sf);
+            } else {
+                self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, sf);
+            }
         } else {
             // MLX affine: dims [n_experts, rows, groups_per_row], BF16 — per-expert = dims[1]*dims[2]*2
             // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row * 2 (BF16)
