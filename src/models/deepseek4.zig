@@ -750,30 +750,92 @@ pub const Ds4Model = struct {
         const max_comp_dim: usize = 2 * kd; // buffer stride (max of CSA=1024 and HCA=512)
 
         // Attention projections: Metal rmsNorm → sync → CPU GEMV (MLX-Q fallback)
+        // CPU rmsNorm for attn_norm (eliminates Metal sync before CPU q_a GEMV).
+        // 4096 elements — CPU is ~0.01ms, Metal sync is ~2ms.
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
-        self.be.sync(); // hidden2 ready for CPU q_a GEMV
-        if (self.kv_seq_len == 0 and li == 0) {
-            std.log.info("ds4 L0: hidden2 after rmsNorm+sync: [{d:.4},{d:.4},{d:.4},{d:.4}]", .{
-                self.hidden2[0], self.hidden2[1], self.hidden2[2], self.hidden2[3],
-            });
+        {
+            const an_w = self.normAsF32(nw, e);
+            const V8 = @Vector(8, f32);
+            var acc: V8 = @splat(0.0);
+            var ri: usize = 0;
+            while (ri + 8 <= e) : (ri += 8) {
+                const v: V8 = self.hidden[ri..][0..8].*;
+                acc = @mulAdd(V8, v, v, acc);
+            }
+            var ss2: f32 = @reduce(.Add, acc);
+            while (ri < e) : (ri += 1) ss2 += self.hidden[ri] * self.hidden[ri];
+            const rms_inv = 1.0 / @sqrt(ss2 / @as(f32, @floatFromInt(e)) + self.rms_eps);
+            ri = 0;
+            while (ri + 8 <= e) : (ri += 8) {
+                const v: V8 = self.hidden[ri..][0..8].*;
+                const w: V8 = an_w[ri..][0..8].*;
+                const r: V8 = @splat(rms_inv);
+                (self.hidden2.ptr + ri)[0..8].* = v * r * w;
+            }
+            while (ri < e) : (ri += 1) self.hidden2[ri] = self.hidden[ri] * rms_inv * an_w[ri];
         }
+        if (self.kv_seq_len == 0 and li == 0) {
         const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
         self.doGemv(self.hidden2.ptr, q_a, self.q_compressed.ptr, ql, e);
-        if (self.kv_seq_len == 0 and li == 0) {
+        // Debug: test Metal native gemvMlxQ for q_a (compare with CPU fallback result)
+        if (self.kv_seq_len == 0 and li == 0 and q_a.dtype == .mlx_q) {
             var qs: f32 = 0; for (self.q_compressed[0..@min(ql, 1024)]) |v| qs += v * v;
-            std.log.info("ds4 L0: q_compressed after q_a GEMV: L2={d:.4} first=[{d:.6},{d:.6}]", .{ @sqrt(qs), self.q_compressed[0], self.q_compressed[1] });
+                const t_data = q_a.data_ptr;
+                // Direct Metal kernel call:
+                switch (self.be) {
+                    inline else => |be| {
+                        if (comptime @hasDecl(@TypeOf(be.*), "pipe_gemv_mlx_q4")) {
+                            // Call the Metal kernel directly (not through CPU fallback)
+                            const gpr2 = (e + comp.group_size - 1) / comp.group_size;
+                            const wpg2 = comp.group_size / 8;
+                            const w_bytes2 = ql * gpr2 * wpg2 * 4;
+                            const sb_bytes2 = ql * gpr2 * 2;
+                            const x_ref = be.getBufRef(@ptrCast(self.hidden2.ptr), e * 4);
+                            const w_ref = be.getBufRef(@ptrCast(t_data), w_bytes2);
+                            const s_ref = be.getBufRef(@ptrCast(comp.scales), sb_bytes2);
+                            const b_ref = be.getBufRef(@ptrCast(comp.biases), sb_bytes2);
+                            const y_ref = be.getBufRef(@ptrCast(&metal_out), ql * 4);
+                            const n_val: u32 = @intCast(ql);
+                            const k_val: u32 = @intCast(e);
+                            const gs_val: u32 = comp.group_size;
+                            const enc = be.getEncoder(be.pipe_gemv_mlx_q4);
+                            const setBuf2 = @import("../backend/metal.zig").setBuf;
+                            const setBytes2 = @import("../backend/metal.zig").setBytes;
+                            setBuf2(enc, x_ref, 0);
+                            setBuf2(enc, w_ref, 1);
+                            setBuf2(enc, s_ref, 2);
+                            setBuf2(enc, b_ref, 3);
+                            setBuf2(enc, y_ref, 4);
+                            setBytes2(enc, @ptrCast(&n_val), 4, 5);
+                            setBytes2(enc, @ptrCast(&k_val), 4, 6);
+                            setBytes2(enc, @ptrCast(&gs_val), 4, 7);
+                            be.endEncodeThreadgroups(enc, ql, @import("../backend/metal.zig").gemvThreadgroupSize(.mlx_q, e));
+                            be.sync();
+                            var ms: f32 = 0; for (&metal_out) |v| ms += v * v;
+            }
         }
+        // CPU rmsNorm for q_norm (only 1024 elements — CPU is faster than Metal sync overhead)
         const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
-        self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
-        self.be.sync(); // q_compressed ready for CPU q_b GEMV
+        {
+            const norm_w = self.normAsF32(q_an, ql);
+            var ss2: f32 = 0;
+            for (self.q_compressed[0..ql]) |v| ss2 += v * v;
+            const rms_inv = 1.0 / @sqrt(ss2 / @as(f32, @floatFromInt(ql)) + self.rms_eps);
+            for (0..ql) |i| self.q_compressed[i] = self.q_compressed[i] * rms_inv * norm_w[i];
+        }
         const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
         self.doGemv(self.q_compressed.ptr, q_b, self.q_full.ptr, nh * kd, ql);
         const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
         self.doGemv(self.hidden2.ptr, kv_a, self.kv_proj.ptr, kd, e);
+        // CPU rmsNorm for kv_norm (only 512 elements — CPU faster than Metal sync)
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
-        self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
-        self.be.sync(); // kv_proj ready for CPU RoPE + KV store
+        {
+            const kv_norm_w = self.normAsF32(kv_an, kd);
+            var kvss: f32 = 0;
+            for (self.kv_proj[0..kd]) |v| kvss += v * v;
+            const kv_rms_inv = 1.0 / @sqrt(kvss / @as(f32, @floatFromInt(kd)) + self.rms_eps);
+            for (0..kd) |i| self.kv_proj[i] = self.kv_proj[i] * kv_rms_inv * kv_norm_w[i];
+        }
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
         // Both batched with Q+KV in same GPU command buffer — single sync covers all.
@@ -815,7 +877,8 @@ pub const Ds4Model = struct {
             break :blk true;
         };
 
-        self.be.sync(); // single sync: Q, KV, CSA/HCA, and (if batched) LID GEMVs
+        // Sync removed: Q/KV/CSA GEMVs use CPU fallback for MLX-Q (no Metal work to sync).
+        // self.be.sync();
 
         // Debug: compare GPU vs CPU — check key tensors after sync
         if (self.kv_seq_len == 0 and li == 0) {
@@ -1550,10 +1613,29 @@ pub const Ds4Model = struct {
         const nk: usize = if (self.expert_budget > 0) self.expert_budget else self.n_expert_used;
         const ne: usize = self.n_experts;
 
-        // Pre-norm: Metal rmsNorm → sync → CPU GEMV dispatch for MLX-Q
+        // CPU rmsNorm for FFN norm (eliminates Metal sync before CPU router/expert GEMVs)
         const nw = try self.layerTensorReq(li, "ffn_norm.weight");
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
-        self.be.sync(); // hidden2 ready for CPU router + expert GEMVs
+        {
+            const fn_w = self.normAsF32(nw, e);
+            const V8f = @Vector(8, f32);
+            var acc2: V8f = @splat(0.0);
+            var fi: usize = 0;
+            while (fi + 8 <= e) : (fi += 8) {
+                const v: V8f = self.hidden[fi..][0..8].*;
+                acc2 = @mulAdd(V8f, v, v, acc2);
+            }
+            var fss: f32 = @reduce(.Add, acc2);
+            while (fi < e) : (fi += 1) fss += self.hidden[fi] * self.hidden[fi];
+            const frms = 1.0 / @sqrt(fss / @as(f32, @floatFromInt(e)) + self.rms_eps);
+            fi = 0;
+            while (fi + 8 <= e) : (fi += 8) {
+                const v: V8f = self.hidden[fi..][0..8].*;
+                const w: V8f = fn_w[fi..][0..8].*;
+                const r: V8f = @splat(frms);
+                (self.hidden2.ptr + fi)[0..8].* = v * r * w;
+            }
+            while (fi < e) : (fi += 1) self.hidden2[fi] = self.hidden[fi] * frms * fn_w[fi];
+        }
 
         // Route
         var top_ids: [8]usize = undefined;
@@ -1584,7 +1666,7 @@ pub const Ds4Model = struct {
             // Learned routing: gate_inp GEMV → sync → top-k on CPU
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
             self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
-            self.be.sync(); // CPU reads router_logits
+            // Sync removed: router GEMV uses CPU fallback for MLX-Q.
 
             // Compute probs = sqrt_softplus(logits) — SIMD vectorized (3 transcendentals × 256)
             var probs: [256]f32 = undefined;
@@ -1669,9 +1751,6 @@ pub const Ds4Model = struct {
                     self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                     if (self.kv_seq_len == 0 and li == 0) {
                         var gs2: f32 = 0; for ((self.ff_gate_scratch.ptr + n_scratch * ff)[0..@min(ff, 2048)]) |v| gs2 += v * v;
-                        std.log.info("ds4 L0 FFN: shared gate L2={d:.4}", .{@sqrt(gs2)});
-                    }
-                    self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                 }
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
@@ -1779,6 +1858,11 @@ pub const Ds4Model = struct {
             }
         }
 
+        if (self.kv_seq_len == 0 and li == 0) {
+            // Debug: check all expert outputs before silu
+            for (0..n_scratch) |s| {
+                var gs2: f32 = 0;
+                for ((self.ff_gate_scratch.ptr + s * ff)[0..ff]) |v| gs2 += v * v;
         // Phase 2: clampedSiluMul — skip when fused path already applied activation.
         // Note: for MLX-Q models, expert GEMVs ran on CPU. The scratch buffers
         // are in UMA shared memory but Metal may have stale cached copies.

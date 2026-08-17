@@ -2117,9 +2117,39 @@ pub const MetalBackend = struct {
         // CPU fallback for MLX-Q GEMV. Metal kernel produces wrong output
         // (root cause: unknown buffer/scale issue). No sync here — caller
         // must ensure any Metal-written input buffers are committed first.
-        const actual_gs2: u32 = if (gs > 0) gs else 64;
-        mlx_ops.mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs2);
-        _ = self;
+        // NATIVE Metal MLX-Q GEMV kernel (dynamic gs support).
+        const actual_gs: u32 = if (gs > 0) gs else 64;
+        const gpr = (k + actual_gs - 1) / actual_gs;
+        const wpg: usize = switch (bits) {
+            8 => actual_gs / 4,
+            4 => actual_gs / 8,
+            else => actual_gs / 16,
+        };
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        const sb_bytes = n * gpr * @sizeOf(u16);
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getBufRef(@ptrCast(scales), sb_bytes);
+        const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = actual_gs;
+        const pipe = switch (bits) {
+            8 => self.pipe_gemv_mlx_q8,
+            4 => self.pipe_gemv_mlx_q4,
+            else => self.pipe_gemv_mlx_q2,
+        };
+        const enc = self.getEncoder(pipe);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, b_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, gemvThreadgroupSize(.mlx_q, k));
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
