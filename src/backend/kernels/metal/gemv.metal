@@ -1467,20 +1467,23 @@ kernel void gemv_mxfp4_st(
     device float* y                   [[buffer(3)]],
     constant uint& n                  [[buffer(4)]],
     constant uint& k                  [[buffer(5)]],
+    constant uint& gs                 [[buffer(6)]],
+    constant uint& scale_fmt          [[buffer(7)]],  // 0=E4M3, 1=E8M0
     uint tgid     [[threadgroup_position_in_grid]],
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
     if (tgid >= n) return;
 
-    const uint gs = 16;   // NVIDIA MXFP4: 16-element groups (was wrong at 32)
-    const uint wpg = 2;   // u32 words per group (16 nibbles / 8 per word)
+    const uint wpg = gs / 8;  // u32 words per group (gs nibbles / 8 per word)
     uint gpr = (k + gs - 1) / gs;
     uint w_row = tgid * gpr * wpg;
     float sum = 0.0f;
 
     for (uint g = tid; g < gpr; g += tg_size) {
-        float scale = fp8e4m3_to_f32(scales[tgid * gpr + g]);
+        float scale = (scale_fmt == 1)
+            ? e8m0_to_f32(scales[tgid * gpr + g])
+            : fp8e4m3_to_f32(scales[tgid * gpr + g]);
         uint xo = g * gs;
         uint wg = w_row + g * wpg;
 
