@@ -2114,14 +2114,16 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
-        // CPU fallback for MLX-Q GEMV. Metal kernel produces wrong output
-        // (root cause: unknown buffer/scale issue). No sync here — caller
-        // must ensure any Metal-written input buffers are committed first.
-        // CPU fallback: Metal kernel accumulates float rounding differences that cascade
-        // to NaN over 43 layers. CPU path is bit-exact. Sync before read required.
+        // CPU fallback: sync Metal, then CPU GEMV.
+        // Use thread pool for large matrices (n >= 4096), direct for small.
         self.sync();
-        const actual_gs2: u32 = if (gs > 0) gs else 64;
-        mlx_ops.mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs2);
+        if (n >= 4096) {
+            var cpu = self.cpuFallback();
+            cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, gs);
+        } else {
+            const actual_gs2: u32 = if (gs > 0) gs else 64;
+            mlx_ops.mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs2);
+        }
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
