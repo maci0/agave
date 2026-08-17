@@ -749,19 +749,31 @@ pub const Ds4Model = struct {
         const pos = self.kv_seq_len;
         const max_comp_dim: usize = 2 * kd; // buffer stride (max of CSA=1024 and HCA=512)
 
-        // All Q, KV, and (if CSA) compressor GPU ops in ONE command buffer → 1 sync
+        // Attention projections: Metal rmsNorm → sync → CPU GEMV (MLX-Q fallback)
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        self.be.sync(); // hidden2 ready for CPU q_a GEMV
+        if (self.kv_seq_len == 0 and li == 0) {
+            std.log.info("ds4 L0: hidden2 after rmsNorm+sync: [{d:.4},{d:.4},{d:.4},{d:.4}]", .{
+                self.hidden2[0], self.hidden2[1], self.hidden2[2], self.hidden2[3],
+            });
+        }
         const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
         self.doGemv(self.hidden2.ptr, q_a, self.q_compressed.ptr, ql, e);
+        if (self.kv_seq_len == 0 and li == 0) {
+            var qs: f32 = 0; for (self.q_compressed[0..@min(ql, 1024)]) |v| qs += v * v;
+            std.log.info("ds4 L0: q_compressed after q_a GEMV: L2={d:.4} first=[{d:.6},{d:.6}]", .{ @sqrt(qs), self.q_compressed[0], self.q_compressed[1] });
+        }
         const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
         self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
+        self.be.sync(); // q_compressed ready for CPU q_b GEMV
         const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
         self.doGemv(self.q_compressed.ptr, q_b, self.q_full.ptr, nh * kd, ql);
         const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
         self.doGemv(self.hidden2.ptr, kv_a, self.kv_proj.ptr, kd, e);
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
         self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
+        self.be.sync(); // kv_proj ready for CPU RoPE + KV store
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
         // Both batched with Q+KV in same GPU command buffer — single sync covers all.
@@ -1292,33 +1304,16 @@ pub const Ds4Model = struct {
             const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
             break :blk olr * row_bytes;
         };
-        // wo_a groups + wo_b: use CPU dispatch for MLX-Q to avoid Metal NaN.
-        // Metal MLX-Q GEMV produces NaN for grouped LoRA slices (buffer offset issue).
-        // CPU fallback is fast because wo_a/wo_b weights are page-cached.
-        self.be.sync(); // flush pending Metal work before CPU dispatch
+        // wo_a: CPU dispatch for gs=8 grouped LoRA (Metal kernel untested for gs<64).
+        // wo_b: Metal dispatch (gs=64, works correctly).
+        self.be.sync(); // ensure attn_out is ready before CPU reads
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
             const yp = self.lora_out.ptr + g * olr;
-            // CPU dispatch for wo_a (grouped LoRA) — avoids Metal NaN
-            if (wo_a.dtype == .mlx_q) {
-                self.cpuGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
-            } else {
-                self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
-            }
+            self.cpuGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
         }
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
-        if (wo_b.dtype == .mlx_q) {
-            // CPU dispatch for wo_b
-            const comp = model_mod.findMlxCompanion(self.fmt, wo_b, og * olr);
-            if (comp) |c| {
-                const mlx_ops2 = @import("../ops/mlx.zig");
-                mlx_ops2.mlxGemvRaw(self.lora_out.ptr, @ptrCast(@alignCast(wo_b.data_ptr)), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), self.hidden.ptr, e, og * olr, c.bits, c.group_size);
-            } else {
-                self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
-            }
-        } else {
-            self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
-        }
+        self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
         self.be.sync();
 
     }
@@ -1555,9 +1550,10 @@ pub const Ds4Model = struct {
         const nk: usize = if (self.expert_budget > 0) self.expert_budget else self.n_expert_used;
         const ne: usize = self.n_experts;
 
-        // Pre-norm: GPU only (no sync — expert GEMVs and routing GEMV also GPU)
+        // Pre-norm: Metal rmsNorm → sync → CPU GEMV dispatch for MLX-Q
         const nw = try self.layerTensorReq(li, "ffn_norm.weight");
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        self.be.sync(); // hidden2 ready for CPU router + expert GEMVs
 
         // Route
         var top_ids: [8]usize = undefined;
@@ -1670,15 +1666,12 @@ pub const Ds4Model = struct {
                         },
                     }
                 } else {
-                    // TEST: revert shared expert to Metal doGemv
-                    if (false and gt.dtype == .mlx_q) {
-                        self.be.sync();
-                        self.cpuGemvExpert(self.hidden2.ptr, gt, 0, 0, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.cpuGemvExpert(self.hidden2.ptr, ut, 0, 0, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
-                    } else {
-                        self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                    self.doGemv(self.hidden2.ptr, gt, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                    if (self.kv_seq_len == 0 and li == 0) {
+                        var gs2: f32 = 0; for ((self.ff_gate_scratch.ptr + n_scratch * ff)[0..@min(ff, 2048)]) |v| gs2 += v * v;
+                        std.log.info("ds4 L0 FFN: shared gate L2={d:.4}", .{@sqrt(gs2)});
                     }
+                    self.doGemv(self.hidden2.ptr, ut, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                 }
                 slot_weights[n_scratch] = 1.0;
                 n_scratch += 1;
@@ -1791,7 +1784,13 @@ pub const Ds4Model = struct {
         // are in UMA shared memory but Metal may have stale cached copies.
         // No explicit cache flush is needed on Apple Silicon UMA — coherency is automatic.
         if (!fused_experts and n_scratch > 0) {
-            self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
+            // CPU silu: avoids Metal stale-read issues with CPU-written expert buffers.
+            for (0..n_scratch * ff) |i| {
+                const g = self.ff_gate_scratch[i];
+                const u = self.ff_up_scratch[i];
+                const silu_g = g / (1.0 + @exp(-g));
+                self.ff_gate_scratch[i] = @min(silu_g, 127.0) * u;
+            }
         }
 
         // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
@@ -1916,9 +1915,6 @@ pub const Ds4Model = struct {
             // Layer skip: skip layers in [layer_skip_start, layer_skip_end) for self-speculative draft.
             if (li >= self.layer_skip_start and li < self.layer_skip_end) continue;
 
-            // Sync Metal before CPU-dispatched MLX-Q GEMVs read from GPU-written buffers.
-            // Single per-layer sync replaces per-GEMV syncs (86 vs 430 total).
-            self.be.sync();
 
             // Attn: HC pre → attn → HC post
             const af = try self.layerTensorReq(li, "hc_attn_fn.weight");
@@ -3304,13 +3300,10 @@ pub const Ds4Model = struct {
     /// Return a TensorInfo with heap-overridden data pointer (Metal-safe).
     /// If the tensor has been heap-copied, returns a copy with the heap pointer.
     /// Otherwise returns the original TensorInfo unchanged.
-    fn heapTensor(self: *Ds4Model, t: TensorInfo) TensorInfo {
-        if (!self.tensor_overrides_inited) return t;
-        const heap_ptr = self.heapTensorData(t);
-        if (heap_ptr == t.data_ptr) return t;
-        var result = t;
-        result.data_ptr = heap_ptr;
-        return result;
+    fn heapTensor(_: *Ds4Model, t: TensorInfo) TensorInfo {
+        // Disabled: heap copies of mmap'd SafeTensors data may read unfaulted pages.
+        // On UMA (Apple Silicon), CPU and GPU share memory — no copy needed.
+        return t;
     }
 
     /// Get tensor data with heap override (Metal-safe).

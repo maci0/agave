@@ -1242,14 +1242,13 @@ kernel void gemv_mlx_q4(
     device float* y                    [[buffer(4)]],
     constant uint& n                   [[buffer(5)]],
     constant uint& k                   [[buffer(6)]],
+    constant uint& gs                  [[buffer(7)]],
     uint tgid     [[threadgroup_position_in_grid]],
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
     if (tgid >= n) return;
-
-    const uint gs = 64;
-    const uint wpg = 8;    // u32 words per group (64 nibbles / 8 per word)
+    const uint wpg = gs / 8;  // u32 words per group (gs nibbles / 8 per word)
     uint gpr = (k + gs - 1) / gs;
 
     // packed_uchar4 loads: alignment-free 4-byte reads from mmap'd data
