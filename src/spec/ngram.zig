@@ -195,7 +195,7 @@ pub const SuffixState = struct {
     const cache_capacity: usize = 10_000;
     const min_suffix: usize = 2; // minimum suffix length to attempt
     const max_suffix: usize = 32; // maximum suffix length to search
-    const default_max_k: usize = 48; // vLLM default max tree depth
+    const default_max_k: usize = 96; // vLLM default max tree depth
 
     history: []u32,
     len: usize = 0,
@@ -266,6 +266,10 @@ pub const SuffixState = struct {
 
     /// Propose tokens and compute dynamic speculation depth.
     /// Depth scales with match quality: 1 token for minimum match, max_k for maximum.
+    /// Minimum gap between the match position and current position.
+    /// Prevents suffix from matching its own very recent output (self-loop).
+    const min_match_gap: usize = 0;
+
     pub fn propose(self: *const SuffixState, out: []u32) usize {
         const result = self.proposeWithDepth(self.max_k, out);
         if (result.n == 0) return 0;

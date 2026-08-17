@@ -969,7 +969,9 @@ flowchart TD
 
 **V cache inverse rotation**: For rotation-based KV quantization (TurboQuant, PlanarQuant, IsoQuant, RotorQuant), the V cache dequantization **must** apply the inverse rotation. K cache can rotate the query instead (orthogonality trick). Omitting the V inverse rotation produces garbage output.
 
-**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
+**MLX expert scale format ambiguity (DS4 case study):** MLX-community MoE models use two different scale formats in the *same file*. Attention weights use standard MLX affine (bf16 scales + biases, group_size=64). Expert weights use MXFP4-style E2M1 values with uint8 scales and **no biases** — but the uint8 scales are E8M0 (`2^(val-127)`), not FP8 E4M3. Confusing E8M0 for E4M3 produces 32,000× scale error (e.g., uint8 120 → E4M3: 256.0 vs E8M0: 0.0078). The group_size also differs: experts use 32 (not the standard 16). Finally, SafeTensors parses `U8` as `.nvfp4` dtype, so checking `st.dtype == .unknown` misses them entirely. All three bugs must be fixed together — fixing only one still produces garbled output. See `Mxfp4ScaleFormat` enum in `mlx.zig` and `mlxExpertIsMxfp4()` / `doGemvExpert()` in `deepseek4.zig`.
+
+**In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format, `Mxfp4ScaleFormat`), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
 
 ```text
 for each output row:

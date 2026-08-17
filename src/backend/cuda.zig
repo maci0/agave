@@ -1631,7 +1631,7 @@ pub const CudaBackend = struct {
     }
 
     /// MXFP4 SafeTensors GEMV: u32-packed nibbles + FP8 E4M3 scales, group_size=16.
-    pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+    pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         const mxfp4_gs: usize = mlx_ops.mxfp4_group_size;
         const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
         const wpg: usize = mxfp4_gs * 4 / 32; // 16 nibbles / 8 per word = 2

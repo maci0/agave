@@ -941,7 +941,8 @@ pub const Qwen35Model = struct {
         if (st.dtype == .unknown) {
             // MXFP4: dims [n_experts, rows, groups_per_row], U8 — per-expert = dims[1]*dims[2]
             const s_stride = if (st.n_dims >= 3) @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) else st.numElements();
-            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k);
+            const mxfp4_gs = model_mod.inferMxfp4GroupSize(st, k);
+            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, .fp8_e4m3);
         } else {
             // MLX affine: dims [n_experts, rows, groups_per_row], BF16 — per-expert = dims[1]*dims[2]*2
             var bbuf: [model_mod.tensor_name_buf_size]u8 = undefined;

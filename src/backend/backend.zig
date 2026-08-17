@@ -455,9 +455,11 @@ pub const NullBackend = struct {
         unreachable;
     }
 
-    pub fn gemvMxfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize) void {
+    pub fn gemvMxfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: usize, _: Mxfp4ScaleFormat) void {
         unreachable;
     }
+
+    const Mxfp4ScaleFormat = @import("../ops/mlx.zig").Mxfp4ScaleFormat;
 
     pub fn gemvMulti(_: *NullBackend, _: [*]const f32, _: []const GemvOp, _: usize) void {
         unreachable;
@@ -937,14 +939,18 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Scale format for MXFP4 GEMV (re-exported from mlx.zig for dispatcher callers).
+    pub const Mxfp4ScaleFormat = @import("../ops/mlx.zig").Mxfp4ScaleFormat;
+
     /// Compute y[n] = W[n,k] @ x[k] for MXFP4 SafeTensors layout (MLX-style packing).
     ///
     /// MXFP4 stores weights as U32-packed 4-bit nibbles (8 per word) with
-    /// FP8 E4M3 per-group scales (group_size=16). No quantization bias.
-    /// Dequant: float_val = mxfp4_lut[nibble] * fp8_scale.
-    pub inline fn gemvMxfp4St(self: Backend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+    /// per-group U8 scales. `gs` is the quantization group size
+    /// (16 for standard MXFP4, 32 for MLX community expert weights).
+    /// `sf` selects scale decoding: `.fp8_e4m3` (NVIDIA/GGUF) or `.e8m0` (OCP/MLX experts).
+    pub inline fn gemvMxfp4St(self: Backend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: Mxfp4ScaleFormat) void {
         switch (self) {
-            inline else => |be| be.gemvMxfp4St(x, weight, scale, y, n, k),
+            inline else => |be| be.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf),
         }
     }
 

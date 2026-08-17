@@ -1693,7 +1693,7 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
-    pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+    pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         const x_sz = k * @sizeOf(f32);
         const w_sz = n * k / 2;
         const mxfp4_gs: usize = 16; // NVIDIA MXFP4 group size (must match gemv_mxfp4_st.wgsl)

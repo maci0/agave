@@ -204,6 +204,20 @@ Notes:
 - Heterogeneous architectures (x86_64 + aarch64) work seamlessly
 - POSIX shm auto-selected for same-node peers (`--transport auto`)
 
+## DeepSeek V4 Flash (MoE 290B, MLX 4-bit, CPU + SSD Streaming)
+
+Suffix speculation on the 141GB MLX-community 4-bit model exceeds GPU-based ds4 inference.
+
+| Mode | Model | Size | tok/s | vs ds4 Metal GPU | Notes |
+|------|-------|------|-------|-----------------|-------|
+| **Suffix spec** | MLX-Q 4-bit | 141GB | **9.5-10.6** (factual) | **1.61-1.80× WIN** | Budget=3 fallback, grain=128 |
+| **Suffix spec** | MLX-Q 4-bit | 141GB | **7.1-7.4** (code/prose) | **1.20-1.25× WIN** | All workloads exceed ds4 |
+| Baseline | MLX-Q 4-bit | 141GB | 1.3-1.4 | 0.24× | SSD I/O-bound, no speculation |
+| ds4 reference | Q2 imatrix | 81GB | 5.9 | 1.00× | Metal GPU + graph capture |
+
+**Hardware:** Apple M4 Pro 48GB, macOS 26.6.1, NVMe SSD (~3.5 GB/s).
+See [DS4_BENCHMARK.md](DS4_BENCHMARK.md) for full methodology and optimization details.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.

@@ -2154,7 +2154,7 @@ pub const MetalBackend = struct {
     /// MXFP4 SafeTensors GEMV on GPU.
     /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
     /// group_size=16, 2 words per group (8 nibbles per word × 2 = 16 values).
-    pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+    pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
         const wpg: usize = mxfp4_words_per_group;
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
@@ -3880,8 +3880,8 @@ test "MetalBackend.gemvMxfp4St signature" {
     comptime {
         const F = @TypeOf(MetalBackend.gemvMxfp4St);
         const info = @typeInfo(F);
-        // self + x + weight + scale + y + n + k = 7 params
-        try std.testing.expectEqual(7, info.@"fn".params.len);
+        // self + x + weight + scale + y + n + k + gs + sf = 9 params
+        try std.testing.expectEqual(9, info.@"fn".params.len);
     }
 }
 

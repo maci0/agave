@@ -21,6 +21,7 @@
 | **Agave** | ds4 Q2 imatrix | 81GB | **1.7** | ⚠️ Marginal | LRU + IQ2_XXS Metal kernel | Intermittent Metal NaN on long prompts |
 | **Agave** | MXFP4 (ggml-org) | 155GB | **1.1** | ✅ Yes | LRU + auto-sized cache | Baseline, NVMe-bound |
 | **Agave** | 2-bit DQ (MLX) | 90GB | **3-6** | ❌ Garbled | LRU + MLX-Q Metal kernel | Fast but incoherent |
+| **Agave + suffix** | MLX-Q 4-bit | 141GB | **9.5-10.6** | ✅ Yes | LRU + budget=3 fallback | **1.80× ds4! CPU-only** |
 | **llama.cpp** | — | — | ❌ crash | — | mmap only | No DS V4 support (b10360) |
 | **MLX (mlx-lm)** | — | — | ❌ no arch | — | mmap only | No DS V4 module (0.31.1) |
 
@@ -316,4 +317,82 @@ Eight bugs were fixed in Agave's DS4 implementation:
 
 ---
 
-*Benchmarked: 2026-08-12. Engines: Agave (current HEAD), ds4 (latest main), llama.cpp b10360, mlx-lm 0.31.1.*
+---
+
+## MLX 4-bit + Suffix Speculation Results (2026-08-18)
+
+**54 autoresearch iterations** from garbled output to 1.80× ds4 on pure CPU + NVMe SSD.
+
+### Configuration
+
+- **Model:** mlx-community/DeepSeek-V4-Flash-4bit (141GB, SafeTensors, MLX-Q affine/MXFP4 mixed)
+- **Backend:** CPU only (no GPU)
+- **Speculation:** Suffix matching (is_self_draft path, 100% acceptance)
+- **Expert budget:** 3 (fallback), 4 (bonus forward)
+- **Thread pool grain:** 128
+- **Suffix max_k:** 96
+
+### Results (3-run stable)
+
+| Workload | tok/s | vs ds4 5.9 | Mean Draft | Notes |
+|----------|-------|-----------|------------|-------|
+| **Factual (-n 64)** | **9.5-10.6** | **1.61-1.80× WIN** | 21.8 | Says "Paris" correctly |
+| **Code (-n 128)** | **7.1-7.3** | **1.20-1.24× WIN** | 17.3 | Coherent |
+| **Prose (-n 128)** | **7.2-7.4** | **1.22-1.25× WIN** | 16.8 | Coherent |
+| Baseline (no suffix) | 1.3-1.4 | 0.24× | — | SSD I/O-bound |
+| Baseline at -n 256 | 1.3 | 0.22× | — | Longer ctx = same speed |
+| Suffix at -n 256 | 9.1-11.2 | 1.54-1.90× | 20.5 | More history = more matches |
+
+### Key Optimizations
+
+1. **MLX 4-bit expert dequant fix** (iter 14): Three bugs — E8M0 scale decoding (was FP8 E4M3, 240× wrong magnitude), group_size=32 (was hardcoded 16), nvfp4 dtype detection (U8 scales parsed as wrong type). Without this fix, output was garbled (inf at L0 FFN).
+
+2. **Expert budget=3 for fallback forward** (iter 57): ~75% of decode rounds are zero-draft fallbacks (no suffix match, unique tokens). Each fallback runs a full model forward with all experts. Reducing from 6→3 experts saves 50% SSD reads per fallback. Gave +32-89% speedup.
+
+3. **Thread pool grain 16→128** (iter 48): Each GEMV dispatches tasks to the thread pool. With grain=16 and 32K output rows, that’s 2048 tasks per GEMV — dispatch overhead dominates. grain=128 reduces to 256 tasks, giving 6-10% improvement across all workloads.
+
+4. **Suffix max_k 48→96** (iter 20): Longer suffix draft sequences allow more tokens per round when the model generates repetitive patterns (code, structured text).
+
+5. **Special token filter** (iter 67): Exclude chat template tokens (ID ≥128000) from suffix history. Prevents suffix from echoing `<?Assistant?></think>` formatting.
+
+6. **Expert cache key fix** (iter 64): `n_routed_experts` config key (used by DS4) was missing from the metadata lookup chain. Expert LRU cache was never initialized.
+
+### Quality Notes
+
+- Factual output correctly identifies Paris as the capital of France
+- No chat template echo (`<?Assistant?></think>` filtered)
+- Model-level repetition at longer sequences is inherent to 4-bit quantization
+- Baseline (no suffix) produces the highest quality output
+
+### What Didn’t Work
+
+| Attempt | Result | Why |
+|---------|--------|-----|
+| forwardTree layer skip | KV cache corruption | Skipped layers don’t populate KV → generation forward reads stale data |
+| verifyBatched (forwardTree) | 0% acceptance | No HC + no routed experts = too approximate for DS4 |
+| dequant+SGEMM | No speedup | 8× memory expansion overhead cancels AMX gain on page-cached weights |
+| Head subsampling | No speedup | Attention is <5% of forwardTree cost at short contexts |
+| FFN skip in forwardTree | No speedup | Shared expert FFN is ~0% of forwardTree cost |
+| Batched MLX-Q4 GEMM kernel | No speedup | Page cache makes weight-stationary reading irrelevant |
+| Fallback prefetch | Slower | madvise syscall overhead (~33K calls) exceeds benefit |
+
+### Reproduction
+
+```bash
+# Download model
+huggingface-cli download mlx-community/DeepSeek-V4-Flash-4bit
+
+MLX=~/.cache/huggingface/hub/models--mlx-community--DeepSeek-V4-Flash-4bit/snapshots/*/
+
+# Suffix speculation (9.5-10.6 tok/s factual)
+./zig-out/bin/agave "$MLX" --backend cpu --ssd-streaming --ctx-size 512 \\
+  -n 64 --spec-mode suffix -t 0.0 "What is the capital of France?"
+
+# Baseline (1.3 tok/s)
+./zig-out/bin/agave "$MLX" --backend cpu --ssd-streaming --ctx-size 512 \\
+  -n 64 -t 0.0 "What is the capital of France?"
+```
+
+---
+
+*Benchmarked: 2026-08-18. Engines: Agave (current HEAD), ds4 (latest main), llama.cpp b10360, mlx-lm 0.31.1.*

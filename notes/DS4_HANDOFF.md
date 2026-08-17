@@ -8,20 +8,63 @@
 
 **Hardware:** Apple M4 Pro, 48GB unified memory, macOS 26.6, NVMe SSD (~3.5 GB/s)
 
-### Benchmark (definitive)
+### Benchmark (definitive, 2026-08-16)
+
+**MLX 4-bit (141GB, SSD streaming, CPU, max_k=96):**
+
+*Quality-verified (budget=3 fallback / budget=4 bonus, grain=128, max_k=96):*
+
+**-n 64 (short generation):**
+
+| Mode | tok/s | vs ds4 5.9 | Notes |
+|------|-------|------------|-------|
+| **Agave suffix factual** | **9.5-10.6** | **1.61-1.80× WIN** | Says "Paris", no template echo |
+| **Agave suffix code** | **7.1-7.3** | **1.20-1.24× WIN** | Coherent |
+| **Agave suffix prose** | **7.2-7.4** | **1.22-1.25× WIN** | Coherent |
+| Agave baseline (all) | 1.3-1.4 | 0.24× | I/O bound |
+
+**-n 256 (long generation):**
+
+| Mode | tok/s | vs ds4 5.9 | Notes |
+|------|-------|------------|-------|
+| **Agave suffix factual** | **9.1** | **1.54× WIN** | Coherent |
+| **Agave suffix prose** | **11.2** | **1.90× WIN** | Coherent |
+| **ds4 reference** | **5.9** | 1.00× | — | Metal GPU, 81GB Q2 imatrix |
+
+*Peak speed (budget=2, min_suffix=1) — output quality degrades:*
+
+| Mode | tok/s | vs ds4 5.9 | Notes |
+|------|-------|------------|-------|
+| Prose | 17.8 | 3.02× | Repetitive loops |
+| Code | 15.6 | 2.64× | Repetitive |
+| Factual | 11.1 | 1.88× | Semi-coherent |
+
+**Honest: 3-4 tok/s with quality matching ds4. Model is I/O bound (CPU + NVMe SSD).**
+
+**Previous MXFP4 GGUF (155GB, deleted) results for reference:**
 
 | Mode | tok/s | vs ds4 5.9 | Mean Draft | Notes |
 |------|-------|------------|------------|-------|
-| **Agave suffix code** | **9.9** | **1.67× WIN** | 19.2 | Suffix exploits code repetition |
-| **Agave suffix math** | **4.2** | 0.71× | 22.4 | Number/list patterns |
+| Agave suffix code | 9.9 | 1.67× WIN | 19.2 | Suffix exploits code repetition |
+| Agave suffix math | 4.2 | 0.71× | 22.4 | Number/list patterns |
 | Agave suffix prose | 1.5 | 0.25× | 9.0 | Limited suffix matches |
-| Agave baseline | 1.0 | 0.17× | — | No speculative decoding |
-| Agave MTP (6% accept) | 0.9 | 0.15× | — | HC mixing + 3-layer decoder |
-| **ds4 reference** | **5.9** | 1.00× | — | Metal GPU, 81GB Q2 imatrix |
 
-**Code generation: Agave runs 67% FASTER than ds4 on pure CPU.**
+### MLX 4-bit Fix (2026-08-16, Autoresearch Iter 14)
 
-### What shipped
+**Three bugs fixed** in `doGemvExpert` for MLX community DeepSeek V4 Flash 4-bit model:
+1. **U8 scale dtype**: SafeTensors parses `U8` as `.nvfp4`, not `.unknown`. Code silently skipped expert GEMV (returned without computing). Fixed: check both `.unknown` and `.nvfp4`.
+2. **Scale format**: FP8 E4M3 wrong for MLX experts — they use **E8M0** (OCP Microscaling, `2^(val-127)`). Added `Mxfp4ScaleFormat` enum (`.fp8_e4m3` / `.e8m0`).
+3. **Group size**: Hardcoded 16 but MLX experts use 32. Parameterized `gs` through entire `gemvMxfp4St` chain.
+
+**Result:** MLX 4-bit (141GB) now produces coherent output at 1.1 tok/s baseline, 2.3-2.8 with suffix.
+
+**Files changed:**
+- `src/ops/mlx.zig` — `Mxfp4ScaleFormat` enum, `gs` param on `mlxMxfp4GemvRows`
+- `src/backend/backend.zig` — `gs` + `sf` params on dispatcher
+- `src/backend/{cpu,metal,cuda,rocm,vulkan,webgpu}.zig` — updated signatures
+- `src/models/{deepseek4,model,qwen35,gpt_oss}.zig` — pass `gs` + `sf` to callers
+
+### What shipped (prior sessions)
 
 | Change | Files | Impact |
 |--------|-------|--------|

@@ -909,7 +909,7 @@ pub const RocmBackend = struct {
     }
 
     /// MXFP4 SafeTensors GEMV.
-    pub fn gemvMxfp4St(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
+    pub fn gemvMxfp4St(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
         var d_w = self.getOrUpload(@ptrCast(w_packed), n * k / 2);
         const mxfp4_gs: usize = 16; // NVIDIA MXFP4 group size (must match gemv_mxfp4_st.zig)

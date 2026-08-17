@@ -604,8 +604,9 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
     const st = fmt.getTensor(s_name) orelse return false;
 
     if (st.dtype == .unknown) {
-        // MXFP4: U8 E8M0 scales, no bias
-        be.gemvMxfp4St(x, t.data_ptr, st.data_ptr, y, n, k);
+        // MXFP4: U8 FP8 E4M3 scales, no bias
+        const mxfp4_gs: usize = @intCast(inferMlxGroupSize(st, k));
+        be.gemvMxfp4St(x, t.data_ptr, st.data_ptr, y, n, k, mxfp4_gs, .fp8_e4m3);
     } else {
         // MLX affine: BF16 scales + biases
         const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return false;
@@ -633,6 +634,17 @@ pub fn inferMlxGroupSize(st: format_mod.TensorInfo, k: usize) u32 {
         if (n_groups > 0) return @intCast(k / n_groups);
     }
     return @intCast(mlx_ops.mlx_group_size);
+}
+
+/// Infer MXFP4 group size from a U8 scale tensor's last dimension.
+/// Standard MXFP4 uses group_size=16; MLX community expert weights use group_size=32.
+/// Returns k / scales_last_dim, or default 16 if dims are unavailable.
+pub fn inferMxfp4GroupSize(st: format_mod.TensorInfo, k: usize) usize {
+    // For 3D expert tensors [n_experts, rows, groups_per_row], use the last dim
+    const dim_idx: usize = if (st.n_dims >= 3) 2 else if (st.n_dims >= 2) @as(usize, @intCast(st.n_dims - 1)) else return mlx_ops.mxfp4_group_size;
+    const n_groups: usize = @intCast(st.dims[dim_idx]);
+    if (n_groups > 0 and k > 0) return k / n_groups;
+    return mlx_ops.mxfp4_group_size;
 }
 
 /// Find MLX companion tensors (scales + biases) for an MLX-quantized weight.

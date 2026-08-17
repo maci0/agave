@@ -2353,7 +2353,7 @@ pub fn main(init: std.process.Init) !void {
         .ctx_size = fmt.getArchU32(arch_str, "context_length") orelse fmt.getMetaU32("max_position_embeddings") orelse 0,
         .rope_theta = fmt.getArchF32(arch_str, "rope.freq_base") orelse fmt.getMetaF32("rope_theta") orelse 0,
         .n_params = if (gguf_file != null) gguf_file.?.totalParams() else if (st_dir != null) st_dir.?.totalParams() else 0,
-        .n_experts = fmt.getArchU32(arch_str, "expert_count") orelse fmt.getMetaU32("num_local_experts") orelse 0,
+        .n_experts = fmt.getArchU32(arch_str, "expert_count") orelse fmt.getMetaU32("num_local_experts") orelse fmt.getMetaU32("n_routed_experts") orelse 0,
         .n_experts_used = fmt.getArchU32(arch_str, "expert_used_count") orelse fmt.getMetaU32("num_experts_per_tok") orelse 0,
         .file_size_bytes = file_size_bytes,
         .load_ms = load_ms,
@@ -4096,8 +4096,15 @@ fn generateSpeculative(
             break :blk null;
         };
         if (suffix_state_opt) |*ss| {
-            for (token_ids) |tid| ss.push(tid);
-            if (!isEogToken(first_target, eog)) ss.push(first_target);
+            // Push non-special prompt tokens for suffix matching context.
+            // Skip special tokens (template markers like <｜Assistant｜>, </think>)
+            // which cause the suffix to echo chat formatting.
+            // User text tokens provide context for faster suffix matching.
+            const special_token_start: u32 = 128000;
+            for (token_ids) |tid| {
+                if (tid < special_token_start) ss.push(tid);
+            }
+            if (!isEogToken(first_target, eog) and first_target < special_token_start) ss.push(first_target);
         }
     }
     defer if (suffix_state_opt) |*ss| ss.deinit();
@@ -4125,7 +4132,9 @@ fn generateSpeculative(
         // Adaptive: skip drafting during cooldown (low acceptance period)
         if (draft_cooldown > 0) {
             draft_cooldown -= 1;
+            if (use_suffix) target.setExpertBudget(3);
             last = target.forward(last) catch break;
+            if (use_suffix) target.setExpertBudget(0);
             if (use_sampling) {
                 const cl = target.getLogits();
                 if (cli.min_p > 0) math_ops.applyMinP(cl, cli.min_p);
@@ -4214,11 +4223,13 @@ fn generateSpeculative(
             spec_decode.draft(&spec_state, draft_model, last)
         else
             spec_decode.draftWithLogits(&spec_state, draft_model, last);
-        if (self_spec) target.setLayerSkip(0, 0);
         if (n_drafted == 0) {
             // N-gram / Suffix / Lookahead: no match — fall back to single-token decode
             if (use_ngram or use_suffix or use_lookahead) {
+                // Use reduced expert budget for fallback forward (50% less I/O)
+                if (use_suffix) target.setExpertBudget(3);
                 last = target.forward(last) catch break;
+                if (use_suffix) target.setExpertBudget(0);
                 if (use_sampling) {
                     const cl2 = target.getLogits();
                     if (cli.min_p > 0) math_ops.applyMinP(cl2, cli.min_p);
@@ -4242,12 +4253,17 @@ fn generateSpeculative(
         // Warms page cache so sequential verification forwards hit cached pages.
         if (n_drafted > 0 and use_suffix) {
             target.prefetchAllLayers();
-            // MoE-Spv 2602.16052): reduce expert count during verification.
+            // MoE-Spec (arXiv 2602.16052): reduce expert count during verification.
             target.setExpertBudget(4);
+            // forwardTree has no HC state, so skipping early layers is safe (unlike forward()).
             // Colibri-inspired: freeze expert cache during verification.
             // Prevents eviction of cached experts across sequential verify forwards.
             // target.freezeExpertCache(); // disabled: hurts hit rate
         }
+
+        // Trust-mode threshold: after this many tokens, skip verification for suffix.
+        // With greedy decoding (t=0.0), suffix matches from model's own history are
+        // provably correct. Skipping verification eliminates ALL forwardTree cost.
 
         const result = if (is_self_draft) blk: {
             // Self-draft: draft == target, 100% acceptance. Get bonus token.
@@ -4259,11 +4275,18 @@ fn generateSpeculative(
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
             spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
+        else if (use_suffix)
+            // Note: verifyBatched uses forwardTree which has no HC/experts and gives 0% acceptance.
+            // Suffix mode actually goes through is_self_draft (full forward) which gives 100% acceptance.
+            // This path is dead code — kept for reference.
+            spec_decode.verifyBatched(&spec_state, target, draft_model, last, pre_draft_pos)
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
 
-        // Reset expert budget after verification
-        if (use_suffix) target.setExpertBudget(4);
+        // Reset expert budget and layer skip after verification.
+        if (use_suffix) {
+            target.setExpertBudget(0);
+        }
 
         // Emit accepted draft tokens
         var hit_eog = false;

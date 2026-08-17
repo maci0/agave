@@ -277,7 +277,7 @@ const softmax_width: comptime_int = 8; // SIMD width for softmax: 4, 8, or 16
 /// Minimum output rows to justify thread pool dispatch overhead.
 const parallel_min_rows: usize = 32;
 /// Row granularity for work-stealing (aligned to 4-row batch size).
-const parallel_grain: usize = 16;
+const parallel_grain: usize = 128;
 /// Maximum number of SSM v-heads for DeltaNet stack buffers.
 const max_deltanet_v_heads: usize = 128;
 /// Minimum v-heads to parallelize DeltaNet recurrence across the thread pool.
@@ -603,8 +603,7 @@ pub const CpuBackend = struct {
     };
 
     /// MXFP4 SafeTensors GEMV (U32-packed nibbles, E8M0 scales, no bias).
-    pub fn gemvMxfp4St(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        const mlx_ops = @import("../ops/mlx.zig");
+    pub fn gemvMxfp4St(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: mlx_mod.Mxfp4ScaleFormat) void {
         if (self.pool) |pool| {
             if (n >= parallel_min_rows) {
                 var ctx = Mxfp4StCtx{
@@ -613,13 +612,17 @@ pub const CpuBackend = struct {
                     .scales_u8 = scale,
                     .y = y,
                     .k = k,
+                    .gs = gs,
+                    .sf = sf,
                 };
                 pool.parallelFor(n, parallel_grain, @ptrCast(&ctx), Mxfp4StCtx.work);
                 return;
             }
         }
-        mlx_ops.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(weight)), scale, y, 0, n, k);
+        mlx_mod.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(weight)), scale, y, 0, n, k, gs, sf);
     }
+
+    const mlx_mod = @import("../ops/mlx.zig");
 
     const Mxfp4StCtx = struct {
         x: [*]const f32,
@@ -627,11 +630,12 @@ pub const CpuBackend = struct {
         scales_u8: [*]const u8,
         y: [*]f32,
         k: usize,
+        gs: usize,
+        sf: mlx_mod.Mxfp4ScaleFormat,
 
         fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
             const ctx: *const Mxfp4StCtx = @ptrCast(@alignCast(ctx_ptr));
-            const mlx = @import("../ops/mlx.zig");
-            mlx.mlxMxfp4GemvRows(ctx.x, ctx.pw, ctx.scales_u8, ctx.y, start, end - start, ctx.k);
+            mlx_mod.mlxMxfp4GemvRows(ctx.x, ctx.pw, ctx.scales_u8, ctx.y, start, end - start, ctx.k, ctx.gs, ctx.sf);
         }
     };
 

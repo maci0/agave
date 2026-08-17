@@ -139,10 +139,10 @@ fn mlxGemvQ2Rows(
 ) void {
     const V = crumbs_per_u32;
     const VecF32 = @Vector(V, f32);
+    const vzero: VecF32 = @splat(0.0);
     const VecU32 = @Vector(V, u32);
     const crumb_shifts: VecU32 = .{ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30 };
     const mask2: VecU32 = @splat(0x3);
-    const vzero: VecF32 = @splat(0.0);
 
     // 2-row batching for x-vector cache reuse
     var row = start_row;
@@ -407,8 +407,8 @@ fn mlxGemvQ8Rows(
     const VecF32 = @Vector(V, f32);
     const VecU32 = @Vector(V, u32);
     const byte_shifts: VecU32 = .{ 0, 8, 16, 24 };
-    const mask8: VecU32 = @splat(0xFF);
     const vzero: VecF32 = @splat(0.0);
+    const mask8: VecU32 = @splat(0xFF);
 
     for (start_row..start_row + n_rows) |row| {
         var sum: f32 = 0.0;
@@ -446,9 +446,20 @@ fn mlxGemvQ8Rows(
     }
 }
 
+/// Scale format for MXFP4 GEMV.
+pub const Mxfp4ScaleFormat = enum {
+    /// FP8 E4M3: standard NVIDIA MXFP4 / GGUF format.
+    fp8_e4m3,
+    /// E8M0: pure power-of-2 exponent (OCP Microscaling spec, MLX community experts).
+    e8m0,
+};
+
 /// Compute a range of rows for MLX MXFP4 GEMV.
-/// Scales are FP8 E4M3 block scales (NVIDIA MXFP4 spec), one per 16-element group.
-/// Previously decoded as E8M0 (wrong), causing near-zero outputs for all rows.
+/// Weights are E2M1 (4-bit) looked up via `mxfp4Lookup`, scaled by per-group U8 scales.
+/// `gs` is the quantization group size (16 for standard MXFP4, 32 for MLX experts).
+/// `scale_fmt` selects how U8 scale bytes are decoded:
+///   - `.fp8_e4m3`: NVIDIA/GGUF MXFP4 format
+///   - `.e8m0`: OCP Microscaling / MLX community MoE experts
 pub fn mlxMxfp4GemvRows(
     x: [*]const f32,
     pw: [*]const u32,
@@ -457,47 +468,185 @@ pub fn mlxMxfp4GemvRows(
     start_row: usize,
     n_rows: usize,
     k: usize,
+    gs: usize,
+    scale_fmt: Mxfp4ScaleFormat,
 ) void {
-    const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
-    const wpg: usize = mxfp4_group_size * bits_per_nibble / bits_per_u32;
+    const gpr = (k + gs - 1) / gs;
+    const wpg: usize = gs * bits_per_nibble / bits_per_u32;
     const wpr = gpr * wpg;
 
     const V8 = @Vector(nibbles_per_u32, f32);
+    const vzero: V8 = @splat(0.0);
 
-    for (start_row..start_row + n_rows) |row| {
-        var acc: V8 = @splat(0.0);
+    // 2-row batching: reuse x vector loads across two output rows.
+    var row = start_row;
+    while (row + 2 <= start_row + n_rows) : (row += 2) {
+        var acc0: V8 = vzero;
+        var acc1: V8 = vzero;
+        const wr0 = pw + row * wpr;
+        const wr1 = pw + (row + 1) * wpr;
+        const sr0 = scales_u8 + row * gpr;
+        const sr1 = scales_u8 + (row + 1) * gpr;
+
+        for (0..gpr) |g| {
+            const scale0 = switch (scale_fmt) {
+                .fp8_e4m3 => quant.fp8e4m3ToF32(sr0[g]),
+                .e8m0 => quant.e8m0ToF32(sr0[g]),
+            };
+            const scale1 = switch (scale_fmt) {
+                .fp8_e4m3 => quant.fp8e4m3ToF32(sr1[g]),
+                .e8m0 => quant.e8m0ToF32(sr1[g]),
+            };
+            const sv0: V8 = @splat(scale0);
+            const sv1: V8 = @splat(scale1);
+            const xo = g * gs;
+            const wo = g * wpg;
+            const elems = @min(gs, k - xo);
+
+            const full_words = elems / nibbles_per_u32;
+            for (0..full_words) |wi| {
+                const xv: V8 = (x + xo + wi * nibbles_per_u32)[0..nibbles_per_u32].*;
+                // Row 0
+                const w0 = wr0[wo + wi];
+                var v0: [nibbles_per_u32]f32 = undefined;
+                inline for (0..nibbles_per_u32) |ni| {
+                    v0[ni] = quant.mxfp4Lookup(@truncate((w0 >> @as(u5, @intCast(ni * bits_per_nibble))) & 0xF));
+                }
+                acc0 = @mulAdd(V8, sv0 * @as(V8, v0), xv, acc0);
+                // Row 1
+                const w1 = wr1[wo + wi];
+                var v1: [nibbles_per_u32]f32 = undefined;
+                inline for (0..nibbles_per_u32) |ni| {
+                    v1[ni] = quant.mxfp4Lookup(@truncate((w1 >> @as(u5, @intCast(ni * bits_per_nibble))) & 0xF));
+                }
+                acc1 = @mulAdd(V8, sv1 * @as(V8, v1), xv, acc1);
+            }
+
+            // Scalar tail
+            const done = full_words * nibbles_per_u32;
+            for (done..elems) |i| {
+                const xval = x[xo + i];
+                acc0[0] += scale0 * quant.mxfp4Lookup(unpackU4(wr0 + wo, i)) * xval;
+                acc1[0] += scale1 * quant.mxfp4Lookup(unpackU4(wr1 + wo, i)) * xval;
+            }
+        }
+        y[row] = @reduce(.Add, acc0);
+        y[row + 1] = @reduce(.Add, acc1);
+    }
+
+    // Remainder: single row
+    while (row < start_row + n_rows) : (row += 1) {
+        var acc: V8 = vzero;
         const wr = pw + row * wpr;
         const sr = scales_u8 + row * gpr;
 
         for (0..gpr) |g| {
-            const scale = quant.fp8e4m3ToF32(sr[g]);
+            const scale = switch (scale_fmt) {
+                .fp8_e4m3 => quant.fp8e4m3ToF32(sr[g]),
+                .e8m0 => quant.e8m0ToF32(sr[g]),
+            };
             const sv: V8 = @splat(scale);
-            const xo = g * mxfp4_group_size;
+            const xo = g * gs;
             const wo = g * wpg;
-            const elems = @min(mxfp4_group_size, k - xo);
+            const elems = @min(gs, k - xo);
 
             const full_words = elems / nibbles_per_u32;
             for (0..full_words) |wi| {
                 const word = wr[wo + wi];
                 var vals: [nibbles_per_u32]f32 = undefined;
                 inline for (0..nibbles_per_u32) |ni| {
-                    const nibble: u8 = @truncate((word >> @as(u5, @intCast(ni * bits_per_nibble))) & 0xF);
-                    vals[ni] = quant.mxfp4Lookup(nibble);
+                    vals[ni] = quant.mxfp4Lookup(@truncate((word >> @as(u5, @intCast(ni * bits_per_nibble))) & 0xF));
                 }
                 const v: V8 = vals;
                 const xv: V8 = (x + xo + wi * nibbles_per_u32)[0..nibbles_per_u32].*;
                 acc = @mulAdd(V8, sv * v, xv, acc);
             }
 
-            // Scalar tail — reuse pre-computed scale
             const done = full_words * nibbles_per_u32;
             for (done..elems) |i| {
-                const nibble = unpackU4(wr + wo, i);
-                const val = quant.mxfp4Lookup(nibble);
-                acc[0] += scale * val * x[xo + i];
+                acc[0] += scale * quant.mxfp4Lookup(unpackU4(wr + wo, i)) * x[xo + i];
             }
         }
         y[row] = @reduce(.Add, acc);
+    }
+}
+
+/// Weight-stationary batched MLX-Q4 GEMM: y[n_tok, n_out] = x[n_tok, k] @ W[n_out, k]^T.
+/// Reads each weight row ONCE and accumulates dot products for all n_tok input vectors.
+/// This is N× less memory bandwidth than N sequential GEMVs.
+/// Uses the same factored scale/bias as mlxGemvQ4Rows.
+pub fn mlxGemmQ4(
+    x: [*]const f32,
+    pw: [*]const u32,
+    sc: [*]const u16,
+    bi: [*]const u16,
+    y: [*]f32,
+    n_tok: usize,
+    n_out: usize,
+    k: usize,
+    gs: usize,
+) void {
+    const V = nibbles_per_u32;
+    const VecF32 = @Vector(V, f32);
+    const VecU32 = @Vector(V, u32);
+    const nibble_shifts: VecU32 = .{ 0, 4, 8, 12, 16, 20, 24, 28 };
+    const mask4: VecU32 = @splat(0xF);
+
+    const gpr = (k + gs - 1) / gs;
+    const wpg = wordsPerGroup(4, gs);
+    const wpr = gpr * wpg;
+
+    for (0..n_out) |row| {
+        const wr = pw + row * wpr;
+        const sr = sc + row * gpr;
+        const br = bi + row * gpr;
+
+        // Per-token accumulators (stack-allocated, max 128 tokens)
+        var q_dots: [128]f32 = undefined;
+        var x_sums: [128]f32 = undefined;
+        for (0..n_tok) |t| {
+            q_dots[t] = 0;
+            x_sums[t] = 0;
+        }
+
+        for (0..gpr) |g| {
+            const scale = quant.bf16ToF32(sr[g]);
+            const bias = quant.bf16ToF32(br[g]);
+            const xo = g * gs;
+            const wo = g * wpg;
+            const elems = @min(gs, k - xo);
+            const full_words = elems / V;
+
+            // For each word in this group, dequant weight ONCE, dot with all tokens
+            for (0..full_words) |wi| {
+                const w: VecU32 = @splat(wr[wo + wi]);
+                const vals: VecF32 = @floatFromInt((w >> nibble_shifts) & mask4);
+                for (0..n_tok) |t| {
+                    const xv: VecF32 = (x + t * k + xo + wi * V)[0..V].*;
+                    q_dots[t] += @reduce(.Add, xv * vals);
+                    x_sums[t] += @reduce(.Add, xv);
+                }
+            }
+
+            // Scalar tail
+            const done = full_words * V;
+            for (done..elems) |i| {
+                const val: u32 = unpackU4(wr + wo, i);
+                const fval = @as(f32, @floatFromInt(val));
+                for (0..n_tok) |t| {
+                    const xval = x[t * k + xo + i];
+                    q_dots[t] += xval * fval;
+                    x_sums[t] += xval;
+                }
+            }
+
+            // Apply scale+bias per group
+            for (0..n_tok) |t| {
+                y[t * n_out + row] += scale * q_dots[t] + bias * x_sums[t];
+                q_dots[t] = 0;
+                x_sums[t] = 0;
+            }
+        }
     }
 }
 

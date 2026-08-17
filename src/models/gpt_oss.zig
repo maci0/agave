@@ -611,7 +611,7 @@ pub const GptOssModel = struct {
         // Override bits using actual k dimension (findCompanion uses n_embd which may differ)
         if (!comp.is_mxfp4) comp.bits = inferMlxBits(t, @intCast(k));
         if (comp.is_mxfp4) {
-            self.be.gemvMxfp4St(x, t.data_ptr, comp.scales, y, n, k);
+            self.be.gemvMxfp4St(x, t.data_ptr, comp.scales, y, n, k, comp.group_size, .fp8_e4m3);
         } else {
             self.be.gemvMlxQ(x, t.data_ptr, comp.scales, comp.biases, y, n, k, comp.bits, comp.group_size);
         }
@@ -629,7 +629,7 @@ pub const GptOssModel = struct {
         if (comp.is_mxfp4) {
             // MXFP4: U8 scales only, no quantization bias
             const s_stride = comp.expertScaleStrideMxfp4();
-            self.be.gemvMxfp4St(x, data, comp.scales + ei * s_stride, y, n, k);
+            self.be.gemvMxfp4St(x, data, comp.scales + ei * s_stride, y, n, k, comp.group_size, .fp8_e4m3);
         } else {
             // MLX affine: BF16 scales + biases (2 bytes/group each)
             const s_stride = comp.expertScaleStrideAffine();
@@ -697,6 +697,7 @@ pub const GptOssModel = struct {
                 .bias_t = undefined,
                 .is_mxfp4 = true,
                 .bits = 4,
+                .group_size = @intCast(model_mod.inferMxfp4GroupSize(st, self.n_embd)),
             };
         }
         // MLX affine: needs .biases companion tensor
