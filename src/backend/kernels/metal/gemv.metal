@@ -2335,6 +2335,18 @@ kernel void gemv_iq2_xxs(
 // Processes elements in the SAME order as CPU NEON @mulAdd/@reduce.
 // Uses scalar operations to match CPU accumulation exactly.
 // tg_size MUST be 1 (single thread per row for bit-exact matching).
+
+// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
+// Single thread per row. E8M0 or E4M3 scale format via scale_fmt parameter.
+
+// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
+// Matches CPU computation: (scale * lookup[nibble]) * x, accumulated
+// into 8-element array, then pairwise reduced. Single thread per row.
+
+// ── Vec8-exact MLX Q4 GEMV (matches CPU NEON @mulAdd + @reduce) ──
+// Uses float4 pairs to match CPU's @Vector(8,f32) accumulation.
+// fma(float4) maps to the SAME Apple Silicon FPU as NEON fmla.
+// Pairwise reduction matches CPU's @reduce(.Add) → NEON faddp.
 kernel void gemv_mlx_q4_exact(
     device const float* x              [[buffer(0)]],
     device const packed_uchar4* W      [[buffer(1)]],
@@ -2363,40 +2375,69 @@ kernel void gemv_mlx_q4_exact(
         uint xo = g * gs;
         uint wg = w_row + g * wpg;
 
-        // Match CPU: accumulate q_dot and x_sum per 8-element word,
-        // using the SAME per-element multiply-add order as NEON @mulAdd.
-        float q_dot = 0.0f;
-        float x_sum = 0.0f;
+        // Match CPU: @mulAdd(@Vector(8,f32), xv, vals, q_acc)
+        // Using float4 pairs (lo + hi) to match NEON 2×fmla on V8.
+        float4 q_acc_lo = float4(0);
+        float4 q_acc_hi = float4(0);
+        float4 x_acc_lo = float4(0);
+        float4 x_acc_hi = float4(0);
 
-        for (uint w = 0; w < wpg && xo + w * 8 <= k; w++) {
+        for (uint w = 0; w < wpg; w++) {
             uint xi = xo + w * 8;
+            if (xi + 8 > k) {
+                // Scalar tail for partial word
+                for (uint i = 0; i < k - xi; i++) {
+                    float q = float((((device const uchar*)(W + wg + w))[i / 2] >> ((i % 2) * 4)) & 0xF);
+                    q_acc_lo[0] += x[xi + i] * q;
+                    x_acc_lo[0] += x[xi + i];
+                }
+                break;
+            }
+            // Load 8 x values as 2×float4 (matches CPU V8 load)
+            float4 xv_lo = *(device const float4*)(x + xi);
+            float4 xv_hi = *(device const float4*)(x + xi + 4);
+
+            // Dequant 8 nibbles from packed u32 word
             packed_uchar4 bytes = W[wg + w];
             uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
                         (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+            float4 vals_lo = float4(float(word & 0xF), float((word >> 4) & 0xF),
+                                     float((word >> 8) & 0xF), float((word >> 12) & 0xF));
+            float4 vals_hi = float4(float((word >> 16) & 0xF), float((word >> 20) & 0xF),
+                                     float((word >> 24) & 0xF), float((word >> 28) & 0xF));
 
-            uint rem = min(uint(8), k - xi);
-            // Process ALL 8 elements sequentially to match CPU @mulAdd order.
-            // CPU does: q_acc[i] += x[i] * val[i] for i=0..7 (SIMD fmla)
-            // Then: q_dot = q_acc[0]+q_acc[1]+...+q_acc[7] (reduce)
-            // We match: accumulate per-element products into q_dot.
-            for (uint i = 0; i < rem; i++) {
-                float q = float((word >> (i * 4)) & 0xF);
-                float xv = x[xi + i];
-                q_dot += xv * q;  // fma(xv, q, q_dot) — matches NEON fmla
-                x_sum += xv;
-            }
+            // fma: matches CPU @mulAdd(V8, xv, vals, q_acc)
+            q_acc_lo = fma(xv_lo, vals_lo, q_acc_lo);
+            q_acc_hi = fma(xv_hi, vals_hi, q_acc_hi);
+
+            // x_acc += xv (matches CPU x_acc += xv vector add)
+            x_acc_lo += xv_lo;
+            x_acc_hi += xv_hi;
         }
+
+        // Pairwise reduction (matches CPU @reduce(.Add)):
+        // ((lo.x+lo.y)+(lo.z+lo.w)) + ((hi.x+hi.y)+(hi.z+hi.w))
+        float q_01 = q_acc_lo.x + q_acc_lo.y;
+        float q_23 = q_acc_lo.z + q_acc_lo.w;
+        float q_45 = q_acc_hi.x + q_acc_hi.y;
+        float q_67 = q_acc_hi.z + q_acc_hi.w;
+        float q_dot = (q_01 + q_23) + (q_45 + q_67);
+
+        float x_01 = x_acc_lo.x + x_acc_lo.y;
+        float x_23 = x_acc_lo.z + x_acc_lo.w;
+        float x_45 = x_acc_hi.x + x_acc_hi.y;
+        float x_67 = x_acc_hi.z + x_acc_hi.w;
+        float x_sum = (x_01 + x_23) + (x_45 + x_67);
+
         sum += scale * q_dot + bias * x_sum;
     }
     y[tgid] = sum;
 }
 
-// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
-// Single thread per row. E8M0 or E4M3 scale format via scale_fmt parameter.
-
-// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
-// Matches CPU computation: (scale * lookup[nibble]) * x, accumulated
-// into 8-element array, then pairwise reduced. Single thread per row.
+// ── Vec8-exact MXFP4 GEMV (matches CPU NEON @mulAdd + @reduce) ──
+// Uses float4 pairs. CPU does: acc = @mulAdd(V8, sv*v, xv, acc)
+// where sv = scale splat, v = mxfp4_lut lookups.
+// Then: y = @reduce(.Add, acc) — pairwise.
 kernel void gemv_mxfp4_st_exact(
     device const float* x             [[buffer(0)]],
     device const packed_uchar4* W     [[buffer(1)]],
@@ -2414,8 +2455,9 @@ kernel void gemv_mxfp4_st_exact(
     uint gpr = (k + gs - 1) / gs;
     uint w_row = tgid * gpr * wpg;
 
-    // Match CPU: accumulate into 8-element vector per word, reduce pairwise.
-    float acc[8] = {0,0,0,0,0,0,0,0};
+    // Match CPU: accumulate into V8 (2×float4) then pairwise reduce
+    float4 acc_lo = float4(0);
+    float4 acc_hi = float4(0);
 
     for (uint g = 0; g < gpr; g++) {
         float scale = (scale_fmt == 1)
@@ -2429,28 +2471,41 @@ kernel void gemv_mxfp4_st_exact(
             packed_uchar4 bytes = W[wg + w];
             uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
                         (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
-            uint rem = min(uint(8), k - xi);
-            // Match CPU: acc[i] = fma(scale * lookup, x, acc[i])
-            // CPU does: @mulAdd(V8, sv * v, xv, acc) = acc + (sv*v) * xv
-            for (uint i = 0; i < rem; i++) {
-                float sv = scale * mxfp4_lut[(word >> (i * 4)) & 0xF];
-                acc[i] = fma(sv, x[xi + i], acc[i]);
-            }
-        }
 
-        // Match CPU: per-group, apply scale was already multiplied in.
-        // Pairwise reduce at end of each group to match @reduce(.Add):
-        // ((acc[0]+acc[1])+(acc[2]+acc[3]))+((acc[4]+acc[5])+(acc[6]+acc[7]))
-        // But CPU accumulates across ALL groups before reducing.
-        // So we DON'T reduce here — keep accumulating in the 8 lanes.
+            if (xi + 8 > k) {
+                // Scalar tail
+                for (uint i = 0; i < k - xi; i++) {
+                    float sv = scale * mxfp4_lut[(word >> (i * 4)) & 0xF];
+                    acc_lo[0] = fma(sv, x[xi + i], acc_lo[0]);
+                }
+                break;
+            }
+
+            // Dequant 8 nibbles via E2M1 LUT, multiply by scale → sv
+            float4 sv_lo = float4(
+                scale * mxfp4_lut[word & 0xF],
+                scale * mxfp4_lut[(word >> 4) & 0xF],
+                scale * mxfp4_lut[(word >> 8) & 0xF],
+                scale * mxfp4_lut[(word >> 12) & 0xF]);
+            float4 sv_hi = float4(
+                scale * mxfp4_lut[(word >> 16) & 0xF],
+                scale * mxfp4_lut[(word >> 20) & 0xF],
+                scale * mxfp4_lut[(word >> 24) & 0xF],
+                scale * mxfp4_lut[(word >> 28) & 0xF]);
+
+            float4 xv_lo = *(device const float4*)(x + xi);
+            float4 xv_hi = *(device const float4*)(x + xi + 4);
+
+            // fma: matches CPU @mulAdd(V8, sv*v, xv, acc)
+            acc_lo = fma(sv_lo, xv_lo, acc_lo);
+            acc_hi = fma(sv_hi, xv_hi, acc_hi);
+        }
     }
 
-    // Pairwise reduce (match CPU @reduce(.Add) on @Vector(8, f32)):
-    float s01 = acc[0] + acc[1];
-    float s23 = acc[2] + acc[3];
-    float s45 = acc[4] + acc[5];
-    float s67 = acc[6] + acc[7];
-    float s0123 = s01 + s23;
-    float s4567 = s45 + s67;
-    y[tgid] = s0123 + s4567;
+    // Pairwise reduction (matches CPU @reduce(.Add, acc)):
+    float s01 = acc_lo.x + acc_lo.y;
+    float s23 = acc_lo.z + acc_lo.w;
+    float s45 = acc_hi.x + acc_hi.y;
+    float s67 = acc_hi.z + acc_hi.w;
+    y[tgid] = (s01 + s23) + (s45 + s67);
 }
