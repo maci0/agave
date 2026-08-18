@@ -272,7 +272,7 @@ const softmax_width: comptime_int = 8; // SIMD width for softmax: 4, 8, or 16
 /// Minimum output rows to justify thread pool dispatch overhead.
 const parallel_min_rows: usize = 32;
 /// Row granularity for work-stealing (aligned to 4-row batch size).
-const parallel_grain: usize = 128;
+const parallel_grain: usize = 16;
 /// Maximum number of SSM v-heads for DeltaNet stack buffers.
 const max_deltanet_v_heads: usize = 128;
 /// Minimum v-heads to parallelize DeltaNet recurrence across the thread pool.

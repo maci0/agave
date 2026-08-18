@@ -114,15 +114,11 @@ pub const SharedNgramPool = struct {
     }
 
     /// Wipe shared token history so prior requests' tokens are not retained
-    /// across idle periods or explicit clear. Zeros the used region before
-    /// resetting length.
+    /// across idle periods or explicit clear.
     pub fn clear(self: *SharedNgramPool) void {
         self.lock();
         defer self.unlock();
-        if (self.len > 0) {
-            @memset(self.history[0..self.len], 0);
-            self.len = 0;
-        }
+        self.len = 0;
     }
 
     /// Record a generated token into the shared pool (called by every server slot).
@@ -225,14 +221,13 @@ pub const SuffixState = struct {
         };
     }
 
-    /// Zero and free the suffix cache. Safe to call multiple times —
+    /// Free the suffix cache. Safe to call multiple times —
     /// subsequent calls are no-ops after the first free.
     pub fn deinit(self: *SuffixState) void {
         if (self.history.len == 0) return;
-        @memset(self.history, 0);
-        self.len = 0;
         self.allocator.free(self.history);
         self.history = &.{};
+        self.len = 0;
     }
 
     /// Add a generated token to the suffix cache.
@@ -330,13 +325,16 @@ test "suffix no match" {
     try std.testing.expect(n == 0);
 }
 
-test "shared pool clear zeros history" {
+test "shared pool clear resets len" {
     var pool = SharedNgramPool{};
     for ([_]u32{ 10, 20, 30, 40, 50 }) |t| pool.push(t);
     try std.testing.expect(pool.len == 5);
     pool.clear();
     try std.testing.expect(pool.len == 0);
-    for (pool.history[0..5]) |v| try std.testing.expect(v == 0);
+    // After clear, propose returns nothing (empty pool).
+    var draft: [4]u32 = undefined;
+    const n = pool.propose(&[_]u32{ 10, 20, 30 }, 4, &draft);
+    try std.testing.expectEqual(@as(usize, 0), n);
 }
 
 test "shared pool propose finds late alignment" {
