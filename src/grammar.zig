@@ -182,11 +182,10 @@ pub const Grammar = struct {
             test_state.completed = state.completed;
 
             var valid = true;
-            for (effective, 0..) |c, ci| {
+            for (effective) |c| {
                 if (test_state.completed) {
-                    // Grammar finished mid-token — remaining bytes after
-                    // this point are extra content that violates the grammar.
-                    if (ci < effective.len) valid = false;
+                    // Grammar finished mid-token: remaining bytes violate it.
+                    valid = false;
                     break;
                 }
                 if (!test_state.acceptChar(c)) {
@@ -240,9 +239,9 @@ pub const Grammar = struct {
             test_state.completed = state.completed;
 
             var valid = true;
-            for (effective, 0..) |c, ci| {
+            for (effective) |c| {
                 if (test_state.completed) {
-                    if (ci < effective.len) valid = false;
+                    valid = false;
                     break;
                 }
                 if (!test_state.acceptChar(c)) {

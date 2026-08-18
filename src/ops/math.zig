@@ -231,21 +231,29 @@ pub fn applyDry(logits: []f32, recent_ids: []const u32, multiplier: f32, allowed
     const al: usize = allowed_length;
 
     // Scan recent_ids to find which token would continue an existing n-gram.
-    // For each position, check if the suffix ending there matches the tail of
-    // recent_ids. If so, the token at (position + match_len) would extend the
-    // repetition — penalize it. O(seq^2) instead of O(vocab * seq).
+    // For each position where the last `al` tokens appear, extend the match
+    // backward to find the true repeated-prefix length, then penalize the
+    // token that would continue that repetition.  Longer repetitions get
+    // proportionally stronger penalties (DRY spec).  O(seq^2) worst-case.
     for (0..n - al) |search_pos| {
-        var match_len: usize = 0;
+        // Check base al-length match.
         var j: usize = 0;
-        while (j < al and search_pos + j < n) : (j += 1) {
-            const tail_idx = n - al + j;
-            if (recent_ids[search_pos + j] != recent_ids[tail_idx]) break;
-            match_len += 1;
+        while (j < al) : (j += 1) {
+            if (recent_ids[search_pos + j] != recent_ids[n - al + j]) break;
         }
-        if (match_len < al) continue;
+        if (j < al) continue;
 
-        // The token at search_pos + match_len would continue the repeat
-        const continuation_pos = search_pos + match_len;
+        // Extend backward: each additional matching token before the base
+        // window increases the effective repetition length and the penalty.
+        var ext: usize = 0;
+        while (search_pos >= ext + 1 and al + ext < n) {
+            if (recent_ids[search_pos - ext - 1] != recent_ids[n - al - ext - 1]) break;
+            ext += 1;
+        }
+        const match_len = al + ext;
+
+        // The token at search_pos + al would continue the repeat.
+        const continuation_pos = search_pos + al;
         if (continuation_pos >= n) continue;
         const tid = recent_ids[continuation_pos];
         if (tid < logits.len and logits[tid] != -std.math.inf(f32)) {
@@ -1155,8 +1163,9 @@ test "applyXtc no-op at probability 0" {
 
 test "applyDry penalizes repeated sequence" {
     var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0 };
-    // History: [1, 2, 3, 1, 2] — token 3 would continue the repeat
-    // match_len=2 (suffix [1,2] matches at pos 0), penalty = 1.0 * 2 = 2.0
+    // History: [1, 2, 3, 1, 2] — token 3 would continue the repeat.
+    // search_pos=0: [1,2] matches tail [1,2]; no backward extension possible.
+    // match_len=2, penalty = 1.0 * 2 = 2.0.
     const history = [_]u32{ 1, 2, 3, 1, 2 };
     applyDry(&logits, &history, 1.0, 2);
     try std.testing.expectEqual(@as(f32, -2.0), logits[3]);
@@ -1164,6 +1173,20 @@ test "applyDry penalizes repeated sequence" {
     try std.testing.expectEqual(@as(f32, 0.0), logits[1]);
     try std.testing.expectEqual(@as(f32, 0.0), logits[2]);
     try std.testing.expectEqual(@as(f32, 0.0), logits[4]);
+}
+
+test "applyDry scales penalty with match length" {
+    // History: [1, 2, 3, 1, 2, 3, 1, 2], allowed_length=2.
+    // search_pos=0: [1,2] matches [1,2]; no back-extension (pos=0). match_len=2. token 3 -= 2.
+    // search_pos=3: [1,2] matches [1,2]; back-extends by 3 ([3,2,1] matches [3,2,1]). match_len=5. token 3 -= 5.
+    // Token 3 total penalty: 2 + 5 = 7.  Without the extension it would be 2+2=4.
+    var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0 };
+    const history = [_]u32{ 1, 2, 3, 1, 2, 3, 1, 2 };
+    applyDry(&logits, &history, 1.0, 2);
+    try std.testing.expectEqual(@as(f32, -7.0), logits[3]);
+    try std.testing.expectEqual(@as(f32, 0.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 0.0), logits[1]);
+    try std.testing.expectEqual(@as(f32, 0.0), logits[2]);
 }
 
 test "applyDry no-op with no repeats" {

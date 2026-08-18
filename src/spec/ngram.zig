@@ -169,16 +169,20 @@ pub const SharedNgramPool = struct {
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
             const pat = tail[tail.len - n ..];
-            // Tail is an external query (not hist's own suffix), so search every
-            // alignment that leaves at least one continuation token.
-            // (Unlike SuffixState, which must exclude a self-match at the end.)
-            var pos: usize = 0;
-            while (pos + n < snap_len) : (pos += 1) {
+            // Search backward so the most recent occurrence wins — recency is a
+            // better predictor than position for cross-request shared history.
+            // Tail is an external query, so every alignment with ≥1 continuation
+            // token is a valid match (no self-match exclusion needed here).
+            if (snap_len < n + 1) continue;
+            var pos: usize = snap_len - n - 1;
+            while (true) {
                 if (std.mem.eql(u32, hist_snap[pos .. pos + n], pat)) {
                     best_pos = pos + n;
                     best_len = n;
                     break;
                 }
+                if (pos == 0) break;
+                pos -= 1;
             }
             if (best_len > 0) break;
         }
