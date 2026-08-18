@@ -534,8 +534,6 @@ pub const TieredKvCache = struct {
     /// Sparse file format: each block occupies a fixed slot regardless of content.
     ///
     /// After spill, frees RAM backing and sets tier tag to .ssd.
-    ///
-    /// Returns: void on success.
     fn demoteToSsd(self: *TieredKvCache, block_id: u32) !void {
         var blk = &self.blocks[block_id];
         std.debug.assert(blk.tier == .ram); // Only demote from RAM
@@ -571,11 +569,10 @@ pub const TieredKvCache = struct {
     /// Reads block data from SSD file at stored offset.
     /// Allocates RAM backing and loads keys + values.
     ///
+    /// Caller must hold tier_lock.
+    ///
     /// Parameters:
     ///   - block_id: Physical block ID to promote.
-    ///
-    /// Returns: void on success.
-    /// Promote SSD block to RAM. Caller must hold tier_lock.
     fn promoteFromSsdInner(self: *TieredKvCache, block_id: u32) !void {
         var blk = &self.blocks[block_id];
         if (blk.tier != .ssd) return; // Already promoted by another thread
