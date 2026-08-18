@@ -2390,3 +2390,67 @@ kernel void gemv_mlx_q4_exact(
     }
     y[tgid] = sum;
 }
+
+// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
+// Single thread per row. E8M0 or E4M3 scale format via scale_fmt parameter.
+
+// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
+// Matches CPU computation: (scale * lookup[nibble]) * x, accumulated
+// into 8-element array, then pairwise reduced. Single thread per row.
+kernel void gemv_mxfp4_st_exact(
+    device const float* x             [[buffer(0)]],
+    device const packed_uchar4* W     [[buffer(1)]],
+    device const uchar* scales        [[buffer(2)]],
+    device float* y                   [[buffer(3)]],
+    constant uint& n                  [[buffer(4)]],
+    constant uint& k                  [[buffer(5)]],
+    constant uint& gs                 [[buffer(6)]],
+    constant uint& scale_fmt          [[buffer(7)]],
+    uint tgid     [[threadgroup_position_in_grid]])
+{
+    if (tgid >= n) return;
+
+    const uint wpg = gs / 8;
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+
+    // Match CPU: accumulate into 8-element vector per word, reduce pairwise.
+    float acc[8] = {0,0,0,0,0,0,0,0};
+
+    for (uint g = 0; g < gpr; g++) {
+        float scale = (scale_fmt == 1)
+            ? e8m0_to_f32(scales[tgid * gpr + g])
+            : fp8e4m3_to_f32(scales[tgid * gpr + g]);
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+
+        for (uint w = 0; w < wpg && xo + w * 8 <= k; w++) {
+            uint xi = xo + w * 8;
+            packed_uchar4 bytes = W[wg + w];
+            uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
+                        (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+            uint rem = min(uint(8), k - xi);
+            // Match CPU: acc[i] = fma(scale * lookup, x, acc[i])
+            // CPU does: @mulAdd(V8, sv * v, xv, acc) = acc + (sv*v) * xv
+            for (uint i = 0; i < rem; i++) {
+                float sv = scale * mxfp4_lut[(word >> (i * 4)) & 0xF];
+                acc[i] = fma(sv, x[xi + i], acc[i]);
+            }
+        }
+
+        // Match CPU: per-group, apply scale was already multiplied in.
+        // Pairwise reduce at end of each group to match @reduce(.Add):
+        // ((acc[0]+acc[1])+(acc[2]+acc[3]))+((acc[4]+acc[5])+(acc[6]+acc[7]))
+        // But CPU accumulates across ALL groups before reducing.
+        // So we DON'T reduce here — keep accumulating in the 8 lanes.
+    }
+
+    // Pairwise reduce (match CPU @reduce(.Add) on @Vector(8, f32)):
+    float s01 = acc[0] + acc[1];
+    float s23 = acc[2] + acc[3];
+    float s45 = acc[4] + acc[5];
+    float s67 = acc[6] + acc[7];
+    float s0123 = s01 + s23;
+    float s4567 = s45 + s67;
+    y[tgid] = s0123 + s4567;
+}

@@ -154,6 +154,7 @@ pub const MetalBackend = struct {
     pipe_gemv_mlx_q8: objc.id,
     pipe_gemv_mxfp4: objc.id,
     pipe_gemv_mxfp4_st: objc.id,
+    pipe_gemv_mxfp4_st_exact: objc.id,
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
     pipe_gemv_gptq: objc.id,
@@ -342,6 +343,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_mlx_q8 = undefined,
             .pipe_gemv_mxfp4 = undefined,
             .pipe_gemv_mxfp4_st = undefined,
+            .pipe_gemv_mxfp4_st_exact = undefined,
             .pipe_gemv_nvfp4_st = undefined,
             .pipe_split_qgate = undefined,
             .pipe_gemv_q4_k = undefined,
@@ -446,6 +448,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_mlx_q8 = try self.makePipeline("gemv_mlx_q8");
         self.pipe_gemv_mxfp4 = try self.makePipeline("gemv_mxfp4");
         self.pipe_gemv_mxfp4_st = try self.makePipeline("gemv_mxfp4_st");
+        self.pipe_gemv_mxfp4_st_exact = try self.makePipeline("gemv_mxfp4_st_exact");
         self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
         self.pipe_split_qgate = try self.makePipeline("split_qgate");
         self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
@@ -2129,9 +2132,9 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
-        // CPU fallback with threaded dispatch for large matrices.
-        // Native Metal exact kernel is bit-exact at L0 but volatile_weights
-        // buf_cache interaction breaks subsequent layers.
+        // CPU fallback: native Metal exact kernel has 1.2% L2 drift at L0
+        // from scalar vs NEON @mulAdd accumulation order. DS4 HC amplifies
+        // this to wrong tokens by L43. CPU path is bit-exact.
         self.sync();
         if (n >= 4096) {
             var cpu = self.cpuFallback();
@@ -2146,7 +2149,7 @@ pub const MetalBackend = struct {
     /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
     /// group_size=16, 2 words per group (8 nibbles per word × 2 = 16 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
-        // CPU fallback for MXFP4 expert GEMVs (Metal kernel NaN for E8M0).
+        // CPU fallback for MXFP4: getBufRef offset issue for sliced expert tensors.
         self.sync();
         var cpu = self.cpuFallback();
         cpu.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf);
@@ -2366,15 +2369,12 @@ pub const MetalBackend = struct {
     pub fn sync(self: *MetalBackend) void {
         self.flush();
         if (self.profile_counters) self.sync_count += 1;
-        // In volatile_weights mode (SSD streaming), flush the WRAP buffer cache
-        // (buf_cache) on sync. Wrapped buffers reference mmap'd pages that can
-        // go stale when evicted. The copy_cache is NOT flushed because its
-        // buffers contain Metal-managed copies that are always valid.
-        if (self.volatile_weights) {
-            var it = self.buf_cache.valueIterator();
-            while (it.next()) |info| release(info.metal_buf);
-            self.buf_cache.clearRetainingCapacity();
-        }
+        // DO NOT flush buf_cache on sync. Wrapped buffers use
+        // newBufferWithBytesNoCopy (shared UMA memory) — they always
+        // point to the same physical memory as CPU. Flushing forces
+        // expensive re-wrapping and breaks mixed CPU/Metal dispatch.
+        // Only pread-based expert loading needs explicit invalidation
+        // (which uses stable_cache, not buf_cache).
     }
 
     /// Reset dispatch counters and enable counting (call at start of profiled token).
