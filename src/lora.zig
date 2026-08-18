@@ -29,7 +29,6 @@ pub fn applyLoraGguf(
     var lora_file = try gguf.GGUFFile.open(allocator, lora_path);
     defer lora_file.deinit();
 
-    // Validate adapter type
     const adapter_type = lora_file.getMetaStr("adapter.type") orelse
         lora_file.getMetaStr("general.type") orelse "";
     if (!std.mem.eql(u8, adapter_type, "lora")) return error.NotALoraAdapter;
@@ -44,7 +43,6 @@ pub fn applyLoraGguf(
 
         const base_suffix = lora_a_name[0 .. lora_a_name.len - ".lora_a".len];
 
-        // Build lora_b name
         var b_buf: [512]u8 = undefined;
         const lora_b_name = std.fmt.bufPrint(&b_buf, "{s}.lora_b", .{base_suffix}) catch {
             std.log.warn("LoRA: tensor name too long, skipping: {s}", .{base_suffix});

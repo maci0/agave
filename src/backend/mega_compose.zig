@@ -373,7 +373,6 @@ pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
     }
 
     // Emit per-layer attention block for layers that have it
-    // Check if any layers are attention
     var has_attn = false;
     for (0..desc.n_layers) |i| {
         if (desc.layer_types[i] == .attention) {

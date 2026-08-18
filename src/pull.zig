@@ -402,7 +402,6 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
         error.OutOfMemory => return error.OutOfMemory,
     };
 
-    // Perform HTTP GET request.
     const body = httpGet(allocator, url, token) catch |err| {
         switch (err) {
             PullError.RepoNotFound => {
