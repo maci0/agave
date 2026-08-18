@@ -149,6 +149,7 @@ pub const MetalBackend = struct {
     pipe_gemv_q5_k: objc.id,
     pipe_gemv_mlx_q2: objc.id,
     pipe_gemv_mlx_q4: objc.id,
+    pipe_gemv_mlx_q4_exact: objc.id,
     pipe_gemv_mlx_q6: objc.id,
     pipe_gemv_mlx_q8: objc.id,
     pipe_gemv_mxfp4: objc.id,
@@ -336,6 +337,7 @@ pub const MetalBackend = struct {
             .pipe_gemv_f16 = undefined,
             .pipe_gemv_mlx_q2 = undefined,
             .pipe_gemv_mlx_q4 = undefined,
+            .pipe_gemv_mlx_q4_exact = undefined,
             .pipe_gemv_mlx_q6 = undefined,
             .pipe_gemv_mlx_q8 = undefined,
             .pipe_gemv_mxfp4 = undefined,
@@ -439,6 +441,7 @@ pub const MetalBackend = struct {
         self.pipe_gemv_f16 = try self.makePipeline("gemv_f16");
         self.pipe_gemv_mlx_q2 = try self.makePipeline("gemv_mlx_q2");
         self.pipe_gemv_mlx_q4 = try self.makePipeline("gemv_mlx_q4");
+        self.pipe_gemv_mlx_q4_exact = try self.makePipeline("gemv_mlx_q4_exact");
         self.pipe_gemv_mlx_q6 = try self.makePipeline("gemv_mlx_q6");
         self.pipe_gemv_mlx_q8 = try self.makePipeline("gemv_mlx_q8");
         self.pipe_gemv_mxfp4 = try self.makePipeline("gemv_mxfp4");
@@ -2126,10 +2129,9 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
-        // CPU fallback: GPU float4 dot/reduce has different accumulation order
-        // than CPU NEON @mulAdd/@reduce, causing ~2% L2 drift per layer that
-        // cascades to wrong tokens over 43 HC layers. sync() flushes pending
-        // Metal work (rmsNorm etc.) before CPU reads input buffers.
+        // CPU fallback with threaded dispatch for large matrices.
+        // Native Metal exact kernel is bit-exact at L0 but volatile_weights
+        // buf_cache interaction breaks subsequent layers.
         self.sync();
         if (n >= 4096) {
             var cpu = self.cpuFallback();

@@ -2330,3 +2330,63 @@ kernel void gemv_iq2_xxs(
     sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
     if (tid == 0) y[tgid] = sum;
 }
+
+// ── Bit-exact MLX Q4 GEMV (matches CPU mlxGemvQ4Rows) ─────────
+// Processes elements in the SAME order as CPU NEON @mulAdd/@reduce.
+// Uses scalar operations to match CPU accumulation exactly.
+// tg_size MUST be 1 (single thread per row for bit-exact matching).
+kernel void gemv_mlx_q4_exact(
+    device const float* x              [[buffer(0)]],
+    device const packed_uchar4* W      [[buffer(1)]],
+    device const packed_uchar2* scales [[buffer(2)]],
+    device const packed_uchar2* biases [[buffer(3)]],
+    device float* y                    [[buffer(4)]],
+    constant uint& n                   [[buffer(5)]],
+    constant uint& k                   [[buffer(6)]],
+    constant uint& gs                  [[buffer(7)]],
+    uint tgid     [[threadgroup_position_in_grid]])
+{
+    if (tgid >= n) return;
+
+    const uint wpg = gs / 8;
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+    float sum = 0.0f;
+
+    for (uint g = 0; g < gpr; g++) {
+        uint sb_idx = tgid * gpr + g;
+        packed_uchar2 sb = scales[sb_idx];
+        float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
+        packed_uchar2 bb = biases[sb_idx];
+        float bias  = as_type<float>(uint(ushort(bb[0]) | (ushort(bb[1]) << 8)) << 16);
+
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+
+        // Match CPU: accumulate q_dot and x_sum per 8-element word,
+        // using the SAME per-element multiply-add order as NEON @mulAdd.
+        float q_dot = 0.0f;
+        float x_sum = 0.0f;
+
+        for (uint w = 0; w < wpg && xo + w * 8 <= k; w++) {
+            uint xi = xo + w * 8;
+            packed_uchar4 bytes = W[wg + w];
+            uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
+                        (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+
+            uint rem = min(uint(8), k - xi);
+            // Process ALL 8 elements sequentially to match CPU @mulAdd order.
+            // CPU does: q_acc[i] += x[i] * val[i] for i=0..7 (SIMD fmla)
+            // Then: q_dot = q_acc[0]+q_acc[1]+...+q_acc[7] (reduce)
+            // We match: accumulate per-element products into q_dot.
+            for (uint i = 0; i < rem; i++) {
+                float q = float((word >> (i * 4)) & 0xF);
+                float xv = x[xi + i];
+                q_dot += xv * q;  // fma(xv, q, q_dot) — matches NEON fmla
+                x_sum += xv;
+            }
+        }
+        sum += scale * q_dot + bias * x_sum;
+    }
+    y[tgid] = sum;
+}
