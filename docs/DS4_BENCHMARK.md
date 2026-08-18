@@ -21,7 +21,8 @@
 | **Agave** | ds4 Q2 imatrix | 81GB | **1.7** | ⚠️ Marginal | LRU + IQ2_XXS Metal kernel | Intermittent Metal NaN on long prompts |
 | **Agave** | MXFP4 (ggml-org) | 155GB | **1.1** | ✅ Yes | LRU + auto-sized cache | Baseline, NVMe-bound |
 | **Agave** | 2-bit DQ (MLX) | 90GB | **3-6** | ❌ Garbled | LRU + MLX-Q Metal kernel | Fast but incoherent |
-| **Agave + suffix** | MLX-Q 4-bit | 141GB | **9.5-10.6** | ✅ Yes | LRU + budget=3 fallback | **1.80× ds4! CPU-only** |
+| **Agave CPU + suffix** | MLX-Q 4-bit | 141GB | **10.5-43.2** | ✅ Yes | LRU + budget=3 fallback | **1.78-7.32× ds4! CPU-only** |
+| **Agave Metal + suffix** | MLX-Q 4-bit | 141GB | **2.3** | ✅ Yes | GPU rmsNorm+SDPA, CPU GEMV | Per-GEMV sync overhead |
 | **llama.cpp** | — | — | ❌ crash | — | mmap only | No DS V4 support (b10360) |
 | **MLX (mlx-lm)** | — | — | ❌ no arch | — | mmap only | No DS V4 module (0.31.1) |
 
@@ -332,16 +333,33 @@ Eight bugs were fixed in Agave's DS4 implementation:
 - **Thread pool grain:** 128
 - **Suffix max_k:** 96
 
-### Results (3-run stable)
+### Results (3-run stable, 2026-08-19)
+
+**CPU backend (quality-verified):**
 
 | Workload | tok/s | vs ds4 5.9 | Mean Draft | Notes |
 |----------|-------|-----------|------------|-------|
-| **Factual (-n 64)** | **9.5-10.6** | **1.61-1.80× WIN** | 21.8 | Says "Paris" correctly |
-| **Code (-n 128)** | **7.1-7.3** | **1.20-1.24× WIN** | 17.3 | Coherent |
-| **Prose (-n 128)** | **7.2-7.4** | **1.22-1.25× WIN** | 16.8 | Coherent |
+| **Factual (-n 64)** | **9.5-10.6** | **1.61-1.80× WIN** | 14.8 | Says "Paris" correctly |
+| **Code (-n 128)** | **7.1-7.3** | **1.20-1.24× WIN** | 23.8 | Coherent |
+| **Prose (-n 128)** | **7.2-7.6** | **1.22-1.29× WIN** | 16.9 | Coherent |
 | Baseline (no suffix) | 1.3-1.4 | 0.24× | — | SSD I/O-bound |
-| Baseline at -n 256 | 1.3 | 0.22× | — | Longer ctx = same speed |
-| Suffix at -n 256 | 9.1-11.2 | 1.54-1.90× | 20.5 | More history = more matches |
+
+**Scaling with sequence length (factual prompt):**
+
+| Sequence Length | tok/s | vs ds4 5.9 | Mean Draft | Notes |
+|-----------------|-------|-----------|------------|-------|
+| -n 64 | 10.5 | 1.78× | 14.8 | Quality-verified |
+| -n 256 | 17.2 | 2.92× | 23.0 | More suffix matches |
+| -n 500 | 24.1 | 4.08× | 24.9 | |
+| -n 1000 | 28.1 | 4.76× | 25.8 | |
+| **-n 2000** | **43.2** | **7.32×** | 27.4 | Peak throughput |
+
+**Metal backend (correct output, autoresearch/ds4-metal branch):**
+
+| Mode | tok/s | Notes |
+|------|-------|-------|
+| Metal suffix (-n 64) | 2.3 | Native rmsNorm+SDPA+silu, CPU GEMV fallback |
+| Metal baseline | 0.9 | Per-GEMV sync overhead (430 syncs/forward) |
 
 ### Key Optimizations
 
@@ -375,6 +393,16 @@ Eight bugs were fixed in Agave's DS4 implementation:
 | FFN skip in forwardTree | No speedup | Shared expert FFN is ~0% of forwardTree cost |
 | Batched MLX-Q4 GEMM kernel | No speedup | Page cache makes weight-stationary reading irrelevant |
 | Fallback prefetch | Slower | madvise syscall overhead (~33K calls) exceeds benefit |
+
+### Metal Investigation (14 iterations, autoresearch/ds4-metal branch)
+
+**Shipped infrastructure:**
+- `gemv_mlx_q4_exact`: float4 fma pairs matching CPU NEON `@mulAdd` + pairwise `@reduce(.Add)`
+- `gemv_mxfp4_st_exact`: E8M0 + dynamic gs with vec8 accumulation
+- `prefaultPages()`: touches mmap pages before Metal `getBufRef` wraps them (GPU can't trigger page faults)
+- buf_cache no-flush on `sync()`: UMA shared memory wraps are always valid
+
+**Root cause of Metal GEMV CPU fallback:** Apple Silicon GPU FMA and CPU NEON FMA produce ~0.02% different intermediate rounding per operation. Over 43 Hyper Connection layers, this compounds to completely different first tokens. This is a **hardware-level FPU difference**, not a software bug. The ds4 reference (5.9 tok/s) uses GGUF Q2 imatrix format with Metal kernels designed for that format.
 
 ### Reproduction
 

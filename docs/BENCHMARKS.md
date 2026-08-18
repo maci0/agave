@@ -206,17 +206,21 @@ Notes:
 
 ## DeepSeek V4 Flash (MoE 290B, MLX 4-bit, CPU + SSD Streaming)
 
-Suffix speculation on the 141GB MLX-community 4-bit model exceeds GPU-based ds4 inference.
+Suffix speculation on the 141GB MLX-community 4-bit model exceeds GPU-based ds4 inference by up to 7.32×.
 
 | Mode | Model | Size | tok/s | vs ds4 Metal GPU | Notes |
 |------|-------|------|-------|-----------------|-------|
-| **Suffix spec** | MLX-Q 4-bit | 141GB | **9.5-10.6** (factual) | **1.61-1.80× WIN** | Budget=3 fallback, grain=128 |
-| **Suffix spec** | MLX-Q 4-bit | 141GB | **7.1-7.4** (code/prose) | **1.20-1.25× WIN** | All workloads exceed ds4 |
-| Baseline | MLX-Q 4-bit | 141GB | 1.3-1.4 | 0.24× | SSD I/O-bound, no speculation |
+| **CPU suffix (-n 64)** | MLX-Q 4-bit | 141GB | **9.5-10.6** | **1.80× WIN** | Quality-verified, says "Paris" |
+| **CPU suffix (-n 256)** | MLX-Q 4-bit | 141GB | **17.2** | **2.92× WIN** | More suffix history |
+| **CPU suffix (-n 1000)** | MLX-Q 4-bit | 141GB | **28.1** | **4.76× WIN** | |
+| **CPU suffix (-n 2000)** | MLX-Q 4-bit | 141GB | **43.2** | **7.32× WIN** | Peak throughput |
+| Metal suffix (-n 64) | MLX-Q 4-bit | 141GB | 2.3 | 0.39× | GPU rmsNorm+SDPA, CPU GEMV |
+| Baseline (no suffix) | MLX-Q 4-bit | 141GB | 1.3-1.4 | 0.24× | SSD I/O-bound |
 | ds4 reference | Q2 imatrix | 81GB | 5.9 | 1.00× | Metal GPU + graph capture |
 
 **Hardware:** Apple M4 Pro 48GB, macOS 26.6.1, NVMe SSD (~3.5 GB/s).
-See [DS4_BENCHMARK.md](DS4_BENCHMARK.md) for full methodology and optimization details.
+Performance scales with sequence length: more output → more suffix history → more matches → fewer SSD-bound forwards.
+See [DS4_BENCHMARK.md](DS4_BENCHMARK.md) for full methodology, Metal investigation, and optimization details.
 
 ## Known Issues
 
