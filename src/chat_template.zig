@@ -311,15 +311,7 @@ pub const ChatTemplate = struct {
 ///
 /// This is used after tokenizing the text prompt to inject image token IDs
 /// at the correct position (typically right after the user_prefix tokens).
-///
-/// Parameters:
-///   - allocator: Memory allocator for the returned slice.
-///   - text_tokens: The tokenized text prompt (without image tokens).
-///   - insert_pos: Index in text_tokens where image tokens should be inserted.
-///   - image_tokens: Architecture-specific start/end/pad token IDs.
-///   - n_visual_tokens: Number of pad tokens to insert (from vision encoder).
-///
-/// Returns: New token ID array with image tokens spliced in. Caller owns the slice.
+/// Caller owns the returned slice.
 pub fn injectImageTokens(
     allocator: std.mem.Allocator,
     text_tokens: []const u32,

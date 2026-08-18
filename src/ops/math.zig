@@ -83,12 +83,6 @@ pub fn argmax(buf: []const f32) u32 {
 /// top-k entry if the new score is larger. O(n*k), no heap allocation.
 /// Output order is not sorted — callers that need sorted results must
 /// sort the output arrays themselves.
-///
-/// Parameters:
-///   - scores: Input scores to select from [n].
-///   - k: Number of top elements to select.
-///   - out_indices: Output buffer for selected indices (must have len >= k).
-///   - out_scores: Output buffer for selected scores (must have len >= k).
 pub fn topKExperts(
     scores: []const f32,
     k: usize,
