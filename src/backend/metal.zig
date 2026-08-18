@@ -2114,25 +2114,38 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
-        // CPU fallback: Metal MLX-Q kernel hardcodes gs=64 but wo_a uses gs=8.
-        // Also, GPU float reduction drift cascades through 43 HC layers.
-        // CPU GEMV with thread pool for large matrices, direct for small.
-        self.sync();
-        if (n >= 4096) {
-            var cpu = self.cpuFallback();
-            cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, gs);
-        } else {
-            const actual_gs: u32 = if (gs > 0) gs else 64;
-            @import("../ops/mlx.zig").mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs);
-        }
-        return;
+        // NATIVE Metal MLX-Q GEMV with dynamic group_size.
+        if (bits != 4) @panic("Metal MLX GEMV: only 4-bit supported with dynamic gs");
+        const actual_gs: u32 = if (gs > 0) gs else 64;
+        const gpr = (k + actual_gs - 1) / actual_gs;
+        const wpg: usize = actual_gs / 8;
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        const sb_bytes = n * gpr * @sizeOf(u16);
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getBufRef(@ptrCast(scales), sb_bytes);
+        const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = actual_gs;
+        const enc = self.getEncoder(self.pipe_gemv_mlx_q4);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, b_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, gemvThreadgroupSize(.mlx_q, k));
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
     /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
     /// group_size=16, 2 words per group (8 nibbles per word × 2 = 16 values).
     pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
-        // CPU fallback: Metal MXFP4 kernel lacks E8M0 + dynamic gs support.
+        // CPU fallback for MXFP4 expert GEMVs (Metal kernel NaN for E8M0).
         self.sync();
         var cpu = self.cpuFallback();
         cpu.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf);
