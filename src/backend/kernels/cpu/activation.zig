@@ -30,6 +30,34 @@ pub fn silu(input: [*]const f32, output: [*]f32, n: usize) void {
     }
 }
 
+/// Fused clamped SiLU + multiply: out[i] = silu(clamp(gate[i], -10, 10)) * clamp(up[i], -10, 10).
+/// Identical clamp bounds to the scalar implementation in cpu.zig. Dual-vector SIMD.
+pub fn clampedSiluMul(gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+    const one: V8 = @splat(1.0);
+    const neg: V8 = @splat(-1.0);
+    const hi: V8 = @splat(@as(f32, 10.0));
+    const lo: V8 = @splat(@as(f32, -10.0));
+    var i: usize = 0;
+    while (i + 16 <= n) : (i += 16) {
+        const ga: V8 = @min(hi, @max(lo, @as(V8, gate[i..][0..8].*)));
+        const ua: V8 = @min(hi, @max(lo, @as(V8, up[i..][0..8].*)));
+        const gb: V8 = @min(hi, @max(lo, @as(V8, gate[i + 8 ..][0..8].*)));
+        const ub: V8 = @min(hi, @max(lo, @as(V8, up[i + 8 ..][0..8].*)));
+        out[i..][0..8].* = (ga / (one + @exp(neg * ga))) * ua;
+        out[i + 8 ..][0..8].* = (gb / (one + @exp(neg * gb))) * ub;
+    }
+    while (i + 8 <= n) : (i += 8) {
+        const gv: V8 = @min(hi, @max(lo, @as(V8, gate[i..][0..8].*)));
+        const uv: V8 = @min(hi, @max(lo, @as(V8, up[i..][0..8].*)));
+        out[i..][0..8].* = (gv / (one + @exp(neg * gv))) * uv;
+    }
+    while (i < n) : (i += 1) {
+        const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
+        const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
+        out[i] = (g / (1.0 + @exp(-g))) * u;
+    }
+}
+
 /// Fused SiLU + multiply: out[i] = silu(a[i]) * b[i].
 /// Dual-vector processing hides exp() latency by overlapping two independent chains.
 pub fn siluMul(a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
@@ -179,6 +207,39 @@ test "silu non-aligned size exercises scalar tail" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 0.7311), output[1], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -0.2689), output[2], 0.001);
+}
+
+test "clampedSiluMul matches scalar reference" {
+    // 17 elements: exercises 16-wide, 8-wide, and scalar tail paths.
+    var gate: [17]f32 = undefined;
+    var up: [17]f32 = undefined;
+    var got: [17]f32 = undefined;
+    var ref: [17]f32 = undefined;
+    for (0..17) |i| {
+        gate[i] = @as(f32, @floatFromInt(@as(i32, @intCast(i)) - 8)); // -8..8
+        up[i] = @as(f32, @floatFromInt(@as(i32, @intCast(i)) - 4)) * 0.5; // -2..4
+    }
+    clampedSiluMul(&gate, &up, &got, 17);
+    for (0..17) |i| {
+        const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
+        const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
+        ref[i] = (g / (1.0 + @exp(-g))) * u;
+        try std.testing.expectApproxEqAbs(ref[i], got[i], 1e-5);
+    }
+}
+
+test "clampedSiluMul clamps inputs" {
+    // Values outside [-10, 10] must be clamped before sigmoid.
+    var gate = [_]f32{ 100.0, -100.0, 0.0, 5.0, -5.0, 50.0, -50.0, 0.5 };
+    var up = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    var got: [8]f32 = undefined;
+    clampedSiluMul(&gate, &up, &got, 8);
+    // gate clamped to 10 → silu(10) ≈ 9.9999546
+    try std.testing.expectApproxEqAbs(@as(f32, 9.9999546), got[0], 1e-4);
+    // gate clamped to -10 → silu(-10) ≈ -4.54e-5
+    try std.testing.expect(got[1] < 0.0 and got[1] > -1e-3);
+    // gate=0 → silu(0)=0
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), got[2], 1e-6);
 }
 
 test "siluMul non-aligned size" {

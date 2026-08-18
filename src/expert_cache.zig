@@ -68,6 +68,9 @@ pub const ExpertCache = struct {
     total_pinned_bytes: u64 = 0,
     /// When true, admit() is a no-op (no eviction during verification).
     frozen: bool = false,
+    /// Index of the next slot that has never been occupied (monotone during fill).
+    /// Once it reaches n_slots the cache is full and the LRU scan takes over.
+    first_unoccupied: u32 = 0,
 
     /// Allocates cache slots, the `(layer, expert) → slot` lookup table (clamped
     /// to `max_cache_slots`), and the pinned-range tracking array.
@@ -134,20 +137,29 @@ pub const ExpertCache = struct {
             return slot_idx;
         }
 
-        // Find a free slot or evict LRU
+        // Find a free slot or evict LRU.
+        // Fast path: during the fill phase every slot past first_unoccupied is still
+        // uninitialised, so we can pick the next one without scanning (O(1)).
+        // Once the cache is full the slow O(n_slots) LRU scan takes over.
         var target_slot: u32 = 0;
         var found_free = false;
-        var min_access: u64 = std.math.maxInt(u64);
 
-        for (self.slots, 0..) |slot, i| {
-            if (!slot.occupied) {
-                target_slot = @intCast(i);
-                found_free = true;
-                break;
-            }
-            if (slot.last_access < min_access) {
-                min_access = slot.last_access;
-                target_slot = @intCast(i);
+        if (self.first_unoccupied < self.n_slots) {
+            target_slot = self.first_unoccupied;
+            self.first_unoccupied += 1;
+            found_free = true;
+        } else {
+            var min_access: u64 = std.math.maxInt(u64);
+            for (self.slots, 0..) |slot, i| {
+                if (!slot.occupied) {
+                    target_slot = @intCast(i);
+                    found_free = true;
+                    break;
+                }
+                if (slot.last_access < min_access) {
+                    min_access = slot.last_access;
+                    target_slot = @intCast(i);
+                }
             }
         }
 

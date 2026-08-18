@@ -447,11 +447,7 @@ pub const CpuBackend = struct {
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
     pub fn clampedSiluMul(_: *CpuBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
-        for (0..n) |i| {
-            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
-            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
-            out[i] = (g / (1.0 + @exp(-g))) * u;
-        }
+        activation_kernel.clampedSiluMul(gate, up, out, n);
     }
 
     /// Fused GELU + multiply: out[i] = gelu(a[i]) * b[i].

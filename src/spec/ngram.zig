@@ -144,17 +144,28 @@ pub const SharedNgramPool = struct {
     /// Propose continuation tokens from shared history given the current tail.
     /// `tail` is the most recent tokens (the n-gram query); writes into `out`.
     /// Returns number of tokens proposed (0 if no match).
+    ///
+    /// The lock is held only for the memcpy snapshot — the O(hist × ngram_levels)
+    /// search runs outside the lock so concurrent server slots do not spin waiting.
     pub fn propose(self: *SharedNgramPool, tail: []const u32, max_draft: usize, out: []u32) usize {
         if (tail.len < min_ngram or max_draft == 0) return 0;
-        self.lock();
-        defer self.unlock();
-        const hist = self.history[0..self.len];
-        if (hist.len < min_ngram + 1) return 0;
+
+        // Snapshot under the lock; the array is small (pool_capacity * 4 bytes = 32 KB).
+        var hist_snap: [pool_capacity]u32 = undefined;
+        var snap_len: usize = 0;
+        {
+            self.lock();
+            snap_len = self.len;
+            if (snap_len > 0) @memcpy(hist_snap[0..snap_len], self.history[0..snap_len]);
+            self.unlock();
+        }
+
+        if (snap_len < min_ngram + 1) return 0;
 
         var best_pos: usize = 0;
         var best_len: usize = 0;
-        // hist.len - 1: need ≥1 token after a match to draft from.
-        const max_n = @min(max_ngram, @min(tail.len, hist.len - 1));
+        // snap_len - 1: need ≥1 token after a match to draft from.
+        const max_n = @min(max_ngram, @min(tail.len, snap_len - 1));
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
             const pat = tail[tail.len - n ..];
@@ -162,8 +173,8 @@ pub const SharedNgramPool = struct {
             // alignment that leaves at least one continuation token.
             // (Unlike SuffixState, which must exclude a self-match at the end.)
             var pos: usize = 0;
-            while (pos + n < hist.len) : (pos += 1) {
-                if (std.mem.eql(u32, hist[pos .. pos + n], pat)) {
+            while (pos + n < snap_len) : (pos += 1) {
+                if (std.mem.eql(u32, hist_snap[pos .. pos + n], pat)) {
                     best_pos = pos + n;
                     best_len = n;
                     break;
@@ -172,9 +183,9 @@ pub const SharedNgramPool = struct {
             if (best_len > 0) break;
         }
         if (best_len == 0) return 0;
-        const avail = hist.len - best_pos;
+        const avail = snap_len - best_pos;
         const n_out = @min(@min(avail, max_draft), out.len);
-        @memcpy(out[0..n_out], hist[best_pos..][0..n_out]);
+        @memcpy(out[0..n_out], hist_snap[best_pos..][0..n_out]);
         return n_out;
     }
 };
