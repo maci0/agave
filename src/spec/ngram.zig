@@ -265,14 +265,19 @@ pub const SuffixState = struct {
             const suffix = hist[self.len - n ..];
             const search_end = self.len - n;
 
-            var pos: usize = 0;
-            while (pos + n <= search_end) : (pos += 1) {
-                if (std.mem.eql(u32, hist[pos .. pos + n], suffix)) {
-                    // Found match at pos: propose continuation
-                    const avail = self.len - (pos + n);
-                    const n_out = @min(@min(avail, max_draft), out.len);
-                    @memcpy(out[0..n_out], hist[pos + n ..][0..n_out]);
-                    return .{ .n = n_out, .match_len = n };
+            // Search backward — most recent occurrence is a better predictor,
+            // mirroring the NgramState approach.
+            if (search_end >= n) {
+                var pos: usize = search_end - n;
+                while (true) {
+                    if (std.mem.eql(u32, hist[pos .. pos + n], suffix)) {
+                        const avail = self.len - (pos + n);
+                        const n_out = @min(@min(avail, max_draft), out.len);
+                        @memcpy(out[0..n_out], hist[pos + n ..][0..n_out]);
+                        return .{ .n = n_out, .match_len = n };
+                    }
+                    if (pos == 0) break;
+                    pos -= 1;
                 }
             }
         }

@@ -266,38 +266,11 @@ pub const ExpertCache = struct {
     /// by the next layer's router, but the cost of a wasted madvise is negligible
     /// compared to a cache miss on a needed expert.
     pub fn prefetchTopResidents(self: *ExpertCache, layer: u32, base_ptr: [*]const u8, expert_bytes: usize, k: u32) void {
-        const actual_k = @min(k, max_prefetch_k);
-        var best_slots: [max_prefetch_k]u32 = .{0} ** max_prefetch_k;
-        var best_access: [max_prefetch_k]u64 = .{0} ** max_prefetch_k;
-        var found: u32 = 0;
-
-        for (self.slots[0..self.n_slots], 0..) |slot, idx| {
-            if (!slot.occupied or slot.layer != layer) continue;
-            // Insert into sorted top-k (descending by access time)
-            var insert_pos: u32 = found;
-            for (0..@min(found, actual_k)) |bi| {
-                if (slot.last_access > best_access[bi]) {
-                    insert_pos = @intCast(bi);
-                    break;
-                }
-            }
-            if (insert_pos < actual_k) {
-                // Shift down to make room
-                var j: u32 = @min(found, actual_k - 1);
-                while (j > insert_pos) : (j -= 1) {
-                    best_slots[j] = best_slots[j - 1];
-                    best_access[j] = best_access[j - 1];
-                }
-                best_slots[insert_pos] = @intCast(idx);
-                best_access[insert_pos] = slot.last_access;
-                if (found < actual_k) found += 1;
-            }
-        }
-
-        // Issue madvise for the top-k most recently used experts
+        var ids: [max_prefetch_k]u32 = undefined;
+        const out = ids[0..@min(k, max_prefetch_k)];
+        const found = self.getTopResidents(layer, out);
         for (0..found) |i| {
-            const eid = self.slots[best_slots[i]].expert_id;
-            const offset = @as(usize, eid) * expert_bytes;
+            const offset = @as(usize, out[i]) * expert_bytes;
             prefetchRegion(base_ptr + offset, expert_bytes);
         }
     }
