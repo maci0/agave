@@ -64,15 +64,12 @@ pub const ParseResult = struct {
         return std.fmt.parseInt(T, s, 10) catch null;
     }
 
-    /// Parse the named CLI option as a u16. Returns null if not present or on parse failure.
     pub fn optionU16(self: *const ParseResult, name: []const u8) ?u16 {
         return self.optionInt(u16, name);
     }
-    /// Parse the named CLI option as a u32. Returns null if not present or on parse failure.
     pub fn optionU32(self: *const ParseResult, name: []const u8) ?u32 {
         return self.optionInt(u32, name);
     }
-    /// Parse the named CLI option as a u64. Returns null if not present or on parse failure.
     pub fn optionU64(self: *const ParseResult, name: []const u8) ?u64 {
         return self.optionInt(u64, name);
     }

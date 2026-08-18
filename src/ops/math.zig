@@ -1158,8 +1158,7 @@ test "applyDry penalizes repeated sequence" {
     // History: [1, 2, 3, 1, 2] — token 3 would continue the repeat
     // match_len=2 (suffix [1,2] matches at pos 0), penalty = 1.0 * 2 = 2.0
     const history = [_]u32{ 1, 2, 3, 1, 2 };
-    const hist_slice: []const u32 = &history;
-    applyDry(&logits, hist_slice, 1.0, 2);
+    applyDry(&logits, &history, 1.0, 2);
     try std.testing.expectEqual(@as(f32, -2.0), logits[3]);
     try std.testing.expectEqual(@as(f32, 0.0), logits[0]);
     try std.testing.expectEqual(@as(f32, 0.0), logits[1]);
@@ -1170,8 +1169,7 @@ test "applyDry penalizes repeated sequence" {
 test "applyDry no-op with no repeats" {
     var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0 };
     const history = [_]u32{ 1, 2, 3 };
-    const hist_slice: []const u32 = &history;
-    applyDry(&logits, hist_slice, 1.0, 2);
+    applyDry(&logits, &history, 1.0, 2);
     // No repeated bigrams → no penalty
     for (logits) |v| try std.testing.expectEqual(@as(f32, 0.0), v);
 }
