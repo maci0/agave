@@ -1270,6 +1270,9 @@ pub const Ds4Model = struct {
         }
 
 
+        // Sync GPU before CPU reads attn_out for inverse RoPE.
+        self.be.sync();
+
         // Apply inverse RoPE (derope) using the cached cos/sin table (same table, negate sin).
         for (0..nh) |h| {
             applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
