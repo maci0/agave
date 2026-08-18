@@ -517,9 +517,7 @@ pub const Glm4Model = struct {
         try self.multiLinearGemv(li, "self_attn.unembed_out", self.kv_latent, self.v_buf.ptr, nh, vhd, kv_rank);
 
         // 5. Assemble full K per head: [k_nope(nope_dim), k_pe(rope_dim)]
-        // k_buf currently has [nh * nope_dim] from embed_q
-        // We need to interleave k_pe into each head's K
-        // Shift k_nope data to make room for k_pe in each head
+        // k_buf has [nh * nope_dim] from embed_q; shift nope to make room for k_pe
         self.be.sync();
         {
             var h: usize = nh;
@@ -538,10 +536,7 @@ pub const Glm4Model = struct {
             }
         }
 
-        // 6. RoPE on q_pe and k_pe portions
-        // q_pe is at offset nope_dim within each head of q_full
-        // k_pe is at offset nope_dim within each head of k_buf
-        // We need to apply RoPE only to the rope portion
+        // 6. RoPE on q_pe and k_pe portions (offset nope_dim within each head)
         self.ropePartial(self.q_full.ptr, nh, q_head_dim, nope_dim, rope_dim);
         self.ropePartial(self.k_buf.ptr, nh, q_head_dim, nope_dim, rope_dim);
 
@@ -933,7 +928,6 @@ pub const Glm4Model = struct {
 
     fn expertFfn(self: *Glm4Model, li: u32, expert_id: u32, input: []const f32, output: []f32, ff: usize, e: usize) !void {
         // Expert weights are stacked: switch_mlp.gate_proj.weight shape [64, ff, e*6/32]
-        // We need to index into expert_id's slice
         try self.mlxExpertGemv(li, "mlp.switch_mlp.gate_proj", expert_id, input, self.ff_gate[0..ff], ff, e);
         try self.mlxExpertGemv(li, "mlp.switch_mlp.up_proj", expert_id, input, self.ff_up[0..ff], ff, e);
 

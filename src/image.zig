@@ -70,7 +70,6 @@ pub const PngImage = struct {
 
     /// Free pixel buffer (zeroed first to avoid lingering image data in freelist).
     pub fn deinit(self: *PngImage) void {
-        // Zero pixel bytes before free so image data does not linger in freelist.
         @memset(self.pixels, 0);
         self.allocator.free(self.pixels);
         self.pixels = &.{};
@@ -135,7 +134,6 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
     const bpp: usize = if (color_type == color_type_rgba) rgba_channels else rgb_channels;
 
     // Collect all IDAT chunk data positions
-    // We need to track them to feed into the decompressor
     var idat_chunks: std.ArrayList([]const u8) = .empty;
     defer idat_chunks.deinit(allocator);
 

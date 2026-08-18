@@ -179,7 +179,6 @@ test "fuzz: all tokenizer functions" {
             var mock = Mock{ .val = smith.valueWithHash(u32, 0) };
             const tok = Tokenizer{ .ptr = @ptrCast(&mock), .vtable = &vtable };
 
-            // Exercise Tokenizer.encode with random-length text
             const text_len = smith.valueWithHash(u8, 1) % 64;
             var text_buf: [64]u8 = undefined;
             for (text_buf[0..text_len]) |*b| b.* = smith.valueWithHash(u8, 2);
@@ -187,7 +186,6 @@ test "fuzz: all tokenizer functions" {
                 try std.testing.expectEqual(TokenizerError.OutOfMemory, e);
             };
 
-            // Exercise Tokenizer.decode with random token IDs
             const tok_len = smith.valueWithHash(u8, 3) % 16;
             var tok_buf: [16]u32 = undefined;
             for (tok_buf[0..tok_len]) |*t| t.* = smith.valueWithHash(u32, 4);
@@ -195,31 +193,25 @@ test "fuzz: all tokenizer functions" {
                 try std.testing.expectEqual(TokenizerError.OutOfMemory, e);
             };
 
-            // Exercise Tokenizer.vocabSize — must return mock val
             const vs = tok.vocabSize();
             try std.testing.expectEqual(mock.val, vs);
 
-            // Exercise Tokenizer.getVocabTexts — must return empty slice from mock
             const texts = tok.getVocabTexts();
             try std.testing.expectEqual(@as(usize, 0), texts.len);
 
-            // Exercise TokenizerKind — convert random u8 to enum variant
             const kind_idx = smith.valueWithHash(u8, 5) % 3;
             const kind: TokenizerKind = @enumFromInt(kind_idx);
             try std.testing.expect(@intFromEnum(kind) < 3);
 
-            // Exercise TokenizerError — verify it is a valid error set
             comptime {
                 const info = @typeInfo(TokenizerError);
                 _ = info;
             }
 
-            // Exercise BpeTokenizer — comptime verify the re-exported type exists
             comptime {
                 _ = BpeTokenizer;
             }
 
-            // Exercise Tokenizer.VTable — verify field accessibility
             comptime {
                 _ = @TypeOf(Tokenizer.VTable{
                     .encode = Mock.encode,

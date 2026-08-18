@@ -725,7 +725,6 @@ test "fuzz: all sdpa functions" {
             sdpaPagedHead(&q, kv_view2, &output, 0, nh, nkv, hd, 1, scale);
             for (output) |o| std.debug.assert(std.math.isFinite(o));
 
-            // Pub constants are compile-time verified
             comptime {
                 std.debug.assert(sparse_v_threshold > 0);
                 std.debug.assert(max_sdpa_seq_len > 0);

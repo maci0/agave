@@ -490,15 +490,12 @@ test "fuzz: all ddtree functions" {
             const budget_raw = smith.valueWithHash(u8, 400);
             builder.budget = @as(u32, (budget_raw % 16)) + 1; // 1..16
 
-            // pub fn presort
             builder.presort(logits_slice);
             std.debug.assert(builder.n_depths == @as(u32, @intCast(n_depths)));
 
-            // pub fn buildTree
             builder.buildTree();
             std.debug.assert(builder.n_nodes <= builder.budget);
 
-            // pub fn compile
             const base_pos = smith.valueWithHash(u32, 500) % 4096;
             const tree = builder.compile(base_pos);
             std.debug.assert(tree.n_nodes == builder.n_nodes);

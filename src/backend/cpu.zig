@@ -59,7 +59,6 @@ fn detectCpuModel() []const u8 {
     if (cpu_model_detected.load(.acquire)) return cpu_model_buf[0..cpu_model_len];
 
     if (comptime builtin.os.tag == .macos) {
-        // macOS: sysctlbyname("machdep.cpu.brand_string")
         var len: usize = cpu_model_buf.len;
         const rc = std.c.sysctlbyname("machdep.cpu.brand_string", &cpu_model_buf, &len, null, 0);
         if (rc == 0 and len > 0) {
@@ -69,7 +68,6 @@ fn detectCpuModel() []const u8 {
             return cpu_model_buf[0..cpu_model_len];
         }
     } else if (comptime builtin.os.tag == .linux) {
-        // Linux: parse /proc/cpuinfo for CPU name.
         // x86 uses "model name\t: ...", ARM uses "Model\t: ..." or "Hardware\t: ...".
         var read_buf: [cpuinfo_read_buf_size]u8 = undefined;
         const data = readSmallFile("/proc/cpuinfo", &read_buf);
@@ -138,13 +136,11 @@ fn parseSysfsCacheSize(comptime path: []const u8) usize {
     if (raw.len == 0) return 0;
     const data = std.mem.trimEnd(u8, raw, "\n ");
     if (data.len == 0) return 0;
-    // Parse numeric prefix
     var val: usize = 0;
     var i: usize = 0;
     while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
         val = val * 10 + (data[i] - '0');
     }
-    // Check suffix: K or M
     if (i < data.len) {
         if (data[i] == 'K') return val * kb_to_bytes;
         if (data[i] == 'M') return val * mb_to_bytes;
@@ -253,7 +249,6 @@ pub fn detectOsVersion() []const u8 {
             return os_version_buf[0..os_version_len];
         }
     } else if (comptime builtin.os.tag == .linux) {
-        // Linux: Use uname to get kernel release (e.g., "6.5.0-14-generic")
         const uts = std.posix.uname();
         @memcpy(os_version_buf[0..os_prefix_len], "Linux ");
         // uts.release is a null-terminated array; find the null

@@ -237,27 +237,18 @@ pub fn pflashPrefill(
     state.orig_len = token_ids.len;
     _ = allocator;
 
-    // Step 1: Draft model prefill (standard prefill builds KV cache)
     _ = try draft_model.prefill(token_ids);
 
-    // Step 2: Score blocks using a uniform scorer based on sequence position.
-    // In a full implementation, this would extract attention weights from the
-    // draft model's KV cache. For now, use a position-aware heuristic:
-    // recent blocks score higher (recency bias), matching empirical importance.
+    // Score blocks by recency heuristic (approximates attention-weight importance;
+    // replace with KV-based scoring once attention weight extraction is integrated).
     const bs = @as(usize, cfg.block_size);
     const n_blocks = (token_ids.len + bs - 1) / bs;
     for (0..n_blocks) |bi| {
-        // Recency-weighted score: later blocks score higher
-        // This is a conservative approximation — replace with KV-based scoring
-        // once attention weight extraction is integrated.
         const recency = @as(f32, @floatFromInt(bi + 1)) / @as(f32, @floatFromInt(n_blocks));
         state.block_scores[bi] = recency;
     }
 
-    // Step 3: Adaptive block selection
     selectBlocks(state);
-
-    // Step 4: Build compressed prompt
     const compressed = buildCompressedPrompt(state, token_ids);
 
     // Log compression stats (debug)
@@ -266,7 +257,6 @@ pub fn pflashPrefill(
         token_ids.len, compressed.len, ratio * 100, cfg.alpha,
     });
 
-    // Step 5: Reset target KV cache, prefill on compressed prompt
     target_model.resetCache();
     return try target_model.prefill(compressed);
 }

@@ -164,7 +164,6 @@ test "fuzz: all rope functions" {
             var orig: [512]f32 = undefined;
             @memcpy(orig[0..total], buf[0..total]);
 
-            // Exercise the sole pub function: rope
             rope(&buf, pos, nh, hd, rd, theta);
 
             // Verify magnitude preservation per rotated pair per head.

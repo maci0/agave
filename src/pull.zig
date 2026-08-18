@@ -1207,19 +1207,16 @@ fn downloadFileOnce(
 ///  9. Create agave convenience symlink
 /// 10. Print the final model path
 pub fn pullModel(allocator: Allocator, args: PullArgs) (PullError || Allocator.Error)!void {
-    // Step 1: List available files.
     eprint("Fetching model info for '{s}'...\n", .{args.repo});
     var list_result = try listModelFiles(allocator, args.repo, args.token);
     defer list_result.deinit();
 
-    // Step 2: If --list, print file list to stdout and return.
     if (args.list_only) {
         eprint("Available model files in '{s}':\n", .{args.repo});
         printFileList(list_result.files, list_result.safetensors);
         return;
     }
 
-    // Step 3: Select model.
     const selected = try selectModel(&list_result, args.quant);
 
     switch (selected) {

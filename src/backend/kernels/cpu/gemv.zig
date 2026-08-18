@@ -231,17 +231,12 @@ test "fuzz: all gemv functions" {
 
             var y: [N]f32 = undefined;
 
-            // 1. sparse_threshold (pub const)
             _ = sparse_threshold;
-
-            // 2. isBlockSparse
             _ = isBlockSparse(&x, 0, K);
 
-            // 3. gemvRowBytes
             const rb = gemvRowBytes(.f32, K);
             std.debug.assert(rb == K * 4);
 
-            // 4. gemvF32
             var w_f32: [K]f32 = undefined;
             for (&w_f32, 0..) |*v, i| v.* = @bitCast(smith.valueWithHash(u32, @intCast(i + 2 * K)));
             for (&w_f32) |*v| {
@@ -249,7 +244,6 @@ test "fuzz: all gemv functions" {
             }
             gemvF32(&x, &w_f32, &y, N, K);
 
-            // 5. gemvF16
             var w_f16: [K]f16 align(2) = undefined;
             for (&w_f16, 0..) |*v, i| {
                 v.* = @bitCast(smith.valueWithHash(u16, @intCast(i + 3 * K)));
@@ -257,56 +251,23 @@ test "fuzz: all gemv functions" {
             }
             gemvF16(&x, &w_f16, &y, N, K);
 
-            // 6. gemvBF16
             gemvBF16(&x, &w_buf, &y, N, K);
-
-            // 7. gemvQ4_0
             gemvQ4_0(&x, &w_buf, &y, N, K);
-
-            // 8. gemvQ8_0
             gemvQ8_0(&x, &w_buf, &y, N, K);
-
-            // 9. gemvQ4_K
             gemvQ4_K(&x, &w_buf, &y, N, K);
-
-            // 10. gemvQ5_K
             gemvQ5_K(&x, &w_buf, &y, N, K);
-
-            // 11. gemvQ6_K
             gemvQ6_K(&x, &w_buf, &y, N, K);
-
-            // 12. gemvQ4_1
             gemvQ4_1(&x, &w_buf, &y, N, K);
-
-            // 13. gemvQ5_0
             gemvQ5_0(&x, &w_buf, &y, N, K);
-
-            // 14. gemvQ2_K
             gemvQ2_K(&x, &w_buf, &y, N, K);
-
-            // 15. gemvQ3_K
             gemvQ3_K(&x, &w_buf, &y, N, K);
-
-            // 16. gemvFP8_E4M3
             gemvFP8_E4M3(&x, &w_buf, &y, N, K);
-
-            // 17. gemvFP8_E5M2
             gemvFP8_E5M2(&x, &w_buf, &y, N, K);
-
-            // 18. gemvMXFP4
             gemvMXFP4(&x, &w_buf, &y, N, K);
-
-            // 19. gemvNVFP4
             gemvNVFP4(&x, &w_buf, &y, N, K);
-
-            // 20. gemvIQ4_NL
             gemvIQ4_NL(&x, &w_buf, &y, N, K);
-
-            // 21. gemvIQ4_XS
             gemvIQ4_XS(&x, &w_buf, &y, N, K);
 
-            // 22. gemvSeq (dispatcher — exercises multiple dtype paths)
-            // Exercise every gemvSeq branch for full dispatch coverage.
             gemvSeq(&x, &w_buf, .q4_0, &y, N, K);
             gemvSeq(&x, &w_buf, .q4_1, &y, N, K);
             gemvSeq(&x, &w_buf, .q5_0, &y, N, K);

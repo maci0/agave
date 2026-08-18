@@ -92,16 +92,7 @@ def main():
         print(f"Error: {args.out} exists (use --force to overwrite)")
         sys.exit(1)
 
-    # This is a structural scaffold. A full implementation would:
-    # 1. Parse both GGUF files' tensor tables
-    # 2. For each tensor in the base file:
-    #    a. If it's a routed expert in a target layer AND the donor has it:
-    #       copy from donor
-    #    b. Otherwise: copy from base
-    # 3. Write a new GGUF with updated tensor offsets and sizes
-
     print("\nTensors that would be spliced from donor:")
-    # Placeholder: list what would be copied
     for layer in target_layers:
         for suffix in ["ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight"]:
             name = f"blk.{layer}.{suffix}"
@@ -112,11 +103,7 @@ def main():
         print("\n(dry run — no files written)")
         return
 
-    # TODO: Full GGUF parsing and tensor-level copy.
-    # The scaffold above shows the structure. A complete implementation needs:
-    # - GGUF header/metadata parsing (read_gguf_header)
-    # - Tensor table parsing (offsets, sizes, types)
-    # - Byte-level copy with updated offsets
+    # TODO: implement GGUF header/tensor-table parsing and byte-level copy.
     print(f"\nNote: Full GGUF binary splicing not yet implemented.")
     print(f"See gguf-tools/ for reference implementations.")
 

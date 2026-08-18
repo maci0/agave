@@ -3774,7 +3774,6 @@ fn generateDiffusion(
 
     if (!g_quiet) eprint("diffusion: prompt = {d} tokens\n", .{token_ids.len});
 
-    // 1. Encoder prefill.
     const start_ms = milliTimestamp(g_io);
     const last_tok = model.prefill(token_ids) catch |e| {
         eprint("Error: prefill failed: {}\n", .{e});
@@ -3783,7 +3782,6 @@ fn generateDiffusion(
     const prefill_ms = milliTimestamp(g_io) - start_ms;
     _ = last_tok;
 
-    // 2. Diffusion denoising.
     const max_steps = cli.diffusion_steps;
     const canvas_len = cli.diffusion_canvas;
     const confidence_threshold = cli.diffusion_confidence;
@@ -5215,7 +5213,6 @@ test "fuzz: main.zig pure functions" {
                 _ = &isKnownSpec;
             }
 
-            // Exercise pure parsing functions with fuzz inputs
             var ip_out: [4]u8 = undefined;
             const s_len = smith.valueWithHash(u8, 0) % 32;
             var ip_buf: [32]u8 = undefined;

@@ -2111,25 +2111,17 @@ test "Backend.gemvMulti via CPU dispatch — empty ops" {
 test "Backend.gemvT via CPU dispatch" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
-    // Q8_0 transposed GEMV: y = W^T @ x
-    // For a simple test, we can construct a Q8_0 block manually.
-    // Q8_0 block: 2 bytes f16 scale + 32 bytes i8 quantized
-    // Let's create 1 block (32 elements) with scale=1.0 and quants=[1,0,...,0]
+    // Q8_0 block: 2-byte f16 scale (1.0 → 0x3C00) + 32 i8 quants; first quant=1, rest=0
     var w_block: [34]u8 align(2) = undefined;
-    // f16 scale = 1.0 → bits = 0x3C00
-    w_block[0] = 0x00; // little-endian low byte
-    w_block[1] = 0x3C; // little-endian high byte
-    // Fill quants: first = 1, rest = 0
+    w_block[0] = 0x00;
+    w_block[1] = 0x3C;
     @memset(w_block[2..34], 0);
-    w_block[2] = 1; // i8 value 1
-    // x = [1.0], in_dim = 1, out_dim = 32
-    // This is W^T @ x where W is stored as [in_dim rows × out_dim cols]
+    w_block[2] = 1;
     var x_in = [_]f32{1.0};
     var y_out: [32]f32 = undefined;
     be.gemvT(&x_in, &w_block, &y_out, 32, 1);
-    // y[0] = x[0] * scale * quant[0] = 1.0 * 1.0 * 1.0 = 1.0
+    // y[0] = 1.0 * 1.0 * 1.0; y[1..] = 0
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), y_out[0], 1e-3);
-    // y[1..] = 0
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), y_out[1], 1e-3);
 }
 

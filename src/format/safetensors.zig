@@ -3295,7 +3295,6 @@ test "fuzz: all safetensors functions" {
             // -- SafeTensorsDir.format --
             const fmt = dir.format();
             try std.testing.expect(fmt.is_safetensors);
-            // Exercise vtable: getTensor with random name (should return null)
             try std.testing.expect(fmt.getTensor("nonexistent.tensor.xyz") == null);
 
             // -- SafeTensorsDir.deinit: verify symbol, don't call (would invalidate our stack vars) --

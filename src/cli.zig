@@ -144,18 +144,9 @@ pub fn parse(allocator: std.mem.Allocator, args: std.process.Args, specs: []cons
             if (std.mem.indexOfScalar(u8, rest, '=')) |eq_pos| {
                 const name = rest[0..eq_pos];
                 const value = rest[eq_pos + 1 ..];
-                if (findByLong(specs, name)) |spec| {
-                    if (spec.kind == .option) {
-                        result.options.put(name, value) catch @panic("out of memory");
-                    } else {
-                        // Boolean --flag=value: keep in options so callers can error
-                        // (do not set the flag; --help=1 must not act like --help).
-                        result.options.put(name, value) catch @panic("out of memory");
-                    }
-                } else {
-                    // Unknown --name=value: store as option anyway
-                    result.options.put(name, value) catch @panic("out of memory");
-                }
+                // Always store in options (not flags) so callers can detect and
+                // reject boolean --flag=value forms like --help=1.
+                result.options.put(name, value) catch @panic("out of memory");
                 continue;
             }
 
@@ -504,16 +495,14 @@ test "fuzz: all cli functions" {
         fn f(_: void, smith: *std.testing.Smith) !void {
             const allocator = std.testing.allocator;
 
-            // Build a ParseResult with fuzz-driven keys
             var r = ParseResult{
                 .flags = std.StringHashMap(void).init(allocator),
                 .options = std.StringHashMap([]const u8).init(allocator),
                 .positionals = .empty,
                 .allocator = allocator,
             };
-            defer r.deinit(); // exercises deinit
+            defer r.deinit();
 
-            // Insert fuzz-driven flag/option/positional data
             const key_idx = smith.valueWithHash(u8, 0) % 4;
             const keys = [_][]const u8{ "help", "port", "temp", "seed" };
             const key = keys[key_idx];
@@ -527,51 +516,41 @@ test "fuzz: all cli functions" {
             const positional_vals = [_][]const u8{ "model.gguf", "", "arg2" };
             r.positionals.append(allocator, positional_vals[pos_idx]) catch return;
 
-            // Exercise flag (pub)
             _ = r.flag(key);
             _ = r.flag("nonexistent");
 
-            // Exercise option (pub)
             _ = r.option(key);
             _ = r.option("missing");
 
-            // Exercise positional (pub)
             const pos_query = smith.valueWithHash(usize, 3);
             _ = r.positional(pos_query);
             _ = r.positional(0);
 
-            // Exercise optionInt (pub) — generic over types
             _ = r.optionInt(u8, key);
             _ = r.optionInt(i32, key);
             _ = r.optionInt(u64, key);
             _ = r.optionInt(u32, "missing");
 
-            // Exercise optionU16 (pub)
             _ = r.optionU16(key);
             _ = r.optionU16("missing");
 
-            // Exercise optionU32 (pub)
             _ = r.optionU32(key);
             _ = r.optionU32("missing");
 
-            // Exercise optionU64 (pub)
             _ = r.optionU64(key);
             _ = r.optionU64("missing");
 
-            // Exercise optionF32 (pub)
             const f32_result = r.optionF32(key);
             if (f32_result) |v| {
                 std.debug.assert(std.math.isFinite(v));
             }
             _ = r.optionF32("missing");
 
-            // Exercise parse (pub) — takes std.process.Args which is OS-specific,
-            // so verify reference at comptime and exercise via empty specs
+            // parse() takes std.process.Args (OS-specific); verify reference at comptime
             comptime {
                 _ = &parse;
             }
 
-            // Exercise ArgSpec struct (pub) — construct with fuzz-driven fields
             const short_val = smith.valueWithHash(u8, 4);
             const spec = ArgSpec{
                 .long = key,

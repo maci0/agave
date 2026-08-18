@@ -2634,11 +2634,7 @@ pub const Gemma4Model = struct {
 
         // Step 2: Context projection — per_layer_model_proj @ hidden
         const proj_t = self.fmt.getTensor("per_layer_model_proj.weight") orelse return;
-        // Use ple_gate_buf as temp for the projection output (need total_ple_dim space)
-        // Since total_ple_dim might be larger than ple_buf, use router_input as temp
-        // Actually, we need total_ple_dim f32s. We can compute this GEMV and accumulate.
-        // The projection is [total_ple_dim, n_embd] @ hidden[n_embd] -> [total_ple_dim]
-        // We need a temp buffer of size total_ple_dim. Use attn_out (which is max_qkv_dim >= total_ple_dim for these models).
+        // Use attn_out as temp (max_qkv_dim >= total_ple_dim for these models).
         const ctx_proj = self.attn_out[0..total_ple_dim];
         self.doGemv(self.hidden.ptr, proj_t, ctx_proj.ptr, total_ple_dim, e);
         self.be.sync();

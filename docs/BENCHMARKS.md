@@ -201,7 +201,7 @@ NCCL loaded at runtime via `dlopen("libnccl.so.2")`. Unique ID exchanged over TC
 Notes:
 - PP is 1.7× faster than TP over network (less traffic per token)
 - Disaggregated is fastest for decode (no per-token network overhead after KV transfer)
-- Heterogeneous architectures (x86_64 + aarch64) work seamlessly
+- Heterogeneous architectures (x86_64 + aarch64) work without issues
 - POSIX shm auto-selected for same-node peers (`--transport auto`)
 
 ## DeepSeek V4 Flash (MoE 290B, MLX 4-bit, CPU + SSD Streaming)

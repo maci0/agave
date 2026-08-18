@@ -41,12 +41,9 @@ import numpy as np
 def get_activations(agave_bin, model_path, prompt, n_layers, n_embd):
     """Run agave with --profile to extract per-layer hidden states.
 
-    NOTE: This is a placeholder. A full implementation would need agave
-    to export per-layer activations (e.g. via --export-activations).
-    For now, this generates random directions as a scaffold.
+    Placeholder: returns zeros. A full implementation requires agave to
+    export per-layer activations (e.g. via --export-activations).
     """
-    # TODO: When agave supports --export-activations, capture real activations.
-    # For now, return placeholder zeros to show the pipeline structure.
     return np.zeros((n_layers, n_embd), dtype=np.float32)
 
 

@@ -17,16 +17,8 @@ pub const KvCache = struct {
     values: [][]u8,
 };
 
-/// Allocate per-layer key/value cache slices with proper error cleanup.
-/// Each layer gets `kv_bytes_per_layer` bytes for both keys and values.
-///
-/// Parameters:
-///   - allocator: Memory allocator.
-///   - n_layers: Number of layers to allocate caches for.
-///   - kv_bytes_per_layer: Byte size per layer (use kv_quant.kvSliceBytes()).
-///
-/// Returns: KvCache with allocated key/value slices.
-/// Caller must call freeKvCache when done.
+/// Allocate per-layer key/value cache slices. `kv_bytes_per_layer` should come
+/// from `kv_quant.kvSliceBytes()`. Caller must call `freeKvCache` when done.
 pub fn allocKvCache(allocator: Allocator, n_layers: usize, kv_bytes_per_layer: usize) !KvCache {
     const keys = try allocator.alloc([]u8, n_layers);
     errdefer allocator.free(keys);
@@ -78,12 +70,6 @@ pub const CacheBlock = struct {
     used: u16 = 0,
     /// Reference count for prefix sharing.
     ref_count: u16 = 1,
-    /// Frequency tracking for eviction policy.
-    /// Unused in base CacheBlock — TieredBlock has its own copy that is actually used.
-    access_count: u32 = 0,
-    /// Last access timestamp for LRU within tier.
-    /// Unused in base CacheBlock — TieredBlock has its own copy that is actually used.
-    last_access_ms: i64 = 0,
 };
 
 /// Per-sequence metadata: which blocks hold this sequence's KV data.

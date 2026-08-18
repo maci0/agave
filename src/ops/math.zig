@@ -1252,13 +1252,11 @@ test "fuzz: all math functions" {
                 buf[i] = @as(f32, @floatFromInt(@as(i16, @bitCast(raw)))) * 0.01;
             }
 
-            // 1. argmax
             {
                 const idx = argmax(&buf);
                 std.debug.assert(idx < buf_len);
             }
 
-            // 2. topKExperts
             {
                 const k_raw = smith.valueWithHash(u8, 100) % 4;
                 const k: usize = @as(usize, k_raw) + 1; // 1..4
@@ -1268,7 +1266,6 @@ test "fuzz: all math functions" {
                 for (0..k) |i| std.debug.assert(out_idx[i] < buf_len);
             }
 
-            // 3. simdDotF32
             {
                 var buf2: [buf_len]f32 = undefined;
                 for (0..buf_len) |i| {
@@ -1279,7 +1276,6 @@ test "fuzz: all math functions" {
                 std.debug.assert(std.math.isFinite(dot));
             }
 
-            // 4. simdScaleF32
             {
                 var scale_buf: [buf_len]f32 = buf;
                 const scale_raw = smith.valueWithHash(i16, 200);
@@ -1288,7 +1284,6 @@ test "fuzz: all math functions" {
                 for (0..buf_len) |i| std.debug.assert(std.math.isFinite(scale_buf[i]));
             }
 
-            // 5. softplus
             {
                 const x_raw = smith.valueWithHash(i16, 300);
                 const x = @as(f32, @floatFromInt(x_raw)) * 0.01;
@@ -1297,7 +1292,6 @@ test "fuzz: all math functions" {
                 std.debug.assert(std.math.isFinite(sp));
             }
 
-            // 6. sigmoid
             {
                 const x_raw = smith.valueWithHash(i16, 400);
                 const x = @as(f32, @floatFromInt(x_raw)) * 0.01;
@@ -1305,7 +1299,6 @@ test "fuzz: all math functions" {
                 std.debug.assert(s >= 0 and s <= 1.0);
             }
 
-            // 7. silu
             {
                 const x_raw = smith.valueWithHash(i16, 500);
                 const x = @as(f32, @floatFromInt(x_raw)) * 0.01;
@@ -1313,21 +1306,19 @@ test "fuzz: all math functions" {
                 std.debug.assert(std.math.isFinite(s));
             }
 
-            // 8. applyReluSquared
             {
                 var relu_buf: [buf_len]f32 = buf;
                 applyReluSquared(&relu_buf);
                 for (relu_buf) |v| std.debug.assert(v >= 0);
             }
 
-            // 9. applyGelu
             {
                 var gelu_buf: [buf_len]f32 = buf;
                 applyGelu(&gelu_buf);
                 for (gelu_buf) |v| std.debug.assert(std.math.isFinite(v));
             }
 
-            // 10. applyRepeatPenalty (penalty must be > 0)
+            // penalty must be > 0
             {
                 var rp_buf: [buf_len]f32 = buf;
                 const pen_raw = smith.valueWithHash(u16, 600);
@@ -1337,7 +1328,6 @@ test "fuzz: all math functions" {
                 for (rp_buf) |v| std.debug.assert(std.math.isFinite(v));
             }
 
-            // 11. applyLogitBias
             {
                 var lb_buf: [buf_len]f32 = buf;
                 const ids = [_]u32{ 1, 5, 999 };
@@ -1346,7 +1336,6 @@ test "fuzz: all math functions" {
                 for (lb_buf) |v| std.debug.assert(std.math.isFinite(v));
             }
 
-            // 12. applyDry
             {
                 var dry_buf: [buf_len]f32 = buf;
                 const history = [_]u32{ 1, 2, 3, 1, 2, 4, 0, 3 };
@@ -1358,7 +1347,6 @@ test "fuzz: all math functions" {
                 for (dry_buf) |v| std.debug.assert(!std.math.isNan(v));
             }
 
-            // 13. applyPenalties
             {
                 var pen_buf: [buf_len]f32 = buf;
                 const gen_toks = [_]u32{ 0, 2, 2, 5, 999 };
@@ -1370,7 +1358,6 @@ test "fuzz: all math functions" {
                 for (pen_buf) |v| std.debug.assert(std.math.isFinite(v));
             }
 
-            // 14. tokenLogProb
             {
                 const tid_raw = smith.valueWithHash(u8, 900);
                 const tid: u32 = @as(u32, tid_raw) % (buf_len + 2);
@@ -1378,7 +1365,6 @@ test "fuzz: all math functions" {
                 std.debug.assert(!std.math.isNan(lp));
             }
 
-            // 15. topLogProbs
             {
                 var out_ids: [4]u32 = undefined;
                 var out_lp: [4]f32 = undefined;
@@ -1389,7 +1375,6 @@ test "fuzz: all math functions" {
                 for (0..count) |i| std.debug.assert(!std.math.isNan(out_lp[i]));
             }
 
-            // 16. applyMinP
             {
                 var mp_buf: [buf_len]f32 = buf;
                 const mp_raw = smith.valueWithHash(u8, 1100);
@@ -1398,7 +1383,6 @@ test "fuzz: all math functions" {
                 for (mp_buf) |v| std.debug.assert(!std.math.isNan(v));
             }
 
-            // 17. applyXtc
             {
                 var xtc_buf: [buf_len]f32 = buf;
                 const xp_raw = smith.valueWithHash(u8, 1200);
@@ -1409,7 +1393,6 @@ test "fuzz: all math functions" {
                 for (xtc_buf) |v| std.debug.assert(!std.math.isNan(v));
             }
 
-            // 18. sampleMirostat
             {
                 var miro_buf: [buf_len]f32 = buf;
                 var mu: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 1300) % 20 + 1));
@@ -1423,7 +1406,6 @@ test "fuzz: all math functions" {
                 std.debug.assert(std.math.isFinite(mu));
             }
 
-            // 19. sampleToken
             {
                 var st_buf: [buf_len]f32 = buf;
                 const t_raw = smith.valueWithHash(u8, 1400);
