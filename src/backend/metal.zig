@@ -678,6 +678,18 @@ pub const MetalBackend = struct {
     ///
     /// Cached by page-aligned base address — subsequent calls for the same page
     /// skip ObjC allocation entirely.
+    /// Touch every page of a memory region to trigger CPU page faults.
+    /// Metal GPU cannot trigger page faults on UMA — unfaulted mmap pages read as zeros.
+    /// Call before getBufRef for mmap'd data (SafeTensors weight/scale/bias tensors).
+    fn prefaultPages(data: [*]const u8, len: usize) void {
+        const page_sz: usize = 16384;
+        var off: usize = 0;
+        while (off < len) : (off += page_sz) {
+            const p: *const volatile u8 = @ptrCast(data + off);
+            _ = p.*;
+        }
+    }
+
     fn getBufRef(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
         const addr = @intFromPtr(ptr);
         const aligned_base = addr & ~(@as(usize, page_size - 1));
@@ -2114,31 +2126,18 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
-        // NATIVE Metal MLX-Q GEMV with dynamic group_size.
-        if (bits != 4) @panic("Metal MLX GEMV: only 4-bit supported with dynamic gs");
-        const actual_gs: u32 = if (gs > 0) gs else 64;
-        const gpr = (k + actual_gs - 1) / actual_gs;
-        const wpg: usize = actual_gs / 8;
-        const w_bytes = n * gpr * wpg * @sizeOf(u32);
-        const sb_bytes = n * gpr * @sizeOf(u16);
-        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
-        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
-        const s_ref = self.getBufRef(@ptrCast(scales), sb_bytes);
-        const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
-        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
-        const n_val: u32 = @intCast(n);
-        const k_val: u32 = @intCast(k);
-        const gs_val: u32 = actual_gs;
-        const enc = self.getEncoder(self.pipe_gemv_mlx_q4);
-        setBuf(enc, x_ref, 0);
-        setBuf(enc, w_ref, 1);
-        setBuf(enc, s_ref, 2);
-        setBuf(enc, b_ref, 3);
-        setBuf(enc, y_ref, 4);
-        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
-        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
-        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
-        self.endEncodeThreadgroups(enc, n, gemvThreadgroupSize(.mlx_q, k));
+        // CPU fallback: GPU float4 dot/reduce has different accumulation order
+        // than CPU NEON @mulAdd/@reduce, causing ~2% L2 drift per layer that
+        // cascades to wrong tokens over 43 HC layers. sync() flushes pending
+        // Metal work (rmsNorm etc.) before CPU reads input buffers.
+        self.sync();
+        if (n >= 4096) {
+            var cpu = self.cpuFallback();
+            cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, gs);
+        } else {
+            const actual_gs2: u32 = if (gs > 0) gs else 64;
+            @import("../ops/mlx.zig").mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs2);
+        }
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
