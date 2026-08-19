@@ -234,6 +234,9 @@ pub const MetalBackend = struct {
     /// model activation buffers) on every GEMV / norm / elementwise call.
     /// Cached buffers live for the model's lifetime and are released in deinit().
     buf_cache: std.AutoHashMap(usize, BufferInfo),
+    /// Buffers pending release (too-small cache entries replaced by larger ones).
+    /// Released on sync() when the command buffer has completed.
+    pending_release: std.ArrayList(objc.id),
     /// When true, enables GPU-safe SSD streaming:
     /// - Weight buffers (>256KB) are copied into Metal-managed memory via
     ///   newBufferWithBytes and stored in stable_cache (never flushed)
@@ -417,6 +420,7 @@ pub const MetalBackend = struct {
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+            .pending_release = .empty,
             .stable_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
 
             .allocator = allocator,
@@ -723,8 +727,8 @@ pub const MetalBackend = struct {
         // Check cache for this page-aligned base
         if (self.buf_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-            // Buffer too small (e.g. KV cache grew) — release old, recreate below
-            release(cached.metal_buf);
+            // Buffer too small — defer release until sync (may be referenced by pending dispatches).
+            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
             _ = self.buf_cache.remove(aligned_base);
         }
 
@@ -2132,18 +2136,40 @@ pub const MetalBackend = struct {
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
-        // CPU fallback: Apple Silicon GPU FMA produces different rounding than
-        // CPU NEON FMA. Even with identical float4 accumulation order,
-        // the ~1.5% L2 drift per layer cascades to wrong tokens over 43 HC layers.
-        // This is a hardware-level FPU difference, not a software bug.
-        self.sync();
-        if (n >= 4096) {
-            var cpu = self.cpuFallback();
-            cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, gs);
-        } else {
-            const actual_gs2: u32 = if (gs > 0) gs else 64;
-            @import("../ops/mlx.zig").mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs2);
+        // NATIVE Metal: bit-exact vec8 kernel (GPU FMA = CPU NEON FMA on Apple Silicon).
+        // CPU fallback only for gs<64 (wo_a gs=8 kernel needs separate fix).
+        if (bits != 4) @panic("Metal MLX GEMV: only 4-bit");
+        const actual_gs: u32 = if (gs > 0) gs else 64;
+        if (actual_gs < 64) {
+            self.sync();
+            @import("../ops/mlx.zig").mlxGemvRaw(x, @ptrCast(@alignCast(weight)), @ptrCast(@alignCast(scales)), @ptrCast(@alignCast(biases)), @ptrCast(y), n, k, bits, actual_gs);
+            return;
         }
+        const gpr = (k + actual_gs - 1) / actual_gs;
+        const wpg: usize = actual_gs / 8;
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        const sb_bytes = n * gpr * @sizeOf(u16);
+        prefaultPages(weight, w_bytes);
+        prefaultPages(scales, sb_bytes);
+        prefaultPages(biases, sb_bytes);
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getBufRef(@ptrCast(scales), sb_bytes);
+        const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = actual_gs;
+        const enc = self.getEncoder(self.pipe_gemv_mlx_q4_exact);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, b_ref, 3);
+        setBuf(enc, y_ref, 4);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, 1);
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
@@ -2370,12 +2396,10 @@ pub const MetalBackend = struct {
     pub fn sync(self: *MetalBackend) void {
         self.flush();
         if (self.profile_counters) self.sync_count += 1;
-        // DO NOT flush buf_cache on sync. Wrapped buffers use
-        // newBufferWithBytesNoCopy (shared UMA memory) — they always
-        // point to the same physical memory as CPU. Flushing forces
-        // expensive re-wrapping and breaks mixed CPU/Metal dispatch.
-        // Only pread-based expert loading needs explicit invalidation
-        // (which uses stable_cache, not buf_cache).
+        // Release deferred buffers (too-small cache entries replaced during this epoch).
+        // Safe now because flush() committed and waited for the command buffer.
+        for (self.pending_release.items) |buf| release(buf);
+        self.pending_release.clearRetainingCapacity();
     }
 
     /// Reset dispatch counters and enable counting (call at start of profiled token).
