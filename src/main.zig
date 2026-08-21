@@ -176,6 +176,12 @@ fn eprint(comptime fmt: []const u8, args: anytype) void {
     _ = std.posix.system.write(stderr_file.handle, text.ptr, text.len);
 }
 
+/// Rank 1+ of a TP/PP pair still runs the decode loop (NCCL lockstep) but must
+/// not write tokens; rank 0 is the only stdout owner.
+fn emitGeneratedTokens(cli: *const CliArgs) bool {
+    return cli.tp_rank == 0 or (cli.tp_degree <= 1 and cli.pp_degree <= 1);
+}
+
 /// Debug output. Only printed when --debug is active.
 fn dbg(comptime fmt: []const u8, args: anytype) void {
     if (!g_debug) return;
@@ -887,10 +893,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Error: --tp must be >= 1\n", .{});
             std.process.exit(2);
         }
-        // TpGroup currently runs rank 0 only (all-reduce not implemented).
-        if (tp > 1) {
-            eprint("Error: --tp > 1 is not supported yet (tensor-parallel all-reduce is incomplete)\n", .{});
-            eprint("  Use --pp for pipeline parallelism, or run a single rank.\n", .{});
+        // Transport is a fixed rank-0 ↔ rank-1 pair (NCCL unique-id exchange,
+        // shm names, tcp_fds[0]). Same cap as --pp.
+        if (tp > 2) {
+            eprint("Error: --tp > 2 is not supported yet (transport is a 2-rank pair only)\n", .{});
+            eprint("  Use --tp 2 with --transport nccl (CUDA) or tcp/shm, or run a single rank.\n", .{});
             std.process.exit(2);
         }
     }
@@ -2047,8 +2054,8 @@ fn printUsage() void {
         \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
         \\
         \\PARALLELISM:
-        \\      --tp <N>              Tensor parallelism degree [default: 1; only 1 supported until all-reduce ships]
-        \\      --pp <N>              Pipeline parallelism stages [default: 1]
+        \\      --tp <N>              Tensor parallelism degree [default: 1; 1 or 2 (2-rank pair)]
+        \\      --pp <N>              Pipeline parallelism stages [default: 1; 1 or 2]
         \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
         \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
         \\      --transport <TYPE>    IPC transport: auto, tcp, shm, nccl [default: auto]
@@ -3954,6 +3961,7 @@ fn generateSpeculative(
     prompt: []const u8,
     show_stats: bool,
 ) void {
+    const emit = emitGeneratedTokens(cli);
     const template = arch.chatTemplateForLayers(target.nLayers());
     const formatted = template.format(allocator, cli.system_prompt, prompt) catch @as([]const u8, prompt);
     defer if (formatted.ptr != prompt.ptr) allocator.free(formatted);
@@ -4368,22 +4376,22 @@ fn generateSpeculative(
         }
 
         // Stream
-        if (token_count - batch_start >= batch_size) {
+        if (emit and token_count - batch_start >= batch_size) {
             flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..@min(token_count, gen_ids_buf.len)], &started_output);
             batch_start = token_count;
         }
     }
 
     // Flush remaining
-    if (token_count > batch_start and token_count <= gen_ids_buf.len) {
+    if (emit and token_count > batch_start and token_count <= gen_ids_buf.len) {
         flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..token_count], &started_output);
     }
-    if (!g_tty and started_output) {
+    if (emit and !g_tty and started_output) {
         _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
 
     const gen_ms = milliTimestamp(g_io) - gen_start;
-    if (show_stats and token_count > 0) {
+    if (emit and show_stats and token_count > 0) {
         const tok_per_sec = if (gen_ms > 0) @as(f32, @floatFromInt(token_count)) / @as(f32, @floatFromInt(gen_ms)) * ms_per_second else 0;
         eprint("\n{d} tok · {d:.1} tok/s · {d}ms prefill · spec: {d:.0}% accept ({d:.1} mean)\n", .{
             token_count,
@@ -4803,7 +4811,7 @@ fn generateAndPrintInner(
         }
 
         // Stream batches — small batches for TTY (responsive), larger for pipes (efficient)
-        if (token_count - batch_start >= batch_size) {
+        if (emitGeneratedTokens(cli) and token_count - batch_start >= batch_size) {
             if (display.mode != .json) {
                 flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..@min(token_count, gen_ids_buf.len)], &started_output);
                 batch_start = token_count;
@@ -4811,11 +4819,11 @@ fn generateAndPrintInner(
         }
     }
     // Flush remaining tokens
-    if (display.mode != .json and token_count > batch_start and token_count <= gen_ids_buf.len) {
+    if (emitGeneratedTokens(cli) and display.mode != .json and token_count > batch_start and token_count <= gen_ids_buf.len) {
         flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..token_count], &started_output);
     }
     // Ensure a trailing newline for piped output (not TTY, not JSON)
-    if (!g_tty and display.mode != .json and started_output) {
+    if (emitGeneratedTokens(cli) and !g_tty and display.mode != .json and started_output) {
         _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
     if (hit_eog and g_verbose) print("\n[EOG]\n", .{});
@@ -5082,6 +5090,24 @@ comptime {
     _ = @import("parallel/peer_discovery.zig");
     _ = @import("parallel/tp.zig");
     _ = @import("kvcache/prefetch.zig");
+}
+
+test "emitGeneratedTokens only rank 0 prints in a pair" {
+    var cli: CliArgs = undefined;
+    cli.tp_rank = 0;
+    cli.tp_degree = 2;
+    cli.pp_degree = 1;
+    try std.testing.expect(emitGeneratedTokens(&cli));
+    cli.tp_rank = 1;
+    try std.testing.expect(!emitGeneratedTokens(&cli));
+    cli.tp_degree = 1;
+    cli.pp_degree = 2;
+    try std.testing.expect(!emitGeneratedTokens(&cli));
+    cli.tp_rank = 0;
+    try std.testing.expect(emitGeneratedTokens(&cli));
+    cli.tp_rank = 1;
+    cli.pp_degree = 1;
+    try std.testing.expect(emitGeneratedTokens(&cli));
 }
 
 test "parseIpv4 valid addresses" {

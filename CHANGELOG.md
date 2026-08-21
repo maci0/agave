@@ -52,6 +52,7 @@ must still appear under **Changed** or **Breaking** below. See
 - LoRA apply returns a `Handle`; `dispose` unmerges that adapter (mmap base stays, stacked adapters compose).
 - Scheduler sampling uses a fixed interceptor stack (`src/ops/sampler_stack.zig`); request end disposes LIFO.
 - Server tool registry (`src/server/tools.zig`): register/unregister; request JSON tools overlay the registry.
+- DeepSeek V4 Flash 0731 multi-node: `--pp 2` transfers 4-stream HC state; `--tp 2` is expert-parallel with `allReduceAdd`. CUDA GEMV path for non-Metal backends. `--transport nccl` plus `--spec-mode dspark` on a 2-rank pair. `--tp`/`--pp` still cap at 2.
 
 ### Fixed
 - GPT-OSS / MXFP4 SafeTensors: group size corrected to 16 and block scales decoded
