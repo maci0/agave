@@ -37,6 +37,7 @@ agave/
 │   ├── server/
 │   │   ├── server.zig     # HTTP server (OpenAI + Anthropic API + chat UI)
 │   │   ├── scheduler.zig  # Continuous batching request scheduler
+│   │   ├── tools.zig      # Process-level tool registry (register / dispose)
 │   │   ├── metrics.zig    # Prometheus metrics collector
 │   │   ├── rate_limiter.zig # Token bucket rate limiter
 │   │   ├── json.zig        # JSON field extraction, encoding, and form-parsing
@@ -65,7 +66,7 @@ agave/
 │   │   ├── format.zig     # Format interface (getTensor, getMetaStr, ...)
 │   │   ├── gguf.zig       # GGUF v2/v3 parser with mmap
 │   │   └── safetensors.zig# Multi-shard SafeTensors loader with config.json
-│   ├── lora.zig           # LoRA adapter load + merge at model load time
+│   ├── lora.zig           # LoRA adapter merge; Handle.dispose unmerges
 │   ├── models/
 │   │   ├── model.zig      # Model interface (forward, prefill, resetCache, cancel)
 │   │   ├── gemma3.zig     # Gemma 3 (GQA, GELU, post-norms)
@@ -83,6 +84,7 @@ agave/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
 │   │   ├── sparse_attn.zig # Block sparse attention (PFlash scorer path)
 │   │   ├── math.zig       # argmax, GELU, sampling (top-k/p, min-p, XTC, Mirostat, DRY)
+│   │   ├── sampler_stack.zig # Per-request logit interceptor stack (LIFO dispose)
 │   │   ├── ssm.zig        # SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
 │   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/turbo/planar/iso/rotor)
@@ -117,6 +119,7 @@ agave/
 │   │   └── peer_discovery.zig # UDP peer discovery (LAN broadcast, auto-connect; not devices/discovery)
 │   ├── spec/
 │   │   ├── spec_decode.zig # Speculative decoding orchestrator (draft, verify, accept)
+│   │   ├── caps.zig       # Spec-mode provider table (named wait if unsatisfied)
 │   │   ├── ddtree.zig     # DDTree tree construction (best-first heap, compile, walk)
 │   │   ├── ngram.zig      # N-gram / suffix / lookahead (history-based, no draft model)
 │   │   ├── pflash.zig     # PFlash speculative prefill (block scoring, alpha threshold)
@@ -324,6 +327,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 |----------|------|-------------|
 | `scaledDotProductAttention` | attention.zig | Full SDPA with KV cache, GQA, sliding window |
 | `sampleToken` | math.zig | Temperature + top-k + top-p nucleus sampling |
+| `Stack.apply` | sampler_stack.zig | Ordered logit interceptors; `dispose` clears LIFO |
 | `causalConv1dSilu` | ssm.zig | Causal conv1d with ring buffer + SiLU |
 | `mamba2Recurrence` | ssm.zig | Mamba-2 per-head state update + output |
 | `groupRmsNormSiluGate` | ssm.zig | Group RMS norm followed by SiLU gate |
@@ -352,6 +356,7 @@ Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`
 | Module | Description |
 |--------|-------------|
 | `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting, DSpark confidence trim |
+| `caps.zig` | Per-mode provider requirements; missing provider is a named wait, not a crash in `forward_tree` |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
 | `ngram.zig` | N-gram, SharedNgramPool (server cross-request), SuffixState (10k cache), LookaheadState (Jacobi) |
 | `pflash.zig` | PFlash speculative prefill: block scoring, alpha-threshold selection, compressed prefill |
@@ -366,18 +371,18 @@ Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`
 | `--spec-mode` | Draft source | Draft model required? |
 |---|---|---|
 | `auto` | DDTree with `--draft-model`, else n-gram | Conditional |
-| `standard` | Separate draft model, greedy | Yes |
-| `ddtree` | Separate draft model, tree-based | Yes |
+| `standard` | Separate draft model, greedy | Optional (self-draft) |
+| `ddtree` | Separate draft model, tree-based | Optional (self-draft) |
 | `self` | Target model with layer skip | No |
 | `ngram` | Output history ring buffer | No |
 | `suffix` | Cross-request suffix cache (10k tokens) | No |
 | `lookahead` | Jacobi parallel branch exploration | No |
-| `mtp` | Built-in MTP prediction heads | No (in model) |
-| `medusa` | Built-in Medusa MLP heads (MTP alias) | No (in model) |
-| `eagle` | Hidden-state conditioned draft (chained) | Yes |
-| `eagle3` | Pre-output-norm hidden-state conditioned draft | Yes |
-| `mlp` | Hidden-state conditioned draft (frozen) | Yes |
-| `pflash` | Block-scored speculative prefill | Yes |
+| `mtp` | Built-in MTP prediction heads | MTP heads (`waiting for mtp` if missing) |
+| `medusa` | Built-in Medusa MLP heads (MTP alias) | MTP heads |
+| `eagle` | Hidden-state conditioned draft (chained) | Yes (`waiting for draft`) |
+| `eagle3` | Pre-output-norm hidden-state conditioned draft | Yes (`waiting for draft`) |
+| `mlp` | Hidden-state conditioned draft (frozen) | Yes (`waiting for draft`) |
+| `pflash` | Block-scored speculative prefill | Yes (`waiting for draft`) |
 | `dspark` | Confidence-scheduled verification (any drafter) | Optional |
 
 EAGLE uses `get_hidden_state` + `eagle_forward` vtable methods on the target model to extract last residual hidden state and feed it to the draft model. FR-Spec (`--spec-token-map`) restricts draft logits to a frequency-ranked token subset.

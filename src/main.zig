@@ -11,9 +11,11 @@ const backend_mod = @import("backend/backend.zig");
 const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
 const spec_decode = @import("spec/spec_decode.zig");
+const spec_caps = @import("spec/caps.zig");
 const ngram_mod = @import("spec/ngram.zig");
 const tok_mod = @import("tokenizer/tokenizer.zig");
 const server = @import("server/server.zig");
+const lora_mod = @import("lora.zig");
 const display_mod = @import("display.zig");
 const Display = display_mod.Display;
 const chat_tmpl_mod = @import("chat_template.zig");
@@ -460,21 +462,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
 
 /// Speculative decoding strategy. CLI aliases (e.g. `medusa` → `mtp`) normalize at
 /// parse time so call sites never branch on synonym variants.
-const SpecMode = enum {
-    none,
-    standard,
-    ddtree,
-    self_spec,
-    ngram,
-    suffix,
-    mtp,
-    eagle,
-    eagle3, // EAGLE-3: conditions on pre-output-norm hidden state
-    mlp,
-    lookahead,
-    pflash,
-    dspark, // DSpark: confidence-scheduled verification (Cheng et al., 2026)
-};
+const SpecMode = spec_caps.SpecMode;
 
 const CliArgs = struct {
     model_path: []const u8,
@@ -1072,13 +1060,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             if (sm == null or !std.mem.eql(u8, sm.?, "self"))
                 eprint("Warning: --draft-layers only applies to --spec-mode self\n", .{});
         }
-        // Warn about --spec-mode standard/ddtree/pflash without a draft model
+        // Warn about --spec-mode standard/ddtree without a draft model (self-draft still works).
         if (res.option("spec-mode")) |sm| {
             if (res.option("draft-model") == null and
                 (std.mem.eql(u8, sm, "standard") or std.mem.eql(u8, sm, "ddtree")))
-                eprint("Warning: --spec-mode {s} requires --draft-model\n", .{sm});
-            if (std.mem.eql(u8, sm, "pflash") and res.option("draft-model") == null)
-                eprint("Warning: --spec-mode pflash requires --draft-model for block scoring\n", .{});
+                eprint("Warning: --spec-mode {s} has no --draft-model (using self-draft)\n", .{sm});
         }
     }
 
@@ -1182,7 +1168,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         break :blk null;
     };
 
-    return .{
+    const parsed_cli: CliArgs = .{
         .model_path = res.positional(0).?,
         .prompt = res.positional(1),
         .serve = res.flag("serve"),
@@ -1407,6 +1393,15 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             .ctx_size = res.option("ctx-size") != null or res.flag("no-kv-cache"),
         },
     };
+
+    if (spec_caps.unsatisfied(parsed_cli.spec_mode, .{ .draft = parsed_cli.draft_model_path != null })) |p| {
+        if (p == .draft) {
+            eprint("Error: --spec-mode {s} waiting for {s}\n", .{ @tagName(parsed_cli.spec_mode), spec_caps.providerName(p) });
+            eprint("  {s}\n", .{spec_caps.howToProvide(p)});
+            std.process.exit(2);
+        }
+    }
+    return parsed_cli;
 }
 
 fn parseIpv4(s: []const u8, out: *[4]u8) bool {
@@ -2222,7 +2217,9 @@ pub fn main(init: std.process.Init) !void {
 
     var gguf_file: ?GGUFFile = null;
     var st_dir: ?SafeTensorsDir = null;
+    var lora_handle: lora_mod.Handle = .{ .allocator = allocator };
     defer {
+        lora_handle.dispose();
         if (gguf_file) |*g| g.deinit();
         if (st_dir) |*s| s.deinit();
     }
@@ -2265,8 +2262,7 @@ pub fn main(init: std.process.Init) !void {
         };
         // Apply LoRA adapter (load-time merge into base weights as F32).
         if (cli.lora_path) |lp| {
-            const lora_mod = @import("lora.zig");
-            lora_mod.applyLoraGguf(allocator, &gguf_file.?, lp) catch |e| {
+            lora_handle = lora_mod.applyLoraGguf(allocator, &gguf_file.?, lp) catch |e| {
                 eprint("Error: failed to apply LoRA '{s}': {}\n", .{ lp, e });
                 std.process.exit(1);
             };
@@ -3059,6 +3055,15 @@ fn initAndRun(
 
     var model_if = mdl.model();
 
+    if (spec_caps.unsatisfied(cli.spec_mode, .{
+        .draft = cli.draft_model_path != null,
+        .mtp = model_if.getMtpDepth() > 0,
+    })) |p| {
+        eprint("Error: --spec-mode {s} waiting for {s}\n", .{ @tagName(cli.spec_mode), spec_caps.providerName(p) });
+        eprint("  {s}\n", .{spec_caps.howToProvide(p)});
+        return false;
+    }
+
     // ── Vision encoder (multimodal) ──────────────────────────────
     const VisionEncoder = model_mod.VisionEncoder;
     var mmproj_gguf: ?GGUFFile = null;
@@ -3341,9 +3346,6 @@ fn initAndRun(
         draft_ptr = &draft_model_if;
         eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
     } else if (cli.spec_mode != .none) {
-        if (cli.spec_mode == .eagle or cli.spec_mode == .eagle3 or cli.spec_mode == .mlp) {
-            eprint("Warning: --spec-mode {s} requires --draft-model (falling back to self-draft)\n", .{@tagName(cli.spec_mode)});
-        }
         draft_ptr = &model_if;
     }
 
@@ -4886,6 +4888,7 @@ test {
     _ = @import("ops/sparse_attn.zig");
     _ = @import("spec/pflash.zig");
     _ = @import("spec/dspark.zig");
+    _ = @import("spec/caps.zig");
     _ = @import("lora.zig");
     _ = @import("arch.zig");
     _ = @import("perf.zig");
@@ -4904,6 +4907,7 @@ test {
     _ = @import("ops/kv_quant.zig");
     _ = @import("ops/quant.zig");
     _ = @import("ops/math.zig");
+    _ = @import("ops/sampler_stack.zig");
     _ = @import("ops/attention.zig");
     _ = @import("ops/kv_evict.zig");
     _ = @import("ops/ssm.zig");
@@ -4915,6 +4919,7 @@ test {
     _ = @import("tokenizer/tokenizer.zig");
     _ = @import("server/server.zig");
     _ = @import("server/json.zig");
+    _ = @import("server/tools.zig");
     _ = @import("server/rate_limiter.zig");
     _ = @import("server/metrics.zig");
     _ = @import("server/fixed_buf_stream.zig");
