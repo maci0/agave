@@ -28,6 +28,7 @@ const metrics_mod = @import("metrics.zig");
 const Metrics = metrics_mod.Metrics;
 const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 const json = @import("json.zig");
+const tools_mod = @import("tools.zig");
 const SamplingParams = json.SamplingParams;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const VisionEncoder = @import("../models/model.zig").VisionEncoder;
@@ -256,6 +257,7 @@ fn configureSchedulerSampling(req: *scheduler.Request, sampling: SamplingParams)
     // Always re-seed: enqueue leaves a placeholder id-based PRNG; null seed must
     // follow prngSeedFromSampling (sim_clock) like the direct generation paths.
     req.prng = std.Random.DefaultPrng.init(schedulerPrngSeed(req.id, sampling));
+    req.rebuildSampler();
     req.sampling_ready.store(true, .release);
 }
 
@@ -505,6 +507,8 @@ const Server = struct {
     last_request_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     /// True when the server is in sleep mode (idle too long).
     sleeping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Process-level tools (register/dispose). Request JSON tools overlay these.
+    tool_registry: tools_mod.Registry = .{},
 
     fn getActiveConv(self: *Server) ?*Conversation {
         return self.getConvById(self.active_id);
@@ -1093,8 +1097,14 @@ fn sendHtml(stream: TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
 }
 
+/// True when this request should inject tools and parse <tool_call> output.
+fn toolsWanted(tp: *const json.ToolParams) bool {
+    if (std.mem.eql(u8, tp.tool_choice, "none")) return false;
+    return tp.tool_count > 0 or g_server.tool_registry.count() > 0;
+}
+
 /// Build system prompt with tool definitions injected.
-fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, existing_system: ?[]const u8) ![]u8 {
+fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, existing_system: ?[]const u8, registry: *const tools_mod.Registry) ![]u8 {
     var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     if (existing_system) |sys| {
@@ -1102,18 +1112,33 @@ fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, exist
         try buf.appendSlice(allocator, "\n\n");
     }
     try buf.appendSlice(allocator, "You have access to the following tools:\n\n");
-    for (0..tp.tool_count) |i| {
-        if (tp.tools[i]) |tool| {
-            try buf.appendSlice(allocator, "- ");
-            try buf.appendSlice(allocator, tool.name);
-            if (tool.description.len > 0) {
-                try buf.appendSlice(allocator, ": ");
-                try buf.appendSlice(allocator, tool.description);
-            }
-            try buf.appendSlice(allocator, "\n  Parameters: ");
-            try buf.appendSlice(allocator, tool.parameters_json);
-            try buf.appendSlice(allocator, "\n");
+
+    var req_tools: [tools_mod.max_tools]?tools_mod.Tool = .{null} ** tools_mod.max_tools;
+    var req_n: u32 = 0;
+    for (tp.tools) |maybe| {
+        const t = maybe orelse continue;
+        if (req_n >= req_tools.len) break;
+        req_tools[req_n] = .{
+            .name = t.name,
+            .description = t.description,
+            .parameters_json = t.parameters_json,
+        };
+        req_n += 1;
+    }
+    var merged: [tools_mod.max_tools]?tools_mod.Tool = .{null} ** tools_mod.max_tools;
+    const n = registry.mergeInto(req_tools[0..req_n], &merged);
+
+    for (merged[0..n]) |maybe| {
+        const tool = maybe orelse continue;
+        try buf.appendSlice(allocator, "- ");
+        try buf.appendSlice(allocator, tool.name);
+        if (tool.description.len > 0) {
+            try buf.appendSlice(allocator, ": ");
+            try buf.appendSlice(allocator, tool.description);
         }
+        try buf.appendSlice(allocator, "\n  Parameters: ");
+        try buf.appendSlice(allocator, tool.parameters_json);
+        try buf.appendSlice(allocator, "\n");
     }
     try buf.appendSlice(allocator,
         \\
@@ -1604,8 +1629,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Inject tool definitions into system prompt
         var tool_system: ?[]u8 = null;
         defer if (tool_system) |ts| wipeFree(g_server.allocator, ts);
-        if (tool_params.tool_count > 0 and !std.mem.eql(u8, tool_params.tool_choice, "none")) {
-            tool_system = buildToolSystemPrompt(g_server.allocator, &tool_params, if (extracted) |ex| ex.system else null) catch |err| {
+        if (toolsWanted(&tool_params)) {
+            tool_system = buildToolSystemPrompt(g_server.allocator, &tool_params, if (extracted) |ex| ex.system else null, &g_server.tool_registry) catch |err| {
                 std.log.err("req={d} tool system prompt build failed: {}", .{ log_request_id, err });
                 sendJsonError(stream, "500 Internal Server Error", "server_error", "Failed to build tool definitions");
                 g_server.metrics.recordFailure();
@@ -1663,7 +1688,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
 
         if (json.extractBoolField(body, "stream")) {
-            if (tool_params.tool_count > 0) {
+            if (toolsWanted(&tool_params)) {
                 startStreamWithTools(stream, formatted, max_tokens, sampling, &tool_params);
             } else {
                 startStream(stream, formatted, true, false, max_tokens, sampling);
@@ -1693,12 +1718,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Check if output contains tool calls.
         // Store raw output in the replay map keyed by request ID so future turns
         // can reconstruct the exact token stream from stored bytes (ds4 replay approach).
-        if (tool_params.tool_count > 0 and hasToolCalls(gen.raw)) {
+        if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) {
             var rid_buf: [24]u8 = undefined;
             const rid_str = std.fmt.bufPrint(&rid_buf, "{d}", .{req_id}) catch "";
             toolReplayStore(rid_str, gen.raw);
         }
-        const json_body = if (tool_params.tool_count > 0 and hasToolCalls(gen.raw)) blk: {
+        const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
             const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated);
             break :blk if (tc_resp.len > 0) tc_resp else std.fmt.bufPrint(&resp_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}

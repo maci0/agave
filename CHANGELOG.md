@@ -33,6 +33,9 @@ must still appear under **Changed** or **Breaking** below. See
 - HTTP: `/v1/kv_cache` matches the exact path only (no longer
   `startsWith("/v1/kv_cache")`). `/v1/kv_cache/info` is routed separately and is
   not shadowed. Clients using a longer path prefix must call the documented URLs.
+- CLI: `--spec-mode eagle|eagle3|mlp|pflash` without `--draft-model` now exits
+  with code 2 (`waiting for draft`) instead of warning and self-drafting.
+  `--spec-mode mtp` on a model with no MTP heads exits after load (`waiting for mtp`).
 
 ### Added
 - **DeepSeek V4 Flash 0731**: full architecture support — hyper connections,
@@ -45,6 +48,10 @@ must still appear under **Changed** or **Breaking** below. See
 - Local Compose path: `docker-compose.yml` + `.env.example` (`AGAVE_API_KEY`
   required; publish defaults to `127.0.0.1`).
 - CLI: short flag clusters and attached short-option values (e.g. `-qV`, `-n128`).
+- Spec-mode caps (`src/spec/caps.zig`): `--spec-mode eagle|eagle3|mlp|pflash` without `--draft-model`, and `--spec-mode mtp` on a model with no MTP heads, exit with `waiting for draft|mtp` instead of falling back or crashing later.
+- LoRA apply returns a `Handle`; `dispose` unmerges that adapter (mmap base stays, stacked adapters compose).
+- Scheduler sampling uses a fixed interceptor stack (`src/ops/sampler_stack.zig`); request end disposes LIFO.
+- Server tool registry (`src/server/tools.zig`): register/unregister; request JSON tools overlay the registry.
 
 ### Fixed
 - GPT-OSS / MXFP4 SafeTensors: group size corrected to 16 and block scales decoded

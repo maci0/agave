@@ -21,6 +21,7 @@ const Metrics = @import("metrics.zig").Metrics;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const Prefetcher = @import("../kvcache/prefetch.zig").Prefetcher;
 const math_ops = @import("../ops/math.zig");
+const sampler_stack = @import("../ops/sampler_stack.zig");
 const SamplingParams = @import("json.zig").SamplingParams;
 
 /// Scheduler loop poll interval (nanoseconds).
@@ -72,21 +73,23 @@ fn sampleNextToken(req: *Request, model: *Model, greedy: u32) u32 {
     if (logits.len == 0) return greedy;
 
     const gen_tokens = req.tokens.items;
-    if (req.logit_bias_count > 0) {
-        math_ops.applyLogitBias(logits, req.logit_bias_ids[0..], req.logit_bias_vals[0..], req.logit_bias_count);
-    }
-    if (req.repetition_penalty != 1.0 and gen_tokens.len > 0) {
-        math_ops.applyRepeatPenalty(logits, gen_tokens, req.repetition_penalty);
-    }
-    if (req.dry_multiplier > 0 and gen_tokens.len > 0) {
-        math_ops.applyDry(logits, gen_tokens, req.dry_multiplier, req.dry_allowed_length);
-    }
-    if (req.frequency_penalty != 0 or req.presence_penalty != 0) {
-        math_ops.applyPenalties(logits, gen_tokens, req.frequency_penalty, req.presence_penalty);
-    }
-
-    const mutated = req.logit_bias_count > 0 or req.repetition_penalty != 1.0 or
-        req.frequency_penalty != 0 or req.presence_penalty != 0 or req.dry_multiplier > 0;
+    req.sampler.apply(logits, .{
+        .tokens = gen_tokens,
+        .repetition_penalty = req.repetition_penalty,
+        .dry_multiplier = req.dry_multiplier,
+        .dry_allowed_length = req.dry_allowed_length,
+        .frequency_penalty = req.frequency_penalty,
+        .presence_penalty = req.presence_penalty,
+        .min_p = req.min_p,
+        .xtc_probability = req.xtc_probability,
+        .xtc_threshold = req.xtc_threshold,
+        .logit_bias_ids = req.logit_bias_ids[0..],
+        .logit_bias_vals = req.logit_bias_vals[0..],
+        .logit_bias_count = req.logit_bias_count,
+        .temperature = req.temperature,
+        .rng = if (req.xtc_probability > 0) req.prng.random() else null,
+    });
+    const mutated = req.sampler.len > 0;
 
     if (req.temperature == 0) {
         return if (mutated) math_ops.argmax(logits) else greedy;
@@ -157,6 +160,18 @@ pub const Request = struct {
     /// must not admit the request while this is false (avoids racing
     /// temperature/top_p/prng with sampleNextToken).
     sampling_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+    /// Logit interceptors for this request. Built by `rebuildSampler`.
+    sampler: sampler_stack.Stack = .{},
+
+    /// Fill `sampler` from current sampling fields. Call after configuring
+    /// temperature/bias/penalties, not on the token loop.
+    pub fn rebuildSampler(self: *Request) void {
+        self.sampler.dispose();
+        if (self.logit_bias_count > 0) self.sampler.push(.bias);
+        if (self.repetition_penalty != 1.0) self.sampler.push(.repeat);
+        if (self.dry_multiplier > 0) self.sampler.push(.dry);
+        if (self.frequency_penalty != 0 or self.presence_penalty != 0) self.sampler.push(.penalties);
+    }
 
     /// Append a token to the output sequence.
     /// If the token matches any EOG (end-of-generation) ID, sets is_finished
@@ -191,6 +206,7 @@ pub const Request = struct {
     /// Zeros the token buffer before free so generated IDs (derived from
     /// prompts / completions) do not linger in the allocator freelist.
     pub fn deinit(self: *Request) void {
+        self.sampler.dispose();
         if (self.tokens.capacity > 0) {
             @memset(std.mem.sliceAsBytes(self.tokens.allocatedSlice()), 0);
         }
@@ -1216,6 +1232,7 @@ test "sampleNextToken applies logit bias at temperature 0" {
     };
     req.logit_bias_ids[0] = 0;
     req.logit_bias_vals[0] = 10.0; // boost token 0 above greedy argmax at index 1
+    req.rebuildSampler();
 
     // forward()'s greedy would be 1 (score 5); bias makes 0 win (1+10=11)
     const next = sampleNextToken(&req, &model, 1);

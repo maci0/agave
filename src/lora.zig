@@ -11,6 +11,10 @@
 //!
 //! Merged tensors are stored in GGUFFile.lora_overrides. getTensor() returns the
 //! override transparently, so all models see the merged weight without any hot-path overhead.
+//!
+//! `applyLoraGguf` returns a Handle whose `dispose` unmerges this adapter
+//! (restores the previous override or the mmap base). Stacked applies compose;
+//! dispose is LIFO.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -18,14 +22,58 @@ const Allocator = std.mem.Allocator;
 const gguf = @import("format/gguf.zig");
 const quant = @import("ops/quant.zig");
 
+/// Revertible LoRA apply. `dispose` restores tensors this apply changed.
+pub const Handle = struct {
+    const Record = struct {
+        key: []const u8,
+        prev: ?gguf.GGUFFile.LoraOverride,
+    };
+
+    allocator: Allocator,
+    file: ?*gguf.GGUFFile = null,
+    records: std.ArrayList(Record) = .empty,
+
+    /// Unmerge this adapter. LIFO vs later applies. Idempotent.
+    pub fn dispose(self: *Handle) void {
+        const file = self.file orelse {
+            self.records.deinit(self.allocator);
+            self.records = .empty;
+            return;
+        };
+        var i = self.records.items.len;
+        while (i > 0) {
+            i -= 1;
+            const rec = self.records.items[i];
+            restoreOverride(file, rec.key, rec.prev);
+        }
+        self.records.deinit(self.allocator);
+        self.records = .empty;
+        self.file = null;
+    }
+};
+
+fn restoreOverride(file: *gguf.GGUFFile, key: []const u8, prev: ?gguf.GGUFFile.LoraOverride) void {
+    if (file.lora_overrides.getEntry(key)) |ent| {
+        file.allocator.free(ent.value_ptr.data);
+        if (prev) |p| {
+            ent.value_ptr.* = p;
+        } else {
+            const removed = file.lora_overrides.fetchRemove(key).?;
+            file.allocator.free(removed.key);
+        }
+    } else if (prev) |p| {
+        file.allocator.free(p.data);
+    }
+}
+
 /// Apply a LoRA adapter GGUF file to a base GGUFFile in place.
 /// Modified tensors are stored as F32 in base_gguf.lora_overrides.
-/// Caller must keep base_gguf alive; its deinit frees the override buffers.
+/// Caller must keep base_gguf alive until `Handle.dispose` (or GGUFFile.deinit).
 pub fn applyLoraGguf(
     allocator: Allocator,
     base_gguf: *gguf.GGUFFile,
     lora_path: []const u8,
-) !void {
+) !Handle {
     var lora_file = try gguf.GGUFFile.open(allocator, lora_path);
     defer lora_file.deinit();
 
@@ -34,6 +82,9 @@ pub fn applyLoraGguf(
     if (!std.mem.eql(u8, adapter_type, "lora")) return error.NotALoraAdapter;
 
     const alpha = lora_file.getMetaF32("adapter.lora.alpha") orelse 1.0;
+
+    var handle = Handle{ .allocator = allocator, .file = base_gguf };
+    errdefer handle.dispose();
 
     // Iterate lora tensors. Only process lora_a entries; find paired lora_b and base.
     var lora_iter = lora_file.tensors.iterator();
@@ -94,31 +145,36 @@ pub fn applyLoraGguf(
         defer allocator.free(lb);
         quant.dequantToF32(lb, lora_file.tensorData(&lora_b_info), gguf.GGUFFile.ggmlToDType(lora_b_info.ggml_type), n * rank);
 
-        // Allocate merged buffer [n × k], dequant base into it
+        // Allocate merged buffer [n × k]. Start from a previous adapter if present
+        // so stacked applies compose; otherwise dequant the mmap base.
         const merged = try allocator.alloc(f32, n * k);
         errdefer allocator.free(merged);
-        quant.dequantToF32(merged, base_gguf.tensorData(base_ti), gguf.GGUFFile.ggmlToDType(base_ti.ggml_type), n * k);
+        if (base_gguf.lora_overrides.get(base_ti.name)) |ov| {
+            @memcpy(merged, ov.data);
+        } else {
+            quant.dequantToF32(merged, base_gguf.tensorData(base_ti), gguf.GGUFFile.ggmlToDType(base_ti.ggml_type), n * k);
+        }
 
         // Add LoRA delta: merged += scale * (lb[n,rank] @ la[rank,k])
         // Use Accelerate on macOS for ~4× speedup via AMX; fall back to scalar.
         addLoraMatrix(merged, lb, la, n, rank, k, scale);
 
         // Insert override keyed by the GGUF canonical name (dupe'd — mmap pointer will be freed).
-        // Use getOrPut to avoid leaking the key allocation on duplicate tensor names.
         const key = try allocator.dupe(u8, base_ti.name);
         errdefer allocator.free(key);
         const gop = try base_gguf.lora_overrides.getOrPut(allocator, key);
-        if (gop.found_existing) {
-            // Duplicate — free the new key and update value only.
+        const prev: ?gguf.GGUFFile.LoraOverride = if (gop.found_existing) blk: {
             allocator.free(key);
-            allocator.free(gop.value_ptr.data); // free old merged data
-        }
+            break :blk gop.value_ptr.*;
+        } else null;
         gop.value_ptr.* = .{
             .data = merged,
             .n_dims = base_ti.n_dims,
             .dims = base_ti.dims,
         };
+        try handle.records.append(allocator, .{ .key = gop.key_ptr.*, .prev = prev });
     }
+    return handle;
 }
 
 test "addLoraMatrix 2×2 rank-1" {
@@ -174,4 +230,74 @@ fn addLoraMatrix(
             m_row[j] += scale * acc;
         }
     }
+}
+
+fn testGguf(allocator: Allocator) gguf.GGUFFile {
+    return .{
+        .is_buffer = true,
+        .file_size = 0,
+        .metadata = std.StringHashMap(gguf.MetaValue).init(allocator),
+        .tensors = std.StringHashMap(gguf.TensorInfo).init(allocator),
+        .allocator = allocator,
+    };
+}
+
+test "lora handle dispose drops override" {
+    const allocator = std.testing.allocator;
+    var file = testGguf(allocator);
+    defer file.deinit();
+
+    const data = try allocator.alloc(f32, 4);
+    @memcpy(data, &[_]f32{ 1, 2, 3, 4 });
+    const key = try allocator.dupe(u8, "blk.0.weight");
+    try file.lora_overrides.put(allocator, key, .{
+        .data = data,
+        .n_dims = 2,
+        .dims = .{ 2, 2, 0, 0 },
+    });
+
+    var handle = Handle{ .allocator = allocator, .file = &file };
+    try handle.records.append(allocator, .{ .key = key, .prev = null });
+    handle.dispose();
+
+    try std.testing.expectEqual(@as(u32, 0), file.lora_overrides.count());
+}
+
+test "lora handle dispose restores previous adapter" {
+    const allocator = std.testing.allocator;
+    var file = testGguf(allocator);
+    defer file.deinit();
+
+    const older = try allocator.alloc(f32, 2);
+    @memcpy(older, &[_]f32{ 1, 1 });
+    const newer = try allocator.alloc(f32, 2);
+    @memcpy(newer, &[_]f32{ 9, 9 });
+    const key = try allocator.dupe(u8, "tok.weight");
+    try file.lora_overrides.put(allocator, key, .{
+        .data = newer,
+        .n_dims = 1,
+        .dims = .{ 2, 0, 0, 0 },
+    });
+
+    var handle = Handle{ .allocator = allocator, .file = &file };
+    try handle.records.append(allocator, .{
+        .key = key,
+        .prev = .{
+            .data = older,
+            .n_dims = 1,
+            .dims = .{ 2, 0, 0, 0 },
+        },
+    });
+    handle.dispose();
+
+    const ov = file.lora_overrides.get(key).?;
+    try std.testing.expectEqual(@as(f32, 1), ov.data[0]);
+    try std.testing.expectEqual(@as(f32, 1), ov.data[1]);
+}
+
+test "lora handle dispose is idempotent" {
+    const allocator = std.testing.allocator;
+    var handle = Handle{ .allocator = allocator };
+    handle.dispose();
+    handle.dispose();
 }
