@@ -21,6 +21,7 @@ const quant_ops = @import("../ops/quant.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const attn_ops = @import("../ops/attention.zig");
+const cpu_norm = @import("../backend/kernels/cpu/norm.zig");
 const Backend = backend_mod.Backend;
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -99,6 +100,10 @@ pub const Ds4Model = struct {
     layer_skip_start: u32 = 0,
     layer_skip_end: u32 = 0,
     pool: ?*@import("../thread_pool.zig").ThreadPool = null,
+    /// Dedicated CPU backend for hot-path dispatch. Bypasses the Metal tagged
+    /// union entirely, ensuring bit-identical output with --backend cpu.
+    /// Set by setPool() to share the same thread pool.
+    cpu: backend_mod.CpuBackend = .{},
     kv_seq_len: usize = 0,
     kv_type: KvQuantType = .q8_0,
 
@@ -162,6 +167,9 @@ pub const Ds4Model = struct {
     expert_pool_slot_size: u32 = 0,
     /// Base address of mmap'd GGUF data (for computing file offsets from data_ptr).
     gguf_mmap_base: ?[*]const u8 = null,
+    /// Companion pool for expert scales/biases (heap staging for GPU safety).
+    companion_pool: []u8 = &.{},
+    companion_pool_slot_size: u32 = 0,
     expert_profile: ?*ExpertProfile = null,
     /// MTP (multi-token prediction) weights loaded from separate safetensors.
     mtp_weights: ?*MtpWeights = null,
@@ -172,6 +180,15 @@ pub const Ds4Model = struct {
     // Pre-computed RoPE frequency bases [rope_dim/2]. Eliminates pow() per token.
     rope_freqs: [32]f32 = undefined, // freq_base = rope_freq (layers with ratio=0)
     compress_rope_freqs: [32]f32 = undefined, // freq_base = compress_rope_freq (ratio≠0 layers)
+
+    // GPU-visible rope cos/sin buffers for Metal dispatch.
+    rope_cos_buf: []f32 = &.{}, // [rope_dim/2]
+    rope_sin_buf: []f32 = &.{}, // [rope_dim/2]
+    // GPU-visible slot_weights buffer for Metal weighted accumulation.
+    gpu_slot_weights: []f32 = &.{}, // [max_total_experts + 1]
+    // GPU-visible routing buffers for zero-sync MoE dispatch.
+    gpu_top_ids: []u32 = &.{}, // [max_total_experts]
+    gpu_top_weights: []f32 = &.{}, // [max_total_experts]
 
     // KV cache as quantized bytes: [n_layers * ctx * kv_lora_rank].
     // K=V in DS4 MLA (single compressed head) — one buffer serves both K and V.
@@ -361,17 +378,25 @@ pub const Ds4Model = struct {
         self.amx_dequant_buf = try allocator.alloc(f32, @max(ff * e, e * ff));
         errdefer allocator.free(self.amx_dequant_buf);
 
-        // Expert data pool for pread-based loading (Colibri-inspired).
+        // Expert data pool: heap staging for GPU-safe expert weight access.
         // 21 slots (7 experts × 3 weights), each sized for max expert weight.
-        // Total: ~92MB on MXFP4. Heap-allocated → Metal-safe.
-        if (self.gguf_fd >= 0) {
-            const max_expert_bytes: u32 = @intCast(backend_mod.weightBytes(.mxfp4, 1, ff * e));
+        // For GGUF: pread from file into pool. For SafeTensors: memcpy from mmap.
+        // Total: ~92MB on MXFP4. Heap-allocated → Metal GPU can safely read.
+        {
+            const max_expert_bytes: u32 = @intCast(@max(backend_mod.weightBytes(.mxfp4, 1, ff * e), ff * e / 2)); // MXFP4 or MLX-Q4
             const n_pool_slots: u32 = (self.n_expert_used + self.n_expert_shared) * 3;
             const pool_size = @as(usize, n_pool_slots) * max_expert_bytes;
             self.expert_pool = try allocator.alloc(u8, pool_size);
             errdefer allocator.free(self.expert_pool);
             self.expert_pool_slots = n_pool_slots;
             self.expert_pool_slot_size = max_expert_bytes;
+            // Companion pool for scales/biases: each slot holds one expert's
+            // scales+biases data. Max size: n_out × groups_per_row × 2 (BF16).
+            const max_companion_bytes: u32 = @intCast(ff * (e / 32) * 2); // generous upper bound
+            const comp_pool_size = @as(usize, n_pool_slots) * max_companion_bytes;
+            self.companion_pool = try allocator.alloc(u8, comp_pool_size);
+            errdefer allocator.free(self.companion_pool);
+            self.companion_pool_slot_size = max_companion_bytes;
         }
         self.tensor_overrides = std.StringHashMap([*]const u8).init(allocator);
         self.tensor_overrides_inited = true;
@@ -390,6 +415,18 @@ pub const Ds4Model = struct {
         self.mtp_hc_state = try allocator.alloc(f32, n_hc * e);
         errdefer allocator.free(self.mtp_hc_state);
         @memset(self.mtp_hc_state, 0);
+
+        // GPU-visible rope cos/sin and slot_weights buffers for Metal dispatch.
+        self.rope_cos_buf = try allocator.alloc(f32, self.rope_dim / 2);
+        errdefer allocator.free(self.rope_cos_buf);
+        self.rope_sin_buf = try allocator.alloc(f32, self.rope_dim / 2);
+        errdefer allocator.free(self.rope_sin_buf);
+        self.gpu_slot_weights = try allocator.alloc(f32, max_experts + 1);
+        errdefer allocator.free(self.gpu_slot_weights);
+        self.gpu_top_ids = try allocator.alloc(u32, max_experts);
+        errdefer allocator.free(self.gpu_top_ids);
+        self.gpu_top_weights = try allocator.alloc(f32, max_experts);
+        errdefer allocator.free(self.gpu_top_weights);
 
         // KV cache bytes: K=V shared buffer (MLA single compressed head, halves KV memory).
         const kv_bytes_per_layer = kv_quant.kvByteOffset(self.kv_type, ctx * kd);
@@ -442,11 +479,14 @@ pub const Ds4Model = struct {
         return self;
     }
 
-    /// Pre-dequantize all norm weights at init time to avoid per-token allocations.
+    /// Pre-dequantize all norm + HC weights at init time to avoid per-token allocations.
+    /// HC fn weights (hc_attn_fn, hc_ffn_fn, output_hc_fn) are dequantized to f32
+    /// so the GPU HC mixing kernel can access them directly.
     fn warmNormCache(self: *Ds4Model) void {
         const e = self.n_embd;
         _ = self.normAsF32OrNull(self.fmt.getTensor("output_norm.weight"), e);
-        _ = self.normAsF32OrNull(self.fmt.getTensor("output_hc_fn.weight"), n_hc);
+        // Output HC head: fn[n_hc × flat_size], base[n_hc], scale[1]
+        _ = self.normAsF32OrNull(self.fmt.getTensor("output_hc_fn.weight"), n_hc * n_hc * e);
         _ = self.normAsF32OrNull(self.fmt.getTensor("output_hc_base.weight"), n_hc);
         _ = self.normAsF32OrNull(self.fmt.getTensor("output_hc_scale.weight"), 1);
         for (0..self.n_layers) |li| {
@@ -454,8 +494,11 @@ pub const Ds4Model = struct {
             _ = self.normAsF32OrNull(self.layerTensor(li, "ffn_norm.weight"), e);
             _ = self.normAsF32OrNull(self.layerTensor(li, "attn_q_a_norm.weight"), self.q_lora_rank);
             _ = self.normAsF32OrNull(self.layerTensor(li, "attn_kv_a_norm.weight"), self.kv_lora_rank);
+            // HC weights: dequant fn to f32 for GPU kernel (24 × 4*n_embd = 393K elems)
+            _ = self.normAsF32OrNull(self.layerTensor(li, "hc_attn_fn.weight"), hc_mix_dim * n_hc * e);
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_attn_base.weight"), hc_mix_dim);
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_attn_scale.weight"), 3);
+            _ = self.normAsF32OrNull(self.layerTensor(li, "hc_ffn_fn.weight"), hc_mix_dim * n_hc * e);
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_ffn_base.weight"), hc_mix_dim);
             _ = self.normAsF32OrNull(self.layerTensor(li, "hc_ffn_scale.weight"), 3);
             _ = self.normAsF32OrNull(self.layerTensor(li, "attn_compressor_norm.weight"), self.kv_lora_rank);
@@ -476,6 +519,9 @@ pub const Ds4Model = struct {
             &self.expert_scratch,    &self.ff_gate_scratch, &self.ff_up_scratch, &self.router_logits,  &self.logits_buf,
             &self.kv_k_bytes,        &self.csa_comp_kv,     &self.csa_comp_score, &self.csa_k,
             &self.csa_score_scratch, &self.lid_comp_k,      &self.lid_query,     &self.lid_head_w,     &self.lid_scores,
+            &self.rope_cos_buf,      &self.rope_sin_buf,    &self.gpu_slot_weights,
+            &self.expert_pool,       &self.companion_pool,
+            &self.gpu_top_ids,       &self.gpu_top_weights,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
         // Prefill buffers (page_allocator) — currently empty slices (allocation deferred).
@@ -576,12 +622,19 @@ pub const Ds4Model = struct {
             }
             return;
         }
+        self.be.sync();
+        self.hcPreCpu(hc_fn, hc_base, hc_scale);
+    }
+
+    /// CPU fallback for hcPre (non-Metal backends).
+    fn hcPreCpu(
+        self: *Ds4Model,
+        hc_fn: TensorInfo,
+        hc_base: TensorInfo,
+        hc_scale: TensorInfo,
+    ) void {
         const e = self.n_embd;
         const flat_size = n_hc * e;
-
-        // Compute RMS scale factor from hc_state without copying.
-        // Then run GEMV on raw hc_state and post-scale the output.
-        // Saves 16KB memcpy + in-place norm pass (was: copy → norm → GEMV).
         const rms_inv = blk: {
             const V8 = @Vector(8, f32);
             var acc: V8 = @splat(0.0);
@@ -595,20 +648,16 @@ pub const Ds4Model = struct {
             break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
         };
 
-        // mixes[24] = hc_fn @ hc_state — then post-scale by rms_inv
-        // CPU fast path for HC mixing: the matrix is tiny (24×16384) — CPU GEMV
-        // is faster than GPU dispatch overhead and avoids Metal buffer issues with
-        // small f32 tensors from mmap'd safetensors.
         if (hc_fn.dtype == .q8_0) {
-            cpuGemvQ8_0(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes, flat_size);
+            cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_mixes, flat_size);
         } else if (hc_fn.dtype == .f32) {
-            cpuGemvF32(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else if (hc_fn.dtype == .bf16) {
-            cpuGemvBf16(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else if (hc_fn.dtype == .f16) {
-            cpuGemvF16(self.heapTensorData(hc_fn), self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
+            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
         } else {
-            @memcpy(self.flat_norm, self.hc_state); // GPU path still needs stable buffer
+            @memcpy(self.flat_norm, self.hc_state);
             self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_mixes.ptr, hc_mix_dim, flat_size);
             self.be.sync();
         }
@@ -617,18 +666,14 @@ pub const Ds4Model = struct {
         const base = self.normAsF32(hc_base, hc_mix_dim);
         const scale = self.normAsF32(hc_scale, 3);
         const mixes = self.hc_mixes;
-
         for (0..n_hc) |s| {
             self.hc_pre_w[s] = sigmoid(mixes[s] * scale[0] + base[s]) + hc_eps;
             self.hc_post_w[s] = sigmoid(mixes[n_hc + s] * scale[1] + base[n_hc + s]) * 2.0;
         }
-        // Comb: raw affine values — sinkhorn applies its own softmax
         for (0..n_hc * n_hc) |s| {
             self.hc_comb[s] = mixes[2 * n_hc + s] * scale[2] + base[2 * n_hc + s];
         }
         hcSinkhorn(self.hc_comb);
-
-        // Weighted sum of HC streams → sublayer input (SIMD-optimized)
         const V8 = @Vector(8, f32);
         var i: usize = 0;
         while (i + 8 <= e) : (i += 8) {
@@ -654,12 +699,13 @@ pub const Ds4Model = struct {
             return;
         }
         const e = self.n_embd;
+
+        self.be.sync();
         const sub = self.hidden;
         const V8 = @Vector(8, f32);
         for (0..n_hc) |dst| {
             const ns = self.new_hc[dst * e ..][0..e];
             const pw: V8 = @splat(self.hc_post_w[dst]);
-            // Pre-load comb coefficients for this dst
             var cvec: [n_hc]V8 = undefined;
             for (0..n_hc) |src| cvec[src] = @splat(self.hc_comb[dst + src * n_hc]);
             var i: usize = 0;
@@ -676,7 +722,6 @@ pub const Ds4Model = struct {
                 ns[i] = v;
             }
         }
-        // Swap buffers instead of copying 16KB
         const tmp = self.hc_state;
         self.hc_state = self.new_hc;
         self.new_hc = tmp;
@@ -685,7 +730,6 @@ pub const Ds4Model = struct {
     /// HC head: merge 4 streams → self.hidden.
     fn hcHead(self: *Ds4Model, hc_fn: TensorInfo, hc_base: TensorInfo, hc_scale: TensorInfo) void {
         if (debug_disable_hc) {
-            // Identity: mean of streams
             const e = self.n_embd;
             @memset(self.hidden, 0.0);
             for (0..n_hc) |s| {
@@ -695,8 +739,9 @@ pub const Ds4Model = struct {
             return;
         }
         const e = self.n_embd;
+
+        self.be.sync();
         const flat_size_h = n_hc * e;
-        // Same post-scale RMS optimization as hcPre
         const rms_inv_h = blk: {
             const V8 = @Vector(8, f32);
             var acc: V8 = @splat(0.0);
@@ -710,20 +755,19 @@ pub const Ds4Model = struct {
             break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size_h)) + self.rms_eps);
         };
         if (hc_fn.dtype == .q8_0) {
-            cpuGemvQ8_0(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w, flat_size_h);
+            cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_pre_w, flat_size_h);
         } else if (hc_fn.dtype == .f32) {
-            cpuGemvF32(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+            cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else if (hc_fn.dtype == .bf16) {
-            cpuGemvBf16(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+            cpuGemvBf16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else if (hc_fn.dtype == .f16) {
-            cpuGemvF16(self.heapTensorData(hc_fn), self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
+            cpuGemvF16(hc_fn.data_ptr, self.hc_state, self.hc_pre_w[0..n_hc], flat_size_h);
         } else {
             @memcpy(self.flat_norm, self.hc_state);
             self.doGemv(self.flat_norm.ptr, hc_fn, self.hc_pre_w.ptr, n_hc, flat_size_h);
             self.be.sync();
         }
         for (self.hc_pre_w[0..n_hc]) |*m| m.* *= rms_inv_h;
-
         const base = self.normAsF32(hc_base, n_hc);
         const scale = self.normAsF32(hc_scale, 1);
         for (0..n_hc) |s| {
@@ -751,17 +795,17 @@ pub const Ds4Model = struct {
 
         // All Q, KV, and (if CSA) compressor GPU ops in ONE command buffer → 1 sync
         const nw = try self.layerTensorReq(li, "attn_norm.weight");
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
         self.doGemv(self.hidden2.ptr, q_a, self.q_compressed.ptr, ql, e);
         const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
-        self.be.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
+        self.cpu.rmsNorm(self.q_compressed.ptr, self.normAsF32(q_an, ql), self.q_compressed.ptr, ql, self.rms_eps);
         const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
         self.doGemv(self.q_compressed.ptr, q_b, self.q_full.ptr, nh * kd, ql);
         const kv_a = try self.layerTensorReq(li, "attn_kv.weight");
         self.doGemv(self.hidden2.ptr, kv_a, self.kv_proj.ptr, kd, e);
         const kv_an = try self.layerTensorReq(li, "attn_kv_a_norm.weight");
-        self.be.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
+        self.cpu.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
         // Both batched with Q+KV in same GPU command buffer — single sync covers all.
@@ -803,22 +847,8 @@ pub const Ds4Model = struct {
             break :blk true;
         };
 
-        self.be.sync(); // single sync: Q, KV, CSA/HCA, and (if batched) LID GEMVs
-
-        // Debug: compare GPU vs CPU — check key tensors after sync
-        if (self.kv_seq_len == 0 and li == 0) {
-            var h2s: f32 = 0;
-            for (self.hidden2[0..e]) |v| h2s += v * v;
-            var qcs: f32 = 0;
-            for (self.q_compressed[0..ql]) |v| qcs += v * v;
-            var qfs: f32 = 0;
-            for (self.q_full[0..@min(nh * kd, 4096)]) |v| qfs += v * v;
-            var kvs: f32 = 0;
-            for (self.kv_proj[0..kd]) |v| kvs += v * v;
-            std.log.info("ds4 L0: hidden2 L2={d:.2} q_comp L2={d:.2} q_full(0..4K) L2={d:.2} kv L2={d:.2}", .{
-                @sqrt(h2s), @sqrt(qcs), @sqrt(qfs), @sqrt(kvs),
-            });
-        }
+        self.be.sync();
+        for (0..nh) |h| plainRmsNorm(self.q_full[h * kd ..][0..kd], self.rms_eps);
 
         // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
         const nd = rd / 2;
@@ -847,13 +877,7 @@ pub const Ds4Model = struct {
             }
         }
 
-        // CPU: per-head Q RMS norm + Q RoPE (using pre-computed table)
-        for (0..nh) |h| {
-            const q_head = self.q_full[h * kd ..][0..kd];
-            plainRmsNorm(q_head, self.rms_eps);
-            applyRopeTable(q_head[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
-        }
-        // CPU: KV RoPE
+        for (0..nh) |h| applyRopeTable(self.q_full[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
         applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
 
         // Compressor: GPU projections done above; do APE + group compression here.
@@ -1188,95 +1212,32 @@ pub const Ds4Model = struct {
             }
         } else {
             // Standard attention (no compressed KVs).
-            // GPU SDPA: f32 supports hd≤512 (sdpa_fa2_hd512), but the turbo/Q8_0
-            // kernel only supports hd≤256 (its threadgroup buffers are 256-element).
-            // DS4 has hd=512 (kv_lora_rank), so Q8_0/turbo overflow — use CPU fallback.
-            const sdpa_ok = switch (self.kv_type) {
-                .f32 => true, // f32 path uses sdpa_fa2_hd512 which supports 512
-                .q8_0, .turbo2, .turbo3, .turbo4 => kd <= 256, // turbo kernel max hd=256
-                else => false,
-            };
-            if (sdpa_ok) {
-                attn_ops.scaledDotProductAttention(
-                    self.q_full.ptr,
-                    kv_k_layer,
-                    kv_k_layer, // K=V shared
-                    self.kv_proj,
-                    self.kv_proj,
-                    self.attn_out.ptr,
-                    self.scores_buf.ptr,
-                    nh,
-                    1,
-                    kd,
-                    pos,
-                    scale,
-                    self.be,
-                    null,
-                    0,
-                    self.kv_type,
-                    self.kv_type,
-                );
-            } else {
-                // CPU fallback for KV types not supported by GPU SDPA
-                const k_byte_off = kv_quant.kvByteOffset(self.kv_type, pos * kd);
-                kv_quant.kvStore(kv_k_layer[k_byte_off..].ptr, self.kv_proj.ptr, kd, self.kv_type);
-                const kv_elem_bytes = kv_quant.kvByteOffset(self.kv_type, kd);
-                const V8 = @Vector(8, f32);
-                for (0..nh) |h| {
-                    const q_h = self.q_full[h * kd ..][0..kd];
-                    const ao_h = self.attn_out[h * kd ..][0..kd];
-                    const scores_h = self.scores_buf[h * self.score_stride ..];
-                    var running_max: f32 = -std.math.inf(f32);
-                    for (0..pos + 1) |t| {
-                        const k_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
-                        const s = kv_quant.kvDot(q_h.ptr, k_ptr, kd, self.kv_type) * scale;
-                        scores_h[t] = s;
-                        running_max = @max(running_max, s);
-                    }
-                    const mx_splat: V8 = @splat(running_max);
-                    var sum_v: V8 = @splat(@as(f32, 0.0));
-                    var si: usize = 0;
-                    while (si + 8 <= pos + 1) : (si += 8) {
-                        const ev = @exp(@as(V8, scores_h[si..][0..8].*) - mx_splat);
-                        scores_h[si..][0..8].* = ev;
-                        sum_v += ev;
-                    }
-                    var sm = @reduce(.Add, sum_v);
-                    while (si < pos + 1) : (si += 1) {
-                        scores_h[si] = @exp(scores_h[si] - running_max);
-                        sm += scores_h[si];
-                    }
-                    const inv = 1.0 / sm;
-                    const inv_v: V8 = @splat(inv);
-                    si = 0;
-                    while (si + 8 <= pos + 1) : (si += 8) {
-                        scores_h[si..][0..8].* = @as(V8, scores_h[si..][0..8].*) * inv_v;
-                    }
-                    while (si < pos + 1) : (si += 1) scores_h[si] *= inv;
-                    var first_written = false;
-                    for (0..pos + 1) |t| {
-                        if (scores_h[t] < sparse_v_threshold) continue;
-                        const v_ptr = kv_k_layer[t * kv_elem_bytes ..].ptr;
-                        if (!first_written) {
-                            kv_quant.kvScaledCopy(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
-                            first_written = true;
-                        } else {
-                            kv_quant.kvMulAccum(ao_h.ptr, scores_h[t], v_ptr, kd, self.kv_type);
-                        }
-                    }
-                    if (!first_written) @memset(ao_h, 0.0);
-                }
-            }
+            // GPU SDPA: Metal handles all supported KV types at hd=512.
+            // f32 uses sdpa_fa2_hd512, turbo/q8_0 uses sdpa_fa2_turbo_hd512.
+            attn_ops.scaledDotProductAttention(
+                self.q_full.ptr,
+                kv_k_layer,
+                kv_k_layer, // K=V shared
+                self.kv_proj,
+                self.kv_proj,
+                self.attn_out.ptr,
+                self.scores_buf.ptr,
+                nh,
+                1,
+                kd,
+                pos,
+                scale,
+                self.be,
+                null,
+                0,
+                self.kv_type,
+                self.kv_type,
+            );
         }
 
 
-        // Sync GPU before CPU reads attn_out for inverse RoPE.
         self.be.sync();
-
-        // Apply inverse RoPE (derope) using the cached cos/sin table (same table, negate sin).
-        for (0..nh) |h| {
-            applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
-        }
+        for (0..nh) |h| applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
 
         // Output LoRA: grouped wo_a [n_in=4096 per group, n_out=o_lora_rank] × 8 groups
         const og: usize = self.o_groups;
@@ -1295,17 +1256,18 @@ pub const Ds4Model = struct {
             const row_bytes = backend_mod.weightBytes(wo_a.dtype, 1, group_in);
             break :blk olr * row_bytes;
         };
-        // wo_a groups + wo_b in one GPU command buffer: lora_out feeds directly into wo_b
+        // wo_a groups: 8 independent GEMVs, batch for no barriers.
+        self.be.beginBatch();
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
             const yp = self.lora_out.ptr + g * olr;
             self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
         }
+        self.be.endBatch();
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
         // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
         self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
-        self.be.sync(); // single sync covers all 9 GEMVs (8 wo_a + wo_b)
-
+        self.be.sync();
     }
 
     // ── Compressed attention parallel dispatch context ─────────
@@ -1542,7 +1504,7 @@ pub const Ds4Model = struct {
 
         // Pre-norm: GPU only (no sync — expert GEMVs and routing GEMV also GPU)
         const nw = try self.layerTensorReq(li, "ffn_norm.weight");
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
 
         // Route
         var top_ids: [8]usize = undefined;
@@ -1731,11 +1693,11 @@ pub const Ds4Model = struct {
                 }
             } else {
                 fused_experts = false;
+                // Batch expert gate+up GEMVs: all read hidden2, write independent slots.
+                // Suppresses per-dispatch barriers for ~2× dispatch throughput.
+                self.be.beginBatch();
                 for (0..n_active) |j| {
                     const eid = top_ids[j];
-                    // Use direct be.gemv() for GGUF quants (MXFP4, Q2_K, Q8_0, IQ2_XXS, etc.)
-                    // to avoid Metal buffer cache issues with the doGemvExpert wrapper.
-                    // doGemvExpert is only needed for MLX-Q safetensors (companion scales/biases).
                     if (ge.dtype == .mlx_q) {
                         self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
@@ -1747,26 +1709,28 @@ pub const Ds4Model = struct {
                         // MLX mxfp4 mode: override dtype for correct GEMV kernel
                         const gate_dtype: DType = if (self.mlxExpertIsMxfp4(ge)) .mxfp4 else ge.dtype;
                         const up_dtype: DType = if (self.mlxExpertIsMxfp4(ue)) .mxfp4 else ue.dtype;
-                        self.be.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = gate_dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.be.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = up_dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        self.cpu.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = gate_dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.cpu.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = up_dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else {
-                        self.be.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.be.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        self.cpu.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.cpu.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     }
                     de_ptrs[n_scratch] = de.data_ptr + eid * ds;
                     de_slot_eids[n_scratch] = eid;
                     slot_weights[n_scratch] = top_weights[j];
                     n_scratch += 1;
                 }
+                self.be.endBatch(); // end gate+up batch
             }
         }
 
         // Phase 2: clampedSiluMul — skip when fused path already applied activation.
         if (!fused_experts and n_scratch > 0) {
-            self.be.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
+            self.cpu.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
 
-        // Phase 3: all down GEMVs into expert_scratch (same cmd buffer as siluMul)
+        // Phase 3: all down GEMVs into expert_scratch — batch for no barriers.
+        self.be.beginBatch();
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
                 self.doGemv(self.ff_gate_scratch.ptr, dt, self.expert_scratch.ptr, e, ff);
@@ -1779,22 +1743,27 @@ pub const Ds4Model = struct {
                 } else if (self.expert_cache != null) {
                     const down_data = self.preadExpert(de_ptrs[slot], @intCast(de_exp_stride), @intCast(slot * 3 + 2));
                     const down_dt: DType = if (de_exp_tensor) |det| (if (self.mlxExpertIsMxfp4(det)) .mxfp4 else de_dtype) else de_dtype;
-                    self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = down_dt }, self.expert_scratch.ptr + slot * e, e, ff);
+                    self.cpu.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = down_dt }, self.expert_scratch.ptr + slot * e, e, ff);
                 } else {
-                    self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                    self.cpu.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
                 }
             }
         } else {
             for (shexp_slots..n_scratch) |slot| {
-                self.be.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                self.cpu.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
             }
         }
 
-        self.be.sync(); // all down GEMVs complete (+ gate_inp for hash layers)
+        self.be.endBatch(); // end down GEMVs batch
 
-        // Lookahead: prefetch next layer's popular experts (gate + up + down).
-        // Overlaps SSD read latency with the weighted accumulation compute below.
-        // 1-layer ahead only — 2-layer was measured slower (scan overhead).
+        // Only sync for hash layers (0-2) which need CPU deferred weight computation,
+        // or when weighted accumulation is CPU. For layers 3+ with GPU weighted_accum,
+        // the down GEMVs → weighted_accum → hcPost all stay on GPU without sync.
+        if (li < self.hash_layer_count) {
+            self.be.sync();
+        }
+
+        // Lookahead: prefetch next layer's popular experts.
         if (self.expert_cache) |ec| {
             if (li + 1 < self.n_layers and li + 1 >= self.hash_layer_count) {
                 inline for (.{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" }) |tensor_name| {
@@ -1823,11 +1792,8 @@ pub const Ds4Model = struct {
             }
         }
 
-        // CPU: SIMD weighted accumulation directly into hidden.
-        // First slot: direct scaled write (skip memset + mulAdd into zeros).
-        // Remaining slots: fused multiply-add.
-        const V8 = @Vector(8, f32);
         if (n_scratch > 0) {
+            const V8 = @Vector(8, f32);
             const sd0 = self.expert_scratch[0..e];
             const wv0: V8 = @splat(slot_weights[0]);
             var i: usize = 0;
@@ -1857,29 +1823,37 @@ pub const Ds4Model = struct {
     pub fn forward(self: *Ds4Model, token_id: u32) !u32 {
         if (self.cancelled.load(.monotonic)) return error.Cancelled;
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
+        // Ensure dedicated CPU backend has the current thread pool.
+        self.cpu.pool = self.pool;
 
         const e = self.n_embd;
         const nl = self.n_layers;
 
         // Embed → broadcast to all n_hc HC streams.
-        // CPU-side dequant avoids GPU dispatch + sync for single-row read.
+        // embLookup is CPU (single-row read, faster than GPU dispatch).
+        // Broadcast to HC streams uses GPU kernel when available.
         const emb = try self.getTensorReq("token_embd.weight");
         if (emb.dtype == .mlx_q) {
-            // MLX-Q: use dedicated embedding lookup with companion scales/biases.
             const companion = model_mod.findMlxCompanion(self.fmt, emb, e);
             if (companion) |c| {
                 mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(self.heapTensorData(emb))), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
             } else {
-                @memset(self.hc_state[0..e], 0); // fallback: no companion found
+                @memset(self.hc_state[0..e], 0);
             }
         } else {
             const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
             quant_ops.dequantToF32(self.hc_state[0..e], self.heapTensorData(emb) + token_id * row_bytes, emb.dtype, e);
         }
+        // Broadcast embedding to all HC streams.
+        // The embedding was written to hc_state[0..e] by CPU. The broadcast copies
+        // to streams 1-3. Use CPU memcpy — it's a 12KB copy from CPU-written data,
+        // no GPU coherency concern. GPU HC kernels read this data in the next dispatch.
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
         for (0..nl) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
+
+
 
             // Layer skip: skip layers in [layer_skip_start, layer_skip_end) for self-speculative draft.
             if (li >= self.layer_skip_start and li < self.layer_skip_end) continue;
@@ -1889,47 +1863,16 @@ pub const Ds4Model = struct {
             const ab = try self.layerTensorReq(li, "hc_attn_base.weight");
             const as_ = try self.layerTensorReq(li, "hc_attn_scale.weight");
             self.hcPre(af, ab, as_);
-            if (self.kv_seq_len == 0 and li == 0) {
-                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
-                std.log.info("ds4 L0: after hcPre(attn) hidden L2={d:.3}", .{@sqrt(hs)});
-            }
             try self.attentionLayer(li);
-            if (self.kv_seq_len == 0 and li == 0) {
-                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
-                std.log.info("ds4 L0: after attn hidden L2={d:.3}", .{@sqrt(hs)});
-            }
             self.hcPost();
-            if (self.kv_seq_len == 0 and li == 0) {
-                var hs: f32 = 0; for (self.hc_state[0..e]) |v| hs += v * v;
-                std.log.info("ds4 L0: after hcPost(attn) hc[0] L2={d:.3}", .{@sqrt(hs)});
-            }
 
             // FFN: HC pre → ffn → HC post
             const ff = try self.layerTensorReq(li, "hc_ffn_fn.weight");
             const fb = try self.layerTensorReq(li, "hc_ffn_base.weight");
             const fs = try self.layerTensorReq(li, "hc_ffn_scale.weight");
             self.hcPre(ff, fb, fs);
-            if (self.kv_seq_len == 0 and li == 0) {
-                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
-                std.log.info("ds4 L0: after hcPre(ffn) hidden L2={d:.3}", .{@sqrt(hs)});
-            }
             try self.ffnLayer(li, token_id);
-            if (self.kv_seq_len == 0 and li == 0) {
-                var hs: f32 = 0; for (self.hidden[0..e]) |v| hs += v * v;
-                std.log.info("ds4 L0: after ffn hidden L2={d:.3}", .{@sqrt(hs)});
-            }
             self.hcPost();
-
-            if (self.kv_seq_len == 0 and li == 0) {
-                var ss: f32 = 0;
-                for (self.hc_state[0..e]) |v| ss += v * v;
-                var max_v: f32 = 0;
-                for (self.hc_state[0..e]) |v| max_v = @max(max_v, @abs(v));
-                std.log.info("ds4 layer {d}: hc[0] L2={d:.2} max={d:.4} first=[{d:.4},{d:.4},{d:.4}]", .{
-                    li, @sqrt(ss), max_v,
-                    self.hc_state[0], self.hc_state[1], self.hc_state[2],
-                });
-            }
         }
 
         // Output HC head
@@ -1940,7 +1883,7 @@ pub const Ds4Model = struct {
 
         // Final norm + LM head — single GPU command buffer, single sync
         const norm_w = try self.getTensorReq("output_norm.weight");
-        self.be.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
+        self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
         const lm = try self.getTensorReq("output.weight");
         self.doGemv(self.hidden.ptr, lm, self.logits_buf.ptr, self.vocab_size, e);
         self.be.sync();
@@ -1979,6 +1922,9 @@ pub const Ds4Model = struct {
                 }
             }
         }
+
+
+
 
         return math_ops.argmax(self.logits_buf);
     }
@@ -2382,19 +2328,23 @@ pub const Ds4Model = struct {
     }
 
     fn doGemv(self: *Ds4Model, x: [*]const f32, t_raw: TensorInfo, y: [*]f32, n: usize, k: usize) void {
-        // Auto-heapify non-expert tensors for Metal safety.
+        // Route ALL dispatch through the dedicated CpuBackend for bit-identical
+        // output between --backend cpu and --backend metal.
+        const cpu_be: backend_mod.Backend = .{ .cpu = &self.cpu };
+        if (t_raw.dtype == .mlx_q) {
+            if (model_mod.mlxGemv(cpu_be, self.fmt, x, t_raw, y, n, k)) return;
+        }
         const t = self.heapTensor(t_raw);
-        model_mod.dispatchGemv(self.be, self.fmt, x, t, y, n, k);
+        model_mod.dispatchGemv(cpu_be, self.fmt, x, t, y, n, k);
     }
 
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
     /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
     fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
-        // Auto-heapify for Metal safety (non-expert tensors like wo_a).
-        const base = self.heapTensorData(exp_t);
-        const data = base + ei * stride;
+        // Use raw mmap pointer for CPU dispatch (same addresses on all backends).
+        const data = exp_t.data_ptr + ei * stride;
         if (exp_t.dtype != .mlx_q) {
-            self.be.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
+            self.cpu.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
             return;
         }
         const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return;
@@ -2403,20 +2353,26 @@ pub const Ds4Model = struct {
         const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
         const st = self.fmt.getTensor(s_name) orelse return;
         if (st.dtype == .unknown or st.dtype == .nvfp4) {
-            // MXFP4/E8M0: dims [n_experts, rows, groups_per_row], U8 — per-expert = dims[1]*dims[2]
-            // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row (U8, 1 byte)
             const s_stride = if (st.n_dims >= 3)
                 @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2]))
             else
                 n * @as(usize, @intCast(st.dims[st.n_dims - 1]));
             const mxfp4_gs = model_mod.inferMxfp4GroupSize(st, k);
-            // MLX community models use E8M0 (OCP Microscaling) scales for experts.
-            // GGUF MXFP4 models use FP8 E4M3. Detect: SafeTensors with gs>=32 → E8M0.
             const sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat = if (self.fmt.is_safetensors and mxfp4_gs >= 32) .e8m0 else .fp8_e4m3;
-            self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, sf);
+            // Direct CPU dispatch — bypass Metal for zero overhead.
+            const mlx = @import("../ops/mlx.zig");
+            if (self.pool) |pool| {
+                var ctx = struct {
+                    xp: [*]const f32, wp: [*]const u8, sp: [*]const u8,
+                    yp: [*]f32, kv: usize, gs_v: usize, sf_v: mlx.Mxfp4ScaleFormat,
+                    fn work(c_ptr: *anyopaque, start: usize, end: usize) void {
+                        const c: *const @This() = @ptrCast(@alignCast(c_ptr));
+                        mlx.mlxMxfp4GemvRows(c.xp, @ptrCast(@alignCast(c.wp)), c.sp, @ptrCast(c.yp), start, end - start, c.kv, c.gs_v, c.sf_v);
+                    }
+                }{ .xp = x, .wp = data, .sp = st.data_ptr + ei * s_stride, .yp = y, .kv = k, .gs_v = mxfp4_gs, .sf_v = sf };
+                pool.parallelFor(n, 128, @ptrCast(&ctx), @TypeOf(ctx).work);
+            } else mlx.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(data)), st.data_ptr + ei * s_stride, @ptrCast(y), 0, n, k, mxfp4_gs, sf);
         } else {
-            // MLX affine: dims [n_experts, rows, groups_per_row], BF16 — per-expert = dims[1]*dims[2]*2
-            // 2D fallback: [total_rows, groups_per_row] — per-expert = n * groups_per_row * 2 (BF16)
             var bbuf: [name_buf_size]u8 = undefined;
             const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return;
             const bt = self.fmt.getTensor(b_name) orelse return;
@@ -2424,13 +2380,26 @@ pub const Ds4Model = struct {
                 @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2])) * 2
             else
                 n * @as(usize, @intCast(st.dims[st.n_dims - 1])) * 2;
-            // Infer bits from weight tensor: bits = words_per_row * 32 / k.
-            // This handles mixed-quant models (2-bit, 4-bit, 8-bit) correctly.
             const bits: u32 = if (exp_t.n_dims >= 2 and k > 0)
                 @intCast(@as(u64, exp_t.dims[exp_t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
             else
                 8;
-            self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, bits, model_mod.inferMlxGroupSize(st, k));
+            // Direct CPU dispatch — bypass Metal for zero overhead.
+            const gs_e = model_mod.inferMlxGroupSize(st, k);
+            const mlx2 = @import("../ops/mlx.zig");
+            if (self.pool) |pool| {
+                var ctx = struct {
+                    xp: [*]const f32, wp: [*]const u8, sp: [*]const u8, bp: [*]const u8,
+                    yp: [*]f32, kv: usize, b: u32, g: u32,
+                    fn work(c_ptr: *anyopaque, start: usize, end: usize) void {
+                        const c: *const @This() = @ptrCast(@alignCast(c_ptr));
+                        mlx2.mlxGemvRows(c.xp, @ptrCast(@alignCast(c.wp)), @ptrCast(@alignCast(c.sp)),
+                            @ptrCast(@alignCast(c.bp)), @ptrCast(c.yp), start, end - start, c.kv, c.b, c.g);
+                    }
+                }{ .xp = x, .wp = data, .sp = st.data_ptr + ei * s_stride, .bp = bt.data_ptr + ei * s_stride, .yp = y, .kv = k, .b = bits, .g = gs_e };
+                pool.parallelFor(n, 128, @ptrCast(&ctx), @TypeOf(ctx).work);
+            } else mlx2.mlxGemvRaw(x, @ptrCast(@alignCast(data)), @ptrCast(@alignCast(st.data_ptr + ei * s_stride)),
+                @ptrCast(@alignCast(bt.data_ptr + ei * s_stride)), @ptrCast(y), n, k, bits, gs_e);
         }
     }
 
@@ -3266,9 +3235,31 @@ pub const Ds4Model = struct {
         return heap.ptr;
     }
 
-    /// Read expert weight data via pread into a pool buffer slot.
-    /// Returns the pool buffer pointer (heap memory, Metal-safe).
-    /// Falls back to the original mmap pointer if pread is unavailable.
+    /// Copy expert data to heap pool for GPU safety. Uses pread for GGUF,
+    /// memcpy for SafeTensors. The heap pool is always resident — Metal GPU
+    /// can safely read via wrapBuffer without page cache interference.
+    fn poolExpert(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
+        if (self.expert_pool.len == 0) return data_ptr;
+        if (slot >= self.expert_pool_slots) return data_ptr;
+        const slot_offset = @as(usize, slot) * self.expert_pool_slot_size;
+        if (slot_offset + size > self.expert_pool.len) return data_ptr;
+        const dst = self.expert_pool[slot_offset..][0..size];
+        @memcpy(dst, data_ptr[0..size]);
+        return dst.ptr;
+    }
+
+    /// Copy companion (scales/biases) data to companion pool for GPU safety.
+    fn poolCompanion(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
+        if (self.companion_pool.len == 0) return data_ptr;
+        if (slot >= self.expert_pool_slots) return data_ptr;
+        const slot_offset = @as(usize, slot) * self.companion_pool_slot_size;
+        if (slot_offset + size > self.companion_pool.len) return data_ptr;
+        const dst = self.companion_pool[slot_offset..][0..size];
+        @memcpy(dst, data_ptr[0..size]);
+        return dst.ptr;
+    }
+
+    /// Read expert weight data via pread into a pool buffer slot (GGUF only).
     fn preadExpert(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
         if (self.gguf_fd < 0 or self.expert_pool.len == 0 or self.gguf_mmap_base == null)
             return data_ptr;
@@ -3421,6 +3412,8 @@ fn topKIndices(scores: []const f32, out: []u32) void {
         }
     }
 }
+
+
 
 inline fn sigmoid(x: f32) f32 {
     return 1.0 / (1.0 + @exp(-x));

@@ -352,7 +352,7 @@ pub const CpuBackend = struct {
     }
 
     /// Applies Root Mean Square Layer Normalization: output[i] = input[i] * weight[i] / rms(input).
-    pub fn rmsNorm(_: *CpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
+    pub noinline fn rmsNorm(_: *CpuBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         norm_kernel.rmsNorm(input, weight, output, n, eps);
     }
 
@@ -562,7 +562,10 @@ pub const CpuBackend = struct {
 
     /// MLX affine quantized GEMV: packed integer weights + bf16 scales/biases.
     /// When a thread pool is available, parallelizes across output rows.
-    pub fn gemvMlxQ(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, group_size: u32) void {
+    /// MLX-Q GEMV. Marked noinline to ensure identical machine code regardless
+    /// of calling context (Metal vs CPU backend dispatch). This prevents the
+    /// compiler from generating context-dependent FP accumulation order.
+    pub noinline fn gemvMlxQ(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, group_size: u32) void {
         const mlx_ops = @import("../ops/mlx.zig");
         const gs: usize = group_size;
         if (self.pool) |pool| {
@@ -603,7 +606,8 @@ pub const CpuBackend = struct {
     };
 
     /// MXFP4 SafeTensors GEMV (U32-packed nibbles, E8M0 scales, no bias).
-    pub fn gemvMxfp4St(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: mlx_mod.Mxfp4ScaleFormat) void {
+    /// MXFP4 GEMV. Noinline for identical code across backend dispatch contexts.
+    pub noinline fn gemvMxfp4St(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: mlx_mod.Mxfp4ScaleFormat) void {
         if (self.pool) |pool| {
             if (n >= parallel_min_rows) {
                 var ctx = Mxfp4StCtx{
@@ -638,6 +642,15 @@ pub const CpuBackend = struct {
             mlx_mod.mlxMxfp4GemvRows(ctx.x, ctx.pw, ctx.scales_u8, ctx.y, start, end - start, ctx.k, ctx.gs, ctx.sf);
         }
     };
+
+    /// GPU-native MLX-Q GEMV delegate: on CPU, just calls gemvMlxQ.
+    pub fn gemvMlxQGpu(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, group_size: u32) void {
+        self.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, group_size);
+    }
+    /// GPU-native MXFP4 GEMV delegate: on CPU, just calls gemvMxfp4St.
+    pub fn gemvMxfp4StGpu(self: *CpuBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: mlx_mod.Mxfp4ScaleFormat) void {
+        self.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf);
+    }
 
     /// GPTQ INT4 GEMV with thread pool parallelism.
     pub fn gemvGptq(self: *CpuBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {

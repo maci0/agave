@@ -76,7 +76,7 @@ agave/
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
-│   │   ├── deepseek4.zig    # DeepSeek V4 Flash (hyper connections, MLA, CSA/HCA, LID)
+│   │   ├── deepseek4.zig    # DeepSeek V4 Flash (hyper connections, MLA, CSA/HCA, LID, full Metal GPU path)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/

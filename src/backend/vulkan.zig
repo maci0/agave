@@ -2108,6 +2108,7 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_gemv_mlx_q4, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
     }
+    pub fn gemvMlxQGpu(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
 
     /// MXFP4 SafeTensors GEMV.
     pub fn gemvMxfp4St(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
@@ -2129,6 +2130,7 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_gemv_mxfp4_st, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
     }
+    pub fn gemvMxfp4StGpu(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
 
     /// GPTQ INT4 GEMV on Vulkan GPU.
     pub fn gemvGptq(self: *VulkanBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {

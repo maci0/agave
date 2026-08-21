@@ -12,7 +12,7 @@ pub const sparse_v_threshold: f32 = 1e-6;
 /// Maximum sequence length supported by the CPU SDPA scores buffer.
 pub const max_sdpa_seq_len: usize = 8192;
 /// Maximum per-head dimension for the cached Q vector in SDPA.
-pub const max_head_dim: usize = 256;
+pub const max_head_dim: usize = 512;
 
 const kv_quant = @import("../../../ops/kv_quant.zig");
 const KvQuantType = kv_quant.KvQuantType;

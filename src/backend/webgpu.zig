@@ -1692,6 +1692,7 @@ pub const WebGpuBackend = struct {
         self.dispatchCompute(self.pipe_gemv_mlx_q4, &entries, @intCast(n));
         self.cacheGpuResult(y, y_buf, y_sz);
     }
+    pub fn gemvMlxQGpu(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
 
     pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         const x_sz = k * @sizeOf(f32);
@@ -1717,6 +1718,7 @@ pub const WebGpuBackend = struct {
         self.dispatchCompute(self.pipe_gemv_mxfp4_st, &entries, @intCast(n));
         self.cacheGpuResult(y, y_buf, y_sz);
     }
+    pub fn gemvMxfp4StGpu(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
 
     pub fn gemvGptq(self: *WebGpuBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         const words_per_row = k / 8;
