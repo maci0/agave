@@ -1,6 +1,6 @@
 # Agave — Distributed Inference
 
-**Status**: PP implemented; TP weight sharding implemented, all-reduce incomplete (`--tp > 1` rejected at CLI)  
+**Status**: PP implemented; TP FFN/expert-parallel all-reduce implemented for 2-rank pairs (`--tp 2`, `--pp 2`)  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
 **Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU
@@ -13,8 +13,6 @@
 
 ```bash
 # Same-node TP (auto-selects POSIX shm)
-# NOTE: --tp > 1 is currently rejected at CLI (all-reduce not yet complete).
-# These examples show the intended usage once TP is fully wired.
 agave model.gguf --tp 2 --rank 0 --peers localhost "prompt"    # terminal 1
 agave model.gguf --tp 2 --rank 1 --peers localhost "prompt"    # terminal 2
 
@@ -22,12 +20,16 @@ agave model.gguf --tp 2 --rank 1 --peers localhost "prompt"    # terminal 2
 agave model.gguf --pp 2 --rank 0 --peers 10.0.1.2 "prompt"    # node A
 agave model.gguf --pp 2 --rank 1 --peers 10.0.1.1 "prompt"    # node B
 
-# Cross-node TP over NCCL RoCE RDMA (requires all-reduce completion — future work)
-agave model.gguf --tp 2 --rank 0 --peers 10.0.1.2 --transport nccl "prompt"
-agave model.gguf --tp 2 --rank 1 --peers 10.0.1.1 --transport nccl "prompt"
+# Cross-node TP over NCCL RoCE RDMA (CUDA)
+agave model.gguf --backend cuda --tp 2 --rank 0 --peers 10.0.1.2 --transport nccl "prompt"
+agave model.gguf --backend cuda --tp 2 --rank 1 --peers 10.0.1.1 --transport nccl "prompt"
 
-# Hybrid TP+PP (4 GPUs: 2 TP groups × 2 PP stages; requires TP completion)
-agave model.gguf --tp 2 --pp 2 --rank 0 --peers 10.0.1.2 "prompt"
+# DeepSeek V4 Flash 0731: PP (layer split) + DSpark, or expert-parallel TP + DSpark
+agave ds4-flash.gguf --backend cuda --pp 2 --rank 0 --peers 10.0.1.2 --transport nccl --spec-mode dspark "prompt"
+agave ds4-flash.gguf --backend cuda --tp 2 --rank 0 --peers 10.0.1.2 --transport nccl --spec-mode dspark "prompt"
+
+# Hybrid TP+PP needs 4 ranks (2 TP groups × 2 PP stages). Transport is a 2-rank
+# pair, so this does not launch today; use --tp 2 or --pp 2, not both.
 
 # Disaggregated prefill/decode
 agave model.gguf --disagg --rank 0 --peers 10.0.1.2 "prompt"  # prefill node
@@ -112,7 +114,15 @@ Follows the Megatron-LM pattern — 2 all-reduces per transformer layer:
 - `shardColumnWeight(tensor, n_rows, k)` — returns pointer offset for this rank's column shard
 - `shardRowWeight(tensor, n, k_total, shard_buf)` — copies this rank's row shard into contiguous buffer, calls `be.invalidateWeight()` to evict stale GPU cache entry
 
-TP degree must divide both `n_heads` and `n_kv_heads`. Embedding table is replicated (small relative to model). Final logits computed on each rank independently.
+TP degree must divide both `n_heads` and `n_kv_heads` for dense FFN sharding. Embedding table is replicated. Final logits computed on each rank independently.
+
+**DeepSeek V4 Flash 0731** (`src/models/deepseek4.zig`) does not shard MLA heads. `--tp 2` is **expert parallel**: routed expert `eid` runs on rank `eid % tp_degree`. Shared experts run on every rank. After the weighted expert sum, `Transport.allReduceAdd` combines routed contributions; the duplicated shared-expert term is subtracted locally. Attention and hyper-connection mixing stay replicated. Requires `--peers` (or UDP discovery) so `tp_transport` is set; without a transport the rank still runs every expert.
+
+### DSpark on a pair
+
+`--spec-mode dspark` runs on every rank. Each `forward()` is a TP all-reduce or a PP round-trip, so both ranks stay in lockstep. Rank 0 prints tokens; rank 1 stays silent. Use the same prompt, `--spec-mode`, and `--spec-tokens` on both processes.
+
+---
 
 ### Norms
 
@@ -127,7 +137,7 @@ Layers split into `pp_degree` contiguous stages. Stage assignment: `layer * pp_d
 **Stage 0** (first): embedding lookup + first `n_layers/pp` layers  
 **Stage N-1** (last): remaining layers + lm_head + argmax
 
-**Activation transfer**: hidden state vector (`n_embd × f32` = 4-32 KB) sent via `sendBuf`/`recvBuf` between stages. Tiny relative to interconnect bandwidth.
+**Activation transfer**: hidden state vector (`n_embd × f32` = 4-32 KB) sent via `sendBuf`/`recvBuf` between stages. Tiny relative to interconnect bandwidth. DeepSeek V4 sends the 4-stream hyper-connection state (`4 × n_embd`) instead of `hidden`/`hidden2`.
 
 **Decode loop:**
 - Stage 0: forward through its layers → `sendBuf(hidden)` to stage 1 → `recvBuf(token)` from stage 1

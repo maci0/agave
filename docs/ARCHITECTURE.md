@@ -77,7 +77,7 @@ agave/
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
-│   │   ├── deepseek4.zig    # DeepSeek V4 Flash (hyper connections, MLA, CSA/HCA, LID, full Metal GPU path)
+│   │   ├── deepseek4.zig    # DeepSeek V4 Flash (HC, MLA, CSA/HCA, LID; CUDA GEMV; PP + expert-parallel TP)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
@@ -162,7 +162,7 @@ Irreversible or high-cost choices. Rationale lives here so they are not re-litig
 | Spec CLI aliases | Normalize at parse (`medusa` → `mtp`); domain enum has no synonyms | Call sites must not re-branch on marketing names | A “alias” gains a divergent inference path |
 | Wall clock | `sim_clock` for server/scheduler/rate-limiter/tiered KV; MONOTONIC for interval timers (`perf`, `pull`, benches) | One injectable clock for deterministic timeout/refill tests; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks |
 | Device discovery `BackendKind` | `cpu/metal/cuda/rocm/vulkan` only (no `webgpu`) | `--list-devices` / TP-PP target discrete GPUs; WebGPU is a single logical adapter (browser or wgpu), not multi-device topology | WebGPU multi-adapter or peer groups become real |
-| Parallel transport topology | Fixed 2-rank pair (`rank 0 ↔ 1`); CLI rejects `--pp > 2` | SHM region names, `tcp_fds[0]`, and `sendBuf` peer encoding are pair-shaped; multi-rank ring/tree not built | Ring/tree all-reduce and multi-stage PP ship |
+| Parallel transport topology | Fixed 2-rank pair (`rank 0 ↔ 1`); CLI rejects `--tp > 2` and `--pp > 2` | SHM region names, `tcp_fds[0]`, and `sendBuf` peer encoding are pair-shaped; multi-rank ring/tree not built | Ring/tree all-reduce and multi-stage PP ship |
 | Server sleep mode | Flag in `/health` only; weights stay resident | Orchestrators need an idle signal without cold-start latency | Memory pressure requires actual weight unload / sleep-to-disk |
 | GPU missing kernels | `@panic` (fail closed), except documented cases (`embLookup`, small Metal softmax) | Silent CPU fallback hides broken builds and destroys latency | A new op is proven faster on CPU on UMA (must comment why) |
 | `max_tokens` cap | Tied to `gen_ids_buf_size` (4096) | Generation ID buffer cannot hold more tokens than the clamp | Streaming without a fixed ID buffer needs a higher cap |

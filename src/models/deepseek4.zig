@@ -23,6 +23,7 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const attn_ops = @import("../ops/attention.zig");
 const cpu_norm = @import("../backend/kernels/cpu/norm.zig");
 const Backend = backend_mod.Backend;
+const TransportMod = @import("../parallel/transport.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const ExpertCache = @import("../expert_cache.zig").ExpertCache;
@@ -53,6 +54,39 @@ const sparse_v_threshold: f32 = 1e-6;
 /// since CSA and HCA layers share the same `csa_k` buffer with per-layer offsets.
 fn compSlotsPerLayer(max_seq_len: usize) usize {
     return max_seq_len / 4 + 1;
+}
+
+/// Pipeline stage `[start, end)` for this rank. Last rank takes the remainder
+/// so `n_layers` that do not divide `pp_degree` still cover every layer.
+fn ppLayerRange(n_layers: u32, pp_rank: u32, pp_degree: u32) struct { start: u32, end: u32 } {
+    if (pp_degree <= 1) return .{ .start = 0, .end = n_layers };
+    const per = n_layers / pp_degree;
+    const start = pp_rank * per;
+    const end = if (pp_rank + 1 == pp_degree) n_layers else start + per;
+    return .{ .start = start, .end = end };
+}
+
+/// Expert-parallel owner: routed expert `eid` runs on this TP rank.
+/// Shared experts are replicated on every rank (not gated by this helper).
+fn isLocalExpert(eid: usize, tp_rank: u32, tp_degree: u32) bool {
+    if (tp_degree <= 1) return true;
+    return eid % @as(usize, tp_degree) == @as(usize, tp_rank);
+}
+
+/// After an in-place all-reduce of `hidden = shexp + local_routed`, every rank
+/// has `2*shexp + all_routed`. Subtract the local shared-expert contribution
+/// so the residual is `shexp + all_routed`.
+fn undoDuplicatedShared(hidden: []f32, shexp_out: []const f32, shexp_weight: f32) void {
+    std.debug.assert(hidden.len == shexp_out.len);
+    const V8 = @Vector(8, f32);
+    const wv: V8 = @splat(shexp_weight);
+    var i: usize = 0;
+    while (i + 8 <= hidden.len) : (i += 8) {
+        const h: V8 = hidden[i..][0..8].*;
+        const s: V8 = shexp_out[i..][0..8].*;
+        hidden[i..][0..8].* = h - s * wv;
+    }
+    while (i < hidden.len) : (i += 1) hidden[i] -= shexp_out[i] * shexp_weight;
 }
 
 /// DeepSeek V4 Flash 0731 inference model.
@@ -104,6 +138,15 @@ pub const Ds4Model = struct {
     /// union entirely, ensuring bit-identical output with --backend cpu.
     /// Set by setPool() to share the same thread pool.
     cpu: backend_mod.CpuBackend = .{},
+    // Tensor parallelism (expert-parallel MoE + NCCL all-reduce of routed output)
+    tp_rank: u32 = 0,
+    tp_degree: u32 = 1,
+    tp_row_shard_buf: []u8 = &.{},
+    tp_transport: ?*TransportMod.Transport = null,
+    // Pipeline parallelism (layer split; HC state is the activation)
+    pp_rank: u32 = 0,
+    pp_degree: u32 = 1,
+    pp_transport: ?*TransportMod.Transport = null,
     kv_seq_len: usize = 0,
     kv_type: KvQuantType = .q8_0,
 
@@ -1677,6 +1720,7 @@ pub const Ds4Model = struct {
                     inline else => |be| {
                         for (0..n_active) |j| {
                             const eid = top_ids[j];
+                            if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
                             if (ge.dtype == .mxfp4) {
                                 if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpClampedSiluMxfp4"))
                                     be.fusedFfnGateUpClampedSiluMxfp4(self.hidden2.ptr, ge.data_ptr + eid * gs, ue.data_ptr + eid * us, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
@@ -1698,6 +1742,7 @@ pub const Ds4Model = struct {
                 self.be.beginBatch();
                 for (0..n_active) |j| {
                     const eid = top_ids[j];
+                    if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
                     if (ge.dtype == .mlx_q) {
                         self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
                         self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
@@ -1709,11 +1754,11 @@ pub const Ds4Model = struct {
                         // MLX mxfp4 mode: override dtype for correct GEMV kernel
                         const gate_dtype: DType = if (self.mlxExpertIsMxfp4(ge)) .mxfp4 else ge.dtype;
                         const up_dtype: DType = if (self.mlxExpertIsMxfp4(ue)) .mxfp4 else ue.dtype;
-                        self.cpu.gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = gate_dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.cpu.gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = up_dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = gate_dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = up_dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     } else {
-                        self.cpu.gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.cpu.gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
                     }
                     de_ptrs[n_scratch] = de.data_ptr + eid * ds;
                     de_slot_eids[n_scratch] = eid;
@@ -1726,7 +1771,7 @@ pub const Ds4Model = struct {
 
         // Phase 2: clampedSiluMul — skip when fused path already applied activation.
         if (!fused_experts and n_scratch > 0) {
-            self.cpu.clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
+            self.computeBackend().clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
 
         // Phase 3: all down GEMVs into expert_scratch — batch for no barriers.
@@ -1743,14 +1788,14 @@ pub const Ds4Model = struct {
                 } else if (self.expert_cache != null) {
                     const down_data = self.preadExpert(de_ptrs[slot], @intCast(de_exp_stride), @intCast(slot * 3 + 2));
                     const down_dt: DType = if (de_exp_tensor) |det| (if (self.mlxExpertIsMxfp4(det)) .mxfp4 else de_dtype) else de_dtype;
-                    self.cpu.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = down_dt }, self.expert_scratch.ptr + slot * e, e, ff);
+                    self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = down_dt }, self.expert_scratch.ptr + slot * e, e, ff);
                 } else {
-                    self.cpu.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                    self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
                 }
             }
         } else {
             for (shexp_slots..n_scratch) |slot| {
-                self.cpu.gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
             }
         }
 
@@ -1786,9 +1831,18 @@ pub const Ds4Model = struct {
                 const inv = self.expert_weights_scale / @sqrt(wss);
                 for (0..n_active) |j| top_weights[j] *= inv;
             }
-            // Update slot_weights for expert slots (shared expert weight=1.0 already set)
+            // Update slot_weights for expert slots (shared expert weight=1.0 already set).
+            // Map by expert id so skipped (non-local) experts do not shift indices.
             for (shexp_slots..n_scratch) |slot| {
-                slot_weights[slot] = top_weights[slot - shexp_slots];
+                const eid = de_slot_eids[slot];
+                var w: f32 = 0.0;
+                for (0..n_active) |j| {
+                    if (top_ids[j] == eid) {
+                        w = top_weights[j];
+                        break;
+                    }
+                }
+                slot_weights[slot] = w;
             }
         }
 
@@ -1810,6 +1864,21 @@ pub const Ds4Model = struct {
                     self.hidden[i..][0..8].* = @mulAdd(V8, @as(V8, sd[i..][0..8].*), wv, acc);
                 }
                 while (i < e) : (i += 1) self.hidden[i] += sd[i] * slot_weights[slot];
+            }
+        } else if (self.epDegree() > 1) {
+            @memset(self.hidden[0..e], 0);
+        }
+
+        if (self.epDegree() > 1) {
+            if (self.tp_transport) |tr| {
+                self.be.sync();
+                tr.allReduceAdd(self.hidden.ptr, e) catch |err| {
+                    std.log.err("DS4 allReduceAdd failed: {}", .{err});
+                    return error.MissingTensor;
+                };
+                if (shexp_slots > 0) {
+                    undoDuplicatedShared(self.hidden[0..e], self.expert_scratch[0..e], slot_weights[0]);
+                }
             }
         }
     }
@@ -1850,6 +1919,17 @@ pub const Ds4Model = struct {
         // no GPU coherency concern. GPU HC kernels read this data in the next dispatch.
         for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
 
+        const pp_range = ppLayerRange(nl, self.pp_rank, self.pp_degree);
+        const hc_elems: usize = n_hc * e;
+
+        // Later PP stages receive the 4-stream HC residual from the previous stage.
+        if (self.pp_degree > 1 and self.pp_rank > 0) {
+            if (self.pp_transport) |transport| {
+                transport.recvBuf(self.hc_state.ptr, hc_elems);
+                self.be.invalidateActivation(self.hc_state.ptr);
+            }
+        }
+
         for (0..nl) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
 
@@ -1857,6 +1937,7 @@ pub const Ds4Model = struct {
 
             // Layer skip: skip layers in [layer_skip_start, layer_skip_end) for self-speculative draft.
             if (li >= self.layer_skip_start and li < self.layer_skip_end) continue;
+            if (self.pp_degree > 1 and (li < pp_range.start or li >= pp_range.end)) continue;
 
             // Attn: HC pre → attn → HC post
             const af = try self.layerTensorReq(li, "hc_attn_fn.weight");
@@ -1873,6 +1954,22 @@ pub const Ds4Model = struct {
             self.hcPre(ff, fb, fs);
             try self.ffnLayer(li, token_id);
             self.hcPost();
+        }
+
+        // Non-last PP stage: send HC state downstream and wait for the sampled token.
+        if (self.pp_degree > 1 and self.pp_rank + 1 < self.pp_degree) {
+            if (self.pp_transport) |transport| {
+                self.be.sync();
+                transport.sendBuf(self.hc_state.ptr, hc_elems);
+                var result_token: [1]f32 = undefined;
+                transport.recvBuf(&result_token, 1);
+                self.kv_seq_len += 1;
+                const raw = result_token[0];
+                if (raw >= 0 and raw < @as(f32, @floatFromInt(std.math.maxInt(u32))) and std.math.isFinite(raw)) {
+                    return @intFromFloat(raw);
+                }
+                return error.Cancelled;
+            }
         }
 
         // Output HC head
@@ -1926,7 +2023,14 @@ pub const Ds4Model = struct {
 
 
 
-        return math_ops.argmax(self.logits_buf);
+        const result = math_ops.argmax(self.logits_buf);
+        if (self.pp_degree > 1 and self.pp_rank + 1 == self.pp_degree) {
+            if (self.pp_transport) |transport| {
+                var tok_f32 = [1]f32{@floatFromInt(result)};
+                transport.sendBuf(&tok_f32, 1);
+            }
+        }
+        return result;
     }
 
     /// Return the number of available MTP draft depths.
@@ -2312,6 +2416,21 @@ pub const Ds4Model = struct {
 
     // ---- MLX-aware GEMV dispatch ----
 
+    /// GPU backends except Metal run GEMV on `self.be`. Metal keeps the dedicated
+    /// CpuBackend bypass so UMA shared-buffer coherency matches `--backend cpu`.
+    fn computeBackend(self: *Ds4Model) Backend {
+        return switch (self.be) {
+            .metal => .{ .cpu = &self.cpu },
+            else => self.be,
+        };
+    }
+
+    /// Expert-parallel degree. Without a transport the rank still holds every
+    /// expert (mmap pages for unused shards stay cold once EP is active).
+    fn epDegree(self: *const Ds4Model) u32 {
+        return if (self.tp_transport != null) self.tp_degree else 1;
+    }
+
     /// Dispatch a single GEMV through the format-aware path.
     /// Handles MLX-Q (affine with companion scales/biases), NVFP4, GPTQ, AWQ, HQQ,
     /// and standard GGUF quantized weights transparently.
@@ -2328,14 +2447,14 @@ pub const Ds4Model = struct {
     }
 
     fn doGemv(self: *Ds4Model, x: [*]const f32, t_raw: TensorInfo, y: [*]f32, n: usize, k: usize) void {
-        // Route ALL dispatch through the dedicated CpuBackend for bit-identical
-        // output between --backend cpu and --backend metal.
-        const cpu_be: backend_mod.Backend = .{ .cpu = &self.cpu };
+        // Metal: dedicated CpuBackend (UMA bit-identical with --backend cpu).
+        // CUDA/Vulkan/ROCm/CPU: selected backend so NCCL can all-reduce device activations.
+        const be = self.computeBackend();
         if (t_raw.dtype == .mlx_q) {
-            if (model_mod.mlxGemv(cpu_be, self.fmt, x, t_raw, y, n, k)) return;
+            if (model_mod.mlxGemv(be, self.fmt, x, t_raw, y, n, k)) return;
         }
         const t = self.heapTensor(t_raw);
-        model_mod.dispatchGemv(cpu_be, self.fmt, x, t, y, n, k);
+        model_mod.dispatchGemv(be, self.fmt, x, t, y, n, k);
     }
 
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
@@ -2344,7 +2463,7 @@ pub const Ds4Model = struct {
         // Use raw mmap pointer for CPU dispatch (same addresses on all backends).
         const data = exp_t.data_ptr + ei * stride;
         if (exp_t.dtype != .mlx_q) {
-            self.cpu.gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
+            self.computeBackend().gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
             return;
         }
         const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return;
@@ -2359,6 +2478,13 @@ pub const Ds4Model = struct {
                 n * @as(usize, @intCast(st.dims[st.n_dims - 1]));
             const mxfp4_gs = model_mod.inferMxfp4GroupSize(st, k);
             const sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat = if (self.fmt.is_safetensors and mxfp4_gs >= 32) .e8m0 else .fp8_e4m3;
+            switch (self.be) {
+                .cuda => {
+                    self.be.gemvMxfp4St(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, sf);
+                    return;
+                },
+                else => {},
+            }
             // Direct CPU dispatch — bypass Metal for zero overhead.
             const mlx = @import("../ops/mlx.zig");
             if (self.pool) |pool| {
@@ -2384,8 +2510,15 @@ pub const Ds4Model = struct {
                 @intCast(@as(u64, exp_t.dims[exp_t.n_dims - 1]) * 32 / @as(u64, @intCast(k)))
             else
                 8;
-            // Direct CPU dispatch — bypass Metal for zero overhead.
             const gs_e = model_mod.inferMlxGroupSize(st, k);
+            switch (self.be) {
+                .cuda => {
+                    self.be.gemvMlxQ(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, bits, gs_e);
+                    return;
+                },
+                else => {},
+            }
+            // Direct CPU dispatch — bypass Metal for zero overhead.
             const mlx2 = @import("../ops/mlx.zig");
             if (self.pool) |pool| {
                 var ctx = struct {
@@ -2910,8 +3043,10 @@ pub const Ds4Model = struct {
         // forwardTree has no HC, so skipping early layers loses representation depth
         // but doesn't corrupt state propagation.
         const ft_skip: usize = if (self.layer_skip_end > 0) @min(self.layer_skip_end, self.n_layers / 2) else 0;
+        const pp_range = ppLayerRange(self.n_layers, self.pp_rank, self.pp_degree);
         for (0..self.n_layers) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
+            if (self.pp_degree > 1 and (li < pp_range.start or li >= pp_range.end)) continue;
 
             // Attention norm (batched) — always needed for KV projection
             const nw = try self.layerTensorReq(li, "attn_norm.weight");
@@ -3859,4 +3994,42 @@ test "cpuGemvQ8_0 odd output count" {
 
     // Each row: 1.0 * (2 * 0.5) * 32 = 32.0
     for (y) |v| try std.testing.expectApproxEqAbs(@as(f32, 32.0), v, 0.1);
+}
+
+test "ppLayerRange covers all layers without overlap" {
+    const nl: u32 = 43; // DeepSeek V4 Flash 0731
+    const d: u32 = 2;
+    const r0 = ppLayerRange(nl, 0, d);
+    const r1 = ppLayerRange(nl, 1, d);
+    try std.testing.expectEqual(@as(u32, 0), r0.start);
+    try std.testing.expectEqual(@as(u32, 21), r0.end);
+    try std.testing.expectEqual(@as(u32, 21), r1.start);
+    try std.testing.expectEqual(nl, r1.end);
+    try std.testing.expectEqual(nl, r0.end - r0.start + r1.end - r1.start);
+    const single = ppLayerRange(nl, 0, 1);
+    try std.testing.expectEqual(@as(u32, 0), single.start);
+    try std.testing.expectEqual(nl, single.end);
+}
+
+test "isLocalExpert partitions 256 experts across two ranks" {
+    var r0: u32 = 0;
+    var r1: u32 = 0;
+    for (0..256) |eid| {
+        const a = isLocalExpert(eid, 0, 2);
+        const b = isLocalExpert(eid, 1, 2);
+        try std.testing.expect(a != b);
+        if (a) r0 += 1 else r1 += 1;
+        try std.testing.expect(isLocalExpert(eid, 0, 1));
+    }
+    try std.testing.expectEqual(@as(u32, 128), r0);
+    try std.testing.expectEqual(@as(u32, 128), r1);
+}
+
+test "undoDuplicatedShared restores shexp plus routed sum" {
+    // Rank 0: shexp=1, routed=3. Rank 1: shexp=1, routed=5.
+    // All-reduce hidden: 1+3 + 1+5 = 10. Subtract local shexp → 9 = shexp+all_routed.
+    var hidden = [_]f32{ 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0 };
+    const shexp = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
+    undoDuplicatedShared(&hidden, &shexp, 1.0);
+    for (hidden) |v| try std.testing.expectApproxEqAbs(@as(f32, 9.0), v, 1e-6);
 }
