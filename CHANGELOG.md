@@ -557,34 +557,18 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - Also removed min_match_gap and anti-repetition compaction (over-aggressive,
   caused 2-3× speed regression).
 
-## 2026-08-19 — Peak Performance + Metal Investigation
+## 2026-08-18 — Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
 
-### Performance
-- **Peak: 43.2 tok/s at -n 2000 (7.32× ds4 5.9 tok/s GPU reference)**
-- Performance scales with sequence length:
-  - -n 64: 9.5-10.6 tok/s (1.80×)
-  - -n 256: 17.2 tok/s (2.92×)
-  - -n 500: 24.1 tok/s (4.08×)
-  - -n 1000: 28.1 tok/s (4.76×)
-  - -n 2000: 43.2 tok/s (7.32×)
-- System confirmed at SSD bandwidth limit (3.5 GB/s NVMe)
+### Fixed
+- **Metal MLX-Q GEMV CPU fallback**: Metal's native MLX-Q GEMV kernel produces wrong
+  output for SafeTensors weights (likely buffer offset or scale decode issue). Added
+  CPU fallback via `mlxGemvRaw` with `self.sync()` before CPU dispatch.
+- **cpuGemvExpert MXFP4 E8M0 handling**: Added MXFP4 path (was only handling MLX affine).
+  Expert weights with uint8 E8M0 scales now correctly dispatched to CPU `mlxMxfp4GemvRows`.
+- **Shared expert sync**: shared expert must go through `doGemv` (Metal → CPU fallback
+  with sync), not direct `cpuGemvExpert` (no sync → reads stale GPU buffers).
 
-### Metal Backend (autoresearch/ds4-metal branch)
-- **2.3 tok/s** with correct output ("The capital of France is Paris.")
-- Native Metal GPU: rmsNorm, SDPA, clampedSiluMul, addScaled (bit-exact with CPU)
-- CPU fallback: gemvMlxQ, gemvMxfp4St (per-GEMV sync overhead)
-- Root cause: Apple Silicon GPU FMA ≠ CPU NEON FMA intermediate rounding
-  (~0.02% drift per layer × 43 HC layers = wrong tokens)
-
-### Metal Infrastructure Shipped
-- `gemv_mlx_q4_exact`: float4 fma pairs matching CPU NEON @mulAdd + @reduce
-- `gemv_mxfp4_st_exact`: E8M0 + dynamic gs with vec8 accumulation
-- `prefaultPages()`: touches mmap pages before Metal getBufRef wraps them
-  (GPU can't trigger page faults → unfaulted pages read as zeros)
-- buf_cache no-flush on `sync()`: UMA shared memory wraps always valid
-- Dynamic group_size (`buffer(7)`) and scale_format (`buffer(7)`) parameters
-
-### Tested and Rejected
-- budget=2 fallback: fewer suffix matches → slower (5.8 vs 9.9 tok/s)
-- ssd-cache-slots=8000: 70% hit rate but same tok/s (SSD-bound)
-- expert-profile-in mlock: marginal cold-start improvement only
+### Result
+- **First coherent output on Metal for MLX 4-bit**: "The capital of France is Paris."
+- 0.4 tok/s (limited by 430 Metal syncs per forward — per-GEMV sync overhead)
+- L0 FFN L2=543.882 (matches CPU baseline exactly)

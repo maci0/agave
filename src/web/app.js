@@ -214,6 +214,7 @@ function loadImageFile(file, label) {
   return true;
 }
 
+// oxlint-disable-next-line no-unused-vars -- called from HTML onchange
 function onImageSelect(e) {
   var file = e.target.files[0]; if (!file) return;
   if (!loadImageFile(file, 'Image attached')) e.target.value = '';
@@ -350,6 +351,7 @@ function toggleSettings() {
   announceToSR('Settings panel ' + (open ? 'opened' : 'closed'));
 }
 
+// oxlint-disable-next-line no-unused-vars -- called from HTML onclick
 function clearSystemPrompt() {
   var el = document.getElementById('system-prompt');
   el.value = '';
@@ -395,6 +397,7 @@ function refreshCtxBadge() {
   }).catch(function() {});
 }
 
+// oxlint-disable-next-line no-unused-vars -- called from HTML onclick
 function exportConv() {
   var msgs = chat.querySelectorAll('.msg-wrap');
   if (!msgs.length) { showToast('Nothing to export.', 'info'); return; }
@@ -527,7 +530,7 @@ function renderContent(el, content, final) {
     }
     var parsed;
     if (typeof marked !== 'undefined') {
-      try { parsed = marked.parse(dc); } catch(e) { parsed = dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'); }
+      try { parsed = marked.parse(dc); } catch { parsed = dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>'); }
     } else {
       parsed = dc.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
     }
@@ -765,6 +768,7 @@ function handleCommand(cmd) {
   });
 }
 
+// oxlint-disable-next-line no-unused-vars -- called from HTML onsubmit
 function onSubmit(e) {
   e.preventDefault();
   var text = inp.value.trim();
@@ -942,6 +946,7 @@ function loadConvs() {
   });
 }
 
+// oxlint-disable-next-line no-unused-vars -- called from HTML onclick
 function newConv() {
   if (isStreaming) stopGen();
   if (pendingImage) removeImage();
@@ -1025,6 +1030,7 @@ function setDialogBackdropInert(on) {
 }
 
 var infoTrigger = null;
+// oxlint-disable-next-line no-unused-vars -- called from HTML onclick
 function showInfo() {
   var m = document.getElementById('info-modal'); m.classList.add('show');
   m.setAttribute('aria-hidden', 'false');

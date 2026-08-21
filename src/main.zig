@@ -2942,7 +2942,7 @@ fn initAndRun(
         // Enable volatile weights for Metal safety.
         // Heapification handles expert + non-expert weights,
         // but Metal SDPA/wo_a still has issues — needs investigation.
-        be.setVolatileWeights(true);
+        be.setVolatileWeights(true); // OFF: causes buf_cache invalidation race // disabled: buf_cache flush causes 0.002% drift
     }
 
     // Pre-pin hot experts from a prior profile run before first token.

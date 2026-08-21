@@ -37,7 +37,9 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
     @embedFile("kernels/metal/mega_gemma_q4k.metal") ++
     @embedFile("kernels/metal/mega_gemma_q8.metal") ++
     @embedFile("kernels/metal/mega_qwen35_q4k.metal") ++
-    @embedFile("kernels/metal/mega_nemotron_h_q8.metal");
+    @embedFile("kernels/metal/mega_nemotron_h_q8.metal") ++
+    @embedFile("kernels/metal/ds4.metal") ++
+    @embedFile("kernels/metal/ds4_fused.metal");
 
 const page_size = std.heap.page_size_min;
 
@@ -149,10 +151,12 @@ pub const MetalBackend = struct {
     pipe_gemv_q5_k: objc.id,
     pipe_gemv_mlx_q2: objc.id,
     pipe_gemv_mlx_q4: objc.id,
+    pipe_gemv_mlx_q4_exact: objc.id,
     pipe_gemv_mlx_q6: objc.id,
     pipe_gemv_mlx_q8: objc.id,
     pipe_gemv_mxfp4: objc.id,
     pipe_gemv_mxfp4_st: objc.id,
+    pipe_gemv_mxfp4_st_exact: objc.id,
     pipe_gemv_fp8_e4m3: objc.id,
     pipe_gemv_fp8_e5m2: objc.id,
     pipe_gemv_gptq: objc.id,
@@ -213,6 +217,21 @@ pub const MetalBackend = struct {
     pipe_fused_ffn_gelu_q5_k: objc.id,
     pipe_fused_ffn_clamped_silu_q2_k: objc.id,
     pipe_fused_ffn_clamped_silu_mxfp4: objc.id,
+    // DS4 hyper-connection and turbo hd512 pipelines
+    pipe_ds4_hc_weights: objc.id,
+    pipe_ds4_hc_pre_mix: objc.id,
+    pipe_ds4_hc_post: objc.id,
+    pipe_ds4_emb_broadcast: objc.id,
+    pipe_ds4_rope_table: objc.id,
+    pipe_ds4_inv_rope_table: objc.id,
+    pipe_ds4_weighted_accum: objc.id,
+    pipe_ds4_sdpa_turbo_hd512: objc.id,
+    pipe_ds4_hc_head_weights: objc.id,
+    pipe_ds4_fused_attn_proj: objc.id,
+    pipe_ds4_topk_routing: objc.id,
+    pipe_ds4_moe_gate_up_mxfp4: objc.id,
+    pipe_ds4_moe_down_mxfp4: objc.id,
+    pipe_ds4_rms_norm_noweight: objc.id,
     /// Scratch buffer for multi-pass reductions: 8 bytes = 2 × f32.
     /// Used by softmax (3-pass: max at offset 0, sum at offset 4)
     /// and l2Norm (2-pass: sum-of-squares at offset 0).
@@ -232,6 +251,7 @@ pub const MetalBackend = struct {
     /// model activation buffers) on every GEMV / norm / elementwise call.
     /// Cached buffers live for the model's lifetime and are released in deinit().
     buf_cache: std.AutoHashMap(usize, BufferInfo),
+    pending_release: std.ArrayList(objc.id),
     /// When true, enables GPU-safe SSD streaming:
     /// - Weight buffers (>256KB) are copied into Metal-managed memory via
     ///   newBufferWithBytes and stored in stable_cache (never flushed)
@@ -336,10 +356,12 @@ pub const MetalBackend = struct {
             .pipe_gemv_f16 = undefined,
             .pipe_gemv_mlx_q2 = undefined,
             .pipe_gemv_mlx_q4 = undefined,
+            .pipe_gemv_mlx_q4_exact = undefined,
             .pipe_gemv_mlx_q6 = undefined,
             .pipe_gemv_mlx_q8 = undefined,
             .pipe_gemv_mxfp4 = undefined,
             .pipe_gemv_mxfp4_st = undefined,
+            .pipe_gemv_mxfp4_st_exact = undefined,
             .pipe_gemv_nvfp4_st = undefined,
             .pipe_split_qgate = undefined,
             .pipe_gemv_q4_k = undefined,
@@ -410,9 +432,24 @@ pub const MetalBackend = struct {
             .pipe_fused_ffn_gelu_q5_k = undefined,
             .pipe_fused_ffn_clamped_silu_q2_k = undefined,
             .pipe_fused_ffn_clamped_silu_mxfp4 = undefined,
+            .pipe_ds4_hc_weights = undefined,
+            .pipe_ds4_hc_pre_mix = undefined,
+            .pipe_ds4_hc_post = undefined,
+            .pipe_ds4_emb_broadcast = undefined,
+            .pipe_ds4_rope_table = undefined,
+            .pipe_ds4_inv_rope_table = undefined,
+            .pipe_ds4_weighted_accum = undefined,
+            .pipe_ds4_sdpa_turbo_hd512 = undefined,
+            .pipe_ds4_hc_head_weights = undefined,
+            .pipe_ds4_fused_attn_proj = undefined,
+            .pipe_ds4_topk_routing = undefined,
+            .pipe_ds4_moe_gate_up_mxfp4 = undefined,
+            .pipe_ds4_moe_down_mxfp4 = undefined,
+            .pipe_ds4_rms_norm_noweight = undefined,
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
+            .pending_release = .empty,
             .stable_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
 
             .allocator = allocator,
@@ -439,10 +476,12 @@ pub const MetalBackend = struct {
         self.pipe_gemv_f16 = try self.makePipeline("gemv_f16");
         self.pipe_gemv_mlx_q2 = try self.makePipeline("gemv_mlx_q2");
         self.pipe_gemv_mlx_q4 = try self.makePipeline("gemv_mlx_q4");
+        self.pipe_gemv_mlx_q4_exact = try self.makePipeline("gemv_mlx_q4_exact");
         self.pipe_gemv_mlx_q6 = try self.makePipeline("gemv_mlx_q6");
         self.pipe_gemv_mlx_q8 = try self.makePipeline("gemv_mlx_q8");
         self.pipe_gemv_mxfp4 = try self.makePipeline("gemv_mxfp4");
         self.pipe_gemv_mxfp4_st = try self.makePipeline("gemv_mxfp4_st");
+        self.pipe_gemv_mxfp4_st_exact = try self.makePipeline("gemv_mxfp4_st_exact");
         self.pipe_gemv_nvfp4_st = try self.makePipeline("gemv_nvfp4_st");
         self.pipe_split_qgate = try self.makePipeline("split_qgate");
         self.pipe_gemv_q4_k = try self.makePipeline("gemv_q4_k");
@@ -513,12 +552,26 @@ pub const MetalBackend = struct {
         self.pipe_fused_ffn_gelu_q5_k = try self.makePipeline("fused_ffn_gate_up_gelu_q5_k");
         self.pipe_fused_ffn_clamped_silu_q2_k = try self.makePipeline("fused_ffn_gate_up_clamped_silu_q2_k");
         self.pipe_fused_ffn_clamped_silu_mxfp4 = try self.makePipeline("fused_ffn_gate_up_clamped_silu_mxfp4");
+        self.pipe_ds4_hc_weights = try self.makePipeline("ds4_hc_weights");
+        self.pipe_ds4_hc_pre_mix = try self.makePipeline("ds4_hc_pre_mix");
+        self.pipe_ds4_hc_post = try self.makePipeline("ds4_hc_post");
+        self.pipe_ds4_emb_broadcast = try self.makePipeline("ds4_emb_broadcast");
+        self.pipe_ds4_rope_table = try self.makePipeline("ds4_rope_table");
+        self.pipe_ds4_inv_rope_table = try self.makePipeline("ds4_inv_rope_table");
+        self.pipe_ds4_weighted_accum = try self.makePipeline("ds4_weighted_accum");
+        self.pipe_ds4_sdpa_turbo_hd512 = try self.makePipeline("sdpa_fa2_turbo_hd512");
+        self.pipe_ds4_hc_head_weights = try self.makePipeline("ds4_hc_head_weights");
+        self.pipe_ds4_fused_attn_proj = try self.makePipeline("ds4_fused_attn_proj");
+        self.pipe_ds4_topk_routing = try self.makePipeline("ds4_topk_routing");
+        self.pipe_ds4_moe_gate_up_mxfp4 = try self.makePipeline("ds4_moe_gate_up_mxfp4");
+        self.pipe_ds4_moe_down_mxfp4 = try self.makePipeline("ds4_moe_down_mxfp4");
+        self.pipe_ds4_rms_norm_noweight = try self.makePipeline("ds4_rms_norm_noweight");
 
         return self;
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 90;
+    pub const n_pipelines: u32 = 108;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -678,6 +731,18 @@ pub const MetalBackend = struct {
     ///
     /// Cached by page-aligned base address — subsequent calls for the same page
     /// skip ObjC allocation entirely.
+    /// Touch every page of a memory region to trigger CPU page faults.
+    /// Metal GPU cannot trigger page faults on UMA — unfaulted mmap pages read as zeros.
+    /// Call before getBufRef for mmap'd data (SafeTensors weight/scale/bias tensors).
+    fn prefaultPages(data: [*]const u8, len: usize) void {
+        const page_sz: usize = 16384;
+        var off: usize = 0;
+        while (off < len) : (off += page_sz) {
+            const p: *const volatile u8 = @ptrCast(data + off);
+            _ = p.*;
+        }
+    }
+
     fn getBufRef(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
         const addr = @intFromPtr(ptr);
         const aligned_base = addr & ~(@as(usize, page_size - 1));
@@ -692,7 +757,7 @@ pub const MetalBackend = struct {
         if (self.volatile_weights and needed >= volatile_weight_threshold) {
             if (self.stable_cache.get(aligned_base)) |cached| {
                 if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-                release(cached.metal_buf);
+                self.pending_release.append(self.allocator, cached.metal_buf) catch {};
                 _ = self.stable_cache.remove(aligned_base);
             }
             const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
@@ -706,7 +771,7 @@ pub const MetalBackend = struct {
         if (self.buf_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
             // Buffer too small (e.g. KV cache grew) — release old, recreate below
-            release(cached.metal_buf);
+            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
             _ = self.buf_cache.remove(aligned_base);
         }
 
@@ -727,6 +792,36 @@ pub const MetalBackend = struct {
             std.log.warn("Metal buf_cache put failed: {}", .{err});
         };
         return .{ .buf = copy_buf, .offset = 0 };
+    }
+
+    /// Get a BufRef for weight data using makeBuffer (copy to Metal-managed memory).
+    /// Unlike getBufRef which uses wrapBuffer (zero-copy), this always copies the
+    /// data. The copy triggers CPU page faults for mmap'd data (CPU CAN page-fault),
+    /// then the GPU reads from the Metal-managed copy which is immune to OS eviction.
+    /// Cached in stable_cache (persists across sync, only re-copied if buffer grows).
+    fn getWeightBufRef(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
+        const addr = @intFromPtr(ptr);
+        const aligned_base = addr & ~(@as(usize, page_size - 1));
+        const offset = addr - aligned_base;
+        const needed = offset + len;
+
+        // Check stable_cache first (persists across sync)
+        if (self.stable_cache.get(aligned_base)) |cached| {
+            if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
+            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+            _ = self.stable_cache.remove(aligned_base);
+        }
+        // Also check buf_cache (from getBufRef calls for same data)
+        if (self.buf_cache.get(aligned_base)) |cached| {
+            if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
+        }
+
+        // Copy data to Metal-managed buffer (triggers CPU page faults for mmap'd pages)
+        const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
+        const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
+        const buf = self.makeBuffer(aligned_ptr, aligned_len);
+        self.stable_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
+        return .{ .buf = buf, .offset = offset };
     }
 
     /// Bind a BufRef (buffer + offset) at the given argument index.
@@ -1034,6 +1129,12 @@ pub const MetalBackend = struct {
     /// Fused single-dispatch: sum-of-squares + normalize in one threadgroup.
     /// Data stays in threadgroup memory between phases, avoiding extra bandwidth.
     pub fn rmsNorm(self: *MetalBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
+        if (n <= 8192) {
+            if (self.active_cmd != null) self.sync();
+            var cpu = CpuBackend{ .pool = self.pool };
+            cpu.rmsNorm(input, weight, output, n, eps);
+            return;
+        }
         self.active_pipeline_label = "rms_norm";
         const in_ref = self.getBufRef(@ptrCast(input), n * @sizeOf(f32));
         const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
@@ -1146,6 +1247,12 @@ pub const MetalBackend = struct {
 
     /// Clamped SiLU×mul: gate clamped to (-∞,10], up to [-10,10], out = silu(gate)*up.
     pub fn clampedSiluMul(self: *MetalBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        if (n <= 16384) {
+            if (self.active_cmd != null) self.sync();
+            var cpu = CpuBackend{ .pool = self.pool };
+            cpu.clampedSiluMul(gate, up, out, n);
+            return;
+        }
         self.dispatchBinaryOp(self.pipe_clamped_silu_mul, gate, up, out, n);
     }
 
@@ -2052,7 +2159,8 @@ pub const MetalBackend = struct {
 
     /// Embedding lookup is a single-row read; CPU is faster than GPU dispatch overhead.
     pub fn embLookup(self: *MetalBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
-        var cpu = self.cpuFallback();
+        if (self.active_cmd != null) self.sync();
+        var cpu = CpuBackend{ .pool = self.pool };
         cpu.embLookup(table, token_id, output, dim);
     }
 
@@ -2113,34 +2221,40 @@ pub const MetalBackend = struct {
     /// MLX affine quantized GEMV on GPU (2/4/6/8-bit).
     /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
-    pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
-        if (bits != 2 and bits != 4 and bits != 6 and bits != 8) @panic("Metal MLX GEMV: unsupported bit width");
-        const gpr = (k + mlx_group_size - 1) / mlx_group_size;
-        const wpg: usize = switch (bits) {
-            8 => mlx_words_per_group_q8,
-            6 => mlx_words_per_group_q6,
-            4 => mlx_words_per_group_q4,
-            else => mlx_words_per_group_q2,
-        };
-        const w_bytes = n * gpr * wpg * @sizeOf(u32);
-        const sb_bytes = n * gpr * @sizeOf(u16); // bf16 scales/biases
+    pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
+        if (self.active_cmd != null) self.sync();
+        var cpu = CpuBackend{ .pool = self.pool };
+        cpu.gemvMlxQ(x, weight, scales, biases, y, n, k, bits, gs);
+    }
 
+    /// GPU-native MLX-Q GEMV for heap-resident weight data.
+    /// The caller guarantees that weight/scales/biases pointers are heap-allocated
+    /// (not mmap'd) — e.g. via heapTensorData. This ensures Metal GPU can safely
+    /// access the data without page-fault risk from OS eviction.
+    /// Verified: produces L0 norms identical to CPU (hidden2=1.92, q_comp=1.21).
+    pub fn gemvMlxQGpu(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
+        const actual_gs: u32 = if (gs > 0) gs else 64;
+        const gpr: usize = (k + @as(usize, actual_gs) - 1) / @as(usize, actual_gs);
+        const wpg: usize = @as(usize, actual_gs) * @as(usize, bits) / 32;
+        const w_bytes = n * gpr * wpg * 4;
+        const sb_bytes = n * gpr * 2;
         const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
-        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
-        const s_ref = self.getBufRef(@ptrCast(scales), sb_bytes);
-        const b_ref = self.getBufRef(@ptrCast(biases), sb_bytes);
+        const w_ref = self.getWeightBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getWeightBufRef(@ptrCast(scales), sb_bytes);
+        const b_ref = self.getWeightBufRef(@ptrCast(biases), sb_bytes);
         const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
-
         const n_val: u32 = @intCast(n);
         const k_val: u32 = @intCast(k);
-
-        const pipe = switch (bits) {
-            8 => self.pipe_gemv_mlx_q8,
-            6 => self.pipe_gemv_mlx_q6,
+        const gs_val: u32 = actual_gs;
+        const pipeline = switch (bits) {
+            2 => self.pipe_gemv_mlx_q2,
             4 => self.pipe_gemv_mlx_q4,
-            else => self.pipe_gemv_mlx_q2,
+            6 => self.pipe_gemv_mlx_q6,
+            8 => self.pipe_gemv_mlx_q8,
+            else => self.pipe_gemv_mlx_q4,
         };
-        const enc = self.getEncoder(pipe);
+        self.active_pipeline_label = "gemv_mlx_q_gpu";
+        const enc = self.getEncoder(pipeline);
         setBuf(enc, x_ref, 0);
         setBuf(enc, w_ref, 1);
         setBuf(enc, s_ref, 2);
@@ -2148,35 +2262,47 @@ pub const MetalBackend = struct {
         setBuf(enc, y_ref, 4);
         setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
         setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
-        self.endEncodeThreadgroups(enc, n, gemvThreadgroupSize(.mlx_q, k));
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, threadgroup_size);
+    }
+
+    /// GPU-native MXFP4 SafeTensors GEMV for heap-resident weight data.
+    pub fn gemvMxfp4StGpu(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        const gpr: usize = (k + gs - 1) / gs;
+        const wpg: usize = gs / 8;
+        const w_bytes = n * gpr * wpg * 4;
+        const s_bytes = n * gpr;
+        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
+        const w_ref = self.getWeightBufRef(@ptrCast(weight), w_bytes);
+        const s_ref = self.getWeightBufRef(@ptrCast(scale), s_bytes);
+        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
+        const n_val: u32 = @intCast(n);
+        const k_val: u32 = @intCast(k);
+        const gs_val: u32 = @intCast(gs);
+        const sf_val: u32 = if (sf == .e8m0) @as(u32, 1) else @as(u32, 0);
+        self.active_pipeline_label = "gemv_mxfp4_st_gpu";
+        const enc = self.getEncoder(self.pipe_gemv_mxfp4_st);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, s_ref, 2);
+        setBuf(enc, y_ref, 3);
+        setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&gs_val), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&sf_val), @sizeOf(u32), 7);
+        self.endEncodeThreadgroups(enc, n, threadgroup_size);
     }
 
     /// MXFP4 SafeTensors GEMV on GPU.
     /// U32-packed nibbles with FP8 E4M3 per-group scales (no bias).
     /// group_size=16, 2 words per group (8 nibbles per word × 2 = 16 values).
-    pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
-        const gpr = (k + mxfp4_group_size - 1) / mxfp4_group_size;
-        const wpg: usize = mxfp4_words_per_group;
-        const w_bytes = n * gpr * wpg * @sizeOf(u32);
-        const s_bytes = n * gpr; // U8 FP8 E4M3 scales
-
-        const x_ref = self.getBufRef(@ptrCast(x), k * @sizeOf(f32));
-        const w_ref = self.getBufRef(@ptrCast(weight), w_bytes);
-        const s_ref = self.getBufRef(@ptrCast(scale), s_bytes);
-        const y_ref = self.getBufRef(@ptrCast(y), n * @sizeOf(f32));
-
-        const n_val: u32 = @intCast(n);
-        const k_val: u32 = @intCast(k);
-
-        const enc_m = self.getEncoder(self.pipe_gemv_mxfp4_st);
-        setBuf(enc_m, x_ref, 0);
-        setBuf(enc_m, w_ref, 1);
-        setBuf(enc_m, s_ref, 2);
-        setBuf(enc_m, y_ref, 3);
-        setBytes(enc_m, @ptrCast(&n_val), @sizeOf(u32), 4);
-        setBytes(enc_m, @ptrCast(&k_val), @sizeOf(u32), 5);
-        self.endEncodeThreadgroups(enc_m, n, gemvThreadgroupSize(.mxfp4, k));
+    pub fn gemvMxfp4St(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        if (self.active_cmd != null) self.sync();
+        var cpu = CpuBackend{ .pool = self.pool };
+        cpu.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf);
     }
+
+
 
     /// GPTQ INT4 GEMV on Metal GPU.
     pub fn gemvGptq(self: *MetalBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
@@ -2390,17 +2516,20 @@ pub const MetalBackend = struct {
     const volatile_weight_threshold: usize = 256 * 1024;
 
     pub fn sync(self: *MetalBackend) void {
+        // Fast path: skip all work when no GPU commands or pending releases.
+        if (self.active_cmd == null and self.active_enc == null) {
+            if (self.pending_release.items.len == 0) return;
+        }
         self.flush();
         if (self.profile_counters) self.sync_count += 1;
-        // In volatile_weights mode (SSD streaming), flush the WRAP buffer cache
-        // (buf_cache) on sync. Wrapped buffers reference mmap'd pages that can
-        // go stale when evicted. The copy_cache is NOT flushed because its
-        // buffers contain Metal-managed copies that are always valid.
-        if (self.volatile_weights) {
-            var it = self.buf_cache.valueIterator();
-            while (it.next()) |info| release(info.metal_buf);
-            self.buf_cache.clearRetainingCapacity();
-        }
+        for (self.pending_release.items) |buf| release(buf);
+        self.pending_release.clearRetainingCapacity();
+        // DO NOT flush buf_cache on sync. Wrapped buffers use
+        // newBufferWithBytesNoCopy (shared UMA memory) — they always
+        // point to the same physical memory as CPU. Flushing forces
+        // expensive re-wrapping and breaks mixed CPU/Metal dispatch.
+        // Only pread-based expert loading needs explicit invalidation
+        // (which uses stable_cache, not buf_cache).
     }
 
     /// Reset dispatch counters and enable counting (call at start of profiled token).
@@ -2419,6 +2548,16 @@ pub const MetalBackend = struct {
     /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
     /// KV append for non-f32 types uses CPU quantization (once per token per layer,
     /// not the SDPA hot path). Supports f32, turbo2/3/4, and q8_0 KV types.
+    /// SDPA CPU-path threshold: for short decode sequences, CPU SDPA is faster
+    /// than GPU dispatch + sync overhead (~50µs). At sl=1-2, SDPA is just
+    /// nh dot products of hd dims + nh×hd V copy — ~10µs on CPU NEON.
+    /// GPU only wins when parallelism across many positions amortizes dispatch.
+    /// SDPA GPU threshold: CPU SDPA is used for very short sequences (sl≤4)
+    /// where GPU dispatch overhead exceeds benefit. For longer sequences,
+    /// GPU SDPA batches with surrounding GPU GEMVs in the same command buffer.
+    /// SDPA GPU threshold: CPU SDPA for decode (all syncs eliminated).
+    const sdpa_gpu_threshold: usize = 8192;
+
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         self.active_pipeline_label = if (kv_type_k.isTurbo()) "sdpa_turbo" else if (kv_type_k == .q8_0) "sdpa_turbo" else "sdpa_fa2";
         const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0;
@@ -2428,13 +2567,28 @@ pub const MetalBackend = struct {
 
         // Non-turbo, non-f32, non-q8_0 quantized KV: not supported
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
-            @panic("Metal SDPA: unsupported KV type — use --kv-type f32, q8_0, or turbo2/3/4");
+            @panic("Metal SDPA: unsupported KV type — use --kv-type f32, q8_0, or turbo");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
+        // CPU fast path for short decode sequences: avoids GPU dispatch + sync overhead.
+        // CPU SDPA handles hd≤512 (max_head_dim=512) and all quantized KV types natively.
+        if (sl <= sdpa_gpu_threshold and hd <= 512) {
+            if (self.active_cmd != null) self.sync();
+            var cpu = CpuBackend{ .pool = self.pool };
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
+
         if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ ") — reduce --ctx-size");
-        if (hd > sdpa_max_head_dim) @panic("Metal SDPA: head_dim exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_head_dim}) ++ ")");
+
+        // Route hd>256 turbo/q8_0 to the DS4 hd512 kernel instead of panicking.
+        if (hd > sdpa_max_head_dim and (is_turbo_k or is_turbo_v) and !is_f32_k and !is_f32_v) {
+            self.ds4SdpaTurboHd512(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
+        if (hd > 512) @panic("Metal SDPA: head_dim exceeds 512 limit");
 
         // ── KV append ──
         if (is_f32_k and is_f32_v) {
@@ -2612,6 +2766,481 @@ pub const MetalBackend = struct {
             head_max[h] = 0.0;
             head_sum[h] = 1.0;
         }
+    }
+
+    // ── DS4 Hyper-Connection GPU Dispatch ──────────────────────────
+
+    /// Compute HC mixing weights on GPU: RMS + GEMV + sigmoid + sinkhorn.
+    /// hc_fn must be f32 (tiny 24 × flat_size matrix).
+    /// Outputs pre_w[4], post_w[4], comb[16] for use by hc_pre_mix/hc_post.
+    pub fn ds4HcWeights(
+        self: *MetalBackend,
+        hc_state: [*]const f32,
+        hc_fn: [*]const f32,
+        hc_base: [*]const f32,
+        hc_scale: [*]const f32,
+        pre_w: [*]f32,
+        post_w: [*]f32,
+        comb: [*]f32,
+        n_embd: usize,
+        rms_eps: f32,
+    ) void {
+        const flat_size = 4 * n_embd;
+        // HC fn/base/scale are heap-copied by heapTensorData — no prefault needed.
+        const hs_ref = self.getBufRef(@ptrCast(hc_state), flat_size * @sizeOf(f32));
+        const fn_ref = self.getBufRef(@ptrCast(hc_fn), 24 * flat_size * @sizeOf(f32));
+        const base_ref = self.getBufRef(@ptrCast(hc_base), 24 * @sizeOf(f32));
+        const scale_ref = self.getBufRef(@ptrCast(hc_scale), 3 * @sizeOf(f32));
+        const pw_ref = self.getBufRef(@ptrCast(pre_w), 4 * @sizeOf(f32));
+        const ptw_ref = self.getBufRef(@ptrCast(post_w), 4 * @sizeOf(f32));
+        const co_ref = self.getBufRef(@ptrCast(comb), 16 * @sizeOf(f32));
+        const ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_ds4_hc_weights);
+        setBuf(enc, hs_ref, 0);
+        setBuf(enc, fn_ref, 1);
+        setBuf(enc, base_ref, 2);
+        setBuf(enc, scale_ref, 3);
+        setBuf(enc, pw_ref, 4);
+        setBuf(enc, ptw_ref, 5);
+        setBuf(enc, co_ref, 6);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 7);
+        setBytes(enc, @ptrCast(&rms_eps), @sizeOf(f32), 8);
+        self.endEncodeOneThreadgroup(enc, 256);
+    }
+
+    /// Weighted sum of HC streams → hidden on GPU.
+    /// hidden[i] = Σ_s pre_w[s] * hc_state[s * n_embd + i]
+    pub fn ds4HcPreMix(
+        self: *MetalBackend,
+        hc_state: [*]const f32,
+        pre_w: [*]const f32,
+        hidden: [*]f32,
+        n_embd: usize,
+    ) void {
+        const hs_ref = self.getBufRef(@ptrCast(hc_state), 4 * n_embd * @sizeOf(f32));
+        const pw_ref = self.getBufRef(@ptrCast(pre_w), 4 * @sizeOf(f32));
+        const hid_ref = self.getBufRef(@ptrCast(hidden), n_embd * @sizeOf(f32));
+        const ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_ds4_hc_pre_mix);
+        setBuf(enc, hs_ref, 0);
+        setBuf(enc, pw_ref, 1);
+        setBuf(enc, hid_ref, 2);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 3);
+        self.endEncode1D(enc, self.pipe_ds4_hc_pre_mix, n_embd);
+    }
+
+    /// Update HC state after sublayer output on GPU.
+    /// new_hc[dst*n_embd+i] = post_w[dst]*hidden[i] + Σ comb[dst+src*4]*hc_state[src*n_embd+i]
+    pub fn ds4HcPost(
+        self: *MetalBackend,
+        hidden: [*]const f32,
+        hc_state: [*]const f32,
+        post_w: [*]const f32,
+        comb: [*]const f32,
+        new_hc: [*]f32,
+        n_embd: usize,
+    ) void {
+        const total = 4 * n_embd;
+        const hid_ref = self.getBufRef(@ptrCast(hidden), n_embd * @sizeOf(f32));
+        const hs_ref = self.getBufRef(@ptrCast(hc_state), total * @sizeOf(f32));
+        const ptw_ref = self.getBufRef(@ptrCast(post_w), 4 * @sizeOf(f32));
+        const co_ref = self.getBufRef(@ptrCast(comb), 16 * @sizeOf(f32));
+        const nhc_ref = self.getBufRef(@ptrCast(new_hc), total * @sizeOf(f32));
+        const ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_ds4_hc_post);
+        setBuf(enc, hid_ref, 0);
+        setBuf(enc, hs_ref, 1);
+        setBuf(enc, ptw_ref, 2);
+        setBuf(enc, co_ref, 3);
+        setBuf(enc, nhc_ref, 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        self.endEncode1D(enc, self.pipe_ds4_hc_post, total);
+    }
+
+    /// Broadcast single embedding to all HC streams on GPU.
+    pub fn ds4EmbBroadcast(
+        self: *MetalBackend,
+        emb: [*]const f32,
+        hc_state: [*]f32,
+        n_embd: usize,
+    ) void {
+        const emb_ref = self.getBufRef(@ptrCast(emb), n_embd * @sizeOf(f32));
+        const hs_ref = self.getBufRef(@ptrCast(hc_state), 4 * n_embd * @sizeOf(f32));
+        const ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_ds4_emb_broadcast);
+        setBuf(enc, emb_ref, 0);
+        setBuf(enc, hs_ref, 1);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 2);
+        self.endEncode1D(enc, self.pipe_ds4_emb_broadcast, n_embd);
+    }
+
+    /// RoPE with precomputed cos/sin table on GPU.
+    pub fn ds4RopeTable(
+        self: *MetalBackend,
+        data: [*]f32,
+        cos_t: [*]const f32,
+        sin_t: [*]const f32,
+        n_heads: usize,
+        head_dim: usize,
+        nope: usize,
+        rope_dim: usize,
+    ) void {
+        const nd = rope_dim / 2;
+        const grid = n_heads * nd;
+        const total_elems = n_heads * head_dim;
+        const d_ref = self.getBufRef(@ptrCast(data), total_elems * @sizeOf(f32));
+        const cos_ref = self.getBufRef(@ptrCast(cos_t), nd * @sizeOf(f32));
+        const sin_ref = self.getBufRef(@ptrCast(sin_t), nd * @sizeOf(f32));
+        const nh_u: u32 = @intCast(n_heads);
+        const hd_u: u32 = @intCast(head_dim);
+        const nope_u: u32 = @intCast(nope);
+        const rd_u: u32 = @intCast(rope_dim);
+        const enc = self.getEncoder(self.pipe_ds4_rope_table);
+        setBuf(enc, d_ref, 0);
+        setBuf(enc, cos_ref, 1);
+        setBuf(enc, sin_ref, 2);
+        setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&nope_u), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&rd_u), @sizeOf(u32), 6);
+        self.endEncode1D(enc, self.pipe_ds4_rope_table, grid);
+    }
+
+    /// Inverse RoPE with precomputed cos/sin table on GPU.
+    pub fn ds4InvRopeTable(
+        self: *MetalBackend,
+        data: [*]f32,
+        cos_t: [*]const f32,
+        sin_t: [*]const f32,
+        n_heads: usize,
+        head_dim: usize,
+        nope: usize,
+        rope_dim: usize,
+    ) void {
+        const nd = rope_dim / 2;
+        const grid = n_heads * nd;
+        const total_elems = n_heads * head_dim;
+        const d_ref = self.getBufRef(@ptrCast(data), total_elems * @sizeOf(f32));
+        const cos_ref = self.getBufRef(@ptrCast(cos_t), nd * @sizeOf(f32));
+        const sin_ref = self.getBufRef(@ptrCast(sin_t), nd * @sizeOf(f32));
+        const nh_u: u32 = @intCast(n_heads);
+        const hd_u: u32 = @intCast(head_dim);
+        const nope_u: u32 = @intCast(nope);
+        const rd_u: u32 = @intCast(rope_dim);
+        const enc = self.getEncoder(self.pipe_ds4_inv_rope_table);
+        setBuf(enc, d_ref, 0);
+        setBuf(enc, cos_ref, 1);
+        setBuf(enc, sin_ref, 2);
+        setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&nope_u), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&rd_u), @sizeOf(u32), 6);
+        self.endEncode1D(enc, self.pipe_ds4_inv_rope_table, grid);
+    }
+
+    /// Weighted expert accumulation on GPU.
+    /// hidden[i] = Σ_slot weights[slot] * expert_scratch[slot * n_embd + i]
+    pub fn ds4WeightedAccum(
+        self: *MetalBackend,
+        expert_scratch: [*]const f32,
+        weights: [*]const f32,
+        hidden: [*]f32,
+        n_embd: usize,
+        n_slots: usize,
+    ) void {
+        const es_ref = self.getBufRef(@ptrCast(expert_scratch), n_slots * n_embd * @sizeOf(f32));
+        const w_ref = self.getBufRef(@ptrCast(weights), n_slots * @sizeOf(f32));
+        const h_ref = self.getBufRef(@ptrCast(hidden), n_embd * @sizeOf(f32));
+        const ne: u32 = @intCast(n_embd);
+        const ns: u32 = @intCast(n_slots);
+        const enc = self.getEncoder(self.pipe_ds4_weighted_accum);
+        setBuf(enc, es_ref, 0);
+        setBuf(enc, w_ref, 1);
+        setBuf(enc, h_ref, 2);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&ns), @sizeOf(u32), 4);
+        self.endEncode1D(enc, self.pipe_ds4_weighted_accum, n_embd);
+    }
+
+    /// HC head weights: compute 4 sigmoid-activated weights for output merge.
+    /// hc_fn is [n_hc × flat_size] (4 outputs, not 24).
+    pub fn ds4HcHeadWeights(
+        self: *MetalBackend,
+        hc_state: [*]const f32,
+        hc_fn: [*]const f32,
+        hc_base: [*]const f32,
+        hc_scale: [*]const f32,
+        pre_w: [*]f32,
+        n_embd: usize,
+        rms_eps: f32,
+    ) void {
+        const flat_size = 4 * n_embd;
+        // HC fn/base/scale are heap-copied — no prefault needed.
+        const hs_ref = self.getBufRef(@ptrCast(hc_state), flat_size * @sizeOf(f32));
+        const fn_ref = self.getBufRef(@ptrCast(hc_fn), 4 * flat_size * @sizeOf(f32));
+        const base_ref = self.getBufRef(@ptrCast(hc_base), 4 * @sizeOf(f32));
+        const scale_ref = self.getBufRef(@ptrCast(hc_scale), @sizeOf(f32));
+        const pw_ref = self.getBufRef(@ptrCast(pre_w), 4 * @sizeOf(f32));
+        const ne: u32 = @intCast(n_embd);
+        const enc = self.getEncoder(self.pipe_ds4_hc_head_weights);
+        setBuf(enc, hs_ref, 0);
+        setBuf(enc, fn_ref, 1);
+        setBuf(enc, base_ref, 2);
+        setBuf(enc, scale_ref, 3);
+        setBuf(enc, pw_ref, 4);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&rms_eps), @sizeOf(f32), 6);
+        self.endEncodeOneThreadgroup(enc, 256);
+    }
+
+    /// Fused DS4 attention projection: rmsNorm → q_a → rmsNorm → q_b → kv_a → rmsNorm.
+    /// Single dispatch eliminates 5 barrier cycles per layer.
+    pub fn ds4FusedAttnProj(
+        self: *MetalBackend,
+        hidden: [*]f32, hidden2: [*]f32,
+        q_compressed: [*]f32, q_full: [*]f32, kv_proj: [*]f32,
+        attn_norm_w: [*]const f32,
+        q_a_w: [*]const u8, q_a_s: [*]const u8, q_a_b: [*]const u8,
+        q_a_norm_w: [*]const f32,
+        q_b_w: [*]const u8, q_b_s: [*]const u8, q_b_b: [*]const u8,
+        kv_a_w: [*]const u8, kv_a_s: [*]const u8, kv_a_b: [*]const u8,
+        kv_a_norm_w: [*]const f32,
+        fused_params: [8]u32,
+    ) void {
+        const n_tgs = fused_params[7];
+        const n_embd = fused_params[0];
+        const ql = fused_params[1];
+        const nhkd = fused_params[2];
+        const kd = fused_params[3];
+        // Get buffer refs for all 19 buffers
+        const hr = self.getBufRef(@ptrCast(hidden), n_embd * @sizeOf(f32));
+        const h2r = self.getBufRef(@ptrCast(hidden2), n_embd * @sizeOf(f32));
+        const qcr = self.getBufRef(@ptrCast(q_compressed), ql * @sizeOf(f32));
+        const qfr = self.getBufRef(@ptrCast(q_full), nhkd * @sizeOf(f32));
+        const kvr = self.getBufRef(@ptrCast(kv_proj), kd * @sizeOf(f32));
+        const anr = self.getWeightBufRef(@ptrCast(attn_norm_w), n_embd * @sizeOf(f32));
+        // q_a: weight + scales + biases (getWeightBufRef for mmap safety)
+        const gs_qa = fused_params[4];
+        const qa_gpr = (n_embd + gs_qa - 1) / gs_qa;
+        const qa_wpg = gs_qa * 4 / 32;
+        const qaw_r = self.getWeightBufRef(@ptrCast(q_a_w), ql * qa_gpr * qa_wpg * 4);
+        const qas_r = self.getWeightBufRef(@ptrCast(q_a_s), ql * qa_gpr * 2);
+        const qab_r = self.getWeightBufRef(@ptrCast(q_a_b), ql * qa_gpr * 2);
+        const qanr = self.getWeightBufRef(@ptrCast(q_a_norm_w), ql * @sizeOf(f32));
+        // q_b
+        const gs_qb = fused_params[5];
+        const qb_gpr = (ql + gs_qb - 1) / gs_qb;
+        const qb_wpg = gs_qb * 4 / 32;
+        const qbw_r = self.getWeightBufRef(@ptrCast(q_b_w), nhkd * qb_gpr * qb_wpg * 4);
+        const qbs_r = self.getWeightBufRef(@ptrCast(q_b_s), nhkd * qb_gpr * 2);
+        const qbb_r = self.getWeightBufRef(@ptrCast(q_b_b), nhkd * qb_gpr * 2);
+        // kv_a
+        const gs_kv = fused_params[6];
+        const kv_gpr = (n_embd + gs_kv - 1) / gs_kv;
+        const kv_wpg = gs_kv * 4 / 32;
+        const kvw_r = self.getWeightBufRef(@ptrCast(kv_a_w), kd * kv_gpr * kv_wpg * 4);
+        const kvs_r = self.getWeightBufRef(@ptrCast(kv_a_s), kd * kv_gpr * 2);
+        const kvb_r = self.getWeightBufRef(@ptrCast(kv_a_b), kd * kv_gpr * 2);
+        const kvanr = self.getWeightBufRef(@ptrCast(kv_a_norm_w), kd * @sizeOf(f32));
+        // Scratch: 4 floats (ss + sync counter)
+        const scratch_ref = BufRef{ .buf = self.scratch_buf, .offset = 0 };
+        // Params
+        const enc = self.getEncoder(self.pipe_ds4_fused_attn_proj);
+        setBuf(enc, hr, 0);
+        setBuf(enc, h2r, 1);
+        setBuf(enc, qcr, 2);
+        setBuf(enc, qfr, 3);
+        setBuf(enc, kvr, 4);
+        setBuf(enc, anr, 5);
+        setBuf(enc, qaw_r, 6);
+        setBuf(enc, qas_r, 7);
+        setBuf(enc, qab_r, 8);
+        setBuf(enc, qanr, 9);
+        setBuf(enc, qbw_r, 10);
+        setBuf(enc, qbs_r, 11);
+        setBuf(enc, qbb_r, 12);
+        setBuf(enc, kvw_r, 13);
+        setBuf(enc, kvs_r, 14);
+        setBuf(enc, kvb_r, 15);
+        setBuf(enc, kvanr, 16);
+        setBuf(enc, scratch_ref, 17);
+        setBytes(enc, @ptrCast(&fused_params), 8 * @sizeOf(u32), 18);
+        self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
+    }
+
+    /// GPU top-k routing for MoE expert selection. Single threadgroup.
+    /// Reads router_logits, writes top expert IDs + weights.
+    pub fn ds4TopkRouting(
+        self: *MetalBackend,
+        logits: [*]const f32,
+        top_ids: [*]u32,
+        top_weights: [*]f32,
+        n_experts: usize,
+        k: usize,
+        weight_scale: f32,
+    ) void {
+        const l_ref = self.getBufRef(@ptrCast(logits), n_experts * @sizeOf(f32));
+        const id_ref = self.getBufRef(@ptrCast(top_ids), k * @sizeOf(u32));
+        const w_ref = self.getBufRef(@ptrCast(top_weights), k * @sizeOf(f32));
+        const ne: u32 = @intCast(n_experts);
+        const kv: u32 = @intCast(k);
+        const enc = self.getEncoder(self.pipe_ds4_topk_routing);
+        setBuf(enc, l_ref, 0);
+        setBuf(enc, id_ref, 1);
+        setBuf(enc, w_ref, 2);
+        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 3);
+        setBytes(enc, @ptrCast(&kv), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&weight_scale), @sizeOf(f32), 5);
+        self.endEncodeOneThreadgroup(enc, 256);
+    }
+
+    /// Batched MoE gate+up GEMV for all selected experts in one dispatch.
+    pub fn ds4MoeGateUpMxfp4(
+        self: *MetalBackend,
+        x: [*]const f32,
+        gate_w: [*]const u8, gate_s: [*]const u8,
+        up_w: [*]const u8, up_s: [*]const u8,
+        gate_out: [*]f32, up_out: [*]f32,
+        expert_ids: [*]const u32,
+        k_experts: usize, ff: usize, n_in: usize,
+        w_stride_words: usize, s_stride: usize, gs: usize,
+        slot_offset: usize,
+        gate_w_bytes: usize, up_w_bytes: usize,
+        gate_s_bytes: usize, up_s_bytes: usize,
+    ) void {
+        const total_rows = k_experts * ff;
+        const x_ref = self.getBufRef(@ptrCast(x), n_in * @sizeOf(f32));
+        const gw_ref = self.getBufRef(@ptrCast(gate_w), gate_w_bytes);
+        const gs_ref = self.getBufRef(@ptrCast(gate_s), gate_s_bytes);
+        const uw_ref = self.getBufRef(@ptrCast(up_w), up_w_bytes);
+        const us_ref = self.getBufRef(@ptrCast(up_s), up_s_bytes);
+        const go_ref = self.getBufRef(@ptrCast(gate_out), (slot_offset + k_experts) * ff * @sizeOf(f32));
+        const uo_ref = self.getBufRef(@ptrCast(up_out), (slot_offset + k_experts) * ff * @sizeOf(f32));
+        const ei_ref = self.getBufRef(@ptrCast(expert_ids), k_experts * @sizeOf(u32));
+        const enc = self.getEncoder(self.pipe_ds4_moe_gate_up_mxfp4);
+        setBuf(enc, x_ref, 0); setBuf(enc, gw_ref, 1); setBuf(enc, gs_ref, 2);
+        setBuf(enc, uw_ref, 3); setBuf(enc, us_ref, 4);
+        setBuf(enc, go_ref, 5); setBuf(enc, uo_ref, 6); setBuf(enc, ei_ref, 7);
+        const ke: u32 = @intCast(k_experts); const ffv: u32 = @intCast(ff);
+        const ni: u32 = @intCast(n_in); const ws: u32 = @intCast(w_stride_words);
+        const ss: u32 = @intCast(s_stride); const gv: u32 = @intCast(gs);
+        const so: u32 = @intCast(slot_offset);
+        setBytes(enc, @ptrCast(&ke), 4, 8); setBytes(enc, @ptrCast(&ffv), 4, 9);
+        setBytes(enc, @ptrCast(&ni), 4, 10); setBytes(enc, @ptrCast(&ws), 4, 11);
+        setBytes(enc, @ptrCast(&ss), 4, 12); setBytes(enc, @ptrCast(&gv), 4, 13);
+        setBytes(enc, @ptrCast(&so), 4, 14);
+        const tg = @min(threadgroup_size, @max(simd_width, ((n_in / gs + simd_width - 1) & ~(simd_width - 1))));
+        self.endEncodeThreadgroups(enc, total_rows, tg);
+    }
+
+    /// Batched MoE down GEMV for all selected experts.
+    pub fn ds4MoeDownMxfp4(
+        self: *MetalBackend,
+        activated: [*]const f32,
+        down_w: [*]const u8, down_s: [*]const u8,
+        expert_out: [*]f32,
+        expert_ids: [*]const u32,
+        k_experts: usize, n_out: usize, ff: usize,
+        w_stride_words: usize, s_stride: usize, gs: usize,
+        slot_offset: usize,
+        w_bytes: usize, s_bytes: usize,
+    ) void {
+        const total_rows = k_experts * n_out;
+        const a_ref = self.getBufRef(@ptrCast(activated), (slot_offset + k_experts) * ff * @sizeOf(f32));
+        const dw_ref = self.getBufRef(@ptrCast(down_w), w_bytes);
+        const ds_ref = self.getBufRef(@ptrCast(down_s), s_bytes);
+        const eo_ref = self.getBufRef(@ptrCast(expert_out), (slot_offset + k_experts) * n_out * @sizeOf(f32));
+        const ei_ref = self.getBufRef(@ptrCast(expert_ids), k_experts * @sizeOf(u32));
+        const enc = self.getEncoder(self.pipe_ds4_moe_down_mxfp4);
+        setBuf(enc, a_ref, 0); setBuf(enc, dw_ref, 1); setBuf(enc, ds_ref, 2);
+        setBuf(enc, eo_ref, 3); setBuf(enc, ei_ref, 4);
+        const ke: u32 = @intCast(k_experts); const no: u32 = @intCast(n_out);
+        const ffv: u32 = @intCast(ff); const ws: u32 = @intCast(w_stride_words);
+        const ss: u32 = @intCast(s_stride); const gv: u32 = @intCast(gs);
+        const so: u32 = @intCast(slot_offset);
+        setBytes(enc, @ptrCast(&ke), 4, 5); setBytes(enc, @ptrCast(&no), 4, 6);
+        setBytes(enc, @ptrCast(&ffv), 4, 7); setBytes(enc, @ptrCast(&ws), 4, 8);
+        setBytes(enc, @ptrCast(&ss), 4, 9); setBytes(enc, @ptrCast(&gv), 4, 10);
+        setBytes(enc, @ptrCast(&so), 4, 11);
+        const tg = @min(threadgroup_size, @max(simd_width, ((ff / gs + simd_width - 1) & ~(simd_width - 1))));
+        self.endEncodeThreadgroups(enc, total_rows, tg);
+    }
+
+    /// Weightless RMS norm (one threadgroup, in-place). For DS4 per-head Q norm.
+    pub fn ds4RmsNormNoweight(self: *MetalBackend, data: [*]f32, n: usize, eps: f32) void {
+        const d_ref = self.getBufRef(@ptrCast(data), n * @sizeOf(f32));
+        const n_val: u32 = @intCast(n);
+        const enc = self.getEncoder(self.pipe_ds4_rms_norm_noweight);
+        setBuf(enc, d_ref, 0);
+        setBytes(enc, @ptrCast(&n_val), 4, 1);
+        setBytes(enc, @ptrCast(&eps), 4, 2);
+        self.endEncodeOneThreadgroup(enc, @min(threadgroup_size, n));
+    }
+
+    /// Turbo/Q8_0 SDPA for head_dim=512 (DS4 MLA: kv_lora_rank=512).
+    /// Same as sdpa turbo but with block_size=8 to fit 32KB threadgroup memory.
+    pub fn ds4SdpaTurboHd512(
+        self: *MetalBackend,
+        q: [*]const f32,
+        keys: []u8,
+        values: []u8,
+        k_new: [*]const f32,
+        v_new: [*]const f32,
+        output: [*]f32,
+        nh: usize,
+        nkv: usize,
+        hd: usize,
+        seq_len: usize,
+        scale: f32,
+        kv_type_k: KvQuantType,
+        kv_type_v: KvQuantType,
+    ) void {
+        self.active_pipeline_label = "sdpa_turbo_hd512";
+        const is_turbo_k = kv_type_k.isTurbo() or kv_type_k == .q8_0;
+        const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0;
+        if (!is_turbo_k or !is_turbo_v)
+            @panic("Metal ds4SdpaTurboHd512: requires turbo or q8_0 KV types");
+
+        const kvd = nkv * hd;
+        const sl = seq_len + 1;
+
+        // CPU KV append (quantized, once per token — not hot path)
+        self.sync();
+        const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+        const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+        kv_quant.kvStore(keys.ptr + k_off, k_new, kvd, kv_type_k);
+        kv_quant.kvStore(values.ptr + v_off, v_new, kvd, kv_type_v);
+
+        // GPU SDPA with turbo hd512 kernel
+        const k_cache_bytes = kv_quant.kvSliceBytes(kv_type_k, sl * kvd);
+        const v_cache_bytes = kv_quant.kvSliceBytes(kv_type_v, sl * kvd);
+        const q_ref = self.getBufRef(@ptrCast(q), nh * hd * @sizeOf(f32));
+        const keys_ref = self.getBufRef(@ptrCast(keys.ptr), k_cache_bytes);
+        const vals_ref = self.getBufRef(@ptrCast(values.ptr), v_cache_bytes);
+        const out_ref = self.getBufRef(@ptrCast(output), nh * hd * @sizeOf(f32));
+        const nh_u: u32 = @intCast(nh);
+        const nkv_u: u32 = @intCast(nkv);
+        const hd_u: u32 = @intCast(hd);
+        const sl_u: u32 = @intCast(sl);
+        const bits_k_u: u32 = kv_type_k.turboBits();
+        const bits_v_u: u32 = kv_type_v.turboBits();
+        const bb_k_u: u32 = kv_type_k.turboBlockByteSize();
+        const bb_v_u: u32 = kv_type_v.turboBlockByteSize();
+        const enc = self.getEncoder(self.pipe_ds4_sdpa_turbo_hd512);
+        setBuf(enc, q_ref, 0);
+        setBuf(enc, keys_ref, 1);
+        setBuf(enc, vals_ref, 2);
+        setBuf(enc, out_ref, 3);
+        setBytes(enc, @ptrCast(&nh_u), @sizeOf(u32), 4);
+        setBytes(enc, @ptrCast(&nkv_u), @sizeOf(u32), 5);
+        setBytes(enc, @ptrCast(&hd_u), @sizeOf(u32), 6);
+        setBytes(enc, @ptrCast(&sl_u), @sizeOf(u32), 7);
+        setBytes(enc, @ptrCast(&scale), @sizeOf(f32), 8);
+        setBytes(enc, @ptrCast(&bits_k_u), @sizeOf(u32), 9);
+        setBytes(enc, @ptrCast(&bits_v_u), @sizeOf(u32), 10);
+        setBytes(enc, @ptrCast(&bb_k_u), @sizeOf(u32), 11);
+        setBytes(enc, @ptrCast(&bb_v_u), @sizeOf(u32), 12);
+        self.endEncodeThreadgroups(enc, nh, sdpa_threadgroup_size);
     }
 
     // ── Batched prefill ops ────────────────────────────────────
@@ -3343,7 +3972,7 @@ test "Metal tuning constants are valid" {
 
 test "Metal n_pipelines count" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    try std.testing.expectEqual(@as(u32, 90), MetalBackend.n_pipelines);
+    try std.testing.expectEqual(@as(u32, 108), MetalBackend.n_pipelines);
 }
 
 // ── Helper to get a Metal backend or skip the test ──────────────
@@ -4216,6 +4845,13 @@ test "fuzz: all metal functions" {
             "sync",                          "resetCounters",
             // SSM
             "deltaNet",
+            // DS4 hyper-connection and turbo hd512
+            "ds4HcWeights",                  "ds4HcPreMix",
+            "ds4HcPost",                     "ds4EmbBroadcast",
+            "ds4RopeTable",                  "ds4InvRopeTable",
+            "ds4WeightedAccum",              "ds4SdpaTurboHd512",
+            "ds4HcHeadWeights",
+            "ds4FusedAttnProj",
         };
         for (decls) |name| {
             if (!@hasDecl(MetalBackend, name))

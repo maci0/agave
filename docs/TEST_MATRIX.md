@@ -23,7 +23,7 @@
 | 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | — | |
 | 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | — | GGUF issue — also fails in llama.cpp |
 | 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | — | Prompt-sensitive; answers correctly with clear prompts |
-| 10 | DeepSeek V4 | — | — | Not tested | Not tested | — | MLA, CSA/HCA, LID |
+| 10 | DeepSeek V4 | — | Metal: **10.7-21.2 tok/s** (MLX-Q4, suffix) | Not tested | Not tested | — | MLA, CSA/HCA, LID. 14 Metal kernels. Bit-identical to CPU via dedicated CpuBackend bypass. |
 | 11 | Llama 4 | — | — | Not tested | Not tested | — | iRoPE, chunked attention, MoE |
 | 12 | DiffusionGemma | — | — | Not tested | Not tested | — | Block diffusion |
 | 13 | GPT-OSS Harmony | — | — | Not tested | Not tested | — | |

@@ -107,7 +107,7 @@ class AgaveEngine {
     promptMem.set(promptBytes);
 
     // Generate
-    const tokenCount = this.wasm.exports.agave_generate(this.ctx, promptPtr, promptBytes.length, maxTokens);
+    this.wasm.exports.agave_generate(this.ctx, promptPtr, promptBytes.length, maxTokens);
     this.wasm.exports.agave_dealloc(promptPtr, promptBytes.length);
 
     // Read output

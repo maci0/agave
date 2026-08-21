@@ -1242,14 +1242,13 @@ kernel void gemv_mlx_q4(
     device float* y                    [[buffer(4)]],
     constant uint& n                   [[buffer(5)]],
     constant uint& k                   [[buffer(6)]],
+    constant uint& gs                  [[buffer(7)]],
     uint tgid     [[threadgroup_position_in_grid]],
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
     if (tgid >= n) return;
-
-    const uint gs = 64;
-    const uint wpg = 8;    // u32 words per group (64 nibbles / 8 per word)
+    const uint wpg = gs / 8;  // u32 words per group (gs nibbles / 8 per word)
     uint gpr = (k + gs - 1) / gs;
 
     // packed_uchar4 loads: alignment-free 4-byte reads from mmap'd data
@@ -1468,20 +1467,23 @@ kernel void gemv_mxfp4_st(
     device float* y                   [[buffer(3)]],
     constant uint& n                  [[buffer(4)]],
     constant uint& k                  [[buffer(5)]],
+    constant uint& gs                 [[buffer(6)]],
+    constant uint& scale_fmt          [[buffer(7)]],  // 0=E4M3, 1=E8M0
     uint tgid     [[threadgroup_position_in_grid]],
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
     if (tgid >= n) return;
 
-    const uint gs = 16;   // NVIDIA MXFP4: 16-element groups (was wrong at 32)
-    const uint wpg = 2;   // u32 words per group (16 nibbles / 8 per word)
+    const uint wpg = gs / 8;  // u32 words per group (gs nibbles / 8 per word)
     uint gpr = (k + gs - 1) / gs;
     uint w_row = tgid * gpr * wpg;
     float sum = 0.0f;
 
     for (uint g = tid; g < gpr; g += tg_size) {
-        float scale = fp8e4m3_to_f32(scales[tgid * gpr + g]);
+        float scale = (scale_fmt == 1)
+            ? e8m0_to_f32(scales[tgid * gpr + g])
+            : fp8e4m3_to_f32(scales[tgid * gpr + g]);
         uint xo = g * gs;
         uint wg = w_row + g * wpg;
 
@@ -2327,4 +2329,183 @@ kernel void gemv_iq2_xxs(
     threadgroup float shared[8];
     sum = threadgroup_reduce_sum(sum, shared, tid, tg_size);
     if (tid == 0) y[tgid] = sum;
+}
+
+// ── Bit-exact MLX Q4 GEMV (matches CPU mlxGemvQ4Rows) ─────────
+// Processes elements in the SAME order as CPU NEON @mulAdd/@reduce.
+// Uses scalar operations to match CPU accumulation exactly.
+// tg_size MUST be 1 (single thread per row for bit-exact matching).
+
+// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
+// Single thread per row. E8M0 or E4M3 scale format via scale_fmt parameter.
+
+// ── Bit-exact MXFP4 GEMV (matches CPU mlxMxfp4GemvRows) ─────────
+// Matches CPU computation: (scale * lookup[nibble]) * x, accumulated
+// into 8-element array, then pairwise reduced. Single thread per row.
+
+// ── Vec8-exact MLX Q4 GEMV (matches CPU NEON @mulAdd + @reduce) ──
+// Uses float4 pairs to match CPU's @Vector(8,f32) accumulation.
+// fma(float4) maps to the SAME Apple Silicon FPU as NEON fmla.
+// Pairwise reduction matches CPU's @reduce(.Add) → NEON faddp.
+kernel void gemv_mlx_q4_exact(
+    device const float* x              [[buffer(0)]],
+    device const packed_uchar4* W      [[buffer(1)]],
+    device const packed_uchar2* scales [[buffer(2)]],
+    device const packed_uchar2* biases [[buffer(3)]],
+    device float* y                    [[buffer(4)]],
+    constant uint& n                   [[buffer(5)]],
+    constant uint& k                   [[buffer(6)]],
+    constant uint& gs                  [[buffer(7)]],
+    uint tgid     [[threadgroup_position_in_grid]])
+{
+    if (tgid >= n) return;
+
+    const uint wpg = gs / 8;
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+    float sum = 0.0f;
+
+    for (uint g = 0; g < gpr; g++) {
+        uint sb_idx = tgid * gpr + g;
+        packed_uchar2 sb = scales[sb_idx];
+        float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
+        packed_uchar2 bb = biases[sb_idx];
+        float bias  = as_type<float>(uint(ushort(bb[0]) | (ushort(bb[1]) << 8)) << 16);
+
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+
+        // Match CPU: @mulAdd(@Vector(8,f32), xv, vals, q_acc)
+        // Using float4 pairs (lo + hi) to match NEON 2×fmla on V8.
+        float4 q_acc_lo = float4(0);
+        float4 q_acc_hi = float4(0);
+        float4 x_acc_lo = float4(0);
+        float4 x_acc_hi = float4(0);
+
+        for (uint w = 0; w < wpg; w++) {
+            uint xi = xo + w * 8;
+            if (xi + 8 > k) {
+                // Scalar tail for partial word
+                for (uint i = 0; i < k - xi; i++) {
+                    float q = float((((device const uchar*)(W + wg + w))[i / 2] >> ((i % 2) * 4)) & 0xF);
+                    q_acc_lo[0] += x[xi + i] * q;
+                    x_acc_lo[0] += x[xi + i];
+                }
+                break;
+            }
+            // Load 8 x values as 2×float4 (matches CPU V8 load)
+            float4 xv_lo = *(device const float4*)(x + xi);
+            float4 xv_hi = *(device const float4*)(x + xi + 4);
+
+            // Dequant 8 nibbles from packed u32 word
+            packed_uchar4 bytes = W[wg + w];
+            uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
+                        (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+            float4 vals_lo = float4(float(word & 0xF), float((word >> 4) & 0xF),
+                                     float((word >> 8) & 0xF), float((word >> 12) & 0xF));
+            float4 vals_hi = float4(float((word >> 16) & 0xF), float((word >> 20) & 0xF),
+                                     float((word >> 24) & 0xF), float((word >> 28) & 0xF));
+
+            // fma: matches CPU @mulAdd(V8, xv, vals, q_acc)
+            q_acc_lo = fma(xv_lo, vals_lo, q_acc_lo);
+            q_acc_hi = fma(xv_hi, vals_hi, q_acc_hi);
+
+            // x_acc += xv (matches CPU x_acc += xv vector add)
+            x_acc_lo += xv_lo;
+            x_acc_hi += xv_hi;
+        }
+
+        // Pairwise reduction (matches CPU @reduce(.Add)):
+        // ((lo.x+lo.y)+(lo.z+lo.w)) + ((hi.x+hi.y)+(hi.z+hi.w))
+        float q_01 = q_acc_lo.x + q_acc_lo.y;
+        float q_23 = q_acc_lo.z + q_acc_lo.w;
+        float q_45 = q_acc_hi.x + q_acc_hi.y;
+        float q_67 = q_acc_hi.z + q_acc_hi.w;
+        float q_dot = (q_01 + q_23) + (q_45 + q_67);
+
+        float x_01 = x_acc_lo.x + x_acc_lo.y;
+        float x_23 = x_acc_lo.z + x_acc_lo.w;
+        float x_45 = x_acc_hi.x + x_acc_hi.y;
+        float x_67 = x_acc_hi.z + x_acc_hi.w;
+        float x_sum = (x_01 + x_23) + (x_45 + x_67);
+
+        sum += scale * q_dot + bias * x_sum;
+    }
+    y[tgid] = sum;
+}
+
+// ── Vec8-exact MXFP4 GEMV (matches CPU NEON @mulAdd + @reduce) ──
+// Uses float4 pairs. CPU does: acc = @mulAdd(V8, sv*v, xv, acc)
+// where sv = scale splat, v = mxfp4_lut lookups.
+// Then: y = @reduce(.Add, acc) — pairwise.
+kernel void gemv_mxfp4_st_exact(
+    device const float* x             [[buffer(0)]],
+    device const packed_uchar4* W     [[buffer(1)]],
+    device const uchar* scales        [[buffer(2)]],
+    device float* y                   [[buffer(3)]],
+    constant uint& n                  [[buffer(4)]],
+    constant uint& k                  [[buffer(5)]],
+    constant uint& gs                 [[buffer(6)]],
+    constant uint& scale_fmt          [[buffer(7)]],
+    uint tgid     [[threadgroup_position_in_grid]])
+{
+    if (tgid >= n) return;
+
+    const uint wpg = gs / 8;
+    uint gpr = (k + gs - 1) / gs;
+    uint w_row = tgid * gpr * wpg;
+
+    // Match CPU: accumulate into V8 (2×float4) then pairwise reduce
+    float4 acc_lo = float4(0);
+    float4 acc_hi = float4(0);
+
+    for (uint g = 0; g < gpr; g++) {
+        float scale = (scale_fmt == 1)
+            ? e8m0_to_f32(scales[tgid * gpr + g])
+            : fp8e4m3_to_f32(scales[tgid * gpr + g]);
+        uint xo = g * gs;
+        uint wg = w_row + g * wpg;
+
+        for (uint w = 0; w < wpg && xo + w * 8 <= k; w++) {
+            uint xi = xo + w * 8;
+            packed_uchar4 bytes = W[wg + w];
+            uint word = uint(bytes[0]) | (uint(bytes[1]) << 8) |
+                        (uint(bytes[2]) << 16) | (uint(bytes[3]) << 24);
+
+            if (xi + 8 > k) {
+                // Scalar tail
+                for (uint i = 0; i < k - xi; i++) {
+                    float sv = scale * mxfp4_lut[(word >> (i * 4)) & 0xF];
+                    acc_lo[0] = fma(sv, x[xi + i], acc_lo[0]);
+                }
+                break;
+            }
+
+            // Dequant 8 nibbles via E2M1 LUT, multiply by scale → sv
+            float4 sv_lo = float4(
+                scale * mxfp4_lut[word & 0xF],
+                scale * mxfp4_lut[(word >> 4) & 0xF],
+                scale * mxfp4_lut[(word >> 8) & 0xF],
+                scale * mxfp4_lut[(word >> 12) & 0xF]);
+            float4 sv_hi = float4(
+                scale * mxfp4_lut[(word >> 16) & 0xF],
+                scale * mxfp4_lut[(word >> 20) & 0xF],
+                scale * mxfp4_lut[(word >> 24) & 0xF],
+                scale * mxfp4_lut[(word >> 28) & 0xF]);
+
+            float4 xv_lo = *(device const float4*)(x + xi);
+            float4 xv_hi = *(device const float4*)(x + xi + 4);
+
+            // fma: matches CPU @mulAdd(V8, sv*v, xv, acc)
+            acc_lo = fma(sv_lo, xv_lo, acc_lo);
+            acc_hi = fma(sv_hi, xv_hi, acc_hi);
+        }
+    }
+
+    // Pairwise reduction (matches CPU @reduce(.Add, acc)):
+    float s01 = acc_lo.x + acc_lo.y;
+    float s23 = acc_lo.z + acc_lo.w;
+    float s45 = acc_hi.x + acc_hi.y;
+    float s67 = acc_hi.z + acc_hi.w;
+    y[tgid] = (s01 + s23) + (s45 + s67);
 }

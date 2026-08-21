@@ -454,8 +454,14 @@ pub const NullBackend = struct {
     pub fn gemvMlxQ(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32, _: u32) void {
         unreachable;
     }
+    pub fn gemvMlxQGpu(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: u32, _: u32) void {
+        unreachable;
+    }
 
     pub fn gemvMxfp4St(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: usize, _: Mxfp4ScaleFormat) void {
+        unreachable;
+    }
+    pub fn gemvMxfp4StGpu(_: *NullBackend, _: [*]const f32, _: [*]const u8, _: [*]const u8, _: [*]f32, _: usize, _: usize, _: usize, _: Mxfp4ScaleFormat) void {
         unreachable;
     }
 
@@ -939,6 +945,15 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// GPU-native MLX-Q GEMV for heap-resident weight data.
+    /// On Metal, dispatches to the native GPU kernel (no CPU fallback).
+    /// On other backends, delegates to gemvMlxQ.
+    pub inline fn gemvMlxQGpu(self: Backend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, group_size: u32) void {
+        switch (self) {
+            inline else => |be| be.gemvMlxQGpu(x, weight, scales, biases, y, n, k, bits, group_size),
+        }
+    }
+
     /// Scale format for MXFP4 GEMV (re-exported from mlx.zig for dispatcher callers).
     pub const Mxfp4ScaleFormat = @import("../ops/mlx.zig").Mxfp4ScaleFormat;
 
@@ -951,6 +966,13 @@ pub const Backend = union(enum) {
     pub inline fn gemvMxfp4St(self: Backend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: Mxfp4ScaleFormat) void {
         switch (self) {
             inline else => |be| be.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf),
+        }
+    }
+
+    /// GPU-native MXFP4 GEMV for heap-resident data. On Metal, uses GPU kernel.
+    pub inline fn gemvMxfp4StGpu(self: Backend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: Mxfp4ScaleFormat) void {
+        switch (self) {
+            inline else => |be| be.gemvMxfp4StGpu(x, weight, scale, y, n, k, gs, sf),
         }
     }
 

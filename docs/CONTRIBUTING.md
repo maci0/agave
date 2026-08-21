@@ -148,6 +148,10 @@ The composable megakernel generator (`src/backend/mega_compose.zig`) auto-genera
 - `ModelDesc.qwenHybrid(n, interval)` -- DeltaNet + attention hybrid (Qwen 3.5)
 - Custom: populate `layer_types` array directly for mixed architectures (Nemotron-H, DeepSeek V4 with MLA + hyper connections + MoE)
 
+**Model-specific Metal kernels:** Models with unique inter-layer operations can add dedicated MSL kernels (e.g., `ds4.metal` + `ds4_fused.metal` for DeepSeek V4). Use `comptime @hasDecl` to dispatch to model-specific Metal functions and fall back to CPU for non-Metal backends.
+
+**Dedicated CpuBackend bypass:** For models where all GEMVs fall back to CPU (MLX-Q SafeTensors), store a `CpuBackend` instance in the model struct and route hot-path operations through it instead of `self.be.*()`. This avoids Metal Backend struct cache pollution that causes FP rounding divergence. See `deepseek4.zig`'s `self.cpu` field and `DS4_METAL_DIVERGENCE.md`.
+
 **Optional flags:** `has_gate`, `has_qk_norm`, `has_post_attn_norm`, `fuse_residual` -- set these for model-specific structural variations.
 
 The composer selects the correct GEMV, activation, residual pattern, and SDPA building blocks automatically. See [MEGAKERNEL.md](MEGAKERNEL.md) for the full three-tier architecture.

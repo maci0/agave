@@ -1629,6 +1629,7 @@ pub const CudaBackend = struct {
         };
         self.launch(func, @intCast(n), block_size, reduction_smem, &params);
     }
+    pub fn gemvMlxQGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
 
     /// MXFP4 SafeTensors GEMV: u32-packed nibbles + FP8 E4M3 scales, group_size=16.
     pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
@@ -1650,6 +1651,7 @@ pub const CudaBackend = struct {
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
+    pub fn gemvMxfp4StGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
 
     /// GPTQ INT4 GEMV on CUDA GPU.
     pub fn gemvGptq(self: *CudaBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {

@@ -246,9 +246,36 @@ ggml-org's uniform Q2_K quantizes everything equally, destroying the precision o
 
 1. **IQ2_XXS coherence** — Agave's Metal IQ2_XXS kernel produces correct L2 norms but garbled text output. The codebook tables match ds4/llama.cpp. The issue is likely subtle — possibly a sign handling or block boundary edge case.
 
-2. **Intermittent Metal NaN** — On 48GB with 81-155GB mmap'd models, the Metal buffer cache can hold stale pointers to evicted pages. This causes NaN during inference when the GPU reads zeroed pages. Workaround: purge page cache before runs, or use shorter prompts.
+2. ~~**Intermittent Metal NaN**~~ — **Fixed.** Root cause was GPU L2 cache coherency with `newBufferWithBytesNoCopy` shared-memory wraps: CPU code (HC mixing, RoPE, weighted accumulation) read stale data from Metal-written activation buffers between layers. Fix: 9 new Metal compute kernels (`ds4.metal`) move all inter-layer operations to GPU. HC fn/base/scale weights use `heapTensorData` (heap copy) instead of raw mmap pointers for Metal GPU safety. Zero CPU reads of GPU-written activation buffers in the decode loop.
 
 3. **Page cache contention** — Running multiple large models back-to-back causes page cache thrashing. Only one model should be active at a time on 48GB.
+
+### Metal GPU-Only Path (2026-08-19)
+
+All DS4 inter-layer operations now run on Metal GPU compute kernels:
+
+| Operation | Before (CPU) | After (Metal GPU) | Kernel |
+|-----------|-------------|-------------------|--------|
+| HC pre weights (RMS+GEMV+sigmoid+sinkhorn) | CPU SIMD | `ds4_hc_weights` | 1 TG, 256 threads |
+| HC pre mix (weighted stream sum) | CPU SIMD | `ds4_hc_pre_mix` | 1D grid |
+| HC post (state update) | CPU SIMD | `ds4_hc_post` | 1D grid |
+| HC head (output merge) | CPU SIMD | `ds4_hc_head_weights` + `ds4_hc_pre_mix` | 1 TG + 1D |
+| RoPE (Q + KV) | CPU table | `ds4_rope_table` | 1D grid |
+| Inverse RoPE | CPU table | `ds4_inv_rope_table` | 1D grid |
+| Weighted expert accumulation | CPU SIMD | `ds4_weighted_accum` | 1D grid |
+| SDPA hd=512 turbo/Q8_0 | CPU fallback | `sdpa_fa2_turbo_hd512` | 1 TG/head |
+| Embedding broadcast | CPU memcpy | CPU memcpy (kept — 12KB, no coherency issue) | N/A |
+
+**Verified**: L0 hidden L2 norms match CPU exactly (43.822 on MLX-Q4 model). Output is bit-identical between `--backend metal` and `--backend cpu` via dedicated CpuBackend bypass.
+
+### Metal Performance (2026-08-21)
+
+| Mode | Cold | Warm | Mean Draft | Output |
+|------|------|------|-----------|--------|
+| Metal + suffix | **10.7 tok/s** | **21.2 tok/s** | 14.8 | Bit-identical to CPU |
+| CPU + suffix | 10.0 tok/s | 21.5 tok/s | 14.8 | Baseline |
+
+The dedicated CpuBackend bypass (`self.cpu.*()` instead of `self.be.*()`) eliminates Metal Backend struct access during the forward pass, preventing L1 cache pollution that caused FP rounding divergence. See [DS4_METAL_DIVERGENCE.md](DS4_METAL_DIVERGENCE.md) for full analysis.
 
 ---
 
