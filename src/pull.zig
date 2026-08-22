@@ -202,6 +202,10 @@ pub const PullError = error{
     HttpRequestFailed,
     /// Downloaded file failed integrity check (e.g. invalid GGUF magic bytes).
     IntegrityCheckFailed,
+    /// Local blob size differs from the repository's current file (stale
+    /// leftover from an older revision); the stale copy was removed so the
+    /// next attempt downloads fresh.
+    LocalSizeMismatch,
 };
 
 // ── Stderr helpers ───────────────────────────────────────────────────────────
@@ -897,6 +901,28 @@ fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []co
 
 // ── Download with progress ───────────────────────────────────────────────────
 
+/// Outcome of receiving HTTP 416 (Range Not Satisfiable) during a resume.
+const RangeNotSatisfiable = enum {
+    /// Local blob already holds exactly the expected content length.
+    complete,
+    /// Local blob length differs from the repository's current file: stale
+    /// leftover from an older revision or a corrupted oversized file.
+    stale_local_file,
+};
+
+/// Decide whether a 416 response means "already fully downloaded" or "the
+/// local file no longer matches what the repository serves".
+///
+/// A 416 only certifies completion when the local size equals the size the
+/// API reported for this revision (`expected_size`; 0 = unknown size, which
+/// keeps the historical trust-416 behavior). Without this check, re-running
+/// `agave pull` against a repository whose file shrank (or was replaced)
+/// accepts the stale local copy as valid and publishes a corrupt model.
+fn classifyRangeNotSatisfiable(existing_size: u64, expected_size: u64) RangeNotSatisfiable {
+    if (expected_size > 0 and existing_size != expected_size) return .stale_local_file;
+    return .complete;
+}
+
 /// Build a progress bar string for a given percentage.
 ///
 /// Returns a slice like `[===============>               ]` representing
@@ -926,12 +952,19 @@ fn progressBar(buf: *[progress_bar_width + 2]u8, pct: u8) []const u8 {
 /// The file is downloaded to `blob_path`. If the file already partially
 /// exists, the download resumes from where it left off using HTTP Range
 /// headers. Progress is reported to stderr every 500ms.
+///
+/// `expected_size` is the file size reported by the API listing for the
+/// current revision (0 = unknown). It guards the resume path: a local blob
+/// whose size no longer matches the repository is removed and re-downloaded
+/// instead of being accepted as complete, so repeated runs converge on the
+/// repository's actual content.
 fn downloadFile(
     allocator: Allocator,
     repo: []const u8,
     filename: []const u8,
     blob_path: []const u8,
     token: ?[]const u8,
+    expected_size: u64,
 ) PullError!void {
     // Build download URL.
     const url = std.fmt.allocPrint(allocator, "{s}/{s}/resolve/main/{s}", .{ hf_api_base, repo, filename }) catch
@@ -955,7 +988,7 @@ fn downloadFile(
             };
         }
 
-        downloadFileOnce(allocator, url, blob_path, token, is_tty) catch |err| {
+        downloadFileOnce(allocator, url, blob_path, token, is_tty, expected_size) catch |err| {
             // Don't retry non-transient errors
             switch (err) {
                 PullError.RepoNotFound, PullError.AuthenticationFailed => return err,
@@ -974,12 +1007,16 @@ fn downloadFile(
 }
 
 /// Single download attempt (used by `downloadFile` retry loop).
+///
+/// `expected_size` is the repository's current file size per the API listing
+/// (0 = unknown); see `downloadFile`.
 fn downloadFileOnce(
     allocator: Allocator,
     url: []const u8,
     blob_path: []const u8,
     token: ?[]const u8,
     is_tty: bool,
+    expected_size: u64,
 ) PullError!void {
     // Check for existing partial download.
     var existing_size: u64 = 0;
@@ -1051,8 +1088,19 @@ fn downloadFileOnce(
         .not_found => return PullError.RepoNotFound,
         .unauthorized, .forbidden => return PullError.AuthenticationFailed,
         .range_not_satisfiable => {
-            // File already fully downloaded.
-            return;
+            switch (classifyRangeNotSatisfiable(existing_size, expected_size)) {
+                .complete => return,
+                .stale_local_file => {
+                    // Local blob size differs from the repository's current
+                    // file: leftover from an older revision or corrupted.
+                    // Remove it so the retry starts from a clean state.
+                    eprint("Error: local file size ({d}) does not match repository file ({d}) — removing stale copy\n", .{ existing_size, expected_size });
+                    Io.Dir.cwd().deleteFile(mod_io, blob_path) catch |del_err| {
+                        eprint("Warning: could not remove stale file '{s}': {}\n", .{ blob_path, del_err });
+                    };
+                    return PullError.LocalSizeMismatch;
+                },
+            }
         },
         else => {
             eprint("Error: HTTP {d}\n", .{@intFromEnum(status)});
@@ -1312,7 +1360,7 @@ fn pullGgufModel(
 
     // Download shard 1 (or the only shard) if needed.
     if (!already_complete) {
-        try downloadFile(allocator, args.repo, selected.filename, blob_path, args.token);
+        try downloadFile(allocator, args.repo, selected.filename, blob_path, args.token, selected.size);
         eprint("Download complete.\n", .{});
     }
 
@@ -1349,7 +1397,7 @@ fn pullGgufModel(
 
             if (!shard_done) {
                 eprint("  shard {d}/{d}: {s} ({d:.1} GB)\n", .{ shard_idx, total_shards, shard_name, shard_gb });
-                try downloadFile(allocator, args.repo, shard_name, shard_blob, args.token);
+                try downloadFile(allocator, args.repo, shard_name, shard_blob, args.token, shard_size);
                 eprint("  shard {d}/{d} complete.\n", .{ shard_idx, total_shards });
             }
             atomicSymlink(pa, std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard_name}) catch return error.OutOfMemory, shard_link);
@@ -1433,7 +1481,7 @@ fn pullSafeTensorsModel(
 
         if (!already_complete) {
             eprint("[{d}/{d}] Downloading {s}...\n", .{ i + 1, st.shards.len, shard });
-            try downloadFile(allocator, args.repo, shard, blob_path, args.token);
+            try downloadFile(allocator, args.repo, shard, blob_path, args.token, expected_size);
         }
 
         // Create snapshot symlink for this shard.
@@ -1456,7 +1504,7 @@ fn pullSafeTensorsModel(
             eprint("Already downloaded: {s}\n", .{index_filename});
         } else |_| {
             eprint("Downloading {s}...\n", .{index_filename});
-            downloadFile(allocator, args.repo, index_filename, index_blob, args.token) catch |err| {
+            downloadFile(allocator, args.repo, index_filename, index_blob, args.token, 0) catch |err| {
                 eprint("Warning: could not download {s}: {}\n", .{ index_filename, err });
             };
         }
@@ -1477,7 +1525,7 @@ fn pullSafeTensorsModel(
             eprint("Already downloaded: {s}\n", .{aux_name});
         } else |_| {
             eprint("Downloading {s}...\n", .{aux_name});
-            downloadFile(allocator, args.repo, aux_name, aux_blob, args.token) catch |err| {
+            downloadFile(allocator, args.repo, aux_name, aux_blob, args.token, 0) catch |err| {
                 eprint("Warning: could not download {s}: {}\n", .{ aux_name, err });
             };
         }
@@ -1569,6 +1617,7 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
             PullError.HttpRequestFailed,
             PullError.ApiResponseInvalid,
             PullError.IntegrityCheckFailed,
+            PullError.LocalSizeMismatch,
             => {},
             error.OutOfMemory => eprint("Error: out of memory\n", .{}),
             else => eprint("Error: {}\n", .{err}),
@@ -1754,6 +1803,27 @@ test "isValidHexSha accepts valid hashes" {
     try std.testing.expect(!isValidHexSha("a" ** 65));
     // Exactly 64 chars (valid)
     try std.testing.expect(isValidHexSha("a" ** 64));
+}
+
+// ── Rerun safety (416 resume handling) ──────────────────────────────────────
+
+test "classifyRangeNotSatisfiable matching size is complete" {
+    try std.testing.expectEqual(RangeNotSatisfiable.complete, classifyRangeNotSatisfiable(5000, 5000));
+}
+
+test "classifyRangeNotSatisfiable stale oversized local file is rejected" {
+    // Second run after the repository replaced its file with a smaller one:
+    // the stale local blob must not be accepted as fully downloaded.
+    try std.testing.expectEqual(RangeNotSatisfiable.stale_local_file, classifyRangeNotSatisfiable(7000, 5000));
+}
+
+test "classifyRangeNotSatisfiable stale undersized local file is rejected" {
+    try std.testing.expectEqual(RangeNotSatisfiable.stale_local_file, classifyRangeNotSatisfiable(3000, 5000));
+}
+
+test "classifyRangeNotSatisfiable unknown expected size keeps legacy behavior" {
+    // API listing without size metadata cannot contradict the local file.
+    try std.testing.expectEqual(RangeNotSatisfiable.complete, classifyRangeNotSatisfiable(7000, 0));
 }
 
 // ── selectModel tests ───────────────────────────────────────────────────────
