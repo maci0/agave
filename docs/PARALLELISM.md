@@ -214,6 +214,7 @@ Implemented in `src/parallel/peer_discovery.zig`.
 | `src/parallel/peer_discovery.zig` | UDP peer discovery (LAN broadcast/join) |
 | `src/main.zig` | CLI parsing, transport setup, NCCL wiring |
 | `src/models/qwen35.zig` | TP/PP model integration (sharding, all-reduce, send/recv) |
+| `src/models/deepseek4.zig` | DS4 PP (HC state send/recv) and expert-parallel TP (`allReduceAdd`) |
 | `src/backend/cuda.zig` | CUDA primary context, device pointer lookup for NCCL |
 | `src/backend/backend.zig` | Backend dispatcher with `invalidateWeight()`, `getDevicePtr()` |
 | `src/devices/discovery.zig` | GPU device enumeration (`--list-devices`) |
@@ -229,14 +230,16 @@ Implemented in `src/parallel/peer_discovery.zig`.
 - **K-quant CPU fallback on UMA**: Q4_K/Q5_K/Q6_K delegate to CPU on GB10 sm_121 (PTX register spilling). CPU allReduceAdd uploads to device staging buffer for NCCL
 - **PP bubble**: single-token decode has `1/pp_degree` utilization; only worthwhile for fitting larger models
 - **2 ranks only**: current transport supports rank 0 ↔ rank 1 pair. Multi-rank ring/tree not yet implemented
-- **Speculative decoding**: not tested with TP/PP — spec decode modes assume single-device inference
+- **DSpark + TP/PP**: `--spec-mode dspark` on a 2-rank pair is lockstep (`forward()` per verify). `--temperature` is ignored (greedy) so draft tokens cannot desync the pair. Tree verify (`forwardTree`) does not transfer HC activations.
+- **Attention TP**: MLA/KV stay full-replica. DS4 `--tp 2` shards routed experts only.
 
 ---
 
 ## Future Work
 
 - Multi-rank ring all-reduce (>2 GPUs)
-- Expert parallelism for MoE models
+- Hybrid TP+PP (4 ranks: 2 TP groups × 2 PP stages)
+- Attention TP with per-rank KV caches
 - Quantized communication (bf16/fp8 all-reduce)
 - KV cache sharing over RDMA for disaggregated serving
 - RCCL implementation for ROCm multi-GPU (transport kind declared, needs runtime integration)

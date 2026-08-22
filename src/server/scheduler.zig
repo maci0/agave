@@ -185,7 +185,7 @@ pub const Request = struct {
         }
 
         if (self.tokens.items.len >= self.tokens.capacity) {
-            std.log.err("req={d} token capacity exhausted ({d}), cancelling request", .{ self.id, self.tokens.capacity });
+            std.log.warn("req={d} token capacity exhausted ({d}), cancelling request", .{ self.id, self.tokens.capacity });
             self.is_cancelled.store(true, .release);
             return;
         }
@@ -1064,11 +1064,12 @@ test "waitingOrderLessThan prefers higher cache priority over id" {
 
 test "appendToken at capacity sets cancelled flag" {
     const allocator = std.testing.allocator;
-    // Small capacity so we can fill the buffer without allocating 4K tokens.
+    // Small requested cap; ArrayList may round capacity up.
     const cap: usize = 3;
     var tokens: std.ArrayList(u32) = .empty;
     try tokens.ensureTotalCapacity(allocator, cap);
     defer tokens.deinit(allocator);
+    const actual_cap = tokens.capacity;
 
     var req = Request{
         .id = 1,
@@ -1083,20 +1084,20 @@ test "appendToken at capacity sets cancelled flag" {
     };
 
     var i: u32 = 0;
-    while (i < cap) : (i += 1) {
+    while (i < actual_cap) : (i += 1) {
         req.appendToken(i + 1, &[_]u32{});
         try std.testing.expect(!req.is_cancelled.load(.acquire));
     }
-    try std.testing.expectEqual(cap, req.tokens.items.len);
-    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.visible_len.load(.acquire));
-    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.last_token_id);
+    try std.testing.expectEqual(actual_cap, req.tokens.items.len);
+    try std.testing.expectEqual(@as(u32, @intCast(actual_cap)), req.visible_len.load(.acquire));
+    try std.testing.expectEqual(@as(u32, @intCast(actual_cap)), req.last_token_id);
 
     // Next append must cancel without growing the buffer or mutating state.
     req.appendToken(999, &[_]u32{});
     try std.testing.expect(req.is_cancelled.load(.acquire));
-    try std.testing.expectEqual(cap, req.tokens.items.len);
-    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.last_token_id);
-    try std.testing.expectEqual(@as(u32, @intCast(cap)), req.visible_len.load(.acquire));
+    try std.testing.expectEqual(actual_cap, req.tokens.items.len);
+    try std.testing.expectEqual(@as(u32, @intCast(actual_cap)), req.last_token_id);
+    try std.testing.expectEqual(@as(u32, @intCast(actual_cap)), req.visible_len.load(.acquire));
 }
 
 test "elapsedSeconds large elapsed" {
