@@ -585,6 +585,8 @@ const Server = struct {
                 self.conversations.items[self.conversations.items.len - 1].id
             else
                 0;
+            lockModelWithScheduler();
+            defer unlockModelWithScheduler();
             self.model.resetCache();
             self.kv_valid = false;
             self.clearCachedPromptIds();
@@ -609,6 +611,21 @@ const Server = struct {
 };
 
 var g_server: *Server = undefined;
+
+/// Acquire the scheduler's model mutex so direct-path forward loops
+/// (grammar / json_mode fallbacks) cannot run concurrently with the
+/// scheduler thread's Phase A/B forwards on the same KV cache.
+/// No-op when no scheduler exists: direct paths are then serialized by
+/// g_server.mutex alone. Must be called while holding g_server.mutex
+/// (consistent order: server.mutex → model_mutex).
+fn lockModelWithScheduler() void {
+    if (g_server.request_manager) |rm| rm.model_mutex.lockUncancelable(g_server.io);
+}
+
+/// Release the scheduler's model mutex acquired by lockModelWithScheduler().
+fn unlockModelWithScheduler() void {
+    if (g_server.request_manager) |rm| rm.model_mutex.unlock(g_server.io);
+}
 
 /// Tool call exact-replay map: maps tool_call_id (u64, XxHash64 of ID string)
 /// → raw generated output bytes containing the original <tool_call>…</tool_call> text.
@@ -662,9 +679,13 @@ fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     if (put_result) |old| g_tool_replay_allocator.free(old.value.raw);
 }
 
-/// Look up a cached tool call output by its ID. Returns the raw result
-/// bytes, or null if the ID is empty or not found in the replay cache.
-fn toolReplayGet(id_str: []const u8) ?[]const u8 {
+/// Look up a cached tool call output by its ID. Returns a copy of the raw
+/// result bytes allocated with `allocator` (caller owns and frees), or null
+/// if the ID is empty, not found, or allocation fails.
+/// The copy is made under the spinlock on purpose: handing out the map-owned
+/// slice would race with toolReplayStore freeing it (same-key overwrite or
+/// LRU eviction) after this function releases the lock.
+fn toolReplayGet(allocator: Allocator, id_str: []const u8) ?[]u8 {
     if (id_str.len == 0) return null;
     const key = std.hash.XxHash64.hash(0, id_str);
 
@@ -673,7 +694,7 @@ fn toolReplayGet(id_str: []const u8) ?[]const u8 {
     defer g_tool_replay_lock.store(0, .release);
 
     const entry = g_tool_replay.get(key) orelse return null;
-    return entry.raw;
+    return allocator.dupe(u8, entry.raw) catch null;
 }
 
 /// Per-thread request ID for log correlation. Set at the start of each
@@ -2913,6 +2934,8 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
         {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
+            lockModelWithScheduler();
+            defer unlockModelWithScheduler();
             g_server.model.resetCache();
             g_server.kv_valid = false;
             // KV wiped — drop prefix IDs or the next generate would setKvSeqLen
@@ -2928,6 +2951,8 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
         {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
+            lockModelWithScheduler();
+            defer unlockModelWithScheduler();
             g_server.model.resetCache();
             g_server.kv_valid = false;
             g_server.clearCachedPromptIds();
@@ -3324,6 +3349,8 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     // Direct forward path (fallback when scheduler is not active)
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
+    lockModelWithScheduler();
+    defer unlockModelWithScheduler();
     const model = g_server.model;
 
     // Re-check kv_valid under mutex — the caller's `reset` flag may be stale
@@ -3942,6 +3969,8 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     // Direct forward path (fallback when scheduler is not active)
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
+    lockModelWithScheduler();
+    defer unlockModelWithScheduler();
     const model = g_server.model;
     // Re-check kv_valid under mutex — caller's `reset` may be stale if another
     // thread invalidated the cache between the caller's unlock and this lock.
@@ -4332,6 +4361,8 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     // Direct forward path (fallback when scheduler is not active)
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
+    lockModelWithScheduler();
+    defer unlockModelWithScheduler();
     const model = g_server.model;
     model.resetCache();
     g_server.clearCachedPromptIds();
@@ -4753,6 +4784,8 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     // Direct forward path (fallback when scheduler is not active)
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
+    lockModelWithScheduler();
+    defer unlockModelWithScheduler();
     const model = g_server.model;
     model.resetCache();
     g_server.clearCachedPromptIds();
@@ -5317,6 +5350,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     // Direct forward path (fallback when scheduler is not active)
     g_server.mutex.lockUncancelable(g_server.io);
     defer g_server.mutex.unlock(g_server.io);
+    lockModelWithScheduler();
+    defer unlockModelWithScheduler();
     const model = g_server.model;
 
     // Prompt prefix caching (streaming): reuse KV cache for shared prefix

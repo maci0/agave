@@ -253,6 +253,13 @@ pub const RequestManager = struct {
     allocator: Allocator,
     mutex: Mutex,
     io: Io,
+    /// Serializes model forward execution against direct-path requests.
+    /// step() holds this across the Phase A/B forward loops; server.zig's
+    /// grammar/json_mode fallback paths take the same mutex before touching
+    /// the model. Without it, a handler thread and the scheduler thread call
+    /// model.forward() concurrently and corrupt the shared KV cache.
+    /// Lock order: server.mutex → model_mutex → manager mutex (never reversed).
+    model_mutex: Mutex = .init,
     next_id: std.atomic.Value(u64),
     completed_total: u32 = 0,
     cancelled_total: u32 = 0,
@@ -551,121 +558,132 @@ pub const RequestManager = struct {
         //
         // Sort by id so swapRemove of finished/cancelled requests cannot change
         // Phase B's choice of which prefiller advances (layout-dependent otherwise).
-        if (self.running.items.len > 1) {
-            std.mem.sort(*Request, self.running.items, {}, struct {
-                fn lessThan(_: void, a: *Request, b: *Request) bool {
-                    return a.id < b.id;
-                }
-            }.lessThan);
-        }
+        //
+        // model_mutex held across both phases: direct-path handler threads
+        // (grammar / json_mode) take the same mutex before their own forward
+        // loops, so model state (KV cache, logits) is never mutated by two
+        // threads at once. manager mutex stays free here, so enqueue/getStats
+        // do not stall behind inference.
+        {
+            self.model_mutex.lockUncancelable(self.io);
+            defer self.model_mutex.unlock(self.io);
 
-        // Phase A: decode all requests that finished prefill (one token each)
-        for (self.running.items) |req| {
-            if (req.is_cancelled.load(.acquire)) continue;
-            if (req.is_finished.load(.acquire)) continue;
-            if (req.prefill_pos < req.prompt_tokens) continue;
+            if (self.running.items.len > 1) {
+                std.mem.sort(*Request, self.running.items, {}, struct {
+                    fn lessThan(_: void, a: *Request, b: *Request) bool {
+                        return a.id < b.id;
+                    }
+                }.lessThan);
+            }
 
-            // Restore KV position for this request
-            model.setKvSeqLen(req.kv_position);
+            // Phase A: decode all requests that finished prefill (one token each)
+            for (self.running.items) |req| {
+                if (req.is_cancelled.load(.acquire)) continue;
+                if (req.is_finished.load(.acquire)) continue;
+                if (req.prefill_pos < req.prompt_tokens) continue;
 
-            const greedy = model.forward(req.last_token_id) catch |err| {
-                std.log.err("req={d} forward failed: {}", .{ req.id, err });
-                req.is_cancelled.store(true, .release);
-                continue;
-            };
-            const next_token = sampleNextToken(req, model, greedy);
+                // Restore KV position for this request
+                model.setKvSeqLen(req.kv_position);
 
-            req.kv_position = model.kvSeqLen();
-
-            // Re-check after forward(): handler thread may have set is_cancelled
-            // while forward() was running. Appending to a cancelled request races
-            // with the handler reading req.tokens.items.
-            if (req.is_cancelled.load(.acquire)) continue;
-
-            req.appendToken(next_token, eog_ids);
-
-            // On completion: RadixTree insert + SSM state cache
-            if (req.is_finished.load(.acquire) and req.tokens.items.len > 0) {
-                const block_ids = model.getBlockTable();
-                self.mutex.lockUncancelable(self.io);
-                defer self.mutex.unlock(self.io);
-                self.radix_tree.insert(req.prompt_tokens_slice, block_ids) catch |err| {
-                    std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
+                const greedy = model.forward(req.last_token_id) catch |err| {
+                    std.log.err("req={d} forward failed: {}", .{ req.id, err });
+                    req.is_cancelled.store(true, .release);
+                    continue;
                 };
-                if (self.ssm_cache_inited) {
-                    if (model.saveSsmState(self.allocator)) |snapshot| {
-                        // saveSsmState may return a non-owned empty sentinel (&{})
-                        // when there is nothing to snapshot — never cache or free it.
-                        if (snapshot.len > 0) {
-                            const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
-                            if (self.ssm_state_cache.getPtr(h)) |existing| {
-                                self.allocator.free(existing.*);
-                                existing.* = snapshot;
-                            } else {
-                                while (self.ssm_state_cache.count() >= max_ssm_state_cache_entries) {
-                                    var kit = self.ssm_state_cache.keyIterator();
-                                    const victim_key = (kit.next() orelse break).*;
-                                    if (self.ssm_state_cache.fetchRemove(victim_key)) |kv| {
-                                        self.allocator.free(kv.value);
+                const next_token = sampleNextToken(req, model, greedy);
+
+                req.kv_position = model.kvSeqLen();
+
+                // Re-check after forward(): handler thread may have set is_cancelled
+                // while forward() was running. Appending to a cancelled request races
+                // with the handler reading req.tokens.items.
+                if (req.is_cancelled.load(.acquire)) continue;
+
+                req.appendToken(next_token, eog_ids);
+
+                // On completion: RadixTree insert + SSM state cache
+                if (req.is_finished.load(.acquire) and req.tokens.items.len > 0) {
+                    const block_ids = model.getBlockTable();
+                    self.mutex.lockUncancelable(self.io);
+                    defer self.mutex.unlock(self.io);
+                    self.radix_tree.insert(req.prompt_tokens_slice, block_ids) catch |err| {
+                        std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
+                    };
+                    if (self.ssm_cache_inited) {
+                        if (model.saveSsmState(self.allocator)) |snapshot| {
+                            // saveSsmState may return a non-owned empty sentinel (&{})
+                            // when there is nothing to snapshot — never cache or free it.
+                            if (snapshot.len > 0) {
+                                const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
+                                if (self.ssm_state_cache.getPtr(h)) |existing| {
+                                    self.allocator.free(existing.*);
+                                    existing.* = snapshot;
+                                } else {
+                                    while (self.ssm_state_cache.count() >= max_ssm_state_cache_entries) {
+                                        var kit = self.ssm_state_cache.keyIterator();
+                                        const victim_key = (kit.next() orelse break).*;
+                                        if (self.ssm_state_cache.fetchRemove(victim_key)) |kv| {
+                                            self.allocator.free(kv.value);
+                                        }
                                     }
+                                    self.ssm_state_cache.put(h, snapshot) catch |err| {
+                                        std.log.warn("req={d} SSM state cache insert failed: {}", .{ req.id, err });
+                                        self.allocator.free(snapshot);
+                                    };
                                 }
-                                self.ssm_state_cache.put(h, snapshot) catch |err| {
-                                    std.log.warn("req={d} SSM state cache insert failed: {}", .{ req.id, err });
-                                    self.allocator.free(snapshot);
-                                };
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Phase B: advance ONE prefilling request by chunk_size tokens
-        // Only one prefill chunk per step to minimize decode latency impact
-        for (self.running.items) |req| {
-            if (req.is_cancelled.load(.acquire)) continue;
-            if (req.is_finished.load(.acquire)) continue;
-            if (req.prefill_pos >= req.prompt_tokens) continue;
+            // Phase B: advance ONE prefilling request by chunk_size tokens
+            // Only one prefill chunk per step to minimize decode latency impact
+            for (self.running.items) |req| {
+                if (req.is_cancelled.load(.acquire)) continue;
+                if (req.is_finished.load(.acquire)) continue;
+                if (req.prefill_pos >= req.prompt_tokens) continue;
 
-            // SSM state restore on first prefill step
-            if (req.prefill_pos == 0 and req.cached_prefix_len > 0 and self.ssm_cache_inited) {
-                const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice[0..req.cached_prefix_len]));
-                if (self.ssm_state_cache.get(h)) |snapshot| {
-                    model.restoreSsmState(snapshot);
+                // SSM state restore on first prefill step
+                if (req.prefill_pos == 0 and req.cached_prefix_len > 0 and self.ssm_cache_inited) {
+                    const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice[0..req.cached_prefix_len]));
+                    if (self.ssm_state_cache.get(h)) |snapshot| {
+                        model.restoreSsmState(snapshot);
+                    }
                 }
+
+                // Restore KV position
+                model.setKvSeqLen(req.kv_position);
+
+                // Process up to prefill_chunk_size tokens
+                const remaining = req.prompt_tokens - req.prefill_pos;
+                const chunk = @min(remaining, prefill_chunk_size);
+                var last_token: u32 = 0;
+                var i: u32 = 0;
+                while (i < chunk) : (i += 1) {
+                    last_token = model.forward(req.prompt_tokens_slice[req.prefill_pos]) catch |err| {
+                        std.log.err("req={d} prefill failed: {}", .{ req.id, err });
+                        req.is_cancelled.store(true, .release);
+                        break;
+                    };
+                    req.prefill_pos += 1;
+                }
+
+                req.kv_position = model.kvSeqLen();
+
+                // Prefill complete — emit first generated token.
+                // Re-check is_cancelled: handler may have cancelled during prefill.
+                if (req.prefill_pos >= req.prompt_tokens and !req.is_cancelled.load(.acquire)) {
+                    req.prefill_done_at = milliTimestamp();
+                    // `last_token` is the greedy argmax from the final prefill forward;
+                    // re-sample from logits so temperature/top-p apply to the first token.
+                    const first = sampleNextToken(req, model, last_token);
+                    req.last_token_id = first;
+                    req.appendToken(first, eog_ids);
+                }
+
+                break; // Only one prefill chunk per step
             }
-
-            // Restore KV position
-            model.setKvSeqLen(req.kv_position);
-
-            // Process up to prefill_chunk_size tokens
-            const remaining = req.prompt_tokens - req.prefill_pos;
-            const chunk = @min(remaining, prefill_chunk_size);
-            var last_token: u32 = 0;
-            var i: u32 = 0;
-            while (i < chunk) : (i += 1) {
-                last_token = model.forward(req.prompt_tokens_slice[req.prefill_pos]) catch |err| {
-                    std.log.err("req={d} prefill failed: {}", .{ req.id, err });
-                    req.is_cancelled.store(true, .release);
-                    break;
-                };
-                req.prefill_pos += 1;
-            }
-
-            req.kv_position = model.kvSeqLen();
-
-            // Prefill complete — emit first generated token.
-            // Re-check is_cancelled: handler may have cancelled during prefill.
-            if (req.prefill_pos >= req.prompt_tokens and !req.is_cancelled.load(.acquire)) {
-                req.prefill_done_at = milliTimestamp();
-                // `last_token` is the greedy argmax from the final prefill forward;
-                // re-sample from logits so temperature/top-p apply to the first token.
-                const first = sampleNextToken(req, model, last_token);
-                req.last_token_id = first;
-                req.appendToken(first, eog_ids);
-            }
-
-            break; // Only one prefill chunk per step
         }
     }
 

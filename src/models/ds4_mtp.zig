@@ -45,10 +45,20 @@ pub const MtpWeights = struct {
                 _ = std.c.close(fd);
         }
 
-        // Get file size
-        var stat: std.c.Stat = undefined;
-        if (std.c.fstat(fd, &stat) != 0) return error.FileNotFound;
-        const file_size: usize = @intCast(stat.size);
+        // Get file size — same pattern as gguf.zig: statx on Linux (posix fstat
+        // wrappers were removed in Zig 0.16), std.c.fstat elsewhere.
+        const file_size: usize = blk: {
+            if (comptime @import("builtin").os.tag == .linux) {
+                var buf: std.os.linux.Statx = undefined;
+                const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf);
+                if (rc != 0) return error.FileNotFound;
+                break :blk @intCast(buf.size);
+            } else {
+                var s: posix.Stat = undefined;
+                if (std.c.fstat(fd, &s) != 0) return error.FileNotFound;
+                break :blk @intCast(s.size);
+            }
+        };
 
         // mmap the entire file
         const mapped = try posix.mmap(null, file_size, .{ .READ = true }, .{ .TYPE = .SHARED }, fd, 0);
