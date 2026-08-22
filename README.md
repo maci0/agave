@@ -145,7 +145,8 @@ Supports heterogeneous setups: different backends (CUDA + Vulkan + CPU), archite
 | Nemotron-H | — | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
 | Nemotron Nano | 30B | Partial | MLX 4-bit, NVFP4 | SSM + MoE + attention hybrid, SafeTensors (poor output quality) |
 | GLM-4 MoE Lite | 4.7B | Partial | MLX 4/6/8-bit | MLA + MoE (GGUF compatibility issue, poor output quality) |
-| DeepSeek V4 Flash | 0731 | Working | Q4_K, Q8_0 | MLA, 4-stream HC, CSA/HCA compressors, LID, 256 MoE experts top-6 |
+| DiffusionGemma | 26B-A4B | Working | BF16 | Block diffusion: 256-token canvas, MoE top-8, SafeTensors only |
+| DeepSeek V4 Flash | 0731 | Working | Q4_K, Q8_0 | MLA, 4-stream HC, CSA/HCA compressors, LID, 256 MoE experts top-6, MTP heads (`--mtp-model`) |
 | Llama 4 | Scout | Working | Q4_K, Q8_0 | iRoPE, chunked attention, MoE top-1 + shared expert, batched prefill |
 
 ## Model Download
@@ -313,7 +314,7 @@ agave [OPTIONS] <model> [prompt]
       --grammar-string <G> Inline GBNF grammar string
       --json-schema <S>    JSON schema for structured output
       --json-output        Force valid JSON object output
-      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4 [default: f16]
+      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0, V=turbo4) [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
       --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]
       --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd
@@ -349,8 +350,7 @@ agave [OPTIONS] <model> [prompt]
       --pflash-block-size <N>  PFlash scoring block size [default: 64]
       --pflash-scorer <P>  Separate model for PFlash scoring
       --lora <PATH>        Merge LoRA adapter GGUF at load time
-      --image <PATH>       Image file for multimodal (PNG/PPM)
-      --video <PATH>       Video directory of PNG frames
+      --video <PATH>       Video file for multimodal (frames extracted via ffmpeg)
       --video-fps <N>      Video frame sampling rate [default: 1]
       --diffusion-steps <N>  DiffusionGemma denoising steps [default: 16]
       --diffusion-canvas <N> DiffusionGemma canvas size [default: 256]
@@ -362,7 +362,7 @@ agave [OPTIONS] <model> [prompt]
       --no-kv-cache        Prefill-only / embedding server mode
       --list-devices       List available compute devices and exit
       --device <N>         GPU device index for CUDA/ROCm/Vulkan [default: 0]
-      --tp <N>             Tensor parallelism degree [default: 1] (currently only 1 supported)
+      --tp <N>             Tensor parallelism degree [default: 1]
       --pp <N>             Pipeline parallelism stages [default: 1]
       --peers <ADDR>       Peer address for distributed inference
       --rank <N>           This node's rank [default: 0]
@@ -478,6 +478,8 @@ src/
 │   ├── nemotron_h.zig #   Nemotron-H (Mamba-2 hybrid, GGUF)
 │   ├── nemotron_nano.zig # Nemotron Nano (SSM+MoE+attn, SafeTensors NVFP4)
 │   ├── glm4.zig       #   GLM-4 MoE Lite (MLA, MoE)
+│   ├── deepseek4.zig  #   DeepSeek V4 Flash (MLA, hyper connections, MoE)
+│   ├── diffusion_gemma.zig # DiffusionGemma (block diffusion generation)
 │   ├── llama4.zig     #   Llama 4 (iRoPE, chunked attention, MoE)
 │   └── vision.zig     #   Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 ├── ops/               # Shared compute kernels
@@ -498,6 +500,8 @@ src/
 │   ├── cuda.zig       #   CUDA GPU (runtime dlopen, Zig PTX kernels)
 │   ├── rocm.zig       #   ROCm GPU (runtime dlopen)
 │   ├── webgpu.zig     #   WebGPU (WGSL shaders, browser + native)
+│   ├── megakernel.zig #   Weight offsets for fused FFN megakernels
+│   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL)
 │   ├── accelerate.zig #   Apple Accelerate.framework BLAS bindings (AMX-accelerated SGEMM)
 │   ├── objc.zig       #   Objective-C runtime bridge for Metal
 │   └── kernels/       #   GPU shader/kernel sources
@@ -508,7 +512,10 @@ src/
 │       └── webgpu/    #     WGSL compute shaders
 ├── spec/              # Speculative decoding
 │   ├── spec_decode.zig #  Orchestrator: draft, verify, accept
+│   ├── caps.zig       #   Spec-mode provider requirements (named waits)
 │   ├── ddtree.zig     #   DDTree tree construction
+│   ├── pflash.zig     #   PFlash speculative prefill
+│   ├── dspark.zig     #   DSpark confidence-scheduled verification
 │   └── ngram.zig      #   N-gram history-based draft (no draft model)
 ├── parallel/          # Distributed inference
 │   ├── transport.zig  #   TCP, POSIX shm, NCCL transport
@@ -604,7 +611,7 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## Documentation
 
-- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 20-chapter progressive tutorial + 4 appendixes
+- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 25-chapter progressive tutorial + 5 appendixes
 - **[Architecture](docs/ARCHITECTURE.md)** — Project structure, module reference, inference pipeline
 - **[Models](docs/MODELS.md)** — Supported models, parameters, per-model details
 - **[Benchmarks](docs/BENCHMARKS.md)** — Performance comparisons vs llama.cpp

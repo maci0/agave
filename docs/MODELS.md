@@ -29,7 +29,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Gemma 3 | ✅ `forwardTree` | ✅ | ✅/⚠️² | — | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
 | Gemma 4 | — | ✅ | —/✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
 | Qwen 3.5 | — | ✅ | ✅/— | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
-| DeepSeek V4 | — | ✅ `setLayerSkip` | —/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative |
+| DeepSeek V4 | — | ✅ `setLayerSkip` | —/— | ✅ `--mtp-model` | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative; dedicated MTP weights (`ds4_mtp.zig`) |
 | GLM-4 | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | GPT-OSS | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Nemotron-H | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |

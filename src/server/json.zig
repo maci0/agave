@@ -4,6 +4,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Message = @import("../chat_template.zig").Message;
+const Role = @import("../chat_template.zig").Role;
 const math_ops = @import("../ops/math.zig");
 
 // ── Constants ───────────────────────────────────────────────────
@@ -561,8 +562,12 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
         const role_str = extractField(obj_slice, "role") orelse continue;
         // Content can be a string or an array of content parts (OpenAI vision format).
         // Array format: [{"type":"text","text":"..."}, {"type":"image_url",...}]
+        // Assistant tool-call turns legitimately carry "content": null; keep them
+        // with empty text so multi-turn tool conversations stay intact.
+        const is_assistant = std.mem.eql(u8, role_str, "assistant");
         const content = extractField(obj_slice, "content") orelse
-            extractTextFromContentArray(obj_slice) orelse continue;
+            extractTextFromContentArray(obj_slice) orelse
+            (if (is_assistant) "" else continue);
         const owned_content = jsonUnescapeOwned(allocator, content) catch continue;
 
         // OpenAI o1/o3 SDK sends "developer" role instead of "system" — normalize.
@@ -1028,6 +1033,25 @@ test "extractField handles normal case" {
     try std.testing.expectEqualStrings("gpt-4", extractField(json, "model").?);
     try std.testing.expectEqualStrings("hello", extractField(json, "prompt").?);
 }
+
+test "extractMessages keeps assistant tool-call turns with null content" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"messages": [
+        \\  {"role": "user", "content": "Weather in Paris?"},
+        \\  {"role": "assistant", "content": null, "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]},
+        \\  {"role": "tool", "tool_call_id": "call_1", "content": "{\"temp\": 18}"}
+        \\]}
+    ;
+    const extracted = extractMessages(json, allocator) orelse return error.TestUnexpectedResult;
+    defer extracted.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), extracted.messages.len);
+    try std.testing.expectEqual(Role.assistant, extracted.messages[0].role);
+    try std.testing.expectEqualStrings("", extracted.messages[0].content);
+    try std.testing.expectEqual(Role.tool, extracted.messages[1].role);
+    try std.testing.expectEqualStrings("call_1", extracted.messages[1].tool_call_id.?);
+}
+
 
 test "extractField returns null for missing field" {
     const json = "{\"model\": \"gpt-4\"}";
