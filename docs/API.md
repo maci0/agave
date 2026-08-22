@@ -83,6 +83,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | logprobs | bool | false | Return log probabilities for output tokens (streaming only) |
 | top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only) |
 | n | int | 1 | Number of completions (only n=1 supported, n>1 returns 400) |
+| truncation_side | string | "right" | Which side of the prompt to drop when it exceeds the context window: `"right"` drops the tail, `"left"` drops the beginning (preserves recency) |
 | user | string | null | OpenAI compatibility only; accepted but ignored (not logged; often holds PII) |
 | stream | bool | false | Server-Sent Events streaming |
 | stream_options | object | null | `{"include_usage": true/false}` — gate usage chunk in streaming (usage included by default when omitted) |
@@ -110,6 +111,8 @@ curl http://localhost:49453/v1/chat/completions -d '{
 ```
 
 `finish_reason` is `"stop"` (natural stop or stop sequence), `"length"` (max_tokens reached), or `"tool_calls"` (model invoked a tool — see [Tool Calling](#tool-calling)).
+
+For thinking models, any `<think>...</think>` section is split out of the response and returned as a separate `reasoning_content` field on the message (`"message": {"role": "assistant", "reasoning_content": "...", "content": "..."}`); the field is omitted when the model produced no reasoning.
 
 ### POST /v1/completions
 
@@ -582,7 +585,7 @@ All endpoints return JSON error bodies on failure.
 ```
 
 `param` names the offending field or query key when known; otherwise `null`.
-`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `message_too_long`, `image_decode_failed`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
+`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `message_too_long`, `image_decode_failed`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
 
 **Anthropic format** (`/v1/messages` only):
 ```json
