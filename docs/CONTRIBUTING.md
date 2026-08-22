@@ -150,7 +150,7 @@ The composable megakernel generator (`src/backend/mega_compose.zig`) auto-genera
 
 **Model-specific Metal kernels:** Models with unique inter-layer operations can add dedicated MSL kernels (e.g., `ds4.metal` + `ds4_fused.metal` for DeepSeek V4). Use `comptime @hasDecl` to dispatch to model-specific Metal functions and fall back to CPU for non-Metal backends.
 
-**Dedicated CpuBackend bypass:** For models where all GEMVs fall back to CPU (MLX-Q SafeTensors), store a `CpuBackend` instance in the model struct and route hot-path operations through it instead of `self.be.*()`. This avoids Metal Backend struct cache pollution that causes FP rounding divergence. See `deepseek4.zig`'s `self.cpu` field and `DS4_METAL_DIVERGENCE.md`.
+**Dedicated CpuBackend bypass:** DeepSeek V4 Flash keeps a model-owned `CpuBackend` for CSA/HCA, LID, HC mixing, rmsNorm, and q8_0 SDPA (those ops read host f32). Vulkan and WebGPU dispatch MLX-Q attention GEMV and MXFP4 expert GEMV through native shaders, then download so the CPU path sees fresh activations. Metal/CUDA/ROCm still route the full hot path through the dedicated CpuBackend. See `deepseek4.zig` `computeBackend()` / `gemvBackend()`.
 
 **Optional flags:** `has_gate`, `has_qk_norm`, `has_post_attn_norm`, `fuse_residual` -- set these for model-specific structural variations.
 
@@ -238,6 +238,8 @@ KV cache quantization compresses stored K/V vectors. The pipeline is: normalize 
 5. Implement `myMulAccum()`: unpack → codebook → **inverse rotation** → accumulate (V cache path — inverse rotation critical for correctness)
 6. Wire into `kvStore()`, `kvDot()`, `kvMulAccum()` switch statements
 7. All rotation-based types share the same storage format (f16 norm + packed indices) and Lloyd-Max codebook
+
+Hybrid layouts (not rotation-based): `nvfp4_ds_mla` stores DeepSeek MLA caches as NVFP4 on the NoPE prefix (448 elems) and f16 on the RoPE tail (64 elems). Implement `store`/`dot`/`mulAccum` plus `kvSliceBytes`/`kvByteOffset` for 512-d records. GPU SDPA has no kernel for this layout; backends route `cpuSdpaOnly()` types to CPU `kvDot`/`kvMulAccum`.
 
 Existing examples: `turboStore/turboDot/turboMulAccum` (WHT), `planarStore/planarDot/planarMulAccum` (Givens 2D), `isoStore/isoDot/isoMulAccum` (quaternion 4D), `rotorStore/rotorDot/rotorMulAccum` (Clifford rotor).
 

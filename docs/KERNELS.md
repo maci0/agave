@@ -1,6 +1,6 @@
 # Kernel Implementation Status
 
-**Last Updated**: 2026-08-21
+**Last Updated**: 2026-08-22
 
 This document tracks the implementation status of all compute kernels across backends. Each kernel can be:
 - **Native**: Fully implemented on the target hardware (GPU shader or optimized CPU SIMD)
@@ -157,7 +157,7 @@ Fourteen dedicated Metal compute kernels for DeepSeek V4 Flash that eliminate al
 | `ds4_moe_down_mxfp4` | Batched MoE down GEMV (MXFP4) | 1D grid |
 | `ds4_rms_norm_noweight` | RMSNorm without learned weight | 1D grid |
 
-These kernels activate for GGUF models with native GPU GEMV types or RAM-resident models. For MLX-Q SafeTensors models exceeding RAM (SSD streaming), the DS4 model uses a **dedicated `CpuBackend` bypass** that routes all hot-path operations through a model-owned CpuBackend instance, producing bit-identical output to `--backend cpu` at 10.7-21.2 tok/s with suffix speculation.
+These kernels exist for GGUF models with native GPU GEMV types. Flash 0731 generate (MLX-Q SafeTensors, default q8_0 KV) routes the DS4 hot path through a dedicated `CpuBackend` on every backend: CSA/HCA pooling, LID, and HC mixing read host f32, and GPU GEMV would leave those slices stale or UMA-incoherent. `--backend metal|cuda|vulkan|rocm|webgpu` must match `--backend cpu`. Metal still has a q8_0 decode SDPA kernel for long sequences on other models; DS4 does not use it.
 
 ## Sparse GEMV (Activation Sparsity)
 
@@ -187,6 +187,10 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 
 **Metal** — format gap:
 - GEMV: nvfp4 (GGUF) — GPU backends use SafeTensors NVFP4 (`nvfp4_st`) path instead
+
+**KV cache `nvfp4_ds_mla`**: CPU `kvDot`/`kvMulAccum` on all backends (DeepSeek MLA: NVFP4 on 448 NoPE dims, f16 on 64 RoPE dims). No GPU SDPA kernel; GPU backends route this type through `CpuBackend`.
+
+**KV cache `q8_0` (DS4 default):** CUDA/ROCm/Vulkan/WebGPU have no q8_0 SDPA kernel and use CPU SDPA. Metal has a q8_0 decode kernel for long sequences; tree and prefill still use CPU. DS4 scores via the dedicated CpuBackend. Vulkan/WebGPU still run MLX-Q and MXFP4 GEMV on GPU (`gemv_mlx_q4`, `gemv_mxfp4_st` with `gs` + E8M0 for Flash experts).
 
 **Megakernel ports** (optimization, not correctness):
 - ROCm: gemma_q4k, gemma_q8, qwen35_q4k, nemotron_h_q8 (requires Metal→AMDGCN porting)

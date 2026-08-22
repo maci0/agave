@@ -548,6 +548,64 @@ test "sdpa asymmetric kv types" {
     }
 }
 
+test "sdpa nvfp4_ds_mla 512-d generate path" {
+    // DS4 uncompressed decode: nkv=1, hd=512, K=V shared packing.
+    const hd = kv_quant.ds_mla_latent_dim;
+    const rec = kv_quant.kvSliceBytes(.nvfp4_ds_mla, hd);
+    const max_sl = 2;
+    var kv_keys_buf: [1024]u8 align(4) = undefined;
+    var kv_values_buf: [1024]u8 align(4) = undefined;
+    try std.testing.expect(rec * max_sl <= kv_keys_buf.len);
+
+    var k_buf: [hd]f32 = undefined;
+    var v_buf: [hd]f32 = undefined;
+    var q: [hd]f32 = undefined;
+    for (0..hd) |i| {
+        q[i] = 0.02;
+        k_buf[i] = @as(f32, @floatFromInt(i % 11)) * 0.2 - 1.0;
+        v_buf[i] = @as(f32, @floatFromInt(i % 7)) * 0.1 + 0.25;
+    }
+    var attn_out: [hd]f32 = @splat(0);
+    var scores = [_]f32{0} ** 8;
+
+    const BackendState = @import("../backend/backend.zig").BackendState;
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    var bs = BackendState{};
+    bs.init(std.testing.allocator, .cpu, threaded.io(), 0);
+    defer if (bs.pool) |*p| p.deinit();
+    const be = bs.be;
+
+    scaledDotProductAttention(
+        &q,
+        kv_keys_buf[0..],
+        kv_values_buf[0..],
+        &k_buf,
+        &v_buf,
+        &attn_out,
+        &scores,
+        1,
+        1,
+        hd,
+        0,
+        1.0,
+        be,
+        null,
+        0,
+        .nvfp4_ds_mla,
+        .nvfp4_ds_mla,
+    );
+
+    for (0..kv_quant.ds_mla_nope_dim) |i| {
+        try std.testing.expectApproxEqAbs(v_buf[i], attn_out[i], 0.6);
+    }
+    for (0..kv_quant.ds_mla_rope_dim) |i| {
+        const idx = kv_quant.ds_mla_nope_dim + i;
+        const expected: f32 = @floatCast(@as(f16, @floatCast(v_buf[idx])));
+        try std.testing.expectApproxEqAbs(expected, attn_out[idx], 1e-4);
+    }
+}
+
 test "sdpa exercises SIMD path with hd=16" {
     // Previous tests use hd=4 which falls below simd_width=8, so the SIMD
     // inner loop never executes. This test uses hd=16 to cover both the

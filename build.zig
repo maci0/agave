@@ -281,6 +281,16 @@ pub fn build(b: *std.Build) void {
     // in fuzz and unit tests (see std.debug.assert docs).
     const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
 
+    // Default `--listen=-` server deadlocks under parallel `addRunArtifact` on
+    // this host: children block in receiveMessage and the parent never sends
+    // query_test_metadata after another artifact writes stderr. Simple mode
+    // uses the same runner without the server protocol; failure is exit status.
+    const zig_lib = b.graph.zig_lib_directory.path orelse ".";
+    const simple_test_runner: std.Build.Step.Compile.TestRunner = .{
+        .path = .{ .cwd_relative = b.pathJoin(&.{ zig_lib, "compiler", "test_runner.zig" }) },
+        .mode = .simple,
+    };
+
     // Main test suite (inline tests from src/)
     {
         const mod_test = b.createModule(.{
@@ -290,7 +300,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_test.addImport("build_options", backend_options.createModule());
         // No name filters: run the full inline suite from src/ (ReleaseSafe so asserts fire).
-        const t = b.addTest(.{ .root_module = mod_test });
+        const t = b.addTest(.{ .root_module = mod_test, .test_runner = simple_test_runner });
         link_platform(mod_test, t, target);
         if (link_metal) {
             mod_test.linkFramework("Metal", .{});
@@ -301,18 +311,24 @@ pub fn build(b: *std.Build) void {
     }
 
     // SDPA oracle self-tests (validates ground-truth reference for GPU tests)
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("tests/sdpa_oracle.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    }) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/sdpa_oracle.zig"),
+            .target = target,
+            .optimize = test_optimize,
+        }),
+        .test_runner = simple_test_runner,
+    })).step);
 
     // Golden harness unit tests (degenerate output detection)
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("tests/models/golden_harness.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    }) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/models/golden_harness.zig"),
+            .target = target,
+            .optimize = test_optimize,
+        }),
+        .test_runner = simple_test_runner,
+    })).step);
 
     // Shared backend module for SDPA hardware tests (provides named "backend" import).
     // Rooted at src/test_exports.zig so transitive imports resolve within src/.
@@ -339,8 +355,9 @@ pub fn build(b: *std.Build) void {
     sdpa_harness_mod.addImport("backend", backend_test_mod);
     sdpa_harness_mod.addImport("sdpa_oracle", oracle_mod);
 
-    // CUDA SDPA correctness tests (skips at runtime if no CUDA hardware)
-    {
+    // CUDA SDPA correctness tests (skips at runtime if no CUDA hardware).
+    // Skip compile when CUDA is NullBackend: init() is a compileError.
+    if (enable_cuda) {
         const mod = b.createModule(.{
             .root_source_file = b.path("tests/test_cuda_sdpa.zig"),
             .target = target,
@@ -348,7 +365,7 @@ pub fn build(b: *std.Build) void {
         });
         mod.addImport("backend", backend_test_mod);
         mod.addImport("sdpa_harness", sdpa_harness_mod);
-        const t = b.addTest(.{ .root_module = mod });
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner });
         link_platform(mod, t, target);
         if (link_metal) {
             mod.linkFramework("Metal", .{});
@@ -358,8 +375,9 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // Metal SDPA correctness tests (skips at runtime if not macOS)
-    {
+    // Metal SDPA correctness tests (skips at runtime if not macOS).
+    // Skip compile when Metal is NullBackend: init() arity does not match.
+    if (enable_metal) {
         const mod = b.createModule(.{
             .root_source_file = b.path("tests/test_metal_sdpa.zig"),
             .target = target,
@@ -367,7 +385,7 @@ pub fn build(b: *std.Build) void {
         });
         mod.addImport("backend", backend_test_mod);
         mod.addImport("sdpa_harness", sdpa_harness_mod);
-        const t = b.addTest(.{ .root_module = mod });
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner });
         link_platform(mod, t, target);
         if (link_metal) {
             mod.linkFramework("Metal", .{});
@@ -378,14 +396,15 @@ pub fn build(b: *std.Build) void {
     }
 
     // WebGPU MLX GEMV row-chunking (vocab > 65535). Skips if wgpu-native missing.
-    {
+    // Skip compile when WebGPU is NullBackend: init(allocator) vs init(allocator, device).
+    if (enable_webgpu) {
         const mod = b.createModule(.{
             .root_source_file = b.path("tests/test_webgpu_mlx_gemv.zig"),
             .target = target,
             .optimize = test_optimize,
         });
         mod.addImport("backend", backend_test_mod);
-        const t = b.addTest(.{ .root_module = mod });
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner });
         link_platform(mod, t, target);
         if (link_metal) {
             mod.linkFramework("Metal", .{});
@@ -398,11 +417,14 @@ pub fn build(b: *std.Build) void {
     }
 
     // ROCm kernel tests (placeholder — skips until hardware available)
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("tests/test_rocm_kernel.zig"),
-        .target = target,
-        .optimize = test_optimize,
-    }) })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_rocm_kernel.zig"),
+            .target = target,
+            .optimize = test_optimize,
+        }),
+        .test_runner = simple_test_runner,
+    })).step);
 
     // micro_bench pure-function tests (parseKeyValue, parseKernelName, etc.)
     {
@@ -412,7 +434,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         });
         mod_bench_test.addImport("build_options", backend_options.createModule());
-        const t = b.addTest(.{ .root_module = mod_bench_test });
+        const t = b.addTest(.{ .root_module = mod_bench_test, .test_runner = simple_test_runner });
         link_platform(mod_bench_test, t, target);
         if (link_metal) {
             mod_bench_test.linkFramework("Metal", .{});
@@ -430,7 +452,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         });
         mod_wasm_test.addImport("build_options", backend_options.createModule());
-        const t = b.addTest(.{ .root_module = mod_wasm_test });
+        const t = b.addTest(.{ .root_module = mod_wasm_test, .test_runner = simple_test_runner });
         link_platform(mod_wasm_test, t, target);
         if (link_metal) {
             mod_wasm_test.linkFramework("Metal", .{});

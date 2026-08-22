@@ -270,7 +270,7 @@ pub const ChatTemplate = struct {
         .user_suffix = "",
         .assistant_prefix = "<｜Assistant｜>",
         .assistant_suffix = "<｜end▁of▁sentence｜>",
-        .eog_tokens = &.{ "<｜end▁of▁sentence｜>", "<｜end▁of▁sentence|>" },
+        .eog_tokens = &.{ "<｜end▁of▁sentence｜>", "<｜User｜>" },
         .default_system = "",
         .generation_prefix = "</think>",
     };
@@ -610,6 +610,13 @@ test "glm4 multi-turn conversation" {
     try std.testing.expect(pos_u1 < pos_a1);
     try std.testing.expect(pos_a1 < pos_u2);
     try std.testing.expect(std.mem.endsWith(u8, result, "<|assistant|>\n"));
+}
+
+test "deepseek4 chat format uses BOS and non-thinking suffix" {
+    const result = try ChatTemplate.deepseek4.format(std.testing.allocator, null, "What is the capital of France?");
+    defer std.testing.allocator.free(result);
+    try std.testing.expect(std.mem.startsWith(u8, result, "<｜begin▁of▁sentence｜><｜User｜>What is the capital of France?<｜Assistant｜></think>"));
+    try std.testing.expect(std.mem.endsWith(u8, result, "<｜Assistant｜></think>"));
 }
 
 test "fuzz: all chat_template functions" {

@@ -1,9 +1,14 @@
-// GEMV for MXFP4 sub-tile quantized weights.
+// GEMV for MXFP4 E2M1 weights with per-group U8 scales.
+// gs = 16 (NVIDIA) or 32 (MLX MoE experts). scale_fmt: 0 = FP8 E4M3, 1 = E8M0.
 struct Params {
     n: u32,
     k: u32,
     row_offset: u32,
-    _pad: u32,
+    gs: u32,
+    scale_fmt: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> x: array<f32>;
@@ -27,10 +32,14 @@ fn fp8e4m3(val: u32) -> f32 {
         let fv = f32(m) / 8.0 * exp2(-6.0);
         if (s == 1u) { return -fv; } else { return fv; }
     }
-    // OCP E4M3FN: only e=15,m=7 is NaN; e=15,m<7 are finite (256..448).
-    if (e == 15u && m == 7u) { return 0.0; } // NaN → 0 for scales
+    if (e == 15u && m == 7u) { return 0.0; }
     let fv = (1.0 + f32(m) / 8.0) * exp2(f32(e) - 7.0);
     if (s == 1u) { return -fv; } else { return fv; }
+}
+
+fn e8m0_to_f32(val: u32) -> f32 {
+    if (val == 0u) { return 0.0; }
+    return bitcast<f32>(val << 23u);
 }
 
 var<workgroup> partial: array<f32, 256>;
@@ -42,32 +51,36 @@ fn main(@builtin(workgroup_id) wgid: vec3<u32>, @builtin(local_invocation_id) li
     if (row >= params.n) { return; }
 
     let k = params.k;
-    let groups_per_row = (k + 15u) / 16u;
-    let bytes_per_row = (k + 1u) / 2u;
+    let group_size = max(params.gs, 8u);
+    let gpr = (k + group_size - 1u) / group_size;
+    let wpg = group_size / 8u;
+    let wpr = gpr * wpg;
+    let row_w = row * wpr;
 
     var sum: f32 = 0.0;
-    for (var g = tid; g < groups_per_row; g = g + 256u) {
-        let s_idx = row * groups_per_row + g;
+    for (var g = tid; g < gpr; g = g + 256u) {
+        let s_idx = row * gpr + g;
         let s_word = s_packed[s_idx / 4u];
-        let sc = fp8e4m3((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
+        let s_byte = (s_word >> ((s_idx % 4u) * 8u)) & 0xFFu;
+        var sc: f32;
+        if (params.scale_fmt == 1u) {
+            sc = e8m0_to_f32(s_byte);
+        } else {
+            sc = fp8e4m3(s_byte);
+        }
 
-        let base = g * 16u;
-        let w_byte_base = row * bytes_per_row + g * 8u;
-        let elems = min(16u, k - base);
-        let nbytes = (elems + 1u) / 2u;
-
-        for (var j = 0u; j < nbytes; j = j + 1u) {
-            let w_byte_idx = w_byte_base + j;
-            let w_word = w_packed[w_byte_idx / 4u];
-            let byte_val = (w_word >> ((w_byte_idx % 4u) * 8u)) & 0xFFu;
-            let v0 = mxfp4_lut(byte_val & 0xFu) * sc;
-            let v1 = mxfp4_lut(byte_val >> 4u) * sc;
-            let xi0 = base + 2u * j;
-            sum = sum + v0 * x[xi0];
-            if (xi0 + 1u < k) {
-                sum = sum + v1 * x[xi0 + 1u];
+        let xo = g * group_size;
+        let wg = row_w + g * wpg;
+        var gdot: f32 = 0.0;
+        for (var w = 0u; w < wpg && xo + w * 8u < k; w = w + 1u) {
+            let word = w_packed[wg + w];
+            let xi = xo + w * 8u;
+            let rem = min(8u, k - xi);
+            for (var i = 0u; i < rem; i = i + 1u) {
+                gdot = gdot + mxfp4_lut((word >> (i * 4u)) & 0xFu) * x[xi + i];
             }
         }
+        sum = sum + sc * gdot;
     }
 
     partial[tid] = sum;

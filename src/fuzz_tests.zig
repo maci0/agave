@@ -1814,7 +1814,7 @@ test "fuzz: ModelDesc qwenHybrid pattern" {
 test "fuzz: kvSliceBytes no crash" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            const all_types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .turbo2, .turbo3, .turbo4 };
+            const all_types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .nvfp4, .nvfp4_ds_mla, .turbo2, .turbo3, .turbo4 };
             const kv_type = all_types[smith.indexWithHash(all_types.len, 0)];
             const n: usize = @as(usize, smith.valueWithHash(u16, 1)) + 1;
             const bytes = kv_quant.kvSliceBytes(kv_type, n);
@@ -1830,10 +1830,10 @@ test "fuzz: kvStore random data no crash" {
             var src: [n]f32 = undefined;
             for (&src, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
 
-            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .turbo2, .turbo3, .turbo4 };
+            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .nvfp4, .nvfp4_ds_mla, .turbo2, .turbo3, .turbo4 };
             const kv_type = types[smith.indexWithHash(types.len, 50)];
 
-            var kv_buf: [256]u8 = undefined;
+            var kv_buf: [256]u8 align(4) = undefined;
             const needed = kv_quant.kvSliceBytes(kv_type, n);
             if (needed > kv_buf.len) return;
             kv_quant.kvStore(&kv_buf, &src, n, kv_type);
@@ -2150,7 +2150,7 @@ test "fuzz: KvQuantType name + bitsPerElement + classification" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const all_types = [_]kv_quant.KvQuantType{
-                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4,
+                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4, .nvfp4_ds_mla,
                 .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4,
                 .iso2,   .iso3,   .iso4,   .rotor2,  .rotor3,   .rotor4,
             };
@@ -2164,12 +2164,14 @@ test "fuzz: KvQuantType name + bitsPerElement + classification" {
             if (kv_type.isTurbo() or kv_type.isPlanar() or kv_type.isIso() or kv_type.isRotor()) {
                 try std.testing.expect(is_rot);
             }
-            // turboBits: rotation quants return 2/3/4, others return 0
+            // turboBits: rotation quants return 2/3/4, Q8_0 returns 8, others 0
             const bits = kv_type.turboBits();
             if (is_rot) {
                 try std.testing.expect(bits >= 2 and bits <= 4);
+            } else if (kv_type == .q8_0) {
+                try std.testing.expectEqual(@as(u32, 8), bits);
             } else {
-                try std.testing.expect(bits == 0);
+                try std.testing.expectEqual(@as(u32, 0), bits);
             }
         }
     }.f, .{});
@@ -2186,7 +2188,7 @@ test "fuzz: KvQuantType fromString roundtrip" {
             // Known strings must roundtrip
             const known = [_][]const u8{
                 "f32",    "f16",      "q8_0",   "q8",  "int8",    "i8",
-                "fp8",    "fp8_e4m3", "nvfp4",  "fp4", "turbo2",  "tq2",
+                "fp8",    "fp8_e4m3", "nvfp4",  "fp4", "nvfp4_ds_mla", "turbo2",  "tq2",
                 "turbo3", "tq3",      "turbo4", "tq4", "planar2", "pq2",
                 "iso2",   "iq2",      "rotor2", "rq2",
             };
@@ -2200,7 +2202,7 @@ test "fuzz: KvQuantType fromString roundtrip" {
 test "fuzz: kvByteOffset no crash" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
-            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .turbo2, .turbo3, .turbo4 };
+            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .nvfp4, .nvfp4_ds_mla, .turbo2, .turbo3, .turbo4 };
             const kv_type = types[smith.indexWithHash(types.len, 0)];
             const i: usize = smith.valueWithHash(u16, 1);
             const offset = kv_quant.kvByteOffset(kv_type, i);
@@ -2217,9 +2219,9 @@ test "fuzz: kvMulAccum no crash" {
             const n: usize = 32;
             var src: [n]f32 = undefined;
             for (&src, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
-            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .turbo2, .turbo3, .turbo4 };
+            const types = [_]kv_quant.KvQuantType{ .f16, .q8_0, .fp8_e4m3, .nvfp4, .nvfp4_ds_mla, .turbo2, .turbo3, .turbo4 };
             const kv_type = types[smith.indexWithHash(types.len, 50)];
-            var kv_buf: [256]u8 = undefined;
+            var kv_buf: [256]u8 align(4) = undefined;
             const needed = kv_quant.kvSliceBytes(kv_type, n);
             if (needed > kv_buf.len) return;
             kv_quant.kvStore(&kv_buf, &src, n, kv_type);

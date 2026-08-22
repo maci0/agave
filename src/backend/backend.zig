@@ -376,6 +376,10 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    pub fn ropeMrope(_: *NullBackend, _: [*]f32, _: usize, _: usize, _: usize, _: usize, _: usize, _: usize, _: f32) void {
+        unreachable;
+    }
+
     pub fn embLookup(_: *NullBackend, _: TensorData, _: u32, _: [*]f32, _: usize) void {
         unreachable;
     }
@@ -696,6 +700,13 @@ pub const Backend = union(enum) {
     pub inline fn rope(self: Backend, x: [*]f32, pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         switch (self) {
             inline else => |be| be.rope(x, pos, n_heads, head_dim, rope_dim, theta),
+        }
+    }
+
+    /// Interleaved 3D multimodal RoPE (Qwen3.5). Equals `rope` when T=H=W.
+    pub inline fn ropeMrope(self: Backend, x: [*]f32, t_pos: usize, h_pos: usize, w_pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        switch (self) {
+            inline else => |be| be.ropeMrope(x, t_pos, h_pos, w_pos, n_heads, head_dim, rope_dim, theta),
         }
     }
 
@@ -2169,6 +2180,33 @@ test "Backend.sdpa f32 KV via CPU dispatch" {
     // output = softmax([q·k]) @ v = 1.0 * v = v_new
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[0], 1e-3);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
+}
+
+test "Backend.sdpa nvfp4_ds_mla via CPU dispatch" {
+    const kv_quant = @import("../ops/kv_quant.zig");
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = kv_quant.ds_mla_latent_dim;
+    const rec = kv_quant.kvSliceBytes(.nvfp4_ds_mla, hd);
+    var keys: [1024]u8 align(4) = undefined;
+    var values: [1024]u8 align(4) = undefined;
+    try std.testing.expect(rec <= keys.len);
+    var q: [hd]f32 = @splat(0.02);
+    var k_new: [hd]f32 = undefined;
+    var v_new: [hd]f32 = undefined;
+    for (0..hd) |i| {
+        k_new[i] = @as(f32, @floatFromInt(i % 11)) * 0.2 - 1.0;
+        v_new[i] = @as(f32, @floatFromInt(i % 7)) * 0.1 + 0.25;
+    }
+    var output: [hd]f32 = undefined;
+    be.sdpa(&q, keys[0..], values[0..], &k_new, &v_new, &output, nh, nkv, hd, 0, 1.0, .nvfp4_ds_mla, .nvfp4_ds_mla);
+    for (0..kv_quant.ds_mla_rope_dim) |i| {
+        const idx = kv_quant.ds_mla_nope_dim + i;
+        const expected: f32 = @floatCast(@as(f16, @floatCast(v_new[idx])));
+        try std.testing.expectApproxEqAbs(expected, output[idx], 1e-4);
+    }
 }
 
 test "Backend.sdpaPrefill f32 via CPU dispatch" {

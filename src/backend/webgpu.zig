@@ -11,6 +11,7 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const TensorData = backend_mod.TensorData;
 const KvQuantType = backend_mod.KvQuantType;
 const PagedKvView = backend_mod.PagedKvView;
+const CpuBackend = @import("cpu.zig").CpuBackend;
 
 // ── WGSL shader sources (embedded at compile time) ──────────────────
 
@@ -290,6 +291,12 @@ const delta_net_max_qk_elems: usize = 32768;
 const max_bindings: u32 = 8;
 /// Maximum device poll iterations for buffer map completion.
 const max_map_poll_iterations: u32 = 10000;
+/// Minimum MXFP4 group size (8 nibbles = one u32 word).
+const mxfp4_min_group_size: u32 = 8;
+/// scale_fmt uniform: NVIDIA/GGUF FP8 E4M3.
+const mxfp4_scale_e4m3: u32 = 0;
+/// scale_fmt uniform: OCP / MLX expert E8M0.
+const mxfp4_scale_e8m0: u32 = 1;
 
 // ── Pipeline info ───────────────────────────────────────────────────
 
@@ -1013,14 +1020,11 @@ pub const WebGpuBackend = struct {
     }
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
+    /// Sync first so GPU-written data is visible; match CpuBackend clamp.
     pub fn clampedSiluMul(self: *WebGpuBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
-        // CPU fallback — sync first so GPU-written data is visible to CPU reads.
         self.sync();
-        for (0..n) |idx| {
-            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[idx]));
-            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[idx]));
-            out[idx] = (g / (1.0 + @exp(-g))) * u;
-        }
+        var cpu = CpuBackend{};
+        cpu.clampedSiluMul(gate, up, out, n);
     }
 
     /// Fused GELU×mul (GeGLU): out[i] = gelu(a[i]) * b[i].
@@ -1115,6 +1119,15 @@ pub const WebGpuBackend = struct {
         };
         self.dispatchCompute(self.pipe_rope, &entries, @intCast((half_rope + workgroup_size - 1) / workgroup_size));
         self.cacheGpuResult(data, data_buf, size);
+    }
+
+    /// 3D multimodal RoPE. Discrete GPU path only handles T=H=W (text).
+    pub fn ropeMrope(self: *WebGpuBackend, data: [*]f32, t_pos: usize, h_pos: usize, w_pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        if (t_pos == h_pos and h_pos == w_pos) {
+            self.rope(data, t_pos, n_heads, head_dim, rope_dim, theta);
+            return;
+        }
+        @panic("ropeMrope: 3D multimodal RoPE is implemented for CPU and Metal only");
     }
 
     /// Embedding table lookup: copy row `token_id` from table into output.
@@ -1426,6 +1439,14 @@ pub const WebGpuBackend = struct {
 
     /// Scaled dot-product attention (single-token decode). Appends k/v, computes QK^T, softmax, V lookup.
     pub fn sdpa(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            // nvfp4_ds_mla: no WebGPU SDPA shader. DS4 MLA decode already uses
+            // CPU kvDot for compressed attention; uncompressed SDPA matches.
+            self.sync();
+            var cpu = CpuBackend{};
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (kv_type_k != .f32 or kv_type_v != .f32)
             @panic("WebGPU sdpa: only f32 KV supported — use --kv-type f32");
 
@@ -1571,6 +1592,12 @@ pub const WebGpuBackend = struct {
 
     /// Tree-structured SDPA for speculative decoding with ancestor masks.
     pub fn sdpaTree(self: *WebGpuBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            self.sync();
+            var cpu = CpuBackend{};
+            cpu.sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
             const kvd = nkv * hd;
             const q_sz = n_nodes * nh * hd * @sizeOf(f32);
@@ -1691,7 +1718,10 @@ pub const WebGpuBackend = struct {
         const s_sz = n * gpr * @sizeOf(u16);
         const b_sz = s_sz;
         const y_sz = n * @sizeOf(f32);
-        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
+        // Always upload x: CPU rmsNorm writes the host vector between GEMVs.
+        const x_pool = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool.idx);
+        self.uploadToBuffer(x_pool.buf, @ptrCast(x), x_sz);
         const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
         const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
         const b_buf = self.getOrUpload(@ptrCast(w_biases), b_sz);
@@ -1705,7 +1735,7 @@ pub const WebGpuBackend = struct {
             const params_buf = self.createUniformBuf(Params, p);
             self.deferDestroy(params_buf);
             const entries = [_]WGPUBindGroupEntry{
-                storageEntry(0, x_buf, x_sz),
+                storageEntry(0, x_pool.buf, x_sz),
                 storageEntry(1, w_buf, w_sz),
                 storageEntry(2, s_buf, s_sz),
                 storageEntry(3, b_buf, b_sz),
@@ -1715,39 +1745,72 @@ pub const WebGpuBackend = struct {
             self.dispatchCompute(self.pipe_gemv_mlx_q4, &entries, chunk);
             row_offset += chunk;
         }
-        self.cacheGpuResult(y, y_buf, y_sz);
+        // Host-visible y so DS4 CPU rmsNorm / CSA / HC can read the result.
+        self.downloadF32(y_buf, y, n);
+        self.fn_buffer_destroy(y_buf);
+        self.fn_buffer_release(y_buf);
     }
     pub fn gemvMlxQGpu(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
 
-    pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+    pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        const group_size: u32 = @intCast(@max(gs, mxfp4_min_group_size));
+        const gpr = (k + @as(usize, group_size) - 1) / @as(usize, group_size);
+        const wpg = @as(usize, group_size) / 8;
         const x_sz = k * @sizeOf(f32);
-        const w_sz = n * k / 2;
-        const mxfp4_gs: usize = 16; // NVIDIA MXFP4 group size (must match gemv_mxfp4_st.wgsl)
-        const s_sz = n * ((k + mxfp4_gs - 1) / mxfp4_gs);
+        const w_sz = n * gpr * wpg * @sizeOf(u32);
+        const s_sz = @max(n * gpr, 4);
         const y_sz = n * @sizeOf(f32);
-        const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
-        const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
-        const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
+        const storage_usage = wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst;
+        const x_pool = self.getPooledBuf(x_sz);
+        defer self.releasePooledBuf(x_pool.idx);
+        self.uploadToBuffer(x_pool.buf, @ptrCast(x), x_sz);
+        // Upload-every-dispatch: SSD expert slices reuse host addresses.
+        const w_buf = self.createBuffer(w_sz, storage_usage);
+        const s_buf = self.createBuffer(s_sz, storage_usage);
         const y_buf = self.createOutputBuf(y_sz);
-        const Params = extern struct { n: u32, k: u32, row_offset: u32, _pad: u32 = 0 };
+        self.uploadToBuffer(w_buf, w_packed, w_sz);
+        self.uploadToBuffer(s_buf, w_scales, s_sz);
+        const scale_fmt: u32 = if (sf == .e8m0) mxfp4_scale_e8m0 else mxfp4_scale_e4m3;
+        const Params = extern struct {
+            n: u32,
+            k: u32,
+            row_offset: u32,
+            gs: u32,
+            scale_fmt: u32,
+            _pad0: u32 = 0,
+            _pad1: u32 = 0,
+            _pad2: u32 = 0,
+        };
         var row_offset: u32 = 0;
         const n_u: u32 = @intCast(n);
         while (row_offset < n_u) {
             const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
-            const p = Params{ .n = n_u, .k = @intCast(k), .row_offset = row_offset };
+            const p = Params{
+                .n = n_u,
+                .k = @intCast(k),
+                .row_offset = row_offset,
+                .gs = group_size,
+                .scale_fmt = scale_fmt,
+            };
             const params_buf = self.createUniformBuf(Params, p);
-            self.deferDestroy(params_buf);
             const entries = [_]WGPUBindGroupEntry{
-                storageEntry(0, x_buf, x_sz),
+                storageEntry(0, x_pool.buf, x_sz),
                 storageEntry(1, w_buf, w_sz),
                 storageEntry(2, s_buf, s_sz),
                 storageEntry(3, y_buf, y_sz),
                 uniformEntry(4, params_buf, Params),
             };
             self.dispatchCompute(self.pipe_gemv_mxfp4_st, &entries, chunk);
+            self.deferDestroy(params_buf);
             row_offset += chunk;
         }
-        self.cacheGpuResult(y, y_buf, y_sz);
+        self.downloadF32(y_buf, y, n);
+        self.fn_buffer_destroy(w_buf);
+        self.fn_buffer_release(w_buf);
+        self.fn_buffer_destroy(s_buf);
+        self.fn_buffer_release(s_buf);
+        self.fn_buffer_destroy(y_buf);
+        self.fn_buffer_release(y_buf);
     }
     pub fn gemvMxfp4StGpu(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
 
@@ -2110,6 +2173,10 @@ test "WebGPU tuning constants are valid" {
     try testing.expectEqual(@as(u32, 65535), max_workgroups_per_dim);
     // Qwen3.8-27B vocab (248320) and emb_max_vocab both exceed the 1D dispatch cap.
     try testing.expect(emb_max_vocab > max_workgroups_per_dim);
+
+    try testing.expectEqual(@as(u32, 8), mxfp4_min_group_size);
+    try testing.expectEqual(@as(u32, 0), mxfp4_scale_e4m3);
+    try testing.expectEqual(@as(u32, 1), mxfp4_scale_e8m0);
 }
 
 test "WebGPU alignUniform rounds up to 16" {
