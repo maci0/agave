@@ -53,6 +53,9 @@ must still appear under **Changed** or **Breaking** below. See
 - Scheduler sampling uses a fixed interceptor stack (`src/ops/sampler_stack.zig`); request end disposes LIFO.
 - Server tool registry (`src/server/tools.zig`): register/unregister; request JSON tools overlay the registry.
 - DeepSeek V4 Flash 0731 multi-node: `--pp 2` transfers 4-stream HC state; `--tp 2` is expert-parallel with `allReduceAdd`. CUDA GEMV path for non-Metal backends. `--transport nccl` plus `--spec-mode dspark` on a 2-rank pair. `--tp`/`--pp` still cap at 2.
+- **Qwen3.8-27B**: dense hybrid DeltaNet+attention model loads and generates on Metal/CPU/WebGPU (in-checkpoint vision encoder; vocab GEMV chunked past the 65535 workgroup limit).
+- **DeepSeek V4 Flash on Vulkan and WebGPU**: native MLX-Q / MXFP4 GEMV shaders (E8M0 scales) with greedy output matching CPU; new `--kv-type nvfp4_ds_mla` preset (NoPE keys as NVFP4, 64-d RoPE tail in f16); Qwen3.5 vision uses mRoPE.
+- DeepSeek V4 Flash full Metal path: 14 MSL kernels (HC mixing, RoPE, SDPA hd=512, batched MoE, fused attention megakernel) plus a dedicated CPU bypass for MLX-Q SafeTensors that is bit-identical to `--backend cpu`.
 
 ### Fixed
 - GPT-OSS / MXFP4 SafeTensors: group size corrected to 16 and block scales decoded
@@ -66,6 +69,23 @@ must still appear under **Changed** or **Breaking** below. See
   (possibly unescaped) strings; returns a generic `500` JSON error instead
 - Split GGUF shard merging: `tensors.put()` now propagates OOM instead of
   silently dropping tensors (could cause silent model corruption on large shards)
+- Server: handler threads can no longer race the scheduler thread on the shared
+  KV cache (grammar/`json_mode` direct paths and cache resets now serialize with
+  the scheduler's forward passes). Concurrent requests could previously corrupt
+  generation state.
+- Server: assistant tool-call turns with `"content": null` are kept in the
+  conversation (previously dropped, breaking multi-turn tool calling).
+- Server: streamed responses longer than one chunk buffer are no longer dropped;
+  content is split into 16 KB deltas. A `<tool_call>` block whose payload fails
+  to parse is returned as plain content instead of an empty assistant turn
+  claiming `finish_reason: "tool_calls"`.
+- DRY sampler: the repeated-prefix length is measured over the full match window
+  (penalties were under-scaled for long repetitions); n-gram speculative search
+  now prefers the most recent occurrence.
+- Metal: deferred buffer release prevents use-after-free when a cached buffer is
+  replaced while still referenced by pending GPU dispatches.
+- DeepSeek V4 Flash `--pp`: later pipeline stages skip the unused embedding
+  lookup; expert prefetch respects the TP rank.
 
 ### Changed
 - Changelog entries are consumer-oriented; date-stamped sections below remain the
@@ -77,313 +97,24 @@ must still appear under **Changed** or **Breaking** below. See
   over `--api-key` (process-list exposure)
 - HTTP JSON errors more often include machine-readable `param` and `code` (additive
   for clients that ignore unknown fields; see `docs/API.md`)
+- Web chat UI adopts the warm palette shared with `src/web/style.css` design tokens (visual only)
+- Docker: container stop grace period raised above the server drain timeout so in-flight requests finish on `docker stop`
 
-## 2026-07-31 — DeepSeek V4 Flash 0731
-
-### DeepSeek V4 Flash Full Architecture Support
-
-New model architecture in `src/models/deepseek4.zig` with complete inference support.
-
-**Architecture:**
-- 4-stream hyper connections (HC) with Sinkhorn-normalized combination matrices
-- Modified MLA: K=V single compressed head, no separate V projection
-- Hash routing (layers 0–2), sqrt_softplus routing (layers 3+)
-- Grouped output LoRA (8 groups × 1024 rank)
-- CSA compressor (ratio=4, 21 layers) and HCA compressor (ratio=128, 20 layers)
-- Lightning Indexer (LID): multi-head ReLU dot-product block scoring for sparse attention
-
-**Performance optimizations (cumulative):**
-- KV cache switched from f32 to Q8_0 (~4× memory reduction)
-- Metal GPU SDPA kernel for hd=512 (`sdpa_fa2_hd512`) + Q8_0 KV support
-- SIMD vectorized: RoPE cos/sin (8-wide), RoPE apply/inverse (4-wide complex rotation),
-  sqrt_softplus routing + bias, LID scoring (head-outer loop), expert accumulation
-- CPU Q8_0 GEMV for HC pre/head (eliminates 86 GPU dispatches/token)
-- 2-row interleaved cpuGemvQ8_0 for HC GEMV throughput
-- Sparse V threshold skips negligible attention positions (zero PPL impact)
-- Buffer copy elimination in hot path (~3.5 MB/token saved)
-- RoPE table cache eliminates 128× redundant transcendental calls per token
-- Thread-pool parallel per-head compressed attention
-- Inline plainRmsNorm, RoPE table apply/inverse for tight per-head loops
-
-**GPU fast paths:**
-- Non-compressed layers use GPU SDPA directly
-- Batched CSA+HCA compressor GEMVs in single GPU command buffer
-- Hoist sink tensor lookup outside per-head attention loop
-
-## 2026-06-30 — DSpark Speculative Decoding
-
-### DSpark: Confidence-Scheduled Speculative Decoding (Cheng et al., 2026)
-
-Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf) from DeepSeek-AI in `src/spec/dspark.zig`.
-
-**`src/spec/dspark.zig`** (new file):
-- `SpsProfile` — pre-profiled steps-per-second table for target-model token-batch sizes; `syntheticComputeBound()` for offline use
-- `ConfidenceBlock` + `computeSurvival()` — per-request per-position survival probs `a_{r,j} = Π_{i≤j} c_i`
-- `scheduleVerification()` — **Algorithm 1** (Hardware-Aware Prefix Scheduler): globally sorts `(request, position)` candidates by survival probability descending, greedily admits tokens while `Θ = τ × SPS(B)` improves, stops on first drop (non-anticipating property). `O(Rγ log Rγ)`.
-- `MarkovHead` — low-rank `V×V` transition bias `B(x_{k-1},·) = W1[x_{k-1}]W2` (§3.1 Eq. 5), `rank=256` default
-- `RnnHead` — gated recurrent sequential head with full prefix history (§3.1 Eq. 6)
-- `ConfidenceHead` — `c_k = σ(w^T [h_k; W1[x_{k-1}]])` (§3.2.1 Eq. 7)
-- `calibrateSts()` — Sequential Temperature Scaling: per-position 1D grid search minimising ECE of cumulative product (§3.2.1)
-
-**`src/spec/spec_decode.zig`**:
-- `dsparkTrimDraft()` — single-request draft trim using per-position acceptance history as survival-probability proxy; drops suffix below 0.15 expected survival
-
-**`src/main.zig`**:
-- `--spec-mode dspark` wired into decode loop: drafts via existing draft model, trims via `dsparkTrimDraft()`
-- Enum, help strings, and test export all updated
-
-4/4 unit tests pass (Markov bias correctness, scheduler greedy/load cases, SPS profile).
-
-## 2026-06-18 — Vulkan: KosmicKrisp + Pipeline Cache
-
-### Vulkan macOS Backend
-- **KosmicKrisp** replaces MoltenVK as the macOS Vulkan testing target
-- Load path: `libvulkan.1.dylib` (Homebrew Vulkan loader) with `/opt/homebrew/lib/` fallback; set `VK_ICD_FILENAMES` to KosmicKrisp ICD and `DYLD_LIBRARY_PATH=/opt/homebrew/lib`
-- `sdpa_turbo` pipeline gracefully skipped when driver lacks `GroupNonUniform` subgroup ops (lavapipe/KosmicKrisp don't implement them); TurboQuant KV falls back to standard SDPA
-- **Disk-backed `VkPipelineCache`**: compiled shaders saved to `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 kernels), loaded on subsequent runs; note lavapipe re-JITs LLVM IR each run regardless (~5 min; driver limitation)
-
-## 2026-06-16 — IQ2/IQ3 Quant Support + LoRA + MTP Fix
-
-### IQ2/IQ3/IQ1 Quantization Support
-- Added DType entries: `iq2_xxs`, `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`
-- Previously mapped to `.unknown` → zeroed output and warned. Now dispatched to CPU reference kernels
-- `iq2_xxs`: full codebook-based dequant via iq2xxs_grid[256] (512-bit packed int8 entries)
-- `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`: approximation stubs (scale-based)
-- Metal/Vulkan/CUDA/ROCm/WebGPU: CPU fallback instead of panic for these dtypes
-- `dequantToF32`: iq4_nl/iq4_xs properly dequanted; iq2/iq3 stub for LoRA merge path
-- Mixed-quant "UD" models (e.g. unsloth Qwen3-0.6B-UD-IQ2_XXS) now load and run
-
-### LoRA Adapter Support
-
-### LoRA Adapter Loading
-- `--lora <path>`: load a LoRA adapter GGUF file alongside the base model
-- Load-time merge: base weights are dequanted to F32, delta = (alpha/rank) * lora_b @ lora_a is added, result stored as F32 override
-- Transparent to all model code via `GGUFFile.lora_overrides` map checked in `getTensor()`
-- Supports any base quantization (Q4_0, Q4_K, Q8_0, BF16, F16, etc.) and any lora tensor dtype
-- Format: llama.cpp GGUF LoRA (convert_lora_to_gguf.py output), `adapter.type = "lora"`
-
-### MTP Spec Decode Fix (Qwopus)
-
-- `qwen35.zig`: MTP detection now handles two GGUF layouts — layout A has block_count excluding MTP heads (nextn at blk.{n_layers}), layout B has block_count including MTP heads (nextn at blk.{n_layers-1}). Layout B adjusts n_layers down so mtpForward uses the correct mtp_lid.
-- `qwen35.zig`: All nextn tensor lookups now try `.weight` suffix first (e.g. `nextn.eh_proj.weight`) before falling back to bare name, matching Qwopus GGUF storage convention.
-- `qwen35.zig`: `nextn.embed_tokens` falls back to shared `token_embd.weight`; `nextn.shared_head_head` falls back to shared `output.weight`.
-- Verified: Qwopus3.6-27B-Coder-MTP — 74% accept rate, 0.7 mean tokens/step.
-
----
-
-## 2026-06-15 — Vulkan Correctness Fixes
-
-### Vulkan DeltaNet Fixes (2026-06-16)
-- `deltanet_recurrence.comp`: GQA head mapping wrong for `num_k != num_v` — CPU uses `h % num_k` (round-robin) but shader used `h * num_k / num_v` (blocked). Fixes garbled output for Qwen3.5-4B and any model with mismatched k/v head counts.
-- `vulkan.zig`: `gate_arr`/`beta_arr` too small (64) — should be 128 to match `max_ssm_v_heads`. Prevents stack overflow for models with >64 v_heads.
-
-### Vulkan Backend Fixes
-- `destroyBuffer`: submits pending GPU commands before destroying — prevents VUID-vkCmd invalid state (buffer destroyed while recorded in command buffer)
-- `downloadF32`: submits pending work before host readback — prevents reading stale deferred dispatch results
-- Qwen3.5 Vulkan garbled output fixed: DeltaNet causalConv1d was reading stale conv output due to deferred dispatch not executing before downloadF32
-- Vulkan Q8_0 Qwen2.5: confirmed correct at 14.2 tok/s on RX 7900 XTX
-- `n_pipelines`: updated 44→49 (5 new pipelines added without updating count)
-
-### Build
-- `-Denable-debug=false`: new flag to skip `agave-debug` binary on Linux x86_64 with GCC ≥16 (R_X86_64_PC64 relocation unsupported in debug builds)
-
----
-
-## 2026-06-12 — Feature Release
-
-### Bug Fixes
-- tiered KV cache (`--kv-tiers vram+ram`) crash fixed: `isMultiBlock` now guards against `paged_cache.block_size == 0` (all 10 model architectures)
-- Warning added: tiered SDPA split-attention only fully implemented for Gemma 3; other models will warn
-- CUDA: all 60 kernel files now in PTX build list (was 19); 61 kernels registered at runtime (was 44)
-- CUDA SDPA correctness: `getOrAllocKvBuf` now uploads host KV data on first GPU allocation
-- ARM Linux CPU detection: `implementer+part` fallback for aarch64 `/proc/cpuinfo` (no `model name`)
-
-### CUDA Full Validation (GB10 / sm_121 / CUDA 13.0)
-- `callconv(.nvptx_device)` replaces `callconv(.kernel)` — fixes Zig 0.16/LLVM NVPTX alias crash
-- Build PTX fixup: Python script promotes `.func *_kernel` → `.entry` post-compilation
-- All 60 kernel .zig files now in PTX build list (was 19); 61 kernels registered at runtime
-- CUDA KV cache fix: `getOrAllocKvBuf` uploads host data on first allocation (was reading garbage)
-- ARM Linux CPU detection fix: uses `CPU implementer+part` fallback (no `model name` on aarch64)
-- Test results: **1025 passed, 0 failed** on GB10 (-Denable-vulkan=false)
-- Server mode verified: `/health` returns `backend=CUDA`, CUDA spec decode (ngram 91% accept)
-- TurboQuant KV (`--kv-type turbo2`) works on CUDA
-- Performance: 22.3 tok/s decode Qwen3.5-0.8B-Q8_0 on GB10 (UMA; CPU 48 tok/s)
-
-### DiffusionGemma (Block Diffusion LLM)
-- Added `diffusion_gemma` architecture — Google's DiffusionGemma 26B-A4B (SafeTensors BF16)
-- `src/models/diffusion_gemma.zig`: Gemma 4 26B A4B backbone with block diffusion inference
-- `src/ops/attention.zig`: `scaledDotProductAttentionCanvas()` for bidirectional canvas attention
-- Inference loop: encoder prefill → iterative denoising (uniform state diffusion) → block autoregressive chaining
-- 128 experts, top-8, fused `experts.gate_up_proj` tensor, per-layer `layer_scalar`
-- New flags: `--diffusion-steps` (default 16), `--diffusion-canvas` (default 256), `--diffusion-confidence` (default 0.5)
-
-### New Features
-- **EAGLE-3 speculative decoding** (`--spec-mode eagle3`): conditions draft on pre-output-norm hidden state instead of post-norm; preserves residual magnitude for potentially richer draft conditioning. `hidden_pre_norm` buffer added to Gemma4.
-- **Video input** (`--video`, `--video-fps`): extract frames via ffmpeg at configurable FPS, encode each through vision encoder, concatenate visual tokens for temporal understanding. Works with any vision-capable model (Gemma4, Qwen VL).
-- **Sleep mode** (`--serve --sleep-after=N`): server enters soft sleep state after N seconds of inactivity, signaling `/health` with `"sleeping": true`. Auto-wakes on next request.
-- **`--spec-mode auto`**: selects DDTree with draft model, N-gram without.
-- **`/v1/kv_cache/info`**: lightweight metadata endpoint for orchestrators (seq_len, prefix_hash, kv_used/total).
-- **Thinking token budget** (`thinking_budget_tokens`): Anthropic-style budget that applies strong logit bias toward `</think>` when reasoning exceeds limit (streaming + non-streaming).
-
-### Model Support
-- **Nex-N2-Pro** (qwen35moe): 512-expert MoE with hybrid DeltaNet+full-attention, `attn_output_gate` disambiguation
-- **DeepSeek V3 GGUF**: MLA tensor name fallbacks in glm4.zig, arch-prefixed param loading
-- **NVFP4 Qwen3-8B**: SafeTensors empty-prefix fix (bare `lm_head.weight` now found)
-- **Qwopus MTP models**: fixed init failure when MTP-head layers lack SSM tensors
-
-### Performance
-- `addRmsNorm`/`rmsNormAdd` dispatch fusion across all models (Gemma4, Gemma3, Llama4, GLM-4, GPT-OSS): ~68 fewer Metal dispatches/token
-- Second addRmsNorm fusion for Gemma4/Gemma3: deferred FFN residual fused with next-layer pre-attention norm
-- Native `rms_norm_add` shaders on all GPU backends (Metal, Vulkan SPIR-V, WebGPU WGSL, CUDA PTX, ROCm HIP)
-- Tensor-presence DeltaNet layer detection for Qwen3.5 (handles irregular `layer_types`, MTP boundary layers)
-
-### Fixes
-- VLM pending FFN residual flush in `forwardImageBatch` (was corrupting hidden state)
-- Metal n_pipelines count: 70 → 71
-- MXFP4 scale dtype detection (U8 → `.nvfp4` not `.unknown`)
-
----
-
-## 2026-05-20 — NCCL RoCE RDMA Performance Fix
-
-**PP=2 NCCL over RoCE: 4.2 → 40.2 tok/s (9.6x speedup)**
-
-Root cause: CUDA interop (context, mem_alloc, memcpy) was not wired for PP transport — NCCL couldn't allocate device staging buffers and fell back to TCP sockets silently.
-
-Fixes:
-- Wire CUDA interop inside `setupTransport` before `setupNccl`
-- Set CUDA context current before `ncclCommInitRank`
-- Eager comm init at TCP sync point (post unique ID exchange)
-- NCCL env var logging (17 variables) + comm diagnostics
-- Device pointer path in sendBuf (skip host→device when data on GPU)
-- Test script (`scripts/test-pp-nccl.sh`) with ConnectX RoCE config
-
-Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
-- `NET/IB : Using rocep1s0f1:1/RoCE` confirmed
-- `GIN_IB_GDAKI` (GPUDirect) assigned
-- 16 p2p channels, 0.27s init time
-- PP=2 now **faster than single GPU** (40.2 vs 36.0 tok/s)
-
----
-
-## 2026-05-19 — Major Feature Release (59 commits)
-
-### GPU Kernels (32 new files)
-- **All quantized GEMV formats now native on all 6 backends** (was 14 gaps)
-- ROCm: fused silu_mul, gelu_mul, add_rms_norm kernels
-- WebGPU: bf16, f16, fp8_e4m3, fp8_e5m2, q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs
-- Vulkan: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs (+ compiled SPIR-V)
-- CUDA: q5_0, q2_k, q3_k, iq4_nl, iq4_xs, fused FFN GELU Q8_0
-- CUDA fused FFN activation naming fix (SiLU→GELU correctness for Gemma 3)
-
-### Performance
-- Vulkan deferred dispatch: single submit vs ~240 per token
-- WebGPU deferred dispatch: batch all compute passes into one encoder
-- Paged SDPA staging buffer caching on all 5 GPU backends (zero hot-path allocs)
-- Q/K norm, RoPE, QKV GEMV, gate/up FFN batched across all models (barrier reduction)
-
-### Samplers (3 new, API + CLI)
-- **XTC** (eXclude Top Choices): diversity via random top-token exclusion
-- **DRY** (Don't Repeat Yourself): n-gram sequence repetition penalty
-- **Mirostat 2.0**: target-entropy adaptive sampling with dynamic mu
-- CLI flags: `--dry-multiplier`, `--xtc-probability`, `--mirostat-mode`, etc.
-- All samplers applied consistently across first-token, decode, and spec decode paths
-
-### Speculative Decoding
-- **N-gram mode** (`--spec-mode ngram`): zero-overhead spec decode from output history
-- **Adaptive cooldown**: skip drafting when acceptance rate drops below 25%
-- **Profile-guided adaptive K**: track per-K acceptance, auto-optimize draft length
-- All three improvements work together
-
-### Distributed Inference
-- **UDP peer discovery**: zero-config LAN discovery (no `--peers` needed)
-- **Topology-aware device exchange**: peers swap memory capabilities
-- **Peer RTT measurement**: TCP ping-pong after connection
-
-### Server / API
-- **Logprobs** in streaming responses (`logprobs`, `top_logprobs`)
-- **SSM state prefix caching**: ~2x prefill for Qwen3.5/Nemotron with shared prompts
-- **xxHash prefix cache**: RadixTree fast path for repeated prefix queries
-- **Vulkan device enumeration** for `--list-devices`
-
-### CLI
-- `--ctx-size auto`: probe memory, pick largest safe context
-- `--benchmark`: built-in decode benchmark with JSON output
-- `--benchmark --json`: machine-readable stats for CI
-
-### Documentation
-- PARALLELISM.md: rewritten from 2569-line design doc to 200-line impl reference
-- Tutorials improved: chapters 2 (attention), 3 (FFN), 5 (memory), 6 (SSMs),
-  7 (sampling), 8 (backends), 17 (spec decode) — worked numerical examples
-- KERNELS.md: systematic audit fixed 8+ stale entries, file listings updated
-- TODO.md + IDEAS.md merged into single unified document
-- 26-item roadmap from vLLM, llama.cpp, Exo, Mesh-LLM analysis
-
-### Testing
-- 6 unit tests for new samplers (XTC, DRY, Mirostat)
-- 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
-- Test compile fixes for device_id parameter + MockModel
-
-## 2026-08-13 — DeepSeek V4 Flash Performance Autoresearch
+## 2026-08-18 — Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
 
 ### Fixed
-- **Metal buffer cache staleness**: Added `volatile_weights` mode that flushes
-  the Metal buffer cache periodically on `sync()` when `--ssd-streaming` is active.
-  Prevents NaN/inf from stale `newBufferWithBytesNoCopy` references to OS-evicted
-  mmap'd pages. Models can now run back-to-back without `sudo purge`.
-  Files: `src/backend/metal.zig`, `src/backend/backend.zig`, `src/main.zig`
+- **Metal MLX-Q GEMV CPU fallback**: Metal's native MLX-Q GEMV kernel produces wrong
+  output for SafeTensors weights (likely buffer offset or scale decode issue). Added
+  CPU fallback via `mlxGemvRaw` with `self.sync()` before CPU dispatch.
+- **cpuGemvExpert MXFP4 E8M0 handling**: Added MXFP4 path (was only handling MLX affine).
+  Expert weights with uint8 E8M0 scales now correctly dispatched to CPU `mlxMxfp4GemvRows`.
+- **Shared expert sync**: shared expert must go through `doGemv` (Metal → CPU fallback
+  with sync), not direct `cpuGemvExpert` (no sync → reads stale GPU buffers).
 
-### Investigated
-- **IQ2_XXS coherence (ds4 Q2 model)**: CPU dequant logic matches ds4/llama.cpp
-  exactly (codebook, signs, scale). Garbled output is NOT a kernel bug but rather
-  2-bit quantization error amplified by DeepSeek V4's hyper connections (HC).
-  L0 FFN output differs by ~10% from MXFP4 (expected for 2-bit), but by L1 the
-  HC mixing amplifies this to 30× divergence. ds4 engine achieves coherent output
-  from the same model likely through additional stabilization (per-layer
-  normalization, different HC precision, or quantization-aware training).
-- **Tokenization verified**: Agave and ds4 produce identical token sequences for
-  the same prompt (11 tokens for "What is 2+2?" with deepseek4 chat template).
-- **DSpark/MTP**: DS V4 Flash config.json has `dspark_block_size=5`,
-  `dspark_markov_rank=256`, `num_nextn_predict_layers=1`, but neither the MXFP4
-  nor ds4 Q2 GGUFs contain MTP weight tensors.
-
-### Performance findings (autoresearch)
-- **CPU backend for SSD streaming**: 1.2 tok/s with MXFP4, coherent output.
-  CPU is the recommended backend for SSD streaming because Metal's
-  `newBufferWithBytesNoCopy` does not trigger GPU page faults for evicted
-  file-backed mmap pages on Apple Silicon.
-- **Metal volatile_weights mode**: Buffer cache flush on `sync()` prevents
-  NaN for mostly-resident models. Enabled automatically with `--ssd-streaming`.
-  Not reliable when model far exceeds RAM (GPU reads zeroed evicted pages).
-- **Speculative decoding**: Suffix mode achieves 100% acceptance rate with
-  4.0 mean draft length on DS V4 Flash. N-gram needs history (cold start).
-  DSpark not useful for SSD streaming (extra forward passes = more SSD reads).
-- **IQ2_XXS coherence**: CPU dequant matches ds4/llama.cpp exactly.
-  Root cause is 2-bit quantization error amplified by hyper connections (HC).
-  L0 FFN output differs ~10% from MXFP4, diverges 30× by L1 through HC mixing.
-
-### Research findings (autoresearch iterations 4-5)
-- **Logit correlation analysis**: MXFP4 preserves 65% of ds4 reference logit
-  signal (r=0.65). IQ2_XXS preserves 2% (r=0.02, complete signal loss through
-  43 layers of HC mixing). Sinkhorn implementation verified identical to ds4
-  (max diff 6e-8). IQ2_XXS kernel verified correct.
-- **Expert cache profiling**: ~51 unique experts per layer, 73% cache hit rate
-  at 64 tokens. At warm cache, system is ~70% compute-bound, ~30% SSD-bound.
-- **Coherent generation**: MXFP4 CPU at 1.0 tok/s produces coherent multi-
-  paragraph text. Quality comparable to marginal MXFP4 baseline but reliable.
-
-### Discovery: DS V4 Flash MTP/DSpark weights
-- HF safetensors (deepseek-ai/DeepSeek-V4-Flash-0731) contain 3 full MTP
-  decoder layers with 4,705 tensors including:
-  - Full MLA attention per MTP layer
-  - Full MoE FFN (256 routed experts + shared) per MTP layer
-  - Hyper connections per MTP layer
-  - DSpark confidence_head + markov_head on mtp.2
-  - hc_head (HC merge head) on mtp.2
-- GGUF quantizers (ggml-org, ds4/antirez) stripped ALL MTP weight tensors
-- DSpark weights in ~/Models are for Qwen3 8B, not DS V4 Flash
-- Implementing MTP for DS V4 requires loading from HF safetensors (not GGUF)
-  or converting MTP tensors to GGUF format
+### Result
+- **First coherent output on Metal for MLX 4-bit**: "The capital of France is Paris."
+- 0.4 tok/s (limited by 430 Metal syncs per forward — per-GEMV sync overhead)
+- L0 FFN L2=543.882 (matches CPU baseline exactly)
 
 ## 2026-08-16 — MLX 4-bit Expert Dequantization Fix (Autoresearch Iter 14)
 
@@ -565,18 +296,302 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - Also removed min_match_gap and anti-repetition compaction (over-aggressive,
   caused 2-3× speed regression).
 
-## 2026-08-18 — Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
+## 2026-08-13 — DeepSeek V4 Flash Performance Autoresearch
 
 ### Fixed
-- **Metal MLX-Q GEMV CPU fallback**: Metal's native MLX-Q GEMV kernel produces wrong
-  output for SafeTensors weights (likely buffer offset or scale decode issue). Added
-  CPU fallback via `mlxGemvRaw` with `self.sync()` before CPU dispatch.
-- **cpuGemvExpert MXFP4 E8M0 handling**: Added MXFP4 path (was only handling MLX affine).
-  Expert weights with uint8 E8M0 scales now correctly dispatched to CPU `mlxMxfp4GemvRows`.
-- **Shared expert sync**: shared expert must go through `doGemv` (Metal → CPU fallback
-  with sync), not direct `cpuGemvExpert` (no sync → reads stale GPU buffers).
+- **Metal buffer cache staleness**: Added `volatile_weights` mode that flushes
+  the Metal buffer cache periodically on `sync()` when `--ssd-streaming` is active.
+  Prevents NaN/inf from stale `newBufferWithBytesNoCopy` references to OS-evicted
+  mmap'd pages. Models can now run back-to-back without `sudo purge`.
+  Files: `src/backend/metal.zig`, `src/backend/backend.zig`, `src/main.zig`
 
-### Result
-- **First coherent output on Metal for MLX 4-bit**: "The capital of France is Paris."
-- 0.4 tok/s (limited by 430 Metal syncs per forward — per-GEMV sync overhead)
-- L0 FFN L2=543.882 (matches CPU baseline exactly)
+### Investigated
+- **IQ2_XXS coherence (ds4 Q2 model)**: CPU dequant logic matches ds4/llama.cpp
+  exactly (codebook, signs, scale). Garbled output is NOT a kernel bug but rather
+  2-bit quantization error amplified by DeepSeek V4's hyper connections (HC).
+  L0 FFN output differs by ~10% from MXFP4 (expected for 2-bit), but by L1 the
+  HC mixing amplifies this to 30× divergence. ds4 engine achieves coherent output
+  from the same model likely through additional stabilization (per-layer
+  normalization, different HC precision, or quantization-aware training).
+- **Tokenization verified**: Agave and ds4 produce identical token sequences for
+  the same prompt (11 tokens for "What is 2+2?" with deepseek4 chat template).
+- **DSpark/MTP**: DS V4 Flash config.json has `dspark_block_size=5`,
+  `dspark_markov_rank=256`, `num_nextn_predict_layers=1`, but neither the MXFP4
+  nor ds4 Q2 GGUFs contain MTP weight tensors.
+
+### Performance findings (autoresearch)
+- **CPU backend for SSD streaming**: 1.2 tok/s with MXFP4, coherent output.
+  CPU is the recommended backend for SSD streaming because Metal's
+  `newBufferWithBytesNoCopy` does not trigger GPU page faults for evicted
+  file-backed mmap pages on Apple Silicon.
+- **Metal volatile_weights mode**: Buffer cache flush on `sync()` prevents
+  NaN for mostly-resident models. Enabled automatically with `--ssd-streaming`.
+  Not reliable when model far exceeds RAM (GPU reads zeroed evicted pages).
+- **Speculative decoding**: Suffix mode achieves 100% acceptance rate with
+  4.0 mean draft length on DS V4 Flash. N-gram needs history (cold start).
+  DSpark not useful for SSD streaming (extra forward passes = more SSD reads).
+- **IQ2_XXS coherence**: CPU dequant matches ds4/llama.cpp exactly.
+  Root cause is 2-bit quantization error amplified by hyper connections (HC).
+  L0 FFN output differs ~10% from MXFP4, diverges 30× by L1 through HC mixing.
+
+### Research findings (autoresearch iterations 4-5)
+- **Logit correlation analysis**: MXFP4 preserves 65% of ds4 reference logit
+  signal (r=0.65). IQ2_XXS preserves 2% (r=0.02, complete signal loss through
+  43 layers of HC mixing). Sinkhorn implementation verified identical to ds4
+  (max diff 6e-8). IQ2_XXS kernel verified correct.
+- **Expert cache profiling**: ~51 unique experts per layer, 73% cache hit rate
+  at 64 tokens. At warm cache, system is ~70% compute-bound, ~30% SSD-bound.
+- **Coherent generation**: MXFP4 CPU at 1.0 tok/s produces coherent multi-
+  paragraph text. Quality comparable to marginal MXFP4 baseline but reliable.
+
+### Discovery: DS V4 Flash MTP/DSpark weights
+- HF safetensors (deepseek-ai/DeepSeek-V4-Flash-0731) contain 3 full MTP
+  decoder layers with 4,705 tensors including:
+  - Full MLA attention per MTP layer
+  - Full MoE FFN (256 routed experts + shared) per MTP layer
+  - Hyper connections per MTP layer
+  - DSpark confidence_head + markov_head on mtp.2
+  - hc_head (HC merge head) on mtp.2
+- GGUF quantizers (ggml-org, ds4/antirez) stripped ALL MTP weight tensors
+- DSpark weights in ~/Models are for Qwen3 8B, not DS V4 Flash
+- Implementing MTP for DS V4 requires loading from HF safetensors (not GGUF)
+  or converting MTP tensors to GGUF format
+
+## 2026-07-31 — DeepSeek V4 Flash 0731
+
+### DeepSeek V4 Flash Full Architecture Support
+
+New model architecture in `src/models/deepseek4.zig` with complete inference support.
+
+**Architecture:**
+- 4-stream hyper connections (HC) with Sinkhorn-normalized combination matrices
+- Modified MLA: K=V single compressed head, no separate V projection
+- Hash routing (layers 0–2), sqrt_softplus routing (layers 3+)
+- Grouped output LoRA (8 groups × 1024 rank)
+- CSA compressor (ratio=4, 21 layers) and HCA compressor (ratio=128, 20 layers)
+- Lightning Indexer (LID): multi-head ReLU dot-product block scoring for sparse attention
+
+**Performance optimizations (cumulative):**
+- KV cache switched from f32 to Q8_0 (~4× memory reduction)
+- Metal GPU SDPA kernel for hd=512 (`sdpa_fa2_hd512`) + Q8_0 KV support
+- SIMD vectorized: RoPE cos/sin (8-wide), RoPE apply/inverse (4-wide complex rotation),
+  sqrt_softplus routing + bias, LID scoring (head-outer loop), expert accumulation
+- CPU Q8_0 GEMV for HC pre/head (eliminates 86 GPU dispatches/token)
+- 2-row interleaved cpuGemvQ8_0 for HC GEMV throughput
+- Sparse V threshold skips negligible attention positions (zero PPL impact)
+- Buffer copy elimination in hot path (~3.5 MB/token saved)
+- RoPE table cache eliminates 128× redundant transcendental calls per token
+- Thread-pool parallel per-head compressed attention
+- Inline plainRmsNorm, RoPE table apply/inverse for tight per-head loops
+
+**GPU fast paths:**
+- Non-compressed layers use GPU SDPA directly
+- Batched CSA+HCA compressor GEMVs in single GPU command buffer
+- Hoist sink tensor lookup outside per-head attention loop
+
+## 2026-06-30 — DSpark Speculative Decoding
+
+### DSpark: Confidence-Scheduled Speculative Decoding (Cheng et al., 2026)
+
+Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf) from DeepSeek-AI in `src/spec/dspark.zig`.
+
+**`src/spec/dspark.zig`** (new file):
+- `SpsProfile` — pre-profiled steps-per-second table for target-model token-batch sizes; `syntheticComputeBound()` for offline use
+- `ConfidenceBlock` + `computeSurvival()` — per-request per-position survival probs `a_{r,j} = Π_{i≤j} c_i`
+- `scheduleVerification()` — **Algorithm 1** (Hardware-Aware Prefix Scheduler): globally sorts `(request, position)` candidates by survival probability descending, greedily admits tokens while `Θ = τ × SPS(B)` improves, stops on first drop (non-anticipating property). `O(Rγ log Rγ)`.
+- `MarkovHead` — low-rank `V×V` transition bias `B(x_{k-1},·) = W1[x_{k-1}]W2` (§3.1 Eq. 5), `rank=256` default
+- `RnnHead` — gated recurrent sequential head with full prefix history (§3.1 Eq. 6)
+- `ConfidenceHead` — `c_k = σ(w^T [h_k; W1[x_{k-1}]])` (§3.2.1 Eq. 7)
+- `calibrateSts()` — Sequential Temperature Scaling: per-position 1D grid search minimising ECE of cumulative product (§3.2.1)
+
+**`src/spec/spec_decode.zig`**:
+- `dsparkTrimDraft()` — single-request draft trim using per-position acceptance history as survival-probability proxy; drops suffix below 0.15 expected survival
+
+**`src/main.zig`**:
+- `--spec-mode dspark` wired into decode loop: drafts via existing draft model, trims via `dsparkTrimDraft()`
+- Enum, help strings, and test export all updated
+
+4/4 unit tests pass (Markov bias correctness, scheduler greedy/load cases, SPS profile).
+
+## 2026-06-18 — Vulkan: KosmicKrisp + Pipeline Cache
+
+### Vulkan macOS Backend
+- **KosmicKrisp** replaces MoltenVK as the macOS Vulkan testing target
+- Load path: `libvulkan.1.dylib` (Homebrew Vulkan loader) with `/opt/homebrew/lib/` fallback; set `VK_ICD_FILENAMES` to KosmicKrisp ICD and `DYLD_LIBRARY_PATH=/opt/homebrew/lib`
+- `sdpa_turbo` pipeline gracefully skipped when driver lacks `GroupNonUniform` subgroup ops (lavapipe/KosmicKrisp don't implement them); TurboQuant KV falls back to standard SDPA
+- **Disk-backed `VkPipelineCache`**: compiled shaders saved to `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 kernels), loaded on subsequent runs; note lavapipe re-JITs LLVM IR each run regardless (~5 min; driver limitation)
+
+## 2026-06-16 — IQ2/IQ3 Quant Support + LoRA + MTP Fix
+
+### IQ2/IQ3/IQ1 Quantization Support
+- Added DType entries: `iq2_xxs`, `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`
+- Previously mapped to `.unknown` → zeroed output and warned. Now dispatched to CPU reference kernels
+- `iq2_xxs`: full codebook-based dequant via iq2xxs_grid[256] (512-bit packed int8 entries)
+- `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`: approximation stubs (scale-based)
+- Metal/Vulkan/CUDA/ROCm/WebGPU: CPU fallback instead of panic for these dtypes
+- `dequantToF32`: iq4_nl/iq4_xs properly dequanted; iq2/iq3 stub for LoRA merge path
+- Mixed-quant "UD" models (e.g. unsloth Qwen3-0.6B-UD-IQ2_XXS) now load and run
+
+### LoRA Adapter Support
+
+### LoRA Adapter Loading
+- `--lora <path>`: load a LoRA adapter GGUF file alongside the base model
+- Load-time merge: base weights are dequanted to F32, delta = (alpha/rank) * lora_b @ lora_a is added, result stored as F32 override
+- Transparent to all model code via `GGUFFile.lora_overrides` map checked in `getTensor()`
+- Supports any base quantization (Q4_0, Q4_K, Q8_0, BF16, F16, etc.) and any lora tensor dtype
+- Format: llama.cpp GGUF LoRA (convert_lora_to_gguf.py output), `adapter.type = "lora"`
+
+### MTP Spec Decode Fix (Qwopus)
+
+- `qwen35.zig`: MTP detection now handles two GGUF layouts — layout A has block_count excluding MTP heads (nextn at blk.{n_layers}), layout B has block_count including MTP heads (nextn at blk.{n_layers-1}). Layout B adjusts n_layers down so mtpForward uses the correct mtp_lid.
+- `qwen35.zig`: All nextn tensor lookups now try `.weight` suffix first (e.g. `nextn.eh_proj.weight`) before falling back to bare name, matching Qwopus GGUF storage convention.
+- `qwen35.zig`: `nextn.embed_tokens` falls back to shared `token_embd.weight`; `nextn.shared_head_head` falls back to shared `output.weight`.
+- Verified: Qwopus3.6-27B-Coder-MTP — 74% accept rate, 0.7 mean tokens/step.
+
+## 2026-06-15 — Vulkan Correctness Fixes
+
+### Vulkan DeltaNet Fixes (2026-06-16)
+- `deltanet_recurrence.comp`: GQA head mapping wrong for `num_k != num_v` — CPU uses `h % num_k` (round-robin) but shader used `h * num_k / num_v` (blocked). Fixes garbled output for Qwen3.5-4B and any model with mismatched k/v head counts.
+- `vulkan.zig`: `gate_arr`/`beta_arr` too small (64) — should be 128 to match `max_ssm_v_heads`. Prevents stack overflow for models with >64 v_heads.
+
+### Vulkan Backend Fixes
+- `destroyBuffer`: submits pending GPU commands before destroying — prevents VUID-vkCmd invalid state (buffer destroyed while recorded in command buffer)
+- `downloadF32`: submits pending work before host readback — prevents reading stale deferred dispatch results
+- Qwen3.5 Vulkan garbled output fixed: DeltaNet causalConv1d was reading stale conv output due to deferred dispatch not executing before downloadF32
+- Vulkan Q8_0 Qwen2.5: confirmed correct at 14.2 tok/s on RX 7900 XTX
+- `n_pipelines`: updated 44→49 (5 new pipelines added without updating count)
+
+### Build
+- `-Denable-debug=false`: new flag to skip `agave-debug` binary on Linux x86_64 with GCC ≥16 (R_X86_64_PC64 relocation unsupported in debug builds)
+
+## 2026-06-12 — Feature Release
+
+### Bug Fixes
+- tiered KV cache (`--kv-tiers vram+ram`) crash fixed: `isMultiBlock` now guards against `paged_cache.block_size == 0` (all 10 model architectures)
+- Warning added: tiered SDPA split-attention only fully implemented for Gemma 3; other models will warn
+- CUDA: all 60 kernel files now in PTX build list (was 19); 61 kernels registered at runtime (was 44)
+- CUDA SDPA correctness: `getOrAllocKvBuf` now uploads host KV data on first GPU allocation
+- ARM Linux CPU detection: `implementer+part` fallback for aarch64 `/proc/cpuinfo` (no `model name`)
+
+### CUDA Full Validation (GB10 / sm_121 / CUDA 13.0)
+- `callconv(.nvptx_device)` replaces `callconv(.kernel)` — fixes Zig 0.16/LLVM NVPTX alias crash
+- Build PTX fixup: Python script promotes `.func *_kernel` → `.entry` post-compilation
+- All 60 kernel .zig files now in PTX build list (was 19); 61 kernels registered at runtime
+- CUDA KV cache fix: `getOrAllocKvBuf` uploads host data on first allocation (was reading garbage)
+- ARM Linux CPU detection fix: uses `CPU implementer+part` fallback (no `model name` on aarch64)
+- Test results: **1025 passed, 0 failed** on GB10 (-Denable-vulkan=false)
+- Server mode verified: `/health` returns `backend=CUDA`, CUDA spec decode (ngram 91% accept)
+- TurboQuant KV (`--kv-type turbo2`) works on CUDA
+- Performance: 22.3 tok/s decode Qwen3.5-0.8B-Q8_0 on GB10 (UMA; CPU 48 tok/s)
+
+### DiffusionGemma (Block Diffusion LLM)
+- Added `diffusion_gemma` architecture — Google's DiffusionGemma 26B-A4B (SafeTensors BF16)
+- `src/models/diffusion_gemma.zig`: Gemma 4 26B A4B backbone with block diffusion inference
+- `src/ops/attention.zig`: `scaledDotProductAttentionCanvas()` for bidirectional canvas attention
+- Inference loop: encoder prefill → iterative denoising (uniform state diffusion) → block autoregressive chaining
+- 128 experts, top-8, fused `experts.gate_up_proj` tensor, per-layer `layer_scalar`
+- New flags: `--diffusion-steps` (default 16), `--diffusion-canvas` (default 256), `--diffusion-confidence` (default 0.5)
+
+### New Features
+- **EAGLE-3 speculative decoding** (`--spec-mode eagle3`): conditions draft on pre-output-norm hidden state instead of post-norm; preserves residual magnitude for potentially richer draft conditioning. `hidden_pre_norm` buffer added to Gemma4.
+- **Video input** (`--video`, `--video-fps`): extract frames via ffmpeg at configurable FPS, encode each through vision encoder, concatenate visual tokens for temporal understanding. Works with any vision-capable model (Gemma4, Qwen VL).
+- **Sleep mode** (`--serve --sleep-after=N`): server enters soft sleep state after N seconds of inactivity, signaling `/health` with `"sleeping": true`. Auto-wakes on next request.
+- **`--spec-mode auto`**: selects DDTree with draft model, N-gram without.
+- **`/v1/kv_cache/info`**: lightweight metadata endpoint for orchestrators (seq_len, prefix_hash, kv_used/total).
+- **Thinking token budget** (`thinking_budget_tokens`): Anthropic-style budget that applies strong logit bias toward `</think>` when reasoning exceeds limit (streaming + non-streaming).
+
+### Model Support
+- **Nex-N2-Pro** (qwen35moe): 512-expert MoE with hybrid DeltaNet+full-attention, `attn_output_gate` disambiguation
+- **DeepSeek V3 GGUF**: MLA tensor name fallbacks in glm4.zig, arch-prefixed param loading
+- **NVFP4 Qwen3-8B**: SafeTensors empty-prefix fix (bare `lm_head.weight` now found)
+- **Qwopus MTP models**: fixed init failure when MTP-head layers lack SSM tensors
+
+### Performance
+- `addRmsNorm`/`rmsNormAdd` dispatch fusion across all models (Gemma4, Gemma3, Llama4, GLM-4, GPT-OSS): ~68 fewer Metal dispatches/token
+- Second addRmsNorm fusion for Gemma4/Gemma3: deferred FFN residual fused with next-layer pre-attention norm
+- Native `rms_norm_add` shaders on all GPU backends (Metal, Vulkan SPIR-V, WebGPU WGSL, CUDA PTX, ROCm HIP)
+- Tensor-presence DeltaNet layer detection for Qwen3.5 (handles irregular `layer_types`, MTP boundary layers)
+
+### Fixes
+- VLM pending FFN residual flush in `forwardImageBatch` (was corrupting hidden state)
+- Metal n_pipelines count: 70 → 71
+- MXFP4 scale dtype detection (U8 → `.nvfp4` not `.unknown`)
+
+## 2026-05-20 — NCCL RoCE RDMA Performance Fix
+
+**PP=2 NCCL over RoCE: 4.2 → 40.2 tok/s (9.6x speedup)**
+
+Root cause: CUDA interop (context, mem_alloc, memcpy) was not wired for PP transport — NCCL couldn't allocate device staging buffers and fell back to TCP sockets silently.
+
+Fixes:
+- Wire CUDA interop inside `setupTransport` before `setupNccl`
+- Set CUDA context current before `ncclCommInitRank`
+- Eager comm init at TCP sync point (post unique ID exchange)
+- NCCL env var logging (17 variables) + comm diagnostics
+- Device pointer path in sendBuf (skip host→device when data on GPU)
+- Test script (`scripts/test-pp-nccl.sh`) with ConnectX RoCE config
+
+Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
+- `NET/IB : Using rocep1s0f1:1/RoCE` confirmed
+- `GIN_IB_GDAKI` (GPUDirect) assigned
+- 16 p2p channels, 0.27s init time
+- PP=2 now **faster than single GPU** (40.2 vs 36.0 tok/s)
+
+## 2026-05-19 — Major Feature Release (59 commits)
+
+### GPU Kernels (32 new files)
+- **All quantized GEMV formats now native on all 6 backends** (was 14 gaps)
+- ROCm: fused silu_mul, gelu_mul, add_rms_norm kernels
+- WebGPU: bf16, f16, fp8_e4m3, fp8_e5m2, q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs
+- Vulkan: q4_1, q5_0, q2_k, q3_k, iq4_nl, iq4_xs (+ compiled SPIR-V)
+- CUDA: q5_0, q2_k, q3_k, iq4_nl, iq4_xs, fused FFN GELU Q8_0
+- CUDA fused FFN activation naming fix (SiLU→GELU correctness for Gemma 3)
+
+### Performance
+- Vulkan deferred dispatch: single submit vs ~240 per token
+- WebGPU deferred dispatch: batch all compute passes into one encoder
+- Paged SDPA staging buffer caching on all 5 GPU backends (zero hot-path allocs)
+- Q/K norm, RoPE, QKV GEMV, gate/up FFN batched across all models (barrier reduction)
+
+### Samplers (3 new, API + CLI)
+- **XTC** (eXclude Top Choices): diversity via random top-token exclusion
+- **DRY** (Don't Repeat Yourself): n-gram sequence repetition penalty
+- **Mirostat 2.0**: target-entropy adaptive sampling with dynamic mu
+- CLI flags: `--dry-multiplier`, `--xtc-probability`, `--mirostat-mode`, etc.
+- All samplers applied consistently across first-token, decode, and spec decode paths
+
+### Speculative Decoding
+- **N-gram mode** (`--spec-mode ngram`): zero-overhead spec decode from output history
+- **Adaptive cooldown**: skip drafting when acceptance rate drops below 25%
+- **Profile-guided adaptive K**: track per-K acceptance, auto-optimize draft length
+- All three improvements work together
+
+### Distributed Inference
+- **UDP peer discovery**: zero-config LAN discovery (no `--peers` needed)
+- **Topology-aware device exchange**: peers swap memory capabilities
+- **Peer RTT measurement**: TCP ping-pong after connection
+
+### Server / API
+- **Logprobs** in streaming responses (`logprobs`, `top_logprobs`)
+- **SSM state prefix caching**: ~2x prefill for Qwen3.5/Nemotron with shared prompts
+- **xxHash prefix cache**: RadixTree fast path for repeated prefix queries
+- **Vulkan device enumeration** for `--list-devices`
+
+### CLI
+- `--ctx-size auto`: probe memory, pick largest safe context
+- `--benchmark`: built-in decode benchmark with JSON output
+- `--benchmark --json`: machine-readable stats for CI
+
+### Documentation
+- PARALLELISM.md: rewritten from 2569-line design doc to 200-line impl reference
+- Tutorials improved: chapters 2 (attention), 3 (FFN), 5 (memory), 6 (SSMs),
+  7 (sampling), 8 (backends), 17 (spec decode) — worked numerical examples
+- KERNELS.md: systematic audit fixed 8+ stale entries, file listings updated
+- TODO.md + IDEAS.md merged into single unified document
+- 26-item roadmap from vLLM, llama.cpp, Exo, Mesh-LLM analysis
+
+### Testing
+- 6 unit tests for new samplers (XTC, DRY, Mirostat)
+- 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
+- Test compile fixes for device_id parameter + MockModel
+
