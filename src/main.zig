@@ -4987,7 +4987,11 @@ test {
     _ = @import("models/nemotron_h.zig");
     _ = @import("models/vision.zig");
     _ = @import("backend/cpu.zig");
-    _ = @import("backend/metal.zig");
+    // Metal links Apple frameworks; importing it off-macOS breaks the test link.
+    // Same gate as the backend dispatcher (see backend.zig MetalBackend).
+    if (comptime build_options.enable_metal and @import("builtin").os.tag == .macos) {
+        _ = @import("backend/metal.zig");
+    }
     _ = @import("backend/vulkan.zig");
     _ = @import("backend/kernels/cpu/activation.zig");
     _ = @import("backend/kernels/cpu/elementwise.zig");
