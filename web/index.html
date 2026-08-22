@@ -6,55 +6,64 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agave - Browser LLM Inference</title>
     <style>
+        /* Tokens mirror src/web/style.css so both chat surfaces share one visual identity. */
         :root {
-            --bg: #1a1a2e;
-            --surface: #16213e;
-            --text: #e0e0e0;
-            --muted: #a0a0a0;
-            --accent: #5aad35;
-            --accent-hover: #6bb83f;
-            --accent-ink: #1a1a2e;
-            --focus: #5aad35;
-            /* Borders meet WCAG 1.4.11 (≥3:1) against bg/surface */
-            --border: #777777;
+            --bg: #1a1714;
+            --surface: #231f1c;
+            --elevated: #2c2825;
+            /* Borders meet WCAG 1.4.11 (≥3:1) against bg/surface/elevated */
+            --border: #77716d;
+            --border-hl: #8a837c;
+            --text: #ebe3db;
+            --text-2: #a09890;
+            --text-3: #a8a29e;
+            --accent: #d4a574;
+            --accent-hover: #e0b88a;
+            --accent-bg: rgba(212, 165, 116, 0.1);
+            --red: #e57373;
+            --red-bg: rgba(199, 80, 80, 0.1);
+            --red-text: #e8a0a0;
+            --mono: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace;
+            --r: 8px;
+            --focus: var(--accent);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
         body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
         header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); }
-        header h1 { font-size: 1.2rem; color: var(--accent); }
-        header small { color: var(--muted); }
+        header h1 { font-size: 1.2rem; color: var(--accent); font-family: var(--mono); letter-spacing: -0.5px; }
+        header small { color: var(--text-3); }
         main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         #chat { flex: 1; overflow-y: auto; padding: 1rem 2rem; outline: none; }
         #chat:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: 8px; max-width: 80%; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; line-break: loose; }
-        .msg.user { background: #1a3a5c; margin-inline-start: auto; }
-        .msg.assistant { background: #2a2a3e; }
-        .msg.system { background: #2a3e2a; color: #8c8; font-size: 0.9rem; max-width: 100%; }
-        .msg.error { background: #3e2a2a; color: #e88; font-size: 0.9rem; max-width: 100%; }
-        .msg.empty-hint { background: transparent; border: 1px dashed var(--border); color: var(--muted); max-width: 100%; text-align: center; margin: 2rem auto; }
-        .msg.thinking { color: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
+        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: var(--r); max-width: 80%; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; line-break: loose; }
+        .msg.user { background: var(--surface); border: 1px solid var(--border); border-end-end-radius: 2px; margin-inline-start: auto; }
+        .msg.assistant { background: var(--elevated); border: 1px solid var(--border); border-end-start-radius: 2px; }
+        .msg.system { background: var(--accent-bg); border: 1px solid var(--border-hl); color: var(--text-2); font-size: 0.9rem; max-width: 100%; }
+        .msg.error { background: var(--red-bg); border: 1px solid var(--red); color: var(--red-text); font-size: 0.9rem; max-width: 100%; }
+        .msg.empty-hint { background: transparent; border: 1px dashed var(--border); color: var(--text-3); max-width: 100%; text-align: center; margin: 2rem auto; }
+        .msg.thinking { color: var(--text-3); animation: pulse 1.2s ease-in-out infinite; }
         @keyframes pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
         .msg-role { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-        #model-url[aria-invalid="true"] { border-color: #e88; }
-        #url-error { color: #e88; font-size: 0.85rem; width: 100%; display: none; }
+        #model-url[aria-invalid="true"] { border-color: var(--red); }
+        #url-error { color: var(--red-text); font-size: 0.85rem; width: 100%; display: none; }
         #url-error:not(:empty) { display: block; }
         #controls { padding: 1rem 2rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.5rem; }
-        #prompt { flex: 1; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; min-height: 44px; }
-        #prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 173, 53, 0.2); outline: none; }
+        #prompt { flex: 1; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; min-height: 44px; }
+        #prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
         #prompt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-        button { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 1rem; font-weight: 600; transition: background 0.15s, transform 0.1s; min-height: 44px; }
+        button { padding: 0.75rem 1.5rem; border: none; border-radius: var(--r); background: var(--accent); color: var(--bg); cursor: pointer; font-size: 1rem; font-weight: 600; font-family: var(--mono); transition: background 0.15s, transform 0.1s; min-height: 44px; }
         button:hover:not(:disabled) { background: var(--accent-hover); }
         button:active:not(:disabled) { transform: scale(0.97); }
-        button:disabled { background: #555; color: #ccc; cursor: not-allowed; opacity: 0.6; }
+        button:disabled { background: var(--accent); color: var(--bg); cursor: not-allowed; opacity: 0.4; }
         input:disabled { opacity: 0.6; cursor: not-allowed; }
-        #status { padding: 0.5rem 2rem; background: #111; color: var(--muted); font-size: 0.85rem; }
+        #status { padding: 0.5rem 2rem; background: var(--bg); color: var(--text-3); font-size: 0.85rem; font-family: var(--mono); }
         #model-input { padding: 1rem 2rem; background: var(--surface); display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-        #model-input label[for="model-url"] { font-size: 0.9rem; color: var(--muted); flex: 0 0 auto; }
+        #model-input label[for="model-url"] { font-size: 0.9rem; color: var(--text-3); flex: 0 0 auto; font-family: var(--mono); }
         #model-input input[type="url"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); min-height: 44px; }
-        #model-input input[type="url"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 173, 53, 0.2); outline: none; }
+        #model-input input[type="url"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
         #model-input input[type="url"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-        #drop-zone { border: 2px dashed var(--border); border-radius: 8px; padding: 0.5rem 1rem; color: var(--muted); cursor: pointer; font-size: 0.9rem; display: inline-flex; align-items: center; min-height: 44px; }
+        #drop-zone { border: 2px dashed var(--border); border-radius: var(--r); padding: 0.5rem 1rem; color: var(--text-3); cursor: pointer; font-size: 0.9rem; font-family: var(--mono); display: inline-flex; align-items: center; min-height: 44px; }
         #drop-zone:hover { border-color: var(--accent); color: var(--accent); }
         #drop-zone.dragover { border-color: var(--accent); color: var(--accent); }
         #drop-zone[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
@@ -62,7 +71,7 @@
         #file-input:focus, #file-input:focus-visible { outline: none; }
         button:focus-visible, input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
         #drop-zone:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; border-color: var(--accent); }
-        .skip-link { position: absolute; top: -100%; inset-inline-start: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: var(--accent); color: var(--accent-ink); border-radius: 4px; text-decoration: none; font-weight: 600; transition: top .2s; }
+        .skip-link { position: absolute; top: -100%; inset-inline-start: 16px; z-index: 200; font-size: 13px; padding: 8px 16px; background: var(--accent); color: var(--bg); border-radius: 4px; text-decoration: none; font-weight: 600; font-family: var(--mono); transition: top .2s; }
         .skip-link:focus { top: 8px; }
         @media (prefers-reduced-motion: reduce) {
             .skip-link { transition: none; }
@@ -86,13 +95,13 @@
             button, #drop-zone { min-height: 44px; }
         }
     </style>
-    <meta name="theme-color" content="#1a1a2e">
+    <meta name="theme-color" content="#1a1714">
     <meta name="color-scheme" content="dark">
     <meta name="description" content="Run LLM inference directly in your browser via WebAssembly. Load a GGUF model and chat — no server required.">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#127797;</text></svg>">
 </head>
 <body>
-    <noscript><p style="padding:2rem;color:#e88;text-align:center">JavaScript is required to run Agave in the browser.</p></noscript>
+    <noscript><p style="padding:2rem;color:var(--red-text);text-align:center">JavaScript is required to run Agave in the browser.</p></noscript>
     <a href="#prompt" class="skip-link">Skip to message input</a>
     <header>
         <h1>agave</h1>
@@ -117,7 +126,7 @@
         <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" enterkeyhint="send" autocomplete="off" dir="auto" disabled />
         <button type="submit" id="send-btn" aria-label="Send message" disabled>Send</button>
     </form>
-    <div id="input-hint" hidden style="text-align:center;padding:4px;color:var(--muted);font-size:0.8rem;">Enter to send</div>
+    <div id="input-hint" hidden style="text-align:center;padding:4px;color:var(--text-3);font-family:var(--mono);font-size:0.8rem;">Enter to send</div>
     </main>
     <div id="sr-announce" style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0" aria-live="polite" aria-atomic="true"></div>
 
