@@ -234,8 +234,9 @@ test "clampedSiluMul clamps inputs" {
     var up = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
     var got: [8]f32 = undefined;
     clampedSiluMul(&gate, &up, &got, 8);
-    // gate clamped to 10 → silu(10) ≈ 9.9999546
-    try std.testing.expectApproxEqAbs(@as(f32, 9.9999546), got[0], 1e-4);
+    // gate clamped to 10 → silu(10) = 10 / (1 + exp(-10)), not sigmoid(10)
+    const silu_10 = @as(f32, 10.0) / (1.0 + @exp(@as(f32, -10.0)));
+    try std.testing.expectApproxEqAbs(silu_10, got[0], 1e-5);
     // gate clamped to -10 → silu(-10) ≈ -4.54e-5
     try std.testing.expect(got[1] < 0.0 and got[1] > -1e-3);
     // gate=0 → silu(0)=0

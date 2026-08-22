@@ -1199,12 +1199,14 @@ test "applyDry no-op with no repeats" {
 
 test "sampleMirostat returns valid token" {
     var logits = [_]f32{ 1.0, 2.0, 3.0, 0.5 };
-    var mu: f32 = 10.0;
+    // Start at tau, not the clamp ceiling (2*tau). Sampling a high-prob token
+    // raises mu; starting already at 2*tau made that update a no-op.
+    var mu: f32 = 5.0;
     var prng = std.Random.Xoshiro256.init(42);
     const token = sampleMirostat(&logits, 5.0, 0.1, &mu, 1.0, prng.random());
     try std.testing.expect(token < 4);
     // mu must be updated, remain finite, and stay positive (entropy target)
-    try std.testing.expect(mu != 10.0);
+    try std.testing.expect(mu != 5.0);
     try std.testing.expect(std.math.isFinite(mu));
     try std.testing.expect(mu > 0);
     // Second call should also produce valid results with updated mu

@@ -201,14 +201,14 @@ pub const PagedKvCache = struct {
         std.debug.assert(block_id < self.blocks.len);
         // Full-list guard (all blocks already free).
         if (self.free_list.items.len >= self.blocks.len) {
-            std.log.err("freeBlock: free list full — double-free of block {d}", .{block_id});
+            std.log.warn("freeBlock: free list full, ignoring double-free of block {d}", .{block_id});
             return;
         }
         // Debug-mode per-block double-free check: scan free list for this block.
         if (std.debug.runtime_safety) {
             for (self.free_list.items) |fid| {
                 if (fid == block_id) {
-                    std.log.err("freeBlock: block {d} already on free list (double-free)", .{block_id});
+                    std.log.warn("freeBlock: block {d} already on free list, ignoring double-free", .{block_id});
                     return;
                 }
             }

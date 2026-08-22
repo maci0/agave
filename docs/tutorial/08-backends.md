@@ -387,7 +387,7 @@ flowchart TD
 
 ## Backend-Specific Notes
 
-**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 88 pipelines including 11 fused FFN kernels and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
+**Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 108 pipelines including 11 fused FFN kernels, 14 DS4 kernels, and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
 
 **CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 61 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
 

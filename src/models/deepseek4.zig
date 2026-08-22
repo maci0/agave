@@ -1694,9 +1694,10 @@ pub const Ds4Model = struct {
                         for (0..n_active) |j| prof.record(@intCast(li), @intCast(top_ids[j]));
                         prof.recordToken();
                     }
-                    // Only prefetch cache misses
+                    // Only prefetch cache misses for experts this rank owns.
                     for (0..n_active) |j| {
                         const eid = top_ids[j];
+                        if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
                         if (!ec.touch(@intCast(li), @intCast(eid))) {
                             // Cache miss — admit and prefetch
                             _ = ec.admit(@intCast(li), @intCast(eid));
@@ -1708,6 +1709,7 @@ pub const Ds4Model = struct {
                 } else {
                     for (0..n_active) |j| {
                         const eid = top_ids[j];
+                        if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
                         prefetchRange(ge.data_ptr + eid * gs, gs);
                         prefetchRange(ue.data_ptr + eid * us, us);
                         prefetchRange(de.data_ptr + eid * ds, ds);
@@ -1898,32 +1900,34 @@ pub const Ds4Model = struct {
         const e = self.n_embd;
         const nl = self.n_layers;
 
-        // Embed → broadcast to all n_hc HC streams.
-        // embLookup is CPU (single-row read, faster than GPU dispatch).
-        // Broadcast to HC streams uses GPU kernel when available.
-        const emb = try self.getTensorReq("token_embd.weight");
-        if (emb.dtype == .mlx_q) {
-            const companion = model_mod.findMlxCompanion(self.fmt, emb, e);
-            if (companion) |c| {
-                mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(self.heapTensorData(emb))), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
-            } else {
-                @memset(self.hc_state[0..e], 0);
-            }
-        } else {
-            const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
-            quant_ops.dequantToF32(self.hc_state[0..e], self.heapTensorData(emb) + token_id * row_bytes, emb.dtype, e);
-        }
-        // Broadcast embedding to all HC streams.
-        // The embedding was written to hc_state[0..e] by CPU. The broadcast copies
-        // to streams 1-3. Use CPU memcpy — it's a 12KB copy from CPU-written data,
-        // no GPU coherency concern. GPU HC kernels read this data in the next dispatch.
-        for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
-
         const pp_range = ppLayerRange(nl, self.pp_rank, self.pp_degree);
         const hc_elems: usize = n_hc * e;
+        const pp_recv_hc = self.pp_degree > 1 and self.pp_rank > 0;
+
+        // Later PP stages overwrite hc_state via recvBuf; skip the unused embed.
+        if (!pp_recv_hc) {
+            // Embed → broadcast to all n_hc HC streams.
+            // embLookup is CPU (single-row read, faster than GPU dispatch).
+            const emb = try self.getTensorReq("token_embd.weight");
+            if (emb.dtype == .mlx_q) {
+                const companion = model_mod.findMlxCompanion(self.fmt, emb, e);
+                if (companion) |c| {
+                    mlx_ops.mlxEmbLookup(self.hc_state[0..e].ptr, @ptrCast(@alignCast(self.heapTensorData(emb))), @ptrCast(@alignCast(c.scales)), @ptrCast(@alignCast(c.biases)), token_id, e, c.bits);
+                } else {
+                    @memset(self.hc_state[0..e], 0);
+                }
+            } else {
+                const row_bytes = backend_mod.weightBytes(emb.dtype, 1, e);
+                quant_ops.dequantToF32(self.hc_state[0..e], self.heapTensorData(emb) + token_id * row_bytes, emb.dtype, e);
+            }
+            // Broadcast embedding to all HC streams.
+            // The embedding was written to hc_state[0..e] by CPU. The broadcast copies
+            // to streams 1-3. CPU memcpy of CPU-written data; GPU HC kernels read it next.
+            for (1..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hc_state[0..e]);
+        }
 
         // Later PP stages receive the 4-stream HC residual from the previous stage.
-        if (self.pp_degree > 1 and self.pp_rank > 0) {
+        if (pp_recv_hc) {
             if (self.pp_transport) |transport| {
                 transport.recvBuf(self.hc_state.ptr, hc_elems);
                 self.be.invalidateActivation(self.hc_state.ptr);
@@ -3495,6 +3499,7 @@ pub const Ds4Model = struct {
                                 var top_ids: [6]u32 = undefined;
                                 const n_top = ec2.getTopResidents(@intCast(li), &top_ids);
                                 for (0..n_top) |i| {
+                                    if (!isLocalExpert(top_ids[i], ctx.model.tp_rank, ctx.model.epDegree())) continue;
                                     const ptr: *const volatile u8 = @ptrCast(t.data_ptr + top_ids[i] * stride);
                                     _ = ptr.*;
                                 }
