@@ -1,6 +1,6 @@
 # Kernel Implementation Status
 
-**Last Updated**: 2026-08-09
+**Last Updated**: 2026-08-21
 
 This document tracks the implementation status of all compute kernels across backends. Each kernel can be:
 - **Native**: Fully implemented on the target hardware (GPU shader or optimized CPU SIMD)
@@ -37,7 +37,7 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
 | Paged SDPA | Native | Native | Native | Native | Native | Native |
 | Causal Conv1d | Native | Native (DeltaNet) | Native | In DeltaNet | In DeltaNet | Native |
-| DeltaNet (4 kernels) | Native | Native | Native | CPU delegate⁴ | Hybrid (GPU norm+recur)⁶ | Native |
+| DeltaNet (4 kernels) | Native | Native | Native | Hybrid (GPU recur if PTX)⁴ | Hybrid (GPU norm+recur)⁶ | Native |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | CPU perf |
 | **Batched Prefill Ops** | | | | | | |
 | GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV | Loop-of-GEMV |
@@ -52,7 +52,7 @@ This document tracks the implementation status of all compute kernels across bac
 ¹ Single-row table read — CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders. **Sparse V threshold** (1e-6) is applied in all GPU SDPA kernels (Metal, CUDA, ROCm): positions where the softmax weight falls below the threshold skip V dequantization entirely, yielding +22.8% decode speed at 32K context with zero measured PPL impact. The CPU windowed-attention fallback path (`src/ops/attention.zig`) also uses sparse V dequantization.
 ³ `sdpaWithStats` on CPU computes real per-head max/sum. GPU backends still fill identity stats (max=0, sum=1) after a normal SDPA. **Mixed-tier** split-attention (`--kv-tiers` with both VRAM and RAM/SSD blocks) therefore runs full-sequence CPU SDPA for exact results until GPU backends emit real stats. All-GPU and all-CPU partitions keep their fast paths.
-⁴ CPU delegate: functional but delegates to CPU backend (no native GPU kernel yet).
+⁴ CUDA DeltaNet: `deltanet_recurrence.zig` is in-tree. `zig build ptx` must be re-run to bake the kernel into `all.ptx`. Until then `getFunction` fails and decode uses the CPU recurrence (same as ROCm's conv/gate CPU split). Qwen3.8-27B uses 48 V heads (`max_deltanet_v_heads=128`).
 ⁵ CUDA fused FFN kernel source files exist for Q4_K/Q5_K/Q6_K but Q5_K/Q6_K are blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias). Q4_K compiles and runs.
 ⁶ ROCm DeltaNet: conv1d on CPU, L2 norm + recurrence kernel on GPU. Gate/beta computed on CPU. Not fully native but recurrence (the expensive part) runs on GPU.
 
@@ -98,6 +98,8 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 
 **NR multi-row optimization** is applied across all backends and quant formats. Each kernel computes NR output rows per thread/threadgroup, amortizing input vector loads. CPU: Q8_0/Q4_0/BF16/F16 use NR=4; K-quant formats (Q4_K/Q5_K/Q6_K) use NR=2. Metal: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4; Q2_K/Q3_K/BF16/F16 use NR=2. CUDA: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4. ROCm: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4.
 
+WebGPU and Vulkan cap workgroups per dimension at 65535. Vocab-sized GEMV (Qwen3.8-27B `n=248320`) chunks on WebGPU via `row_offset` and uses a 2D grid on Vulkan (`gl_WorkGroupID.y * 65535 + x`). CUDA/ROCm/Metal grids are large enough for that vocab without splitting.
+
 | Data Type | CPU | Metal | Vulkan | CUDA | ROCm | WebGPU |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | f32 | Native (SIMD) | Native | Native | Native | Native | Native |
@@ -126,17 +128,17 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 | Backend | Directory | Files |
 | :--- | :--- | :--- |
 | CPU | `src/backend/kernels/cpu/` | `gemv.zig` (dispatcher), `gemv_*.zig` (per-format), `norm.zig`, `activation.zig`, `elementwise.zig`, `rope.zig`, `softmax.zig`, `sdpa.zig`, `sdpa_tree.zig` (DDTree), `embedding.zig`, `deltanet.zig` |
-| Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal` (incl. `copy_f32`), `norm.metal`, `rope.metal` (incl. `rope_batched_f32`), `gemv.metal`, `gemv_tiled.metal` (Q4_K/Q8_0 tiled), `gemm.metal` (f32/Q8_0/Q4_0/BF16), `sdpa.metal` (incl. `sdpa_prefill_fa2`), `deltanet.metal`, `ds4.metal` (9 DeepSeek V4 kernels: HC weights/pre/post/head, RoPE/invRoPE table, emb broadcast, weighted accum, turbo SDPA hd512), `megakernel.metal` (11 fused FFN kernels: SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}), `mega_common.metal` (18 composable building blocks, 730 lines), `mega_qwen35_q8.metal`, `mega_qwen35_q4k.metal`, `mega_gemma_q4k.metal`, `mega_gemma_q8.metal`, `mega_nemotron_h_q8.metal` (true megakernels) |
+| Metal | `src/backend/kernels/metal/` | `common.metal`, `elementwise.metal` (incl. `copy_f32`), `norm.metal`, `rope.metal` (incl. `rope_batched_f32`), `gemv.metal`, `gemv_tiled.metal` (Q4_K/Q8_0 tiled), `gemm.metal` (f32/Q8_0/Q4_0/BF16), `sdpa.metal` (incl. `sdpa_prefill_fa2`), `deltanet.metal`, `ds4.metal` + `ds4_fused.metal` (14 DeepSeek V4 kernels: HC weights/pre/post/head, RoPE/invRoPE table, emb broadcast, weighted accum, turbo SDPA hd512, fused attn proj, top-k routing, MoE gate+up/down MXFP4, RMS no-weight), `megakernel.metal` (11 fused FFN kernels: SiLU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0, MLX_Q4} + GELU x {Q8_0, Q4_K, Q5_K, Q6_K, Q4_0}), `mega_common.metal` (18 composable building blocks, 730 lines), `mega_qwen35_q8.metal`, `mega_qwen35_q4k.metal`, `mega_gemma_q4k.metal`, `mega_gemma_q8.metal`, `mega_nemotron_h_q8.metal` (true megakernels) |
 | Vulkan | `src/backend/kernels/vulkan/` | `silu.comp`, `silu_mul.comp`, `gelu.comp`, `gelu_mul.comp`, `add.comp`, `add_rms_norm.comp`, `rms_norm_add.comp`, `add_scaled.comp`, `mul.comp`, `rms_norm.comp`, `rms_norm_multi.comp`, `softmax.comp`, `l2_norm.comp`, `rope.comp`, `sigmoid_mul.comp`, `deinterleave.comp`, `split_qgate.comp`, `embedding.comp`, `conv1d.comp`, `deltanet_recurrence.comp`, `sdpa.comp`, `sdpa_turbo.comp`, `sdpa_paged.comp`, `sdpa_tree.comp`, `gemv_{f32,q8_0,q4_0,q4_1,q5_0,bf16,f16,q4_k,q5_k,q6_k,q2_k,q3_k,iq4_nl,iq4_xs,fp8_e4m3,fp8_e5m2,gptq,awq,hqq,mlx_q4,nvfp4_st,mxfp4_st,t_q8_0,tq1_0,tq2_0}.comp` (+compiled `.spv`) |
 | CUDA | `src/backend/kernels/cuda/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_scaled.zig`, `add_rms_norm.zig`, `rms_norm_add.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_batched.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `rope_batched.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `split_qgate.zig`, `sdpa.zig`, `sdpa_turbo.zig`, `sdpa_prefill.zig`, `sdpa_tree.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_0_batch,q4_1,q5_0,q4_k,q5_k,q6_k,q2_k,q3_k,iq4_nl,iq4_xs,fp8_e4m3,fp8_e5m2,fp4_tc,gptq,awq,hqq,mlx_q4,mlx_q6,mlx_q8,nvfp4_st,mxfp4_st,tq1_0,tq2_0}.zig`, `gemv_t_q8_0.zig`, `gemm_q8_0.zig`, `fused_ffn_{q8_0,q4_k,q5_k,q6_k}.zig` (fused FFN megakernels)⁵, `mega_qwen35_q8.zig`, `mega_gemma_q4k.zig`, `mega_gemma_q8.zig` (true megakernels), `all.zig` (aggregator) — compiled to PTX via `zig build ptx` |
 | ROCm | `src/backend/kernels/rocm/` | `common.zig` (shared primitives), `silu.zig`, `silu_mul.zig`, `gelu.zig`, `gelu_mul.zig`, `add.zig`, `add_rms_norm.zig`, `mul.zig`, `rms_norm.zig`, `rms_norm_multi.zig`, `softmax.zig`, `l2_norm.zig`, `rope.zig`, `sigmoid_mul.zig`, `deinterleave.zig`, `split_qgate.zig`, `sdpa.zig`, `sdpa_paged.zig`, `sdpa_tree.zig`, `deltanet.zig`, `deltanet_recurrence.zig`, `gemv_{f32,bf16,f16,q8_0,q4_0,q4_1,q5_0,q4_k,q5_k,q6_k,q2_k,q3_k,iq4_nl,iq4_xs,fp8_e4m3,fp8_e5m2,mlx_q4,nvfp4_st,mxfp4_st,t_q8_0,tq1_0,tq2_0}.zig`, `gemv_gptq.zig`, `gemv_awq.zig`, `gemv_hqq.zig`, `mega_qwen35_q8.zig` (true megakernel), `all.zig` (aggregator) — compiled to HSACO via `zig build amdgcn` |
 | WebGPU | `src/backend/kernels/webgpu/` | `silu.wgsl`, `silu_mul.wgsl`, `gelu.wgsl`, `gelu_mul.wgsl`, `add.wgsl`, `add_rms_norm.wgsl`, `rms_norm_add.wgsl`, `add_scaled.wgsl`, `mul.wgsl`, `rms_norm.wgsl`, `rms_norm_multi.wgsl`, `softmax.wgsl`, `l2_norm.wgsl`, `rope.wgsl`, `sigmoid_mul.wgsl`, `deinterleave.wgsl`, `split_qgate.wgsl`, `embedding.wgsl`, `sdpa.wgsl`, `sdpa_paged.wgsl`, `sdpa_tree.wgsl`, `conv1d.wgsl`, `deltanet_recurrence.wgsl`, `gemv_f32.wgsl`, `gemv_bf16.wgsl`, `gemv_f16.wgsl`, `gemv_fp8_e4m3.wgsl`, `gemv_fp8_e5m2.wgsl`, `gemv_q4_1.wgsl`, `gemv_q5_0.wgsl`, `gemv_q8_0.wgsl`, `gemv_q4_0.wgsl`, `gemv_q4_k.wgsl`, `gemv_q5_k.wgsl`, `gemv_q6_k.wgsl`, `gemv_q2_k.wgsl`, `gemv_q3_k.wgsl`, `gemv_iq4_nl.wgsl`, `gemv_iq4_xs.wgsl`, `gemv_t_q8_0.wgsl`, `gemv_gptq.wgsl`, `gemv_awq.wgsl`, `gemv_hqq.wgsl`, `gemv_mlx_q4.wgsl`, `gemv_nvfp4_st.wgsl`, `gemv_mxfp4_st.wgsl`, `gemv_tq1_0.wgsl`, `gemv_tq2_0.wgsl` |
 
-**Pipeline/kernel counts** (from backend constants in source): Metal `n_pipelines = 103` (incl. 9 DS4 HC/SDPA kernels + runtime-composed megakernels), CUDA `n_kernels = 61`, ROCm `n_kernels = 49`, Vulkan `n_pipelines = 49`, WebGPU ~48 WGSL shaders. Total megakernel code: ~4,923 lines across 16 files plus ~1,050 lines in `mega_compose.zig` (composable generator).
+**Pipeline/kernel counts** (from backend constants in source): Metal `n_pipelines = 108` (incl. 14 DS4 HC/MoE/SDPA kernels + runtime-composed megakernels), CUDA `n_kernels = 61`, ROCm `n_kernels = 49`, Vulkan `n_pipelines = 49`, WebGPU ~48 WGSL shaders. Total megakernel code: ~4,923 lines across 16 files plus ~1,050 lines in `mega_compose.zig` (composable generator).
 
-## DeepSeek V4 Metal Kernels (`ds4.metal`)
+## DeepSeek V4 Metal Kernels (`ds4.metal` + `ds4_fused.metal`)
 
-Nine dedicated Metal compute kernels for DeepSeek V4 Flash that eliminate all CPU reads of GPU-written activation buffers between layers. Fixes GPU L2 cache coherency issues with `newBufferWithBytesNoCopy` shared-memory wraps on Apple Silicon UMA.
+Fourteen dedicated Metal compute kernels for DeepSeek V4 Flash that eliminate all CPU reads of GPU-written activation buffers between layers. Fixes GPU L2 cache coherency issues with `newBufferWithBytesNoCopy` shared-memory wraps on Apple Silicon UMA.
 
 | Kernel | Description | Threadgroup |
 | :--- | :--- | :--- |
@@ -149,6 +151,11 @@ Nine dedicated Metal compute kernels for DeepSeek V4 Flash that eliminate all CP
 | `ds4_inv_rope_table` | Inverse RoPE (negate sin) with precomputed table | 1D grid, n_heads×rope_dim/2 |
 | `ds4_weighted_accum` | Expert accumulation: hidden = Σ weights[s] × scratch[s×E+i] | 1D grid, n_embd |
 | `sdpa_fa2_turbo_hd512` | FlashAttention-2 for turbo/Q8_0 KV at hd=512, block_size=8 | 1 TG/head, 256 threads |
+| `ds4_fused_attn_proj` | Fused MLA attention projections (ds4_fused.metal) | 1 TG/head |
+| `ds4_topk_routing` | GPU top-k expert selection | 1 TG |
+| `ds4_moe_gate_up_mxfp4` | Batched MoE gate+up GEMV (MXFP4) | 1D grid |
+| `ds4_moe_down_mxfp4` | Batched MoE down GEMV (MXFP4) | 1D grid |
+| `ds4_rms_norm_noweight` | RMSNorm without learned weight | 1D grid |
 
 These kernels activate for GGUF models with native GPU GEMV types or RAM-resident models. For MLX-Q SafeTensors models exceeding RAM (SSD streaming), the DS4 model uses a **dedicated `CpuBackend` bypass** that routes all hot-path operations through a model-owned CpuBackend instance, producing bit-identical output to `--backend cpu` at 10.7-21.2 tok/s with suffix speculation.
 

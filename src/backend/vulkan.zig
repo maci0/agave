@@ -645,6 +645,9 @@ const max_descriptors: u32 = max_descriptor_sets * 4;
 
 /// Workgroup size for all compute shaders.
 const workgroup_size: u32 = 256;
+/// Vulkan spec minimum maxComputeWorkGroupCount[0]. One-workgroup-per-row GEMV
+/// for Qwen3.8-27B vocab (248320) exceeds this; dispatch() uses a 2D grid.
+const max_workgroups_per_dim: u32 = 65535;
 
 /// Maximum sequence length for the fused SDPA kernel (limited by shared memory).
 const sdpa_max_seq_len: usize = 4096;
@@ -1639,6 +1642,15 @@ pub const VulkanBackend = struct {
 
     // ── Dispatch helper ──────────────────────────────────────────
 
+    /// Split large 1D grids across X/Y so vocab-sized GEMV stays within
+    /// `max_workgroups_per_dim`. Shaders that index by workgroup must use
+    /// `gl_WorkGroupID.y * 65535 + gl_WorkGroupID.x`.
+    fn dispatchWorkgroups(self: *VulkanBackend, n_groups: u32) void {
+        const gy = (n_groups + max_workgroups_per_dim - 1) / max_workgroups_per_dim;
+        const gx = @min(n_groups, max_workgroups_per_dim);
+        self.vkCmdDispatch(self.cmd_buf, gx, gy, 1);
+    }
+
     fn dispatch(self: *VulkanBackend, pipe: PipelineInfo, bufs: []const VkBuffer, buf_sizes: []const usize, push_data: [*]const u8, push_size: u32, n_groups: u32) void {
         var buf_infos: [16]VkDescriptorBufferInfo = undefined;
         var writes: [16]VkWriteDescriptorSet = undefined;
@@ -1683,7 +1695,7 @@ pub const VulkanBackend = struct {
             self.vkCmdBindPipeline(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.pipeline);
             pushDesc(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.layout, 0, @intCast(bufs.len), &writes);
             self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
-            self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
+            self.dispatchWorkgroups(n_groups);
         } else {
             // Deferred path: allocate fresh descriptor set per dispatch, record into open command buffer
             var desc_set: VkDescriptorSet = null;
@@ -1723,7 +1735,7 @@ pub const VulkanBackend = struct {
             self.vkCmdBindPipeline(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.pipeline);
             self.vkCmdBindDescriptorSets(self.cmd_buf, VK_PIPELINE_BIND_POINT_COMPUTE, pipe.layout, 0, 1, &desc_set, 0, null);
             self.vkCmdPushConstants(self.cmd_buf, pipe.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, push_size, push_data);
-            self.vkCmdDispatch(self.cmd_buf, n_groups, 1, 1);
+            self.dispatchWorkgroups(n_groups);
         }
     }
 
@@ -2303,7 +2315,13 @@ pub const VulkanBackend = struct {
 
     /// Batched GEMV — sequential dispatch on Vulkan.
     pub fn gemvMulti(self: *VulkanBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
-        for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
+        for (ops) |op| {
+            if (op.mlx_scales) |s| {
+                self.gemvMlxQ(x, op.w.data, s, op.mlx_biases.?, op.y, op.n, k, op.mlx_bits, op.mlx_group_size);
+            } else {
+                self.gemv(x, op.w, op.y, op.n, k);
+            }
+        }
     }
 
     /// Allocate a KV cache slice — plain allocator on Vulkan.
@@ -2789,6 +2807,8 @@ test "Vulkan tuning constants are valid" {
     try testing.expect(sdpa_max_seq_len >= 1024);
     try testing.expect(sdpa_max_head_dim >= 64);
     try testing.expect(emb_max_vocab_size > 0);
+    try testing.expectEqual(@as(u32, 65535), max_workgroups_per_dim);
+    try testing.expect(emb_max_vocab_size > max_workgroups_per_dim);
 }
 
 test "Vulkan pipeline binding counts" {

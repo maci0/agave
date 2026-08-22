@@ -18,7 +18,7 @@ layout(push_constant) uniform Params { uint out_dim; uint in_dim; };
 shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 void main() {
-    uint col = gl_WorkGroupID.x;  // output element index
+    uint col = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;  // output element index
     uint tid = gl_LocalInvocationID.x;
     uint tg_size = gl_WorkGroupSize.x;
     if (col >= out_dim) return;

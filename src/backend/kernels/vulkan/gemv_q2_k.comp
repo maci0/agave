@@ -31,7 +31,7 @@ float readF16(uint byte_off) {
 }
 
 void main() {
-    uint row = gl_WorkGroupID.x;
+    uint row = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;
     uint tid = gl_LocalInvocationID.x;
     uint tg_size = gl_WorkGroupSize.x;
     if (row >= n) return;

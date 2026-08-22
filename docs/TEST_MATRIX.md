@@ -21,6 +21,7 @@
 | 5 | Qwen 3.5 0.8B | Q8_0 | 774 MB | PASS "Four" | PASS "Four" | PASS "4" (71 tok/s) | |
 | 6 | Qwen 3.5 9B | Q4_K_M | 5.2 GB | PASS "Four" | PASS "Four" | — | |
 | 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | — | |
+| 7b | Qwen 3.8 27B | MLX-4bit ST | 15.0 GB | PASS "Hi" | PASS "Hi" | — | Dense hybrid. Greedy "Say hi in one word." EOS after Hi. WebGPU PASS "Hi" (vocab GEMV chunked at 65535; DeltaNet cache must not bump generation on SSM download). Vulkan: no ICD here (CPU fallback PASS). BF16/GGUF not on disk. Skip extra RMSNorm +1 on MLX-sanitized ST. |
 | 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | — | GGUF issue — also fails in llama.cpp |
 | 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | — | Prompt-sensitive; answers correctly with clear prompts |
 | 10 | DeepSeek V4 | — | Metal: **10.7-21.2 tok/s** (MLX-Q4, suffix) | Not tested | Not tested | — | MLA, CSA/HCA, LID. 14 Metal kernels. Bit-identical to CPU via dedicated CpuBackend bypass. |

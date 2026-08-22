@@ -36,7 +36,8 @@ fn main(@builtin(workgroup_id) wgid: vec3<u32>) {
 
     let decay = exp(gate_beta[h]);
     let beta_h = gate_beta[nvh + h];
-    let kh = select(h % nkh, h * nkh / nvh, nkh == nvh);
+    // HF / llama.cpp: repeat_interleave grouping (h * n_k / n_v).
+    let kh = select(0u, h * nkh / nvh, nkh != 0u && nvh != 0u);
     let s_off = h * hvd * hkd;
     let k_base = kh * hkd;
     let qk_stride = nkh * hkd; // Q at [0..stride), K at [stride..2*stride)

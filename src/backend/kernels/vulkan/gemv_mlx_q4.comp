@@ -18,7 +18,7 @@ float bf16_to_f32(uint val16) {
 shared float partial[256];
 
 void main() {
-    uint row = gl_WorkGroupID.x;
+    uint row = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;
     uint tid = gl_LocalInvocationID.x;
     if (row >= n) return;
 

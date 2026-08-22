@@ -1,8 +1,8 @@
-//! DeltaNet SSM recurrence kernel for ROCm.
-//! One workgroup per v-head (single-threaded — recurrence is sequential).
+//! DeltaNet SSM recurrence kernel for CUDA.
+//! One block per v-head (single-threaded — recurrence is sequential).
+//! Launch: grid = num_v_heads, block = 1.
 
 const cu = @import("common.zig");
-const math = @import("std").math;
 
 export fn deltanet_recurrence_kernel(
     q_ptr: [*]const f32,
@@ -20,24 +20,29 @@ export fn deltanet_recurrence_kernel(
     head_v_dim: u32,
     q_scale: f32,
     rms_eps: f32,
-) callconv(.kernel) void {
+) callconv(.nvptx_device) void {
     const h = cu.blockIdx();
     if (h >= num_v_heads) return;
 
-    const decay = @exp(gate_vals[h]);
+    const decay = cu.expf(gate_vals[h]);
     const beta_h = beta_vals[h];
     const kh = if (num_k_heads == 0 or num_v_heads == 0) 0 else h * num_k_heads / num_v_heads;
     const s_off = h * head_v_dim * head_k_dim;
     const k_base = kh * head_k_dim;
 
     var kq: f32 = 0.0;
-    for (0..head_k_dim) |ki| kq += k_ptr[k_base + ki] * q_ptr[k_base + ki];
+    var ki: u32 = 0;
+    while (ki < head_k_dim) : (ki += 1) {
+        kq += k_ptr[k_base + ki] * q_ptr[k_base + ki];
+    }
 
-    for (0..head_v_dim) |vi| {
+    var vi: u32 = 0;
+    while (vi < head_v_dim) : (vi += 1) {
         const row_off = s_off + vi * head_k_dim;
         var sk: f32 = 0.0;
         var sq_dec: f32 = 0.0;
-        for (0..head_k_dim) |ki| {
+        ki = 0;
+        while (ki < head_k_dim) : (ki += 1) {
             const s_dec = ssm_state[row_off + ki] * decay;
             ssm_state[row_off + ki] = s_dec;
             sk += s_dec * k_ptr[k_base + ki];
@@ -45,28 +50,31 @@ export fn deltanet_recurrence_kernel(
         }
         const delta = beta_h * (v_ptr[h * head_v_dim + vi] - sk);
         output[h * head_v_dim + vi] = (sq_dec + delta * kq) * q_scale;
-        for (0..head_k_dim) |ki| {
+        ki = 0;
+        while (ki < head_k_dim) : (ki += 1) {
             ssm_state[row_off + ki] += k_ptr[k_base + ki] * delta;
         }
     }
 
-    // Gated output: RMSNorm + SiLU
     const off = h * head_v_dim;
     var ss: f32 = 0.0;
-    for (0..head_v_dim) |vi| ss += output[off + vi] * output[off + vi];
-    const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(head_v_dim)) + rms_eps);
-    for (0..head_v_dim) |vi| {
+    vi = 0;
+    while (vi < head_v_dim) : (vi += 1) {
+        ss += output[off + vi] * output[off + vi];
+    }
+    const inv_n = cu.rcpf(@as(f32, @floatFromInt(head_v_dim)));
+    const inv_rms = cu.rsqrtf(ss * inv_n + rms_eps);
+    vi = 0;
+    while (vi < head_v_dim) : (vi += 1) {
         const normed = output[off + vi] * ssm_norm_w[vi] * inv_rms;
         const z = z_buf[off + vi];
-        const silu_z = z / (1.0 + @exp(-z));
-        output[off + vi] = normed * silu_z;
+        output[off + vi] = normed * (z * cu.sigmoidf(z));
     }
 }
 
 const std = @import("std");
 
 test "constants valid" {
-    // No module-level numeric constants defined in this file.
     _ = @sizeOf(u8);
 }
 

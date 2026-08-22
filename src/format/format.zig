@@ -200,6 +200,19 @@ pub const Format = struct {
         return self.getTensor(name);
     }
 
+    /// True when a conv1d weight is MLX-native `[C, K, 1]` (last dim 1).
+    /// HuggingFace stores `[C, 1, K]`. MLX sanitize() also bakes RMSNorm `+1`.
+    pub fn conv1dIsMlxNative(t: TensorInfo) bool {
+        return t.n_dims >= 2 and t.dims[t.n_dims - 1] == 1;
+    }
+
+    /// True when Qwen3.5/3.8 SafeTensors already store shifted RMSNorm gammas
+    /// (`y = w * rms(x)` with w = 1+hf_w). Detected via MLX conv1d layout.
+    pub fn qwen35MlxNormsShifted(self: Format) bool {
+        const conv = self.layerTensor(0, "ssm_conv1d.weight") orelse return false;
+        return conv1dIsMlxNative(conv);
+    }
+
     /// Weight tensor suffixes to prefetch — covers the most bandwidth-heavy
     /// tensors (GEMV projections and expert weights). Norms are tiny and
     /// almost always cache-resident, so they're excluded.
@@ -312,6 +325,26 @@ test "TensorInfo numElements" {
         .data_ptr = @as([*]const u8, @ptrCast(&dummy)),
     };
     try std.testing.expectEqual(@as(usize, 12), t.numElements());
+}
+
+test "conv1dIsMlxNative last dim 1 vs HuggingFace last dim K" {
+    var dummy: u8 = 0;
+    const mlx = TensorInfo{
+        .name = "blk.0.ssm_conv1d.weight",
+        .n_dims = 3,
+        .dims = .{ 10240, 4, 1, 0 },
+        .dtype = .bf16,
+        .data_ptr = @as([*]const u8, @ptrCast(&dummy)),
+    };
+    const hf = TensorInfo{
+        .name = "blk.0.ssm_conv1d.weight",
+        .n_dims = 3,
+        .dims = .{ 10240, 1, 4, 0 },
+        .dtype = .bf16,
+        .data_ptr = @as([*]const u8, @ptrCast(&dummy)),
+    };
+    try std.testing.expect(Format.conv1dIsMlxNative(mlx));
+    try std.testing.expect(!Format.conv1dIsMlxNative(hf));
 }
 
 test "TensorInfo numElements scalar" {

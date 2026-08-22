@@ -27,9 +27,8 @@ void main() {
 
     float decay_val = exp(gate_vals[h]);
     float beta_h = beta_vals[h];
-    // GQA mapping: matches CPU deltanet.zig (h % num_k for non-grouped, h * num_k / num_v for grouped)
-    // kqv_order=false (GGUF default) uses round-robin: kh = h % num_k_heads
-    uint kh = (num_k_heads == num_v_heads) ? h : (h % num_k_heads);
+    // HF / llama.cpp: repeat_interleave grouping (h * n_k / n_v).
+    uint kh = (num_k_heads == 0 || num_v_heads == 0) ? 0 : (h * num_k_heads / num_v_heads);
     uint s_off = h * head_v_dim * head_k_dim;
     uint k_base = kh * head_k_dim;
 

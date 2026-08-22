@@ -33,7 +33,7 @@ float fp8e4m3(uint val) {
 shared float partial[256];
 
 void main() {
-    uint row = gl_WorkGroupID.x;
+    uint row = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;
     uint tid = gl_LocalInvocationID.x;
     if (row >= n) return;
 

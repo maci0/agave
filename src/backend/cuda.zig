@@ -55,6 +55,9 @@ const block_size: u32 = 256;
 /// Shared memory for block reductions (8 warps × 4 bytes).
 const reduction_smem: u32 = 32;
 
+/// DeltaNet V-head scratch for gate/beta (Qwen3.8-27B uses 48).
+const max_deltanet_v_heads: usize = 128;
+
 /// Shared memory for sdpa_tree: 8 warp-reduce + 16 scores + 1 broadcast = 100 bytes.
 const tree_sdpa_smem: u32 = 100;
 
@@ -232,6 +235,7 @@ pub const CudaBackend = struct {
     fn_mega_qwen35_q8: CUfunction = null,
     fn_mega_gemma_q4k: CUfunction = null,
     fn_mega_gemma_q8: CUfunction = null,
+    fn_deltanet_recurrence: CUfunction = null,
 
     /// CPU backend for ops where CPU is genuinely faster than GPU dispatch (embLookup).
     cpu: CpuBackend = .{},
@@ -524,6 +528,7 @@ pub const CudaBackend = struct {
         self.fn_mega_qwen35_q8 = try self.getFunction("megakernel_qwen35_q8_kernel");
         self.fn_mega_gemma_q4k = try self.getFunction("megakernel_gemma_q4k_kernel");
         self.fn_mega_gemma_q8 = try self.getFunction("megakernel_gemma_q8_kernel");
+        self.fn_deltanet_recurrence = self.getFunction("deltanet_recurrence_kernel") catch null;
 
         // Detect GPUDirect Storage (cuFile) for NVMe→VRAM direct transfer
         if (!self.is_uma) {
@@ -1334,7 +1339,13 @@ pub const CudaBackend = struct {
             }
         }
         // Fallback: sequential dispatch
-        for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
+        for (ops) |op| {
+            if (op.mlx_scales) |s| {
+                self.gemvMlxQ(x, op.w.data, s, op.mlx_biases.?, op.y, op.n, k, op.mlx_bits, op.mlx_group_size);
+            } else {
+                self.gemv(x, op.w, op.y, op.n, k);
+            }
+        }
     }
 
     /// Launch the fused Q4_0 batched GEMV kernel for 2-4 ops.
@@ -2291,15 +2302,82 @@ pub const CudaBackend = struct {
         _ = cuCheck(self.cuMemcpyDtoD(d_v_cache + prev_len * kvd_bytes, d_v_new, n_tok * kvd_bytes), "cuMemcpyDtoD(prefill KV val)");
     }
 
-    /// DeltaNet SSM recurrence — CPU fallback.
-    /// Sequential SSM state updates are inherently serial per head; GPU dispatch
-    /// overhead exceeds the compute benefit for single-token decode.
+    /// DeltaNet SSM recurrence. GPU recurrence when PTX includes
+    /// `deltanet_recurrence_kernel` (`zig build ptx`); otherwise CPU.
     pub fn deltaNet(self: *CudaBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
+        if (self.fn_deltanet_recurrence == null) {
+            self.flushActivations();
+            self.cpu.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p);
+            self.invalidateAct(conv_out);
+            self.invalidateAct(output);
+            return;
+        }
+
+        const math_ops = @import("../ops/math.zig");
+        const num_v = p.num_v_heads;
+        const num_k = p.num_k_heads;
+        const hkd = p.head_k_dim;
+        const hvd = p.head_v_dim;
+
         self.flushActivations();
-        self.cpu.deltaNet(conv_in, conv_out, z_buf, alpha_buf, beta_buf, output, conv_state, ssm_state, ssm_a, dt_bias, conv_w, ssm_norm_w, p);
-        // Invalidate all activation buffers that DeltaNet wrote to
-        self.invalidateAct(conv_out);
+        if (num_v > max_deltanet_v_heads) @panic("CUDA deltaNet: num_v_heads exceeds max_deltanet_v_heads");
+        var gate_arr: [max_deltanet_v_heads]f32 = undefined;
+        var beta_arr: [max_deltanet_v_heads]f32 = undefined;
+        for (0..num_v) |h| {
+            gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_buf[h] + dt_bias[h]);
+            beta_arr[h] = math_ops.sigmoid(beta_buf[h]);
+        }
+
+        @import("../ops/ssm.zig").causalConv1dSilu(conv_out, conv_state, conv_in, conv_w, null, p.conv_ch, p.d_conv);
+        self.flushActivations();
+
+        const q_off: usize = if (p.kqv_order) num_k * hkd else 0;
+        const k_off: usize = if (p.kqv_order) 0 else num_k * hkd;
+        for (0..num_k) |h| {
+            self.l2Norm(conv_out + q_off + h * hkd, hkd, p.rms_eps);
+            self.l2Norm(conv_out + k_off + h * hkd, hkd, p.rms_eps);
+        }
+        self.flushActivations();
+
+        const q_ptr = conv_out + q_off;
+        const k_ptr = conv_out + k_off;
+        const v_off: usize = 2 * num_k * hkd;
+        const v_ptr = conv_out + v_off;
+
+        const q_sz = num_k * hkd * @sizeOf(f32);
+        const v_sz = num_v * hvd * @sizeOf(f32);
+        const gate_sz = num_v * @sizeOf(f32);
+        const state_sz = ssm_state.len * @sizeOf(f32);
+        const norm_sz = hvd * @sizeOf(f32);
+
+        var d_q = self.getInputBuf(q_ptr, q_sz);
+        var d_k = self.getInputBuf(k_ptr, q_sz);
+        var d_v = self.getInputBuf(v_ptr, v_sz);
+        var d_gate = self.getInputBuf(@as([*]const f32, &gate_arr), gate_sz);
+        var d_beta = self.getInputBuf(@as([*]const f32, &beta_arr), gate_sz);
+        var d_z = self.getInputBuf(z_buf, v_sz);
+        var d_norm = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
+        var d_state = self.getInPlaceBuf(ssm_state.ptr, state_sz);
+        var d_out = self.getOutputBuf(output, v_sz);
+
+        var nvh: u32 = @intCast(num_v);
+        var nkh: u32 = @intCast(num_k);
+        var hkd_u: u32 = @intCast(hkd);
+        var hvd_u: u32 = @intCast(hvd);
+        var q_sc: f32 = p.q_scale;
+        var eps: f32 = p.rms_eps;
+
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_q),    @ptrCast(&d_k),     @ptrCast(&d_v),
+            @ptrCast(&d_gate), @ptrCast(&d_beta),  @ptrCast(&d_z),
+            @ptrCast(&d_norm), @ptrCast(&d_state), @ptrCast(&d_out),
+            @ptrCast(&nvh),    @ptrCast(&nkh),     @ptrCast(&hkd_u),
+            @ptrCast(&hvd_u),  @ptrCast(&q_sc),    @ptrCast(&eps),
+        };
+        self.launch(self.fn_deltanet_recurrence, @intCast(num_v), 1, 0, &params);
         self.invalidateAct(output);
+        self.invalidateAct(@as([*]f32, @ptrCast(ssm_state.ptr)));
+        self.invalidateAct(conv_out);
     }
 };
 
@@ -2331,6 +2409,7 @@ test "CUDA tuning constants are valid" {
 
     // bits_per_u32_word must be exactly 32
     try testing.expectEqual(@as(usize, 32), bits_per_u32_word);
+    try testing.expect(max_deltanet_v_heads >= 48);
 }
 
 test "CUDA GEMV grid size calculations" {

@@ -23,10 +23,12 @@
 //!     - Post-encoder LayerNorm (v.post_ln), then mm.soft_emb_norm + mm.input_projection
 //!
 //!   Qwen VL (`qwen_vl`):
-//!     - Conv2D patch embedding with bias, dual patch weights (only first used)
-//!     - Learned 1D position embedding
-//!     - ViT blocks with: fused QKV projection, LayerNorm (with bias), GELU FFN, no QK norms
-//!     - Post-encoder LayerNorm (v.post_ln), then MLP projector (mm.0 + GELU + mm.2)
+//!     - Conv2D patch embedding with bias, dual patch weights (Qwen2-VL mmproj)
+//!     - Qwen3.8 in-checkpoint ViT: Conv3d (temporal_patch_size=2), still images
+//!       duplicate the frame; merger.norm (LayerNorm/RMSNorm) then 2×2 MLP merge
+//!     - Learned 1D position embedding (HF [n_pos, embd] or GGUF [embd, n_pos])
+//!     - ViT blocks with: fused QKV projection, LayerNorm or RMSNorm, GELU FFN
+//!     - Optional post-encoder LayerNorm (v.post_ln) for GGUF mmproj
 
 const std = @import("std");
 const Io = std.Io;
@@ -123,6 +125,8 @@ pub const VisionEncoder = struct {
     /// When true, the caller should resize to the original image dims rounded up
     /// to a multiple of patch_size * 2 (Qwen VL) instead of image_size.
     use_native_resolution: bool = false,
+    /// Conv3d temporal kernel (1 for Conv2d, 2 for Qwen3.8 still-image duplicate).
+    temporal_patch_size: u32 = 1,
     embd_dim: u32,
     ffn_dim: u32,
     n_blocks: u32,
@@ -242,7 +246,7 @@ pub const VisionEncoder = struct {
         const has_post_norms = variant == .gemma4_siglip2;
         const fused_qkv = variant == .qwen_vl;
         const ffn_has_gate = variant == .gemma4_siglip2;
-        const has_post_ln = variant != .gemma4_siglip2;
+        const has_post_ln = fmt.getTensor("v.post_ln.weight") != null;
         const pos_embd_is_2d = variant == .gemma4_siglip2;
         // Standardization only when v.std_scale/v.std_bias tensors exist (26B-A4B).
         // E2B/E4B SigLIP-2 omits these — image_mean=[0,0,0], image_std=[1,1,1].
@@ -266,6 +270,20 @@ pub const VisionEncoder = struct {
         if (variant == .qwen_vl) {
             if (fmt.getTensor("mm.0.weight")) |mm0| {
                 mlp_intermediate_dim = @intCast(mm0.dims[0]);
+            }
+        }
+
+        var temporal_patch_size: u32 = fmt.getArchU32(arch, "temporal_patch_size") orelse 1;
+        var patch_in_dim: usize = @as(usize, patch_size) * patch_size * n_channels;
+        if (fmt.getTensor("v.patch_embd.weight")) |emb_t| {
+            const n_out = emb_t.dims[0];
+            const n_elem = emb_t.numElements();
+            if (n_out > 0 and n_elem >= n_out) {
+                patch_in_dim = n_elem / n_out;
+                if (patch_in_dim % (@as(usize, patch_size) * patch_size * n_channels) == 0) {
+                    const t_from_w: u32 = @intCast(patch_in_dim / (@as(usize, patch_size) * patch_size * n_channels));
+                    if (t_from_w > temporal_patch_size) temporal_patch_size = t_from_w;
+                }
             }
         }
 
@@ -296,6 +314,7 @@ pub const VisionEncoder = struct {
             .n_output_patches = n_output_patches,
             .n_merge = n_merge,
             .use_native_resolution = variant == .qwen_vl,
+            .temporal_patch_size = temporal_patch_size,
             .embd_dim = embd_dim,
             .ffn_dim = ffn_dim,
             .n_blocks = n_blocks,
@@ -341,7 +360,7 @@ pub const VisionEncoder = struct {
         errdefer allocator.free(self.patch_buf);
         self.hidden = try allocator.alloc(f32, np * ed);
         errdefer allocator.free(self.hidden);
-        const patch_elems_alloc: usize = @as(usize, patch_size) * patch_size * n_channels;
+        const patch_elems_alloc: usize = patch_in_dim;
         self.norm_buf = try allocator.alloc(f32, np * @max(ed, patch_elems_alloc));
         errdefer allocator.free(self.norm_buf);
         self.q_buf = try allocator.alloc(f32, np * ed);
@@ -384,8 +403,9 @@ pub const VisionEncoder = struct {
     fn warmNormCache(self: *VisionEncoder) void {
         const ed: usize = self.embd_dim;
         const hd: usize = self.head_dim;
-        if (self.fmt.getTensor("v.post_ln.weight")) |t| _ = self.normAsF32(t, ed);
+            if (self.fmt.getTensor("v.post_ln.weight")) |t| _ = self.normAsF32(t, ed);
         if (self.fmt.getTensor("mm.soft_emb_norm.weight")) |t| _ = self.normAsF32(t, ed);
+        if (self.fmt.getTensor("mm.norm.weight")) |t| _ = self.normAsF32(t, ed);
         for (0..self.n_blocks) |i| {
             const li: u32 = @intCast(i);
             if (self.fmt.layerTensor(li, "ln1.weight")) |t| _ = self.normAsF32(t, ed);
@@ -571,32 +591,34 @@ pub const VisionEncoder = struct {
         // This is a conv2d kernel. For each patch, we flatten the pixels and do a dot product
         // with each output channel (embd_dim rows).
         const emb_t = self.fmt.getTensor("v.patch_embd.weight") orelse return error.MissingTensor;
-        const patch_elems = ps * ps * n_channels; // elements per flattened patch
+        const spatial = ps * ps * n_channels;
+        const temporal: usize = @max(@as(usize, self.temporal_patch_size), 1);
+        const patch_elems = spatial * temporal;
 
         // Optional bias: Gemma3 and Qwen have v.patch_embd.bias [embd_dim]
         const emb_bias: ?[*]const f32 = if (self.has_bias)
-            if (self.fmt.getTensor("v.patch_embd.bias")) |bt| tensorAsF32(bt) else null
+            if (self.fmt.getTensor("v.patch_embd.bias")) |bt| self.tensorAsF32(bt) else null
         else
             null;
 
         // Flatten all patches into norm_buf first, then batch the GEMV.
-        // norm_buf is allocated as [np * @max(ed, patch_elems)], so
-        // np * patch_elems always fits even when patch_elems > ed.
+        // Conv3d weights are [out, C, T, H, W]; still images duplicate the frame on T.
         const np: usize = pps * pps;
         for (0..pps) |py| {
             for (0..pps) |px| {
                 const patch_idx = py * pps + px;
                 const flat_base = patch_idx * patch_elems;
 
-                // Flatten patch pixels from channel-first layout [C, H, W]
                 for (0..n_channels) |c| {
-                    for (0..ps) |dy| {
-                        for (0..ps) |dx| {
-                            const src_y = py * ps + dy;
-                            const src_x = px * ps + dx;
-                            const src_idx = c * h * w + src_y * w + src_x;
-                            const flat_idx = c * ps * ps + dy * ps + dx;
-                            self.norm_buf[flat_base + flat_idx] = self.patch_buf[src_idx];
+                    for (0..temporal) |t| {
+                        for (0..ps) |dy| {
+                            for (0..ps) |dx| {
+                                const src_y = py * ps + dy;
+                                const src_x = px * ps + dx;
+                                const src_idx = c * h * w + src_y * w + src_x;
+                                const flat_idx = c * (temporal * ps * ps) + t * (ps * ps) + dy * ps + dx;
+                                self.norm_buf[flat_base + flat_idx] = self.patch_buf[src_idx];
+                            }
                         }
                     }
                 }
@@ -635,8 +657,8 @@ pub const VisionEncoder = struct {
         const scale_t = self.fmt.getTensor("v.std_scale") orelse return error.MissingTensor;
         const bias_t = self.fmt.getTensor("v.std_bias") orelse return error.MissingTensor;
 
-        const scale_ptr = tensorAsF32(scale_t);
-        const bias_ptr = tensorAsF32(bias_t);
+        const scale_ptr = self.tensorAsF32(scale_t);
+        const bias_ptr = self.tensorAsF32(bias_t);
 
         for (0..np) |p| {
             const base = p * ed;
@@ -656,7 +678,8 @@ pub const VisionEncoder = struct {
         const pps = h / ps; // patches per side
 
         const pos_t = self.fmt.getTensor("v.position_embd.weight") orelse return error.MissingTensor;
-        const pos_data: [*]const f32 = @ptrCast(@alignCast(pos_t.data_ptr));
+        const n_elem = pos_t.numElements();
+        const pos_data = self.normAsF32(pos_t, n_elem);
 
         // Debug: check position embedding values
         if (self.debug) {
@@ -690,16 +713,26 @@ pub const VisionEncoder = struct {
                 }
             }
         } else {
-            // 1D position embedding: [embd_dim, n_patches] (stored row-major by embd_dim)
-            // For GGUF layout: pos_data[d * n_pos + patch_idx] gives dim d for patch patch_idx.
-            const n_pos: usize = @intCast(pos_t.dims[1]);
+            // 1D position embedding.
+            // GGUF: [embd_dim, n_pos] column-major-ish → pos[d * n_pos + p]
+            // HuggingFace: [n_pos, embd_dim] (or [1, n_pos, embd]) → pos[p * ed + d]
             const np: usize = self.n_patches;
+            const last = if (pos_t.n_dims > 0) pos_t.dims[pos_t.n_dims - 1] else 0;
+            const hf_row = last == ed;
+
+            var n_pos: usize = np;
+            if (hf_row) {
+                if (pos_t.n_dims >= 2) n_pos = @intCast(pos_t.dims[pos_t.n_dims - 2]);
+            } else if (pos_t.n_dims >= 2) {
+                n_pos = @intCast(pos_t.dims[1]);
+            }
 
             for (0..np) |p| {
-                if (p >= n_pos) break; // safety: don't read beyond embedding table
+                if (p >= n_pos) break;
                 const base = p * ed;
                 for (0..ed) |d| {
-                    self.patch_buf[base + d] += pos_data[d * n_pos + p];
+                    const val = if (hf_row) pos_data[p * ed + d] else pos_data[d * n_pos + p];
+                    self.patch_buf[base + d] += val;
                 }
             }
         }
@@ -723,7 +756,7 @@ pub const VisionEncoder = struct {
         const ln1_w = self.blockTensor(bi, "ln1.weight") orelse return error.MissingTensor;
         const ln1_ptr = self.normAsF32(ln1_w, ed);
         const ln1_bias: ?[*]const f32 = if (self.has_bias)
-            if (self.blockTensor(bi, "ln1.bias")) |bt| tensorAsF32(bt) else null
+            if (self.blockTensor(bi, "ln1.bias")) |bt| self.tensorAsF32(bt) else null
         else
             null;
 
@@ -757,7 +790,7 @@ pub const VisionEncoder = struct {
             std.debug.assert(self.ffn_dim >= 3 * self.embd_dim);
             const qkv_w = self.blockTensor(bi, "attn_qkv.weight") orelse return error.MissingTensor;
             const qkv_bias: ?[*]const f32 = if (self.has_bias)
-                if (self.blockTensor(bi, "attn_qkv.bias")) |bt| tensorAsF32(bt) else null
+                if (self.blockTensor(bi, "attn_qkv.bias")) |bt| self.tensorAsF32(bt) else null
             else
                 null;
 
@@ -786,15 +819,15 @@ pub const VisionEncoder = struct {
             const vw = self.blockTensor(bi, "attn_v.weight") orelse return error.MissingTensor;
 
             const q_bias: ?[*]const f32 = if (self.has_bias)
-                if (self.blockTensor(bi, "attn_q.bias")) |bt| tensorAsF32(bt) else null
+                if (self.blockTensor(bi, "attn_q.bias")) |bt| self.tensorAsF32(bt) else null
             else
                 null;
             const k_bias: ?[*]const f32 = if (self.has_bias)
-                if (self.blockTensor(bi, "attn_k.bias")) |bt| tensorAsF32(bt) else null
+                if (self.blockTensor(bi, "attn_k.bias")) |bt| self.tensorAsF32(bt) else null
             else
                 null;
             const v_bias: ?[*]const f32 = if (self.has_bias)
-                if (self.blockTensor(bi, "attn_v.bias")) |bt| tensorAsF32(bt) else null
+                if (self.blockTensor(bi, "attn_v.bias")) |bt| self.tensorAsF32(bt) else null
             else
                 null;
 
@@ -861,7 +894,7 @@ pub const VisionEncoder = struct {
         // ── 5. Output projection (batched across all patches) ───
         const ow = self.blockTensor(bi, "attn_out.weight") orelse return error.MissingTensor;
         const out_bias: ?[*]const f32 = if (self.has_bias)
-            if (self.blockTensor(bi, "attn_out.bias")) |bt| tensorAsF32(bt) else null
+            if (self.blockTensor(bi, "attn_out.bias")) |bt| self.tensorAsF32(bt) else null
         else
             null;
 
@@ -890,7 +923,7 @@ pub const VisionEncoder = struct {
         const ln2_w = self.blockTensor(bi, "ln2.weight") orelse return error.MissingTensor;
         const ln2_ptr = self.normAsF32(ln2_w, ed);
         const ln2_bias: ?[*]const f32 = if (self.has_bias)
-            if (self.blockTensor(bi, "ln2.bias")) |bt| tensorAsF32(bt) else null
+            if (self.blockTensor(bi, "ln2.bias")) |bt| self.tensorAsF32(bt) else null
         else
             null;
 
@@ -941,11 +974,11 @@ pub const VisionEncoder = struct {
             const dw = self.blockTensor(bi, "ffn_down.weight") orelse return error.MissingTensor;
 
             const up_bias: ?[*]const f32 = if (self.has_bias)
-                if (self.blockTensor(bi, "ffn_up.bias")) |bt| tensorAsF32(bt) else null
+                if (self.blockTensor(bi, "ffn_up.bias")) |bt| self.tensorAsF32(bt) else null
             else
                 null;
             const down_bias: ?[*]const f32 = if (self.has_bias)
-                if (self.blockTensor(bi, "ffn_down.bias")) |bt| tensorAsF32(bt) else null
+                if (self.blockTensor(bi, "ffn_down.bias")) |bt| self.tensorAsF32(bt) else null
             else
                 null;
 
@@ -1143,17 +1176,30 @@ pub const VisionEncoder = struct {
                 self.batchGemm(self.hidden.ptr, proj_t, self.output.ptr, np, pd, ed);
             },
             .qwen_vl => {
-                // Qwen VL merger: reshape to merge 4 adjacent tokens, then MLP.
-                // hidden [n_patches, embd] → reshape [n_patches/4, 4*embd] → MLP → output
-                // Matches llama.cpp: ggml_reshape_3d(cur, n_embd*4, n_pos/4, batch)
+                // hidden is [n_patches, embd] (pixel-shuffled). Merge 2×2 → n_patches/4 tokens.
                 const merge_factor: usize = 4;
-                const np_merged = np / merge_factor;
+                const n_vit: usize = self.n_patches;
+                const np_merged = n_vit / merge_factor;
                 const merged_dim = ed * merge_factor;
 
+                // Qwen3.8 merger.norm: per-token norm on ViT output before 2×2 concat.
+                if (self.fmt.getTensor("mm.norm.weight")) |nw| {
+                    const nptr = self.normAsF32(nw, ed);
+                    const nbias: ?[*]const f32 = if (self.fmt.getTensor("mm.norm.bias")) |bt| self.tensorAsF32(bt) else null;
+                    for (0..n_vit) |p| {
+                        const base = p * ed;
+                        if (nbias) |bias| {
+                            layerNormInPlace(self.hidden[base..][0..ed], nptr, bias, ed, self.norm_eps);
+                        } else {
+                            rmsNormInPlace(self.hidden[base..][0..ed], nptr, ed, self.norm_eps);
+                        }
+                    }
+                }
+
                 const mm0_w = self.fmt.getTensor("mm.0.weight") orelse return error.MissingTensor;
-                const mm0_bias: ?[*]const f32 = if (self.fmt.getTensor("mm.0.bias")) |bt| tensorAsF32(bt) else null;
+                const mm0_bias: ?[*]const f32 = if (self.fmt.getTensor("mm.0.bias")) |bt| self.tensorAsF32(bt) else null;
                 const mm2_w = self.fmt.getTensor("mm.2.weight") orelse return error.MissingTensor;
-                const mm2_bias: ?[*]const f32 = if (self.fmt.getTensor("mm.2.bias")) |bt| tensorAsF32(bt) else null;
+                const mm2_bias: ?[*]const f32 = if (self.fmt.getTensor("mm.2.bias")) |bt| self.tensorAsF32(bt) else null;
 
                 const mid: usize = self.mlp_intermediate_dim;
 
@@ -1185,7 +1231,7 @@ pub const VisionEncoder = struct {
 
         const ln_w = self.fmt.getTensor("v.post_ln.weight") orelse return error.MissingTensor;
         const ln_ptr = self.normAsF32(ln_w, ed);
-        const ln_bias: ?[*]const f32 = if (self.fmt.getTensor("v.post_ln.bias")) |bt| tensorAsF32(bt) else null;
+        const ln_bias: ?[*]const f32 = if (self.fmt.getTensor("v.post_ln.bias")) |bt| self.tensorAsF32(bt) else null;
 
         for (0..np) |p| {
             const base = p * ed;
@@ -1268,23 +1314,56 @@ pub const VisionEncoder = struct {
 
     /// Get norm weights as f32 pointer. Caches converted weights on first access
     /// so subsequent images return a stable pointer with zero work.
+    /// Get weights as f32 pointer. Caches conversion (and SafeTensors RMS +1 bake)
+    /// so subsequent images return a stable pointer with zero work.
     fn normAsF32(self: *VisionEncoder, t: TensorInfo, n: usize) [*]const f32 {
-        if (t.dtype != .bf16) return @ptrCast(@alignCast(t.data_ptr));
-
         const key = @intFromPtr(t.data_ptr);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| {
             if (entry.key == key) return entry.data.ptr;
         }
 
-        // Cache miss: allocate, convert, and store permanently.
+        const bake_one = self.shouldBakeRmsPlusOne(t);
+        if (t.dtype == .f32 and !bake_one) return @ptrCast(@alignCast(t.data_ptr));
+
         if (self.norm_cache_len >= max_norm_entries)
             @panic("normAsF32: norm cache overflow — increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
-        const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
-        for (0..n) |i| buf[i] = quant.bf16ToF32(src[i]);
+        quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
+        if (bake_one) {
+            for (buf) |*v| v.* += 1.0;
+        }
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
         self.norm_cache_len += 1;
         return buf.ptr;
+    }
+
+    /// HuggingFace Qwen3_5RMSNorm is `(1+w)*x/rms` with zero-init `w`.
+    /// GGUF converters bake the +1. MLX sanitize() also bakes it (conv1d `[C,K,1]`).
+    /// LayerNorm (has a sibling .bias) must not bake.
+    fn shouldBakeRmsPlusOne(self: *VisionEncoder, t: TensorInfo) bool {
+        if (!self.fmt.is_safetensors) return false;
+        if (self.fmt.qwen35MlxNormsShifted()) return false;
+        if (std.mem.endsWith(u8, t.name, ".bias")) return false;
+        const is_norm = std.mem.indexOf(u8, t.name, "norm") != null or
+            std.mem.indexOf(u8, t.name, "ln1") != null or
+            std.mem.indexOf(u8, t.name, "ln2") != null or
+            std.mem.indexOf(u8, t.name, "post_ln") != null or
+            std.mem.indexOf(u8, t.name, "ln_q") != null;
+        if (!is_norm) return false;
+        if (std.mem.endsWith(u8, t.name, ".weight")) {
+            var bias_buf: [name_buf_size]u8 = undefined;
+            const base_len = t.name.len - ".weight".len;
+            if (base_len + ".bias".len > bias_buf.len) return false;
+            @memcpy(bias_buf[0..base_len], t.name[0..base_len]);
+            const bias_suffix = ".bias";
+            @memcpy(bias_buf[base_len..][0..bias_suffix.len], bias_suffix);
+            if (self.fmt.getTensor(bias_buf[0 .. base_len + bias_suffix.len]) != null) return false;
+        }
+        return true;
+    }
+
+    fn tensorAsF32(self: *VisionEncoder, t: TensorInfo) [*]const f32 {
+        return self.normAsF32(t, t.numElements());
     }
 };
 
@@ -1583,11 +1662,6 @@ fn softmaxSimd(x: []f32) void {
         }
         while (i < n) : (i += 1) x[i] *= inv_sum;
     }
-}
-
-/// Get a tensor's data as an f32 pointer (only valid for f32 dtype tensors).
-fn tensorAsF32(t: TensorInfo) [*]const f32 {
-    return @ptrCast(@alignCast(t.data_ptr));
 }
 
 /// Apply 2D neox-style RoPE to Q or K buffer for all patches.

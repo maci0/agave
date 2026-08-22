@@ -42,7 +42,7 @@ float bf16ToFloat(uint bits16) {
 }
 
 void main() {
-    uint row     = gl_WorkGroupID.x;
+    uint row     = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;
     uint tid     = gl_LocalInvocationID.x;
     uint tg_size = gl_WorkGroupSize.x; // 256
 

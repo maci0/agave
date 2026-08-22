@@ -31,6 +31,9 @@ comptime {
     // Position encoding
     _ = @import("rope.zig");
 
+    // SSM
+    _ = @import("deltanet_recurrence.zig");
+
     // Attention
     _ = @import("sdpa.zig");
     _ = @import("sdpa_turbo.zig");
