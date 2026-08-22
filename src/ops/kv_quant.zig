@@ -9,6 +9,7 @@
 //!   - int8:      Block-quantized INT8 with f32 scale per 32 elements (1.125 B/elem)
 //!   - fp8_e4m3:  FP8 E4M3 format (1 byte/element, hardware-native on Hopper+)
 //!   - nvfp4:     NVFP4 E2M1 with FP8 scale per 16 elements (0.5625 B/elem)
+//!   - nvfp4_ds_mla: DeepSeek MLA KV — NVFP4 on NoPE (448), f16 on RoPE (64)
 //!   - turbo2-4:  TurboQuant — WHT + Lloyd-Max codebook (2.5/3.5/4.5 bits/elem)
 //!   - planar2-4: PlanarQuant — Givens 2D rotation + Lloyd-Max (same sizes as turbo)
 //!   - iso2-4:    IsoQuant — Quaternion 4D rotation + Lloyd-Max (same sizes as turbo)
@@ -46,6 +47,14 @@ const int8_block_bytes: usize = 36;
 const nvfp4_block: usize = 16;
 /// NVFP4 block: fp8 scale (1 byte) + 8 packed nibble bytes = 9 bytes.
 const nvfp4_block_bytes: usize = 9;
+/// DeepSeek MLA compressed latent width this format is packed for (`kv_lora_rank`).
+pub const ds_mla_latent_dim: usize = 512;
+/// RoPE tail kept in f16 (matches DS4 `rope_dim`).
+pub const ds_mla_rope_dim: usize = 64;
+/// Non-RoPE latent quantized with NVFP4 (`kv_lora_rank - rope_dim`).
+pub const ds_mla_nope_dim: usize = ds_mla_latent_dim - ds_mla_rope_dim;
+/// Bytes per f16 element (RoPE tail of `nvfp4_ds_mla`).
+const f16_elem_bytes: usize = @sizeOf(f16);
 /// Q8_0 scale header size: f16 = 2 bytes.
 const q8_0_scale_bytes: usize = 2;
 /// INT8 scale header size: f32 = 4 bytes.
@@ -445,6 +454,8 @@ pub const KvQuantType = enum {
     int8,
     fp8_e4m3,
     nvfp4,
+    /// DeepSeek MLA: NVFP4 on the NoPE prefix, f16 on the last `ds_mla_rope_dim` elems.
+    nvfp4_ds_mla,
     turbo2,
     turbo3,
     turbo4,
@@ -467,6 +478,7 @@ pub const KvQuantType = enum {
             .int8 => "INT8",
             .fp8_e4m3 => "FP8",
             .nvfp4 => "NVFP4",
+            .nvfp4_ds_mla => "NVFP4-MLA",
             .turbo2 => "TQ2",
             .turbo3 => "TQ3",
             .turbo4 => "TQ4",
@@ -491,6 +503,7 @@ pub const KvQuantType = enum {
             .int8 => 9.0,
             .fp8_e4m3 => 8.0,
             .nvfp4 => 4.5,
+            .nvfp4_ds_mla => nvfp4DsMlaBitsPerElement(),
             .turbo2, .planar2, .iso2, .rotor2 => 2.5,
             .turbo3, .planar3, .iso3, .rotor3 => 3.5,
             .turbo4, .planar4, .iso4, .rotor4 => 4.5,
@@ -515,6 +528,20 @@ pub const KvQuantType = enum {
     /// Returns true if this is a RotorQuant variant (rotor2/3/4).
     pub fn isRotor(self: KvQuantType) bool {
         return self == .rotor2 or self == .rotor3 or self == .rotor4;
+    }
+
+    /// True when GPU SDPA has no kernel for this layout. Decode uses CPU kvDot/kvMulAccum.
+    /// `nvfp4_ds_mla` packs NoPE NVFP4 + f16 RoPE; DS4 MLA already scores compressed
+    /// positions on CPU, so uncompressed SDPA uses the same path (no GPU round-trip).
+    pub fn cpuSdpaOnly(self: KvQuantType) bool {
+        return self == .nvfp4_ds_mla;
+    }
+
+    /// CUDA/ROCm/Vulkan/WebGPU have no SDPA kernel for these layouts.
+    /// Metal implements q8_0 GPU SDPA; DS4's default KV is q8_0, so discrete
+    /// GPUs must use CPU SDPA or they panic on the generate path.
+    pub fn discreteGpuUsesCpuSdpa(self: KvQuantType) bool {
+        return self.cpuSdpaOnly() or self == .q8_0;
     }
 
     /// Returns true if this is any rotation-based quantization method (Turbo, Planar, Iso, or Rotor).
@@ -554,6 +581,7 @@ pub const KvQuantType = enum {
         if (eql(s, "int8") or eql(s, "i8")) return .int8;
         if (eql(s, "fp8") or eql(s, "fp8_e4m3")) return .fp8_e4m3;
         if (eql(s, "nvfp4") or eql(s, "fp4")) return .nvfp4;
+        if (eql(s, "nvfp4_ds_mla")) return .nvfp4_ds_mla;
         if (eql(s, "turbo2") or eql(s, "tq2")) return .turbo2;
         if (eql(s, "turbo3") or eql(s, "tq3")) return .turbo3;
         if (eql(s, "turbo4") or eql(s, "tq4")) return .turbo4;
@@ -581,6 +609,7 @@ pub fn kvSliceBytes(kv_type: KvQuantType, n: usize) usize {
         .int8 => ((n + block_size - 1) / block_size) * int8_block_bytes,
         .fp8_e4m3 => n,
         .nvfp4 => ((n + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes,
+        .nvfp4_ds_mla => nvfp4DsMlaSliceBytes(n),
         .turbo2, .planar2, .iso2, .rotor2 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo2_block_bytes,
         .turbo3, .planar3, .iso3, .rotor3 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo3_block_bytes,
         .turbo4, .planar4, .iso4, .rotor4 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo4_block_bytes,
@@ -600,10 +629,45 @@ pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
         .int8 => (i / block_size) * int8_block_bytes,
         .fp8_e4m3 => i,
         .nvfp4 => (i / nvfp4_block) * nvfp4_block_bytes,
+        .nvfp4_ds_mla => nvfp4DsMlaByteOffset(i),
         .turbo2, .planar2, .iso2, .rotor2 => (i / turbo_block_size) * turbo2_block_bytes,
         .turbo3, .planar3, .iso3, .rotor3 => (i / turbo_block_size) * turbo3_block_bytes,
         .turbo4, .planar4, .iso4, .rotor4 => (i / turbo_block_size) * turbo4_block_bytes,
     };
+}
+
+fn nvfp4SliceBytes(n: usize) usize {
+    return ((n + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes;
+}
+
+fn nvfp4DsMlaRecordBytes() usize {
+    return nvfp4SliceBytes(ds_mla_nope_dim) + ds_mla_rope_dim * f16_elem_bytes;
+}
+
+fn nvfp4DsMlaBitsPerElement() f32 {
+    return @as(f32, @floatFromInt(nvfp4DsMlaRecordBytes() * 8)) / @as(f32, @floatFromInt(ds_mla_latent_dim));
+}
+
+/// Packed size of `rem` leading elements of a 512-d MLA record.
+fn nvfp4DsMlaPrefixBytes(rem: usize) usize {
+    if (rem <= ds_mla_nope_dim) return nvfp4SliceBytes(rem);
+    return nvfp4SliceBytes(ds_mla_nope_dim) + (rem - ds_mla_nope_dim) * f16_elem_bytes;
+}
+
+fn nvfp4DsMlaSliceBytes(n: usize) usize {
+    const full = n / ds_mla_latent_dim;
+    const rem = n % ds_mla_latent_dim;
+    return full * nvfp4DsMlaRecordBytes() + nvfp4DsMlaPrefixBytes(rem);
+}
+
+fn nvfp4DsMlaByteOffset(i: usize) usize {
+    const full = i / ds_mla_latent_dim;
+    const rem = i % ds_mla_latent_dim;
+    const rec = nvfp4DsMlaRecordBytes();
+    if (rem < ds_mla_nope_dim) {
+        return full * rec + (rem / nvfp4_block) * nvfp4_block_bytes;
+    }
+    return full * rec + nvfp4SliceBytes(ds_mla_nope_dim) + (rem - ds_mla_nope_dim) * f16_elem_bytes;
 }
 
 // ── Per-head KV quantization scales ──────────────────────────────
@@ -693,6 +757,7 @@ pub fn kvStore(dst: [*]u8, src: [*]const f32, n: usize, kv_type: KvQuantType) vo
         .int8 => storeInt8(dst, src, n),
         .fp8_e4m3 => storeFp8(dst, src, n),
         .nvfp4 => storeNvfp4(dst, src, n),
+        .nvfp4_ds_mla => storeNvfp4DsMla(dst, src, n),
         .turbo2 => turboStore(2, dst, src, n),
         .turbo3 => turboStore(3, dst, src, n),
         .turbo4 => turboStore(4, dst, src, n),
@@ -819,6 +884,23 @@ fn storeNvfp4(dst: [*]u8, src: [*]const f32, n: usize) void {
     }
 }
 
+fn storeNvfp4DsMla(dst: [*]u8, src: [*]const f32, n: usize) void {
+    var elem: usize = 0;
+    var boff: usize = 0;
+    while (elem < n) {
+        const chunk = @min(ds_mla_latent_dim, n - elem);
+        const nope = @min(chunk, ds_mla_nope_dim);
+        const rope = chunk - nope;
+        storeNvfp4(dst + boff, src + elem, nope);
+        boff += nvfp4SliceBytes(nope);
+        if (rope > 0) {
+            storeF16(dst + boff, src + elem + nope, rope);
+            boff += rope * f16_elem_bytes;
+        }
+        elem += chunk;
+    }
+}
+
 // ── Dot product (query · quantized_kv) ───────────────────────────
 
 /// Compute dot product between f32 query vector and quantized KV vector.
@@ -830,6 +912,7 @@ pub fn kvDot(q_vec: [*]const f32, kv_data: [*]const u8, n: usize, kv_type: KvQua
         .int8 => dotInt8(q_vec, kv_data, n),
         .fp8_e4m3 => dotFp8(q_vec, kv_data, n),
         .nvfp4 => dotNvfp4(q_vec, kv_data, n),
+        .nvfp4_ds_mla => dotNvfp4DsMla(q_vec, kv_data, n),
         .turbo2 => turboDot(2, q_vec, kv_data, n),
         .turbo3 => turboDot(3, q_vec, kv_data, n),
         .turbo4 => turboDot(4, q_vec, kv_data, n),
@@ -980,6 +1063,25 @@ fn dotNvfp4(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
     return sum;
 }
 
+fn dotNvfp4DsMla(q_vec: [*]const f32, kv_data: [*]const u8, n: usize) f32 {
+    var elem: usize = 0;
+    var boff: usize = 0;
+    var sum: f32 = 0;
+    while (elem < n) {
+        const chunk = @min(ds_mla_latent_dim, n - elem);
+        const nope = @min(chunk, ds_mla_nope_dim);
+        const rope = chunk - nope;
+        sum += dotNvfp4(q_vec + elem, kv_data + boff, nope);
+        boff += nvfp4SliceBytes(nope);
+        if (rope > 0) {
+            sum += dotF16(q_vec + elem + nope, kv_data + boff, rope);
+            boff += rope * f16_elem_bytes;
+        }
+        elem += chunk;
+    }
+    return sum;
+}
+
 // ── Weighted accumulation (acc += weight * dequant(kv)) ──────────
 
 /// Accumulate: acc[0..n] += weight * dequant(kv_data[0..n]).
@@ -1025,6 +1127,7 @@ pub fn kvMulAccum(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize, kv_t
         .int8 => mulAccInt8(acc, weight, kv_data, n),
         .fp8_e4m3 => mulAccFp8(acc, weight, kv_data, n),
         .nvfp4 => mulAccNvfp4(acc, weight, kv_data, n),
+        .nvfp4_ds_mla => mulAccNvfp4DsMla(acc, weight, kv_data, n),
         .turbo2 => turboMulAccum(2, acc, weight, kv_data, n),
         .turbo3 => turboMulAccum(3, acc, weight, kv_data, n),
         .turbo4 => turboMulAccum(4, acc, weight, kv_data, n),
@@ -1155,6 +1258,23 @@ fn mulAccNvfp4(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
         while (i < count) : (i += 1) {
             acc[base + i] = @mulAdd(f32, ws, vals[i], acc[base + i]);
         }
+    }
+}
+
+fn mulAccNvfp4DsMla(acc: [*]f32, weight: f32, kv_data: [*]const u8, n: usize) void {
+    var elem: usize = 0;
+    var boff: usize = 0;
+    while (elem < n) {
+        const chunk = @min(ds_mla_latent_dim, n - elem);
+        const nope = @min(chunk, ds_mla_nope_dim);
+        const rope = chunk - nope;
+        mulAccNvfp4(acc + elem, weight, kv_data + boff, nope);
+        boff += nvfp4SliceBytes(nope);
+        if (rope > 0) {
+            mulAccF16(acc + elem + nope, weight, kv_data + boff, rope);
+            boff += rope * f16_elem_bytes;
+        }
+        elem += chunk;
     }
 }
 
@@ -1745,6 +1865,10 @@ test "kvSliceBytes" {
     // nvfp4: 9 bytes per 16 elements
     try std.testing.expectEqual(@as(usize, 18), kvSliceBytes(.nvfp4, 32));
     try std.testing.expectEqual(@as(usize, 9), kvSliceBytes(.nvfp4, 16));
+    // nvfp4_ds_mla: n=32 is entirely in the NoPE region (same packing as nvfp4)
+    try std.testing.expectEqual(kvSliceBytes(.nvfp4, 32), kvSliceBytes(.nvfp4_ds_mla, 32));
+    try std.testing.expectEqual(nvfp4DsMlaRecordBytes(), kvSliceBytes(.nvfp4_ds_mla, ds_mla_latent_dim));
+    try std.testing.expectEqual(nvfp4DsMlaRecordBytes() * 2, kvSliceBytes(.nvfp4_ds_mla, ds_mla_latent_dim * 2));
 }
 
 test "f16 roundtrip" {
@@ -1875,6 +1999,72 @@ test "nvfp4 roundtrip" {
     try std.testing.expectApproxEqAbs(expected, dot, 0.05);
 }
 
+test "nvfp4_ds_mla 512-d roundtrip keeps rope" {
+    var src: [ds_mla_latent_dim]f32 = undefined;
+    for (0..ds_mla_nope_dim) |i| {
+        src[i] = @as(f32, @floatFromInt(i % 17)) * 0.3 - 2.0;
+    }
+    for (0..ds_mla_rope_dim) |i| {
+        src[ds_mla_nope_dim + i] = @as(f32, @floatFromInt(@as(i32, @intCast(i)) - 32)) * 0.125;
+    }
+    var buf: [nvfp4DsMlaRecordBytes()]u8 align(4) = undefined;
+    kvStore(&buf, &src, ds_mla_latent_dim, .nvfp4_ds_mla);
+
+    var recon: [ds_mla_latent_dim]f32 = @splat(0);
+    kvMulAccum(&recon, 1.0, &buf, ds_mla_latent_dim, .nvfp4_ds_mla);
+
+    for (0..ds_mla_nope_dim) |i| {
+        try std.testing.expectApproxEqAbs(src[i], recon[i], 0.6);
+    }
+    for (0..ds_mla_rope_dim) |i| {
+        const idx = ds_mla_nope_dim + i;
+        const expected: f32 = @floatCast(@as(f16, @floatCast(src[idx])));
+        try std.testing.expectApproxEqAbs(expected, recon[idx], 1e-4);
+    }
+
+    var nvfp4_buf: [((ds_mla_latent_dim + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes]u8 = undefined;
+    kvStore(&nvfp4_buf, &src, ds_mla_latent_dim, .nvfp4);
+    var nvfp4_recon: [ds_mla_latent_dim]f32 = @splat(0);
+    kvMulAccum(&nvfp4_recon, 1.0, &nvfp4_buf, ds_mla_latent_dim, .nvfp4);
+    var rope_err_mla: f32 = 0;
+    var rope_err_nvfp4: f32 = 0;
+    for (0..ds_mla_rope_dim) |i| {
+        const idx = ds_mla_nope_dim + i;
+        rope_err_mla += @abs(recon[idx] - src[idx]);
+        rope_err_nvfp4 += @abs(nvfp4_recon[idx] - src[idx]);
+    }
+    try std.testing.expect(rope_err_mla < rope_err_nvfp4);
+}
+
+test "nvfp4_ds_mla two-token store and attend" {
+    const n = ds_mla_latent_dim;
+    var t0: [n]f32 = undefined;
+    var t1: [n]f32 = undefined;
+    for (0..n) |i| {
+        t0[i] = @as(f32, @floatFromInt(i % 11)) * 0.2 - 1.0;
+        t1[i] = @as(f32, @floatFromInt(i % 13)) * 0.15 + 0.5;
+    }
+    var cache: [nvfp4DsMlaRecordBytes() * 2]u8 align(4) = undefined;
+    const kv_t = KvQuantType.nvfp4_ds_mla;
+    kvStore(cache[kvByteOffset(kv_t, 0 * n) ..].ptr, &t0, n, kv_t);
+    kvStore(cache[kvByteOffset(kv_t, 1 * n) ..].ptr, &t1, n, kv_t);
+
+    const stride = kvByteOffset(kv_t, n);
+    try std.testing.expectEqual(nvfp4DsMlaRecordBytes(), stride);
+
+    var q: [n]f32 = undefined;
+    for (0..n) |i| q[i] = 0.01;
+    const d0 = kvDot(&q, cache[0..].ptr, n, kv_t);
+    const d1 = kvDot(&q, cache[stride..].ptr, n, kv_t);
+    try std.testing.expect(std.math.isFinite(d0));
+    try std.testing.expect(std.math.isFinite(d1));
+
+    var acc: [n]f32 = @splat(0);
+    kvScaledCopy(&acc, 0.6, cache[0..].ptr, n, kv_t);
+    kvMulAccum(&acc, 0.4, cache[stride..].ptr, n, kv_t);
+    for (acc) |v| try std.testing.expect(std.math.isFinite(v));
+}
+
 test "kvByteOffset consistency" {
     // For element-wise formats, byteOffset should match sliceBytes
     try std.testing.expectEqual(kvSliceBytes(.f32, 10), kvByteOffset(.f32, 10));
@@ -1914,6 +2104,17 @@ test "kvByteOffset block boundaries" {
     try std.testing.expectEqual(@as(usize, 9), kvByteOffset(.nvfp4, 16));
     try std.testing.expectEqual(@as(usize, 9), kvByteOffset(.nvfp4, 31));
     try std.testing.expectEqual(@as(usize, 18), kvByteOffset(.nvfp4, 32));
+
+    try std.testing.expectEqual(@as(usize, 0), kvByteOffset(.nvfp4_ds_mla, 0));
+    try std.testing.expectEqual(nvfp4DsMlaRecordBytes(), kvByteOffset(.nvfp4_ds_mla, ds_mla_latent_dim));
+    try std.testing.expectEqual(nvfp4DsMlaRecordBytes() * 2, kvByteOffset(.nvfp4_ds_mla, ds_mla_latent_dim * 2));
+    try std.testing.expectEqual(nvfp4SliceBytes(ds_mla_nope_dim), kvByteOffset(.nvfp4_ds_mla, ds_mla_nope_dim));
+
+    // DS4 allocates with kvByteOffset(type, ctx * kd); that must equal packed size.
+    for (0..8) |pos| {
+        const n = pos * ds_mla_latent_dim;
+        try std.testing.expectEqual(kvSliceBytes(.nvfp4_ds_mla, n), kvByteOffset(.nvfp4_ds_mla, n));
+    }
 }
 
 test "fromString" {
@@ -1925,6 +2126,14 @@ test "fromString" {
     try std.testing.expectEqual(KvQuantType.fp8_e4m3, KvQuantType.fromString("fp8").?);
     try std.testing.expectEqual(KvQuantType.nvfp4, KvQuantType.fromString("nvfp4").?);
     try std.testing.expectEqual(KvQuantType.nvfp4, KvQuantType.fromString("fp4").?);
+    try std.testing.expectEqual(KvQuantType.nvfp4_ds_mla, KvQuantType.fromString("nvfp4_ds_mla").?);
+    try std.testing.expectEqual(KvQuantType.nvfp4_ds_mla, KvQuantType.fromString("NVFP4_DS_MLA").?);
+    try std.testing.expectEqual(@as(f32, 5.9375), KvQuantType.nvfp4_ds_mla.bitsPerElement());
+    try std.testing.expect(KvQuantType.nvfp4_ds_mla.cpuSdpaOnly());
+    try std.testing.expect(!KvQuantType.nvfp4.cpuSdpaOnly());
+    try std.testing.expect(KvQuantType.q8_0.discreteGpuUsesCpuSdpa());
+    try std.testing.expect(KvQuantType.nvfp4_ds_mla.discreteGpuUsesCpuSdpa());
+    try std.testing.expect(!KvQuantType.f32.discreteGpuUsesCpuSdpa());
     try std.testing.expect(KvQuantType.fromString("invalid") == null);
 }
 
@@ -2248,9 +2457,9 @@ test "fuzz: all kv_quant functions" {
             }
 
             // ── KvQuantType: exercise all pub methods on a random variant ──
-            const type_idx = smith.valueWithHash(u8, 0) % 18;
-            const all_types = [18]KvQuantType{
-                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4,
+            const type_idx = smith.valueWithHash(u8, 0) % 19;
+            const all_types = [19]KvQuantType{
+                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4, .nvfp4_ds_mla,
                 .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4,
                 .iso2,   .iso3,   .iso4,   .rotor2,  .rotor3,   .rotor4,
             };
@@ -2272,10 +2481,12 @@ test "fuzz: all kv_quant functions" {
             const irq = kv_type.isRotationQuant();
             std.debug.assert(irq == (it or ip or ii or ir));
 
-            // turboBits — 0 for non-rotation, 2/3/4 for rotation
+            // turboBits — 2/3/4 for rotation, 8 for Q8_0, 0 otherwise
             const tb = kv_type.turboBits();
             if (irq) {
                 std.debug.assert(tb >= 2 and tb <= 4);
+            } else if (kv_type == .q8_0) {
+                std.debug.assert(tb == 8);
             } else {
                 std.debug.assert(tb == 0);
             }

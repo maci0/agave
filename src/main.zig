@@ -151,7 +151,7 @@ const tiered_fallback_n_kv_heads: u32 = 8;
 const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
 /// Valid KV cache quantization type names (shared across all --kv-type* validation).
-const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0, V=turbo4)";
+const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0, V=turbo4)";
 
 // ── Output control ──────────────────────────────────────────────
 
@@ -2040,7 +2040,7 @@ fn printUsage() void {
         \\
         \\KV CACHE:
         \\      --kv-type <TYPE>      KV cache quantization [default: f16]
-        \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4,
+        \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla,
         \\                                   turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4
         \\                            Preset: turbo (K=q8_0, V=turbo4)
         \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)

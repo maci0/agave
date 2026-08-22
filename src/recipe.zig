@@ -175,6 +175,34 @@ pub const Recipe = struct {
                 .max_tokens = 1024,
             },
         },
+        // ── DeepSeek V4 Flash — no V2 repeat penalty (greedy / official sampling) ──
+        .{
+            .arch_prefix = "deepseek4",
+            .backend = "",
+            .quant = "",
+            .recipe = .{
+                .name = "DeepSeek V4 Flash",
+                .repeat_penalty = 1.0,
+            },
+        },
+        .{
+            .arch_prefix = "deepseek_v4",
+            .backend = "",
+            .quant = "",
+            .recipe = .{
+                .name = "DeepSeek V4 Flash",
+                .repeat_penalty = 1.0,
+            },
+        },
+        .{
+            .arch_prefix = "dflash",
+            .backend = "",
+            .quant = "",
+            .recipe = .{
+                .name = "DeepSeek V4 Flash",
+                .repeat_penalty = 1.0,
+            },
+        },
         // ── DeepSeek V2 — shares inference path with GLM-4, same repeat penalty ──
         .{
             .arch_prefix = "deepseek",
@@ -221,6 +249,17 @@ test "recipe match glm4 gets GLM-4 recipe" {
     const r = Recipe.match("glm4", "CPU", "Q4_0") orelse Recipe.default;
     try std.testing.expectEqualStrings("GLM-4 generic", r.name);
     try std.testing.expectApproxEqAbs(@as(f32, 1.1), r.repeat_penalty.?, 0.001);
+}
+
+test "recipe match deepseek4 does not use V2 penalty" {
+    const r4 = Recipe.match("deepseek4", "CPU", "Q4") orelse Recipe.default;
+    try std.testing.expectEqualStrings("DeepSeek V4 Flash", r4.name);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), r4.repeat_penalty.?, 0.001);
+    const rv4 = Recipe.match("deepseek_v4", "Metal", "MLX") orelse Recipe.default;
+    try std.testing.expectEqualStrings("DeepSeek V4 Flash", rv4.name);
+    const r2 = Recipe.match("deepseek", "CPU", "Q4") orelse Recipe.default;
+    try std.testing.expectEqualStrings("DeepSeek V2 generic", r2.name);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.1), r2.repeat_penalty.?, 0.001);
 }
 
 test "recipe match falls through to CPU generic" {

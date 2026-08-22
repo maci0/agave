@@ -23,11 +23,13 @@
 //!     - Post-encoder LayerNorm (v.post_ln), then mm.soft_emb_norm + mm.input_projection
 //!
 //!   Qwen VL (`qwen_vl`):
-//!     - Conv2D patch embedding with bias, dual patch weights (Qwen2-VL mmproj)
-//!     - Qwen3.8 in-checkpoint ViT: Conv3d (temporal_patch_size=2), still images
-//!       duplicate the frame; merger.norm (LayerNorm/RMSNorm) then 2×2 MLP merge
-//!     - Learned 1D position embedding (HF [n_pos, embd] or GGUF [embd, n_pos])
-//!     - ViT blocks with: fused QKV projection, LayerNorm or RMSNorm, GELU FFN
+//!     - Conv2D/Conv3d patch embedding with bias; dual conv weights on Qwen2-VL mmproj
+//!     - Qwen3.5/3.8 in-checkpoint ViT: Conv3d (temporal_patch_size=2), still images
+//!       duplicate the frame; 2×2 spatial-merge packing then merger.norm + MLP
+//!     - Learned 2D pos table (side = sqrt(n_pos)), bilinear resample with
+//!       align_corners=True onto the native patch grid (HF pos_embed)
+//!     - ViT RoPE is 2D rotate_half (height then width), not llama.cpp 4-section M-RoPE
+//!     - ViT blocks: fused QKV, LayerNorm or RMSNorm, GELU FFN
 //!     - Optional post-encoder LayerNorm (v.post_ln) for GGUF mmproj
 
 const std = @import("std");
@@ -70,8 +72,11 @@ const vec_len: usize = 8;
 const gemma4_merge_kernel: u32 = 3;
 /// ViT RoPE theta for Gemma 4 SigLIP-2 (from llama.cpp hparams.rope_theta).
 const vit_rope_theta: f32 = 100.0;
-/// Qwen VL M-RoPE theta for multi-section rotary position embeddings.
+/// Qwen VL ViT RoPE theta (HF Qwen3_5VisionRotaryEmbedding default).
 const qwen_rope_theta: f32 = 10000.0;
+/// Qwen3.5 spatial merge window (config.spatial_merge_size). Groups 2×2 patches
+/// into one LLM token after the ViT; sequence layout is merge-block major.
+const qwen_spatial_merge: u32 = 2;
 /// Maximum half-head dimension for RoPE precomputation.
 const max_rope_half: usize = 128;
 /// Default Gemma 4 effective image size: 768 = 48 patches/side × 16 pixels/patch.
@@ -127,6 +132,9 @@ pub const VisionEncoder = struct {
     use_native_resolution: bool = false,
     /// Conv3d temporal kernel (1 for Conv2d, 2 for Qwen3.8 still-image duplicate).
     temporal_patch_size: u32 = 1,
+    /// MLX Conv3d stores `[out, T, H, W, C]` (channels last). PyTorch/GGUF store
+    /// `[out, C, T, H, W]`. When true, patch unfold uses T,H,W,C flattening.
+    patch_channels_last: bool = false,
     embd_dim: u32,
     ffn_dim: u32,
     n_blocks: u32,
@@ -275,6 +283,7 @@ pub const VisionEncoder = struct {
 
         var temporal_patch_size: u32 = fmt.getArchU32(arch, "temporal_patch_size") orelse 1;
         var patch_in_dim: usize = @as(usize, patch_size) * patch_size * n_channels;
+        var patch_channels_last = false;
         if (fmt.getTensor("v.patch_embd.weight")) |emb_t| {
             const n_out = emb_t.dims[0];
             const n_elem = emb_t.numElements();
@@ -284,6 +293,11 @@ pub const VisionEncoder = struct {
                     const t_from_w: u32 = @intCast(patch_in_dim / (@as(usize, patch_size) * patch_size * n_channels));
                     if (t_from_w > temporal_patch_size) temporal_patch_size = t_from_w;
                 }
+            }
+            // Folded Conv3d: PyTorch [out,C,T,H,W] keeps dims[1]==C.
+            // MLX [out,T,H,W,C] keeps dims[1]==T (not C).
+            if (variant == .qwen_vl and emb_t.n_dims >= 2 and emb_t.dims[1] != n_channels) {
+                patch_channels_last = true;
             }
         }
 
@@ -315,6 +329,7 @@ pub const VisionEncoder = struct {
             .n_merge = n_merge,
             .use_native_resolution = variant == .qwen_vl,
             .temporal_patch_size = temporal_patch_size,
+            .patch_channels_last = patch_channels_last,
             .embd_dim = embd_dim,
             .ffn_dim = ffn_dim,
             .n_blocks = n_blocks,
@@ -470,32 +485,32 @@ pub const VisionEncoder = struct {
         try self.patchEmbed();
         if (self.debug) self.dumpBuf("agave_01_after_patch_embed.bin", self.patch_buf[0 .. np * ed]);
 
-        // 3. Add position embedding (2D for Gemma4, 1D for others)
-        // NOTE: For Gemma 4, standardization happens AFTER pooling (step 7b).
-        try self.addPositionEmbedding();
-        if (self.debug) self.dumpBuf("agave_02_after_pos.bin", self.patch_buf[0 .. np * ed]);
-
-        // 3b. Qwen VL pixel shuffle: applied AFTER position embedding so both
-        // data and positions are rearranged together. Groups 2×2 spatial
-        // neighbors into contiguous blocks of 4 tokens for the 4× MLP merge.
+        // 2b. Qwen VL: pack patches into spatial-merge order before pos embed
+        // and ViT RoPE. Matches HF Qwen3.5: processor emits merge-block-major
+        // tokens; merger.norm then views groups of 4 as one LLM token.
         if (self.variant == .qwen_vl) {
             const pps = self.image_size / self.patch_size;
-            const hx = pps / 2;
-            const hy = pps / 2;
-            // Use hidden as temp, write result back to patch_buf
+            const merge: usize = qwen_spatial_merge;
+            const hx = pps / merge;
+            const hy = pps / merge;
             @memcpy(self.hidden[0 .. np * ed], self.patch_buf[0 .. np * ed]);
             for (0..hy) |by| {
                 for (0..hx) |bx| {
-                    for (0..2) |dy| {
-                        for (0..2) |dx| {
-                            const si = ((by * 2 + dy) * pps + (bx * 2 + dx)) * ed;
-                            const di = ((by * hx + bx) * 4 + dy * 2 + dx) * ed;
+                    for (0..merge) |dy| {
+                        for (0..merge) |dx| {
+                            const si = ((by * merge + dy) * pps + (bx * merge + dx)) * ed;
+                            const di = ((by * hx + bx) * (merge * merge) + dy * merge + dx) * ed;
                             @memcpy(self.patch_buf[di..][0..ed], self.hidden[si..][0..ed]);
                         }
                     }
                 }
             }
         }
+
+        // 3. Add position embedding (2D for Gemma4, interpolated 2D for Qwen,
+        // 1D for Gemma3). Gemma 4 standardization happens AFTER pooling (step 7b).
+        try self.addPositionEmbedding();
+        if (self.debug) self.dumpBuf("agave_02_after_pos.bin", self.patch_buf[0 .. np * ed]);
 
         // 4. Copy patch_buf to hidden (initial residual)
         @memcpy(self.hidden[0 .. np * ed], self.patch_buf[0 .. np * ed]);
@@ -616,7 +631,7 @@ pub const VisionEncoder = struct {
                                 const src_y = py * ps + dy;
                                 const src_x = px * ps + dx;
                                 const src_idx = c * h * w + src_y * w + src_x;
-                                const flat_idx = c * (temporal * ps * ps) + t * (ps * ps) + dy * ps + dx;
+                                const flat_idx = patchFlatIndex(c, t, dy, dx, ps, temporal, self.patch_channels_last);
                                 self.norm_buf[flat_base + flat_idx] = self.patch_buf[src_idx];
                             }
                         }
@@ -713,7 +728,7 @@ pub const VisionEncoder = struct {
                 }
             }
         } else {
-            // 1D position embedding.
+            // 1D position embedding stored as a flattened table.
             // GGUF: [embd_dim, n_pos] column-major-ish → pos[d * n_pos + p]
             // HuggingFace: [n_pos, embd_dim] (or [1, n_pos, embd]) → pos[p * ed + d]
             const np: usize = self.n_patches;
@@ -725,6 +740,38 @@ pub const VisionEncoder = struct {
                 if (pos_t.n_dims >= 2) n_pos = @intCast(pos_t.dims[pos_t.n_dims - 2]);
             } else if (pos_t.n_dims >= 2) {
                 n_pos = @intCast(pos_t.dims[1]);
+            }
+
+            // Qwen3.5: nn.Embedding(num_position_embeddings, hidden) is a square
+            // 2D grid. HF bilinear-resamples it onto the native patch grid with
+            // align_corners=True, in spatial-merge order (already packed above).
+            if (self.variant == .qwen_vl and hf_row) {
+                const side = isqrt(n_pos);
+                if (side * side == n_pos and side > 0) {
+                    const merge: usize = qwen_spatial_merge;
+                    for (0..np) |p| {
+                        const hw = qwenMergeCoords(p, pps, merge);
+                        const ht = bilinearAxis(hw.h, pps, side);
+                        const wt = bilinearAxis(hw.w, pps, side);
+                        const base = p * ed;
+                        const idx00 = ht.tap0 * side + wt.tap0;
+                        const idx01 = ht.tap0 * side + wt.tap1;
+                        const idx10 = ht.tap1 * side + wt.tap0;
+                        const idx11 = ht.tap1 * side + wt.tap1;
+                        const w00 = ht.w0 * wt.w0;
+                        const w01 = ht.w0 * wt.w1;
+                        const w10 = ht.w1 * wt.w0;
+                        const w11 = ht.w1 * wt.w1;
+                        for (0..ed) |d| {
+                            const v = pos_data[idx00 * ed + d] * w00 +
+                                pos_data[idx01 * ed + d] * w01 +
+                                pos_data[idx10 * ed + d] * w10 +
+                                pos_data[idx11 * ed + d] * w11;
+                            self.patch_buf[base + d] += v;
+                        }
+                    }
+                    return;
+                }
             }
 
             for (0..np) |p| {
@@ -882,9 +929,9 @@ pub const VisionEncoder = struct {
                 applyRope2d(self.q_buf, np, nh, hd, pps, vit_rope_theta);
                 applyRope2d(self.k_buf, np, nh, hd, pps, vit_rope_theta);
             } else if (self.variant == .qwen_vl) {
-                // Qwen VL: M-RoPE — 4 sections [temporal, height, height, width] (theta=10000)
-                applyMRope(self.q_buf, np, nh, hd, pps, qwen_rope_theta);
-                applyMRope(self.k_buf, np, nh, hd, pps, qwen_rope_theta);
+                // Qwen3.5 ViT: 2D rotate_half RoPE (height, width) in merge-block order.
+                applyQwenVisionRope(self.q_buf, np, nh, hd, pps, qwen_spatial_merge, qwen_rope_theta);
+                applyQwenVisionRope(self.k_buf, np, nh, hd, pps, qwen_spatial_merge, qwen_rope_theta);
             }
         }
 
@@ -1664,6 +1711,51 @@ fn softmaxSimd(x: []f32) void {
     }
 }
 
+/// Flatten a patch pixel into the conv-kernel vector.
+/// PyTorch Conv3d: `[C, T, H, W]`. MLX Conv3d: `[T, H, W, C]`.
+fn patchFlatIndex(c: usize, t: usize, dy: usize, dx: usize, ps: usize, temporal: usize, channels_last: bool) usize {
+    if (channels_last) {
+        return t * (ps * ps * n_channels) + dy * (ps * n_channels) + dx * n_channels + c;
+    }
+    return c * (temporal * ps * ps) + t * (ps * ps) + dy * ps + dx;
+}
+
+fn isqrt(n: usize) usize {
+    if (n == 0) return 0;
+    var s: usize = 0;
+    while ((s + 1) * (s + 1) <= n) : (s += 1) {}
+    return s;
+}
+
+/// Map a merge-block-major token index to the original (row, col) on a
+/// `pps × pps` patch grid. Inverse of HF `get_vision_position_ids` packing:
+/// reshape (h/m, m, w/m, m) then transpose the inner merge axes.
+fn qwenMergeCoords(p: usize, pps: usize, merge: usize) struct { h: usize, w: usize } {
+    const unit = merge * merge;
+    const blocks_w = pps / merge;
+    const group = p / unit;
+    const inner = p % unit;
+    const by = group / blocks_w;
+    const bx = group % blocks_w;
+    const dy = inner / merge;
+    const dx = inner % merge;
+    return .{ .h = by * merge + dy, .w = bx * merge + dx };
+}
+
+/// One-axis bilinear taps with `align_corners=True` (HF Qwen3.5 pos embed).
+fn bilinearAxis(index: usize, size: usize, side: usize) struct { tap0: usize, tap1: usize, w0: f32, w1: f32 } {
+    if (size <= 1 or side <= 1) return .{ .tap0 = 0, .tap1 = 0, .w0 = 1.0, .w1 = 0.0 };
+    const src = @as(f32, @floatFromInt(index)) * @as(f32, @floatFromInt(side - 1)) /
+        @as(f32, @floatFromInt(size - 1));
+    const floor_s = @floor(src);
+    var tap0: usize = @intFromFloat(floor_s);
+    if (tap0 >= side) tap0 = side - 1;
+    const tap1 = @min(tap0 + 1, side - 1);
+    const frac = src - floor_s;
+    if (frac <= 0 or tap0 == tap1) return .{ .tap0 = tap0, .tap1 = tap0, .w0 = 1.0, .w1 = 0.0 };
+    return .{ .tap0 = tap0, .tap1 = tap1, .w0 = 1.0 - frac, .w1 = frac };
+}
+
 /// Apply 2D neox-style RoPE to Q or K buffer for all patches.
 /// For each patch at grid position (col=px, row=py):
 ///   - First half of each head: RoPE with position = px (column)
@@ -1727,48 +1819,49 @@ fn applyRope2d(buf: []f32, np: usize, nh: usize, hd: usize, pps: usize, theta: f
     }
 }
 
-/// Apply M-RoPE (multi-resolution rotary position encoding) for Qwen VL.
-/// Splits each head into 4 equal sections and applies independent RoPE:
-///   Section 0: temporal position (0 for static images)
-///   Section 1: height position (py)
-///   Section 2: height position (py, same for single frame)
-///   Section 3: width position (px)
-/// Matches llama.cpp: ggml_rope_multi with mrope_sections=[d/4,d/4,d/4,d/4].
-fn applyMRope(buf: []f32, np: usize, nh: usize, hd: usize, pps: usize, theta: f32) void {
-    const n_sections: usize = 4;
-    const sec_dim = hd / n_sections;
-    const sec_half = sec_dim / 2;
-    const inv_rd: f32 = 1.0 / @as(f32, @floatFromInt(sec_dim));
+/// Qwen3.5 ViT rotary: HF `Qwen3_5VisionRotaryEmbedding` + `rotate_half`.
+///
+/// `rotary_dim = head_dim / 2`. Frequencies are `theta^(-2i/rotary_dim)` for
+/// `i in 0 .. rotary_dim/2`. Height uses pairs `(i, i+half)`, width uses
+/// `(i+n_freq, i+n_freq+half)`, with `half = head_dim/2` and `n_freq = half/2`.
+/// Token index `p` is merge-block-major; spatial (h, w) come from `qwenMergeCoords`.
+fn applyQwenVisionRope(buf: []f32, np: usize, nh: usize, hd: usize, pps: usize, merge: usize, theta: f32) void {
+    if (hd < 4 or hd % 4 != 0) @panic("vision: Qwen ViT head_dim must be divisible by 4");
+    const half = hd / 2;
+    const n_freq = half / 2;
+    const rot_dim = half;
+    const inv_rd: f32 = 1.0 / @as(f32, @floatFromInt(rot_dim));
     const neg_log_theta: f32 = -@log(theta);
     const ed = nh * hd;
 
     for (0..np) |p| {
-        const py = p / pps;
-        const px = p % pps;
-        const positions = [n_sections]f32{
-            0, // temporal (always 0 for images)
-            @floatFromInt(py), // height
-            @floatFromInt(py), // height (same for single frame)
-            @floatFromInt(px), // width
-        };
+        const hw = qwenMergeCoords(p, pps, merge);
+        const h_pos: f32 = @floatFromInt(hw.h);
+        const w_pos: f32 = @floatFromInt(hw.w);
         const p_base = p * ed;
 
         for (0..nh) |h| {
             const h_base = p_base + h * hd;
-
-            for (0..n_sections) |s| {
-                const pos = positions[s];
-                const s_base = h_base + s * sec_dim;
-
-                for (0..sec_half) |i| {
-                    const freq = @exp(neg_log_theta * @as(f32, @floatFromInt(2 * i)) * inv_rd);
-                    const angle = pos * freq;
+            for (0..n_freq) |i| {
+                const freq = @exp(neg_log_theta * @as(f32, @floatFromInt(2 * i)) * inv_rd);
+                {
+                    const angle = h_pos * freq;
                     const cos_a = @cos(angle);
                     const sin_a = @sin(angle);
-                    const r = buf[s_base + i];
-                    const im = buf[s_base + i + sec_half];
-                    buf[s_base + i] = @mulAdd(f32, r, cos_a, -(im * sin_a));
-                    buf[s_base + i + sec_half] = @mulAdd(f32, r, sin_a, im * cos_a);
+                    const r = buf[h_base + i];
+                    const im = buf[h_base + i + half];
+                    buf[h_base + i] = @mulAdd(f32, r, cos_a, -(im * sin_a));
+                    buf[h_base + i + half] = @mulAdd(f32, r, sin_a, im * cos_a);
+                }
+                {
+                    const angle = w_pos * freq;
+                    const cos_a = @cos(angle);
+                    const sin_a = @sin(angle);
+                    const j = i + n_freq;
+                    const r = buf[h_base + j];
+                    const im = buf[h_base + j + half];
+                    buf[h_base + j] = @mulAdd(f32, r, cos_a, -(im * sin_a));
+                    buf[h_base + j + half] = @mulAdd(f32, r, sin_a, im * cos_a);
                 }
             }
         }
@@ -1954,6 +2047,80 @@ test "VisionVariant detection constants" {
     try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.gemma3_siglip));
     try std.testing.expect(@intFromEnum(VisionVariant.gemma3_siglip) != @intFromEnum(VisionVariant.qwen_vl));
     try std.testing.expect(@intFromEnum(VisionVariant.gemma4_siglip2) != @intFromEnum(VisionVariant.qwen_vl));
+}
+
+test "qwen merge-block coords match HF spatial merge order" {
+    const pps: usize = 4;
+    const merge: usize = 2;
+    // First 2×2 group at origin
+    try std.testing.expectEqual(@as(usize, 0), qwenMergeCoords(0, pps, merge).h);
+    try std.testing.expectEqual(@as(usize, 0), qwenMergeCoords(0, pps, merge).w);
+    try std.testing.expectEqual(@as(usize, 0), qwenMergeCoords(1, pps, merge).h);
+    try std.testing.expectEqual(@as(usize, 1), qwenMergeCoords(1, pps, merge).w);
+    try std.testing.expectEqual(@as(usize, 1), qwenMergeCoords(2, pps, merge).h);
+    try std.testing.expectEqual(@as(usize, 0), qwenMergeCoords(2, pps, merge).w);
+    try std.testing.expectEqual(@as(usize, 1), qwenMergeCoords(3, pps, merge).h);
+    try std.testing.expectEqual(@as(usize, 1), qwenMergeCoords(3, pps, merge).w);
+    // Next group starts at col 2
+    try std.testing.expectEqual(@as(usize, 0), qwenMergeCoords(4, pps, merge).h);
+    try std.testing.expectEqual(@as(usize, 2), qwenMergeCoords(4, pps, merge).w);
+    // Row-major p/pps would map p=2 → (0, 2). Merge-block maps it to (1, 0).
+    try std.testing.expect(qwenMergeCoords(2, pps, merge).h != 2 / pps or qwenMergeCoords(2, pps, merge).w != 2 % pps);
+}
+
+test "bilinearAxis identity on matching grid" {
+    const t = bilinearAxis(5, 48, 48);
+    try std.testing.expectEqual(@as(usize, 5), t.tap0);
+    try std.testing.expectEqual(@as(usize, 5), t.tap1);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), t.w0, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), t.w1, 1e-6);
+}
+
+test "bilinearAxis align_corners downsamples 48→4" {
+    // src = index * 47 / 3. index=0 → 0; index=3 → 47.
+    const t0 = bilinearAxis(0, 4, 48);
+    try std.testing.expectEqual(@as(usize, 0), t0.tap0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), t0.w0, 1e-5);
+    const t3 = bilinearAxis(3, 4, 48);
+    try std.testing.expectEqual(@as(usize, 47), t3.tap0);
+    try std.testing.expectEqual(@as(usize, 47), t3.tap1);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), t3.w0, 1e-5);
+}
+
+test "applyQwenVisionRope height rotates pair (0, half)" {
+    // hd=4 → half=2, n_freq=1. Token 0 at merge-block (0,0) is identity.
+    // Token 2 at pps=4 merge=2 is spatial (1,0): height=1, width=0.
+    var buf = [_]f32{ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0 };
+    applyQwenVisionRope(&buf, 3, 1, 4, 4, 2, 10000.0);
+    // p=0 (0,0): unchanged
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), buf[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[2], 1e-5);
+    // p=2 (1,0): height pair (0,2) rotated by angle=1, width pair (1,3) stays 0
+    const base = 8;
+    try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), buf[base], 1e-5);
+    try std.testing.expectApproxEqAbs(@sin(@as(f32, 1.0)), buf[base + 2], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[base + 1], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), buf[base + 3], 1e-5);
+}
+
+test "patchFlatIndex PyTorch CTHW vs MLX THWC" {
+    const ps: usize = 16;
+    const temporal: usize = 2;
+    // Channel 0, first row, x=1 — CTHW vs THWC disagree here.
+    const c: usize = 0;
+    const t: usize = 0;
+    const dy: usize = 0;
+    const dx: usize = 1;
+    const pt = patchFlatIndex(c, t, dy, dx, ps, temporal, false);
+    try std.testing.expectEqual(@as(usize, 1), pt);
+    const mlx = patchFlatIndex(c, t, dy, dx, ps, temporal, true);
+    try std.testing.expectEqual(@as(usize, 3), mlx);
+}
+
+test "isqrt of Qwen pos table" {
+    try std.testing.expectEqual(@as(usize, 48), isqrt(2304));
+    try std.testing.expectEqual(@as(usize, 0), isqrt(0));
+    try std.testing.expectEqual(@as(usize, 2), isqrt(4));
 }
 
 test "fuzz: all vision functions" {

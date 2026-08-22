@@ -259,6 +259,20 @@ pub const Model = struct {
                         if (comptime @hasField(T, "visual_token_idx")) {
                             self.visual_token_idx = 0;
                         }
+                        if (comptime @hasField(T, "image_seq_start")) {
+                            self.image_seq_start = null;
+                        }
+                        if (comptime @hasField(T, "vision_grid_w")) {
+                            var side: u32 = 0;
+                            if (n_tokens > 0) {
+                                side = 1;
+                                while (side * side < n_tokens) : (side += 1) {}
+                            }
+                            self.vision_grid_w = side;
+                            if (comptime @hasField(T, "vision_grid_h")) {
+                                self.vision_grid_h = side;
+                            }
+                        }
                     }
                 }
             }.call),
@@ -604,9 +618,10 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
     const st = fmt.getTensor(s_name) orelse return false;
 
     if (st.dtype == .unknown) {
-        // MXFP4: U8 FP8 E4M3 scales, no bias
-        const mxfp4_gs: usize = @intCast(inferMlxGroupSize(st, k));
-        be.gemvMxfp4St(x, t.data_ptr, st.data_ptr, y, n, k, mxfp4_gs, .fp8_e4m3);
+        // MXFP4: U8 scales, no bias (E4M3 or E8M0 from group size)
+        const mxfp4_gs: usize = inferMxfp4GroupSize(st, k);
+        const sf = mlx_ops.mxfp4ScaleFormat(fmt.is_safetensors, mxfp4_gs);
+        be.gemvMxfp4St(x, t.data_ptr, st.data_ptr, y, n, k, mxfp4_gs, sf);
     } else {
         // MLX affine: BF16 scales + biases
         const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return false;
@@ -641,8 +656,8 @@ pub fn mlxGemvGpu(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f
     const s_data = if (heap_fn) |hf| hf(st) else st.data_ptr;
 
     if (st.dtype == .unknown) {
-        const mxfp4_gs: usize = @intCast(inferMlxGroupSize(st, k));
-        const sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat = if (fmt.is_safetensors and mxfp4_gs >= 32) .e8m0 else .fp8_e4m3;
+        const mxfp4_gs: usize = inferMxfp4GroupSize(st, k);
+        const sf = mlx_ops.mxfp4ScaleFormat(fmt.is_safetensors, mxfp4_gs);
         be.gemvMxfp4StGpu(x, t.data_ptr, s_data, y, n, k, mxfp4_gs, sf);
     } else {
         const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return false;
@@ -902,6 +917,10 @@ pub const ModelStorage = union(enum) {
     /// Initialize a model from its architecture type.
     /// Returns a ModelStorage union holding the initialized concrete model.
     pub fn initFromArch(arch: Arch, allocator: std.mem.Allocator, fmt: format_mod.Format, be: backend_mod.Backend, ctx_size: u32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, kv_boundary_v: u32, kv_eviction_budget: u32, tiered_cache: ?*TieredKvCache, tp_rank: u32, tp_degree: u32) !ModelStorage {
+        // nvfp4_ds_mla packs 512-d MLA records (448 NoPE NVFP4 + 64 RoPE f16).
+        // GQA heads would treat the last 64 elems of a concatenated vector as RoPE.
+        if ((kv_type_k.cpuSdpaOnly() or kv_type_v.cpuSdpaOnly()) and arch != .deepseek4)
+            @panic("nvfp4_ds_mla is DeepSeek MLA only — use --kv-type q8_0 or f16");
         switch (arch) {
             inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
@@ -1007,6 +1026,7 @@ pub const ModelStorage = union(enum) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
                     if (comptime @hasField(@TypeOf(m.*), "pool")) m.pool = pool;
+                    if (comptime @hasField(@TypeOf(m.*), "cpu")) m.cpu.pool = pool;
                 }
             },
         }

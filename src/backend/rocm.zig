@@ -857,6 +857,15 @@ pub const RocmBackend = struct {
         self.launch(self.fn_rope, grid, block_size, 0, &params);
     }
 
+    /// 3D multimodal RoPE. Discrete GPU path only handles T=H=W (text).
+    pub fn ropeMrope(self: *RocmBackend, x: [*]f32, t_pos: usize, h_pos: usize, w_pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        if (t_pos == h_pos and h_pos == w_pos) {
+            self.rope(x, t_pos, n_heads, head_dim, rope_dim, theta);
+            return;
+        }
+        @panic("ropeMrope: 3D multimodal RoPE is implemented for CPU and Metal only");
+    }
+
     /// Embedding lookup — CPU is faster than GPU dispatch for single-row read.
     pub fn embLookup(self: *RocmBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         self.flushActivations();
@@ -971,12 +980,10 @@ pub const RocmBackend = struct {
     }
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
-    pub fn clampedSiluMul(_: *@This(), gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
-        for (0..n) |idx| {
-            const g = @min(gate[idx], @as(f32, 10.0));
-            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[idx]));
-            out[idx] = (g / (1.0 + @exp(-g))) * u;
-        }
+    /// Sync first so GPU-written activations are visible; match CpuBackend clamp.
+    pub fn clampedSiluMul(self: *RocmBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
+        self.sync();
+        self.cpu.clampedSiluMul(gate, up, out, n);
     }
 
     /// Sequential GELU + multiply: out[i] = gelu(a[i]) * b[i] (two dispatches, not fused).
@@ -1267,12 +1274,20 @@ pub const RocmBackend = struct {
     /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
     /// KV cache (native GPU dequant). KV append for turbo types uses CPU
     /// quantization (once per token per layer, not the SDPA hot path).
-    /// Non-turbo quantized types (q8_0, f16, fp8, etc.) panic.
+    /// q8_0 and nvfp4_ds_mla use CPU SDPA (no ROCm kernel for those layouts).
     pub fn sdpa(self: *RocmBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
+
+        // nvfp4_ds_mla: no ROCm SDPA kernel. DS4 MLA decode already uses CPU
+        // kvDot for compressed attention; uncompressed SDPA matches that path.
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            self.sync();
+            self.cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
 
         // Non-turbo, non-f32 quantized KV: not supported on GPU
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
@@ -1511,6 +1526,11 @@ pub const RocmBackend = struct {
 
     /// Tree-structured scaled dot-product attention for speculative decoding verification.
     pub fn sdpaTree(self: *RocmBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            self.sync();
+            self.cpu.sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
             self.flushActivations();
             const kvd = nkv * hd;

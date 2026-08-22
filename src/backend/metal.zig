@@ -2143,6 +2143,17 @@ pub const MetalBackend = struct {
         self.endEncode1D(enc, self.pipe_rope, grid);
     }
 
+    /// Interleaved 3D multimodal RoPE. Apple Silicon UMA: sync then CPU kernel.
+    pub fn ropeMrope(self: *MetalBackend, x: [*]f32, t_pos: usize, h_pos: usize, w_pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        if (t_pos == h_pos and h_pos == w_pos) {
+            self.rope(x, t_pos, n_heads, head_dim, rope_dim, theta);
+            return;
+        }
+        self.sync();
+        var cpu = CpuBackend{ .pool = self.pool };
+        cpu.ropeMrope(x, t_pos, h_pos, w_pos, n_heads, head_dim, rope_dim, theta);
+    }
+
     // ── Embedding lookup — CPU fallback ───────────────────────
 
     /// Embedding lookup is a single-row read; CPU is faster than GPU dispatch overhead.
@@ -2554,6 +2565,16 @@ pub const MetalBackend = struct {
         const is_turbo_v = kv_type_v.isTurbo() or kv_type_v == .q8_0;
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
+
+        // nvfp4_ds_mla: packed NoPE NVFP4 + f16 RoPE. No Metal SDPA kernel.
+        // DS4 MLA (hd=512) already scores compressed positions via CPU kvDot;
+        // uncompressed decode uses the same path. CPU is faster than a GPU
+        // round-trip for single-token decode of this layout.
+        if (kv_type_k.cpuSdpaOnly() or kv_type_v.cpuSdpaOnly()) {
+            var cpu = self.cpuFallback();
+            cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
 
         // Non-turbo, non-f32, non-q8_0 quantized KV: not supported
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
@@ -3339,6 +3360,13 @@ pub const MetalBackend = struct {
     /// Tree-masked SDPA for DDTree verification. GPU-accelerated for f32 and TurboQuant KV.
     pub fn sdpaTree(self: *MetalBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         if (n_nodes == 0) return;
+        // q8_0 has a Metal decode SDPA kernel, but no tree kernel. DS4 default KV
+        // is q8_0; tree verify must not panic.
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            var cpu = self.cpuFallback();
+            cpu.sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+            return;
+        }
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
@@ -3416,8 +3444,15 @@ pub const MetalBackend = struct {
     ///
     /// For turbo KV types: CPU-side KV append + sequential GPU turbo SDPA per token.
     /// For f32 KV: dual-source FA2 prefill on GPU, then GPU copy into the cache.
+    /// `nvfp4_ds_mla` and q8_0 use CPU SDPA. FA2 prefill is f32-only; q8_0 is
+    /// DS4's default KV and has no Metal prefill kernel.
     /// Other quantized KV types panic (fail closed; no silent CPU fallback).
     pub fn sdpaPrefill(self: *MetalBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            var cpu = self.cpuFallback();
+            cpu.sdpaPrefill(q, k, v, kv_keys, kv_values, output, nh, nkv, hd, prev_len, n_tok, scale, kv_type_k, kv_type_v);
+            return;
+        }
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);

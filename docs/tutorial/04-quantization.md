@@ -553,6 +553,8 @@ Value = (-1)^0 × 1.75 × 2^2 = 7.0
 
 **NVFP4, MXFP4**: 4-bit microscaled floating-point. NVFP4 uses 16-element blocks (9 bytes each) with FP8 E4M3 scales; MXFP4 uses 32-element blocks (17 bytes each) with E8M0 (power-of-2) scales. Hardware-native on NVIDIA Blackwell and newer.
 
+**`nvfp4_ds_mla`** (DeepSeek MLA KV): `--kv-type nvfp4_ds_mla`. Each 512-d compressed latent is packed as NVFP4 on the 448 NoPE dims and f16 on the 64 RoPE dims (380 bytes/token). RoPE stays unquantized so position geometry is not rounded to E2M1. Decode uses CPU `kvDot`/`kvMulAccum` on every backend (no GPU SDPA kernel for this layout). Intended for DeepSeek V4 MLA (`kv_lora_rank=512`, `rope_dim=64`).
+
 ## TurboQuant — KV Cache Quantization
 
 TurboQuant ([Zandieh et al., 2025](https://arxiv.org/abs/2504.19874)) is a KV cache-specific quantization method that achieves 3.6-6.4x compression vs f16 with minimal quality loss. Unlike weight quantization formats (Q4_0, Q8_0), TurboQuant is applied at runtime to the KV cache during inference.

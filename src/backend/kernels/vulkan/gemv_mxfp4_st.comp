@@ -1,14 +1,14 @@
-// GEMV for MXFP4 sub-tile quantized weights.
+// GEMV for MXFP4 E2M1 weights with per-group U8 scales.
+// gs and scale_fmt are push constants:
+//   gs         = 16 (NVIDIA MXFP4) or 32 (MLX community MoE experts)
+//   scale_fmt  = 0 FP8 E4M3, 1 E8M0 (2^(byte-127))
 #version 450
 layout(local_size_x = 256) in;
 layout(set = 0, binding = 0) readonly buffer X { float x[]; };
 layout(set = 0, binding = 1) readonly buffer W { uint w_packed[]; };
 layout(set = 0, binding = 2) readonly buffer S { uint s_packed[]; };
 layout(set = 0, binding = 3) writeonly buffer Y { float y[]; };
-layout(push_constant) uniform Params { uint n; uint k; };
-
-// MXFP4 E2M1 dequant + FP8 E4M3 scale
-// Group size = 16 elements, 8 weight bytes, 1 FP8 E4M3 scale byte per group
+layout(push_constant) uniform Params { uint n; uint k; uint gs; uint scale_fmt; };
 
 float mxfp4_lut(uint nibble) {
     float t[16] = float[16](0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
@@ -25,10 +25,14 @@ float fp8e4m3(uint val) {
         float fv = float(m) / 8.0 * exp2(-6.0);
         return s == 1u ? -fv : fv;
     }
-    // OCP E4M3FN: only e=15,m=7 is NaN; e=15,m<7 are finite (256..448).
-    if (e == 15u && m == 7u) return 0.0; // NaN → 0 for scales
+    if (e == 15u && m == 7u) return 0.0;
     float fv = (1.0 + float(m) / 8.0) * exp2(float(e) - 7.0);
     return s == 1u ? -fv : fv;
+}
+
+float e8m0_to_f32(uint val) {
+    if (val == 0u) return 0.0;
+    return uintBitsToFloat(val << 23);
 }
 
 shared float partial[256];
@@ -38,30 +42,31 @@ void main() {
     uint tid = gl_LocalInvocationID.x;
     if (row >= n) return;
 
-    uint groups_per_row = (k + 15u) / 16u;
-    uint bytes_per_row = (k + 1u) / 2u;
+    uint group_size = max(gs, 8u);
+    uint gpr = (k + group_size - 1u) / group_size;
+    uint wpg = group_size / 8u;
+    uint wpr = gpr * wpg;
+    uint row_w = row * wpr;
 
     float sum = 0.0;
-    for (uint g = tid; g < groups_per_row; g += 256u) {
-        uint s_idx = row * groups_per_row + g;
+    for (uint g = tid; g < gpr; g += 256u) {
+        uint s_idx = row * gpr + g;
         uint s_word = s_packed[s_idx / 4u];
-        float sc = fp8e4m3((s_word >> ((s_idx % 4u) * 8u)) & 0xFFu);
+        uint s_byte = (s_word >> ((s_idx % 4u) * 8u)) & 0xFFu;
+        float sc = (scale_fmt == 1u) ? e8m0_to_f32(s_byte) : fp8e4m3(s_byte);
 
-        uint base = g * 16u;
-        uint w_byte_base = row * bytes_per_row + g * 8u;
-        uint elems = min(16u, k - base);
-        uint nbytes = (elems + 1u) / 2u;
-
-        for (uint j = 0u; j < nbytes; j++) {
-            uint w_idx = (w_byte_base + j) / 4u;
-            uint w_shift = ((w_byte_base + j) % 4u) * 8u;
-            uint byte_val = (w_packed[w_idx] >> w_shift) & 0xFFu;
-            float v0 = mxfp4_lut(byte_val & 0xFu) * sc;
-            float v1 = mxfp4_lut(byte_val >> 4u) * sc;
-            uint xi0 = base + 2u * j;
-            sum += v0 * x[xi0];
-            if (xi0 + 1u < k) sum += v1 * x[xi0 + 1u];
+        uint xo = g * group_size;
+        uint wg = row_w + g * wpg;
+        float gdot = 0.0;
+        for (uint w = 0u; w < wpg && xo + w * 8u < k; w++) {
+            uint word = w_packed[wg + w];
+            uint xi = xo + w * 8u;
+            uint rem = min(8u, k - xi);
+            for (uint i = 0u; i < rem; i++) {
+                gdot += mxfp4_lut((word >> (i * 4u)) & 0xFu) * x[xi + i];
+            }
         }
+        sum += sc * gdot;
     }
 
     partial[tid] = sum;

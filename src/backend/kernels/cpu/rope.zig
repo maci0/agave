@@ -5,6 +5,60 @@ const std = @import("std");
 /// Maximum half rope_dim for precomputed cos/sin buffers.
 const max_rope_half_dim: usize = 512;
 
+/// Qwen3.5 interleaved multimodal RoPE sections (T, H, W) over rope_dim/2 freqs.
+/// HF `mrope_section` default: 11 + 11 + 10 = 32 pairs = 64 rotary dims.
+pub const qwen35_mrope_section = [3]u32{ 11, 11, 10 };
+
+/// Interleaved 3D RoPE: frequency i uses T, H, or W according to `section`.
+/// Layout matches `Qwen3_5TextRotaryEmbedding.apply_interleaved_mrope`.
+/// When t_pos == h_pos == w_pos this is identical to `rope`.
+pub fn ropeMrope(
+    x: [*]f32,
+    t_pos: usize,
+    h_pos: usize,
+    w_pos: usize,
+    n_heads: usize,
+    head_dim: usize,
+    rope_dim: usize,
+    theta: f32,
+    section: [3]u32,
+) void {
+    if (t_pos == h_pos and h_pos == w_pos) {
+        rope(x, t_pos, n_heads, head_dim, rope_dim, theta);
+        return;
+    }
+
+    const half = rope_dim / 2;
+    const inv_rd: f32 = 1.0 / @as(f32, @floatFromInt(rope_dim));
+    const neg_log_theta: f32 = -@log(theta);
+    const t_f: f32 = @floatFromInt(t_pos);
+    const h_f: f32 = @floatFromInt(h_pos);
+    const w_f: f32 = @floatFromInt(w_pos);
+    const h_lim: usize = @as(usize, section[1]) * 3;
+    const w_lim: usize = @as(usize, section[2]) * 3;
+
+    if (half > max_rope_half_dim) @panic("ropeMrope: half-dim exceeds max_rope_half_dim");
+    var cos_buf: [max_rope_half_dim]f32 = undefined;
+    var sin_buf: [max_rope_half_dim]f32 = undefined;
+    for (0..half) |i| {
+        const pos = if (i % 3 == 1 and i < h_lim) h_f else if (i % 3 == 2 and i < w_lim) w_f else t_f;
+        const freq = @exp(neg_log_theta * @as(f32, @floatFromInt(2 * i)) * inv_rd);
+        const angle = pos * freq;
+        cos_buf[i] = @cos(angle);
+        sin_buf[i] = @sin(angle);
+    }
+
+    for (0..n_heads) |h| {
+        const base = h * head_dim;
+        for (0..half) |i| {
+            const r = x[base + i];
+            const im = x[base + i + half];
+            x[base + i] = @mulAdd(f32, r, cos_buf[i], -(im * sin_buf[i]));
+            x[base + i + half] = @mulAdd(f32, r, sin_buf[i], im * cos_buf[i]);
+        }
+    }
+}
+
 /// Applies Rotary Position Embedding (RoPE) in-place.
 /// Uses split-complex layout: pairs `[i, i+half]` are rotated together
 /// (matches CUDA convention; NOT interleaved `[2i, 2i+1]`).
@@ -186,4 +240,25 @@ test "fuzz: all rope functions" {
             }
         }
     }.f, .{});
+}
+
+test "ropeMrope equals rope when T=H=W" {
+    var a = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    var b = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
+    rope(&a, 7, 1, 4, 4, 10000.0);
+    ropeMrope(&b, 7, 7, 7, 1, 4, 4, 10000.0, qwen35_mrope_section);
+    for (0..4) |i| try std.testing.expectApproxEqAbs(a[i], b[i], 1e-6);
+}
+
+test "ropeMrope 3D differs from 1D when H and W differ" {
+    var a = [_]f32{ 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+    var b = a;
+    // rope_dim=8 → half=4. i=1 uses H (pair x[1], x[5]).
+    rope(&a, 1, 1, 8, 8, 10000.0);
+    ropeMrope(&b, 1, 5, 9, 1, 8, 8, 10000.0, qwen35_mrope_section);
+    var same = true;
+    for (0..8) |i| {
+        if (@abs(a[i] - b[i]) > 1e-5) same = false;
+    }
+    try std.testing.expect(!same);
 }

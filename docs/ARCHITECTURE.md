@@ -77,7 +77,7 @@ agave/
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
-│   │   ├── deepseek4.zig    # DeepSeek V4 Flash (HC, MLA, CSA/HCA, LID; CUDA GEMV; PP + expert-parallel TP)
+│   │   ├── deepseek4.zig    # DeepSeek V4 Flash (HC, MLA, CSA/HCA, LID; Vulkan/WebGPU GEMV shaders; CpuBackend for rms/SDPA/HC)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
@@ -87,7 +87,7 @@ agave/
 │   │   ├── sampler_stack.zig # Per-request logit interceptor stack (LIFO dispose)
 │   │   ├── ssm.zig        # SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
 │   │   ├── quant.zig      # Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
-│   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/turbo/planar/iso/rotor)
+│   │   ├── kv_quant.zig   # KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/nvfp4_ds_mla/turbo/planar/iso/rotor)
 │   │   ├── mlx.zig        # MLX 4/6/8-bit dequant (mlxGemvRaw, mlxGemvRows, mlxEmbLookup)
 │   │   ├── gptq.zig       # GPTQ INT4 GEMV kernel (row-major packed u32, per-group scales/qzeros)
 │   │   ├── awq.zig        # AWQ INT4 GEMV kernel (column-major, GEMM-order nibble interleave)
@@ -500,6 +500,7 @@ DDTree speculative decode -> output tokens
 | `int8` | 8 | Symmetric INT8 |
 | `fp8_e4m3` | 8 | FP8 E4M3 |
 | `nvfp4` | 4.25 | NVFP4 microscaled |
+| `nvfp4_ds_mla` | 5.94 | DeepSeek MLA: NVFP4 on 448 NoPE dims, f16 on 64 RoPE dims (380 B/token) |
 | `turbo2` | 2.5 | TurboQuant 2-bit (WHT-32 + Lloyd-Max codebook) |
 | `turbo3` | 3.5 | TurboQuant 3-bit (WHT-32 + Lloyd-Max codebook) |
 | `turbo4` | 4.5 | TurboQuant 4-bit (WHT-32 + Lloyd-Max codebook) |

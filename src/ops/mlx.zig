@@ -12,6 +12,8 @@ pub const mlx_group_size: usize = 64;
 /// Each scale covers 16 weight elements. Group size 32 was wrong and caused
 /// row-stride corruption: every row after row 0 read the wrong scale bytes.
 pub const mxfp4_group_size: usize = 16;
+/// MLX community MoE experts pack MXFP4 with 32-element groups and E8M0 scales.
+pub const mxfp4_mlx_expert_group_size: usize = 32;
 
 /// Bit-packing constants for u32-packed quantized weights.
 const bits_per_u32: usize = 32;
@@ -454,6 +456,11 @@ pub const Mxfp4ScaleFormat = enum {
     e8m0,
 };
 
+/// MLX SafeTensors experts with group_size 32 store E8M0 scales, not FP8 E4M3.
+pub fn mxfp4ScaleFormat(is_safetensors: bool, gs: usize) Mxfp4ScaleFormat {
+    return if (is_safetensors and gs >= mxfp4_mlx_expert_group_size) .e8m0 else .fp8_e4m3;
+}
+
 /// Compute a range of rows for MLX MXFP4 GEMV.
 /// Weights are E2M1 (4-bit) looked up via `mxfp4Lookup`, scaled by per-group U8 scales.
 /// `gs` is the quantization group size (16 for standard MXFP4, 32 for MLX experts).
@@ -891,4 +898,10 @@ test "fuzz: wordsPerGroup and mlxEmbLookup" {
             for (out) |v| try std.testing.expect(std.math.isFinite(v));
         }
     }.f, .{});
+}
+
+test "mxfp4ScaleFormat uses E8M0 for MLX expert group size" {
+    try std.testing.expectEqual(Mxfp4ScaleFormat.fp8_e4m3, mxfp4ScaleFormat(false, mxfp4_mlx_expert_group_size));
+    try std.testing.expectEqual(Mxfp4ScaleFormat.fp8_e4m3, mxfp4ScaleFormat(true, mxfp4_group_size));
+    try std.testing.expectEqual(Mxfp4ScaleFormat.e8m0, mxfp4ScaleFormat(true, mxfp4_mlx_expert_group_size));
 }

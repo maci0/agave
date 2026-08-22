@@ -179,6 +179,8 @@ The preset also enables **boundary V protection** — the first and last 2 trans
 
 **Sparse V dequantization** further accelerates quantized V reads. After softmax, positions with weight below 1e-6 are skipped entirely: no V dequantization, no multiply-accumulate. At long context most softmax mass concentrates on a small number of positions, so skipping the rest improves decode speed with zero measured perplexity impact (`src/ops/attention.zig`). See [Chapter 4: Quantization](04-quantization.md#turboquant--the-turbo-preset) for implementation details.
 
+**DeepSeek MLA (`nvfp4_ds_mla`):** `--kv-type nvfp4_ds_mla` packs each 512-d compressed latent as NVFP4 on the 448 NoPE dims and f16 on the 64 RoPE dims (380 bytes/token). RoPE stays unquantized. Decode uses CPU `kvDot`/`kvMulAccum` on every backend.
+
 ## PagedAttention
 
 PagedAttention maps a sequence's logical positions to non-contiguous physical memory blocks, the same way an OS uses virtual memory pages.
@@ -573,7 +575,7 @@ Useful for shared system prompts: compute the prefix KV once on one instance, di
 
 **Paged block-index math assumes a fixed block size**: `PagedKvView` (`src/kvcache/manager.zig`) converts a logical position to a block index and in-block offset via `position >> block_shift` / `position & block_mask` when `block_size` is a power of two, falling back to plain division/modulo otherwise. Both paths must agree on the same `block_size` for the life of a cache; resizing `block_size` after blocks have been allocated (rather than just adding more blocks of the existing size) would silently misalign every position lookup that follows.
 
-**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
+**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, nvfp4_ds_mla, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
 
 ```text
 block = blockTable[position / block_size]              # src/kvcache/manager.zig

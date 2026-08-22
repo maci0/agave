@@ -189,6 +189,13 @@ pub const Qwen35Model = struct {
     /// Index into image_embeddings for the next visual token injection.
     /// Incremented each time a pad token is encountered during forward().
     visual_token_idx: u32 = 0,
+    /// Sequence index of the first image-pad token, set on first inject.
+    /// Null until a pad is seen. Used to build 3D mRoPE coordinates.
+    image_seq_start: ?usize = null,
+    /// Merged vision grid height (sqrt of n_visual_tokens for square images).
+    vision_grid_h: u32 = 0,
+    /// Merged vision grid width.
+    vision_grid_w: u32 = 0,
 
     /// Optional directional steering for runtime activation editing.
     steering: ?*const @import("../steering.zig").DirectionalSteering = null,
@@ -207,6 +214,34 @@ pub const Qwen35Model = struct {
     /// Returns the generic Model interface for this Qwen3.5 instance.
     pub fn model(self: *Qwen35Model) Model {
         return Model.from(Qwen35Model, self);
+    }
+
+    /// 3D mRoPE coordinates for sequence index `seq_idx` (HF get_rope_index).
+    fn mropeCoords(self: *const Qwen35Model, seq_idx: usize) [3]usize {
+        const S = self.image_seq_start orelse return .{ seq_idx, seq_idx, seq_idx };
+        const n: usize = self.n_visual_tokens;
+        const gh: usize = self.vision_grid_h;
+        const gw: usize = self.vision_grid_w;
+        if (seq_idx < S) return .{ seq_idx, seq_idx, seq_idx };
+        if (n > 0 and seq_idx < S + n) {
+            const local = seq_idx - S;
+            const ly = if (gw > 0) local / gw else 0;
+            const lx = if (gw > 0) local % gw else 0;
+            return .{ S, S + ly, S + lx };
+        }
+        const gmax = @max(gh, gw);
+        const pos = seq_idx - n + gmax;
+        return .{ pos, pos, pos };
+    }
+
+    /// Apply interleaved 3D mRoPE when a vision grid is active, else 1D RoPE.
+    fn applyLmRope(self: *Qwen35Model, x: [*]f32, seq_idx: usize, n_heads: usize) void {
+        if (self.image_embeddings == null or self.n_visual_tokens == 0) {
+            self.be.rope(x, seq_idx, n_heads, self.head_dim, self.rope_dim, self.rope_theta);
+            return;
+        }
+        const thw = self.mropeCoords(seq_idx);
+        self.be.ropeMrope(x, thw[0], thw[1], thw[2], n_heads, self.head_dim, self.rope_dim, self.rope_theta);
     }
 
     /// Initialize a Qwen3.5 model from format metadata and weights.
@@ -1088,8 +1123,8 @@ pub const Qwen35Model = struct {
         // RoPE — Q and K write to independent buffers, batch without barriers.
         t = self.perf.start();
         self.be.beginBatch();
-        self.be.rope(q_ptr, self.kv_seq_len, nh, hd, self.rope_dim, self.rope_theta);
-        self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, self.rope_dim, self.rope_theta);
+        self.applyLmRope(q_ptr, self.kv_seq_len, nh);
+        self.applyLmRope(self.k_buf.ptr, self.kv_seq_len, nkv);
         self.be.endBatch();
         self.syncProfile();
         self.perf.end(.rope, t);
@@ -1748,6 +1783,7 @@ pub const Qwen35Model = struct {
                         @memcpy(self.hidden, vis_embd[offset..end]);
                         is_image_token = true;
                     }
+                    if (self.image_seq_start == null) self.image_seq_start = self.kv_seq_len;
                     self.visual_token_idx = idx + 1;
                 }
             }
@@ -2008,6 +2044,7 @@ pub const Qwen35Model = struct {
                             @memcpy(self.pf_hidden[t * e ..][0..e], vis_embd[off..end]);
                             is_image_token = true;
                         }
+                        if (self.image_seq_start == null) self.image_seq_start = base_pos + t;
                         self.visual_token_idx = idx + 1;
                     }
                 }
@@ -2094,8 +2131,19 @@ pub const Qwen35Model = struct {
         }
 
         // RoPE
-        self.be.ropeBatched(q_ptr, self.pf_positions.ptr, n_tok, nh, hd, self.rope_dim, self.rope_theta);
-        self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, self.rope_dim, self.rope_theta);
+        if (self.image_embeddings != null and self.n_visual_tokens > 0) {
+            self.be.sync();
+            const q_stride = nh * hd;
+            const k_stride = nkv * hd;
+            for (0..n_tok) |t| {
+                const seq_idx: usize = self.pf_positions[t];
+                self.applyLmRope(q_ptr + t * q_stride, seq_idx, nh);
+                self.applyLmRope(self.pf_k.ptr + t * k_stride, seq_idx, nkv);
+            }
+        } else {
+            self.be.ropeBatched(q_ptr, self.pf_positions.ptr, n_tok, nh, hd, self.rope_dim, self.rope_theta);
+            self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, self.rope_dim, self.rope_theta);
+        }
 
         // Fused causal attention
         const kv_view = self.getLayerKvView(li);
@@ -2502,6 +2550,34 @@ test "applyNvfp4Scale no-op when tensor missing" {
     // Buffer should be unchanged — no matching tensor found.
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), buf[0], 1e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), buf[3], 1e-6);
+}
+
+test "mropeCoords 2x2 image grid" {
+    var m: Qwen35Model = undefined;
+    m.image_seq_start = 10;
+    m.n_visual_tokens = 4;
+    m.vision_grid_h = 2;
+    m.vision_grid_w = 2;
+    const before = m.mropeCoords(9);
+    try std.testing.expectEqual(@as(usize, 9), before[0]);
+    try std.testing.expectEqual(@as(usize, 9), before[1]);
+    try std.testing.expectEqual(@as(usize, 9), before[2]);
+    const p0 = m.mropeCoords(10);
+    try std.testing.expectEqual(@as(usize, 10), p0[0]);
+    try std.testing.expectEqual(@as(usize, 10), p0[1]);
+    try std.testing.expectEqual(@as(usize, 10), p0[2]);
+    const p1 = m.mropeCoords(11);
+    try std.testing.expectEqual(@as(usize, 10), p1[0]);
+    try std.testing.expectEqual(@as(usize, 10), p1[1]);
+    try std.testing.expectEqual(@as(usize, 11), p1[2]);
+    const p2 = m.mropeCoords(12);
+    try std.testing.expectEqual(@as(usize, 10), p2[0]);
+    try std.testing.expectEqual(@as(usize, 11), p2[1]);
+    try std.testing.expectEqual(@as(usize, 10), p2[2]);
+    const after = m.mropeCoords(14);
+    try std.testing.expectEqual(@as(usize, 12), after[0]);
+    try std.testing.expectEqual(@as(usize, 12), after[1]);
+    try std.testing.expectEqual(@as(usize, 12), after[2]);
 }
 
 test "fuzz: all qwen35 functions" {

@@ -478,6 +478,11 @@ pub const CpuBackend = struct {
         rope_kernel.rope(x, pos, n_heads, head_dim, rope_dim, theta);
     }
 
+    /// Interleaved 3D multimodal RoPE (Qwen3.5). Equals `rope` when T=H=W.
+    pub fn ropeMrope(_: *CpuBackend, x: [*]f32, t_pos: usize, h_pos: usize, w_pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        rope_kernel.ropeMrope(x, t_pos, h_pos, w_pos, n_heads, head_dim, rope_dim, theta, rope_kernel.qwen35_mrope_section);
+    }
+
     /// Looks up a token embedding row and dequantizes to f32.
     pub fn embLookup(_: *CpuBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         emb_kernel.embLookup(table.data, table.dtype, token_id, output, dim);
@@ -1689,6 +1694,68 @@ test "CpuBackend — sdpaWithStats f32 single token" {
     try std.testing.expect(std.math.isFinite(head_max[0]));
     try std.testing.expect(std.math.isFinite(head_sum[0]));
     try std.testing.expect(head_sum[0] > 0);
+}
+
+test "CpuBackend — sdpa nvfp4_ds_mla 512-d decode" {
+    // Uncompressed DS4 decode (nkv=1, hd=512) and GPU backends' cpuSdpaOnly path.
+    var be = CpuBackend{};
+    const kv_quant = @import("../ops/kv_quant.zig");
+    const nh: usize = 1;
+    const nkv: usize = 1;
+    const hd: usize = kv_quant.ds_mla_latent_dim;
+    const kvd = nkv * hd;
+    const rec = kv_quant.kvSliceBytes(.nvfp4_ds_mla, kvd);
+    const max_seq: usize = 2;
+    var keys: [1024]u8 align(4) = undefined;
+    var values: [1024]u8 align(4) = undefined;
+    try std.testing.expect(rec * max_seq <= keys.len);
+
+    var q: [hd]f32 = undefined;
+    var k0: [hd]f32 = undefined;
+    var v0: [hd]f32 = undefined;
+    var k1: [hd]f32 = undefined;
+    var v1: [hd]f32 = undefined;
+    for (0..hd) |i| {
+        q[i] = 0.02;
+        k0[i] = @as(f32, @floatFromInt(i % 11)) * 0.2 - 1.0;
+        v0[i] = @as(f32, @floatFromInt(i % 7)) * 0.1 + 0.25;
+        k1[i] = @as(f32, @floatFromInt(i % 13)) * 0.15 + 0.5;
+        v1[i] = @as(f32, @floatFromInt(i % 9)) * 0.08 - 0.4;
+    }
+    var output: [hd]f32 = undefined;
+    be.sdpa(&q, keys[0..], values[0..], &k0, &v0, &output, nh, nkv, hd, 0, 1.0, .nvfp4_ds_mla, .nvfp4_ds_mla);
+    for (0..kv_quant.ds_mla_nope_dim) |i| {
+        try std.testing.expectApproxEqAbs(v0[i], output[i], 0.6);
+    }
+    for (0..kv_quant.ds_mla_rope_dim) |i| {
+        const idx = kv_quant.ds_mla_nope_dim + i;
+        const expected: f32 = @floatCast(@as(f16, @floatCast(v0[idx])));
+        try std.testing.expectApproxEqAbs(expected, output[idx], 1e-4);
+    }
+
+    var output1: [hd]f32 = undefined;
+    be.sdpa(&q, keys[0..], values[0..], &k1, &v1, &output1, nh, nkv, hd, 1, 1.0, .nvfp4_ds_mla, .nvfp4_ds_mla);
+    for (output1) |v| try std.testing.expect(std.math.isFinite(v));
+}
+
+test "CpuBackend — sdpaTree nvfp4_ds_mla" {
+    var be = CpuBackend{};
+    const kv_quant = @import("../ops/kv_quant.zig");
+    const hd: usize = kv_quant.ds_mla_latent_dim;
+    const rec = kv_quant.kvSliceBytes(.nvfp4_ds_mla, hd);
+    var prefix_k: [1024]u8 align(4) = undefined;
+    var prefix_v: [1024]u8 align(4) = undefined;
+    try std.testing.expect(rec <= prefix_k.len);
+    var k0: [hd]f32 = @splat(0.1);
+    kv_quant.kvStore(&prefix_k, &k0, hd, .nvfp4_ds_mla);
+    kv_quant.kvStore(&prefix_v, &k0, hd, .nvfp4_ds_mla);
+    var q: [hd]f32 = @splat(0.02);
+    var tree_k: [hd]f32 = @splat(0.05);
+    var tree_v: [hd]f32 = @splat(0.3);
+    var output: [hd]f32 = undefined;
+    var masks = [_][8]u64{.{0} ** 8};
+    be.sdpaTree(&q, &prefix_k, &prefix_v, &tree_k, &tree_v, &output, &masks, 1, 1, hd, 1, 1, 1.0, .nvfp4_ds_mla, .nvfp4_ds_mla);
+    for (output) |v| try std.testing.expect(std.math.isFinite(v));
 }
 
 test "fuzz: all cpu functions" {

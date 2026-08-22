@@ -952,14 +952,10 @@ pub const CudaBackend = struct {
     }
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
-    /// CPU fallback — must sync GPU before reading and invalidate after writing.
+    /// Sync first so GPU-written activations are visible; match CpuBackend clamp.
     pub fn clampedSiluMul(self: *CudaBackend, gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
         self.flushActivations();
-        for (0..n) |i| {
-            const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
-            const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
-            out[i] = (g / (1.0 + @exp(-g))) * u;
-        }
+        self.cpu.clampedSiluMul(gate, up, out, n);
         self.invalidateAct(out);
     }
 
@@ -1577,6 +1573,15 @@ pub const CudaBackend = struct {
         self.launch(self.fn_rope, grid, block_size, 0, &params);
     }
 
+    /// 3D multimodal RoPE. Discrete GPU path only handles T=H=W (text).
+    pub fn ropeMrope(self: *CudaBackend, x: [*]f32, t_pos: usize, h_pos: usize, w_pos: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
+        if (t_pos == h_pos and h_pos == w_pos) {
+            self.rope(x, t_pos, n_heads, head_dim, rope_dim, theta);
+            return;
+        }
+        @panic("ropeMrope: 3D multimodal RoPE is implemented for CPU and Metal only");
+    }
+
     /// Embedding lookup — CPU is faster than GPU dispatch for single-row read.
     pub fn embLookup(self: *CudaBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         self.flushActivations();
@@ -1887,12 +1892,20 @@ pub const CudaBackend = struct {
     /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
     /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
     /// KV append for turbo types uses CPU quantization (once per token per layer,
-    /// not the SDPA hot path). Non-turbo quantized types (q8_0, etc.) panic.
+    /// not the SDPA hot path). q8_0 and nvfp4_ds_mla use CPU SDPA (no CUDA kernel).
     pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
         const is_f32_v = (kv_type_v == .f32);
+
+        // nvfp4_ds_mla: no CUDA SDPA kernel. DS4 MLA decode already uses CPU
+        // kvDot for compressed attention; uncompressed SDPA matches that path.
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            self.sync();
+            self.cpu.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
+            return;
+        }
 
         // Non-turbo, non-f32 quantized KV: not yet supported
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
@@ -2072,6 +2085,11 @@ pub const CudaBackend = struct {
     /// Attends to both cached KV (prev_len positions) and new KV (n_tok positions).
     /// For f32 KV: native FA2 GPU kernel (single dispatch for all tokens).
     pub fn sdpaTree(self: *CudaBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            self.sync();
+            self.cpu.sdpaTree(q_all, prefix_keys, prefix_values, tree_keys, tree_values, output, ancestor_masks, nh, nkv, hd, prefix_len, n_nodes, scale, kv_type_k, kv_type_v);
+            return;
+        }
         if (kv_type_k == .f32 and kv_type_v == .f32 and n_nodes > 0) {
             const kvd = nkv * hd;
             var d_q = self.getInputBuf(q_all, n_nodes * nh * hd * @sizeOf(f32));
@@ -2186,8 +2204,14 @@ pub const CudaBackend = struct {
     }
 
     /// For turbo KV: CPU-side KV append + sequential GPU turbo SDPA per token.
+    /// `nvfp4_ds_mla` uses CPU SDPA (no CUDA kernel for that packed layout).
     /// For other quantized KV types: panics (not yet supported).
     pub fn sdpaPrefill(self: *CudaBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
+        if (kv_type_k.discreteGpuUsesCpuSdpa() or kv_type_v.discreteGpuUsesCpuSdpa()) {
+            self.sync();
+            self.cpu.sdpaPrefill(q, k, v, kv_keys, kv_values, output, nh, nkv, hd, prev_len, n_tok, scale, kv_type_k, kv_type_v);
+            return;
+        }
         const is_turbo_k = kv_type_k.isTurbo();
         const is_turbo_v = kv_type_v.isTurbo();
         const is_f32_k = (kv_type_k == .f32);
