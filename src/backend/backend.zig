@@ -841,10 +841,14 @@ pub const Backend = union(enum) {
     pub inline fn setVolatileWeights(self: Backend, v: bool) void {
         switch (self) {
             .metal => |be| {
-                be.volatile_weights = v;
-                // Immediately flush any existing cached buffers that may hold
-                // stale references from a previous mmap'd model or process.
-                if (v) be.flushBufferCache();
+                // On non-macOS targets the metal slot is NullBackend, which has
+                // neither field — gate at comptime so Linux builds compile.
+                if (comptime @hasField(@TypeOf(be.*), "volatile_weights")) {
+                    be.volatile_weights = v;
+                    // Immediately flush any existing cached buffers that may hold
+                    // stale references from a previous mmap'd model or process.
+                    if (v and comptime @hasDecl(@TypeOf(be.*), "flushBufferCache")) be.flushBufferCache();
+                }
             },
             else => {},
         }
