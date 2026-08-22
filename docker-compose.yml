@@ -39,7 +39,9 @@ services:
     # ENTRYPOINT is already: agave --host 0.0.0.0
     command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]
     restart: unless-stopped
-    stop_grace_period: 30s
+    # Must exceed the server's 30s connection-drain timeout (server.zig) plus
+    # scheduler join/cleanup; equal budgets get SIGKILLed mid-cleanup.
+    stop_grace_period: 40s
     security_opt:
       - no-new-privileges:true
     cap_drop:
