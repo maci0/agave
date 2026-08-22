@@ -132,8 +132,8 @@ kernel void deltanet_recurrence(
     uint hkd = head_k_dim;
     float decay = exp(gate[h]);
     float beta_h = beta_vals[h];
-    // GGUF: tiling (h % n_kv). SafeTensors/HF: interleaved grouping (h * n_kv / n_v).
-    uint kh = (num_k_heads == num_v_heads) ? h : (use_grouped != 0 ? h * num_k_heads / num_v_heads : h % num_k_heads);
+    // HF / llama.cpp: repeat_interleave grouping (h * n_k / n_v).
+    uint kh = (num_k_heads == 0 || num_v_heads == 0) ? 0 : (h * num_k_heads / num_v_heads);
     uint s_off = h * hvd * hkd;
     uint k_base = kh * hkd;
 

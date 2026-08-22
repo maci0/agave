@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
             "rms_norm",      "softmax",        "l2_norm",        "rope",           "add_scaled",
             "silu_mul",      "gelu_mul",       "add_rms_norm",   "rms_norm_add",   "rms_norm_batched",
             "rope_batched",  "sigmoid_mul",    "deinterleave",   "split_qgate",
+            "deltanet_recurrence",
             // SDPA
                "sdpa",
             "sdpa_turbo",    "sdpa_prefill",   "sdpa_tree",
@@ -374,6 +375,26 @@ pub fn build(b: *std.Build) void {
             mod.linkFramework("Accelerate", .{});
         }
         test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
+    // WebGPU MLX GEMV row-chunking (vocab > 65535). Skips if wgpu-native missing.
+    {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("tests/test_webgpu_mlx_gemv.zig"),
+            .target = target,
+            .optimize = test_optimize,
+        });
+        mod.addImport("backend", backend_test_mod);
+        const t = b.addTest(.{ .root_module = mod });
+        link_platform(mod, t, target);
+        if (link_metal) {
+            mod.linkFramework("Metal", .{});
+            mod.linkFramework("Foundation", .{});
+            mod.linkFramework("Accelerate", .{});
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+        const webgpu_mlx_step = b.step("test-webgpu-mlx", "WebGPU MLX-Q4 GEMV chunking test");
+        webgpu_mlx_step.dependOn(&b.addRunArtifact(t).step);
     }
 
     // ROCm kernel tests (placeholder — skips until hardware available)

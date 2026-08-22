@@ -729,20 +729,8 @@ pub const MetalBackend = struct {
     /// region and returning an offset, so sub-regions (e.g. per-head slices) reuse
     /// the parent buffer instead of creating isolated copies.
     ///
-    /// Cached by page-aligned base address — subsequent calls for the same page
+    /// Cached by page-aligned base address. Subsequent calls for the same page
     /// skip ObjC allocation entirely.
-    /// Touch every page of a memory region to trigger CPU page faults.
-    /// Metal GPU cannot trigger page faults on UMA — unfaulted mmap pages read as zeros.
-    /// Call before getBufRef for mmap'd data (SafeTensors weight/scale/bias tensors).
-    fn prefaultPages(data: [*]const u8, len: usize) void {
-        const page_sz: usize = 16384;
-        var off: usize = 0;
-        while (off < len) : (off += page_sz) {
-            const p: *const volatile u8 = @ptrCast(data + off);
-            _ = p.*;
-        }
-    }
-
     fn getBufRef(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
         const addr = @intFromPtr(ptr);
         const aligned_base = addr & ~(@as(usize, page_size - 1));
@@ -2399,7 +2387,8 @@ pub const MetalBackend = struct {
             // MLX quantized weights — dispatch MLX-Q kernel with companion buffers
             if (op.mlx_scales != null) {
                 const bits = op.mlx_bits;
-                const gpr = (k + mlx_group_size - 1) / mlx_group_size;
+                const gs: u32 = if (op.mlx_group_size > 0) op.mlx_group_size else @intCast(mlx_group_size);
+                const gpr = (k + @as(usize, gs) - 1) / @as(usize, gs);
                 const wpg: usize = switch (bits) {
                     8 => mlx_words_per_group_q8,
                     6 => mlx_words_per_group_q6,
@@ -2429,6 +2418,7 @@ pub const MetalBackend = struct {
                 setBuf(enc, y_ref, 4);
                 setBytes(enc, @ptrCast(&n_val), @sizeOf(u32), 5);
                 setBytes(enc, @ptrCast(&k_val), @sizeOf(u32), 6);
+                setBytes(enc, @ptrCast(&gs), @sizeOf(u32), 7);
 
                 const tg = gemvThreadgroupSize(.mlx_q, k);
                 if (is_last) {
@@ -4001,7 +3991,7 @@ test "MetalBackend.backendInfo" {
     try std.testing.expectEqualStrings("Metal", info.name);
     try std.testing.expect(info.total_mem > 0);
     try std.testing.expect(info.is_uma);
-    try std.testing.expectEqual(@as(u32, 90), info.n_gpu_kernels);
+    try std.testing.expectEqual(MetalBackend.n_pipelines, info.n_gpu_kernels);
     try std.testing.expectEqualStrings("MSL", info.kernel_type);
     try std.testing.expect(info.device_name.len > 0);
 }

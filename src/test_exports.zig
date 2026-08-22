@@ -17,3 +17,5 @@ pub const MetalBackend = backend.MetalBackend;
 pub const VulkanBackend = backend.VulkanBackend;
 /// Re-exported RocmBackend for test access.
 pub const RocmBackend = backend.RocmBackend;
+/// Re-exported WebGpuBackend for test access.
+pub const WebGpuBackend = backend.WebGpuBackend;

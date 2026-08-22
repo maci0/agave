@@ -275,6 +275,9 @@ const WGPUBindGroupDescriptor = extern struct {
 // ── Tuning constants ────────────────────────────────────────────────
 
 const workgroup_size: u32 = 256;
+/// WebGPU minimum `maxComputeWorkgroupsPerDimension` (spec). One-workgroup-per-row
+/// GEMV for Qwen3.8-27B vocab (248320) exceeds this; callers must chunk.
+const max_workgroups_per_dim: u32 = 65535;
 const act_pool_capacity: u32 = 32;
 /// Max params buffers to defer-destroy per sync cycle.
 const max_deferred_destroy: u32 = 256;
@@ -808,7 +811,11 @@ pub const WebGpuBackend = struct {
             @memcpy(dst[0..count], src_slice[0..count]);
         }
         self.fn_buffer_unmap(self.staging_buf);
-        self.upload_generation +%= 1;
+        // Do not bump upload_generation here. A GPU→CPU read must not invalidate
+        // other cached activations. deltaNet downloads SSM state after
+        // cacheGpuResult(output); bumping would make the next getOrUpload(output)
+        // miss and re-upload stale CPU zeros over the real GPU result.
+        // sync() is the only place that retires a generation.
     }
 
     /// Register a GPU buffer as the cached result for a CPU pointer.
@@ -876,7 +883,9 @@ pub const WebGpuBackend = struct {
         const pass = self.fn_command_encoder_begin_compute_pass(self.batch_encoder, null);
         self.fn_compute_pass_set_pipeline(pass, pipe.pipeline);
         self.fn_compute_pass_set_bind_group(pass, 0, bind_group, 0, null);
-        self.fn_compute_pass_dispatch(pass, @min(workgroups_x, 65535), 1, 1);
+        if (workgroups_x > max_workgroups_per_dim)
+            @panic("WebGPU: workgroup count exceeds max_workgroups_per_dim — chunk GEMV rows");
+        self.fn_compute_pass_dispatch(pass, workgroups_x, 1, 1);
         self.fn_compute_pass_end(pass);
     }
 
@@ -1203,10 +1212,9 @@ pub const WebGpuBackend = struct {
         };
         const w_buf = self.getOrUpload(w.data, w_size);
 
-        const max_dispatch: u32 = 65535;
         var row_offset: u32 = 0;
         while (row_offset < n) {
-            const chunk = @min(@as(u32, @intCast(n)) - row_offset, max_dispatch);
+            const chunk = @min(@as(u32, @intCast(n)) - row_offset, max_workgroups_per_dim);
             const params = Params{ .n = @intCast(n), .k = @intCast(k), .row_offset = row_offset, ._pad = 0 };
             const params_buf = self.createUniformBuf(Params, params);
             self.deferDestroy(params_buf);
@@ -1624,18 +1632,23 @@ pub const WebGpuBackend = struct {
         const w_buf = self.getOrUpload(@ptrCast(w), w_size);
         const out_buf = self.createOutputBuf(y_size);
 
-        const Params = extern struct { out_dim_val: u32, in_dim_val: u32, _pad: [8]u8 = .{0} ** 8 };
-        const params = Params{ .out_dim_val = @intCast(out_dim), .in_dim_val = @intCast(in_dim) };
-        const params_buf = self.createUniformBuf(Params, params);
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_size),
-            storageEntry(1, w_buf, w_size),
-            storageEntry(2, out_buf, y_size),
-            uniformEntry(3, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_t_q8_0, &entries, @intCast(out_dim));
+        const Params = extern struct { out_dim_val: u32, in_dim_val: u32, row_offset: u32, _pad: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(out_dim);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const params = Params{ .out_dim_val = n_u, .in_dim_val = @intCast(in_dim), .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, params);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_size),
+                storageEntry(1, w_buf, w_size),
+                storageEntry(2, out_buf, y_size),
+                uniformEntry(3, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_t_q8_0, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, out_buf, y_size);
     }
 
@@ -1648,18 +1661,24 @@ pub const WebGpuBackend = struct {
         const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
         const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
         const y_buf = self.createOutputBuf(y_sz);
-        const Params = extern struct { n: u32, k: u32 };
-        const p = Params{ .n = @intCast(n), .k = @intCast(k) };
-        const params_buf = self.createUniformBuf(Params, p);
-        self.deferDestroy(params_buf);
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_sz),
-            storageEntry(1, w_buf, w_sz),
-            storageEntry(2, s_buf, s_sz),
-            storageEntry(3, y_buf, y_sz),
-            uniformEntry(4, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_nvfp4_st, &entries, @intCast(n));
+        const Params = extern struct { n: u32, k: u32, row_offset: u32, _pad: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(n);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const p = Params{ .n = n_u, .k = @intCast(k), .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, p);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_sz),
+                storageEntry(1, w_buf, w_sz),
+                storageEntry(2, s_buf, s_sz),
+                storageEntry(3, y_buf, y_sz),
+                uniformEntry(4, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_nvfp4_st, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
@@ -1677,19 +1696,25 @@ pub const WebGpuBackend = struct {
         const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
         const b_buf = self.getOrUpload(@ptrCast(w_biases), b_sz);
         const y_buf = self.createOutputBuf(y_sz);
-        const Params = extern struct { n: u32, k: u32 };
-        const p = Params{ .n = @intCast(n), .k = @intCast(k) };
-        const params_buf = self.createUniformBuf(Params, p);
-        self.deferDestroy(params_buf);
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_sz),
-            storageEntry(1, w_buf, w_sz),
-            storageEntry(2, s_buf, s_sz),
-            storageEntry(3, b_buf, b_sz),
-            storageEntry(4, y_buf, y_sz),
-            uniformEntry(5, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_mlx_q4, &entries, @intCast(n));
+        const Params = extern struct { n: u32, k: u32, row_offset: u32, _pad: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(n);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const p = Params{ .n = n_u, .k = @intCast(k), .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, p);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_sz),
+                storageEntry(1, w_buf, w_sz),
+                storageEntry(2, s_buf, s_sz),
+                storageEntry(3, b_buf, b_sz),
+                storageEntry(4, y_buf, y_sz),
+                uniformEntry(5, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_mlx_q4, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, y_buf, y_sz);
     }
     pub fn gemvMlxQGpu(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
@@ -1704,18 +1729,24 @@ pub const WebGpuBackend = struct {
         const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
         const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
         const y_buf = self.createOutputBuf(y_sz);
-        const Params = extern struct { n: u32, k: u32 };
-        const p = Params{ .n = @intCast(n), .k = @intCast(k) };
-        const params_buf = self.createUniformBuf(Params, p);
-        self.deferDestroy(params_buf);
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_sz),
-            storageEntry(1, w_buf, w_sz),
-            storageEntry(2, s_buf, s_sz),
-            storageEntry(3, y_buf, y_sz),
-            uniformEntry(4, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_mxfp4_st, &entries, @intCast(n));
+        const Params = extern struct { n: u32, k: u32, row_offset: u32, _pad: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(n);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const p = Params{ .n = n_u, .k = @intCast(k), .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, p);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_sz),
+                storageEntry(1, w_buf, w_sz),
+                storageEntry(2, s_buf, s_sz),
+                storageEntry(3, y_buf, y_sz),
+                uniformEntry(4, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_mxfp4_st, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, y_buf, y_sz);
     }
     pub fn gemvMxfp4StGpu(self: *WebGpuBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
@@ -1735,20 +1766,25 @@ pub const WebGpuBackend = struct {
         const z_buf = self.getOrUpload(@ptrCast(qzeros), z_sz);
         const y_buf = self.createOutputBuf(y_sz);
 
-        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
-        const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
-        const params_buf = self.createUniformBuf(Params, p);
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_sz),
-            storageEntry(1, w_buf, w_sz),
-            storageEntry(2, s_buf, s_sz),
-            storageEntry(3, z_buf, z_sz),
-            storageEntry(4, y_buf, y_sz),
-            uniformEntry(5, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_gptq, &entries, @intCast(n));
+        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, row_offset: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(n);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const p = Params{ .n_v = n_u, .k_v = @intCast(k), .gs = group_size, .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, p);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_sz),
+                storageEntry(1, w_buf, w_sz),
+                storageEntry(2, s_buf, s_sz),
+                storageEntry(3, z_buf, z_sz),
+                storageEntry(4, y_buf, y_sz),
+                uniformEntry(5, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_gptq, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
@@ -1768,20 +1804,25 @@ pub const WebGpuBackend = struct {
         const z_buf = self.getOrUpload(@ptrCast(qzeros), z_sz);
         const y_buf = self.createOutputBuf(y_sz);
 
-        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
-        const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
-        const params_buf = self.createUniformBuf(Params, p);
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_sz),
-            storageEntry(1, w_buf, w_sz),
-            storageEntry(2, s_buf, s_sz),
-            storageEntry(3, z_buf, z_sz),
-            storageEntry(4, y_buf, y_sz),
-            uniformEntry(5, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_awq, &entries, @intCast(n));
+        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, row_offset: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(n);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const p = Params{ .n_v = n_u, .k_v = @intCast(k), .gs = group_size, .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, p);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_sz),
+                storageEntry(1, w_buf, w_sz),
+                storageEntry(2, s_buf, s_sz),
+                storageEntry(3, z_buf, z_sz),
+                storageEntry(4, y_buf, y_sz),
+                uniformEntry(5, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_awq, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
@@ -1801,25 +1842,36 @@ pub const WebGpuBackend = struct {
         const zr_buf = self.getOrUpload(@ptrCast(zero), zr_sz);
         const y_buf = self.createOutputBuf(y_sz);
 
-        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, _pad: u32 = 0 };
-        const p = Params{ .n_v = @intCast(n), .k_v = @intCast(k), .gs = group_size };
-        const params_buf = self.createUniformBuf(Params, p);
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, x_buf, x_sz),
-            storageEntry(1, wq_buf, wq_sz),
-            storageEntry(2, sc_buf, sq_sz),
-            storageEntry(3, zr_buf, zr_sz),
-            storageEntry(4, y_buf, y_sz),
-            uniformEntry(5, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gemv_hqq, &entries, @intCast(n));
+        const Params = extern struct { n_v: u32, k_v: u32, gs: u32, row_offset: u32 = 0 };
+        var row_offset: u32 = 0;
+        const n_u: u32 = @intCast(n);
+        while (row_offset < n_u) {
+            const chunk = @min(n_u - row_offset, max_workgroups_per_dim);
+            const p = Params{ .n_v = n_u, .k_v = @intCast(k), .gs = group_size, .row_offset = row_offset };
+            const params_buf = self.createUniformBuf(Params, p);
+            self.deferDestroy(params_buf);
+            const entries = [_]WGPUBindGroupEntry{
+                storageEntry(0, x_buf, x_sz),
+                storageEntry(1, wq_buf, wq_sz),
+                storageEntry(2, sc_buf, sq_sz),
+                storageEntry(3, zr_buf, zr_sz),
+                storageEntry(4, y_buf, y_sz),
+                uniformEntry(5, params_buf, Params),
+            };
+            self.dispatchCompute(self.pipe_gemv_hqq, &entries, chunk);
+            row_offset += chunk;
+        }
         self.cacheGpuResult(y, y_buf, y_sz);
     }
 
     pub fn gemvMulti(self: *WebGpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
-        for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
+        for (ops) |op| {
+            if (op.mlx_scales) |s| {
+                self.gemvMlxQ(x, op.w.data, s, op.mlx_biases.?, op.y, op.n, k, op.mlx_bits, op.mlx_group_size);
+            } else {
+                self.gemv(x, op.w, op.y, op.n, k);
+            }
+        }
     }
 
     pub fn causalConv1dSilu(self: *WebGpuBackend, x: [*]const f32, state: [*]f32, conv_w: [*]const f32, conv_bias: ?[*]const f32, output: [*]f32, conv_ch: usize, d_conv: usize) void {
@@ -2054,6 +2106,10 @@ test "WebGPU tuning constants are valid" {
     try testing.expect(max_bindings <= 16);
 
     try testing.expect(max_map_poll_iterations > 0);
+
+    try testing.expectEqual(@as(u32, 65535), max_workgroups_per_dim);
+    // Qwen3.8-27B vocab (248320) and emb_max_vocab both exceed the 1D dispatch cap.
+    try testing.expect(emb_max_vocab > max_workgroups_per_dim);
 }
 
 test "WebGPU alignUniform rounds up to 16" {

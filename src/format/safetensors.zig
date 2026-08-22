@@ -395,6 +395,18 @@ pub const SafeTensorsDir = struct {
                 }
             }
         }
+        var alias_buf: [name_buf_size]u8 = undefined;
+        const n_layers: u32 = blk: {
+            if (self.config_meta.get("num_hidden_layers")) |v| switch (v) {
+                .uint => |u| break :blk @intCast(u),
+                else => {},
+            };
+            break :blk 0;
+        };
+        var alias_idx: usize = 0;
+        while (qwen38HfAliasAt(name, n_layers, alias_idx, &alias_buf)) |alias| : (alias_idx += 1) {
+            if (self.lookupStable(alias)) |r| return self.entryToInfo(r.key, r.entry);
+        }
         return null;
     }
 
@@ -478,6 +490,7 @@ pub const SafeTensorsDir = struct {
         return switch (v) {
             .uint => |u| if (u <= std.math.maxInt(u32)) @intCast(u) else null,
             .float => |f| if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else null,
+            .bool_val => |b| @as(u32, if (b) 1 else 0),
             else => null,
         };
     }
@@ -755,6 +768,141 @@ fn ggufToHfNameIter(name: []const u8, prefix: []const u8) GgufHfNameIter {
     return .{ .name = name, .prefix = prefix, .is_toplevel = is_toplevel };
 }
 
+/// HuggingFace prefixes for in-checkpoint Qwen3.8 vision tensors.
+const qwen38_vision_prefixes = [_][]const u8{ "model.visual.", "visual.", "vision_tower." };
+
+/// GGUF `v.blk.N.*` component → HuggingFace vision block component.
+const qwen38_vision_block_map = [_]struct { []const u8, []const u8 }{
+    .{ "attn_qkv", "attn.qkv" },
+    .{ "attn_out", "attn.proj" },
+    .{ "ln1", "norm1" },
+    .{ "ln2", "norm2" },
+    .{ "ffn_up", "mlp.linear_fc1" },
+    .{ "ffn_up", "mlp.fc1" },
+    .{ "ffn_down", "mlp.linear_fc2" },
+    .{ "ffn_down", "mlp.fc2" },
+};
+
+/// GGUF top-level vision / merger names → HuggingFace suffix (after vision prefix).
+const qwen38_vision_top_map = [_]struct { []const u8, []const u8 }{
+    .{ "v.patch_embd.", "patch_embed.proj." },
+    .{ "v.position_embd.weight", "pos_embed.weight" },
+    .{ "v.post_ln.", "post_layernorm." },
+    .{ "mm.0.", "merger.linear_fc1." },
+    .{ "mm.0.", "merger.mlp.0." },
+    .{ "mm.2.", "merger.linear_fc2." },
+    .{ "mm.2.", "merger.mlp.2." },
+    .{ "mm.norm.", "merger.norm." },
+    .{ "mm.norm.", "merger.ln_q." },
+};
+
+const qwen38_mtp_nextn_map = [_]struct { []const u8, []const u8 }{
+    .{ "eh_proj", "mtp.fc.weight" },
+    .{ "eh_proj.weight", "mtp.fc.weight" },
+    .{ "enorm", "mtp.pre_fc_norm_embedding.weight" },
+    .{ "enorm.weight", "mtp.pre_fc_norm_embedding.weight" },
+    .{ "hnorm", "mtp.pre_fc_norm_hidden.weight" },
+    .{ "hnorm.weight", "mtp.pre_fc_norm_hidden.weight" },
+    .{ "shared_head_norm", "mtp.norm.weight" },
+    .{ "shared_head_norm.weight", "mtp.norm.weight" },
+};
+
+fn parseDecimalPrefix(s: []const u8) ?struct { val: u32, rest: []const u8 } {
+    if (s.len == 0 or s[0] < '0' or s[0] > '9') return null;
+    var v: u32 = 0;
+    var i: usize = 0;
+    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
+        const d: u32 = s[i] - '0';
+        v = std.math.mul(u32, v, 10) catch return null;
+        v = std.math.add(u32, v, d) catch return null;
+    }
+    return .{ .val = v, .rest = s[i..] };
+}
+
+/// Map Agave GGUF-style names onto HuggingFace Qwen3.8 tensor names.
+/// `idx` walks alternate prefixes / component spellings; returns null when exhausted.
+fn qwen38HfAliasAt(name: []const u8, n_layers: u32, idx: usize, buf: *[name_buf_size]u8) ?[]const u8 {
+    if (qwen38VisionAliasAt(name, idx, buf)) |a| return a;
+    if (n_layers > 0) {
+        if (qwen38MtpAliasAt(name, n_layers, idx, buf)) |a| return a;
+    }
+    return null;
+}
+
+fn qwen38VisionAliasAt(name: []const u8, idx: usize, buf: *[name_buf_size]u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, name, "v.blk.")) {
+        const rest = name["v.blk.".len..];
+        const parsed = parseDecimalPrefix(rest) orelse return null;
+        if (parsed.rest.len == 0 or parsed.rest[0] != '.') return null;
+        const suffix = parsed.rest[1..];
+        const dot = std.mem.indexOfScalar(u8, suffix, '.') orelse return null;
+        const component = suffix[0..dot];
+        const attr = suffix[dot + 1 ..];
+        var match_i: usize = 0;
+        for (qwen38_vision_block_map) |m| {
+            if (!std.mem.eql(u8, component, m[0])) continue;
+            for (qwen38_vision_prefixes) |pfx| {
+                if (match_i == idx) {
+                    return std.fmt.bufPrint(buf, "{s}blocks.{d}.{s}.{s}", .{ pfx, parsed.val, m[1], attr }) catch null;
+                }
+                match_i += 1;
+            }
+        }
+        return null;
+    }
+
+    var match_i: usize = 0;
+    for (qwen38_vision_top_map) |m| {
+        if (!std.mem.startsWith(u8, name, m[0])) continue;
+        const attr = name[m[0].len..];
+        for (qwen38_vision_prefixes) |pfx| {
+            if (match_i == idx) {
+                return std.fmt.bufPrint(buf, "{s}{s}{s}", .{ pfx, m[1], attr }) catch null;
+            }
+            match_i += 1;
+        }
+    }
+    return null;
+}
+
+fn qwen38MtpAliasAt(name: []const u8, n_layers: u32, idx: usize, buf: *[name_buf_size]u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, name, "blk.")) return null;
+    const rest = name["blk.".len..];
+    const parsed = parseDecimalPrefix(rest) orelse return null;
+    if (parsed.val < n_layers) return null;
+    if (parsed.rest.len == 0 or parsed.rest[0] != '.') return null;
+    const suffix = parsed.rest[1..];
+    const depth = parsed.val - n_layers;
+
+    if (std.mem.startsWith(u8, suffix, "nextn.")) {
+        if (idx != 0) return null;
+        const nextn_rest = suffix["nextn.".len..];
+        for (qwen38_mtp_nextn_map) |m| {
+            if (std.mem.eql(u8, nextn_rest, m[0])) {
+                const copied = std.fmt.bufPrint(buf, "{s}", .{m[1]}) catch return null;
+                return copied;
+            }
+        }
+        return null;
+    }
+
+    const dot = std.mem.indexOfScalar(u8, suffix, '.');
+    const component = if (dot) |d| suffix[0..d] else suffix;
+    const attr = if (dot) |d| suffix[d + 1 ..] else "";
+    var match_i: usize = 0;
+    for (gguf_hf_layer_map) |m| {
+        if (!std.mem.eql(u8, component, m[0])) continue;
+        if (match_i == idx) {
+            if (attr.len == 0) {
+                return std.fmt.bufPrint(buf, "mtp.layers.{d}.{s}", .{ depth, m[1] }) catch null;
+            }
+            return std.fmt.bufPrint(buf, "mtp.layers.{d}.{s}.{s}", .{ depth, m[1], attr }) catch null;
+        }
+        match_i += 1;
+    }
+    return null;
+}
+
 // ── GGUF metadata key → HuggingFace config.json key translation ───────────────
 
 /// Map from GGUF-style suffix (after stripping arch prefix) to HF config.json key.
@@ -782,8 +930,10 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "ssm.time_step_rank", "linear_num_value_heads" },
     // Nex-N2-Pro / hybrid full-attention output gating
     .{ "attn_output_gate", "attn_output_gate" },
+    .{ "output_gate_type", "output_gate_type" },
     .{ "partial_rotary_factor", "partial_rotary_factor" },
     .{ "vocab_size", "vocab_size" },
+    .{ "nextn_predict_layers", "mtp_num_hidden_layers" },
     // DeepSeek V4 specific
     .{ "expert_shared_count", "n_shared_experts" },
     .{ "rope.dimension_count", "qk_rope_head_dim" },
@@ -1868,18 +2018,24 @@ fn parseShardHeader(
                 } else if (std.mem.eql(u8, key_res.val, "shape")) {
                     i = try expect(json, i, '[');
                     n_dims = 0;
-                    while (n_dims < 4) {
+                    dims = .{ 0, 0, 0, 0 };
+                    while (true) {
                         i = skipWs(json, i);
                         if (i >= json.len or json[i] == ']') break;
                         const num_start = i;
                         while (i < json.len and json[i] != ',' and json[i] != ']') : (i += 1) {}
-                        dims[n_dims] = try parseU64Slice(json[num_start..i]);
-                        n_dims += 1;
+                        const dim = try parseU64Slice(json[num_start..i]);
+                        if (n_dims < 4) {
+                            dims[n_dims] = dim;
+                            n_dims += 1;
+                        } else {
+                            // Fold extra dims (Conv3d [out,C,T,H,W]) into the last stored dim
+                            // so numElements() matches the on-disk element count.
+                            dims[3] = std.math.mul(u64, dims[3], dim) catch return error.InvalidSafeTensors;
+                        }
                         i = skipWs(json, i);
                         if (i < json.len and json[i] == ',') i += 1;
                     }
-                    // Skip remaining dimensions beyond 4 (e.g. 5-D vision tensors).
-                    while (i < json.len and json[i] != ']') : (i += 1) {}
                     if (i < json.len and json[i] == ']') i += 1;
                 } else if (std.mem.eql(u8, key_res.val, "data_offsets")) {
                     i = try expect(json, i, '[');
@@ -2026,15 +2182,22 @@ fn parseConfigObject(
                 std.mem.eql(u8, key_res.val, "quantization_config")));
         if (should_recurse and json[i] == '{') {
             i = try parseConfigObject(allocator, json, i, meta, owned, true);
+        } else if (!is_override and std.mem.eql(u8, key_res.val, "vision_config") and json[i] == '{') {
+            // Keep vision keys under clip.vision.* so they never clobber text_config
+            // (Qwen3.8-27B: text hidden_size=5120, vision hidden_size=1152).
+            i = try parseVisionConfigObject(allocator, json, i, meta, owned);
         } else {
             const owned_key = try dupeString(allocator, owned, key_res.val);
+            // text_config.eos_token_id is often pad/EOT (248044). Top-level
+            // eos_token_id is [im_end, eot]; keep the chat stop id.
+            const preserve_top_level = is_override and std.mem.eql(u8, key_res.val, "eos_token_id");
 
             switch (json[i]) {
                 '"' => {
                     const val_res = try parseString(json, i);
                     i = val_res.next;
                     const owned_val = try dupeString(allocator, owned, val_res.val);
-                    if (is_override or !meta.contains(owned_key))
+                    if (!preserve_top_level and (is_override or !meta.contains(owned_key)))
                         try meta.put(owned_key, .{ .string = owned_val });
                 },
                 '{' => {
@@ -2051,7 +2214,7 @@ fn parseConfigObject(
                         const num_start = i;
                         while (i < json.len and json[i] != ',' and json[i] != ']') : (i += 1) {}
                         if (parseU64Slice(json[num_start..i])) |u| {
-                            if (is_override or !meta.contains(owned_key))
+                            if (!preserve_top_level and (is_override or !meta.contains(owned_key)))
                                 try meta.put(owned_key, .{ .uint = u });
                         } else |_| {}
                     }
@@ -2060,12 +2223,12 @@ fn parseConfigObject(
                 },
                 't' => {
                     i = try skipValue(json, i);
-                    if (is_override or !meta.contains(owned_key))
+                    if (!preserve_top_level and (is_override or !meta.contains(owned_key)))
                         try meta.put(owned_key, .{ .bool_val = true });
                 },
                 'f' => {
                     i = try skipValue(json, i);
-                    if (is_override or !meta.contains(owned_key))
+                    if (!preserve_top_level and (is_override or !meta.contains(owned_key)))
                         try meta.put(owned_key, .{ .bool_val = false });
                 },
                 'n' => {
@@ -2079,11 +2242,11 @@ fn parseConfigObject(
                     {}
                     const num_str = std.mem.trim(u8, json[num_start..i], " \t\r\n");
                     if (std.fmt.parseUnsigned(u64, num_str, 10)) |u| {
-                        if (is_override or !meta.contains(owned_key))
+                        if (!preserve_top_level and (is_override or !meta.contains(owned_key)))
                             try meta.put(owned_key, .{ .uint = u });
                     } else |_| {
                         if (std.fmt.parseFloat(f64, num_str)) |f| {
-                            if (is_override or !meta.contains(owned_key))
+                            if (!preserve_top_level and (is_override or !meta.contains(owned_key)))
                                 try meta.put(owned_key, .{ .float = f });
                         } else |_| {}
                     }
@@ -2095,6 +2258,124 @@ fn parseConfigObject(
         if (i < json.len and json[i] == ',') i += 1;
     }
     if (i < json.len and json[i] == '}') i += 1;
+    return i;
+}
+
+/// HuggingFace `vision_config` key → GGUF-style `clip.vision.*` metadata key.
+const vision_hf_to_clip = [_]struct { []const u8, []const u8 }{
+    .{ "patch_size", "clip.vision.patch_size" },
+    .{ "hidden_size", "clip.vision.embedding_length" },
+    .{ "intermediate_size", "clip.vision.feed_forward_length" },
+    .{ "depth", "clip.vision.block_count" },
+    .{ "num_hidden_layers", "clip.vision.block_count" },
+    .{ "num_heads", "clip.vision.attention.head_count" },
+    .{ "out_hidden_size", "clip.vision.projection_dim" },
+    .{ "layer_norm_eps", "clip.vision.attention.layer_norm_epsilon" },
+    .{ "rms_norm_eps", "clip.vision.attention.layer_norm_epsilon" },
+    .{ "image_size", "clip.vision.image_size" },
+    .{ "num_position_embeddings", "clip.vision.num_position_embeddings" },
+    .{ "temporal_patch_size", "clip.vision.temporal_patch_size" },
+};
+
+fn mapVisionConfigKey(key: []const u8) ?[]const u8 {
+    for (vision_hf_to_clip) |m| {
+        if (std.mem.eql(u8, key, m[0])) return m[1];
+    }
+    return null;
+}
+
+fn metaU32(meta: *const std.StringHashMap(MetaValue), key: []const u8) ?u32 {
+    const v = meta.get(key) orelse return null;
+    return switch (v) {
+        .uint => |u| std.math.cast(u32, u),
+        else => null,
+    };
+}
+
+/// Parse `vision_config` into `clip.vision.*` keys without touching text_config values.
+fn parseVisionConfigObject(
+    allocator: Allocator,
+    json: []const u8,
+    start: usize,
+    meta: *std.StringHashMap(MetaValue),
+    owned: *std.ArrayList([]u8),
+) !usize {
+    var i: usize = try expect(json, start, '{');
+
+    while (true) {
+        i = skipWs(json, i);
+        if (i >= json.len or json[i] == '}') break;
+
+        const key_res = try parseString(json, i);
+        i = key_res.next;
+        i = try expect(json, i, ':');
+        i = skipWs(json, i);
+        if (i >= json.len) break;
+
+        const mapped = mapVisionConfigKey(key_res.val);
+        if (mapped == null or json[i] == '{' or json[i] == '[') {
+            i = try skipValue(json, i);
+        } else {
+            const owned_key = try dupeString(allocator, owned, mapped.?);
+            switch (json[i]) {
+                '"' => {
+                    const val_res = try parseString(json, i);
+                    i = val_res.next;
+                    const owned_val = try dupeString(allocator, owned, val_res.val);
+                    if (!meta.contains(owned_key))
+                        try meta.put(owned_key, .{ .string = owned_val });
+                },
+                't' => {
+                    i = try skipValue(json, i);
+                    if (!meta.contains(owned_key))
+                        try meta.put(owned_key, .{ .bool_val = true });
+                },
+                'f' => {
+                    i = try skipValue(json, i);
+                    if (!meta.contains(owned_key))
+                        try meta.put(owned_key, .{ .bool_val = false });
+                },
+                'n' => {
+                    i = try skipValue(json, i);
+                },
+                else => {
+                    const num_start = i;
+                    while (i < json.len and json[i] != ',' and json[i] != '}' and
+                        json[i] != ' ' and json[i] != '\n' and json[i] != '\r' and
+                        json[i] != '\t') : (i += 1)
+                    {}
+                    const num_str = std.mem.trim(u8, json[num_start..i], " \t\r\n");
+                    if (std.fmt.parseUnsigned(u64, num_str, 10)) |u| {
+                        if (!meta.contains(owned_key))
+                            try meta.put(owned_key, .{ .uint = u });
+                    } else |_| {
+                        if (std.fmt.parseFloat(f64, num_str)) |f| {
+                            if (!meta.contains(owned_key))
+                                try meta.put(owned_key, .{ .float = f });
+                        } else |_| {}
+                    }
+                },
+            }
+        }
+
+        i = skipWs(json, i);
+        if (i < json.len and json[i] == ',') i += 1;
+    }
+    if (i < json.len and json[i] == '}') i += 1;
+
+    // image_size = sqrt(num_position_embeddings) * patch_size when the HF config
+    // only stores a position-grid count (Qwen3.8: 48×48 patches × 16 = 768).
+    if (metaU32(meta, "clip.vision.image_size") == null) {
+        if (metaU32(meta, "clip.vision.num_position_embeddings")) |n_pos| {
+            if (metaU32(meta, "clip.vision.patch_size")) |ps| {
+                const side: u32 = @intFromFloat(@sqrt(@as(f64, @floatFromInt(n_pos))));
+                if (side > 0 and side * side == n_pos) {
+                    const owned_key = try dupeString(allocator, owned, "clip.vision.image_size");
+                    try meta.put(owned_key, .{ .uint = @as(u64, side) * @as(u64, ps) });
+                }
+            }
+        }
+    }
     return i;
 }
 
@@ -2484,12 +2765,13 @@ test "parseShardHeader 5D shape" {
     try std.testing.expectEqual(@as(usize, 1), tensors.count());
     const entry = tensors.get("vision.proj.weight") orelse return error.MissingTensor;
     try std.testing.expectEqual(DType.bf16, entry.dtype);
-    // Only first 4 dims are stored; 5th is skipped gracefully
+    // Extra dims fold into the last stored dim so the element count is preserved.
     try std.testing.expectEqual(@as(u32, 4), entry.n_dims);
     try std.testing.expectEqual(@as(u64, 1152), entry.dims[0]);
     try std.testing.expectEqual(@as(u64, 2), entry.dims[1]);
     try std.testing.expectEqual(@as(u64, 16), entry.dims[2]);
-    try std.testing.expectEqual(@as(u64, 16), entry.dims[3]);
+    try std.testing.expectEqual(@as(u64, 48), entry.dims[3]); // 16 * 3
+    try std.testing.expectEqual(@as(u64, 1152 * 2 * 16 * 48), entry.dims[0] * entry.dims[1] * entry.dims[2] * entry.dims[3]);
 }
 
 test "dupeUnescaped surrogate pair" {
@@ -2602,6 +2884,62 @@ test "parseConfigJson with text_config override" {
     try std.testing.expectEqual(@as(u64, 4096), hs.uint);
     const nl = meta.get("num_hidden_layers") orelse return error.Missing;
     try std.testing.expectEqual(@as(u64, 32), nl.uint);
+}
+
+test "parseConfigJson vision_config stays under clip.vision" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"hidden_size":5120,"num_hidden_layers":64,"text_config":{"hidden_size":5120,"num_hidden_layers":64},"vision_config":{"hidden_size":1152,"depth":27,"patch_size":16,"num_heads":16,"out_hidden_size":5120,"intermediate_size":4304,"num_position_embeddings":2304,"temporal_patch_size":2}}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    const hs = meta.get("hidden_size") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 5120), hs.uint);
+    const ve = meta.get("clip.vision.embedding_length") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 1152), ve.uint);
+    const depth = meta.get("clip.vision.block_count") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 27), depth.uint);
+    const proj = meta.get("clip.vision.projection_dim") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 5120), proj.uint);
+    const img = meta.get("clip.vision.image_size") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 768), img.uint);
+    const tps = meta.get("clip.vision.temporal_patch_size") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 2), tps.uint);
+}
+
+test "parseConfigJson Qwen3.8 keeps top-level chat eos" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"eos_token_id":[248046,248044],"model_type":"qwen3_5","text_config":{"eos_token_id":248044,"head_dim":256,"hidden_size":5120,"num_attention_heads":24,"num_key_value_heads":4,"num_hidden_layers":64,"intermediate_size":17408,"linear_num_value_heads":48,"linear_num_key_heads":16,"linear_value_head_dim":128,"linear_key_head_dim":128,"full_attention_interval":4,"output_gate_type":"swish","partial_rotary_factor":0.25}}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    const eos = meta.get("eos_token_id") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 248046), eos.uint);
+    const hd = meta.get("head_dim") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 256), hd.uint);
+    const nv = meta.get("linear_num_value_heads") orelse return error.Missing;
+    try std.testing.expectEqual(@as(u64, 48), nv.uint);
+    const gt = meta.get("output_gate_type") orelse return error.Missing;
+    try std.testing.expectEqualStrings("swish", gt.string);
+    const mt = meta.get("model_type") orelse return error.Missing;
+    try std.testing.expectEqualStrings("qwen3_5", mt.string);
 }
 
 test "parseConfigJson float values" {
@@ -2727,6 +3065,35 @@ test "ggufToHfName DeltaNet SSM mappings" {
     try std.testing.expectEqualStrings("model.layers.0.linear_attn.out_proj.weight", ggufToHfName("blk.0.ssm_out.weight", &buf, "model.").?);
 }
 
+test "qwen38HfAliasAt vision and MTP" {
+    var buf: [name_buf_size]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "model.visual.blocks.3.attn.qkv.weight",
+        qwen38HfAliasAt("v.blk.3.attn_qkv.weight", 64, 0, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "model.visual.merger.linear_fc1.weight",
+        qwen38HfAliasAt("mm.0.weight", 64, 0, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "model.visual.patch_embed.proj.weight",
+        qwen38HfAliasAt("v.patch_embd.weight", 64, 0, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "mtp.fc.weight",
+        qwen38HfAliasAt("blk.64.nextn.eh_proj.weight", 64, 0, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "mtp.pre_fc_norm_embedding.weight",
+        qwen38HfAliasAt("blk.64.nextn.enorm.weight", 64, 0, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "mtp.layers.0.self_attn.q_proj.weight",
+        qwen38HfAliasAt("blk.64.attn_q.weight", 64, 0, &buf).?,
+    );
+    try std.testing.expect(qwen38HfAliasAt("blk.0.attn_q.weight", 64, 0, &buf) == null);
+}
+
 test "ggufToHfName with different prefixes" {
     var buf: [name_buf_size]u8 = undefined;
     // language_model.model. prefix
@@ -2795,6 +3162,8 @@ test "ggufKeyToHf translations" {
     try std.testing.expectEqualStrings("rope_theta", ggufKeyToHf("llama.rope.freq_base").?);
     try std.testing.expectEqualStrings("num_experts_per_tok", ggufKeyToHf("deepseek2.expert_used_count").?);
     try std.testing.expectEqualStrings("vocab_size", ggufKeyToHf("llama.vocab_size").?);
+    try std.testing.expectEqualStrings("output_gate_type", ggufKeyToHf("qwen3_5.output_gate_type").?);
+    try std.testing.expectEqualStrings("head_dim", ggufKeyToHf("qwen3_5_text.attention.key_length").?);
     // Unknown key
     try std.testing.expect(ggufKeyToHf("llama.unknown_key") == null);
     try std.testing.expect(ggufKeyToHf("no_dots") == null);
@@ -3005,10 +3374,10 @@ test "ggufToHfNameIter shared expert dual mappings" {
     const second = iter.next(&buf);
     try std.testing.expect(second != null);
     try std.testing.expectEqualStrings("model.layers.0.mlp.shared_expert.gate_proj.weight", second.?);
-    // DS V4: ffn.shared_experts.w1
+    // DS V4 packed shared expert (gate_proj, not the older w1 alias)
     const third = iter.next(&buf);
     try std.testing.expect(third != null);
-    try std.testing.expectEqualStrings("model.layers.0.ffn.shared_experts.w1.weight", third.?);
+    try std.testing.expectEqualStrings("model.layers.0.ffn.shared_experts.gate_proj.weight", third.?);
     // No more
     try std.testing.expect(iter.next(&buf) == null);
 }
@@ -3050,21 +3419,21 @@ test "ggufToHfNameIter DeepSeek V4 attention" {
     try std.testing.expectEqualStrings("layers.0.attn.wo_a.weight", wo.?);
     try std.testing.expect(iter_wo.next(&buf) == null);
 
-    // DS V4 hyper connection (hc_attn_fn → hc_attn_fn, identity)
+    // DS V4 hyper connection (hc_attn_fn → attn_hc.fn)
     var iter_hc = ggufToHfNameIter("blk.0.hc_attn_fn.weight", "");
     const hc = iter_hc.next(&buf);
     try std.testing.expect(hc != null);
-    try std.testing.expectEqualStrings("layers.0.hc_attn_fn.weight", hc.?);
+    try std.testing.expectEqualStrings("layers.0.attn_hc.fn.weight", hc.?);
     try std.testing.expect(iter_hc.next(&buf) == null);
 }
 
 test "ggufToHfNameIter DeepSeek V4 toplevel" {
     var buf: [name_buf_size]u8 = undefined;
-    // DS V4 top-level: output_hc_fn → hc_fn
+    // DS V4 top-level: output_hc_fn → hc_head.fn
     var iter = ggufToHfNameIter("output_hc_fn.weight", "");
     const first = iter.next(&buf);
     try std.testing.expect(first != null);
-    try std.testing.expectEqualStrings("hc_fn.weight", first.?);
+    try std.testing.expectEqualStrings("hc_head.fn.weight", first.?);
     try std.testing.expect(iter.next(&buf) == null);
 
     // DS V4 top-level: output → lm_head then head
@@ -3086,10 +3455,10 @@ test "ggufToHfNameIter DeepSeek V4 MoE w1/w2/w3" {
     const std_map = iter.next(&buf);
     try std.testing.expect(std_map != null);
     try std.testing.expectEqualStrings("layers.0.mlp.experts.gate_proj.weight", std_map.?);
-    // DS V4: ffn.experts.w1
+    // DS V4 packed experts (switch_mlp, not the older w1 alias)
     const ds4_map = iter.next(&buf);
     try std.testing.expect(ds4_map != null);
-    try std.testing.expectEqualStrings("layers.0.ffn.experts.w1.weight", ds4_map.?);
+    try std.testing.expectEqualStrings("layers.0.ffn.switch_mlp.gate_proj.weight", ds4_map.?);
     try std.testing.expect(iter.next(&buf) == null);
 }
 

@@ -182,6 +182,12 @@ fn emitGeneratedTokens(cli: *const CliArgs) bool {
     return cli.tp_rank == 0 or (cli.tp_degree <= 1 and cli.pp_degree <= 1);
 }
 
+/// True when two ranks share one generate loop over the pair transport.
+/// Draft/sample RNG would desync the pair; greedy argmax keeps lockstep.
+fn distributedLockstep(cli: *const CliArgs) bool {
+    return cli.tp_degree > 1 or cli.pp_degree > 1;
+}
+
 /// Debug output. Only printed when --debug is active.
 fn dbg(comptime fmt: []const u8, args: anytype) void {
     if (!g_debug) return;
@@ -912,6 +918,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Error: --pp > 2 is not supported yet (transport is a 2-rank pair only)\n", .{});
             eprint("  Use --pp 2, or run a single stage (--pp 1).\n", .{});
             std.process.exit(2);
+        }
+    }
+    {
+        const tp = parseU32(res.option("tp"), "tp") orelse 1;
+        const pp = parseU32(res.option("pp"), "pp") orelse 1;
+        if ((tp > 1 or pp > 1) and temperature > 0) {
+            eprint("Warning: --temperature ignored with --tp/--pp (greedy lockstep)\n", .{});
         }
     }
     if (parseU32(res.option("rank"), "rank")) |rank| {
@@ -3083,7 +3096,7 @@ fn initAndRun(
     // the directory itself. Uses dirname() which returns null for bare filenames.
     var auto_mmproj_buf: [Io.Dir.max_path_bytes]u8 = undefined;
     var mmproj_path: ?[]const u8 = cli.mmproj;
-    if (mmproj_path == null and (cli.image != null or cli.serve)) {
+    if (mmproj_path == null and (cli.image != null or cli.serve or cli.video != null)) {
         const model_dir: []const u8 = blk: {
             // Check if model_path is a directory (SafeTensors)
             const probe_dir = Io.Dir.cwd().openDir(g_io, cli.model_path, .{}) catch break :blk Io.Dir.path.dirname(cli.model_path) orelse ".";
@@ -3140,6 +3153,30 @@ fn initAndRun(
                 ve.image_size / ve.patch_size,
                 ve.projection_dim,
             });
+        }
+    } else if (cli.image != null or cli.serve or cli.video != null) {
+        // Qwen3.8 ships the ViT in the same checkpoint (model.visual.* / v.blk.*).
+        if (fmt.getTensor("v.blk.0.attn_qkv.weight") != null) {
+            vision_enc = VisionEncoder.init(allocator, fmt, be, pool) catch |err| {
+                eprint("Error: failed to init in-checkpoint vision encoder: {}\n", .{err});
+                return false;
+            };
+            {
+                const ve = &vision_enc.?;
+                if (ve.patch_size == 0 or ve.projection_dim == 0) {
+                    eprint("Error: vision encoder has invalid patch_size or projection_dim\n", .{});
+                    return false;
+                }
+            }
+            if (!g_quiet) {
+                const ve = &vision_enc.?;
+                eprint("vision: in-checkpoint {d} layers, {d}x{d} patches -> {d}D\n", .{
+                    ve.n_blocks,
+                    ve.image_size / ve.patch_size,
+                    ve.image_size / ve.patch_size,
+                    ve.projection_dim,
+                });
+            }
         }
     }
 
@@ -4037,8 +4074,8 @@ fn generateSpeculative(
     }
     const prefill_ms = milliTimestamp(g_io) - prefill_start;
 
-    // Sampling setup
-    const use_sampling = cli.temperature > 0;
+    // Sampling setup. Distributed pairs stay greedy so draft tokens match.
+    const use_sampling = cli.temperature > 0 and !distributedLockstep(cli);
     var prng = std.Random.Xoshiro256.init(cli.seed);
     if (use_sampling) {
         first_target = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
@@ -4532,7 +4569,7 @@ fn generateAndPrintInner(
     }
 
     // Apply sampling to the first generated token (from prefill's last forward call)
-    const use_sampling = cli.temperature > 0;
+    const use_sampling = cli.temperature > 0 and !distributedLockstep(cli);
     const use_repeat_penalty = cli.repeat_penalty != 1.0;
     var prng = std.Random.Xoshiro256.init(cli.seed);
     var cli_mirostat_mu: f32 = cli.mirostat_tau * 2.0;
@@ -5108,6 +5145,18 @@ test "emitGeneratedTokens only rank 0 prints in a pair" {
     cli.tp_rank = 1;
     cli.pp_degree = 1;
     try std.testing.expect(emitGeneratedTokens(&cli));
+}
+
+test "distributedLockstep when tp or pp is a pair" {
+    var cli: CliArgs = undefined;
+    cli.tp_degree = 1;
+    cli.pp_degree = 1;
+    try std.testing.expect(!distributedLockstep(&cli));
+    cli.tp_degree = 2;
+    try std.testing.expect(distributedLockstep(&cli));
+    cli.tp_degree = 1;
+    cli.pp_degree = 2;
+    try std.testing.expect(distributedLockstep(&cli));
 }
 
 test "parseIpv4 valid addresses" {

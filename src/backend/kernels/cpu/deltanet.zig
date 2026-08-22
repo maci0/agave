@@ -10,6 +10,13 @@ const V8 = @Vector(8, f32);
 /// Maximum number of SSM v-heads supported by DeltaNet stack buffers.
 const max_deltanet_v_heads: usize = 128;
 
+/// Map a V-head index onto its K/Q head using HuggingFace/llama.cpp repeat_interleave.
+/// Qwen3.8-27B: 48 V heads / 16 K heads → groups of 3 (h=0,1,2 → k=0).
+pub fn groupedKHead(h: usize, num_k_heads: usize, num_v_heads: usize) usize {
+    if (num_k_heads == 0 or num_v_heads == 0) return 0;
+    return h * num_k_heads / num_v_heads;
+}
+
 /// DeltaNet SSM recurrence: gate/beta → conv1d+SiLU → L2 norm Q&K → recurrence → gated output.
 /// Operates on a single token: conv_state and ssm_state are updated in-place.
 /// CPU implementation — runs inline with SIMD. No GPU sync needed.
@@ -78,7 +85,7 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
     const num_v_heads: usize = p.num_v_heads;
     const decay = @exp(gate_vals[h]);
     const beta_h = beta_vals_arr[h];
-    const kh = if (num_k_heads == num_v_heads) h else if (p.kqv_order) h * num_k_heads / num_v_heads else h % num_k_heads;
+    const kh = groupedKHead(h, num_k_heads, num_v_heads);
     const s_off = h * head_v_dim * head_k_dim;
     const k_base = kh * head_k_dim;
     const decay_v: V8 = @splat(decay);
@@ -162,6 +169,20 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "groupedKHead repeat_interleave not modulo" {
+    // 4 V heads, 2 K heads: groups of 2, not h%2.
+    try testing.expectEqual(@as(usize, 0), groupedKHead(0, 2, 4));
+    try testing.expectEqual(@as(usize, 0), groupedKHead(1, 2, 4));
+    try testing.expectEqual(@as(usize, 1), groupedKHead(2, 2, 4));
+    try testing.expectEqual(@as(usize, 1), groupedKHead(3, 2, 4));
+    // Qwen3.8-27B: 48 V / 16 K → groups of 3.
+    try testing.expectEqual(@as(usize, 0), groupedKHead(0, 16, 48));
+    try testing.expectEqual(@as(usize, 0), groupedKHead(2, 16, 48));
+    try testing.expectEqual(@as(usize, 1), groupedKHead(3, 16, 48));
+    try testing.expectEqual(@as(usize, 15), groupedKHead(47, 16, 48));
+    try testing.expectEqual(@as(usize, 0), groupedKHead(0, 0, 48));
+}
 
 /// Build a minimal DeltaNetParams for testing with the given dimensions.
 fn testParams(num_heads: u32, head_k: u32, head_v: u32) DeltaNetParams {

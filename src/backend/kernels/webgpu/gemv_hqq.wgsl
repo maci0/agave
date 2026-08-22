@@ -17,7 +17,7 @@ struct Params {
     n:          u32, // output dimension (rows)
     k:          u32, // input  dimension
     group_size: u32, // quantization group size (typically 64)
-    _pad:       u32,
+    row_offset: u32,
 }
 
 // binding 0: x          — f32 activations [k]
@@ -40,10 +40,14 @@ fn bf16_to_f32(bits16: u32) -> f32 {
     return bitcast<f32>(bits16 << 16u);
 }
 
-// Read the bf16 value at logical index idx from a u32 buffer packed two-per-word.
-// Even indices occupy the low 16 bits; odd indices occupy the high 16 bits.
-fn read_bf16(buf_idx: u32, src: ptr<storage, array<u32>, read>) -> f32 {
-    let word   = (*src)[buf_idx / 2u];
+fn read_scale_bf16(buf_idx: u32) -> f32 {
+    let word = scale_data[buf_idx / 2u];
+    let bits16 = select(word >> 16u, word & 0xFFFFu, buf_idx % 2u == 0u);
+    return bf16_to_f32(bits16);
+}
+
+fn read_zero_bf16(buf_idx: u32) -> f32 {
+    let word = zero_data[buf_idx / 2u];
     let bits16 = select(word >> 16u, word & 0xFFFFu, buf_idx % 2u == 0u);
     return bf16_to_f32(bits16);
 }
@@ -53,7 +57,7 @@ fn main(
     @builtin(workgroup_id)        wgid: vec3<u32>,
     @builtin(local_invocation_id) lid:  vec3<u32>,
 ) {
-    let row = wgid.x;
+    let row = wgid.x + params.row_offset;
     let tid = lid.x;
 
     if (row >= params.n) { return; }
@@ -84,8 +88,8 @@ fn main(
             // Fetch bf16 scale and zero for this group.
             let g      = ki / group_size;
             let sq_idx = row * n_groups + g;
-            let scale  = read_bf16(sq_idx, &scale_data);
-            let zero   = read_bf16(sq_idx, &zero_data);
+            let scale  = read_scale_bf16(sq_idx);
+            let zero   = read_zero_bf16(sq_idx);
 
             sum += (nibble - zero) * scale * xv;
         }

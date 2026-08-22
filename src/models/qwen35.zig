@@ -36,6 +36,11 @@ const max_active_experts: usize = 16;
 
 /// Default top-k experts for Qwen3.5 MoE (35B-A3B variant).
 const default_moe_experts_active: u32 = 8;
+/// Qwen3.8-27B geometry (dense hybrid). Used to size tests and tensor-shape checks.
+const qwen38_27b_n_embd: u32 = 5120;
+const qwen38_27b_head_dim: u32 = 256;
+const qwen38_27b_n_layers: u32 = 64;
+
 /// Default per-expert FFN dimension for Qwen3.5 MoE.
 const default_moe_expert_ff_dim: u32 = 512;
 /// Default MLX quantization bit width (4-bit). Canonical source: model.zig.
@@ -99,6 +104,8 @@ pub const Qwen35Model = struct {
     /// True when loaded from SafeTensors (HF conventions for Q/K/V split, GQA, A_log).
     /// Set from Format.is_safetensors during init.
     is_safetensors: bool = false,
+    /// MLX-converted Qwen3.5/3.8 already store `(1+w)` in RMSNorm weights.
+    rms_plus_one_baked: bool = false,
 
     is_moe: bool = false,
     n_experts: u32 = 0,
@@ -205,7 +212,13 @@ pub const Qwen35Model = struct {
     /// Initialize a Qwen3.5 model from format metadata and weights.
     /// When `tiered_cache` is provided, uses tiered block allocation instead of PagedKvCache.
     pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Qwen35Model {
-        var self = Qwen35Model{ .fmt = f, .be = be, .allocator = allocator, .is_safetensors = f.is_safetensors };
+        var self = Qwen35Model{
+            .fmt = f,
+            .be = be,
+            .allocator = allocator,
+            .is_safetensors = f.is_safetensors,
+            .rms_plus_one_baked = f.is_safetensors and f.qwen35MlxNormsShifted(),
+        };
         self.kv_type_k = kv_type_k;
         self.kv_type_v = kv_type_v;
         const arch = f.getMetaStr("general.architecture") orelse "qwen35";
@@ -215,9 +228,11 @@ pub const Qwen35Model = struct {
         if (f.getArchU32(arch, "attention.head_count_kv")) |v| self.n_head_kv = v;
         if (f.getArchU32(arch, "attention.key_length")) |v| {
             self.head_dim = v;
-        } else if (self.n_embd > 0 and self.n_head > 0) {
+        } else if (self.n_embd > 0 and self.n_head > 0 and self.n_embd % self.n_head == 0) {
             self.head_dim = self.n_embd / self.n_head;
         }
+        // Qwen3.8-27B: n_embd=5120, n_head=24, head_dim=256 (5120 is not 24*256).
+        // Never infer head_dim from n_embd/n_head when they do not divide.
         if (f.getArchU32(arch, "feed_forward_length")) |v| {
             self.n_ff = v;
         } else if (f.layerTensor(0, "ffn_up.weight")) |t| {
@@ -232,12 +247,15 @@ pub const Qwen35Model = struct {
         if (f.getArchU32(arch, "ssm.state_size")) |v| self.ssm_d_state = v;
         if (f.getArchU32(arch, "ssm.group_count")) |v| self.ssm_n_group = v;
         if (f.getArchU32(arch, "ssm.time_step_rank")) |v| self.ssm_dt_rank = v;
+        // A_log / dt_bias length is the authoritative V-head count (Qwen3.8-27B: 48).
+        if (f.layerTensor(0, "ssm_a")) |a_t| {
+            if (a_t.n_dims >= 1 and a_t.dims[0] > 0) self.ssm_dt_rank = @intCast(a_t.dims[0]);
+        }
         self.ssm_d_inner = f.getArchU32(arch, "ssm.inner_size") orelse blk: {
-            // SafeTensors: compute from linear_num_value_heads × linear_value_head_dim.
-            if (f.getMetaU32("linear_value_head_dim")) |vhd| {
-                break :blk self.ssm_dt_rank * vhd;
-            }
-            break :blk self.ssm_dt_rank * self.ssm_d_state;
+            // SafeTensors: linear_num_value_heads × linear_value_head_dim (Qwen3.8-27B: 48×128=6144).
+            const nv = f.getMetaU32("linear_num_value_heads") orelse self.ssm_dt_rank;
+            const vhd = f.getMetaU32("linear_value_head_dim") orelse self.ssm_d_state;
+            break :blk nv * vhd;
         };
         self.rope_dim = f.getArchU32(arch, "rope.dimension_count") orelse blk: {
             // SafeTensors: compute from head_dim × partial_rotary_factor
@@ -259,13 +277,15 @@ pub const Qwen35Model = struct {
             break :blk null;
         };
         if (expert_count_meta) |ec| {
-            self.is_moe = true;
-            self.n_experts = ec;
-            self.n_experts_active = f.getArchU32(arch, "expert_used_count") orelse default_moe_experts_active;
-            self.expert_ff_dim = f.getArchU32(arch, "expert_feed_forward_length") orelse default_moe_expert_ff_dim;
-            self.shared_expert_ff_dim = f.getArchU32(arch, "expert_shared_feed_forward_length") orelse self.expert_ff_dim;
-            // For MoE, n_ff is repurposed as max buffer size (must fit both expert FFN and attention de-interleave)
-            self.n_ff = @max(self.expert_ff_dim, self.n_head * self.head_dim);
+            if (ec > 0) {
+                self.is_moe = true;
+                self.n_experts = ec;
+                self.n_experts_active = f.getArchU32(arch, "expert_used_count") orelse default_moe_experts_active;
+                self.expert_ff_dim = f.getArchU32(arch, "expert_feed_forward_length") orelse default_moe_expert_ff_dim;
+                self.shared_expert_ff_dim = f.getArchU32(arch, "expert_shared_feed_forward_length") orelse self.expert_ff_dim;
+                // For MoE, n_ff is repurposed as max buffer size (must fit both expert FFN and attention de-interleave)
+                self.n_ff = @max(self.expert_ff_dim, self.n_head * self.head_dim);
+            }
         }
         if (f.getArchF32(arch, "rope.freq_base")) |v| self.rope_theta = v;
         if (f.getArchF32(arch, "attention.layer_norm_rms_epsilon")) |v| self.rms_eps = v;
@@ -338,7 +358,7 @@ pub const Qwen35Model = struct {
         // The full attention output is gated: attn_out *= sigmoid(gate(hidden2))
         // Use metadata flag or tensor presence as fallback.
         self.has_full_attn_output_gate = blk: {
-            // Check config metadata first
+            // Check config metadata first (uint or bool stored as 0/1)
             if (f.getMetaU32("attn_output_gate")) |v| break :blk v != 0;
             // Fallback: check for output gate weight tensor in a full attention layer
             if (f.layerTensor(check_layer, "attn_output_gate.weight")) |_| break :blk true;
@@ -367,13 +387,21 @@ pub const Qwen35Model = struct {
             f.layerTensor(self.n_layers, "nextn.eh_proj.weight") != null;
         const nextn_at_n1 = self.n_layers > 0 and (f.layerTensor(self.n_layers - 1, "nextn.eh_proj") != null or
             f.layerTensor(self.n_layers - 1, "nextn.eh_proj.weight") != null);
+        const mtp_st = f.getTensor("mtp.fc.weight") != null or
+            f.getTensor("mtp.layers.0.self_attn.q_proj.weight") != null;
         if (nextn_at_n) {
-            self.n_mtp_layers = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
+            self.n_mtp_layers = f.getArchU32(arch, "nextn_predict_layers") orelse
+                f.getMetaU32("mtp_num_hidden_layers") orelse 1;
         } else if (nextn_at_n1) {
             // block_count includes MTP heads: last block is nextn head, adjust n_layers down
-            const nc = f.getArchU32(arch, "nextn_predict_layers") orelse 1;
+            const nc = f.getArchU32(arch, "nextn_predict_layers") orelse
+                f.getMetaU32("mtp_num_hidden_layers") orelse 1;
             self.n_mtp_layers = nc;
             self.n_layers = if (nc < self.n_layers) self.n_layers - nc else 0;
+        } else if (mtp_st) {
+            // HuggingFace Qwen3.8: mtp.fc + mtp.layers.{d} outside the transformer stack.
+            self.n_mtp_layers = f.getArchU32(arch, "nextn_predict_layers") orelse
+                f.getMetaU32("mtp_num_hidden_layers") orelse 1;
         }
 
         if (self.n_head_kv == 0 or self.n_head % self.n_head_kv != 0) {
@@ -615,6 +643,7 @@ pub const Qwen35Model = struct {
             }
             quant.dequantToF32(self.dn_dt_bias[i], dt_bias_t.data_ptr, dt_bias_t.dtype, num_v_heads);
             quant.dequantToF32(self.dn_conv_w[i], conv_w_t.data_ptr, conv_w_t.dtype, conv_ch * self.ssm_d_conv);
+            // HF Qwen3_5RMSNormGated: rms(x) * w * silu(z). Weight is ones-init, not (1+w).
             quant.dequantToF32(self.dn_ssm_norm_w[i], ssm_norm_t.data_ptr, ssm_norm_t.dtype, head_v_dim);
         }
 
@@ -729,26 +758,27 @@ pub const Qwen35Model = struct {
     }
 
     /// Return tensor weight data as [*]const f32 with permanent caching.
-    /// F32 tensors: returns raw pointer (zero-copy).
-    /// BF16 tensors: dequantizes once, caches permanently (GPU-safe — avoids
-    /// stale Metal buf_cache entries from reused dequant_buf).
+    /// F32 GGUF tensors: returns raw pointer (zero-copy, +1 already baked by converters).
+    /// SafeTensors Qwen3.5/3.8: HuggingFace `Qwen3_5RMSNorm` is `(1 + w) * x / rms`
+    /// with zero-init `w`, so unbaked checkpoints get +1 here. MLX sanitize()
+    /// already bakes +1 (`rms_plus_one_baked`). Bias tensors skip the offset.
     fn normAsF32(self: *Qwen35Model, t: TensorInfo, n: usize) [*]const f32 {
-        if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
-
-        // Check cache (linear scan — at most ~200 entries, first-token only on miss)
         const key = @intFromPtr(t.data_ptr);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| {
             if (entry.key == key) return entry.data.ptr;
         }
 
-        // Cache miss: allocate, convert, store permanently.
-        // Guard capacity before allocating to avoid leaking uncached buffers.
-        // Never reuse dequant_buf: GPU backends cache buffer bindings by pointer,
-        // so a reused scratch would serve stale norm weights.
+        const bake_one = self.is_safetensors and !self.rms_plus_one_baked and
+            !std.mem.endsWith(u8, t.name, ".bias");
+        if (t.dtype == .f32 and !bake_one) return @ptrCast(@alignCast(t.data_ptr));
+
         if (self.norm_cache_len >= max_norm_entries)
             @panic("normAsF32: norm cache overflow — increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
+        if (bake_one) {
+            for (buf) |*v| v.* += 1.0;
+        }
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
         self.norm_cache_len += 1;
         return buf.ptr;
@@ -959,6 +989,19 @@ pub const Qwen35Model = struct {
         }
     }
 
+    /// HuggingFace `output_gate_type` (`swish`/`silu` vs `sigmoid`).
+    /// Full-attention Q-gate is always sigmoid (`attn_out * sigmoid(gate)` in
+    /// modeling_qwen3_5.py). `output_gate_type: "swish"` selects SiLU on the
+    /// DeltaNet RMSNormGated z-path, which this model already applies.
+    fn attnGateIsSilu(gt: []const u8) bool {
+        return std.mem.eql(u8, gt, "swish") or std.mem.eql(u8, gt, "silu");
+    }
+
+    /// attn *= sigmoid(gate). Matches HuggingFace Qwen3_5Attention.
+    fn applyAttnGate(self: *Qwen35Model, attn: [*]f32, gate: [*]f32, n: usize) void {
+        self.be.sigmoidMul(attn, gate, n);
+    }
+
     // ---- Full attention layer ----
     // Qwen3.5 full attention: Q projection outputs Q+gate interleaved (2*head_dim per head)
     // gate is applied as sigmoid(gate) * attention_output before output projection
@@ -1092,10 +1135,10 @@ pub const Qwen35Model = struct {
         self.syncProfile();
         self.perf.end(.sdpa, t);
 
-        // Gate: attn_out *= sigmoid(gate) — Qwen3.5 only
+        // Gate: attn_out *= act(gate) — sigmoid (Qwen3.5) or SiLU/swish (Qwen3.8)
         if (self.has_gate) {
             t = self.perf.start();
-            self.be.sigmoidMul(self.attn_out.ptr, self.ff_buf1.ptr, qd);
+            self.applyAttnGate(self.attn_out.ptr, self.ff_buf1.ptr, qd);
             self.syncProfile();
             self.perf.end(.sigmoid_mul, t);
         }
@@ -1109,7 +1152,7 @@ pub const Qwen35Model = struct {
                 // Compute gate using original (pre-attn) normed hidden2 → stored in ff_buf2
                 // (ff_buf2 was not used for Q processing since has_gate handled the Q gate)
                 self.doGemv(self.hidden2.ptr, gw, self.ff_buf2.ptr, qd, e);
-                self.be.sigmoidMul(self.attn_out.ptr, self.ff_buf2.ptr, qd);
+                self.applyAttnGate(self.attn_out.ptr, self.ff_buf2.ptr, qd);
                 self.syncProfile();
                 self.perf.end(.sigmoid_mul, t);
             }
@@ -1542,10 +1585,8 @@ pub const Qwen35Model = struct {
             self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.be.embLookup(.{ .data = emb_t.data_ptr, .dtype = emb_t.dtype }, token_id, self.hidden2.ptr, e);
 
-        // 2. RMSNorm both branches with +1 offset: output = (1 + w) * rmsNorm(x)
-        // Standard rmsNorm computes w * x / rms. We need (1 + w) * x / rms.
-        // Strategy: rmsNorm with weight w → result, then add x / rms (unweighted).
-        // Equivalently: compute rms, apply (1+w) manually on CPU.
+        // 2. RMSNorm both branches. GGUF nextn stores unbaked w (apply 1+w here).
+        // SafeTensors Qwen3.8 bakes 1+w in normAsF32, so use the backend RMS path.
         const enorm_t = self.fmt.layerTensor(mtp_lid, "nextn.enorm.weight") orelse
             self.fmt.layerTensor(mtp_lid, "nextn.enorm") orelse return error.MissingTensor;
         const hnorm_t = self.fmt.layerTensor(mtp_lid, "nextn.hnorm.weight") orelse
@@ -1554,10 +1595,14 @@ pub const Qwen35Model = struct {
         const hnorm_w = self.normAsF32(hnorm_t, e);
         self.be.sync();
 
-        // Embed branch → first half of concat buf
-        rmsNormPlusOne(self.hidden2, self.mtp_concat_buf[0..e], enorm_w, e, self.rms_eps);
-        // Hidden branch → second half of concat buf
-        rmsNormPlusOne(self.mtp_hidden_pre_norm, self.mtp_concat_buf[e..][0..e], hnorm_w, e, self.rms_eps);
+        if (self.is_safetensors) {
+            self.be.rmsNorm(self.hidden2.ptr, enorm_w, self.mtp_concat_buf.ptr, e, self.rms_eps);
+            self.be.rmsNorm(self.mtp_hidden_pre_norm.ptr, hnorm_w, self.mtp_concat_buf.ptr + e, e, self.rms_eps);
+            self.be.sync();
+        } else {
+            rmsNormPlusOne(self.hidden2, self.mtp_concat_buf[0..e], enorm_w, e, self.rms_eps);
+            rmsNormPlusOne(self.mtp_hidden_pre_norm, self.mtp_concat_buf[e..][0..e], hnorm_w, e, self.rms_eps);
+        }
 
         // 3. eh_proj: [2*n_embd] → [n_embd]
         const eh_proj = self.fmt.layerTensor(mtp_lid, "nextn.eh_proj.weight") orelse
@@ -1625,9 +1670,9 @@ pub const Qwen35Model = struct {
         );
         self.mtp_kv_seq_len += 1;
 
-        // Gate: attn_out *= sigmoid(gate)
+        // Gate: attn_out *= act(gate)
         if (self.has_gate) {
-            self.be.sigmoidMul(self.attn_out.ptr, self.ff_buf1.ptr, qd);
+            self.applyAttnGate(self.attn_out.ptr, self.ff_buf1.ptr, qd);
         }
 
         // Output projection → hidden2 (residual target)
@@ -2060,9 +2105,9 @@ pub const Qwen35Model = struct {
         const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(hd)));
         self.be.sdpaPrefill(q_ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, scale, .f32, .f32);
 
-        // Gate: attn_out *= sigmoid(gate) — Qwen3.5 Q-projection gate
+        // Gate: attn_out *= act(gate) — Qwen3.5 Q-projection gate (sigmoid or SiLU)
         if (self.has_gate) {
-            self.be.sigmoidMul(self.pf_attn_out.ptr, self.pf_ff_gate.ptr, n_tok * qd);
+            self.applyAttnGate(self.pf_attn_out.ptr, self.pf_ff_gate.ptr, n_tok * qd);
         }
 
         // Full-attention output gate (Nex-N2-Pro): attn_out *= sigmoid(gate_proj(hidden2))
@@ -2071,7 +2116,7 @@ pub const Qwen35Model = struct {
                 // pf_hidden2 still holds pre-attention normed input at this point.
                 // Use pf_ff_up as scratch for gate output (cs*n_ff ≥ cs*qd).
                 self.doGemm(self.pf_hidden2.ptr, gw, self.pf_ff_up.ptr, n_tok, qd, e);
-                self.be.sigmoidMul(self.pf_attn_out.ptr, self.pf_ff_up.ptr, n_tok * qd);
+                self.applyAttnGate(self.pf_attn_out.ptr, self.pf_ff_up.ptr, n_tok * qd);
             }
         }
 
@@ -2297,6 +2342,28 @@ test "ssmConvChannels default config" {
     m.ssm_d_state = 128;
     // conv_ch = 2048 + 2 * 16 * 128 = 2048 + 4096 = 6144
     try std.testing.expectEqual(@as(usize, 6144), m.ssmConvChannels());
+}
+
+test "ssmConvChannels Qwen3.8-27B" {
+    var m: Qwen35Model = undefined;
+    m.ssm_d_inner = 6144;
+    m.ssm_n_group = 16;
+    m.ssm_d_state = 128;
+    // conv_ch = 6144 + 2 * 16 * 128 = 10240
+    try std.testing.expectEqual(@as(usize, 10240), m.ssmConvChannels());
+}
+
+test "attnGateIsSilu parses DeltaNet gated-norm activation" {
+    try std.testing.expect(Qwen35Model.attnGateIsSilu("swish"));
+    try std.testing.expect(Qwen35Model.attnGateIsSilu("silu"));
+    try std.testing.expect(!Qwen35Model.attnGateIsSilu("sigmoid"));
+    try std.testing.expect(!Qwen35Model.attnGateIsSilu(""));
+}
+
+test "Qwen3.8-27B named geometry" {
+    try std.testing.expectEqual(@as(u32, 5120), qwen38_27b_n_embd);
+    try std.testing.expectEqual(@as(u32, 256), qwen38_27b_head_dim);
+    try std.testing.expectEqual(@as(u32, 64), qwen38_27b_n_layers);
 }
 
 test "shardColumnWeight no-op for single rank" {

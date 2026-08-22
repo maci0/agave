@@ -36,6 +36,9 @@ pub const Arch = enum {
             .{ "qwen3_5_moe_text", .qwen35 },
             .{ "qwen36", .qwen35 },
             .{ "qwen3_6", .qwen35 },
+            .{ "qwen38", .qwen35 },
+            .{ "qwen3_8", .qwen35 },
+            .{ "qwen3_8_text", .qwen35 },
             .{ "qwen35", .qwen35 },
             .{ "qwen3_5", .qwen35 },
             .{ "qwen3", .qwen35 },
@@ -71,7 +74,7 @@ pub const Arch = enum {
             .gemma3 => "Gemma 3",
             .gemma4 => "Gemma 4",
             .diffusion_gemma => "DiffusionGemma",
-            .qwen35 => "Qwen 3.5",
+            .qwen35 => "Qwen 3.5/3.8",
             .gpt_oss => "GPT-OSS",
             .nemotron_h => "Nemotron-H",
             .nemotron_nano => "Nemotron-Nano",
@@ -222,6 +225,9 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5_moe_text").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen36").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_6").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen38").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_8").?);
+    try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_8_text").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen2").?);
@@ -247,7 +253,7 @@ test "Arch.displayName" {
     try std.testing.expectEqualStrings("Gemma 3", Arch.gemma3.displayName());
     try std.testing.expectEqualStrings("Gemma 4", Arch.gemma4.displayName());
     try std.testing.expectEqualStrings("DiffusionGemma", Arch.diffusion_gemma.displayName());
-    try std.testing.expectEqualStrings("Qwen 3.5", Arch.qwen35.displayName());
+    try std.testing.expectEqualStrings("Qwen 3.5/3.8", Arch.qwen35.displayName());
     try std.testing.expectEqualStrings("GPT-OSS", Arch.gpt_oss.displayName());
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());
     try std.testing.expectEqualStrings("Nemotron-Nano", Arch.nemotron_nano.displayName());

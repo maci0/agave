@@ -16,7 +16,7 @@ const uint awq_reverse[8] = uint[8](0, 4, 1, 5, 2, 6, 3, 7);
 shared float shared_sums[32];  // 256/min_subgroup_size(8) = 32 max subgroups
 
 void main() {
-    uint col = gl_WorkGroupID.x;
+    uint col = gl_WorkGroupID.y * 65535u + gl_WorkGroupID.x;
     uint tid = gl_LocalInvocationID.x;
     uint tg_size = gl_WorkGroupSize.x;
     if (col >= n) return;

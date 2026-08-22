@@ -6,7 +6,7 @@ struct Params {
     n: u32,
     k: u32,
     group_size: u32,
-    _pad: u32,
+    row_offset: u32,
 }
 
 @group(0) @binding(0) var<storage, read> x_data: array<f32>;
@@ -26,7 +26,7 @@ fn main(
     @builtin(workgroup_id) wgid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
-    let col = wgid.x;
+    let col = wgid.x + params.row_offset;
     let tid = lid.x;
     if (col >= params.n) { return; }
 

@@ -1059,7 +1059,13 @@ pub const RocmBackend = struct {
 
     /// Batched GEMV — sequential dispatch.
     pub fn gemvMulti(self: *RocmBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
-        for (ops) |op| self.gemv(x, op.w, op.y, op.n, k);
+        for (ops) |op| {
+            if (op.mlx_scales) |s| {
+                self.gemvMlxQ(x, op.w.data, s, op.mlx_biases.?, op.y, op.n, k, op.mlx_bits, op.mlx_group_size);
+            } else {
+                self.gemv(x, op.w, op.y, op.n, k);
+            }
+        }
     }
 
     // ── True megakernels ─────────────────────────────────────────
@@ -1551,8 +1557,8 @@ pub const RocmBackend = struct {
         const hvd = p.head_v_dim;
 
         self.flushActivations();
-        var gate_arr: [64]f32 = undefined;
-        var beta_arr: [64]f32 = undefined;
+        var gate_arr: [128]f32 = undefined;
+        var beta_arr: [128]f32 = undefined;
         for (0..num_v) |h| {
             gate_arr[h] = ssm_a[h] * math_ops.softplus(alpha_buf[h] + dt_bias[h]);
             beta_arr[h] = math_ops.sigmoid(beta_buf[h]);
