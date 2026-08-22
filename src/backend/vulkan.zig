@@ -1476,13 +1476,18 @@ pub const VulkanBackend = struct {
     }
 
     fn createPipeline(self: *VulkanBackend, spv: []const u8, n_bindings: u32, push_size: u32) !PipelineInfo {
+        // @embedFile blobs are 1-byte aligned but pCode needs `*const u32`
+        // (align 4): copy into an aligned buffer before handing to Vulkan.
+        const aligned_code = try self.allocator.alignedAlloc(u8, .@"4", spv.len);
+        defer self.allocator.free(aligned_code);
+        @memcpy(aligned_code, spv);
         // Shader module
         const mod_ci = VkShaderModuleCreateInfo{
             .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .codeSize = spv.len,
-            .pCode = @ptrCast(@alignCast(spv.ptr)),
+            .pCode = @ptrCast(@alignCast(aligned_code.ptr)),
         };
         var shader_mod: VkShaderModule = null;
         if (self.vkCreateShaderModule(self.device, &mod_ci, null, &shader_mod) != VK_SUCCESS)

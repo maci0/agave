@@ -4965,7 +4965,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 // ── SSE Streaming ──────────────────────────────────────────────
 
 /// Send an SSE data event. Returns false if the write failed (client disconnected).
-fn sseWriteData(stream: TcpStream, data: []const u8) bool {
+/// Generic over the stream type so tests can collect output without sockets;
+/// monomorphized at comptime — no dispatch cost.
+fn sseWriteData(stream: anytype, data: []const u8) bool {
     var event_buf: [response_buf_size + 16]u8 = undefined;
     const event = std.fmt.bufPrint(&event_buf, "data: {s}\n\n", .{data}) catch return false;
     stream.writeAll(event) catch return false;
@@ -4980,6 +4982,45 @@ fn startStream(stream: TcpStream, prompt: []const u8, is_chat: bool, format_prom
         return;
     }
     generateStream(stream, prompt, currentRequestId(), timestamp(), is_chat, format_prompt, max_tokens, sampling);
+}
+
+/// Maximum escaped-content bytes per streamed content delta. Longer outputs are
+/// split across multiple deltas rather than dropped when one frame overflows.
+const stream_content_delta_max: usize = 16384;
+/// Buffer for a quoted finish_reason token (`"stop"` / `"length"`).
+const finish_reason_json_buf_size: usize = 16;
+
+/// Format one streamed assistant content delta chunk.
+/// `finish_reason_json` is the raw JSON value: `null` for intermediate chunks,
+/// `"stop"`/`"length"` for the final one. Returns null when `buf` is too small.
+fn formatContentDeltaChunk(buf: []u8, model_name: []const u8, req_id: u64, created: i64, content_piece: []const u8, finish_reason_json: []const u8) ?[]const u8 {
+    return std.fmt.bufPrint(buf,
+        \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{s}"}},"finish_reason":{s}}}]}}
+    , .{ req_id, created, model_name, content_piece, finish_reason_json }) catch null;
+}
+
+/// Emit `escaped_content` as one or more assistant content delta chunks,
+/// splitting at `stream_content_delta_max` so oversized outputs stream fully
+/// instead of being silently dropped when a single chunk overflows the buffer.
+fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8, req_id: u64, created: i64, escaped_content: []const u8, finish_reason: []const u8) void {
+    var pos: usize = 0;
+    while (true) {
+        const end = @min(pos + stream_content_delta_max, escaped_content.len);
+        const piece = escaped_content[pos..end];
+        const final = end == escaped_content.len;
+        var fr_buf: [finish_reason_json_buf_size]u8 = undefined;
+        const fr_json: []const u8 = if (final)
+            std.fmt.bufPrint(&fr_buf, "\"{s}\"", .{finish_reason}) catch "null"
+        else
+            "null";
+        const chunk = formatContentDeltaChunk(chunk_buf, model_name, req_id, created, piece, fr_json) orelse {
+            slog("req={d} stream content chunk overflow: dropping remainder from byte {d}", .{ log_request_id, pos });
+            return;
+        };
+        _ = sseWriteData(stream, chunk);
+        if (final) return;
+        pos = end;
+    }
 }
 
 /// Streaming with tool call support. Generates full output first, then emits
@@ -5007,12 +5048,12 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
 
     var chunk_buf: [response_buf_size]u8 = undefined;
 
+    var call_idx: usize = 0;
     if (hasToolCalls(gen.raw)) {
         // Emit tool calls as delta chunks
         const tc_start_tag = "<tool_call>";
         const tc_end_tag = "</tool_call>";
         var search_pos: usize = 0;
-        var call_idx: usize = 0;
 
         while (search_pos < gen.raw.len) {
             const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
@@ -5046,7 +5087,9 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             _ = sseWriteData(stream, role_chunk);
             call_idx += 1;
         }
+    }
 
+    if (call_idx > 0) {
         // Final chunk with finish_reason
         const finish = std.fmt.bufPrint(&chunk_buf,
             \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{}},"finish_reason":"tool_calls"}}]}}
@@ -5055,16 +5098,11 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             _ = sseWriteData(stream, finish);
         }
     } else {
-        // No tool calls — emit content as single delta chunk
-        const chunk = std.fmt.bufPrint(&chunk_buf,
-            \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}]}}
-        , .{ req_id, created, g_server.model_name, gen.escaped, gen.finish_reason }) catch blk: {
-            slog("req={d} stream tool chunk overflow: content too large for chunk buffer", .{log_request_id});
-            break :blk "";
-        };
-        if (chunk.len > 0) {
-            _ = sseWriteData(stream, chunk);
-        }
+        // No parseable tool call. `<tool_call>` tags whose payload fails to
+        // parse (a common small-model failure) must degrade to the raw text as
+        // content — mirroring the non-streaming path — instead of emitting an
+        // empty assistant turn that claims finish_reason "tool_calls".
+        writeStreamedContent(stream, &chunk_buf, g_server.model_name, req_id, created, gen.escaped, gen.finish_reason);
     }
 
     // Usage chunk + DONE
@@ -6092,6 +6130,100 @@ pub fn run(config: ServerConfig) !void {
 
 test "parseContentLength normal" {
     try std.testing.expectEqual(@as(?usize, 42), parseContentLength("Content-Length: 42\r\nHost: localhost"));
+}
+
+/// Test double satisfying the `writeAll` surface `sseWriteData` needs.
+const CollectingStream = struct {
+    list: *std.ArrayList(u8),
+    allocator: Allocator,
+
+    fn writeAll(self: *CollectingStream, data: []const u8) !void {
+        try self.list.appendSlice(self.allocator, data);
+    }
+};
+
+/// Count SSE data frames in collected output and return their payloads.
+fn collectSseFrames(allocator: Allocator, raw: []const u8) !std.ArrayList([]const u8) {
+    var frames = std.ArrayList([]const u8).empty;
+    errdefer frames.deinit(allocator);
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, raw, pos, "data: ")) |start| {
+        const payload_start = start + "data: ".len;
+        const end = std.mem.indexOfPos(u8, raw, payload_start, "\n\n") orelse break;
+        try frames.append(allocator, raw[payload_start..end]);
+        pos = end + 2;
+    }
+    return frames;
+}
+
+test "formatContentDeltaChunk emits content and finish reason" {
+    var buf: [512]u8 = undefined;
+    const chunk = formatContentDeltaChunk(&buf, "m", 7, 1234, "hello", "\"stop\"").?;
+    try std.testing.expect(std.mem.indexOf(u8, chunk, "\"content\":\"hello\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, chunk, "\"finish_reason\":\"stop\"") != null);
+    const pending = formatContentDeltaChunk(&buf, "m", 7, 1234, "x", "null").?;
+    try std.testing.expect(std.mem.indexOf(u8, pending, "\"finish_reason\":null") != null);
+    // Undersized buffer must be reported, not truncated.
+    try std.testing.expect(formatContentDeltaChunk(buf[0..32], "m", 7, 1234, "hello", "\"stop\"") == null);
+}
+
+test "writeStreamedContent emits single delta for short output" {
+    const allocator = std.testing.allocator;
+    var collected = std.ArrayList(u8).empty;
+    defer collected.deinit(allocator);
+    var fake = CollectingStream{ .list = &collected, .allocator = allocator };
+    var chunk_buf: [response_buf_size]u8 = undefined;
+    writeStreamedContent(&fake, &chunk_buf, "test-model", 1, 2, "hi", "stop");
+    var frames = try collectSseFrames(allocator, collected.items);
+    defer frames.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), frames.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"content\":\"hi\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"finish_reason\":\"stop\"") != null);
+}
+
+test "writeStreamedContent splits oversized output across deltas" {
+    const allocator = std.testing.allocator;
+    var collected = std.ArrayList(u8).empty;
+    defer collected.deinit(allocator);
+    var fake = CollectingStream{ .list = &collected, .allocator = allocator };
+    var chunk_buf: [response_buf_size]u8 = undefined;
+    const total_len = stream_content_delta_max * 2 + 5;
+    const content = try allocator.alloc(u8, total_len);
+    defer allocator.free(content);
+    @memset(content, 'y');
+    writeStreamedContent(&fake, &chunk_buf, "test-model", 1, 2, content, "length");
+    var frames = try collectSseFrames(allocator, collected.items);
+    defer frames.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 3), frames.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"finish_reason\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[1], "\"finish_reason\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[2], "\"finish_reason\":\"length\"") != null);
+    // Reassembled pieces must equal the input exactly — no dropped bytes.
+    var reassembled = std.ArrayList(u8).empty;
+    defer reassembled.deinit(allocator);
+    const fr_key = ",\"finish_reason\"";
+    for (frames.items) |f| {
+        const key = "\"content\":\"";
+        const s = std.mem.indexOf(u8, f, key).? + key.len;
+        const fr = std.mem.indexOf(u8, f, fr_key).?;
+        const e = std.mem.lastIndexOf(u8, f[0..fr], "\"").?;
+        try reassembled.appendSlice(allocator, f[s..e]);
+    }
+    try std.testing.expectEqualStrings(content, reassembled.items);
+}
+
+test "writeStreamedContent emits empty delta with finish reason" {
+    const allocator = std.testing.allocator;
+    var collected = std.ArrayList(u8).empty;
+    defer collected.deinit(allocator);
+    var fake = CollectingStream{ .list = &collected, .allocator = allocator };
+    var chunk_buf: [response_buf_size]u8 = undefined;
+    writeStreamedContent(&fake, &chunk_buf, "test-model", 1, 2, "", "stop");
+    var frames = try collectSseFrames(allocator, collected.items);
+    defer frames.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), frames.items.len);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"content\":\"\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"finish_reason\":\"stop\"") != null);
 }
 
 test "prngSeedFromSampling uses sim_clock when seed omitted" {
