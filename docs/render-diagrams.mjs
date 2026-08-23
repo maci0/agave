@@ -85,9 +85,7 @@ for (const file of files) {
         );
       }
       totalDiagrams += 1;
-    } catch (error) {
-      // Batch renderer: account for the failure, keep rendering siblings, report count at exit.
-      // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- failures are counted and reported, not swallowed
+    } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- batch renderer: failures counted and reported, never swallowed
       console.error(`ERROR: ${file} diagram ${index + 1}: ${error.message}`);
       errors += 1;
     }
