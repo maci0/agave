@@ -55,11 +55,6 @@ const initial_token_capacity: usize = 4096 + 8;
 /// Limits prefill blocking so decode requests get timely service.
 const prefill_chunk_size: u32 = 32;
 
-/// Cap on SSM state snapshots retained for prefix restore. Snapshots can be
-/// multi-MB (all layer conv+recurrence). Without a bound the map grows without
-/// limit under sustained distinct prompts.
-const max_ssm_state_cache_entries: usize = 64;
-
 /// Logit-bias slot count — derived from SamplingParams so the scheduler
 /// buffer cannot drift from JSON parse capacity.
 const max_scheduler_logit_bias: usize = @as(SamplingParams, .{}).logit_bias_ids.len;
@@ -272,11 +267,14 @@ pub const RequestManager = struct {
     /// Optional prefetch worker (Plan 03).
     prefetcher: ?Prefetcher = null,
 
-    /// SSM state prefix cache: maps xxHash(prompt_tokens) → serialized SSM state.
-    /// Enables ~2x prefill speedup for hybrid SSM models (Qwen3.5, Nemotron) by
-    /// restoring cached DeltaNet/Mamba state matrices instead of recomputing.
-    ssm_state_cache: std.AutoHashMap(u64, []u8) = undefined,
-    ssm_cache_inited: bool = false,
+    /// Note: an SSM state prefix cache (xxHash(prompt) → serialized SSM
+    /// snapshot, restored at prefill start) was removed as incorrect: the
+    /// snapshot was captured after prompt + generated tokens while prefill
+    /// always recomputed from position 0 anyway, so a hit restored stale
+    /// state and then re-applied the same tokens on top, corrupting the
+    /// recurrent state. Re-introducing it requires capturing the state at
+    /// end-of-prefix and skipping recompute of exactly those tokens (which
+    /// additionally needs RadixTree block sharing to feed attention).
 
     /// Initialize request manager.
     ///
@@ -309,8 +307,6 @@ pub const RequestManager = struct {
             .next_id = std.atomic.Value(u64).init(1),
             .tiered_cache = tiered_cache,
             .prefetcher = null,
-            .ssm_state_cache = std.AutoHashMap(u64, []u8).init(allocator),
-            .ssm_cache_inited = true,
         };
 
         // Construct only — runSchedulerLoop starts the worker at the final address.
@@ -339,11 +335,6 @@ pub const RequestManager = struct {
         }
 
         self.radix_tree.deinit();
-        if (self.ssm_cache_inited) {
-            var it = self.ssm_state_cache.valueIterator();
-            while (it.next()) |v| self.allocator.free(v.*);
-            self.ssm_state_cache.deinit();
-        }
         self.waiting.deinit(self.allocator);
         self.running.deinit(self.allocator);
     }
@@ -601,7 +592,9 @@ pub const RequestManager = struct {
 
                 req.appendToken(next_token, eog_ids);
 
-                // On completion: RadixTree insert + SSM state cache
+                // On completion: RadixTree insert (prefix bookkeeping for
+                // cache-hit metrics and queue priority; block sharing itself
+                // is not wired yet, so prefill always recomputes).
                 if (req.is_finished.load(.acquire) and req.tokens.items.len > 0) {
                     const block_ids = model.getBlockTable();
                     self.mutex.lockUncancelable(self.io);
@@ -609,31 +602,6 @@ pub const RequestManager = struct {
                     self.radix_tree.insert(req.prompt_tokens_slice, block_ids) catch |err| {
                         std.log.warn("req={d} failed to insert sequence into RadixTree: {}", .{ req.id, err });
                     };
-                    if (self.ssm_cache_inited) {
-                        if (model.saveSsmState(self.allocator)) |snapshot| {
-                            // saveSsmState may return a non-owned empty sentinel (&{})
-                            // when there is nothing to snapshot — never cache or free it.
-                            if (snapshot.len > 0) {
-                                const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice));
-                                if (self.ssm_state_cache.getPtr(h)) |existing| {
-                                    self.allocator.free(existing.*);
-                                    existing.* = snapshot;
-                                } else {
-                                    while (self.ssm_state_cache.count() >= max_ssm_state_cache_entries) {
-                                        var kit = self.ssm_state_cache.keyIterator();
-                                        const victim_key = (kit.next() orelse break).*;
-                                        if (self.ssm_state_cache.fetchRemove(victim_key)) |kv| {
-                                            self.allocator.free(kv.value);
-                                        }
-                                    }
-                                    self.ssm_state_cache.put(h, snapshot) catch |err| {
-                                        std.log.warn("req={d} SSM state cache insert failed: {}", .{ req.id, err });
-                                        self.allocator.free(snapshot);
-                                    };
-                                }
-                            }
-                        }
-                    }
                 }
             }
 
@@ -644,13 +612,12 @@ pub const RequestManager = struct {
                 if (req.is_finished.load(.acquire)) continue;
                 if (req.prefill_pos >= req.prompt_tokens) continue;
 
-                // SSM state restore on first prefill step
-                if (req.prefill_pos == 0 and req.cached_prefix_len > 0 and self.ssm_cache_inited) {
-                    const h = std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(req.prompt_tokens_slice[0..req.cached_prefix_len]));
-                    if (self.ssm_state_cache.get(h)) |snapshot| {
-                        model.restoreSsmState(snapshot);
-                    }
-                }
+                // NOTE: no SSM state restore here. Prefill recomputes from
+                // position 0 (cached_prefix_len only influences queue
+                // priority until RadixTree block sharing is wired), so any
+                // restored snapshot would be re-applied on top of the same
+                // tokens and corrupt recurrent state. See the note on
+                // RequestManager above.
 
                 // Restore KV position
                 model.setKvSeqLen(req.kv_position);

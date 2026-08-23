@@ -1247,7 +1247,6 @@ pub const ModelStorage = union(enum) {
         }
         return error.UnsupportedArch;
     }
-};
 
     /// Print accumulated performance counters.
     pub fn reportPerf(self: *ModelStorage) void {

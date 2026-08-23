@@ -860,7 +860,10 @@ pub const DFlash2Model = struct {
     /// dynamic coefficients. Stage-1 weights are the upper row-block of the
     /// projection matrix (reference packs [2 taps] along the output dim).
     fn runConvProj(self: *DFlash2Model, lid: u32, stage: usize, slots: usize, k_groups: usize) !void {
-        const proj_full = try self.layerTensor(lid, if (stage == 0) "conv_a_proj" else "conv_b_proj");
+        const proj_full = switch (stage) {
+            0 => try self.layerTensor(lid, "conv_a_proj"),
+            else => try self.layerTensor(lid, "conv_b_proj"),
+        };
         const e: usize = self.n_embd;
         const out_dim: usize = k_groups;
         const row_bytes = backend_mod.gemvRowBytes(proj_full.dtype, e);
