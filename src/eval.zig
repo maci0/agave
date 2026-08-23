@@ -19,7 +19,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const math = std.math;
+const math_ops = @import("ops/math.zig");
 
 /// Result of evaluating one continuation.
 pub const CaseResult = struct {
@@ -112,34 +112,13 @@ pub fn scoreCase(
             continue;
         }
 
-        // Log-softmax to get log probabilities
-        // Find max for numerical stability
-        var max_logit: f32 = logits[0];
-        for (logits[1..]) |l| {
-            if (l > max_logit) max_logit = l;
-        }
-
-        // Compute log(sum(exp(logits - max)))
-        var sum_exp: f64 = 0;
-        for (logits) |l| {
-            sum_exp += @exp(@as(f64, l - max_logit));
-        }
-        const log_sum = @as(f32, @floatCast(math.log(f64, math.e, sum_exp))) + max_logit;
-
-        // Log probability of ground truth token
-        const log_prob = logits[gt_token] - log_sum;
+        // Log-softmax probability of the ground-truth token and greedy argmax,
+        // both via the SIMD helpers shared with the sampler (single fused pass
+        // over the vocab instead of scalar max/sum-exp/argmax rescans).
+        const log_prob = math_ops.tokenLogProb(logits, gt_token);
         total_nll -= @as(f64, log_prob);
 
-        // Argmax check
-        var argmax_id: u32 = 0;
-        var argmax_val: f32 = logits[0];
-        for (logits[1..], 1..) |l, i| {
-            if (l > argmax_val) {
-                argmax_val = l;
-                argmax_id = @intCast(i);
-            }
-        }
-        if (argmax_id == gt_token) n_correct += 1;
+        if (math_ops.argmax(logits) == gt_token) n_correct += 1;
 
         n_scored += 1;
     }

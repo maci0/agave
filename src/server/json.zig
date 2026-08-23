@@ -899,6 +899,25 @@ pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
     return escapeWith(allocator, input, jsonEscapeChar);
 }
 
+/// Escape `src` for safe embedding in JSON into `dst` without allocating.
+/// Returns the escaped slice within `dst`, or null when it would not fit
+/// (escaped output can be up to 6× the input length for control chars).
+pub fn jsonEscapeInto(dst: []u8, src: []const u8) ?[]const u8 {
+    var pos: usize = 0;
+    for (src) |c| {
+        const replacement = jsonEscapeChar(c) orelse {
+            if (pos + 1 > dst.len) return null;
+            dst[pos] = c;
+            pos += 1;
+            continue;
+        };
+        if (pos + replacement.len > dst.len) return null;
+        @memcpy(dst[pos..][0..replacement.len], replacement);
+        pos += replacement.len;
+    }
+    return dst[0..pos];
+}
+
 /// Decode JSON escape sequences from `src` into `dst` without allocating.
 /// Returns the decoded slice within `dst`, or null when the decoded form does
 /// not fit. Output is never longer than input.
@@ -1626,6 +1645,43 @@ test "htmlEscape no-op for plain text" {
     // No escaping needed — returns input pointer, no allocation
     try std.testing.expect(escaped.ptr == input.ptr);
     try std.testing.expectEqualStrings("hello world", escaped);
+}
+
+test "jsonEscapeInto escapes without allocating" {
+    var buf: [64]u8 = undefined;
+    // Quotes, backslashes, newline, and control chars.
+    const out = jsonEscapeInto(&buf, "a\"b\\c\nd\x01").?;
+    try std.testing.expectEqualStrings("a\\\"b\\\\c\\nd\\u0001", out);
+
+    // No escaping needed — byte-identical copy.
+    const plain = jsonEscapeInto(&buf, "hello").?;
+    try std.testing.expectEqualStrings("hello", plain);
+
+    // Output that does not fit must return null, never truncate.
+    var small: [4]u8 = undefined;
+    try std.testing.expect(jsonEscapeInto(&small, "abcde") == null);
+    var tiny: [1]u8 = undefined;
+    try std.testing.expect(jsonEscapeInto(&tiny, "\n") == null); // \n → \\n needs 2 bytes
+    const fits = jsonEscapeInto(&tiny, "a").?;
+    try std.testing.expectEqualStrings("a", fits);
+}
+
+test "jsonEscapeInto matches jsonEscape output" {
+    const allocator = std.testing.allocator;
+    const inputs = [_][]const u8{
+        "plain text",
+        "with \"quotes\" and \\ backslash",
+        "line1\nline2\ttabbed\r",
+        "\x00\x01\x1f control",
+        "",
+    };
+    for (inputs) |input| {
+        const heap_escaped = try jsonEscape(allocator, input);
+        defer if (heap_escaped.ptr != input.ptr) allocator.free(heap_escaped);
+        var buf: [256]u8 = undefined;
+        const into_escaped = jsonEscapeInto(&buf, input).?;
+        try std.testing.expectEqualStrings(heap_escaped, into_escaped);
+    }
 }
 
 test "extractFormField basic" {

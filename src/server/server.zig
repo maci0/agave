@@ -117,6 +117,9 @@ const health_buf_size: usize = 768;
 const metrics_render_buf_size: usize = 65536;
 const stats_buf_size: usize = 512;
 const sse_event_buf_size: usize = 1024;
+/// Stack budget for decoding a single streamed token without allocating.
+/// Tokens longer than this fall back to the allocating batch decode.
+const stream_decode_buf_size: usize = 512;
 const logprob_buf_size: usize = 4096;
 const clear_response_buf_size: usize = 128;
 /// Must not exceed http_buf_size — headers and body share the same read buffer.
@@ -305,15 +308,21 @@ fn pollSchedulerStop(
 ) ?u32 {
     if (!sampling.hasStop()) return null;
     const cur = req.visible_len.load(.acquire);
+    var piece_buf: [stream_decode_buf_size]u8 = undefined;
     while (checked_len.* < cur) {
         const id = req.tokens.items[checked_len.*];
-        const piece = tok.decode(@constCast(&[_]u32{id})) catch |err| {
-            std.log.warn("req={d} stop-sequence decode failed (id={d}): {}", .{ req.id, id, err });
-            checked_len.* += 1;
-            continue;
-        };
-        defer allocator.free(piece);
-        appendStopWindow(stop_buf, stop_len, piece);
+        // Fast path: decode into a stack buffer (no per-token heap traffic).
+        if (tok.decodeOne(id, &piece_buf)) |piece| {
+            appendStopWindow(stop_buf, stop_len, piece);
+        } else {
+            const piece = tok.decode(&[_]u32{id}) catch |err| {
+                std.log.warn("req={d} stop-sequence decode failed (id={d}): {}", .{ req.id, id, err });
+                checked_len.* += 1;
+                continue;
+            };
+            defer allocator.free(piece);
+            appendStopWindow(stop_buf, stop_len, piece);
+        }
         checked_len.* += 1;
         if (sampling.matchesStop(stop_buf[0..stop_len.*])) {
             req.is_finished.store(true, .release);
@@ -4291,9 +4300,23 @@ fn decodeTokenText(tok: *Tokenizer, token_id: u32) ?[]u8 {
 /// Returns false if the write failed (client disconnected).
 fn emitChatStreamEvent(stream: TcpStream, text: []const u8) bool {
     if (text.len == 0) return true;
+    // Fast path: escape into the event buffer without allocating. Falls back
+    // to the allocating escape only when the escaped form does not fit.
+    var buf: [sse_event_buf_size]u8 = undefined;
+    const prefix = "data: {\"t\":\"";
+    const suffix = "\"}\n\n";
+    const budget = buf.len - prefix.len - suffix.len;
+    if (text.len <= budget) {
+        if (json.jsonEscapeInto(buf[prefix.len..][0..budget], text)) |escaped| {
+            const event = buf[0 .. prefix.len + escaped.len + suffix.len];
+            @memcpy(buf[0..prefix.len], prefix);
+            @memcpy(event[prefix.len + escaped.len ..], suffix);
+            stream.writeAll(event) catch return false;
+            return true;
+        }
+    }
     const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
     defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
-    var buf: [sse_event_buf_size]u8 = undefined;
     const event = std.fmt.bufPrint(&buf, "data: {{\"t\":\"{s}\"}}\n\n", .{escaped}) catch {
         std.log.warn("req={d} SSE token event exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
@@ -4316,6 +4339,14 @@ fn flushStreamHoldback(stream: TcpStream, hb: *Utf8Holdback, comptime emitFn: fn
 /// call flushStreamHoldback before the final [DONE].
 /// Returns false if the write failed (client disconnected).
 fn streamToken(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+    // Fast path: allocation-free single-token decode into a stack buffer.
+    var buf: [stream_decode_buf_size]u8 = undefined;
+    if (tok.decodeOne(token_id, &buf)) |decoded| {
+        const pieces = hb.feed(decoded);
+        if (!emitChatStreamEvent(stream, pieces.head)) return false;
+        return emitChatStreamEvent(stream, pieces.body);
+    }
+    // Fallback for oversized tokens: allocating batch decode (same output).
     const decoded = decodeTokenText(tok, token_id) orelse return true;
     defer g_server.allocator.free(decoded);
     const pieces = hb.feed(decoded);
@@ -4737,6 +4768,12 @@ fn emitAnthropicDeltaPiece(stream: TcpStream, text: []const u8) bool {
 /// Callers must flushStreamHoldback before the final events.
 /// Returns false if the write failed (client disconnected).
 fn streamAnthropicDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+    var buf: [stream_decode_buf_size]u8 = undefined;
+    if (tok.decodeOne(token_id, &buf)) |decoded| {
+        const pieces = hb.feed(decoded);
+        if (!emitAnthropicDeltaPiece(stream, pieces.head)) return false;
+        return emitAnthropicDeltaPiece(stream, pieces.body);
+    }
     const decoded = decodeTokenText(tok, token_id) orelse return true;
     defer g_server.allocator.free(decoded);
     const pieces = hb.feed(decoded);
@@ -4794,6 +4831,12 @@ fn emitResponsesDeltaPiece(stream: TcpStream, text: []const u8) bool {
 /// Callers must flushStreamHoldback before the final events.
 /// Returns false if the write failed (client disconnected).
 fn streamResponsesDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+    var buf: [stream_decode_buf_size]u8 = undefined;
+    if (tok.decodeOne(token_id, &buf)) |decoded| {
+        const pieces = hb.feed(decoded);
+        if (!emitResponsesDeltaPiece(stream, pieces.head)) return false;
+        return emitResponsesDeltaPiece(stream, pieces.body);
+    }
     const decoded = decodeTokenText(tok, token_id) orelse return true;
     defer g_server.allocator.free(decoded);
     const pieces = hb.feed(decoded);
@@ -5438,8 +5481,24 @@ fn writeOpenAiChunk(
 }
 
 fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, lp_info: ?LogprobInfo, hb: *Utf8Holdback) bool {
-    const decoded = decodeTokenText(tok, token_id) orelse return true;
-    defer g_server.allocator.free(decoded);
+    // Fast path: allocation-free single-token decode into a stack buffer.
+    var dec_buf: [stream_decode_buf_size]u8 = undefined;
+    var decoded: []const u8 = undefined;
+    var heap_decoded: ?[]u8 = null;
+    defer if (heap_decoded) |h| g_server.allocator.free(h);
+    if (tok.decodeOne(token_id, &dec_buf)) |d| {
+        decoded = d;
+    } else {
+        const h = decodeTokenText(tok, token_id) orelse return true;
+        if (h.len <= dec_buf.len) {
+            @memcpy(dec_buf[0..h.len], h);
+            g_server.allocator.free(h);
+            decoded = dec_buf[0..h.len];
+        } else {
+            heap_decoded = h;
+            decoded = h;
+        }
+    }
 
     // A token split by the UTF-8 holdback may emit two chunks; logprobs
     // describe the whole token, so attach them to the first piece only.
@@ -5958,15 +6017,24 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             }
             // Stop sequence check (decode token, check trailing text)
             if (sampling.hasStop()) {
-                const stok = [1]u32{next};
-                const stext = g_server.tokenizer.decode(@constCast(&stok)) catch |err| blk: {
-                    std.log.warn("req={d} stop seq decode failed (id={d}): {}", .{ log_request_id, next, err });
-                    break :blk null;
-                };
-                defer if (stext) |st| g_server.allocator.free(st);
-                if (stext != null and stext.?.len > 0 and sampling.matchesStop(stext.?)) {
+                var stop_text_buf: [stream_decode_buf_size]u8 = undefined;
+                const stext_opt = g_server.tokenizer.decodeOne(next, &stop_text_buf);
+                if (stext_opt != null and stext_opt.?.len > 0 and sampling.matchesStop(stext_opt.?)) {
                     token_count += 1;
                     break;
+                }
+                if (stext_opt == null) {
+                    // Fallback for oversized tokens: allocating batch decode.
+                    const stok = [1]u32{next};
+                    const stext = g_server.tokenizer.decode(&stok) catch |err| blk: {
+                        std.log.warn("req={d} stop seq decode failed (id={d}): {}", .{ log_request_id, next, err });
+                        break :blk null;
+                    };
+                    defer if (stext) |st| g_server.allocator.free(st);
+                    if (stext != null and stext.?.len > 0 and sampling.matchesStop(stext.?)) {
+                        token_count += 1;
+                        break;
+                    }
                 }
             }
             if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp, &chunk_hb)) {
