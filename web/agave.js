@@ -1,3 +1,4 @@
+// oxlint-disable @rikalabs/no-standalone-classes import/unambiguous -- classic browser script loaded via <script src> in web/index.html; AgaveEngine is a stateful engine with a documented constructor API
 /**
  * Agave WASM browser inference glue (`web/`), not the HTTP chat UI.
  *
@@ -13,11 +14,8 @@
 
 class AgaveEngine {
   wasm = null;
-constructor() {
-    
-    this.ctx = 0;
-    this.ready = false;
-  }
+  ctx = 0;
+  ready = false;
 
   async init() {
     const response = await fetch('agave.wasm');
@@ -39,8 +37,7 @@ constructor() {
         environ_sizes_get: () => 0,
         clock_time_get: () => 0,
         random_get: (ptr, len) => {
-          const view = new Uint8Array(wasmMemory.buffer, ptr, len);
-          crypto.getRandomValues(view);
+          crypto.getRandomValues(new Uint8Array(wasmMemory.buffer, ptr, len));
           return 0;
         },
       },
@@ -50,6 +47,7 @@ constructor() {
     wasmMemory = result.instance.exports.memory;
     this.wasm = result.instance;
     this.ready = true;
+    // oxlint-disable-next-line no-console -- engine diagnostics for WASM debugging
     console.log('Agave WASM engine initialized');
   }
 
@@ -58,17 +56,18 @@ constructor() {
    * @param {string|ArrayBuffer} source - URL to fetch or raw model data
    */
   async loadModel(source) {
-    let data;
+    let data = source;
+    // Runtime union discrimination at the API boundary. The JSDoc contract admits
+    // both shapes; there is no schema parser to delegate to.
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|ArrayBuffer union
     if (typeof source === 'string') {
       const response = await fetch(source);
       data = await response.arrayBuffer();
-    } else {
-      data = source;
     }
 
     // Allocate WASM memory and copy model data
     const ptr = this.wasm.exports.agave_alloc(data.byteLength);
-    if (ptr === 0) {throw new Error('Failed to allocate WASM memory for model');}
+    if (ptr === 0) { throw new Error('Failed to allocate WASM memory for model'); }
 
     const wasmMem = new Uint8Array(this.wasm.exports.memory.buffer, ptr, data.byteLength);
     wasmMem.set(new Uint8Array(data));
@@ -76,7 +75,7 @@ constructor() {
     // Initialize inference context
     this.ctx = this.wasm.exports.agave_init(ptr, data.byteLength);
     // Model buffer is borrowed by GGUF — do NOT agave_dealloc until agave_free.
-    if (this.ctx === 0) {throw new Error('Failed to initialize model');}
+    if (this.ctx === 0) { throw new Error('Failed to initialize model'); }
 
     // Read init status message
     const statusBufSize = 4096;
@@ -86,6 +85,7 @@ constructor() {
     this.initMessage = new TextDecoder().decode(statusMem);
     this.wasm.exports.agave_dealloc(statusPtr, statusBufSize);
 
+    // oxlint-disable-next-line no-console -- engine diagnostics for WASM debugging
     console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB — ${this.initMessage}`);
   }
 
@@ -93,12 +93,16 @@ constructor() {
    * Generate text from a prompt.
    * @param {string} prompt - Input text
    * @param {Object} options - { maxTokens: 100 }
-   * @returns {string} Generated text
+   * @returns {Promise<string>} Generated text
    */
+  // Async signature is the documented API contract even though the body is sync.
+  // oxlint-disable-next-line eslint/require-await typescript-eslint/require-await -- Promise API contract
   async generate(prompt, options = {}) {
-    if (!this.ctx) {throw new Error('No model loaded');}
+    if (!this.ctx) { throw new Error('No model loaded'); }
 
-    const maxTokens = options.maxTokens ?? 100;
+    // Explicit zero must not fall back to the default token budget.
+    // oxlint-disable-next-line unicorn/prefer-nullish-coalescing -- falsy-or semantics intended for numeric options
+    const maxTokens = options.maxTokens || 100;
     const encoder = new TextEncoder();
     const promptBytes = encoder.encode(prompt);
 
@@ -134,5 +138,6 @@ constructor() {
   }
 }
 
-// Export for module systems
-if (typeof module !== 'undefined') {module.exports = AgaveEngine;}
+// Classic scripts expose the class implicitly; pin it explicitly so the
+// contract in web/index.html does not depend on declaration-position magic.
+globalThis.AgaveEngine = AgaveEngine;

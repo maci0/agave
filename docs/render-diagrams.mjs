@@ -27,33 +27,30 @@ const THEME = {
 };
 
 // Resolve CSS custom properties (var(--xxx)) to hex values before rasterizing.
-function resolveVars(svg, theme) {
-  return svg
-    .replaceAll(/var\(--bg\)/g, theme.bg)
-    .replaceAll(/var\(--fg\)/g, theme.fg)
-    .replaceAll(/var\(--accent\)/g, theme.accent)
-    .replaceAll(/var\(--line\)/g, theme.line)
-    .replaceAll(/var\(--muted\)/g, theme.muted)
-    .replaceAll(/var\(--surface\)/g, theme.surface)
-    .replaceAll(/var\(--border\)/g, theme.border);
-}
+const resolveVars = (svg, theme) =>
+  svg
+    .replaceAll('var(--bg)', theme.bg)
+    .replaceAll('var(--fg)', theme.fg)
+    .replaceAll('var(--accent)', theme.accent)
+    .replaceAll('var(--line)', theme.line)
+    .replaceAll('var(--muted)', theme.muted)
+    .replaceAll('var(--surface)', theme.surface)
+    .replaceAll('var(--border)', theme.border);
 
 // Extract mermaid blocks from a Markdown file.
-function extractDiagrams(md) {
+const extractDiagrams = (md) => {
   const blocks = [];
-  const re = /```mermaid\n([\s\S]*?)```/g;
-  let m;
-  let idx = 0;
-  while ((m = re.exec(md)) !== null) {
-    blocks.push({ source: m[1].trim(), index: idx++ });
+  for (const m of md.matchAll(/```mermaid\n([\s\S]*?)```/g)) {
+    blocks.push({ source: m[1].trim(), index: blocks.length });
   }
   return blocks;
-}
+};
 
 // Parse CLI args
 const args = process.argv.slice(2);
 const outDir = args.includes('--out-dir') ? args[args.indexOf('--out-dir') + 1] : 'docs/diagrams';
-const emitPng = args.includes('--png') ?? !args.includes('--svg');
+// oxlint-disable-next-line unicorn/prefer-nullish-coalescing -- boolean operands: default-PNG requires falsy-or semantics
+const emitPng = args.includes('--png') || !args.includes('--svg');
 const emitSvg = args.includes('--svg');
 
 mkdirSync(outDir, { recursive: true });
@@ -67,31 +64,32 @@ let errors = 0;
 for (const file of files) {
   const md = readFileSync(join(tutorialDir, file), 'utf8');
   const diagrams = extractDiagrams(md);
-  if (diagrams.length === 0) {continue;}
+  if (diagrams.length === 0) { continue; }
 
-  const stem = basename(file, extname(file));
-  const fileDir = join(outDir, stem);
+  // oxlint-disable-next-line @rikalabs/no-pass-through-intermediate-vars -- reused by mkdir and every write path below
+  const fileDir = join(outDir, basename(file, extname(file)));
   mkdirSync(fileDir, { recursive: true });
 
   for (const { source, index } of diagrams) {
     const name = `diagram-${String(index + 1).padStart(2, '0')}`;
     try {
-      const rawSvg = renderMermaidSVG(source, { theme: THEME });
-      const resolvedSvg = resolveVars(rawSvg, THEME);
+      const resolvedSvg = resolveVars(renderMermaidSVG(source, { theme: THEME }), THEME);
 
       if (emitSvg) {
         writeFileSync(join(fileDir, `${name}.svg`), resolvedSvg);
       }
       if (emitPng) {
-        const png = new Resvg(resolvedSvg, {
-          fitTo: { mode: 'zoom', value: 2 },
-        }).render().asPng();
-        writeFileSync(join(fileDir, `${name}.png`), png);
+        writeFileSync(
+          join(fileDir, `${name}.png`),
+          new Resvg(resolvedSvg, { fitTo: { mode: 'zoom', value: 2 } }).render().asPng(),
+        );
       }
-      totalDiagrams++;
+      totalDiagrams += 1;
     } catch (error) {
+      // Batch renderer: account for the failure, keep rendering siblings, report count at exit.
+      // oxlint-disable-next-line @rikalabs/no-silent-catch-fallback -- failures are counted and reported, not swallowed
       console.error(`ERROR: ${file} diagram ${index + 1}: ${error.message}`);
-      errors++;
+      errors += 1;
     }
   }
 }
