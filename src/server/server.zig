@@ -6292,6 +6292,11 @@ pub fn run(config: ServerConfig) !void {
     // The scheduler owns the model forward loop; HTTP handlers enqueue
     // requests and poll for results instead of calling model.forward() directly.
     const effective_batch_size: usize = if (config.max_batch_size > 0) config.max_batch_size else scheduler_max_batch_size;
+    // Admission runs one request at a time while the model layer exposes a
+    // single shared KV sequence (see scheduler.max_running_requests_single_sequence);
+    // `--max-batch-size` becomes effective concurrent decoding once per-request
+    // paged KV is wired end to end.
+    const admission_limit = @min(effective_batch_size, scheduler.max_running_requests_single_sequence);
     var request_manager = try scheduler.RequestManager.init(allocator, &server.metrics, effective_batch_size, scheduler_timeout_sec, tiered_cache, io);
     defer request_manager.deinit();
     server.request_manager = &request_manager;
@@ -6345,7 +6350,7 @@ pub fn run(config: ServerConfig) !void {
 
     const t = getTimeComponents();
     var buf: [hdr_buf_size]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://{d}.{d}.{d}.{d}:{d}\n  model={s} backend={s}\n  ctx_size={d} max_conn={d} batch={d} timeout={d}s auth={s} rate_limit={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, host[0], host[1], host[2], host[3], port, model_name, backend_name, ctx_size, max_concurrent_connections, effective_batch_size, scheduler_timeout_sec, if (api_key != null) "yes" else "no", if (server.rate_limiter != null) "yes" else "no" }) catch "";
+    const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://{d}.{d}.{d}.{d}:{d}\n  model={s} backend={s}\n  ctx_size={d} max_conn={d} batch={d} timeout={d}s auth={s} rate_limit={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, host[0], host[1], host[2], host[3], port, model_name, backend_name, ctx_size, max_concurrent_connections, admission_limit, scheduler_timeout_sec, if (api_key != null) "yes" else "no", if (server.rate_limiter != null) "yes" else "no" }) catch "";
     _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
 
     // Install graceful shutdown handlers for SIGTERM and SIGINT.
