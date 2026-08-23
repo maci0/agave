@@ -6257,7 +6257,12 @@ pub fn run(config: ServerConfig) !void {
     const address = net.IpAddress{ .ip4 = .{ .bytes = host, .port = port } };
     var tcp = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
         var buf: [error_body_buf_size]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Error: failed to listen on port {d}: {s}\n", .{ port, @errorName(err) }) catch "";
+        // Port-in-use is by far the most common listen failure; give it an
+        // actionable hint instead of a raw error name (matches pull/main error style).
+        const msg = if (err == error.AddressInUse)
+            std.fmt.bufPrint(&buf, "Error: port {d} is already in use (another server may be running).\n  Start on a different port with --port <PORT>.\n", .{port}) catch ""
+        else
+            std.fmt.bufPrint(&buf, "Error: failed to listen on port {d}: {s}\n", .{ port, @errorName(err) }) catch "";
         _ = std.posix.system.write(stderr_file.handle, msg.ptr, msg.len);
         return error.ListenError;
     };
