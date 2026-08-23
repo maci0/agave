@@ -14,6 +14,7 @@ const math_ops = @import("../ops/math.zig");
 const ddtree = @import("ddtree.zig");
 const dspark = @import("dspark.zig");
 const ngram_mod = @import("ngram.zig");
+const DFlash2Model = @import("../models/dflash2.zig").DFlash2Model;
 
 pub const max_draft_tokens: usize = 32;
 const log_softmax_eps: f32 = 1e-10;
@@ -223,6 +224,84 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     }
     state.n_draft = n;
     return n;
+}
+
+/// DFlash2 block-diffusion drafting (Inco AI, "DFlash 2", 2026).
+///
+/// One parallel pass drafts `k` proposal tokens conditioned on the injected
+/// target-feature context; the candidate path selector picks a coherent chain
+/// and exports per-slot q distributions for lossless rejection sampling.
+///
+/// `anchor` must equal the drafter's current context length position. At
+/// temperature > 0 the selector rewrites each depth's row in
+/// `state.draft_log_probs` into q form (chosen candidate keeps its probability,
+/// everything else becomes −inf log-prob), which verifySampling consumes
+/// unchanged.
+pub fn draftDFlash2(
+    state: *SpecState,
+    drafter: *DFlash2Model,
+    anchor: u32,
+    anchor_pos: usize,
+    temperature: f32,
+    rng: std.Random,
+) u32 {
+    const k = @min(@min(state.k, drafter.block_size -| 1), max_draft_tokens);
+    if (k == 0) {
+        state.n_draft = 0;
+        return 0;
+    }
+    const vs = state.vocab_size;
+    var rows: [max_draft_tokens][]f32 = undefined;
+    for (0..k) |i| rows[i] = state.draft_log_probs[i * vs ..][0..vs];
+    const n = drafter.proposeBlock(
+        anchor,
+        anchor_pos,
+        k,
+        temperature,
+        rng,
+        state.draft_tokens[0..k],
+        rows[0..k],
+    ) catch |err| {
+        std.log.warn("dflash2: proposeBlock failed: {s}", .{@errorName(err)});
+        state.n_draft = 0;
+        return 0;
+    };
+    state.n_draft = @intCast(n);
+    return @intCast(n);
+}
+
+/// Hybrid DFlash2 + n-gram extension (greedy decoding only; sampled rounds
+/// keep pure DFlash2 output because extended slots carry no q distribution).
+///
+/// Proposes an n-gram continuation from history (with shared-pool fallback)
+/// and splices it into the drafted block: positions where the n-gram agrees
+/// with the drafter confirm its picks, and any exact-match tail extends the
+/// block up to the budget. Pure disagreement leaves the drafter untouched —
+/// learned proposals are never clobbered by a blind history guess.
+pub fn dflash2HybridNgram(
+    state: *SpecState,
+    ngram_state: *ngram_mod.NgramState,
+    pool: ?*ngram_mod.SharedNgramPool,
+    k_budget: u32,
+) void {
+    const budget = @min(@as(usize, @intCast(k_budget)), max_draft_tokens);
+    if (budget == 0 or state.n_draft >= budget) return;
+    var prop: [max_draft_tokens]u32 = undefined;
+    var np = ngram_state.propose(budget, &prop);
+    if (np == 0) {
+        if (pool) |p| {
+            const tail_start = if (ngram_state.len >= 10) ngram_state.len - 10 else 0;
+            np = p.propose(ngram_state.history[tail_start..ngram_state.len], budget, &prop);
+        }
+    }
+    if (np == 0) return;
+    var agree: usize = 0;
+    while (agree < state.n_draft and agree < np and state.draft_tokens[agree] == prop[agree]) agree += 1;
+    if (agree == 0) return;
+    while (state.n_draft < np and state.n_draft < budget) {
+        state.draft_tokens[state.n_draft] = prop[state.n_draft];
+        state.n_draft += 1;
+    }
 }
 
 /// EAGLE speculative decoding: condition each draft step on the target model's hidden state.
@@ -1184,6 +1263,31 @@ test "fuzz: all spec_decode functions" {
             }
         }
     }.f, .{});
+}
+
+test "dflash2HybridNgram extends agreeing blocks, keeps disagreeing ones" {
+    var s = try SpecState.init(std.testing.allocator, 8, 64);
+    defer s.deinit(std.testing.allocator);
+    var ng = ngram_mod.NgramState{};
+    // History: ... 10 11 12 → n-gram continuation depends on matches.
+    for ([_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 }) |t| ng.push(t);
+
+    // Drafter agrees on first two tokens (10, 11) then diverges; the n-gram
+    // continuation after "10 11" is "12 13 14", so the block should extend.
+    s.draft_tokens[0] = 10;
+    s.draft_tokens[1] = 11;
+    s.n_draft = 2;
+    dflash2HybridNgram(&s, &ng, null, 8);
+    try std.testing.expect(s.n_draft >= 3);
+    try std.testing.expectEqual(@as(u32, 12), s.draft_tokens[2]);
+
+    // Pure disagreement: drafter proposes unrelated tokens; untouched.
+    s.draft_tokens[0] = 99;
+    s.draft_tokens[1] = 98;
+    s.n_draft = 2;
+    dflash2HybridNgram(&s, &ng, null, 8);
+    try std.testing.expectEqual(@as(u32, 2), s.n_draft);
+    try std.testing.expectEqual(@as(u32, 99), s.draft_tokens[0]);
 }
 
 test "dsparkTrimDraft with no history uses default prior" {

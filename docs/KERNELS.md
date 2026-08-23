@@ -183,7 +183,9 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 - DeltaNet native GPU kernels (sequential recurrence delegates to CPU)
 - Causal Conv1d (delegates to CPU)
 
-**CUDA PTX build**: Zig 0.16 + LLVM NVPTX rejects `callconv(.kernel)` aliases. Workaround: use `callconv(.nvptx_device)` (emits `.func`), then build.zig Python fixup promotes `*_kernel` functions to `.entry`. Run `zig build ptx -Dcuda-sm=sm_120` then copy `zig-out/ptx/*.ptx` to `src/backend/kernels/cuda/` before building with `-Denable-cuda=true`.
+**CUDA PTX build**: Zig 0.16 + LLVM NVPTX rejects `callconv(.kernel)` aliases. Workaround: use `callconv(.nvptx_device)` (emits `.func`), then `src/backend/kernels/cuda/fix_kernel_alias.py` (wired into the build graph) promotes `*_kernel` functions to `.entry`. Run `zig build ptx -Dcuda-sm=sm_120` then copy `zig-out/ptx/*.ptx` to `src/backend/kernels/cuda/` before building with `-Denable-cuda=true`. Verify freshness with `scripts/check-shader-artifacts.sh --ptx-only`.
+
+**Vulkan SPIR-V build**: compile each shader with `glslangValidator -V --target-env vulkan1.1 foo.comp -o foo.spv`. The `.spv` binaries are committed and embedded via `@embedFile`; recompiling is manual. Verify with `scripts/check-shader-artifacts.sh` (byte-compare; different glslang releases embed their generator version, so treat diffs from a different compiler version as suspect, not definitive).
 
 **Metal** — format gap:
 - GEMV: nvfp4 (GGUF) — GPU backends use SafeTensors NVFP4 (`nvfp4_st`) path instead

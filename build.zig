@@ -129,16 +129,11 @@ pub fn build(b: *std.Build) void {
             // callconv(.kernel) causes LLVM NVPTX to reject aliases to kernel functions.
             // Kernels use callconv(.nvptx_device) which generates .func (device function).
             // Post-processing: find .alias directives, promote .func → .entry, remove aliases.
-            const fixup = b.addSystemCommand(&.{
-                "python3", "-c",
-                \\import re, sys
-                \\ptx = open(sys.argv[1]).read()
-                \\for clean, mangled in re.findall(r'\.alias (\w+_kernel), ([^;]+);', ptx):
-                \\    ptx = ptx.replace(f'.func {mangled}(', f'.entry {clean}(')
-                \\ptx = re.sub(r'\.alias \w+_kernel, [^;]+;\n', '', ptx)
-                \\ptx = re.sub(r'^\.func (\w+_kernel)$', r'.entry \1', ptx, flags=re.MULTILINE)
-                \\sys.stdout.write(ptx)
-            });
+            // Pass the fixup script via addFileArg so the build graph tracks it as an
+            // input (rebuilds when the script changes) and avoids configure-time getPath
+            // absolute host paths (same pattern as the ROCm fixup below).
+            const fixup = b.addSystemCommand(&.{"python3"});
+            fixup.addFileArg(b.path("src/backend/kernels/cuda/fix_kernel_alias.py"));
             fixup.addFileArg(ptx.getEmittedAsm());
             const fixed_ptx = fixup.captureStdOut(.{});
             const install = b.addInstallFile(fixed_ptx, b.fmt("ptx/{s}.ptx", .{name}));

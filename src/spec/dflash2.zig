@@ -237,7 +237,7 @@ test "topK selects largest entries descending" {
 }
 
 test "topK handles short inputs" {
-    const scores = [_]f32{ 2.0 };
+    const scores = [_]f32{2.0};
     var ids: [4]u32 = undefined;
     var vals: [4]f32 = undefined;
     const n = topK(&scores, &ids, &vals);
@@ -251,7 +251,7 @@ test "selectPath greedy follows strongest edges" {
     const rank = 2;
     const unary = [_]f32{
         10.0, 0.0, // slot 0: candidate 0 strongly preferred by logits
-        0.0,  20.0, // slot 1: candidate 1 preferred by logits
+        0.0, 20.0, // slot 1: candidate 1 preferred by logits
     };
     const cand_ids = [_]u32{ 1, 3, 5, 7 };
     // Hidden projection all zeros → edges vanish → pure unary walk.

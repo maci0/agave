@@ -261,6 +261,38 @@ jobs:
           fi
           zig build "${args[@]}"
 
+  # Rebuild-and-compare check for committed kernel binaries (CUDA PTX).
+  # These artifacts are @embedFile'd but NOT rebuilt by `zig build`, so a
+  # kernel-source edit without regeneration ships stale GPU code (this has
+  # already happened: committed all.ptx predates deltanet_recurrence.zig).
+  # Informational until the tree is regenerated once; then remove
+  # continue-on-error and add this job to ci-pass.needs to make it blocking.
+  # SPIR-V checking is local-only for now (needs glslangValidator, see
+  # scripts/check-shader-artifacts.sh) because runner glslang versions are
+  # not pinned and its output embeds the generator version.
+  kernel-artifacts:
+    name: Kernel artifact freshness
+    needs: fmt-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Read Zig version
+        id: zig
+        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
+        with:
+          version: ${{ steps.zig.outputs.version }}
+
+      - name: Compare committed PTX against fresh build
+        run: scripts/check-shader-artifacts.sh --ptx-only
+
   fuzz-smoke:
     name: Fuzz smoke (parsers + API surfaces)
     needs: fmt-check

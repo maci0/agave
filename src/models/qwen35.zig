@@ -211,6 +211,18 @@ pub const Qwen35Model = struct {
     mtp_kv_values: []u8 = &.{},
     mtp_kv_seq_len: usize = 0,
 
+    // ── DFlash2 feature capture ──────────────────────────────────
+    /// Layer indices whose post-layer residual streams feed the DFlash2
+    /// drafter's context injection. Empty = capture disabled (zero overhead).
+    capture_layer_ids: []u32 = &.{},
+    /// Ring buffer [n_capture][capture_cap][n_embd] f16 of captured hiddens.
+    capture_ring: []f16 = &.{},
+    capture_cap: usize = 0,
+    /// Number of trailing positions with COMPLETE captures. Captures cover
+    /// absolute positions [kv_seq_len - capture_count, kv_seq_len).
+    capture_count: usize = 0,
+    capture_scratch: []f32 = &.{},
+
     /// Returns the generic Model interface for this Qwen3.5 instance.
     pub fn model(self: *Qwen35Model) Model {
         return Model.from(Qwen35Model, self);
@@ -749,6 +761,9 @@ pub const Qwen35Model = struct {
         self.allocator.free(self.dn_conv_w);
         self.allocator.free(self.dn_ssm_norm_w);
         if (self.tp_row_shard_buf.len > 0) self.allocator.free(self.tp_row_shard_buf);
+        if (self.capture_layer_ids.len > 0) self.allocator.free(self.capture_layer_ids);
+        if (self.capture_ring.len > 0) self.allocator.free(self.capture_ring);
+        if (self.capture_scratch.len > 0) self.allocator.free(self.capture_scratch);
 
         if (self.tiered_block_allocator) |*ta| {
             ta.freeSeqTable(&self.seq_table);
@@ -1895,6 +1910,29 @@ pub const Qwen35Model = struct {
                     try self.mlpLayer(l, true);
                 }
             }
+
+            // DFlash2 feature capture: snapshot the post-layer residual stream.
+            // With deferred residuals the FFN delta sits in hidden2 until the
+            // NEXT layer fuses it, so sum both buffers into scratch without
+            // mutating pipeline state.
+            if (self.capture_layer_ids.len > 0) {
+                if (self.captureSlot(l)) |ci| {
+                    const ce: usize = self.n_embd;
+                    if (self.is_moe) {
+                        @memcpy(self.capture_scratch[0..ce], self.hidden[0..ce]);
+                    } else {
+                        self.be.add(self.hidden.ptr, self.hidden2.ptr, self.capture_scratch.ptr, ce);
+                        self.be.sync();
+                    }
+                    const cslot = self.kv_seq_len % self.capture_cap;
+                    const coff = (ci * self.capture_cap + cslot) * ce;
+                    for (0..ce) |i| self.capture_ring[coff + i] = @floatCast(self.capture_scratch[i]);
+                    // ids are sorted ascending; the largest id completes a token.
+                    if (l == self.capture_layer_ids[self.capture_layer_ids.len - 1]) {
+                        self.capture_count += 1;
+                    }
+                }
+            }
         }
 
         // PP: send activations to next stage / receive logits
@@ -1983,7 +2021,7 @@ pub const Qwen35Model = struct {
         const has_deltanet = for (self.layer_is_deltanet[0..self.n_layers]) |d| {
             if (d) break true;
         } else false;
-        const cs: usize = if (self.pf_hidden.len > 0 and !has_deltanet and self.tp_degree <= 1)
+        const cs: usize = if (self.pf_hidden.len > 0 and !has_deltanet and self.tp_degree <= 1 and self.capture_layer_ids.len == 0)
             self.chunk_size
         else
             1;
@@ -2310,7 +2348,99 @@ pub const Qwen35Model = struct {
             if (self.ssm_states[i].len > 0) @memset(self.ssm_states[i], 0);
         }
         model_mod.resetKvCache(self);
+        self.capture_count = 0;
     }
+
+    // ── DFlash2 feature capture ──────────────────────────────────
+
+    /// Enable post-layer hidden-state capture for the DFlash2 drafter's
+    /// context injection. `ids` must be sorted ascending, unique, and < n_layers;
+    /// `capacity` bounds the retained trailing window (drafter context cap).
+    /// Disables any previous configuration. No-op cost when never enabled:
+    /// the forward() hook checks one pointer-length field first.
+    pub fn setCaptureLayers(self: *Qwen35Model, ids: []const u32, capacity: usize) !void {
+        const a = self.allocator;
+        self.clearCapture();
+        if (ids.len == 0 or capacity == 0) return;
+        var prev: i64 = -1;
+        for (ids) |id| {
+            if (@as(i64, id) <= prev or id >= self.n_layers) {
+                std.log.err("qwen35: capture layer ids must be sorted, unique, < n_layers (got {any})", .{ids});
+                return error.MissingTensor;
+            }
+            prev = id;
+        }
+        const owned = try a.dupe(u32, ids);
+        errdefer a.free(owned);
+        const e: usize = self.n_embd;
+        // Ring layout: [capture_slot][position % capacity][n_embd]
+        const ring = try a.alloc(f16, ids.len * capacity * e);
+        errdefer a.free(ring);
+        @memset(ring, 0);
+        const scratch = try a.alloc(f32, e);
+        errdefer a.free(scratch);
+        self.capture_layer_ids = owned;
+        self.capture_ring = ring;
+        self.capture_cap = capacity;
+        self.capture_scratch = scratch;
+        std.log.info("qwen35: capturing hidden states at layers {any} (window {d}) for DFlash2", .{ ids, capacity });
+    }
+
+    fn clearCapture(self: *Qwen35Model) void {
+        const a = self.allocator;
+        if (self.capture_layer_ids.len > 0) a.free(self.capture_layer_ids);
+        if (self.capture_ring.len > 0) a.free(self.capture_ring);
+        if (self.capture_scratch.len > 0) a.free(self.capture_scratch);
+        self.capture_layer_ids = &.{};
+        self.capture_ring = &.{};
+        self.capture_scratch = &.{};
+        self.capture_cap = 0;
+        self.capture_count = 0;
+    }
+
+    /// Absolute position of the oldest retained capture.
+    pub fn captureBegin(self: *const Qwen35Model) usize {
+        return self.kv_seq_len -| self.capture_count;
+    }
+
+    /// One past the newest capture position.
+    pub fn captureEnd(self: *const Qwen35Model) usize {
+        return self.captureBegin() + self.capture_count;
+    }
+
+    /// Read the concatenated captured features for absolute position `pos`
+    /// into `dst` ([n_capture * n_embd] f32, ordered by capture_layer_ids).
+    pub fn readFeatures(self: *const Qwen35Model, pos: usize, dst: []f32) void {
+        const e = self.n_embd;
+        std.debug.assert(pos >= self.captureBegin() and pos < self.captureEnd());
+        const slot = pos % self.capture_cap;
+        for (0..self.capture_layer_ids.len) |ci| {
+            const off = (ci * self.capture_cap + slot) * e;
+            for (0..e) |i| {
+                dst[ci * e + i] = @floatCast(self.capture_ring[off + i]);
+            }
+        }
+    }
+
+    /// Drop captures beyond position `end` (after speculative rejection rewind).
+    pub fn truncateCapturesTo(self: *Qwen35Model, end: usize) void {
+        const begin = self.captureBegin();
+        if (end >= begin + self.capture_count) return;
+        if (end <= begin) {
+            self.capture_count = 0;
+            return;
+        }
+        self.capture_count = end - begin;
+    }
+
+    /// Ring slot index for capture layer id `l`, or null when not captured.
+    fn captureSlot(self: *const Qwen35Model, l: u32) ?usize {
+        for (self.capture_layer_ids, 0..) |id, i| {
+            if (id == l) return i;
+        }
+        return null;
+    }
+
 };
 
 const expertWeightStride = model_mod.expertWeightStride;

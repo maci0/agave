@@ -2363,7 +2363,8 @@ fn parseDflashConfigObject(
 }
 
 /// HuggingFace `vision_config` key → GGUF-style `clip.vision.*` metadata key.
-const vision_hf_to_clip = [_]struct { []const u8, []const u8 }{    .{ "patch_size", "clip.vision.patch_size" },
+const vision_hf_to_clip = [_]struct { []const u8, []const u8 }{
+    .{ "patch_size", "clip.vision.patch_size" },
     .{ "hidden_size", "clip.vision.embedding_length" },
     .{ "intermediate_size", "clip.vision.feed_forward_length" },
     .{ "depth", "clip.vision.block_count" },
@@ -3097,7 +3098,8 @@ test "parseConfigJson dflash_config flattens to dflash.* keys" {
     try std.testing.expect(!causal.bool_val);
 }
 
-test "parseConfigJson null and false values" {    const allocator = std.testing.allocator;
+test "parseConfigJson null and false values" {
+    const allocator = std.testing.allocator;
     const json =
         \\{"add_cross_attention":false,"output_attentions":null,"use_cache":true}
     ;

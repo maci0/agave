@@ -37,6 +37,7 @@ const GGUFFile = format_mod.GGUFFile;
 const SafeTensorsDir = format_mod.SafeTensorsDir;
 const Model = model_mod.Model;
 const ModelStorage = model_mod.ModelStorage;
+const DFlash2Model = @import("models/dflash2.zig").DFlash2Model;
 const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
@@ -446,7 +447,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "mtp-model", .kind = .option, .help = "Path to MTP weight file (safetensors) for multi-token prediction speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2 [default: ddtree with --draft-model]." },
     .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
@@ -1324,8 +1325,11 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 if (std.mem.eql(u8, s, "lookahead")) break :blk SpecMode.lookahead;
                 if (std.mem.eql(u8, s, "pflash")) break :blk SpecMode.pflash;
                 if (std.mem.eql(u8, s, "dspark")) break :blk SpecMode.dspark;
+                if (std.mem.eql(u8, s, "dflash2")) break :blk SpecMode.dflash2;
+                // DFlash CLI alias: the published checkpoints are DFlash2.
+                if (std.mem.eql(u8, s, "dflash")) break :blk SpecMode.dflash2;
                 if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
-                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -3396,6 +3400,30 @@ fn initAndRun(
         draft_model_if = draft_mdl_storage.?.model();
         draft_ptr = &draft_model_if;
         eprint("draft: {s} · {s}\n", .{ draft_arch.displayName(), Format.getQuantName(draft_fmt) });
+
+        // ── DFlash2 drafter wiring ───────────────────────────────
+        // The checkpoint ships no embeddings or LM head; bind the target's.
+        // Target-side feature capture feeds the drafter's context injection,
+        // and --spec-mode defaults to dflash2 when this drafter is loaded.
+        if (draft_mdl_storage.? == .dflash2) {
+            if (cli.tp_degree > 1 or cli.pp_degree > 1) {
+                eprint("Error: DFlash2 speculative decoding requires tp=1 and pp=1\n", .{});
+                return false;
+            }
+            const emb_t = fmt.getTensor("token_embd.weight") orelse {
+                eprint("Error: target model lacks token_embd.weight for DFlash2 binding\n", .{});
+                return false;
+            };
+            const head_t = fmt.getTensor("output.weight") orelse fmt.getTensor("token_embd.weight") orelse {
+                eprint("Error: target model lacks output.weight for DFlash2 binding\n", .{});
+                return false;
+            };
+            draft_mdl_storage.?.dflash2.bindTarget(emb_t, head_t, fmt);
+            mdl.setCaptureLayers(draft_mdl_storage.?.dflash2.target_layer_ids, draft_mdl_storage.?.dflash2.cap) catch |e| {
+                eprint("Error: failed to enable DFlash2 feature capture on target: {}\n", .{e});
+                return false;
+            };
+        }
     } else if (cli.spec_mode != .none) {
         draft_ptr = &model_if;
     }
@@ -3592,7 +3620,10 @@ fn initAndRun(
         if (arch == .diffusion_gemma) {
             generateDiffusion(allocator, &model_if, tok, cli, tok_kind, arch, prompt, !g_quiet);
         } else {
-            generateAndPrint(allocator, &model_if, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
+    // DFlash2 drafter + feature reader, resolved once where storage lives.
+    const df2_ptr: ?*DFlash2Model = if (draft_mdl_storage != null and draft_mdl_storage.? == .dflash2) &draft_mdl_storage.?.dflash2 else null;
+    const feat_reader: ?ModelStorage.FeatureReader = if (df2_ptr != null) mdl.featureReader() else null;
+    generateAndPrint(allocator, &model_if, df2_ptr, feat_reader, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
         }
     } else {
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens);
@@ -3969,6 +4000,8 @@ fn generateDiffusion(
 fn generateAndPrint(
     allocator: std.mem.Allocator,
     mdl: *Model,
+    df2: ?*DFlash2Model,
+    feat_reader: ?ModelStorage.FeatureReader,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
     tok_kind: TokenizerKind,
@@ -3984,19 +4017,24 @@ fn generateAndPrint(
     pflash_scorer: ?*Model,
 ) void {
     if (draft_model) |dm| {
-        generateSpeculative(allocator, mdl, dm, pflash_scorer, tok, cli, tok_kind, eog, arch, prompt, show_stats);
+        generateSpeculative(allocator, mdl, dm, pflash_scorer, df2, feat_reader, tok, cli, tok_kind, eog, arch, prompt, show_stats);
     } else {
         const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplateForLayers(minfo.n_layers), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
         if (response) |r| allocator.free(r);
     }
 }
+}
 
 /// Runs speculative decoding: tokenizes the prompt, prefills the target and draft models, then decodes with draft-verify speculation.
+/// `df2` carries a DFlash2 drafter (with its target feature reader) when the
+/// loaded --draft-model is one; both are null for every other mode.
 fn generateSpeculative(
     allocator: std.mem.Allocator,
     target: *Model,
     draft_model: *Model,
     pflash_scorer: ?*Model,
+    df2: ?*DFlash2Model,
+    feat_reader: ?ModelStorage.FeatureReader,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
     tok_kind: TokenizerKind,
