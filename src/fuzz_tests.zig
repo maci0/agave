@@ -35,7 +35,8 @@ test "fuzz: JSON sampling params parser" {
             var buf: [512]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
-            const s = json.parseSampling(buf[0..len]);
+            var s = json.SamplingParams{};
+            json.parseSampling(&s, buf[0..len]);
             // Invariant: all numeric fields must be finite and clamped
             try std.testing.expect(std.math.isFinite(s.temperature) and s.temperature >= 0);
             try std.testing.expect(std.math.isFinite(s.top_p) and s.top_p >= 0 and s.top_p <= 1.0);
@@ -2068,7 +2069,8 @@ test "fuzz: parseFormSampling no crash" {
             var buf: [256]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
-            const s = json.parseFormSampling(buf[0..len]);
+            var s = json.SamplingParams{};
+            json.parseFormSampling(&s, buf[0..len]);
             try std.testing.expect(std.math.isFinite(s.temperature) and s.temperature >= 0);
             try std.testing.expect(std.math.isFinite(s.top_p));
         }
@@ -2093,7 +2095,8 @@ test "fuzz: SamplingParams hasStop + matchesStop" {
             var buf: [512]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const len = smith.indexWithHash(buf.len + 1, 1);
-            const s = json.parseSampling(buf[0..len]);
+            var s = json.SamplingParams{};
+            json.parseSampling(&s, buf[0..len]);
             _ = s.hasStop();
             // Generate random text to match against stop sequences
             var text_buf: [64]u8 = undefined;
@@ -3108,7 +3111,8 @@ test "fuzz: nested chat/completions JSON messages + tools" {
                 inner[0..@min(inner_len, 32)],
             }) catch return;
 
-            const s = json.parseSampling(body[0..n.len]);
+            var s = json.SamplingParams{};
+            json.parseSampling(&s, body[0..n.len]);
             try std.testing.expect(std.math.isFinite(s.temperature) and s.temperature >= 0);
             try std.testing.expect(std.math.isFinite(s.top_p));
 
@@ -3238,7 +3242,8 @@ test "fuzz: deeply nested JSON extractObjectField + skip paths" {
                 defer m.deinit(std.testing.allocator);
                 try std.testing.expect(m.messages.len <= 128);
             }
-            const s = json.parseSampling(body[0..i]);
+            var s = json.SamplingParams{};
+            json.parseSampling(&s, body[0..i]);
             try std.testing.expect(std.math.isFinite(s.temperature));
         }
     }.f, .{});
@@ -3262,7 +3267,8 @@ test "fuzz: Anthropic stop_sequences + logit_bias structure-aware" {
                 smith.valueWithHash(u16, 3),
                 @as(i8, @bitCast(smith.valueWithHash(u8, 4))),
             }) catch return;
-            const s = json.parseSampling(body[0..n.len]);
+            var s = json.SamplingParams{};
+            json.parseSampling(&s, body[0..n.len]);
             try std.testing.expect(s.n_stop <= 4);
             try std.testing.expect(s.logit_bias_count <= 16);
             try std.testing.expect(std.math.isFinite(s.temperature));

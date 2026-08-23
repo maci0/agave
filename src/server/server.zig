@@ -1643,7 +1643,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens"));
-        const sampling = json.parseSampling(body);
+        var sampling = json.SamplingParams{};
+        json.parseSampling(&sampling, body);
 
         // Do not log sampling.user — OpenAI "user" field often holds email/username (PII).
 
@@ -1849,7 +1850,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const prompt = json.jsonUnescape(g_server.allocator, prompt_raw) catch @constCast(prompt_raw);
         defer if (prompt.ptr != prompt_raw.ptr) wipeFree(g_server.allocator, prompt);
         const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens"));
-        const sampling_c = json.parseSampling(body);
+        var sampling_c = json.SamplingParams{};
+        json.parseSampling(&sampling_c, body);
 
         // Rate limit check (estimate prompt tokens via encode)
         const prompt_ids_c_owned = g_server.tokenizer.encode(prompt) catch |err| blk: {
@@ -2223,7 +2225,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const input = json.jsonUnescape(g_server.allocator, input_raw) catch @constCast(input_raw);
         defer if (input.ptr != input_raw.ptr) wipeFree(g_server.allocator, input);
         const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens"));
-        const sampling_r = json.parseSampling(body);
+        var sampling_r = json.SamplingParams{};
+        json.parseSampling(&sampling_r, body);
 
         // Rate limit check
         const formatted_rl = g_server.chat_template.format(g_server.allocator, null, input) catch input;
@@ -2300,7 +2303,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         const body = req.body;
         const max_tokens_m = clampMaxTokens(json.extractIntField(body, "max_tokens"));
-        const sampling_m = json.parseSampling(body);
+        var sampling_m = json.SamplingParams{};
+        json.parseSampling(&sampling_m, body);
         // Anthropic: system message is a top-level field, not in messages array
         const system_msg_raw = json.extractField(body, "system");
         const system_msg = if (system_msg_raw) |s| (json.jsonUnescape(g_server.allocator, s) catch @constCast(s)) else null;
@@ -2574,7 +2578,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const regen_body = req.body;
-        const regen_sampling = json.parseFormSampling(regen_body);
+        var regen_sampling = json.SamplingParams{};
+        json.parseFormSampling(&regen_sampling, regen_body);
         const regen_max_tokens = clampMaxTokens(json.extractFormInt(regen_body, "max_tokens"));
 
         // Extract optional system prompt (URL-decode since web UI sends encodeURIComponent)
@@ -2850,7 +2855,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
 
         // Parse optional sampling parameters from form body
-        const chat_sampling = json.parseFormSampling(body);
+        var chat_sampling = json.SamplingParams{};
+        json.parseFormSampling(&chat_sampling, body);
         const chat_max_tokens = clampMaxTokens(json.extractFormInt(body, "max_tokens"));
 
         // SSE streaming mode: stream tokens to the client in real-time
