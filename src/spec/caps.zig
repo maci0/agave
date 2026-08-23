@@ -25,6 +25,7 @@ pub const SpecMode = enum {
     lookahead,
     pflash,
     dspark,
+    dflash2,
 };
 
 /// A runtime capability a spec mode may require.
@@ -52,7 +53,7 @@ pub const Caps = struct {
 pub fn required(mode: SpecMode) []const Provider {
     return switch (mode) {
         .none, .standard, .ddtree, .self_spec, .ngram, .suffix, .lookahead, .dspark => &.{},
-        .eagle, .eagle3, .mlp, .pflash => &.{.draft},
+        .eagle, .eagle3, .mlp, .pflash, .dflash2 => &.{.draft},
         .mtp => &.{.mtp},
     };
 }
@@ -88,6 +89,11 @@ test "self-draft modes need no providers" {
         try std.testing.expectEqual(@as(usize, 0), required(m).len);
         try std.testing.expect(unsatisfied(m, empty) == null);
     }
+}
+
+test "dflash2 waits for draft" {
+    try std.testing.expectEqual(Provider.draft, unsatisfied(.dflash2, Caps{}).?);
+    try std.testing.expect(unsatisfied(.dflash2, Caps{ .draft = true }) == null);
 }
 
 test "eagle waits for draft" {

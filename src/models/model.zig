@@ -1174,6 +1174,81 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Type-erased reader for DFlash2 target-feature captures.
+    /// Captured positions span [begin(), end()); readFeatures concatenates the
+    /// per-layer hidden states for one absolute position into dst.
+    pub const FeatureReader = struct {
+        ptr: *anyopaque,
+        beginFn: *const fn (*anyopaque) usize,
+        endFn: *const fn (*anyopaque) usize,
+        readFn: *const fn (*anyopaque, pos: usize, dst: []f32) void,
+
+        pub fn begin(self: FeatureReader) usize {
+            return self.beginFn(self.ptr);
+        }
+        pub fn end(self: FeatureReader) usize {
+            return self.endFn(self.ptr);
+        }
+        pub fn readAt(self: FeatureReader, pos: usize, dst: []f32) void {
+            self.readFn(self.ptr, pos, dst);
+        }
+    };
+
+    /// Feature-capture surface for models that implement it (Qwen3.5/3.8
+    /// feeding a DFlash2 drafter). Returns null when unsupported.
+    pub fn featureReader(self: *ModelStorage) ?FeatureReader {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void and comptime @hasDecl(@TypeOf(m.*), "readFeatures")) {
+                    const T = @TypeOf(m.*);
+                    return .{
+                        .ptr = m,
+                        .beginFn = @ptrCast(&struct {
+                            fn call(p: *T) usize {
+                                return p.captureBegin();
+                            }
+                        }.call),
+                        .endFn = @ptrCast(&struct {
+                            fn call(p: *T) usize {
+                                return p.captureEnd();
+                            }
+                        }.call),
+                        .readFn = @ptrCast(&struct {
+                            fn call(p: *T, pos: usize, dst: []f32) void {
+                                p.readFeatures(pos, dst);
+                            }
+                        }.call),
+                    };
+                }
+            },
+        }
+        return null;
+    }
+
+    pub fn truncateFeatureCaptures(self: *ModelStorage, end: usize) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void and comptime @hasDecl(@TypeOf(m.*), "truncateCapturesTo")) {
+                    m.truncateCapturesTo(end);
+                }
+            },
+        }
+    }
+
+    /// Enable DFlash2 target-feature capture on models that support it.
+    /// Returns error.UnsupportedArch when the model has no capture support.
+    pub fn setCaptureLayers(self: *ModelStorage, ids: []const u32, capacity: usize) !void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void and comptime @hasDecl(@TypeOf(m.*), "setCaptureLayers")) {
+                    return m.setCaptureLayers(ids, capacity);
+                }
+            },
+        }
+        return error.UnsupportedArch;
+    }
+};
+
     /// Print accumulated performance counters.
     pub fn reportPerf(self: *ModelStorage) void {
         switch (self.*) {

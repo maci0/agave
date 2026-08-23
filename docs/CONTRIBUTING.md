@@ -284,6 +284,23 @@ See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/k
 4. **Check allocations**: Use `std.testing.allocator` in tests (detects leaks automatically)
 5. **Verify comptime dispatch**: Ensure `inline else` dispatch is still used in `backend.zig`
 
+## Kernel Artifact Regeneration
+
+The GPU kernel binaries under `src/backend/kernels/` are **generated artifacts checked into git** and embedded via `@embedFile`. `zig build` never rebuilds them, so editing a kernel source without regenerating ships stale GPU code silently. Canonical commands:
+
+| Backend | Source | Regenerate | Verify |
+|---|---|---|---|
+| CUDA | `src/backend/kernels/cuda/*.zig` | `zig build ptx -Dcuda-sm=sm_120`, then copy `zig-out/ptx/*.ptx` to `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` |
+| Vulkan | `src/backend/kernels/vulkan/*.comp` | `glslangValidator -V --target-env vulkan1.1 foo.comp -o foo.spv` (per shader) | `scripts/check-shader-artifacts.sh` |
+| ROCm | `src/backend/kernels/rocm/all.zig` | `zig build amdgcn` on Linux with ROCm + `ld.lld`; copy `zig-out/rocm/kernels.hsaco` to `src/backend/kernels/rocm/` | manual (needs HIP runtime) |
+| Metal | `src/backend/kernels/metal/*.metal` | none — MSL is compiled from source at runtime | n/a |
+| WebGPU | `src/backend/kernels/webgpu/*.wgsl` | none — WGSL is the source of truth | n/a |
+
+Notes:
+- The committed PTX targets `sm_120` (see docs/KERNELS.md); a plain `zig build ptx` defaults to `sm_90` and will not match.
+- CI runs the PTX comparison as an informational job (`kernel-artifacts`); once committed artifacts are regenerated, remove its `continue-on-error` and add it to `ci-pass.needs`.
+- SPIR-V byte-compares are only exact for the glslang release that produced the commit; treat cross-version diffs as suspect.
+
 ## How to Run Tests
 
 ```bash

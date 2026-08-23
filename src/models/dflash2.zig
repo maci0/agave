@@ -403,12 +403,12 @@ pub const DFlash2Model = struct {
         if (self.ctx_k.len > 0) a.free(self.ctx_k);
         if (self.ctx_v.len > 0) a.free(self.ctx_v);
         inline for (.{
-            &self.blk_x,    &self.blk_h,     &self.blk_q,     &self.blk_k,
-            &self.blk_v,    &self.blk_attn,  &self.cnv_a,     &self.cnv_b,
-            &self.conv_dyn0, &self.conv_dyn1, &self.ff_gate,  &self.ff_up,
-            &self.attn_scores, &self.logits_buf, &self.sel_hid, &self.sel_edge,
-            &self.sel_g,    &self.sel_b_row, &self.sel_a_row, &self.ing_fused,
-            &self.ing_k,    &self.ing_v,
+            &self.blk_x,       &self.blk_h,      &self.blk_q,     &self.blk_k,
+            &self.blk_v,       &self.blk_attn,   &self.cnv_a,     &self.cnv_b,
+            &self.conv_dyn0,   &self.conv_dyn1,  &self.ff_gate,   &self.ff_up,
+            &self.attn_scores, &self.logits_buf, &self.sel_hid,   &self.sel_edge,
+            &self.sel_g,       &self.sel_b_row,  &self.sel_a_row, &self.ing_fused,
+            &self.ing_k,       &self.ing_v,
         }) |buf| {
             if (buf.len > 0) a.free(buf.*);
         }
