@@ -9,9 +9,12 @@ const Io = std.Io;
 const Mutex = Io.Mutex;
 const sim_clock = @import("../sim_clock.zig");
 
-/// Millisecond timestamp (injectable via sim_clock for deterministic tests).
+/// Monotonic millisecond clock (injectable via sim_clock for deterministic
+/// tests). All scheduler interval math — request timeouts, priority aging,
+/// TTFT stamps — uses this so NTP steps cannot spuriously time out running
+/// requests or invert queue priority.
 fn milliTimestamp() i64 {
-    return sim_clock.milliNow();
+    return sim_clock.monoMilli();
 }
 
 const Model = @import("../models/model.zig").Model;
@@ -122,8 +125,9 @@ pub const Request = struct {
     /// Current position in prompt prefill. When < prompt_tokens, the scheduler
     /// feeds prompt tokens to the model. When == prompt_tokens, decode begins.
     prefill_pos: u32 = 0,
-    /// Timestamp (milliTimestamp) when prefill completed and decode began.
-    /// Zero until prefill finishes. Used by the server to record TTFT metrics.
+    /// Timestamp (milliTimestamp, monotonic) when prefill completed and
+    /// decode began. Zero until prefill finishes. Used by the server to
+    /// record TTFT metrics (paired with `enqueued_at`, same clock).
     prefill_done_at: i64 = 0,
     /// KV cache position for this request (for multi-request interleaving).
     kv_position: usize = 0,
@@ -190,7 +194,8 @@ pub const Request = struct {
     }
 
     /// Calculate elapsed time since request was enqueued (in seconds).
-    /// Clamps to zero if the clock moved backwards (e.g. NTP adjustment).
+    /// Both stamps come from the monotonic clock, but the clamp is kept as a
+    /// cheap invariant guard against any future non-monotonic source.
     pub fn elapsedSeconds(self: *const Request, now: i64) u32 {
         if (now <= self.enqueued_at) return 0;
         const elapsed_ms: u64 = @intCast(now - self.enqueued_at);

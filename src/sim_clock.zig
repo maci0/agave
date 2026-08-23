@@ -1,13 +1,19 @@
-//! Injectable wall clock for deterministic simulation and tests.
+//! Injectable clocks for deterministic simulation and tests.
 //!
-//! Production leaves the override unset so milliNow/nanoNow read the OS clock
-//! (REALTIME). Interval timers that must resist NTP skew (profiling, download
-//! progress) use CLOCK_MONOTONIC directly and do not go through this module.
+//! Production leaves the override unset so each reader hits its natural OS
+//! clock: milliNow/nanoNow read REALTIME (wall time: log timestamps, seeds,
+//! epoch fields), while monoMilli reads MONOTONIC (interval math: timeouts,
+//! rate-limit refill, scheduling priority, LRU stamps) so NTP steps or manual
+//! clock changes cannot produce negative or inflated durations. Interval
+//! timers outside this module (perf counters, download progress) also use
+//! CLOCK_MONOTONIC directly.
 //!
 //! Tests and a future sim harness call setOverrideMs / advanceMs to drive
 //! timeouts, rate-limit refill, and scheduling priority from a single seed.
-//! Under override, sleepNs advances virtual time and returns immediately so
-//! poll loops do not block wall-clock time.
+//! Under override both readers share the one simulated timeline so logic
+//! mixing wall and interval reads stays consistent. Under override, sleepNs
+//! advances virtual time and returns immediately so poll loops do not block
+//! wall-clock time.
 //!
 //! The override is process-global (not thread-local). Tests that set it must
 //! `defer setOverrideMs(null)` and must not run concurrently with other tests
@@ -58,6 +64,26 @@ pub fn milliNow() i64 {
     const t = override_ms.load(.acquire);
     if (t != no_override) return t;
     return milliNowWall();
+}
+
+fn monoNowWall() i64 {
+    if (comptime is_freestanding) return 0;
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
+/// Monotonic milliseconds for interval math (timeouts, refill, aging, LRU).
+///
+/// Never steps backwards and never jumps on NTP corrections, unlike
+/// milliNow(); durations computed from two monoMilli() reads are always
+/// sane. Not comparable across processes or to epoch time. Shares the
+/// simulated timeline with milliNow() under override so tests drive both
+/// readers from one virtual clock.
+pub fn monoMilli() i64 {
+    const t = override_ms.load(.acquire);
+    if (t != no_override) return t;
+    return monoNowWall();
 }
 
 /// Nanoseconds since epoch (simulated when override is set).
@@ -115,4 +141,17 @@ test "sleepNs advances virtual clock when overridden" {
     sleepNs(500_000);
     try std.testing.expectEqual(@as(i64, 1_000_005), milliNow());
     try std.testing.expect(isOverridden());
+}
+
+test "monoMilli follows override and monotonic clock" {
+    defer setOverrideMs(null);
+    // Production: two reads never go backwards (CLOCK_MONOTONIC).
+    const a = monoMilli();
+    const b = monoMilli();
+    try std.testing.expect(b >= a);
+    // Under override: same simulated timeline as milliNow().
+    setOverrideMs(1_700_000_000_000);
+    try std.testing.expectEqual(milliNow(), monoMilli());
+    advanceMs(250);
+    try std.testing.expectEqual(@as(i64, 1_700_000_000_250), monoMilli());
 }

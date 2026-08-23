@@ -17,9 +17,11 @@ const Io = if (is_freestanding) struct {
 const SsdFile = if (is_freestanding) void else Io.File;
 const sim_clock = @import("../sim_clock.zig");
 
-/// Millisecond timestamp (injectable via sim_clock; 0 on freestanding).
+/// Monotonic millisecond clock (injectable via sim_clock; 0 on freestanding).
+/// Access-ordering stamps only compare against each other within this
+/// process, so they must not shift with wall-clock (NTP) adjustments.
 fn milliTimestamp() i64 {
-    return sim_clock.milliNow();
+    return sim_clock.monoMilli();
 }
 const Allocator = std.mem.Allocator;
 

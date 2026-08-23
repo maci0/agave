@@ -4571,6 +4571,12 @@ fn generateSpeculative(
         // DFlash2: maintain hybrid history and ingest the newly verified
         // positions' captured features into the drafter's context cache.
         if (use_dflash2 and feat_reader != null and df2 != null) {
+            if (pull.getenv("AGAVE_DF2_DEBUG") != null) {
+                std.debug.print("df2 round {d}: pos={d} drafted={d} accepted={d} next={d} drafts={any}\n", .{
+                    spec_state.total_rounds, pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
+                    spec_state.draft_tokens[0..@min(spec_state.n_draft, 8)],
+                });
+            }
             for (0..result.accepted) |i| {
                 if (isEogToken(spec_state.draft_tokens[i], eog)) break;
                 ngram_state.push(spec_state.draft_tokens[i]);
