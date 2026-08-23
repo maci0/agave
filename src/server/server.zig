@@ -402,7 +402,8 @@ const Conversation = struct {
                     // Sequence would be incomplete; drop it.
                     len -= 1;
                 } else {
-                    break; // Full sequence fits — clean boundary.
+                    len = len - 1 + seq_len; // Full sequence fits — extend to include it.
+                    break;
                 }
                 break;
             }
@@ -3912,6 +3913,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         var stop_len: usize = 0;
         var checked_len: usize = 0;
         var hit_stop = false;
+        var chat_hb = Utf8Holdback{};
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
             if (pollSchedulerStop(req, tok, sampling, &stop_buf, &stop_len, &checked_len, g_server.allocator)) |_| {
                 hit_stop = true;
@@ -3920,7 +3922,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
             // Stream only tokens already stop-checked (checked_len == visible when no stop).
             const stream_limit = if (sampling.hasStop()) checked_len else req.visible_len.load(.acquire);
             while (streamed_count < stream_limit) {
-                if (!streamToken(stream, tok, req.tokens.items[streamed_count])) {
+                if (!streamToken(stream, tok, req.tokens.items[streamed_count], &chat_hb)) {
                     client_connected = false;
                     req.is_cancelled.store(true, .release);
                     break;
@@ -3940,9 +3942,10 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         // Drain remaining tokens up to stop / max_tokens
         const final_len = if (hit_stop) checked_len else req.visible_len.load(.acquire);
         while (client_connected and streamed_count < final_len and streamed_count < max_tokens) {
-            if (!streamToken(stream, tok, req.tokens.items[streamed_count])) break;
+            if (!streamToken(stream, tok, req.tokens.items[streamed_count], &chat_hb)) break;
             streamed_count += 1;
         }
+        if (client_connected) _ = flushStreamHoldback(stream, &chat_hb, emitChatStreamEvent);
 
         const gen_end = milliTimestamp();
         const time_ms = elapsedBetween(gen_start, gen_end);
@@ -4065,11 +4068,12 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
 
     const first_is_eog = token_ids.len > 0 and g_server.isEog(first_gen_token);
     var client_disconnected = false;
+    var chat_hb = Utf8Holdback{};
     if (!first_is_eog and token_ids.len > 0) {
         gen_tokens[0] = first_gen_token;
         token_count = 1;
         // Stream first token
-        client_disconnected = !streamToken(stream, tok, first_gen_token);
+        client_disconnected = !streamToken(stream, tok, first_gen_token, &chat_hb);
     }
 
     var forward_failed = false;
@@ -4092,7 +4096,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         gen_tokens[token_count] = next;
         last = next;
         token_count += 1;
-        if (!streamToken(stream, tok, next)) {
+        if (!streamToken(stream, tok, next, &chat_hb)) {
             client_disconnected = true;
             break;
         }
@@ -4107,6 +4111,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     g_server.metrics.recordGenerationTokens(token_count);
 
     // Send final stats event
+    if (!client_disconnected) _ = flushStreamHoldback(stream, &chat_hb, emitChatStreamEvent);
     var stats_buf: [stats_buf_size]u8 = undefined;
     const stats_json = std.fmt.bufPrint(&stats_buf,
         \\{{"done":true,"n":{d},"ms":{d},"tps":{d:.2},"pn":{d},"pms":{d},"ptps":{d:.1}}}
@@ -4140,23 +4145,136 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     };
 }
 
-/// Decoded and JSON-escaped token text. Call `deinit()` to release memory.
-const EscapedToken = struct {
-    decoded: []u8,
-    escaped: []u8,
+/// Maximum bytes in one UTF-8 sequence.
+const max_utf8_seq_len: usize = 4;
 
-    fn deinit(self: EscapedToken) void {
-        if (self.escaped.ptr != self.decoded.ptr) {
-            @memset(self.escaped, 0);
-            g_server.allocator.free(self.escaped);
+/// True when every byte in `bytes` is a UTF-8 continuation byte (10xxxxxx).
+fn allContinuationBytes(bytes: []const u8) bool {
+    for (bytes) |b| {
+        if (b & 0xC0 != 0x80) return false;
+    }
+    return true;
+}
+
+/// Length of the trailing incomplete-but-valid UTF-8 sequence prefix of `text`;
+/// 0 when `text` ends on a character boundary or its tail is not a valid
+/// sequence prefix (invalid bytes pass through rather than stalling a stream).
+fn incompleteUtf8TailLen(text: []const u8) usize {
+    const lookback_max: usize = @min(text.len, max_utf8_seq_len - 1);
+    var k: usize = 0;
+    while (k < lookback_max) : (k += 1) {
+        const idx = text.len - 1 - k;
+        const b = text[idx];
+        if (b < 0x80) return 0; // ASCII terminates any sequence
+        if (b & 0xC0 == 0x80) continue; // continuation byte — keep walking back
+        // Lead byte at idx.
+        const seq_len = std.unicode.utf8ByteSequenceLength(b) catch return 0;
+        const have = text.len - idx;
+        if (have >= seq_len) return 0; // sequence already complete
+        if (!allContinuationBytes(text[idx + 1 ..])) return 0;
+        return have;
+    }
+    return 0;
+}
+
+/// Cross-token UTF-8 holdback for SSE streaming.
+///
+/// Byte-level tokenizers can split one character across several tokens (for
+/// example SPM byte fallback `<0xE4>` `<0xB8>` `<0x96>`); decoding each token
+/// separately and sending it immediately would put invalid UTF-8 fragments on
+/// the wire. A trailing incomplete sequence is held until its continuation
+/// bytes arrive in a later token; `flush` releases anything still held when
+/// generation ends so streamed output stays byte-identical to the
+/// batch-decoded text returned to callers.
+const Utf8Holdback = struct {
+    /// Assembled storage for a character completed from held + fresh bytes.
+    completed: [max_utf8_seq_len]u8 = undefined,
+    /// Held leading bytes of an incomplete sequence.
+    pending: [max_utf8_seq_len - 1]u8 = .{0} ** (max_utf8_seq_len - 1),
+    pending_len: usize = 0,
+
+    pub const Pieces = struct {
+        /// Character completed from previously held bytes plus the head of
+        /// this token's text. Points into `Utf8Holdback.completed`; valid
+        /// until the next `feed` call. Empty when nothing was held.
+        head: []const u8 = &.{},
+        /// Ready-to-send body: all of this token's text except a newly held
+        /// trailing fragment. Points into the `text` argument passed to feed.
+        body: []const u8 = &.{},
+    };
+
+    /// Partition freshly decoded token text into ready-to-send pieces and
+    /// update holdback state.
+    pub fn feed(self: *Utf8Holdback, text: []const u8) Pieces {
+        var rest = text;
+
+        // Resolve a previously held partial character against the head of
+        // `rest`. At most one character can complete per feed: the holdback
+        // never spans more than a single sequence.
+        var head: []const u8 = &.{};
+        if (self.pending_len > 0 and rest.len > 0) {
+            const seq_len = std.unicode.utf8ByteSequenceLength(self.pending[0]) catch {
+                // Invalid held lead byte: release it raw rather than drop it,
+                // keeping streamed output byte-identical to batch decode.
+                const raw = self.pending[0..self.pending_len];
+                self.pending_len = 0;
+                return .{
+                    .head = raw,
+                    .body = self.feedTail(rest),
+                };
+            };
+            const need = seq_len - self.pending_len;
+            const take = @min(need, rest.len);
+            if (!allContinuationBytes(rest[0..take])) {
+                // Not a continuation: release held bytes raw and process the
+                // whole token normally.
+                const raw = self.pending[0..self.pending_len];
+                self.pending_len = 0;
+                return .{
+                    .head = raw,
+                    .body = self.feedTail(rest),
+                };
+            }
+            if (take < need) {
+                // Still incomplete after absorbing everything available.
+                @memcpy(self.pending[self.pending_len..][0..take], rest[0..take]);
+                self.pending_len += take;
+                return .{};
+            }
+            @memcpy(self.completed[0..self.pending_len], self.pending[0..self.pending_len]);
+            @memcpy(self.completed[self.pending_len..][0..take], rest[0..take]);
+            head = self.completed[0..seq_len];
+            self.pending_len = 0;
+            rest = rest[take..];
         }
-        @memset(self.decoded, 0);
-        g_server.allocator.free(self.decoded);
+
+        return .{
+            .head = head,
+            .body = self.feedTail(rest),
+        };
+    }
+
+    /// Hold any trailing partial sequence of `text`; return the emit-ready
+    /// remainder.
+    fn feedTail(self: *Utf8Holdback, text: []const u8) []const u8 {
+        const hold = incompleteUtf8TailLen(text);
+        if (hold > 0) {
+            @memcpy(self.pending[0..hold], text[text.len - hold ..]);
+        }
+        self.pending_len = hold;
+        return text[0 .. text.len - hold];
+    }
+
+    /// Bytes still held at end of generation. The holdback is reset either way.
+    pub fn flush(self: *Utf8Holdback) []const u8 {
+        const held = self.pending[0..self.pending_len];
+        self.pending_len = 0;
+        return held;
     }
 };
 
-/// Decode a token ID and JSON-escape its text. Returns null on decode failure or empty output.
-fn decodeAndEscape(tok: *Tokenizer, token_id: u32) ?EscapedToken {
+/// Decode a single token ID to raw text. Returns null on decode failure or empty output.
+fn decodeTokenText(tok: *Tokenizer, token_id: u32) ?[]u8 {
     const decoded = tok.decode(&[_]u32{token_id}) catch |err| {
         std.log.warn("req={d} stream decode failed (token_id={d}): {}", .{ log_request_id, token_id, err });
         return null;
@@ -4165,26 +4283,44 @@ fn decodeAndEscape(tok: *Tokenizer, token_id: u32) ?EscapedToken {
         g_server.allocator.free(decoded);
         return null;
     }
-    const escaped = json.jsonEscape(g_server.allocator, decoded) catch {
-        g_server.allocator.free(decoded);
-        return null;
-    };
-    return .{ .decoded = decoded, .escaped = escaped };
+    return decoded;
 }
 
-/// Stream a single decoded token as an SSE event.
+/// JSON-escape `text` and write it as one chat-stream token event
+/// (`data: {"t":"..."}`). Empty text emits nothing.
 /// Returns false if the write failed (client disconnected).
-fn streamToken(stream: TcpStream, tok: *Tokenizer, token_id: u32) bool {
-    const dt = decodeAndEscape(tok, token_id) orelse return true;
-    defer dt.deinit();
-
+fn emitChatStreamEvent(stream: TcpStream, text: []const u8) bool {
+    if (text.len == 0) return true;
+    const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
+    defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
     var buf: [sse_event_buf_size]u8 = undefined;
-    const event = std.fmt.bufPrint(&buf, "data: {{\"t\":\"{s}\"}}\n\n", .{dt.escaped}) catch {
-        std.log.warn("req={d} SSE token event exceeded buffer ({d} bytes escaped)", .{ log_request_id, dt.escaped.len });
+    const event = std.fmt.bufPrint(&buf, "data: {{\"t\":\"{s}\"}}\n\n", .{escaped}) catch {
+        std.log.warn("req={d} SSE token event exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
     stream.writeAll(event) catch return false;
     return true;
+}
+
+/// Release any bytes still held by `hb` as a final event at end of generation
+/// so streamed output matches the batch-decoded text byte for byte.
+fn flushStreamHoldback(stream: TcpStream, hb: *Utf8Holdback, comptime emitFn: fn (TcpStream, []const u8) bool) bool {
+    const held = hb.flush();
+    if (held.len == 0) return true;
+    return emitFn(stream, held);
+}
+
+/// Stream a single decoded token as an SSE event, holding back any trailing
+/// partial UTF-8 sequence until its continuation bytes arrive (byte-level
+/// tokenizers can split one character across several tokens). Callers must
+/// call flushStreamHoldback before the final [DONE].
+/// Returns false if the write failed (client disconnected).
+fn streamToken(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+    const decoded = decodeTokenText(tok, token_id) orelse return true;
+    defer g_server.allocator.free(decoded);
+    const pieces = hb.feed(decoded);
+    if (!emitChatStreamEvent(stream, pieces.head)) return false;
+    return emitChatStreamEvent(stream, pieces.body);
 }
 
 // ── Anthropic Messages API helpers ──────────────────────────────
@@ -4326,6 +4462,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         var stop_len: usize = 0;
         var checked_len: usize = 0;
         var hit_stop = false;
+        var anth_hb = Utf8Holdback{};
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
             if (pollSchedulerStop(req, tok, sampling_a, &stop_buf, &stop_len, &checked_len, g_server.allocator)) |_| {
                 hit_stop = true;
@@ -4333,7 +4470,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             }
             const stream_limit = if (sampling_a.hasStop()) checked_len else req.visible_len.load(.acquire);
             while (streamed_count < stream_limit) {
-                if (!streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count])) {
+                if (!streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count], &anth_hb)) {
                     anth_client_connected = false;
                     req.is_cancelled.store(true, .release);
                     break;
@@ -4355,13 +4492,14 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         // Drain remaining tokens
         const final_len = if (hit_stop) checked_len else req.visible_len.load(.acquire);
         while (anth_client_connected and streamed_count < final_len and token_count < max_tokens) {
-            if (!streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count])) break;
+            if (!streamAnthropicDelta(stream, tok, req.tokens.items[streamed_count], &anth_hb)) break;
             streamed_count += 1;
             token_count += 1;
         }
         if (hit_stop) token_count = @intCast(checked_len);
 
         if (anth_client_connected) {
+            _ = flushStreamHoldback(stream, &anth_hb, emitAnthropicDeltaPiece);
             const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "end_turn";
             sendAnthropicFinalEvents(stream, stop_reason, token_count);
         }
@@ -4445,8 +4583,9 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
 
     // Stream first generated token
     var anth_disconnected = false;
+    var anth_hb = Utf8Holdback{};
     if (token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
-        anth_disconnected = !streamAnthropicDelta(stream, tok, first_gen_token);
+        anth_disconnected = !streamAnthropicDelta(stream, tok, first_gen_token, &anth_hb);
         last = first_gen_token;
         token_count = 1;
     }
@@ -4494,7 +4633,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
                 const at = a_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
                 if (token_count >= max_tokens) break;
-                if (!streamAnthropicDelta(stream, tok, at)) {
+                if (!streamAnthropicDelta(stream, tok, at, &anth_hb)) {
                     anth_disconnected = true;
                     break;
                 }
@@ -4502,7 +4641,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             }
             if (!anth_disconnected and !g_server.isEog(res.next_token)) {
                 if (token_count < max_tokens) {
-                    if (!streamAnthropicDelta(stream, tok, res.next_token)) {
+                    if (!streamAnthropicDelta(stream, tok, res.next_token, &anth_hb)) {
                         anth_disconnected = true;
                     }
                     token_count += 1;
@@ -4528,7 +4667,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             }
             if (g_server.isEog(next)) break;
 
-            if (!streamAnthropicDelta(stream, tok, next)) {
+            if (!streamAnthropicDelta(stream, tok, next, &anth_hb)) {
                 anth_disconnected = true;
                 break;
             }
@@ -4538,6 +4677,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     }
 
     if (!anth_disconnected) {
+        _ = flushStreamHoldback(stream, &anth_hb, emitAnthropicDeltaPiece);
         const stop_reason: []const u8 = if (token_count >= max_tokens) "max_tokens" else "end_turn";
         sendAnthropicFinalEvents(stream, stop_reason, token_count);
     }
@@ -4576,20 +4716,32 @@ fn sendAnthropicFinalEvents(stream: TcpStream, stop_reason: []const u8, token_co
     );
 }
 
-/// Stream a single decoded token as an Anthropic content_block_delta SSE event.
-/// Returns false if the write failed (client disconnected).
-fn streamAnthropicDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32) bool {
-    const dt = decodeAndEscape(tok, token_id) orelse return true;
-    defer dt.deinit();
-
+/// JSON-escape `text` and write it as one Anthropic content_block_delta event.
+/// Empty text emits nothing. Returns false on client disconnect.
+fn emitAnthropicDeltaPiece(stream: TcpStream, text: []const u8) bool {
+    if (text.len == 0) return true;
+    const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
+    defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
     var buf: [sse_event_buf_size]u8 = undefined;
     const data = std.fmt.bufPrint(&buf,
         \\{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{s}"}}}}
-    , .{dt.escaped}) catch {
-        std.log.warn("Anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{dt.escaped.len});
+    , .{escaped}) catch {
+        std.log.warn("Anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{escaped.len});
         return true;
     };
     return sseWriteEvent(stream, "content_block_delta", data);
+}
+
+/// Stream a single decoded token as an Anthropic content_block_delta SSE
+/// event, holding back trailing partial UTF-8 sequences across tokens.
+/// Callers must flushStreamHoldback before the final events.
+/// Returns false if the write failed (client disconnected).
+fn streamAnthropicDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+    const decoded = decodeTokenText(tok, token_id) orelse return true;
+    defer g_server.allocator.free(decoded);
+    const pieces = hb.feed(decoded);
+    if (!emitAnthropicDeltaPiece(stream, pieces.head)) return false;
+    return emitAnthropicDeltaPiece(stream, pieces.body);
 }
 
 // ── Responses API Streaming ─────────────────────────────────────
@@ -4621,20 +4773,32 @@ fn sendResponsesStartEvents(stream: TcpStream, req_id: u64, created: i64) void {
     );
 }
 
-/// Stream a single decoded token as a Responses API output_text.delta event.
-/// Returns false if the write failed (client disconnected).
-fn streamResponsesDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32) bool {
-    const dt = decodeAndEscape(tok, token_id) orelse return true;
-    defer dt.deinit();
-
+/// JSON-escape `text` and write it as one Responses API output_text.delta
+/// event. Empty text emits nothing. Returns false on client disconnect.
+fn emitResponsesDeltaPiece(stream: TcpStream, text: []const u8) bool {
+    if (text.len == 0) return true;
+    const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
+    defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
     var buf: [sse_event_buf_size]u8 = undefined;
     const data = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_text.delta","item_id":"msg_0","output_index":0,"content_index":0,"delta":"{s}"}}
-    , .{dt.escaped}) catch {
-        std.log.warn("Responses SSE delta exceeded buffer ({d} bytes escaped)", .{dt.escaped.len});
+    , .{escaped}) catch {
+        std.log.warn("Responses SSE delta exceeded buffer ({d} bytes escaped)", .{escaped.len});
         return true;
     };
     return sseWriteEvent(stream, "response.output_text.delta", data);
+}
+
+/// Stream a single decoded token as a Responses API output_text.delta event,
+/// holding back trailing partial UTF-8 sequences across tokens.
+/// Callers must flushStreamHoldback before the final events.
+/// Returns false if the write failed (client disconnected).
+fn streamResponsesDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+    const decoded = decodeTokenText(tok, token_id) orelse return true;
+    defer g_server.allocator.free(decoded);
+    const pieces = hb.feed(decoded);
+    if (!emitResponsesDeltaPiece(stream, pieces.head)) return false;
+    return emitResponsesDeltaPiece(stream, pieces.body);
 }
 
 /// Send the Responses API final events: output_text.done, content_part.done,
@@ -4731,6 +4895,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         var stop_len: usize = 0;
         var checked_len: usize = 0;
         var hit_stop = false;
+        var resp_hb = Utf8Holdback{};
         while (!req.is_finished.load(.acquire) and !req.is_cancelled.load(.acquire)) {
             if (pollSchedulerStop(req, tok, sampling_r, &stop_buf, &stop_len, &checked_len, g_server.allocator)) |_| {
                 hit_stop = true;
@@ -4738,7 +4903,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             }
             const stream_limit = if (sampling_r.hasStop()) checked_len else req.visible_len.load(.acquire);
             while (streamed_count < stream_limit) {
-                if (!streamResponsesDelta(stream, tok, req.tokens.items[streamed_count])) {
+                if (!streamResponsesDelta(stream, tok, req.tokens.items[streamed_count], &resp_hb)) {
                     resp_client_connected = false;
                     req.is_cancelled.store(true, .release);
                     break;
@@ -4760,7 +4925,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         // Drain remaining tokens
         const final_len = if (hit_stop) checked_len else req.visible_len.load(.acquire);
         while (resp_client_connected and streamed_count < final_len and token_count < max_tokens) {
-            if (!streamResponsesDelta(stream, tok, req.tokens.items[streamed_count])) break;
+            if (!streamResponsesDelta(stream, tok, req.tokens.items[streamed_count], &resp_hb)) break;
             streamed_count += 1;
             token_count += 1;
         }
@@ -4768,6 +4933,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
         // Send final events — skip if client already disconnected
         if (resp_client_connected) {
+            _ = flushStreamHoldback(stream, &resp_hb, emitResponsesDeltaPiece);
             const safe_resp_count: usize = token_count;
             // Bound by visible_len only (see chatStreamGenerate scheduler path).
             const safe_resp_tokens = req.tokens.items[0..safe_resp_count];
@@ -4869,8 +5035,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     defer @memset(std.mem.sliceAsBytes(&gen_tokens), 0);
 
     var resp_disconnected = false;
+    var resp_hb = Utf8Holdback{};
     if (token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
-        resp_disconnected = !streamResponsesDelta(stream, tok, first_gen_token);
+        resp_disconnected = !streamResponsesDelta(stream, tok, first_gen_token, &resp_hb);
         gen_tokens[0] = first_gen_token;
         last = first_gen_token;
         token_count = 1;
@@ -4919,7 +5086,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
                 const at = r_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
                 if (token_count >= max_tokens) break;
-                if (!streamResponsesDelta(stream, tok, at)) {
+                if (!streamResponsesDelta(stream, tok, at, &resp_hb)) {
                     resp_disconnected = true;
                     break;
                 }
@@ -4928,7 +5095,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             }
             if (!resp_disconnected and !g_server.isEog(res.next_token)) {
                 if (token_count < max_tokens) {
-                    if (!streamResponsesDelta(stream, tok, res.next_token)) {
+                    if (!streamResponsesDelta(stream, tok, res.next_token, &resp_hb)) {
                         resp_disconnected = true;
                     }
                     if (token_count < gen_ids_buf_size) gen_tokens[token_count] = res.next_token;
@@ -4955,7 +5122,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             }
             if (g_server.isEog(next)) break;
 
-            if (!streamResponsesDelta(stream, tok, next)) {
+            if (!streamResponsesDelta(stream, tok, next, &resp_hb)) {
                 resp_disconnected = true;
                 break;
             }
@@ -4967,6 +5134,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
     // Send final events — skip if client already disconnected
     if (!resp_disconnected) {
+        _ = flushStreamHoldback(stream, &resp_hb, emitResponsesDeltaPiece);
         const decoded = tok.decode(gen_tokens[0..@min(token_count, gen_ids_buf_size)]) catch |err| d: {
             std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, token_count, err });
             break :d g_server.allocator.dupe(u8, "") catch @as([]u8, &.{});
@@ -5197,10 +5365,12 @@ fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: Logp
     const header = std.fmt.bufPrint(buf, "\"logprobs\":{{\"content\":[{{\"token\":\"{s}\",\"logprob\":{d:.6},\"top_logprobs\":[", .{ token_text, info.token_logprob }) catch return "";
     pos = header.len;
     for (0..info.count) |i| {
-        const dt = decodeAndEscape(tok, info.top_ids[i]) orelse continue;
-        defer dt.deinit();
+        const top_decoded = decodeTokenText(tok, info.top_ids[i]) orelse continue;
+        defer g_server.allocator.free(top_decoded);
+        const top_escaped = json.jsonEscape(g_server.allocator, top_decoded) catch continue;
+        defer if (top_escaped.ptr != top_decoded.ptr) g_server.allocator.free(top_escaped);
         const prefix: []const u8 = if (i > 0) "," else "";
-        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{d:.6}}}", .{ prefix, dt.escaped, info.top_logprobs[i] }) catch return "";
+        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{d:.6}}}", .{ prefix, top_escaped, info.top_logprobs[i] }) catch return "";
         pos += entry.len;
     }
     const tail = "]}]}";
@@ -5212,17 +5382,29 @@ fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: Logp
 
 /// Stream a single token as an SSE chunk in OpenAI format.
 /// Returns false if the write failed (client disconnected).
-fn streamChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool) bool {
-    return streamChunkLogprobs(stream, chunk_buf, tok, token_id, req_id, created, is_chat, null);
+fn streamChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, hb: *Utf8Holdback) bool {
+    return streamChunkLogprobs(stream, chunk_buf, tok, token_id, req_id, created, is_chat, null, hb);
 }
 
-fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, lp_info: ?LogprobInfo) bool {
-    const dt = decodeAndEscape(tok, token_id) orelse return true;
-    defer dt.deinit();
+/// Format one text piece as an OpenAI SSE chunk and write it.
+/// Returns false if the write failed (client disconnected).
+fn writeOpenAiChunk(
+    stream: TcpStream,
+    chunk_buf: *[response_buf_size]u8,
+    tok: *Tokenizer,
+    text: []const u8,
+    req_id: u64,
+    created: i64,
+    is_chat: bool,
+    lp_info: ?LogprobInfo,
+) bool {
+    if (text.len == 0) return true;
+    const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
+    defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
 
     var lp_buf: [logprob_buf_size]u8 = undefined;
     const lp_json: []const u8 = if (lp_info) |info|
-        formatLogprobs(&lp_buf, tok, dt.escaped, info)
+        formatLogprobs(&lp_buf, tok, escaped, info)
     else
         "";
     const has_lp = lp_json.len > 0;
@@ -5231,28 +5413,45 @@ fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok
         break :blk if (has_lp)
             std.fmt.bufPrint(chunk_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"content":"{s}"}},{s},"finish_reason":null}}]}}
-            , .{ req_id, created, g_server.model_name, dt.escaped, lp_json })
+            , .{ req_id, created, g_server.model_name, escaped, lp_json })
         else
             std.fmt.bufPrint(chunk_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"content":"{s}"}},"finish_reason":null}}]}}
-            , .{ req_id, created, g_server.model_name, dt.escaped });
+            , .{ req_id, created, g_server.model_name, escaped });
     } else blk: {
         break :blk if (has_lp)
             std.fmt.bufPrint(chunk_buf,
                 \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,{s},"finish_reason":null}}]}}
-            , .{ req_id, created, g_server.model_name, dt.escaped, lp_json })
+            , .{ req_id, created, g_server.model_name, escaped, lp_json })
         else
             std.fmt.bufPrint(chunk_buf,
                 \\{{"id":"cmpl-{d}","object":"text_completion","created":{d},"model":"{s}","choices":[{{"text":"{s}","index":0,"finish_reason":null}}]}}
-            , .{ req_id, created, g_server.model_name, dt.escaped });
+            , .{ req_id, created, g_server.model_name, escaped });
     };
 
     if (chunk) |c| {
         return sseWriteData(stream, c);
     } else |_| {
-        std.log.warn("SSE stream chunk exceeded buffer ({d} bytes escaped)", .{dt.escaped.len});
+        std.log.warn("SSE stream chunk exceeded buffer ({d} bytes escaped)", .{escaped.len});
         return true;
     }
+}
+
+fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, lp_info: ?LogprobInfo, hb: *Utf8Holdback) bool {
+    const decoded = decodeTokenText(tok, token_id) orelse return true;
+    defer g_server.allocator.free(decoded);
+
+    // A token split by the UTF-8 holdback may emit two chunks; logprobs
+    // describe the whole token, so attach them to the first piece only.
+    const pieces = hb.feed(decoded);
+    var first_piece = true;
+    for ([_][]const u8{ pieces.head, pieces.body }) |piece| {
+        if (piece.len == 0) continue;
+        const piece_lp: ?LogprobInfo = if (first_piece) lp_info else null;
+        first_piece = false;
+        if (!writeOpenAiChunk(stream, chunk_buf, tok, piece, req_id, created, is_chat, piece_lp)) return false;
+    }
+    return true;
 }
 
 /// Send a usage-only SSE chunk (OpenAI streaming format).
@@ -5311,6 +5510,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
     // Send initial chunk (role announcement for chat completions)
     var chunk_buf: [response_buf_size]u8 = undefined;
+    // UTF-8 holdback shared by both streaming paths below.
+    var chunk_hb = Utf8Holdback{};
     if (is_chat) {
         const initial = std.fmt.bufPrint(&chunk_buf,
             \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","content":""}},"finish_reason":null}}]}}
@@ -5355,7 +5556,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             const stream_limit = if (sampling.hasStop()) checked_len else req.visible_len.load(.acquire);
             while (streamed_count < stream_limit) {
                 const token_id = req.tokens.items[streamed_count];
-                if (!streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat)) {
+                if (!streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat, &chunk_hb)) {
                     chunk_client_connected = false;
                     req.is_cancelled.store(true, .release);
                     break;
@@ -5378,7 +5579,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         const final_len = if (hit_stop) checked_len else req.visible_len.load(.acquire);
         while (chunk_client_connected and streamed_count < final_len and token_count < max_tokens) {
             const token_id = req.tokens.items[streamed_count];
-            if (!streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat)) break;
+            if (!streamChunk(stream, &chunk_buf, tok, token_id, req_id, created, is_chat, &chunk_hb)) break;
             streamed_count += 1;
             token_count += 1;
         }
@@ -5386,6 +5587,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
         // Send final chunk, usage chunk, and [DONE] — skip if client already disconnected
         if (chunk_client_connected) {
+            const held = chunk_hb.flush();
+            _ = writeOpenAiChunk(stream, &chunk_buf, tok, held, req_id, created, is_chat, null);
             const sched_finish: []const u8 = if (token_count >= max_tokens) "length" else "stop";
             sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat, sched_finish);
             if (sampling.stream_include_usage)
@@ -5561,7 +5764,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
     // Stream the first generated token (from last prefill forward)
     if (token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
-        if (!streamChunk(stream, &chunk_buf, tok, first_gen_token, req_id, created, is_chat)) {
+        if (!streamChunk(stream, &chunk_buf, tok, first_gen_token, req_id, created, is_chat, &chunk_hb)) {
             logGeneration(0, 0, 0);
             g_server.metrics.recordCancellation();
             return;
@@ -5615,7 +5818,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 const at = s_spec.draft_tokens[i];
                 if (g_server.isEog(at)) break;
                 if (token_count >= max_tokens) break;
-                if (!streamChunk(stream, &chunk_buf, tok, at, req_id, created, is_chat)) {
+                if (!streamChunk(stream, &chunk_buf, tok, at, req_id, created, is_chat, &chunk_hb)) {
                     stream_disconnected = true;
                     break;
                 }
@@ -5623,7 +5826,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             }
             if (!stream_disconnected and !g_server.isEog(res.next_token)) {
                 if (token_count < max_tokens) {
-                    if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat)) {
+                    if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat, &chunk_hb)) {
                         stream_disconnected = true;
                     }
                     token_count += 1;
@@ -5674,7 +5877,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                         if (g.singleValidToken(gs, s_vocab_texts)) |jump_tok| {
                             const jt_raw_s = if (jump_tok < s_vocab_texts.len) s_vocab_texts[jump_tok] else "";
                             gs.acceptToken(jt_raw_s);
-                            if (!streamChunk(stream, &chunk_buf, tok, jump_tok, req_id, created, is_chat)) {
+                            if (!streamChunk(stream, &chunk_buf, tok, jump_tok, req_id, created, is_chat, &chunk_hb)) {
                                 stream_disconnected = true;
                                 break;
                             }
@@ -5748,7 +5951,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 const s_raw_tok = if (next < s_vocab_texts.len) s_vocab_texts[next] else "";
                 s_grammar_state.?.acceptToken(s_raw_tok);
                 if (s_grammar_state.?.isComplete()) {
-                    if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp)) stream_disconnected = true;
+                    if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp, &chunk_hb)) stream_disconnected = true;
                     token_count += 1;
                     break;
                 }
@@ -5766,7 +5969,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     break;
                 }
             }
-            if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp)) {
+            if (!streamChunkLogprobs(stream, &chunk_buf, tok, next, req_id, created, is_chat, lp, &chunk_hb)) {
                 stream_disconnected = true;
                 break;
             }
@@ -5795,6 +5998,8 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
     // Send final chunk, usage chunk, and [DONE] — skip if client already disconnected
     if (!stream_disconnected) {
+        const held = chunk_hb.flush();
+        _ = writeOpenAiChunk(stream, &chunk_buf, tok, held, req_id, created, is_chat, null);
         const direct_finish: []const u8 = if (stream_forward_failed) "error" else if (token_count >= max_tokens) "length" else "stop";
         sendFinalChunk(stream, &chunk_buf, req_id, created, is_chat, direct_finish);
         if (sampling.stream_include_usage)
@@ -6415,6 +6620,89 @@ test "known_endpoints include kv_cache routes" {
     try std.testing.expect(found_info);
     try std.testing.expect(found_root);
 }
+
+test "incompleteUtf8TailLen holds only valid partial sequences" {
+    // ASCII always ends on a boundary.
+    try std.testing.expectEqual(@as(usize, 0), incompleteUtf8TailLen("hello"));
+    // Complete 3-byte CJK char at the tail.
+    try std.testing.expectEqual(@as(usize, 0), incompleteUtf8TailLen("\xe4\xb8\x96"));
+    // Lead + one continuation of a 3-byte sequence: hold both.
+    try std.testing.expectEqual(@as(usize, 2), incompleteUtf8TailLen("a\xe4\xb8"));
+    // Bare lead byte of a 2-byte sequence: hold it.
+    try std.testing.expectEqual(@as(usize, 1), incompleteUtf8TailLen("ab\xc3"));
+    // Lone continuation byte with no lead in lookback range passes through.
+    try std.testing.expectEqual(@as(usize, 0), incompleteUtf8TailLen("a\x80"));
+    // Invalid lead byte (0xFF) passes through instead of stalling.
+    try std.testing.expectEqual(@as(usize, 0), incompleteUtf8TailLen("a\xff"));
+    // Empty input.
+    try std.testing.expectEqual(@as(usize, 0), incompleteUtf8TailLen(""));
+}
+
+test "Utf8Holdback reassembles a character split across tokens" {
+    const allocator = std.testing.allocator;
+    var hb = Utf8Holdback{};
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(allocator);
+
+    // "世" = E4 B8 96 split across three byte-fallback tokens.
+    const p1 = hb.feed(&[_]u8{0xE4});
+    try std.testing.expectEqualStrings("", p1.head);
+    try std.testing.expectEqualStrings("", p1.body);
+    const p2 = hb.feed(&[_]u8{0xB8});
+    try std.testing.expectEqualStrings("", p2.head);
+    try std.testing.expectEqualStrings("", p2.body);
+    const p3 = hb.feed(&[_]u8{0x96});
+    try std.testing.expectEqualStrings("", p3.head);
+    try std.testing.expectEqualStrings("\xe4\xb8\x96", p3.body);
+
+    // ASCII after a completed sequence flows straight through.
+    const p4 = hb.feed("hi");
+    try std.testing.expectEqualStrings("", p4.head);
+    try std.testing.expectEqualStrings("hi", p4.body);
+
+    // Held bytes at the end are released by flush.
+    _ = hb.feed(&[_]u8{0xF0}); // lead of a 4-byte emoji
+    const held = hb.flush();
+    try std.testing.expectEqualStrings("\xf0", held);
+    try std.testing.expectEqual(@as(usize, 0), hb.pending_len);
+}
+
+test "Utf8Holdback completes held bytes plus head of next token" {
+    var hb = Utf8Holdback{};
+    // First token carries the first two bytes of a 3-byte char.
+    const p1 = hb.feed(&[_]u8{ 0xE7, 0x95 });
+    try std.testing.expectEqualStrings("", p1.body);
+    // Second token starts with the final byte then continues with ASCII.
+    const p2 = hb.feed(&[_]u8{ 0x9C, 'x' });
+    try std.testing.expectEqualStrings("\xe7\x95\x9c", p2.head); // 畜
+    try std.testing.expectEqualStrings("x", p2.body);
+}
+
+test "Utf8Holdback releases invalid continuation raw like batch decode" {
+    var hb = Utf8Holdback{};
+    // Valid prefix E4 B8, then the model emits ASCII instead of continuing.
+    _ = hb.feed(&[_]u8{ 0xE4, 0xB8 });
+    const pieces = hb.feed("z");
+    // Held bytes pass through raw rather than being dropped.
+    try std.testing.expectEqualStrings("\xe4\xb8", pieces.head);
+    try std.testing.expectEqualStrings("z", pieces.body);
+}
+
+test "Conversation.setTitle keeps trailing multi-byte characters" {
+    var conv = Conversation{ .id = 1 };
+    conv.setTitle("caf\xc3\xa9"); // café — trailing é is fully present
+    try std.testing.expectEqualStrings("caf\xc3\xa9", conv.titleSlice());
+
+    // Truncation that lands inside a multi-byte sequence drops the fragment.
+    var conv2 = Conversation{ .id = 2 };
+    const long = "\xe4\xb8\x96" ** 20; // 60 bytes of complete chars
+    conv2.setTitle(long[0..47]); // cut splits the 16th char
+    // Result must be valid UTF-8: ends on a character boundary.
+    const t = conv2.titleSlice();
+    try std.testing.expect(std.unicode.utf8ValidateSlice(t));
+    try std.testing.expect(t.len < 47);
+}
+
 
 test "fuzz: all server functions" {
     try std.testing.fuzz({}, struct {

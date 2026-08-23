@@ -4284,6 +4284,12 @@ fn generateSpeculative(
     var draft_cooldown: u32 = 0;
 
     while (token_count < cli.max_tokens and !isEogToken(last, eog)) {
+        // DFlash2: ingest any newly captured features before drafting so the
+        // drafter's context counter always matches the target's KV position
+        // (covers cooldown/fallback single-token decodes too).
+        if (use_dflash2 and feat_reader != null and df2 != null) {
+            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+        }
         const pre_draft_pos = target.kvSeqLen();
         // Set when the cooldown branch produced pure n-gram drafts; skips the
         // drafter so verification consumes those drafts directly.
@@ -4438,7 +4444,7 @@ fn generateSpeculative(
                     last = math_ops.sampleToken(cl2, cli.temperature, cli.top_k, cli.top_p, prng.random());
                 }
                 if (isEogToken(last, eog)) break;
-                if (use_ngram or use_lookahead) ngram_state.push(last);
+                if (use_ngram or use_lookahead or use_dflash2) ngram_state.push(last);
                 if (use_suffix) if (suffix_state_opt) |*ss| ss.push(last);
                 if (token_count < gen_ids_buf.len) {
                     gen_ids_buf[token_count] = last;
@@ -4568,9 +4574,9 @@ fn generateSpeculative(
             }
         }
 
-        // DFlash2: maintain hybrid history and ingest the newly verified
-        // positions' captured features into the drafter's context cache.
-        if (use_dflash2 and feat_reader != null and df2 != null) {
+        // DFlash2: maintain hybrid history (features are ingested at the top
+        // of the next iteration).
+        if (use_dflash2) {
             if (pull.getenv("AGAVE_DF2_DEBUG") != null) {
                 std.debug.print("df2 round {d}: pos={d} drafted={d} accepted={d} next={d} drafts={any}\n", .{
                     spec_state.total_rounds, pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
@@ -4582,7 +4588,6 @@ fn generateSpeculative(
                 ngram_state.push(spec_state.draft_tokens[i]);
             }
             if (!hit_eog) ngram_state.push(result.next_token);
-            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
         }
 
         // Stream
