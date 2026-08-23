@@ -953,10 +953,18 @@ fn extractQueryParam(query: []const u8, key: []const u8) ?[]const u8 {
 
 /// Result of reading an HTTP request — distinguishes malformed requests from
 /// oversized bodies so the caller can return the correct status code.
+/// Connection failures (`connection_closed`, `read_error`) are kept separate
+/// from `malformed` so logs and client-error metrics do not blame the request
+/// content when the peer vanished before sending a complete request.
 const HttpReadResult = union(enum) {
     ok: HttpRequest,
     malformed,
     body_too_large,
+    /// Peer closed the connection before a complete request arrived
+    /// (probes, port scans, health checks dialing the raw port).
+    connection_closed,
+    /// Socket read failed (timeout or reset) before a complete request arrived.
+    read_error,
 };
 
 /// Check whether a given header name is present in raw HTTP headers.
@@ -988,8 +996,9 @@ fn parseContentLength(headers: []const u8) ?usize {
 }
 
 /// Read a complete HTTP/1.1 request from a TCP stream. Returns `.malformed`
-/// on parse errors or connection close, `.body_too_large` when Content-Length
-/// exceeds max_request_body_size (RFC 7231 §6.5.11).
+/// on parse errors, `.connection_closed`/`.read_error` when the peer vanished
+/// or the socket failed before a complete request arrived, `.body_too_large`
+/// when Content-Length exceeds max_request_body_size (RFC 7231 §6.5.11).
 fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     var total: usize = 0;
     var hdr_end: usize = undefined;
@@ -997,8 +1006,8 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     // Read until we have complete headers (\r\n\r\n).
     // Scan only the newly-received region (plus 3-byte overlap for split boundary).
     while (total < buf.len) {
-        const n = stream.read(buf[total..]) catch return .malformed;
-        if (n == 0) return .malformed;
+        const n = stream.read(buf[total..]) catch return .read_error;
+        if (n == 0) return .connection_closed;
         const scan_start = if (total >= 3) total - 3 else 0;
         total += n;
         if (std.mem.indexOf(u8, buf[scan_start..total], "\r\n\r\n")) |pos| {
@@ -1032,8 +1041,8 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
         const body_end = body_start + content_length;
         if (body_end > buf.len) return .body_too_large;
         while (total < body_end) {
-            const n = stream.read(buf[total..body_end]) catch return .malformed;
-            if (n == 0) return .malformed;
+            const n = stream.read(buf[total..body_end]) catch return .read_error;
+            if (n == 0) return .connection_closed;
             total += n;
         }
         return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = buf[body_start..body_end] } };
@@ -5845,6 +5854,8 @@ fn handleConnection(stream: TcpStream) void {
     const buf = g_server.allocator.alloc(u8, http_buf_size) catch {
         g_server.metrics.recordRequest();
         g_server.metrics.recordFailure();
+        const t = getTimeComponents();
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} OOM allocating {d}-byte connection buffer -> 503\n", .{ t.hours, t.minutes, t.seconds, log_request_id, http_buf_size });
         sendJsonErrorEx(stream, "503 Service Unavailable", "server_error", "Out of memory", null, "server_overloaded");
         return;
     };
@@ -5868,6 +5879,20 @@ fn handleConnection(stream: TcpStream) void {
             const t = getTimeComponents();
             slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
             sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request", null, "malformed_request");
+        },
+        // Connection-level failures below are not client protocol errors: no
+        // 4xx is produced (the peer is gone or unresponsive), so they are kept
+        // out of requests_client_error to preserve that signal's meaning.
+        // Probes/port scans make plain closes common — log once, move on.
+        .connection_closed => {
+            g_server.metrics.recordRequest();
+            const t = getTimeComponents();
+            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Connection closed before request completed\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+        },
+        .read_error => {
+            g_server.metrics.recordRequest();
+            const t = getTimeComponents();
+            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Request read failed (timeout or reset) before completion -> closing\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
         },
     }
 }
@@ -6750,6 +6775,10 @@ test "fuzz: readHttpRequest over socket" {
                 // Both are valid outcomes for arbitrary input.
                 .malformed => {},
                 .body_too_large => {},
+                // EOF after a partial payload is the common fuzz outcome.
+                .connection_closed => {},
+                // EPIPE/reset from the socketpair teardown race.
+                .read_error => {},
             }
         }
     }.f, .{});
