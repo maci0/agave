@@ -21,6 +21,11 @@ pub const Tokenizer = struct {
         decode: *const fn (self: *anyopaque, tokens: []const u32) TokenizerError![]u8,
         get_vocab_size: *const fn (self: *anyopaque) u32,
         get_vocab_texts: *const fn (self: *anyopaque) []const []const u8,
+        /// Decode one token into caller-provided storage without allocating.
+        /// Returns a slice of `buf`, or null when unsupported, the token is out
+        /// of range, or its text does not fit. Callers must fall back to
+        /// `decode` on null so behavior stays identical to batch decode.
+        decode_one: ?*const fn (self: *anyopaque, token_id: u32, buf: []u8) ?[]const u8 = null,
     };
 
     /// Encode text into a sequence of token IDs.
@@ -30,6 +35,13 @@ pub const Tokenizer = struct {
     /// Decode a sequence of token IDs back into text.
     pub fn decode(self: Tokenizer, tokens: []const u32) TokenizerError![]u8 {
         return self.vtable.decode(self.ptr, tokens);
+    }
+    /// Decode a single token ID into `buf` without allocating. Returns a slice
+    /// of `buf`, or null when the implementation does not support it (see
+    /// `VTable.decode_one`); callers fall back to `decode`.
+    pub fn decodeOne(self: Tokenizer, token_id: u32, buf: []u8) ?[]const u8 {
+        const f = self.vtable.decode_one orelse return null;
+        return f(self.ptr, token_id, buf);
     }
     /// Return the vocabulary size.
     pub fn vocabSize(self: Tokenizer) u32 {

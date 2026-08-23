@@ -65,6 +65,7 @@ pub const BpeTokenizer = struct {
         .decode = @ptrCast(&tokDecode),
         .get_vocab_size = @ptrCast(&tokGetVocabSize),
         .get_vocab_texts = @ptrCast(&tokGetVocabTexts),
+        .decode_one = @ptrCast(&tokDecodeOne),
     };
     fn tokEncode(self: *BpeTokenizer, text: []const u8) tok_iface.TokenizerError![]u32 {
         return switch (self.tok_kind) {
@@ -78,6 +79,9 @@ pub const BpeTokenizer = struct {
             .spm, .spm_no_dummy => self.decodeSpm(tokens),
             .bpe => self.decode(tokens),
         };
+    }
+    fn tokDecodeOne(self: *BpeTokenizer, token_id: u32, buf: []u8) ?[]const u8 {
+        return self.decodeOne(token_id, buf);
     }
     fn tokGetVocabSize(self: *BpeTokenizer) u32 {
         return self.vocab_size;
@@ -454,6 +458,85 @@ pub const BpeTokenizer = struct {
         const unicode_str = try unicode_result.toOwnedSlice(self.allocator);
         defer self.allocator.free(unicode_str);
         return self.unicodeToBytes(unicode_str);
+    }
+
+    /// Decode a single token ID into `buf` without allocating.
+    /// Byte-for-byte equivalent to decoding a one-element slice via `decode`
+    /// (BPE mode: reverse byte↔unicode mapping; SPM modes: `<0xNN>` hex-byte
+    /// tokens and ▁→space). Returns a slice of `buf`, or null when the token
+    /// is out of range or its text does not fit — callers then fall back to
+    /// the allocating `decode`.
+    pub fn decodeOne(self: *const BpeTokenizer, token_id: u32, buf: []u8) ?[]const u8 {
+        if (token_id >= self.id_to_token.items.len) return null;
+        const text = self.id_to_token.items[token_id];
+        return switch (self.tok_kind) {
+            .bpe => self.decodeOneBpe(text, buf),
+            .spm, .spm_no_dummy => decodeOneSpm(text, buf),
+        };
+    }
+
+    /// Allocation-free single-token reverse of the GPT-2 unicode mapping.
+    /// Mirrors `unicodeToBytes` char-walk and fallback behavior exactly.
+    fn decodeOneBpe(self: *const BpeTokenizer, text: []const u8, out: []u8) ?[]const u8 {
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < text.len) {
+            var char_len: usize = 1;
+            if ((text[i] & 0x80) != 0) {
+                if ((text[i] & 0xE0) == 0xC0) {
+                    char_len = 2;
+                } else if ((text[i] & 0xF0) == 0xE0) {
+                    char_len = 3;
+                } else if ((text[i] & 0xF8) == 0xF0) {
+                    char_len = 4;
+                }
+            }
+            if (i + char_len > text.len) char_len = 1;
+            const uc = text[i .. i + char_len];
+            const byte: u8 = if (self.unicode_to_byte.get(uc)) |b|
+                b
+            else if (uc.len == 1 and uc[0] < 128)
+                uc[0]
+            else
+                '?';
+            if (n >= out.len) return null;
+            out[n] = byte;
+            n += 1;
+            i += char_len;
+        }
+        return out[0..n];
+    }
+
+    /// Allocation-free single-token SPM decode: mirrors the per-token branch
+    /// of `decodeSpm` (`<0xNN>` hex-byte tokens, ▁ → space, raw copy).
+    fn decodeOneSpm(text: []const u8, out: []u8) ?[]const u8 {
+        // Handle <0xNN> hex-byte tokens — emit raw byte.
+        if (text.len == 6 and text[0] == '<' and text[1] == '0' and text[2] == 'x' and text[5] == '>') {
+            if (std.fmt.parseUnsigned(u8, text[3..5], 16)) |byte| {
+                if (out.len < 1) return null;
+                out[0] = byte;
+                return out[0..1];
+            } else |_| {}
+        }
+        // Replace ▁ (U+2581) with space; copy the rest verbatim.
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < text.len) {
+            if (i + spm_prefix.len <= text.len and std.mem.eql(u8, text[i..][0..spm_prefix.len], spm_prefix)) {
+                if (n >= out.len) return null;
+                out[n] = ' ';
+                n += 1;
+                i += spm_prefix.len;
+            } else {
+                const remaining = text[i..];
+                const next = std.mem.indexOf(u8, remaining, spm_prefix) orelse remaining.len;
+                if (n + next > out.len) return null;
+                @memcpy(out[n..][0..next], remaining[0..next]);
+                n += next;
+                i += next;
+            }
+        }
+        return out[0..n];
     }
 
     /// Load vocabulary and merge rules from GGUF-embedded tokenizer data.
@@ -896,6 +979,67 @@ test "BPE decode reverses encode" {
     const decoded = try tok.decode(&.{ 3, 2 });
     defer allocator.free(decoded);
     try std.testing.expectEqualStrings("abc", decoded);
+}
+
+test "decodeOne matches single-token decode in all modes" {
+    const allocator = std.testing.allocator;
+    var buf: [256]u8 = undefined;
+
+    // BPE mode: mapped bytes, raw ASCII, and an unmapped codepoint ('?' fallback).
+    {
+        var tok = BpeTokenizer.init(allocator);
+        defer tok.deinit();
+        const vocab = [_][]const u8{ "a", "\xc3\xa9", "\xe2\x96\x81", "ab" };
+        var vocab_slice: [vocab.len][]const u8 = undefined;
+        for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+        try tok.loadFromGGUF(&vocab_slice, &.{}, 0);
+
+        for (0..vocab.len) |id| {
+            const batch = try tok.decode(&.{@intCast(id)});
+            defer allocator.free(batch);
+            const one = tok.decodeOne(@intCast(id), &buf) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(batch, one);
+        }
+        // Out-of-range ID behaves like batch decode (empty).
+        const oob_batch = try tok.decode(&.{99});
+        defer allocator.free(oob_batch);
+        try std.testing.expectEqual(@as(usize, 0), oob_batch.len);
+        try std.testing.expect(tok.decodeOne(99, &buf) == null);
+    }
+
+    // SPM mode: hex-byte tokens, ▁ prefix, plain text, malformed hex.
+    {
+        var tok = BpeTokenizer.init(allocator);
+        defer tok.deinit();
+        const vocab = [_][]const u8{ "<0x41>", "\xe2\x96\x81hello", "world", "<0xZZ>" };
+        var vocab_slice: [vocab.len][]const u8 = undefined;
+        for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+        try tok.loadFromGGUFSpm(&vocab_slice, 0);
+        tok.tok_kind = .spm; // set by callers after loading (see main.zig)
+
+        for (0..vocab.len) |id| {
+            const batch = try tok.decodeSpm(&.{@intCast(id)});
+            defer allocator.free(batch);
+            const one = tok.decodeOne(@intCast(id), &buf) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings(batch, one);
+        }
+    }
+
+    // Undersized buffer must return null (caller falls back), never truncate.
+    {
+        var tok = BpeTokenizer.init(allocator);
+        defer tok.deinit();
+        const long_tok = "x" ** 100;
+        const vocab = [_][]const u8{ long_tok, "y" };
+        var vocab_slice: [vocab.len][]const u8 = undefined;
+        for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+        try tok.loadFromGGUFSpm(&vocab_slice, 0);
+        tok.tok_kind = .spm;
+        var small: [4]u8 = undefined;
+        try std.testing.expect(tok.decodeOne(0, &small) == null);
+        const ok = tok.decodeOne(1, &small) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("y", ok);
+    }
 }
 
 test "fuzz: all bpe functions" {
