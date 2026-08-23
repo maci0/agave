@@ -34,6 +34,7 @@ agave target.gguf --draft-model mlp.gguf --spec-mode mlp "prompt"    # MLP Specu
 agave target.gguf --draft-model draft.gguf --spec-token-map freq.txt --spec-mode ddtree "prompt"  # FR-Spec vocab truncation
 agave model-mtp.gguf --spec-mode mtp "prompt"                    # Multi-token prediction heads
 agave target.gguf --draft-model draft.gguf "prompt"              # Standard draft-verify (no tree)
+agave target.gguf --draft-model draft.gguf --spec-mode dflash2 "prompt"   # DFlash2 block diffusion (parallel block drafter + path selector)
 agave model.gguf --spec-mode auto "prompt"                       # Auto-select best spec mode
 agave model.gguf --ctx-size auto "prompt"                        # Auto-fit context to available memory
 agave model.gguf --dir-steering-file dir.f32 "prompt"             # Directional steering (FFN, scale 1.0)
