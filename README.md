@@ -356,7 +356,7 @@ agave [OPTIONS] <model> [prompt]
       --diffusion-canvas <N> DiffusionGemma canvas size [default: 256]
       --diffusion-confidence <F>  Diffusion acceptance threshold [default: 0.5]
       --sleep-after <N>    Server sleep after N seconds idle (0=off)
-      --max-batch-size <N> Server concurrent batch size [default: 8]
+      --max-batch-size <N> Server concurrent batch size [default: 8] (admission is one-at-a-time until per-request paged KV is wired)
       --rate-limit-rpm <N> Server max requests/min (0=unlimited)
       --rate-limit-tpm <N> Server max prompt tokens/min (0=unlimited)
       --no-kv-cache        Prefill-only / embedding server mode

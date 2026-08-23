@@ -77,7 +77,7 @@ agave model.gguf --lora adapter.gguf "prompt"                        # Merge LoR
 # Server features
 agave model.gguf --serve --sleep-after 300     # Enter sleep-mode after 5min idle
 agave model.gguf --serve --no-kv-cache         # Prefill-only / embedding server
-agave model.gguf --serve --max-batch-size 16   # Higher throughput for concurrent workloads
+agave model.gguf --serve --max-batch-size 16   # Batch width (admission one-at-a-time until per-request paged KV is wired)
 agave model.gguf --serve --rate-limit-rpm 60 --rate-limit-tpm 100000  # Token-bucket rate limits
 ```
 

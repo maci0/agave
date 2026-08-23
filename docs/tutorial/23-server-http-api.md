@@ -22,13 +22,13 @@ The messages array (plus any system prompt, plus any tool definitions injected a
 
 ## 4. Continuous Batching: Many Requests, One Model
 
-A single model instance can't run two `forward()` calls at once, so concurrent requests can't each just grab the model and block. `--serve` runs a background scheduler (`RequestManager`, `scheduler.zig`) that does vLLM-style iteration-level continuous batching: HTTP handler threads don't call `forward()` themselves, they `enqueue()` a request's token IDs and then poll an atomic "tokens generated so far" counter. The scheduler thread runs one shared decode step across every active request each iteration, fills unused batch slots from a waiting queue, and evicts finished or cancelled requests, all decoupled from how many client connections happen to be open. A separate, single-mutex direct-forward code path also exists in the same functions as an explicit fallback for when no scheduler is running, but `--serve` always starts one, so in practice every request goes through continuous batching.
+A single model instance can't run two `forward()` calls at once, so concurrent requests can't each just grab the model and block. `--serve` runs a background scheduler (`RequestManager`, `scheduler.zig`) with vLLM-style iteration-level structure: HTTP handler threads don't call `forward()` themselves, they `enqueue()` a request's token IDs and then poll an atomic "tokens generated so far" counter. The scheduler thread runs decode steps, fills admission slots from a waiting queue ordered by cache-aware priority, and evicts finished or cancelled requests, all decoupled from how many client connections happen to be open. A separate, single-mutex direct-forward code path also exists in the same functions as an explicit fallback for when no scheduler is running, but `--serve` always starts one, so in practice every request goes through the scheduler.
 
-Concurrency has a throughput cost worth naming: the scheduler's batch size (`--max-batch-size`) bounds how many requests get a decode step per iteration, so pushing more simultaneous conversations at a server doesn't scale linearly forever, it scales up to that batch width and then queues.
+One honesty note on concurrency: while the model layer exposes only a single shared KV sequence (one `kv_seq_len` cursor over one block table), the scheduler admits at most one running request at a time (`scheduler.max_running_requests_single_sequence`). Two interleaved requests would both prefill from position 0 into the same physical KV slots and silently corrupt each other's output, so until per-request paged sequences are plumbed through the model vtable, concurrent conversations queue and are served one by one. The waiting queue, priority ordering, timeouts, and cancellation all still operate across the whole queue; only forward execution is serialized.
 
 ## 5. Prefix Reuse: Across Requests, and Across Sessions
 
-The OpenAI-style API is stateless on paper (each request resends the full message history), but resending history doesn't mean recomputing it. Every enqueued request's KV allocation goes through the same paged, radix-tree-indexed KV cache from Chapter 5: the scheduler looks up the longest prefix of the incoming token IDs that's already resident in *any* previously cached sequence, not just the immediately prior request, and only prefills the tokens past that match. This is what makes "send the whole conversation every turn" cheap: a long system prompt or early conversation turns get computed once and reused by every subsequent turn, and, because the cache is shared rather than per-connection, by other concurrent conversations that happen to share a prefix too. The scheduler's admission priority also factors in cached-prefix length against wait time, so a request that's mostly a cache hit doesn't wait behind a cold one just because it arrived later.
+The OpenAI-style API is stateless on paper (each request resends the full message history), but resending history doesn't mean recomputing it. Every enqueued request's token IDs go through a radix-tree index over previously completed sequences (`RadixTree`, `kvcache/manager.zig`): the scheduler looks up the longest prefix of the incoming token IDs that matches any cached sequence, not just the immediately prior request. Today the match feeds cache-hit metrics and queue priority (a request that's mostly a cache hit doesn't wait behind a cold one just because it arrived later); reusing the matched blocks to skip re-prefill needs the same per-request sequence wiring as batched decoding, and is tracked as the next step for both.
 
 ## 6. Speculative Decoding Rides the Same Prefix Cache
 
@@ -90,7 +90,7 @@ Server-related flags from [`src/main.zig`](../../src/main.zig):
 | `--host` | | `127.0.0.1` | Bind address: IPv4, `localhost`, `0.0.0.0`, or `0` |
 | `--api-key` | | | API key for auth. Prefer `AGAVE_API_KEY` (env wins if both set). Required for non-loopback binds |
 | `--sleep-after N` | | `0` (disabled) | Enter sleep mode after N seconds idle; signals `/health` sleeping:true |
-| `--max-batch-size N` | | `8` | Max concurrent requests batched per scheduler cycle |
+| `--max-batch-size N` | | `8` | Max requests batched per scheduler cycle; takes effect once per-request paged KV is wired (admission is one-at-a-time today) |
 | `--rate-limit-rpm N` | | `0` (unlimited) | Max requests per minute; enables token-bucket rate limiting |
 | `--rate-limit-tpm N` | | `0` (unlimited) | Max prompt tokens per minute; enables token-bucket rate limiting |
 | `--no-kv-cache` | | | Prefill-only / embedding server (no decode-phase KV cache) |
@@ -105,7 +105,7 @@ AGAVE_API_KEY=mysecret agave model.gguf --serve --port 8080 --host 0.0.0.0
 # Sleep mode after 5 minutes idle
 agave model.gguf --serve --sleep-after 300
 
-# Higher throughput for concurrent workloads
+# Raise the batch width for when per-request paged KV lands (serialized today)
 agave model.gguf --serve --max-batch-size 16
 
 # Rate limiting (60 req/min, 100k prompt tokens/min)

@@ -46,6 +46,19 @@ const ms_per_second: f64 = 1000.0;
 /// Prevents unbounded memory growth under sustained load.
 const max_waiting_queue_size: usize = 1024;
 
+/// Requests that may sit in `running` at the same time.
+///
+/// The model layer currently exposes ONE shared KV sequence per model: a
+/// scalar `kv_seq_len` over a single-row `seq_table`. Two interleaved
+/// requests both prefill from position 0 into the same physical slots, so
+/// each silently corrupts the other's attention state and output (silent
+/// wrong completions, no error). Until Request.block_table is wired through
+/// the model vtable as a per-request sequence row, admission must stay
+/// serialized: requests queue and run one at a time, matching the direct
+/// path's whole-generation forward loop. Raise this to `max_batch_size`
+/// once paged per-request KV works end to end.
+pub const max_running_requests_single_sequence: usize = 1;
+
 /// Initial token output buffer capacity per request.
 /// Must be >= server's gen_ids_buf_size (4096) + cancellation margin.
 /// Handler threads read tokens.items without locking — if append causes
@@ -404,7 +417,9 @@ pub const RequestManager = struct {
     /// Execute one scheduler iteration.
     /// 1. Remove finished/cancelled requests from running
     /// 2. Check timeout on all running requests
-    /// 3. Fill batch from waiting queue (cache-aware priority, up to max_batch_size)
+    /// 3. Fill batch from waiting queue (cache-aware priority, up to the
+    ///    effective batch limit: `max_batch_size` capped by
+    ///    `max_running_requests_single_sequence` while KV is single-sequence)
     /// 4. Call model.forward() for each running request
     pub fn step(self: *RequestManager, model: *Model, eog_ids: []const u32) !void {
         const now = milliTimestamp();
@@ -480,8 +495,9 @@ pub const RequestManager = struct {
             // Reverse-iterate and skip non-ready entries so a single unready request
             // at the head does not block admission of lower-priority ready requests.
             {
+                const batch_limit = @min(self.max_batch_size, max_running_requests_single_sequence);
                 var idx: usize = self.waiting.items.len;
-                while (idx > 0 and self.running.items.len < self.max_batch_size) {
+                while (idx > 0 and self.running.items.len < batch_limit) {
                     idx -= 1;
                     const candidate = self.waiting.items[idx];
                     if (!candidate.sampling_ready.load(.acquire)) continue;
@@ -702,21 +718,36 @@ pub fn runSchedulerLoop(
         sleepNs(scheduler_poll_ns);
     }
 
-    // Shutdown cleanup: mark all remaining requests so handler threads
-    // observe scheduler_done and stop spinning (prevents use-after-free
-    // when the scheduler's queues are freed in deinit).
-    {
-        manager.mutex.lockUncancelable(manager.io);
-        defer manager.mutex.unlock(manager.io);
+    // Shutdown cleanup: wake every queued request and remove it from the
+    // queues so ownership transfers fully to its HTTP handler thread.
+    drainForShutdown(manager);
+}
 
-        for (manager.running.items) |req| {
-            req.scheduler_done.store(true, .release);
-        }
-        for (manager.waiting.items) |req| {
-            req.is_cancelled.store(true, .release);
-            req.scheduler_done.store(true, .release);
-        }
+/// Wake all queued requests and take them out of the queues.
+///
+/// Marking alone is not enough: RequestManager.deinit frees anything still
+/// in these lists, so an entry left listed while its handler destroys it is a
+/// deterministic double-free. Running requests must also observe
+/// `is_cancelled` — handler threads poll only `is_finished`/`is_cancelled`
+/// in their main wait loops, so `scheduler_done` alone leaves them spinning
+/// forever (use-after-free once deinit runs).
+/// Only call once the scheduler loop has stopped: no step() may re-add.
+fn drainForShutdown(manager: *RequestManager) void {
+    manager.mutex.lockUncancelable(manager.io);
+    defer manager.mutex.unlock(manager.io);
+
+    for (manager.running.items) |req| {
+        req.is_cancelled.store(true, .release);
+        req.scheduler_done.store(true, .release);
     }
+    for (manager.waiting.items) |req| {
+        req.is_cancelled.store(true, .release);
+        req.scheduler_done.store(true, .release);
+    }
+    // Drop the pointers without dereferencing: handlers that already saw both
+    // flags may destroy their request concurrently with this drain.
+    manager.running.clearRetainingCapacity();
+    manager.waiting.clearRetainingCapacity();
 }
 
 /// Create a test Io instance for unit tests.
@@ -752,7 +783,7 @@ test "enqueue increments waiting count" {
     try std.testing.expectEqual(@as(u64, 1), req1.id);
 }
 
-test "step fills batch from waiting queue" {
+test "step admits one request at a time while KV is single-sequence" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
     var manager = try RequestManager.init(allocator, &metrics, 2, 30, null, testIo());
@@ -768,19 +799,63 @@ test "step fills batch from waiting queue" {
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
 
-    // Step 1: should fill batch with 2 requests
+    // Step 1: only one request may be admitted — two interleaved requests
+    // share one physical KV sequence and would corrupt each other.
     try manager.step(&model, &[_]u32{});
 
     var stats = manager.getStats();
-    try std.testing.expectEqual(@as(u32, 1), stats.waiting_count);
-    try std.testing.expectEqual(@as(u32, 2), stats.running_count);
+    try std.testing.expectEqual(@as(u32, 2), stats.waiting_count);
+    try std.testing.expectEqual(@as(u32, 1), stats.running_count);
 
-    // Step 2: should keep 2 running (not finished)
+    // Step 2: still one running; the rest wait for it to finish.
     try manager.step(&model, &[_]u32{});
 
     stats = manager.getStats();
-    try std.testing.expectEqual(@as(u32, 1), stats.waiting_count);
-    try std.testing.expectEqual(@as(u32, 2), stats.running_count);
+    try std.testing.expectEqual(@as(u32, 2), stats.waiting_count);
+    try std.testing.expectEqual(@as(u32, 1), stats.running_count);
+}
+
+test "drainForShutdown hands queued requests to their handlers" {
+    // Regression: runSchedulerLoop used to mark queued requests without
+    // removing them. Handlers then destroyed their request while it was
+    // still listed, and RequestManager.deinit double-freed every entry left
+    // in `waiting`; running requests were never cancelled, leaving handlers
+    // spinning on freed memory after deinit.
+    const allocator = std.testing.allocator;
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 4, 30, null, testIo());
+
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const running_req = try manager.enqueue(&dummy_tokens);
+    markSamplingReady(running_req);
+    const waiting_req = try manager.enqueue(&dummy_tokens);
+    markSamplingReady(waiting_req);
+
+    var mock_model = MockModel{};
+    var model = Model.from(MockModel, &mock_model);
+    try manager.step(&model, &[_]u32{}); // admit one request
+
+    drainForShutdown(&manager);
+
+    // Both requests must observe cancellation and scheduler completion...
+    try std.testing.expect(running_req.is_cancelled.load(.acquire));
+    try std.testing.expect(running_req.scheduler_done.load(.acquire));
+    try std.testing.expect(waiting_req.is_cancelled.load(.acquire));
+    try std.testing.expect(waiting_req.scheduler_done.load(.acquire));
+
+    // ...and no longer be listed, so handler-side free is the last touch.
+    try std.testing.expectEqual(@as(usize, 0), manager.running.items.len);
+    try std.testing.expectEqual(@as(usize, 0), manager.waiting.items.len);
+
+    // Handler side of the contract: destroy both after scheduler_done.
+    running_req.deinit();
+    allocator.destroy(running_req);
+    waiting_req.deinit();
+    allocator.destroy(waiting_req);
+
+    // Queues are empty, so deinit must not free anything still listed
+    // (double-free here is exactly the old bug).
+    manager.deinit();
 }
 
 test "step removes finished requests" {
@@ -804,20 +879,24 @@ test "step removes finished requests" {
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
 
-    // Step to move both to running
+    // Step admits req1 only (serialized admission while KV is single-sequence);
+    // req2 keeps waiting.
     try manager.step(&model, &[_]u32{});
 
     var stats = manager.getStats();
-    try std.testing.expectEqual(@as(u32, 2), stats.running_count);
+    try std.testing.expectEqual(@as(u32, 1), stats.running_count);
+    try std.testing.expectEqual(@as(u32, 1), stats.waiting_count);
 
     // Mark first request as finished
     req1.is_finished.store(true, .release);
 
-    // Step again — should remove the finished request from running
+    // Step again — should remove the finished request from running and admit
+    // the waiter in its place within the same iteration.
     try manager.step(&model, &[_]u32{1}); // Pass EOS token ID
 
     stats = manager.getStats();
-    try std.testing.expectEqual(@as(u32, 1), stats.running_count); // One removed, one still running
+    try std.testing.expectEqual(@as(u32, 1), stats.running_count); // req1 removed, req2 admitted
+    try std.testing.expectEqual(@as(u32, 0), stats.waiting_count);
 }
 
 test "step cancels timed-out requests" {
