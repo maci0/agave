@@ -27,6 +27,11 @@ const max_top_k: u32 = math_ops.max_top_k;
 /// Maximum number of stop sequences per request.
 const max_stop_sequences: usize = 4;
 
+/// Inline storage bytes per decoded stop sequence. Sequences containing JSON
+/// escapes are decoded into `SamplingParams.stop_storage`; longer sequences
+/// fall back to raw (undecoded) matching.
+const stop_seq_max_len: usize = 64;
+
 /// Maximum number of logit bias entries per request.
 const max_logit_bias: usize = 16;
 
@@ -87,10 +92,26 @@ pub const SamplingParams = struct {
     grammar_string: ?[]const u8 = null,
     json_schema: ?[]const u8 = null,
     stop: [max_stop_sequences]?[]const u8 = .{null} ** max_stop_sequences,
+    /// Inline storage for JSON-decoded stop sequences. Slices in `stop` may
+    /// point here; `out: *SamplingParams` parse style keeps storage and slices
+    /// in one caller-owned value.
+    stop_storage: [max_stop_sequences][stop_seq_max_len]u8 = .{.{0} ** stop_seq_max_len} ** max_stop_sequences,
     n_stop: u32 = 0,
     /// Anthropic-style thinking budget: max tokens for <think>...</think> reasoning.
     /// 0 = unlimited. When exceeded, model is nudged out of thinking with </think>.
     thinking_budget_tokens: u32 = 0,
+
+    /// Store a stop sequence, decoding JSON escapes (`"\\n"` → newline) into
+    /// inline storage. Falls back to the raw slice when there are no escapes or
+    /// the decoded form exceeds `stop_seq_max_len` (raw matching still works
+    /// for escape-free sequences).
+    fn setStopSeq(self: *SamplingParams, idx: usize, raw: []const u8) void {
+        self.stop[idx] = raw;
+        if (std.mem.indexOfScalar(u8, raw, '\\') == null) return;
+        if (raw.len > stop_seq_max_len) return;
+        const decoded = jsonUnescapeInto(&self.stop_storage[idx], raw) orelse return;
+        self.stop[idx] = decoded;
+    }
 
     pub fn hasStop(self: *const SamplingParams) bool {
         return self.n_stop > 0;
@@ -281,9 +302,12 @@ pub fn extractLastMessage(json: []const u8) ?[]const u8 {
     return last;
 }
 
-/// Parse and clamp sampling parameters from a JSON request body.
+/// Parse and clamp sampling parameters from a JSON request body into `out`.
 /// Negative temperature is treated as 0 (greedy). top_p is clamped to [0, 1].
-pub fn parseSampling(body: []const u8) SamplingParams {
+/// Out-param style: decoded stop sequences live in `out.stop_storage`, so the
+/// value must not be copied to a different address while its stop slices are
+/// in use (handler stack frames satisfy this).
+pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
     const raw_temp = extractFloatField(body, "temperature") orelse 0;
     const raw_top_p = extractFloatField(body, "top_p") orelse 1.0;
     const raw_top_k = extractIntField(body, "top_k") orelse 0;
@@ -371,7 +395,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         if (result.n_stop > 0) break;
         if (extractField(body, stop_field)) |stop_str| {
             if (stop_str.len > 0) {
-                result.stop[0] = stop_str;
+                result.setStopSeq(0, stop_str);
                 result.n_stop = 1;
             }
         } else {
@@ -394,7 +418,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
                             }
                             const seq = body[str_start..@min(si, body.len)];
                             if (seq.len > 0) {
-                                result.stop[result.n_stop] = seq;
+                                result.setStopSeq(result.n_stop, seq);
                                 result.n_stop += 1;
                             }
                             if (si < body.len) si += 1;
@@ -463,7 +487,7 @@ pub fn parseSampling(body: []const u8) SamplingParams {
         }
     }
 
-    return result;
+    out.* = result;
 }
 
 /// Parse tool definitions from "tools" array in request body.
@@ -650,13 +674,13 @@ pub fn extractFormInt(body: []const u8, field: []const u8) ?usize {
     return std.fmt.parseInt(usize, raw, 10) catch null;
 }
 
-/// Parse and clamp sampling parameters from a URL-encoded form body.
+/// Parse and clamp sampling parameters from a URL-encoded form body into `out`.
 /// Negative temperature is treated as 0 (greedy). top_p is clamped to [0, 1].
-pub fn parseFormSampling(body: []const u8) SamplingParams {
+pub fn parseFormSampling(out: *SamplingParams, body: []const u8) void {
     const raw_temp = extractFormFloat(body, "temperature") orelse 0;
     const raw_top_p = extractFormFloat(body, "top_p") orelse 1.0;
     const raw_top_k = extractFormInt(body, "top_k") orelse 0;
-    return .{
+    out.* = .{
         .temperature = if (std.math.isFinite(raw_temp)) std.math.clamp(raw_temp, 0, max_temperature) else 0,
         .top_k = @intCast(@min(raw_top_k, max_top_k)),
         .top_p = if (std.math.isFinite(raw_top_p)) std.math.clamp(raw_top_p, 0, 1.0) else 1.0,
@@ -875,57 +899,60 @@ pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
     return escapeWith(allocator, input, jsonEscapeChar);
 }
 
-/// Decode JSON string escape sequences (\\n → newline, \\\" → quote, etc.).
-/// Returns the input unchanged (via @constCast) when no escapes are present.
-/// Caller must check ptr equality to determine if the result was allocated.
-pub fn jsonUnescape(allocator: Allocator, input: []const u8) ![]u8 {
-    if (std.mem.indexOf(u8, input, "\\") == null) return @constCast(input);
-
-    const buf = try allocator.alloc(u8, input.len);
-    errdefer allocator.free(buf);
+/// Decode JSON escape sequences from `src` into `dst` without allocating.
+/// Returns the decoded slice within `dst`, or null when the decoded form does
+/// not fit. Output is never longer than input.
+pub fn jsonUnescapeInto(dst: []u8, src: []const u8) ?[]const u8 {
     var out: usize = 0;
     var i: usize = 0;
 
-    while (i < input.len) {
-        if (input[i] == '\\' and i + 1 < input.len) {
+    while (i < src.len) {
+        if (src[i] == '\\' and i + 1 < src.len) {
             i += 1;
-            switch (input[i]) {
+            switch (src[i]) {
                 '"', '\\', '/' => {
-                    buf[out] = input[i];
+                    if (out + 1 > dst.len) return null;
+                    dst[out] = src[i];
                     out += 1;
                     i += 1;
                 },
                 'n' => {
-                    buf[out] = '\n';
+                    if (out + 1 > dst.len) return null;
+                    dst[out] = '\n';
                     out += 1;
                     i += 1;
                 },
                 'r' => {
-                    buf[out] = '\r';
+                    if (out + 1 > dst.len) return null;
+                    dst[out] = '\r';
                     out += 1;
                     i += 1;
                 },
                 't' => {
-                    buf[out] = '\t';
+                    if (out + 1 > dst.len) return null;
+                    dst[out] = '\t';
                     out += 1;
                     i += 1;
                 },
                 'b' => {
-                    buf[out] = 0x08;
+                    if (out + 1 > dst.len) return null;
+                    dst[out] = 0x08;
                     out += 1;
                     i += 1;
                 },
                 'f' => {
-                    buf[out] = 0x0C;
+                    if (out + 1 > dst.len) return null;
+                    dst[out] = 0x0C;
                     out += 1;
                     i += 1;
                 },
                 'u' => {
-                    if (i + 5 <= input.len) {
-                        const cp = std.fmt.parseInt(u21, input[i + 1 .. i + 5], 16) catch {
-                            buf[out] = '\\';
+                    if (i + 5 <= src.len) {
+                        const cp = std.fmt.parseInt(u21, src[i + 1 .. i + 5], 16) catch {
+                            if (out + 2 > dst.len) return null;
+                            dst[out] = '\\';
                             out += 1;
-                            buf[out] = 'u';
+                            dst[out] = 'u';
                             out += 1;
                             i += 1;
                             continue;
@@ -933,72 +960,93 @@ pub fn jsonUnescape(allocator: Allocator, input: []const u8) ![]u8 {
                         // Handle UTF-16 surrogates (CWE-176): decode surrogate
                         // pairs into a valid codepoint; emit U+FFFD for lone surrogates.
                         if (cp >= 0xD800 and cp <= 0xDFFF) {
-                            if (cp <= 0xDBFF and i + 11 <= input.len and input[i + 5] == '\\' and input[i + 6] == 'u') {
+                            if (cp <= 0xDBFF and i + 11 <= src.len and src[i + 5] == '\\' and src[i + 6] == 'u') {
                                 // High surrogate — try to read low surrogate
-                                const lo = std.fmt.parseInt(u21, input[i + 7 .. i + 11], 16) catch 0;
+                                const lo = std.fmt.parseInt(u21, src[i + 7 .. i + 11], 16) catch 0;
                                 if (lo >= 0xDC00 and lo <= 0xDFFF) {
                                     // Valid surrogate pair — decode to codepoint (U+10000..U+10FFFF)
                                     const full: u21 = 0x10000 + (@as(u21, cp - 0xD800) << 10) + (lo - 0xDC00);
-                                    buf[out] = @intCast(0xF0 | (full >> 18));
-                                    buf[out + 1] = @intCast(0x80 | ((full >> 12) & 0x3F));
-                                    buf[out + 2] = @intCast(0x80 | ((full >> 6) & 0x3F));
-                                    buf[out + 3] = @intCast(0x80 | (full & 0x3F));
+                                    if (out + 4 > dst.len) return null;
+                                    dst[out] = @intCast(0xF0 | (full >> 18));
+                                    dst[out + 1] = @intCast(0x80 | ((full >> 12) & 0x3F));
+                                    dst[out + 2] = @intCast(0x80 | ((full >> 6) & 0x3F));
+                                    dst[out + 3] = @intCast(0x80 | (full & 0x3F));
                                     out += 4;
                                     i += 11;
                                     continue;
                                 }
                             }
                             // Lone surrogate — emit U+FFFD replacement character
-                            buf[out] = 0xEF;
-                            buf[out + 1] = 0xBF;
-                            buf[out + 2] = 0xBD;
+                            if (out + 3 > dst.len) return null;
+                            dst[out] = 0xEF;
+                            dst[out + 1] = 0xBF;
+                            dst[out + 2] = 0xBD;
                             out += 3;
                             i += 5;
                             continue;
                         }
+                        const cp_len: usize = if (cp < 0x80) 1 else if (cp < 0x800) 2 else 3;
+                        if (out + cp_len > dst.len) return null;
                         if (cp < 0x80) {
-                            buf[out] = @intCast(cp);
+                            dst[out] = @intCast(cp);
                             out += 1;
                         } else if (cp < 0x800) {
-                            buf[out] = @intCast(0xC0 | (cp >> 6));
-                            buf[out + 1] = @intCast(0x80 | (cp & 0x3F));
+                            dst[out] = @intCast(0xC0 | (cp >> 6));
+                            dst[out + 1] = @intCast(0x80 | (cp & 0x3F));
                             out += 2;
                         } else {
-                            buf[out] = @intCast(0xE0 | (cp >> 12));
-                            buf[out + 1] = @intCast(0x80 | ((cp >> 6) & 0x3F));
-                            buf[out + 2] = @intCast(0x80 | (cp & 0x3F));
+                            dst[out] = @intCast(0xE0 | (cp >> 12));
+                            dst[out + 1] = @intCast(0x80 | ((cp >> 6) & 0x3F));
+                            dst[out + 2] = @intCast(0x80 | (cp & 0x3F));
                             out += 3;
                         }
                         i += 5;
                     } else {
-                        buf[out] = '\\';
+                        if (out + 2 > dst.len) return null;
+                        dst[out] = '\\';
                         out += 1;
-                        buf[out] = 'u';
+                        dst[out] = 'u';
                         out += 1;
                         i += 1;
                     }
                 },
                 else => {
-                    buf[out] = '\\';
+                    if (out + 2 > dst.len) return null;
+                    dst[out] = '\\';
                     out += 1;
-                    buf[out] = input[i];
+                    dst[out] = src[i];
                     out += 1;
                     i += 1;
                 },
             }
         } else {
-            buf[out] = input[i];
+            if (out >= dst.len) return null;
+            dst[out] = src[i];
             out += 1;
             i += 1;
         }
     }
 
-    if (out == input.len) {
+    return dst[0..out];
+}
+
+/// Decode JSON string escape sequences (\\n → newline, \\\" → quote, etc.).
+/// Returns the input unchanged (via @constCast) when no escapes are present.
+/// Caller must check ptr equality to determine if the result was allocated.
+pub fn jsonUnescape(allocator: Allocator, input: []const u8) ![]u8 {
+    if (std.mem.indexOf(u8, input, "\\") == null) return @constCast(input);
+
+    // Decoded output is never longer than input, so input.len always fits.
+    const buf = try allocator.alloc(u8, input.len);
+    errdefer allocator.free(buf);
+    const decoded = jsonUnescapeInto(buf, input) orelse unreachable;
+
+    if (decoded.len == input.len) {
         allocator.free(buf);
         return @constCast(input);
     }
 
-    return allocator.realloc(buf, out) catch buf[0..out];
+    return allocator.realloc(buf, decoded.len) catch buf[0..decoded.len];
 }
 
 /// Unescape a JSON string and return an owned copy (always allocated).
@@ -1208,27 +1256,32 @@ test "extractFormImage with unencoded comma" {
 
 test "parseFormSampling clamps values" {
     // Within range
-    const s1 = parseFormSampling("temperature=0.8&top_p=0.95&top_k=50");
+    var s1 = SamplingParams{};
+    parseFormSampling(&s1, "temperature=0.8&top_p=0.95&top_k=50");
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), s1.temperature, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.95), s1.top_p, 0.001);
     try std.testing.expectEqual(@as(u32, 50), s1.top_k);
 
     // Defaults when missing
-    const s2 = parseFormSampling("message=hello");
+    var s2 = SamplingParams{};
+    parseFormSampling(&s2, "message=hello");
     try std.testing.expectEqual(@as(f32, 0), s2.temperature);
     try std.testing.expectEqual(@as(f32, 1.0), s2.top_p);
     try std.testing.expectEqual(@as(u32, 0), s2.top_k);
 
     // Negative temperature clamped to 0
-    const s3 = parseFormSampling("temperature=-1.0");
+    var s3 = SamplingParams{};
+    parseFormSampling(&s3, "temperature=-1.0");
     try std.testing.expectEqual(@as(f32, 0), s3.temperature);
 
     // top_p > 1 clamped to 1
-    const s4 = parseFormSampling("top_p=2.0");
+    var s4 = SamplingParams{};
+    parseFormSampling(&s4, "top_p=2.0");
     try std.testing.expectEqual(@as(f32, 1.0), s4.top_p);
 
     // top_k clamped to max_top_k (1024)
-    const s5 = parseFormSampling("top_k=9999");
+    var s5 = SamplingParams{};
+    parseFormSampling(&s5, "top_k=9999");
     try std.testing.expectEqual(@as(u32, 1024), s5.top_k);
 }
 
@@ -1309,18 +1362,21 @@ test "extractFormFloat handles boundary values" {
 
 test "parseFormSampling handles extreme values" {
     // Temperature > max_temperature (100) clamped to exactly max_temperature
-    const s = parseFormSampling("temperature=999.0");
+    var s = SamplingParams{};
+    parseFormSampling(&s, "temperature=999.0");
     try std.testing.expectEqual(max_temperature, s.temperature);
 }
 
 test "parseSampling stop string" {
-    const s = parseSampling("{\"stop\": \"\\n\"}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"stop\": \"\\n\"}");
     try std.testing.expectEqual(@as(u32, 1), s.n_stop);
     try std.testing.expect(s.hasStop());
 }
 
 test "parseSampling stop array" {
-    const s = parseSampling("{\"stop\": [\"end\", \"quit\"]}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"stop\": [\"end\", \"quit\"]}");
     try std.testing.expectEqual(@as(u32, 2), s.n_stop);
     try std.testing.expect(s.hasStop());
     try std.testing.expectEqualStrings("end", s.stop[0].?);
@@ -1328,36 +1384,42 @@ test "parseSampling stop array" {
 }
 
 test "parseSampling penalties" {
-    const s = parseSampling("{\"frequency_penalty\": 0.5, \"presence_penalty\": -1.0, \"repetition_penalty\": 1.2}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"frequency_penalty\": 0.5, \"presence_penalty\": -1.0, \"repetition_penalty\": 1.2}");
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), s.frequency_penalty, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, -1.0), s.presence_penalty, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 1.2), s.repetition_penalty, 0.01);
 }
 
 test "parseSampling min_p and seed" {
-    const s = parseSampling("{\"min_p\": 0.05, \"seed\": 42}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"min_p\": 0.05, \"seed\": 42}");
     try std.testing.expectApproxEqAbs(@as(f32, 0.05), s.min_p, 0.001);
     try std.testing.expectEqual(@as(u64, 42), s.seed.?);
 }
 
 test "parseSampling json_schema" {
-    const s = parseSampling("{\"json_schema\": \"{\\\"type\\\": \\\"string\\\"}\"}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"json_schema\": \"{\\\"type\\\": \\\"string\\\"}\"}");
     try std.testing.expect(s.json_schema != null);
     try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "string") != null);
 }
 
 test "parseSampling response_format object json_object" {
-    const s = parseSampling("{\"response_format\": {\"type\": \"json_object\"}, \"temperature\": 0.5}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"response_format\": {\"type\": \"json_object\"}, \"temperature\": 0.5}");
     try std.testing.expect(s.json_mode);
 }
 
 test "parseSampling response_format object json_object compact" {
-    const s = parseSampling("{\"response_format\":{\"type\":\"json_object\"},\"max_tokens\":100}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"response_format\":{\"type\":\"json_object\"},\"max_tokens\":100}");
     try std.testing.expect(s.json_mode);
 }
 
 test "parseSampling no response_format" {
-    const s = parseSampling("{\"temperature\": 0.5}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"temperature\": 0.5}");
     try std.testing.expect(!s.json_mode);
 }
 
@@ -1379,13 +1441,15 @@ test "matchesStop ignores empty sequence" {
 }
 
 test "parseSampling empty stop string ignored" {
-    const s = parseSampling("{\"stop\":\"\"}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"stop\":\"\"}");
     try std.testing.expectEqual(@as(u32, 0), s.n_stop);
     try std.testing.expect(!s.matchesStop("anything"));
 }
 
 test "parseSampling empty stop array entries skipped" {
-    const s = parseSampling("{\"stop\":[\"\",\"end\",\"\"]}");
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"stop\":[\"\",\"end\",\"\"]}");
     try std.testing.expectEqual(@as(u32, 1), s.n_stop);
     try std.testing.expectEqualStrings("end", s.stop[0].?);
 }
@@ -1446,7 +1510,8 @@ test "extractTextFromContentArray string content" {
 }
 
 test "parseSampling logit_bias object" {
-    const s = parseSampling(
+    var s = SamplingParams{};
+    parseSampling(&s,
         \\{"logit_bias": {"123": 5.0, "456": -2.0}, "temperature": 0.5}
     );
     try std.testing.expectEqual(@as(u32, 2), s.logit_bias_count);
@@ -1461,7 +1526,8 @@ test "parseSampling logit_bias rejects non-finite values" {
     const huge = "999999999999999999999999999999999999999999999";
     const body = try std.fmt.allocPrint(std.testing.allocator, "{{\"logit_bias\": {{\"1\": {s}, \"2\": 1.5}}}}", .{huge});
     defer std.testing.allocator.free(body);
-    const s = parseSampling(body);
+    var s = SamplingParams{};
+    parseSampling(&s, body);
     try std.testing.expectEqual(@as(u32, 1), s.logit_bias_count);
     try std.testing.expectEqual(@as(u32, 2), s.logit_bias_ids[0]);
     try std.testing.expectApproxEqAbs(@as(f32, 1.5), s.logit_bias_vals[0], 0.01);
@@ -1469,30 +1535,35 @@ test "parseSampling logit_bias rejects non-finite values" {
 }
 
 test "parseSampling stream_options object" {
-    const s1 = parseSampling(
+    var s1 = SamplingParams{};
+    parseSampling(&s1,
         \\{"stream": true, "stream_options": {"include_usage": false}}
     );
     try std.testing.expect(!s1.stream_include_usage);
 
-    const s2 = parseSampling(
+    var s2 = SamplingParams{};
+    parseSampling(&s2,
         \\{"stream": true, "stream_options": {"include_usage": true}}
     );
     try std.testing.expect(s2.stream_include_usage);
 
     // Empty stream_options (or object without include_usage): default true
-    const s3 = parseSampling(
+    var s3 = SamplingParams{};
+    parseSampling(&s3,
         \\{"stream": true, "stream_options": {}}
     );
     try std.testing.expect(s3.stream_include_usage);
 
-    const s4 = parseSampling(
+    var s4 = SamplingParams{};
+    parseSampling(&s4,
         \\{"stream": true}
     );
     try std.testing.expect(s4.stream_include_usage);
 }
 
 test "parseSampling response_format json_schema with nested schema" {
-    const s = parseSampling(
+    var s = SamplingParams{};
+    parseSampling(&s,
         \\{"response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object", "properties": {"name": {"type": "string"}}}}}}
     );
     try std.testing.expect(s.json_schema != null);
@@ -1672,7 +1743,8 @@ test "extractField grammar from API request body" {
         const body =
             \\{"grammar":"root ::= [0-9]+","temperature":0.5}
         ;
-        const sp = parseSampling(body);
+        var sp = SamplingParams{};
+        parseSampling(&sp, body);
         try std.testing.expect(sp.grammar_string != null);
         try std.testing.expectEqualStrings("root ::= [0-9]+", sp.grammar_string.?);
     }
@@ -1731,7 +1803,8 @@ test "fuzz: all json functions" {
             }
 
             // 7. parseSampling — always returns valid SamplingParams
-            const sp = parseSampling(input);
+            var sp = SamplingParams{};
+            parseSampling(&sp, input);
             std.debug.assert(sp.temperature >= 0 and sp.temperature <= max_temperature);
             std.debug.assert(sp.top_p >= 0 and sp.top_p <= 1.0);
             std.debug.assert(sp.min_p >= 0 and sp.min_p <= 1.0);
@@ -1771,7 +1844,8 @@ test "fuzz: all json functions" {
             _ = extractFormInt(input, field);
 
             // 15. parseFormSampling — always returns valid SamplingParams
-            const fs = parseFormSampling(input);
+            var fs = SamplingParams{};
+            parseFormSampling(&fs, input);
             std.debug.assert(fs.temperature >= 0 and fs.temperature <= max_temperature);
             std.debug.assert(fs.top_p >= 0 and fs.top_p <= 1.0);
 
