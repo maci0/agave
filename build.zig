@@ -1,5 +1,5 @@
 //! Build configuration for Agave — LLM inference engine.
-//! Targets: ReleaseFast (agave), Debug (agave-debug), WASM (agave.wasm),
+//! Targets: ReleaseFast (agave), ReleaseSafe (agave-debug), WASM (agave.wasm),
 //! CUDA PTX kernels (zig build ptx), ROCm AMDGCN kernels (zig build amdgcn),
 //! micro-benchmarks (zig build bench).
 
@@ -16,8 +16,6 @@ pub fn build(b: *std.Build) void {
     const enable_metal = b.option(bool, "enable-metal", "Enable Metal backend (default: true)") orelse true;
     const enable_cuda = b.option(bool, "enable-cuda", "Enable CUDA backend (default: true)") orelse true;
     const enable_rocm = b.option(bool, "enable-rocm", "Enable ROCm backend (default: true)") orelse true;
-    // Debug binary fails to link on Linux x86_64 with GCC >= 16 (R_X86_64_PC64 relocation).
-    // Use -Denable-debug=false to skip it on affected systems.
     const enable_debug_binary = b.option(bool, "enable-debug", "Build agave-debug binary (default: true)") orelse true;
 
     const enable_vulkan = b.option(bool, "enable-vulkan", "Enable Vulkan backend (default: true)") orelse true;
@@ -251,10 +249,13 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe_rel);
 
     // ── Debug executable (also built by default) ─────────────────
+    // ReleaseSafe keeps every safety check a Debug build has while linking
+    // against modern system crt1.o (GCC 16 emits .sframe sections that
+    // break Debug-mode linking).
     const mod_dbg = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = .ReleaseSafe,
     });
     mod_dbg.addImport("build_options", backend_options.createModule());
 
@@ -431,7 +432,7 @@ pub fn build(b: *std.Build) void {
         const mod_bench_test = b.createModule(.{
             .root_source_file = b.path("src/micro_bench.zig"),
             .target = target,
-            .optimize = .Debug,
+            .optimize = test_optimize,
         });
         mod_bench_test.addImport("build_options", backend_options.createModule());
         const t = b.addTest(.{ .root_module = mod_bench_test, .test_runner = simple_test_runner });
@@ -449,7 +450,7 @@ pub fn build(b: *std.Build) void {
         const mod_wasm_test = b.createModule(.{
             .root_source_file = b.path("src/wasm_entry.zig"),
             .target = target,
-            .optimize = .Debug,
+            .optimize = test_optimize,
         });
         mod_wasm_test.addImport("build_options", backend_options.createModule());
         const t = b.addTest(.{ .root_module = mod_wasm_test, .test_runner = simple_test_runner });

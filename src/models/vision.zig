@@ -97,6 +97,12 @@ const default_norm_eps: f32 = 1e-6;
 const gelu_sqrt_2_over_pi = math_ops.sqrt_2_over_pi;
 const gelu_cubic_coeff = math_ops.gelu_coeff;
 
+/// True when the AGAVE_VISION_DEBUG env var enables debug buffer dumping.
+/// Docs promise "=1", so the value must be exactly "1"; "0"/empty stay off.
+fn visionDebugEnabled(val: []const u8) bool {
+    return std.mem.eql(u8, val, "1");
+}
+
 /// Vision encoder architecture variant, auto-detected from available tensors.
 const VisionVariant = enum {
     /// Gemma 4 SigLIP-2: QK norms, SwiGLU, 2D pos, no bias, mm.input_projection.
