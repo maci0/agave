@@ -2186,6 +2186,10 @@ fn parseConfigObject(
             // Keep vision keys under clip.vision.* so they never clobber text_config
             // (Qwen3.8-27B: text hidden_size=5120, vision hidden_size=1152).
             i = try parseVisionConfigObject(allocator, json, i, meta, owned);
+        } else if (!is_override and std.mem.eql(u8, key_res.val, "dflash_config") and json[i] == '{') {
+            // DFlash2 drafter configs land under dflash.* so model init can
+            // read them without colliding with top-level text keys.
+            i = try parseDflashConfigObject(allocator, json, i, meta, owned);
         } else {
             const owned_key = try dupeString(allocator, owned, key_res.val);
             // text_config.eos_token_id is often pad/EOT (248044). Top-level
@@ -2261,9 +2265,105 @@ fn parseConfigObject(
     return i;
 }
 
+/// Parse a HuggingFace `dflash_config` object into `dflash.*` metadata keys
+/// (DFlash2 block-diffusion drafters, e.g. z-lab/Qwen3.8-27B-DFlash2).
+/// Integer arrays (target_layer_ids) are stored as comma-joined strings with a
+/// `<key>_len` count, since the generic array handler keeps only the first element.
+fn parseDflashConfigObject(
+    allocator: Allocator,
+    json: []const u8,
+    start: usize,
+    meta: *std.StringHashMap(MetaValue),
+    owned: *std.ArrayList([]u8),
+) !usize {
+    var i: usize = try expect(json, start, '{');
+    while (true) {
+        i = skipWs(json, i);
+        if (i >= json.len or json[i] == '}') break;
+        const key_res = try parseString(json, i);
+        i = key_res.next;
+        i = try expect(json, i, ':');
+        i = skipWs(json, i);
+        if (i >= json.len) break;
+
+        const dflash_key = try std.fmt.allocPrint(allocator, "dflash.{s}", .{key_res.val});
+        defer allocator.free(dflash_key);
+        const owned_key = try dupeString(allocator, owned, dflash_key);
+
+        switch (json[i]) {
+            '[' => {
+                // Integer list: store "v1,v2,..." plus element count.
+                var vals = std.ArrayList(u64).empty;
+                defer vals.deinit(allocator);
+                i += 1;
+                while (true) {
+                    i = skipWs(json, i);
+                    if (i >= json.len) break;
+                    if (json[i] == ']') {
+                        i += 1;
+                        break;
+                    }
+                    const num_start = i;
+                    while (i < json.len and json[i] != ',' and json[i] != ']') : (i += 1) {}
+                    const num_str = std.mem.trim(u8, json[num_start..i], " \t\r\n");
+                    if (std.fmt.parseUnsigned(u64, num_str, 10)) |u| {
+                        vals.append(allocator, u) catch break;
+                    } else |_| {}
+                    i = skipWs(json, i);
+                    if (i < json.len and json[i] == ',') i += 1;
+                }
+                var joined = std.ArrayList(u8).empty;
+                defer joined.deinit(allocator);
+                for (vals.items, 0..) |v, vi| {
+                    if (vi > 0) try joined.append(allocator, ',');
+                    var num_buf: [24]u8 = undefined;
+                    const s = std.fmt.bufPrint(&num_buf, "{d}", .{v}) catch continue;
+                    try joined.appendSlice(allocator, s);
+                }
+                const owned_val = try dupeString(allocator, owned, joined.items);
+                try meta.put(owned_key, .{ .string = owned_val });
+                const len_key = try std.fmt.allocPrint(allocator, "dflash.{s}_len", .{key_res.val});
+                defer allocator.free(len_key);
+                const owned_len_key = try dupeString(allocator, owned, len_key);
+                try meta.put(owned_len_key, .{ .uint = vals.items.len });
+            },
+            '"' => {
+                const val_res = try parseString(json, i);
+                i = val_res.next;
+                const owned_val = try dupeString(allocator, owned, val_res.val);
+                try meta.put(owned_key, .{ .string = owned_val });
+            },
+            't' => {
+                i = try skipValue(json, i);
+                try meta.put(owned_key, .{ .bool_val = true });
+            },
+            'f' => {
+                i = try skipValue(json, i);
+                try meta.put(owned_key, .{ .bool_val = false });
+            },
+            else => {
+                const num_start = i;
+                while (i < json.len and json[i] != ',' and json[i] != '}') : (i += 1) {}
+                const num_str = std.mem.trim(u8, json[num_start..i], " \t\r\n");
+                if (std.fmt.parseUnsigned(u64, num_str, 10)) |u| {
+                    try meta.put(owned_key, .{ .uint = u });
+                } else |_| {
+                    if (std.fmt.parseFloat(f64, num_str)) |fl| {
+                        try meta.put(owned_key, .{ .float = fl });
+                    } else |_| {}
+                }
+            },
+        }
+
+        i = skipWs(json, i);
+        if (i < json.len and json[i] == ',') i += 1;
+    }
+    if (i < json.len and json[i] == '}') i += 1;
+    return i;
+}
+
 /// HuggingFace `vision_config` key → GGUF-style `clip.vision.*` metadata key.
-const vision_hf_to_clip = [_]struct { []const u8, []const u8 }{
-    .{ "patch_size", "clip.vision.patch_size" },
+const vision_hf_to_clip = [_]struct { []const u8, []const u8 }{    .{ "patch_size", "clip.vision.patch_size" },
     .{ "hidden_size", "clip.vision.embedding_length" },
     .{ "intermediate_size", "clip.vision.feed_forward_length" },
     .{ "depth", "clip.vision.block_count" },
@@ -2963,8 +3063,41 @@ test "parseConfigJson float values" {
     try std.testing.expectApproxEqAbs(@as(f64, 1e-5), eps.float, 1e-10);
 }
 
-test "parseConfigJson null and false values" {
+test "parseConfigJson dflash_config flattens to dflash.* keys" {
     const allocator = std.testing.allocator;
+    const json =
+        \\{"model_type":"qwen3","is_causal":false,"sliding_window":2048,
+        \\"dflash_config":{"block_size":8,"conv_kernel_size":2,"conv_group_size":16,
+        \\"mask_token_id":248070,"selector_rank":256,"selector_top_k":16,
+        \\"target_layer_ids":[5,19,33,47,61]}}
+    ;
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+
+    try parseConfigJson(allocator, json, &meta, &owned);
+
+    try std.testing.expectEqual(@as(u32, 8), metaU32(&meta, "dflash.block_size").?);
+    try std.testing.expectEqual(@as(u32, 2), metaU32(&meta, "dflash.conv_kernel_size").?);
+    try std.testing.expectEqual(@as(u32, 16), metaU32(&meta, "dflash.conv_group_size").?);
+    try std.testing.expectEqual(@as(u32, 248070), metaU32(&meta, "dflash.mask_token_id").?);
+    try std.testing.expectEqual(@as(u32, 256), metaU32(&meta, "dflash.selector_rank").?);
+    try std.testing.expectEqual(@as(u32, 16), metaU32(&meta, "dflash.selector_top_k").?);
+    // Integer arrays: comma-joined string + length key.
+    const ids = meta.get("dflash.target_layer_ids") orelse return error.Missing;
+    try std.testing.expectEqualStrings("5,19,33,47,61", ids.string);
+    try std.testing.expectEqual(@as(u32, 5), metaU32(&meta, "dflash.target_layer_ids_len").?);
+    // Top-level scalars still parse generically.
+    try std.testing.expectEqual(@as(u32, 2048), metaU32(&meta, "sliding_window").?);
+    const causal = meta.get("is_causal") orelse return error.Missing;
+    try std.testing.expect(!causal.bool_val);
+}
+
+test "parseConfigJson null and false values" {    const allocator = std.testing.allocator;
     const json =
         \\{"add_cross_attention":false,"output_attentions":null,"use_cache":true}
     ;

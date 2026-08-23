@@ -423,7 +423,7 @@ pub const VisionEncoder = struct {
     fn warmNormCache(self: *VisionEncoder) void {
         const ed: usize = self.embd_dim;
         const hd: usize = self.head_dim;
-            if (self.fmt.getTensor("v.post_ln.weight")) |t| _ = self.normAsF32(t, ed);
+        if (self.fmt.getTensor("v.post_ln.weight")) |t| _ = self.normAsF32(t, ed);
         if (self.fmt.getTensor("mm.soft_emb_norm.weight")) |t| _ = self.normAsF32(t, ed);
         if (self.fmt.getTensor("mm.norm.weight")) |t| _ = self.normAsF32(t, ed);
         for (0..self.n_blocks) |i| {

@@ -331,7 +331,6 @@ pub const ExpertCache = struct {
         }
         return found;
     }
-
 };
 
 // ── Tests ────────────────────────────────────────────────────────

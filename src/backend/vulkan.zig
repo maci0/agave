@@ -1437,27 +1437,28 @@ pub const VulkanBackend = struct {
             &self.pipe_softmax,       &self.pipe_l2_norm,
             // Position
             &self.pipe_rope,
-            // GEMV
-            &self.pipe_gemv_f32,      &self.pipe_gemv_q8_0,
-            &self.pipe_gemv_q4_0,     &self.pipe_gemv_q4_1,
-            &self.pipe_gemv_q5_0,     &self.pipe_gemv_q2_k,
-            &self.pipe_gemv_q3_k,     &self.pipe_gemv_iq4_nl,
-            &self.pipe_gemv_iq4_xs,   &self.pipe_gemv_bf16,
-            &self.pipe_gemv_f16,      &self.pipe_gemv_q4_k,
-            &self.pipe_gemv_q5_k,     &self.pipe_gemv_q6_k,
-            &self.pipe_gemv_fp8_e4m3, &self.pipe_gemv_fp8_e5m2,
-            &self.pipe_gemv_t_q8_0,   &self.pipe_gemv_nvfp4_st,
-            &self.pipe_gemv_mlx_q4,   &self.pipe_gemv_mxfp4_st,
-            &self.pipe_gemv_gptq,     &self.pipe_gemv_awq,
-            &self.pipe_gemv_hqq,      &self.pipe_gemv_tq1_0,
-            &self.pipe_gemv_tq2_0,
+                // GEMV
+                     &self.pipe_gemv_f32,
+            &self.pipe_gemv_q8_0,     &self.pipe_gemv_q4_0,
+            &self.pipe_gemv_q4_1,     &self.pipe_gemv_q5_0,
+            &self.pipe_gemv_q2_k,     &self.pipe_gemv_q3_k,
+            &self.pipe_gemv_iq4_nl,   &self.pipe_gemv_iq4_xs,
+            &self.pipe_gemv_bf16,     &self.pipe_gemv_f16,
+            &self.pipe_gemv_q4_k,     &self.pipe_gemv_q5_k,
+            &self.pipe_gemv_q6_k,     &self.pipe_gemv_fp8_e4m3,
+            &self.pipe_gemv_fp8_e5m2, &self.pipe_gemv_t_q8_0,
+            &self.pipe_gemv_nvfp4_st, &self.pipe_gemv_mlx_q4,
+            &self.pipe_gemv_mxfp4_st, &self.pipe_gemv_gptq,
+            &self.pipe_gemv_awq,      &self.pipe_gemv_hqq,
+            &self.pipe_gemv_tq1_0,    &self.pipe_gemv_tq2_0,
             // Attention
             &self.pipe_sdpa,          &self.pipe_sdpa_turbo,
             &self.pipe_sdpa_paged,    &self.pipe_sdpa_tree,
             // Embedding
             &self.pipe_embedding,
-            // SSM
-            &self.pipe_conv1d,        &self.pipe_deltanet,
+                // SSM
+                &self.pipe_conv1d,
+            &self.pipe_deltanet,
         };
         for (pipelines) |p| {
             if (p.pipeline != null) self.vkDestroyPipeline(self.device, p.pipeline, null);
@@ -2147,7 +2148,9 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_gemv_mlx_q4, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
     }
-    pub fn gemvMlxQGpu(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
+    pub fn gemvMlxQGpu(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
+        self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs);
+    }
 
     /// MXFP4 SafeTensors GEMV. `gs` is 16 (NVIDIA) or 32 (MLX MoE experts).
     /// Weights are uploaded through the activation pool, not the weight cache,
@@ -2178,7 +2181,9 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_gemv_mxfp4_st, &bufs, &sizes, @ptrCast(&params), mxfp4_push_bytes, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
     }
-    pub fn gemvMxfp4StGpu(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
+    pub fn gemvMxfp4StGpu(self: *VulkanBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        self.gemvMxfp4St(x, w, s, y, n, k, gs, sf);
+    }
 
     /// GPTQ INT4 GEMV on Vulkan GPU.
     pub fn gemvGptq(self: *VulkanBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {

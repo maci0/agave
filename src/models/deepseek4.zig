@@ -104,8 +104,8 @@ fn csaOverlapPool(
     var d: usize = 0;
     while (d + 8 <= head_dim) : (d += 8) {
         var mx: V8 = neg_inf_v;
-        var sp: [csa_compress_ratio]V8 = .{neg_inf_v, neg_inf_v, neg_inf_v, neg_inf_v};
-        var kp: [csa_compress_ratio]V8 = .{zeros, zeros, zeros, zeros};
+        var sp: [csa_compress_ratio]V8 = .{ neg_inf_v, neg_inf_v, neg_inf_v, neg_inf_v };
+        var kp: [csa_compress_ratio]V8 = .{ zeros, zeros, zeros, zeros };
         if (has_prev) {
             const ps = prev_score.?;
             const pk = prev_kv.?;
@@ -689,16 +689,15 @@ pub const Ds4Model = struct {
         for (self.norm_cache[0..self.norm_cache_len]) |e| self.allocator.free(e.data);
         const a = self.allocator;
         inline for (.{
-            &self.hc_state,          &self.new_hc,          &self.hc_mixes,      &self.hc_pre_w,       &self.hc_post_w,
-            &self.hc_comb,           &self.hidden,          &self.hidden2,       &self.flat_norm,      &self.q_compressed,
-            &self.q_full,            &self.kv_proj,         &self.scores_buf,    &self.attn_out,       &self.lora_out,
-            &self.attn_result,       &self.ff_gate,         &self.ff_up,         &self.ff_down,        &self.expert_accum,
-            &self.expert_scratch,    &self.ff_gate_scratch, &self.ff_up_scratch, &self.router_logits,  &self.logits_buf,
-            &self.kv_k_bytes,        &self.csa_comp_kv,     &self.csa_comp_score, &self.csa_k,
-            &self.csa_score_scratch, &self.lid_comp_k,      &self.lid_query,     &self.lid_head_w,     &self.lid_scores,
-            &self.rope_cos_buf,      &self.rope_sin_buf,    &self.gpu_slot_weights,
-            &self.expert_pool,       &self.companion_pool,
-            &self.gpu_top_ids,       &self.gpu_top_weights,
+            &self.hc_state,        &self.new_hc,           &self.hc_mixes,       &self.hc_pre_w,       &self.hc_post_w,
+            &self.hc_comb,         &self.hidden,           &self.hidden2,        &self.flat_norm,      &self.q_compressed,
+            &self.q_full,          &self.kv_proj,          &self.scores_buf,     &self.attn_out,       &self.lora_out,
+            &self.attn_result,     &self.ff_gate,          &self.ff_up,          &self.ff_down,        &self.expert_accum,
+            &self.expert_scratch,  &self.ff_gate_scratch,  &self.ff_up_scratch,  &self.router_logits,  &self.logits_buf,
+            &self.kv_k_bytes,      &self.csa_comp_kv,      &self.csa_comp_score, &self.csa_k,          &self.csa_score_scratch,
+            &self.lid_comp_k,      &self.lid_query,        &self.lid_head_w,     &self.lid_scores,     &self.rope_cos_buf,
+            &self.rope_sin_buf,    &self.gpu_slot_weights, &self.expert_pool,    &self.companion_pool, &self.gpu_top_ids,
+            &self.gpu_top_weights,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
         // Prefill buffers (page_allocator) — currently empty slices (allocation deferred).
@@ -706,8 +705,8 @@ pub const Ds4Model = struct {
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
-                &self.pf_hidden,  &self.pf_hidden2, &self.pf_q_a,
-                &self.pf_q,       &self.pf_kv_proj, &self.pf_attn_out,
+                &self.pf_hidden, &self.pf_hidden2, &self.pf_q_a,
+                &self.pf_q,      &self.pf_kv_proj, &self.pf_attn_out,
             };
             inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
             if (self.pf_positions.len > 0) pa.free(self.pf_positions);
@@ -1307,7 +1306,6 @@ pub const Ds4Model = struct {
                 );
             }
         }
-
 
         self.be.sync();
         for (0..nh) |h| applyRopeInverseTable(self.attn_out[h * kd + nope ..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
@@ -1944,8 +1942,6 @@ pub const Ds4Model = struct {
         for (0..nl) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
 
-
-
             // Layer skip: skip layers in [layer_skip_start, layer_skip_end) for self-speculative draft.
             if (li >= self.layer_skip_start and li < self.layer_skip_end) continue;
             if (self.pp_degree > 1 and (li < pp_range.start or li >= pp_range.end)) continue;
@@ -2009,8 +2005,13 @@ pub const Ds4Model = struct {
                         const gemv_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
                         // hidden → kv_proj (using MTP weights, not target weights)
                         gemv_fn(
-                            self.hidden.ptr, kv_w.data_ptr, kv_s.data_ptr,
-                            self.kv_proj.ptr, kd, e, @intCast(kv_s.shape[1]),
+                            self.hidden.ptr,
+                            kv_w.data_ptr,
+                            kv_s.data_ptr,
+                            self.kv_proj.ptr,
+                            kd,
+                            e,
+                            @intCast(kv_s.shape[1]),
                         );
                         // kv_a_norm
                         if (mtp.get("mtp.0.attn.kv_norm.weight")) |kvn_t| {
@@ -2030,9 +2031,6 @@ pub const Ds4Model = struct {
                 }
             }
         }
-
-
-
 
         const result = math_ops.argmax(self.logits_buf);
         if (self.pp_degree > 1 and self.pp_rank + 1 == self.pp_degree) {
@@ -2092,8 +2090,13 @@ pub const Ds4Model = struct {
         if (mtp.get("mtp.0.main_proj.weight")) |proj_w| {
             if (mtp.get("mtp.0.main_proj.scale")) |proj_s| {
                 gemv_mxfp8_fn(
-                    @as([*]const f32, &mtp_input), proj_w.data_ptr, proj_s.data_ptr,
-                    self.hidden2.ptr, e, 3 * e, @intCast(proj_s.shape[1]),
+                    @as([*]const f32, &mtp_input),
+                    proj_w.data_ptr,
+                    proj_s.data_ptr,
+                    self.hidden2.ptr,
+                    e,
+                    3 * e,
+                    @intCast(proj_s.shape[1]),
                 );
             }
         } else {
@@ -2109,7 +2112,8 @@ pub const Ds4Model = struct {
 
         // Debug: check main_proj output
         if (true) {
-            var hs: f32 = 0; for (self.hidden2[0..e]) |v| hs += v * v;
+            var hs: f32 = 0;
+            for (self.hidden2[0..e]) |v| hs += v * v;
             std.log.info("MTP: after main_proj L2={d:.3} first=[{d:.4},{d:.4},{d:.4}]", .{
                 @sqrt(hs), self.hidden2[0], self.hidden2[1], self.hidden2[2],
             });
@@ -2179,8 +2183,7 @@ pub const Ds4Model = struct {
         const kv_w = mtp.get(std.fmt.bufPrint(&b1, "mtp.{d}.attn.wkv.weight", .{layer}) catch return);
         const kv_s = mtp.get(std.fmt.bufPrint(&b2, "mtp.{d}.attn.wkv.scale", .{layer}) catch return);
         if (kv_w == null or kv_s == null) return;
-        gemv_mxfp8_fn(self.expert_scratch.ptr, kv_w.?.data_ptr, kv_s.?.data_ptr,
-            self.kv_proj.ptr, kd, e, @intCast(kv_s.?.shape[1]));
+        gemv_mxfp8_fn(self.expert_scratch.ptr, kv_w.?.data_ptr, kv_s.?.data_ptr, self.kv_proj.ptr, kd, e, @intCast(kv_s.?.shape[1]));
         // kv_norm
         var b3: [64]u8 = undefined;
         if (mtp.get(std.fmt.bufPrint(&b3, "mtp.{d}.attn.kv_norm.weight", .{layer}) catch return)) |kvn_t| {
@@ -2220,8 +2223,7 @@ pub const Ds4Model = struct {
         const qa_s = mtp.get(std.fmt.bufPrint(&b5, "mtp.{d}.attn.wq_a.scale", .{layer}) catch return);
         if (qa_w == null or qa_s == null) return;
         const ql: usize = self.q_lora_rank;
-        gemv_mxfp8_fn(self.expert_scratch.ptr, qa_w.?.data_ptr, qa_s.?.data_ptr,
-            self.q_compressed.ptr, ql, e, @intCast(qa_s.?.shape[1]));
+        gemv_mxfp8_fn(self.expert_scratch.ptr, qa_w.?.data_ptr, qa_s.?.data_ptr, self.q_compressed.ptr, ql, e, @intCast(qa_s.?.shape[1]));
         var b6: [64]u8 = undefined;
         if (mtp.get(std.fmt.bufPrint(&b6, "mtp.{d}.attn.q_norm.weight", .{layer}) catch return)) |qn_t| {
             var qn_f32: [1024]f32 = undefined;
@@ -2235,8 +2237,7 @@ pub const Ds4Model = struct {
         const qb_s = mtp.get(std.fmt.bufPrint(&b8, "mtp.{d}.attn.wq_b.scale", .{layer}) catch return);
         if (qb_w == null or qb_s == null) return;
         const nh = self.n_head;
-        gemv_mxfp8_fn(self.q_compressed.ptr, qb_w.?.data_ptr, qb_s.?.data_ptr,
-            self.q_full.ptr, nh * kd, ql, @intCast(qb_s.?.shape[1]));
+        gemv_mxfp8_fn(self.q_compressed.ptr, qb_w.?.data_ptr, qb_s.?.data_ptr, self.q_full.ptr, nh * kd, ql, @intCast(qb_s.?.shape[1]));
 
         // Per-head Q RMS norm + RoPE
         {
@@ -2331,15 +2332,17 @@ pub const Ds4Model = struct {
             const w_off = g * olr * woa_row_bytes;
             const s_off = g * olr / 128 * woa_scale_row; // scale rows = olr/128 per group
             gemv_mxfp8_fn(
-                self.attn_out.ptr + x_off, 
-                woa_w.?.data_ptr + w_off, 
+                self.attn_out.ptr + x_off,
+                woa_w.?.data_ptr + w_off,
                 woa_s.?.data_ptr + s_off,
-                self.lora_out.ptr + y_off, olr, group_in, woa_scale_row,
+                self.lora_out.ptr + y_off,
+                olr,
+                group_in,
+                woa_scale_row,
             );
         }
         // wo_b: [4096, 8192] is NOT grouped — full GEMV
-        gemv_mxfp8_fn(self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr,
-            self.expert_scratch.ptr, e, og * olr, @intCast(wob_s.?.shape[1]));
+        gemv_mxfp8_fn(self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr, self.expert_scratch.ptr, e, og * olr, @intCast(wob_s.?.shape[1]));
         for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
     }
 
@@ -2372,13 +2375,10 @@ pub const Ds4Model = struct {
         const ds2 = mtp.get(std.fmt.bufPrint(&b6, "mtp.{d}.ffn.shared_experts.w2.scale", .{layer}) catch return);
         if (gw == null or gs == null or uw == null or us == null or dw == null or ds2 == null) return;
         const ff: usize = @intCast(gw.?.shape[0]); // 2048
-        gemv_mxfp8_fn(self.mtp_hidden_buf.ptr, gw.?.data_ptr, gs.?.data_ptr,
-            self.ff_gate_scratch.ptr, ff, e, @intCast(gs.?.shape[1]));
-        gemv_mxfp8_fn(self.mtp_hidden_buf.ptr, uw.?.data_ptr, us.?.data_ptr,
-            self.ff_up_scratch.ptr, ff, e, @intCast(us.?.shape[1]));
+        gemv_mxfp8_fn(self.mtp_hidden_buf.ptr, gw.?.data_ptr, gs.?.data_ptr, self.ff_gate_scratch.ptr, ff, e, @intCast(gs.?.shape[1]));
+        gemv_mxfp8_fn(self.mtp_hidden_buf.ptr, uw.?.data_ptr, us.?.data_ptr, self.ff_up_scratch.ptr, ff, e, @intCast(us.?.shape[1]));
         self.computeBackend().clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, ff);
-        gemv_mxfp8_fn(self.ff_gate_scratch.ptr, dw.?.data_ptr, ds2.?.data_ptr,
-            self.expert_scratch.ptr, e, ff, @intCast(ds2.?.shape[1]));
+        gemv_mxfp8_fn(self.ff_gate_scratch.ptr, dw.?.data_ptr, ds2.?.data_ptr, self.expert_scratch.ptr, e, ff, @intCast(ds2.?.shape[1]));
         for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
     }
 
@@ -2463,7 +2463,7 @@ pub const Ds4Model = struct {
         // Expert weights use mxfp4 mode (check tensor name for "exps" or "switch_mlp")
         const name = t.name;
         return std.mem.indexOf(u8, name, "exps") != null or
-               std.mem.indexOf(u8, name, "switch_mlp") != null;
+            std.mem.indexOf(u8, name, "switch_mlp") != null;
     }
 
     fn doGemv(self: *Ds4Model, x: [*]const f32, t_raw: TensorInfo, y: [*]f32, n: usize, k: usize) void {
@@ -2505,8 +2505,13 @@ pub const Ds4Model = struct {
                 else => {
                     if (self.pool) |pool| {
                         var ctx = struct {
-                            xp: [*]const f32, wp: [*]const u8, sp: [*]const u8,
-                            yp: [*]f32, kv: usize, gs_v: usize, sf_v: mlx.Mxfp4ScaleFormat,
+                            xp: [*]const f32,
+                            wp: [*]const u8,
+                            sp: [*]const u8,
+                            yp: [*]f32,
+                            kv: usize,
+                            gs_v: usize,
+                            sf_v: mlx.Mxfp4ScaleFormat,
                             fn work(c_ptr: *anyopaque, start: usize, end: usize) void {
                                 const c: *const @This() = @ptrCast(@alignCast(c_ptr));
                                 mlx.mlxMxfp4GemvRows(c.xp, @ptrCast(@alignCast(c.wp)), c.sp, @ptrCast(c.yp), start, end - start, c.kv, c.gs_v, c.sf_v);
@@ -2537,17 +2542,21 @@ pub const Ds4Model = struct {
                 else => {
                     if (self.pool) |pool| {
                         var ctx = struct {
-                            xp: [*]const f32, wp: [*]const u8, sp: [*]const u8, bp: [*]const u8,
-                            yp: [*]f32, kv: usize, b: u32, g: u32,
+                            xp: [*]const f32,
+                            wp: [*]const u8,
+                            sp: [*]const u8,
+                            bp: [*]const u8,
+                            yp: [*]f32,
+                            kv: usize,
+                            b: u32,
+                            g: u32,
                             fn work(c_ptr: *anyopaque, start: usize, end: usize) void {
                                 const c: *const @This() = @ptrCast(@alignCast(c_ptr));
-                                mlx2.mlxGemvRows(c.xp, @ptrCast(@alignCast(c.wp)), @ptrCast(@alignCast(c.sp)),
-                                    @ptrCast(@alignCast(c.bp)), @ptrCast(c.yp), start, end - start, c.kv, c.b, c.g);
+                                mlx2.mlxGemvRows(c.xp, @ptrCast(@alignCast(c.wp)), @ptrCast(@alignCast(c.sp)), @ptrCast(@alignCast(c.bp)), @ptrCast(c.yp), start, end - start, c.kv, c.b, c.g);
                             }
                         }{ .xp = x, .wp = data, .sp = st.data_ptr + ei * s_stride, .bp = bt.data_ptr + ei * s_stride, .yp = y, .kv = k, .b = bits, .g = gs_e };
                         pool.parallelFor(n, 128, @ptrCast(&ctx), @TypeOf(ctx).work);
-                    } else mlx2.mlxGemvRaw(x, @ptrCast(@alignCast(data)), @ptrCast(@alignCast(st.data_ptr + ei * s_stride)),
-                        @ptrCast(@alignCast(bt.data_ptr + ei * s_stride)), @ptrCast(y), n, k, bits, gs_e);
+                    } else mlx2.mlxGemvRaw(x, @ptrCast(@alignCast(data)), @ptrCast(@alignCast(st.data_ptr + ei * s_stride)), @ptrCast(@alignCast(bt.data_ptr + ei * s_stride)), @ptrCast(y), n, k, bits, gs_e);
                 },
             }
         }
@@ -3121,17 +3130,21 @@ pub const Ds4Model = struct {
                 @memset(self.pf_q[0 .. n * nh * kd], 0);
                 if (self.pool) |pool| {
                     var ctx = BatchedGemmQ4Ctx{
-                        .x = self.pf_q_a.ptr, .pw = @ptrCast(@alignCast(q_b.data_ptr)),
-                        .sc = @ptrCast(@alignCast(comp.scales)), .bi = @ptrCast(@alignCast(comp.biases)),
-                        .y = self.pf_q.ptr, .n_tok = n, .n_out = nh * kd, .k = ql,
-                        .gs = comp.group_size, .gpr = (ql + comp.group_size - 1) / comp.group_size,
+                        .x = self.pf_q_a.ptr,
+                        .pw = @ptrCast(@alignCast(q_b.data_ptr)),
+                        .sc = @ptrCast(@alignCast(comp.scales)),
+                        .bi = @ptrCast(@alignCast(comp.biases)),
+                        .y = self.pf_q.ptr,
+                        .n_tok = n,
+                        .n_out = nh * kd,
+                        .k = ql,
+                        .gs = comp.group_size,
+                        .gpr = (ql + comp.group_size - 1) / comp.group_size,
                         .wpr = ((ql + comp.group_size - 1) / comp.group_size) * (comp.group_size * 4 / 32),
                     };
                     pool.parallelFor(nh * kd, 128, @ptrCast(&ctx), BatchedGemmQ4Ctx.work);
                 } else {
-                    mlx_ops.mlxGemmQ4(self.pf_q_a.ptr, @ptrCast(@alignCast(q_b.data_ptr)),
-                        @ptrCast(@alignCast(comp.scales)), @ptrCast(@alignCast(comp.biases)),
-                        self.pf_q.ptr, n, nh * kd, ql, comp.group_size);
+                    mlx_ops.mlxGemmQ4(self.pf_q_a.ptr, @ptrCast(@alignCast(q_b.data_ptr)), @ptrCast(@alignCast(comp.scales)), @ptrCast(@alignCast(comp.biases)), self.pf_q.ptr, n, nh * kd, ql, comp.group_size);
                 }
             } else {
                 self.batchedGemm(self.pf_q_a.ptr, q_b, self.pf_q.ptr, n, nh * kd, ql);
@@ -3258,7 +3271,11 @@ pub const Ds4Model = struct {
                             @ptrCast(@alignCast(gt.data_ptr)),
                             @ptrCast(@alignCast(g_comp.?.scales)),
                             @ptrCast(@alignCast(g_comp.?.biases)),
-                            self.pf_q_a.ptr, n, ff, e, g_comp.?.group_size,
+                            self.pf_q_a.ptr,
+                            n,
+                            ff,
+                            e,
+                            g_comp.?.group_size,
                         );
                         // Batched up: [n, e] × [ff, e]^T → [n, ff]
                         mlx_ops.mlxGemmQ4(
@@ -3266,7 +3283,11 @@ pub const Ds4Model = struct {
                             @ptrCast(@alignCast(ut.data_ptr)),
                             @ptrCast(@alignCast(u_comp.?.scales)),
                             @ptrCast(@alignCast(u_comp.?.biases)),
-                            self.pf_kv_proj.ptr, n, ff, e, u_comp.?.group_size,
+                            self.pf_kv_proj.ptr,
+                            n,
+                            ff,
+                            e,
+                            u_comp.?.group_size,
                         );
                         // Per-token: silu(gate) * up, then batched down
                         for (0..n) |t| {
@@ -3355,16 +3376,16 @@ pub const Ds4Model = struct {
     /// Expert weights use preadExpert instead (separate pool).
     fn heapTensorData(self: *Ds4Model, t: format_mod.TensorInfo) [*]const u8 {
         if (!self.tensor_overrides_inited) return t.data_ptr;
-        
+
         // Check override table
         if (self.tensor_overrides.get(t.name)) |heap_ptr| {
             return heap_ptr;
         }
-        
+
         // First access: copy to heap
         const size = t.dataByteLen();
         if (size == 0 or size > 256 * 1024 * 1024) return t.data_ptr; // skip huge/empty
-        
+
         const heap = self.allocator.alloc(u8, size) catch return t.data_ptr;
         // Pre-fault: touch every page from CPU before memcpy.
         // Ensures page faults are resolved before Metal accesses the copy.
@@ -3378,12 +3399,12 @@ pub const Ds4Model = struct {
             }
         }
         @memcpy(heap, src[0..size]);
-        
+
         self.tensor_overrides.put(t.name, heap.ptr) catch {
             self.allocator.free(heap);
             return t.data_ptr;
         };
-        
+
         return heap.ptr;
     }
 
@@ -3416,12 +3437,12 @@ pub const Ds4Model = struct {
         if (self.gguf_fd < 0 or self.expert_pool.len == 0 or self.gguf_mmap_base == null)
             return data_ptr;
         if (slot >= self.expert_pool_slots) return data_ptr;
-        
+
         // Compute file offset from mmap pointer
         const mmap_base = self.gguf_mmap_base.?;
         const offset = @intFromPtr(data_ptr) - @intFromPtr(mmap_base);
         const pool_ptr = self.expert_pool.ptr + @as(usize, slot) * self.expert_pool_slot_size;
-        
+
         // pread: read directly from file into heap buffer
         const actual_size = @min(size, self.expert_pool_slot_size);
         var total_read: usize = 0;
@@ -3435,7 +3456,7 @@ pub const Ds4Model = struct {
             if (n <= 0) break;
             total_read += @intCast(n);
         }
-        
+
         if (total_read == actual_size) return pool_ptr;
         return data_ptr; // fallback to mmap if pread failed
     }
@@ -3447,14 +3468,16 @@ pub const Ds4Model = struct {
         // Non-expert tensors to copy: attn_q_a, q_b, kv, wo_a, wo_b, norms, HC, output head
         // Total: ~15GB. One-time cost at startup.
         const tensor_names = [_][]const u8{
-            "attn_q_a.weight", "attn_q_a_norm.weight",
-            "attn_q_b.weight", "attn_kv.weight", "attn_kv_a_norm.weight",
-            "attn_output_a.weight", "attn_output_b.weight",
-            "attn_norm.weight", "ffn_norm.weight", "attn_sinks.weight",
-            "hc_attn_fn.weight", "hc_attn_base.weight", "hc_attn_scale.weight",
-            "hc_ffn_fn.weight", "hc_ffn_base.weight", "hc_ffn_scale.weight",
-            "ffn_gate_inp.weight", "ffn_gate_shexp.weight",
-            "ffn_up_shexp.weight", "ffn_down_shexp.weight",
+            "attn_q_a.weight",       "attn_q_a_norm.weight",
+            "attn_q_b.weight",       "attn_kv.weight",
+            "attn_kv_a_norm.weight", "attn_output_a.weight",
+            "attn_output_b.weight",  "attn_norm.weight",
+            "ffn_norm.weight",       "attn_sinks.weight",
+            "hc_attn_fn.weight",     "hc_attn_base.weight",
+            "hc_attn_scale.weight",  "hc_ffn_fn.weight",
+            "hc_ffn_base.weight",    "hc_ffn_scale.weight",
+            "ffn_gate_inp.weight",   "ffn_gate_shexp.weight",
+            "ffn_up_shexp.weight",   "ffn_down_shexp.weight",
         };
         var total_copied: usize = 0;
         for (0..self.n_layers) |li| {
@@ -3525,7 +3548,6 @@ pub const Ds4Model = struct {
             pool.parallelFor(n_layers, 4, @ptrCast(&ctx), PrefaultCtx.work);
         }
     }
-
 };
 
 // ── Math helpers ─────────────────────────────────────────────────
@@ -3565,8 +3587,6 @@ fn topKIndices(scores: []const f32, out: []u32) void {
         }
     }
 }
-
-
 
 inline fn sigmoid(x: f32) f32 {
     return 1.0 / (1.0 + @exp(-x));

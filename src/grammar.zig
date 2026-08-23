@@ -134,8 +134,6 @@ pub const Grammar = struct {
         if (state.completed) return;
         if (state.stack.items.len == 0) return;
 
-
-
         // Pre-allocate a reusable test state — avoids per-token heap allocation.
         // acceptCharInner recursion allows depth 0..max_accept_depth, each pushes at most 1 entry.
         const required_cap = state.stack.items.len + max_stack_growth_per_token;

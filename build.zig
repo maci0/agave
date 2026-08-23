@@ -32,6 +32,7 @@ pub fn build(b: *std.Build) void {
     const enable_diffusion_gemma = b.option(bool, "enable-diffusion-gemma", "Enable DiffusionGemma model support (default: true)") orelse true;
     const enable_deepseek4 = b.option(bool, "enable-deepseek4", "Enable DeepSeek V4 model support (default: true)") orelse true;
     const enable_llama4 = b.option(bool, "enable-llama4", "Enable Llama 4 model support (default: true)") orelse true;
+    const enable_dflash2 = b.option(bool, "enable-dflash2", "Enable DFlash2 block-diffusion drafter support (default: true)") orelse true;
 
     // ── Helper: link frameworks for macOS ─────────────────────────
     // Note: Vulkan (libvulkan.so / libvulkan.1.dylib (via KosmicKrisp ICD)) is loaded at runtime
@@ -79,37 +80,33 @@ pub fn build(b: *std.Build) void {
     {
         const kernel_files = [_][]const u8{
             // Core ops
-            "all",           "silu",           "gelu",           "add",            "mul",
-            "rms_norm",      "softmax",        "l2_norm",        "rope",           "add_scaled",
-            "silu_mul",      "gelu_mul",       "add_rms_norm",   "rms_norm_add",   "rms_norm_batched",
-            "rope_batched",  "sigmoid_mul",    "deinterleave",   "split_qgate",
-            "deltanet_recurrence",
+            "all",             "silu",          "gelu",           "add",            "mul",
+            "rms_norm",        "softmax",       "l2_norm",        "rope",           "add_scaled",
+            "silu_mul",        "gelu_mul",      "add_rms_norm",   "rms_norm_add",   "rms_norm_batched",
+            "rope_batched",    "sigmoid_mul",   "deinterleave",   "split_qgate",    "deltanet_recurrence",
             // SDPA
-               "sdpa",
-            "sdpa_turbo",    "sdpa_prefill",   "sdpa_tree",
+            "sdpa",            "sdpa_turbo",    "sdpa_prefill",   "sdpa_tree",
             // Dense GEMV
-                 "gemv_f32",       "gemv_bf16",
-            "gemv_f16",      "gemv_t_q8_0",
+                 "gemv_f32",
+            "gemv_bf16",       "gemv_f16",      "gemv_t_q8_0",
             // Quantized GEMV — standard GGUF formats
-               "gemv_q8_0",      "gemv_q4_0",      "gemv_q4_0_batch",
-            "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",      "gemv_q6_k",
-            "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
+               "gemv_q8_0",      "gemv_q4_0",
+            "gemv_q4_0_batch", "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",
+            "gemv_q6_k",       "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
             // FP8/FP4
-               "gemv_fp8_e4m3",
-            "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_fp4_tc",
+            "gemv_fp8_e4m3",   "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_fp4_tc",
             // MLX / TQ
-               "gemv_mlx_q4",
-            "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",     "gemv_tq2_0",
+            "gemv_mlx_q4",     "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",     "gemv_tq2_0",
             // Specialist formats
-                "gemv_gptq",
-            "gemv_awq",      "gemv_hqq",
+            "gemv_gptq",       "gemv_awq",      "gemv_hqq",
             // GEMM
                   "gemm_q8_0",
             // Megakernels
-                 "mega_qwen35_q8", "mega_gemma_q4k",
-            "mega_gemma_q8",
+                 "mega_qwen35_q8",
+            "mega_gemma_q4k",  "mega_gemma_q8",
             // Fused FFN
-            "fused_ffn_q8_0", "fused_ffn_q4_k", "fused_ffn_q5_k", "fused_ffn_q6_k",
+            "fused_ffn_q8_0", "fused_ffn_q4_k", "fused_ffn_q5_k",
+            "fused_ffn_q6_k",
         };
 
         for (kernel_files) |name| {
@@ -228,6 +225,7 @@ pub fn build(b: *std.Build) void {
     backend_options.addOption(bool, "enable_diffusion_gemma", enable_diffusion_gemma);
     backend_options.addOption(bool, "enable_deepseek4", enable_deepseek4);
     backend_options.addOption(bool, "enable_llama4", enable_llama4);
+    backend_options.addOption(bool, "enable_dflash2", enable_dflash2);
 
     // Strip ReleaseFast: unstripped ELF/Mach-O embeds host absolute paths
     // (project root, zig lib, global cache) and breaks path-independent rebuilds.
@@ -277,6 +275,15 @@ pub fn build(b: *std.Build) void {
     // ── Test step ────────────────────────────────────────────────
     const test_step = b.step("test", "Run unit tests");
 
+    // Substring filter applied to every test artifact:
+    //   zig build test -Dtest-filter=wht32
+    // Repeat the flag to AND multiple filters.
+    const test_filters = b.option(
+        []const []const u8,
+        "test-filter",
+        "Only run tests whose name contains this substring (repeatable)",
+    ) orelse &.{};
+
     // Test modules use ReleaseSafe so std.debug.assert / unreachable fire.
     // Reusing mod_rel (ReleaseFast) silently no-ops ~400 assert-based checks
     // in fuzz and unit tests (see std.debug.assert docs).
@@ -308,7 +315,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_test.addImport("build_options", backend_options.createModule());
         // No name filters: run the full inline suite from src/ (ReleaseSafe so asserts fire).
-        const t = b.addTest(.{ .root_module = mod_test, .test_runner = fuzz_test_runner });
+        const t = b.addTest(.{ .root_module = mod_test, .test_runner = fuzz_test_runner, .filters = test_filters });
         link_platform(mod_test, t, target);
         if (link_metal) {
             mod_test.linkFramework("Metal", .{});
@@ -326,6 +333,7 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
         }),
         .test_runner = simple_test_runner,
+        .filters = test_filters,
     })).step);
 
     // Golden harness unit tests (degenerate output detection)
@@ -336,6 +344,7 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
         }),
         .test_runner = simple_test_runner,
+        .filters = test_filters,
     })).step);
 
     // Shared backend module for SDPA hardware tests (provides named "backend" import).
@@ -373,7 +382,7 @@ pub fn build(b: *std.Build) void {
         });
         mod.addImport("backend", backend_test_mod);
         mod.addImport("sdpa_harness", sdpa_harness_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner });
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
         link_platform(mod, t, target);
         if (link_metal) {
             mod.linkFramework("Metal", .{});
@@ -393,7 +402,7 @@ pub fn build(b: *std.Build) void {
         });
         mod.addImport("backend", backend_test_mod);
         mod.addImport("sdpa_harness", sdpa_harness_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner });
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
         link_platform(mod, t, target);
         if (link_metal) {
             mod.linkFramework("Metal", .{});
@@ -412,7 +421,7 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
         });
         mod.addImport("backend", backend_test_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner });
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
         link_platform(mod, t, target);
         if (link_metal) {
             mod.linkFramework("Metal", .{});
@@ -432,6 +441,7 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
         }),
         .test_runner = simple_test_runner,
+        .filters = test_filters,
     })).step);
 
     // micro_bench pure-function tests (parseKeyValue, parseKernelName, etc.)
@@ -442,7 +452,7 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
         });
         mod_bench_test.addImport("build_options", backend_options.createModule());
-        const t = b.addTest(.{ .root_module = mod_bench_test, .test_runner = simple_test_runner });
+        const t = b.addTest(.{ .root_module = mod_bench_test, .test_runner = simple_test_runner, .filters = test_filters });
         link_platform(mod_bench_test, t, target);
         if (link_metal) {
             mod_bench_test.linkFramework("Metal", .{});
@@ -460,7 +470,7 @@ pub fn build(b: *std.Build) void {
             .optimize = test_optimize,
         });
         mod_wasm_test.addImport("build_options", backend_options.createModule());
-        const t = b.addTest(.{ .root_module = mod_wasm_test, .test_runner = simple_test_runner });
+        const t = b.addTest(.{ .root_module = mod_wasm_test, .test_runner = simple_test_runner, .filters = test_filters });
         link_platform(mod_wasm_test, t, target);
         if (link_metal) {
             mod_wasm_test.linkFramework("Metal", .{});
@@ -513,6 +523,7 @@ pub fn build(b: *std.Build) void {
     wasm_options.addOption(bool, "enable_diffusion_gemma", false);
     wasm_options.addOption(bool, "enable_deepseek4", false);
     wasm_options.addOption(bool, "enable_llama4", false);
+    wasm_options.addOption(bool, "enable_dflash2", false); // draft-only arch; not used in browser inference
 
     const wasm_target = b.resolveTargetQuery(.{
         .cpu_arch = .wasm32,

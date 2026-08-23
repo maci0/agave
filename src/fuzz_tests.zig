@@ -2150,9 +2150,9 @@ test "fuzz: KvQuantType name + bitsPerElement + classification" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {
             const all_types = [_]kv_quant.KvQuantType{
-                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4, .nvfp4_ds_mla,
-                .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4,
-                .iso2,   .iso3,   .iso4,   .rotor2,  .rotor3,   .rotor4,
+                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4,   .nvfp4_ds_mla,
+                .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4, .iso2,
+                .iso3,   .iso4,   .rotor2, .rotor3,  .rotor4,
             };
             const kv_type = all_types[smith.indexWithHash(all_types.len, 0)];
             // name() must return non-empty string
@@ -2187,10 +2187,10 @@ test "fuzz: KvQuantType fromString roundtrip" {
             _ = kv_quant.KvQuantType.fromString(buf[0..len]);
             // Known strings must roundtrip
             const known = [_][]const u8{
-                "f32",    "f16",      "q8_0",   "q8",  "int8",    "i8",
-                "fp8",    "fp8_e4m3", "nvfp4",  "fp4", "nvfp4_ds_mla", "turbo2",  "tq2",
-                "turbo3", "tq3",      "turbo4", "tq4", "planar2", "pq2",
-                "iso2",   "iq2",      "rotor2", "rq2",
+                "f32", "f16",      "q8_0",  "q8",     "int8",         "i8",
+                "fp8", "fp8_e4m3", "nvfp4", "fp4",    "nvfp4_ds_mla", "turbo2",
+                "tq2", "turbo3",   "tq3",   "turbo4", "tq4",          "planar2",
+                "pq2", "iso2",     "iq2",   "rotor2", "rq2",
             };
             const k = known[smith.indexWithHash(known.len, 2)];
             const result = kv_quant.KvQuantType.fromString(k);

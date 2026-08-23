@@ -720,7 +720,7 @@ pub const Qwen35Model = struct {
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
-                &self.pf_hidden, &self.pf_hidden2, &self.pf_q,       &self.pf_k,
+                &self.pf_hidden, &self.pf_hidden2,  &self.pf_q,       &self.pf_k,
                 &self.pf_v,      &self.pf_attn_out, &self.pf_ff_gate, &self.pf_ff_up,
             };
             inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);

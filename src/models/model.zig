@@ -690,7 +690,13 @@ pub fn dispatchGemvGpu(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]co
 /// Direct CPU MLX GEMV. Routes through the same mlxGemv function as the
 /// CPU backend, using a thread-local CpuBackend to avoid lifetime issues.
 pub fn mlxGemvCpu(pool: ?*@import("../thread_pool.zig").ThreadPool, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize) bool {
-    _ = pool; _ = fmt; _ = x; _ = t; _ = y; _ = n; _ = k;
+    _ = pool;
+    _ = fmt;
+    _ = x;
+    _ = t;
+    _ = y;
+    _ = n;
+    _ = k;
     // Disabled: CpuBackend lifetime issues cause hangs. Standard dispatch is used.
     return false;
 }
@@ -913,6 +919,7 @@ pub const ModelStorage = union(enum) {
     glm4: Glm4Model,
     deepseek4: Ds4Model,
     llama4: Llama4Model,
+    dflash2: DFlash2Model,
 
     /// Initialize a model from its architecture type.
     /// Returns a ModelStorage union holding the initialized concrete model.
@@ -922,7 +929,7 @@ pub const ModelStorage = union(enum) {
         if ((kv_type_k.cpuSdpaOnly() or kv_type_v.cpuSdpaOnly()) and arch != .deepseek4)
             @panic("nvfp4_ds_mla is DeepSeek MLA only — use --kv-type q8_0 or f16");
         switch (arch) {
-            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4 => |a| {
+            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4, .dflash2 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
                 var mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
@@ -957,6 +964,7 @@ pub const ModelStorage = union(enum) {
             .glm4 => Glm4Model,
             .deepseek4 => Ds4Model,
             .llama4 => Llama4Model,
+            .dflash2 => DFlash2Model,
         };
     }
 
@@ -1190,6 +1198,7 @@ const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model e
 const Ds4Model = if (build_options.enable_deepseek4) @import("deepseek4.zig").Ds4Model else void;
 const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
 const Llama4Model = if (build_options.enable_llama4) @import("llama4.zig").Llama4Model else void;
+const DFlash2Model = if (build_options.enable_dflash2) @import("dflash2.zig").DFlash2Model else void;
 
 // ── Tests ─────────────────────────────────────────────────────────
 

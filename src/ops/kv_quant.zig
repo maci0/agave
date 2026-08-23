@@ -2046,8 +2046,8 @@ test "nvfp4_ds_mla two-token store and attend" {
     }
     var cache: [nvfp4DsMlaRecordBytes() * 2]u8 align(4) = undefined;
     const kv_t = KvQuantType.nvfp4_ds_mla;
-    kvStore(cache[kvByteOffset(kv_t, 0 * n) ..].ptr, &t0, n, kv_t);
-    kvStore(cache[kvByteOffset(kv_t, 1 * n) ..].ptr, &t1, n, kv_t);
+    kvStore(cache[kvByteOffset(kv_t, 0 * n)..].ptr, &t0, n, kv_t);
+    kvStore(cache[kvByteOffset(kv_t, 1 * n)..].ptr, &t1, n, kv_t);
 
     const stride = kvByteOffset(kv_t, n);
     try std.testing.expectEqual(nvfp4DsMlaRecordBytes(), stride);
@@ -2459,9 +2459,9 @@ test "fuzz: all kv_quant functions" {
             // ── KvQuantType: exercise all pub methods on a random variant ──
             const type_idx = smith.valueWithHash(u8, 0) % 19;
             const all_types = [19]KvQuantType{
-                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4, .nvfp4_ds_mla,
-                .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4,
-                .iso2,   .iso3,   .iso4,   .rotor2,  .rotor3,   .rotor4,
+                .f32,    .f16,    .q8_0,   .int8,    .fp8_e4m3, .nvfp4,   .nvfp4_ds_mla,
+                .turbo2, .turbo3, .turbo4, .planar2, .planar3,  .planar4, .iso2,
+                .iso3,   .iso4,   .rotor2, .rotor3,  .rotor4,
             };
             const kv_type = all_types[type_idx];
 
