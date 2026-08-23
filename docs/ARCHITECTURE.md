@@ -20,7 +20,7 @@ zig build                                          # Build (ReleaseFast + Debug)
 
 `zig build` produces three binaries:
 - `zig-out/bin/agave` — ReleaseFast (optimized; size varies with enabled models/backends)
-- `zig-out/bin/agave-debug` — Debug (safety checks, leak detection)
+- `zig-out/bin/agave-debug` — ReleaseSafe (safety checks, leak detection)
 - `zig-out/bin/agave-bench` — ReleaseFast micro-benchmark tool (`src/micro_bench.zig`)
 
 ## Project Structure

@@ -1045,11 +1045,13 @@ test "extractMessages keeps assistant tool-call turns with null content" {
     ;
     const extracted = extractMessages(json, allocator) orelse return error.TestUnexpectedResult;
     defer extracted.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 2), extracted.messages.len);
-    try std.testing.expectEqual(Role.assistant, extracted.messages[0].role);
-    try std.testing.expectEqualStrings("", extracted.messages[0].content);
-    try std.testing.expectEqual(Role.tool, extracted.messages[1].role);
-    try std.testing.expectEqualStrings("call_1", extracted.messages[1].tool_call_id.?);
+    try std.testing.expectEqual(@as(usize, 3), extracted.messages.len);
+    try std.testing.expectEqual(Role.user, extracted.messages[0].role);
+    try std.testing.expectEqualStrings("Weather in Paris?", extracted.messages[0].content);
+    try std.testing.expectEqual(Role.assistant, extracted.messages[1].role);
+    try std.testing.expectEqualStrings("", extracted.messages[1].content);
+    try std.testing.expectEqual(Role.tool, extracted.messages[2].role);
+    try std.testing.expectEqualStrings("call_1", extracted.messages[2].tool_call_id.?);
 }
 
 

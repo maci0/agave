@@ -2765,6 +2765,8 @@ test "VulkanBackend init and silu" {
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0 };
     var output: [4]f32 = undefined;
     vk_be.silu(&input, &output, 4);
+    // Deferred dispatch: results reach host memory only after sync.
+    vk_be.sync();
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.7311), output[1], 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, -0.2689), output[2], 0.01);
@@ -2782,6 +2784,7 @@ test "VulkanBackend gelu" {
     var output: [4]f32 = undefined;
     vk_be.gelu(&input, &output, 4);
     // GELU(0) = 0, GELU(1) ≈ 0.841, GELU(-1) ≈ -0.159, GELU(2) ≈ 1.955
+    vk_be.sync();
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), output[0], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 0.841), output[1], 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, -0.159), output[2], 0.01);
@@ -2801,6 +2804,7 @@ test "VulkanBackend rmsNorm" {
     vk_be.rmsNorm(&input, &weight, &output, 4, 1e-6);
     // RMS = sqrt((1+4+9+16)/4) = sqrt(7.5) ≈ 2.7386
     // output[i] = input[i] * weight[i] / RMS
+    vk_be.sync();
     try std.testing.expectApproxEqAbs(@as(f32, 0.3651), output[0], 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 1.4606), output[1], 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5477), output[2], 0.01);
@@ -2817,6 +2821,7 @@ test "VulkanBackend softmax" {
     var data = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
     vk_be.softmax(&data, 4);
     // softmax([1,2,3,4]) ≈ [0.0321, 0.0871, 0.2369, 0.6439]
+    vk_be.sync();
     var sum: f32 = 0;
     for (&data) |v| sum += v;
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), sum, 1e-4);
@@ -2836,6 +2841,7 @@ test "VulkanBackend l2Norm" {
     var data = [_]f32{ 3.0, 4.0, 0.0, 0.0 };
     vk_be.l2Norm(&data, 4, 1e-6);
     // L2 = 5, normalized: [0.6, 0.8, 0, 0]
+    vk_be.sync();
     try std.testing.expectApproxEqAbs(@as(f32, 0.6), data[0], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), data[1], 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), data[2], 1e-4);
@@ -3209,6 +3215,7 @@ test "VulkanBackend rope" {
     // Input: pair0=(1.0, 0.0), pair1=(0.0, 1.0) in split-complex layout
     var x = [_]f32{ 1.0, 0.0, 0.0, 1.0 };
     vk_be.rope(&x, 1, 1, 4, 4, 10000.0);
+    vk_be.sync();
     // RoPE is a rotation — magnitude of each pair must be preserved
     const mag0 = @sqrt(x[0] * x[0] + x[2] * x[2]);
     const mag1 = @sqrt(x[1] * x[1] + x[3] * x[3]);

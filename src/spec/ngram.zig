@@ -21,6 +21,22 @@ const min_ngram: usize = 3;
 /// falls back to shorter lengths, so longer values prefer higher-quality matches.
 const max_ngram: usize = 10;
 
+/// Append `token` to a fixed-capacity history buffer. When full, keep the most
+/// recent half to make room (amortized O(1) push). Shared by NgramState,
+/// SharedNgramPool, and SuffixState, which all compact identically.
+fn historyPush(history: []u32, len: *usize, token: u32) void {
+    if (len.* < history.len) {
+        history[len.*] = token;
+        len.* += 1;
+    } else {
+        const keep = history.len / 2;
+        std.mem.copyForwards(u32, history[0..keep], history[history.len - keep ..]);
+        len.* = keep;
+        history[len.*] = token;
+        len.* += 1;
+    }
+}
+
 /// N-gram proposal state. Maintains a ring buffer of generated tokens.
 pub const NgramState = struct {
     history: [history_capacity]u32 = undefined,
@@ -28,17 +44,7 @@ pub const NgramState = struct {
 
     /// Record a generated token.
     pub fn push(self: *NgramState, token: u32) void {
-        if (self.len < history_capacity) {
-            self.history[self.len] = token;
-            self.len += 1;
-        } else {
-            // Shift left by half to make room (amortized)
-            const keep = history_capacity / 2;
-            std.mem.copyForwards(u32, self.history[0..keep], self.history[history_capacity - keep ..]);
-            self.len = keep;
-            self.history[self.len] = token;
-            self.len += 1;
-        }
+        historyPush(&self.history, &self.len, token);
     }
 
     /// Propose up to `max_draft` continuation tokens based on n-gram matching.
@@ -57,22 +63,18 @@ pub const NgramState = struct {
             // Pattern = last n tokens
             const pattern = hist[self.len - n ..];
 
-            // Search for this pattern earlier in history
-            if (self.len < n + 1) continue;
+            // Search backward — most recent occurrence is a better predictor.
+            // max_n <= len - 1 leaves at least one earlier alignment to try.
             const search_end = self.len - n;
-
-            // Search backward — most recent occurrence is a better predictor
-            if (search_end > 0) {
-                var pos: usize = search_end - 1;
-                while (true) {
-                    if (std.mem.eql(u32, hist[pos .. pos + n], pattern[0..n])) {
-                        best_match_pos = pos + n;
-                        best_match_len = n;
-                        break;
-                    }
-                    if (pos == 0) break;
-                    pos -= 1;
+            var pos: usize = search_end - 1;
+            while (true) {
+                if (std.mem.eql(u32, hist[pos .. pos + n], pattern[0..n])) {
+                    best_match_pos = pos + n;
+                    best_match_len = n;
+                    break;
                 }
+                if (pos == 0) break;
+                pos -= 1;
             }
             if (best_match_len > 0) break;
         }
@@ -125,16 +127,7 @@ pub const SharedNgramPool = struct {
     pub fn push(self: *SharedNgramPool, token: u32) void {
         self.lock();
         defer self.unlock();
-        if (self.len < pool_capacity) {
-            self.history[self.len] = token;
-            self.len += 1;
-        } else {
-            const keep = pool_capacity / 2;
-            std.mem.copyForwards(u32, self.history[0..keep], self.history[pool_capacity - keep ..]);
-            self.len = keep;
-            self.history[self.len] = token;
-            self.len += 1;
-        }
+        historyPush(&self.history, &self.len, token);
     }
 
     /// Propose continuation tokens from shared history given the current tail.
@@ -232,17 +225,7 @@ pub const SuffixState = struct {
 
     /// Add a generated token to the suffix cache.
     pub fn push(self: *SuffixState, token: u32) void {
-        if (self.len < cache_capacity) {
-            self.history[self.len] = token;
-            self.len += 1;
-        } else {
-            // Compact: keep the second half
-            const keep = cache_capacity / 2;
-            std.mem.copyForwards(u32, self.history[0..keep], self.history[cache_capacity - keep ..]);
-            self.len = keep;
-            self.history[self.len] = token;
-            self.len += 1;
-        }
+        historyPush(self.history, &self.len, token);
     }
 
     /// Propose up to `max_draft` tokens using suffix matching.
@@ -281,10 +264,6 @@ pub const SuffixState = struct {
 
     /// Propose tokens and compute dynamic speculation depth.
     /// Depth scales with match quality: 1 token for minimum match, max_k for maximum.
-    /// Minimum gap between the match position and current position.
-    /// Prevents suffix from matching its own very recent output (self-loop).
-    const min_match_gap: usize = 0;
-
     pub fn propose(self: *const SuffixState, out: []u32) usize {
         const result = self.proposeWithDepth(self.max_k, out);
         if (result.n == 0) return 0;
@@ -474,7 +453,6 @@ pub const LookaheadState = struct {
     branches: [max_branches][max_window]u32 = undefined,
     branch_len: [max_branches]usize = .{0} ** max_branches,
     n_branches: usize = 5,
-    window: usize = 7,
 
     /// Seed branches with continuations from an initial token set.
     /// Called after prefill; branches start from the last `n_branches` distinct tokens.
@@ -614,7 +592,6 @@ test "SharedNgramPool propose on empty pool returns 0" {
 test "LookaheadState advance wraps at max_window" {
     var ls = LookaheadState{};
     ls.n_branches = 1;
-    ls.window = 4;
     ls.seed(&[_]u32{1});
 
     // Advance past max_window to trigger the shift path
