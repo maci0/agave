@@ -1820,7 +1820,7 @@ pub const Qwen35Model = struct {
                 const e = self.n_embd;
                 const recv_bufs = [_][*]f32{ self.hidden.ptr, self.hidden2.ptr };
                 const recv_lens = [_]usize{ e, e };
-                transport.recvBufs(&recv_bufs, &recv_lens);
+                try transport.recvBufs(&recv_bufs, &recv_lens);
             }
         }
 
@@ -1859,7 +1859,7 @@ pub const Qwen35Model = struct {
                     try self.ffnCompute(l);
                     transport.allReduceAdd(self.hidden2.ptr, e) catch |err| {
                         std.log.err("allReduceAdd failed: {}", .{err});
-                        return error.MissingTensor;
+                        return error.TransportFailed;
                     };
                     continue;
                 }
@@ -1944,10 +1944,10 @@ pub const Qwen35Model = struct {
                 // Not last stage: send hidden+hidden2 to next rank (batched), receive token back
                 const send_bufs = [_][*]const f32{ self.hidden.ptr, self.hidden2.ptr };
                 const send_lens = [_]usize{ e, e };
-                transport.sendBufs(&send_bufs, &send_lens);
+                try transport.sendBufs(&send_bufs, &send_lens);
                 // Receive the argmax'd token from last rank
                 var result_token: [1]f32 = undefined;
-                transport.recvBuf(&result_token, 1);
+                try transport.recvBuf(&result_token, 1);
                 self.kv_seq_len += 1;
                 const raw = result_token[0];
                 if (raw >= 0 and raw < @as(f32, @floatFromInt(std.math.maxInt(u32))) and std.math.isFinite(raw)) {
@@ -1999,7 +1999,7 @@ pub const Qwen35Model = struct {
         if (self.pp_degree > 1 and self.pp_rank == self.pp_degree - 1) {
             if (self.pp_transport) |transport| {
                 var tok_f32 = [1]f32{@floatFromInt(result)};
-                transport.sendBuf(&tok_f32, 1);
+                try transport.sendBuf(&tok_f32, 1);
             }
         }
         return result;
@@ -2242,13 +2242,13 @@ pub const Qwen35Model = struct {
     }
 
     /// Send KV cache to a peer via transport (for disaggregated prefill/decode).
-    pub fn sendKvCache(self: *Qwen35Model, transport: *TransportMod.Transport) void {
+    pub fn sendKvCache(self: *Qwen35Model, transport: *TransportMod.Transport) !void {
         const kvd = self.paged_cache.kv_dim;
         const bs = self.paged_cache.block_size;
         const elems_per_block = @as(usize, bs) * kvd;
         // Send seq_len and n_layers
         var meta = [3]f32{ @floatFromInt(self.kv_seq_len), @floatFromInt(self.n_layers), 0 };
-        transport.sendBuf(&meta, 3);
+        try transport.sendBuf(&meta, 3);
         // Send block data for each layer
         for (0..self.n_layers) |li| {
             const bt = self.seq_table.block_table[li];
@@ -2256,8 +2256,8 @@ pub const Qwen35Model = struct {
             for (0..n_blocks) |bi| {
                 const block_id = bt[bi];
                 const blk = self.paged_cache.blocks[block_id];
-                transport.sendBuf(blk.keys.ptr, elems_per_block);
-                transport.sendBuf(blk.values.ptr, elems_per_block);
+                try transport.sendBuf(blk.keys.ptr, elems_per_block);
+                try transport.sendBuf(blk.values.ptr, elems_per_block);
             }
         }
     }
@@ -2269,7 +2269,7 @@ pub const Qwen35Model = struct {
         const elems_per_block = @as(usize, bs) * kvd;
         // Receive seq_len and n_layers
         var meta: [3]f32 = undefined;
-        transport.recvBuf(&meta, 3);
+        try transport.recvBuf(&meta, 3);
         const raw_sl = meta[0];
         const seq_len: usize = if (raw_sl >= 0 and raw_sl < @as(f32, @floatFromInt(self.max_seq_len)) and std.math.isFinite(raw_sl))
             @intFromFloat(raw_sl)
@@ -2291,8 +2291,8 @@ pub const Qwen35Model = struct {
             for (0..n_blocks) |bi| {
                 const block_id = bt[bi];
                 const blk = &self.paged_cache.blocks[block_id];
-                transport.recvBuf(blk.keys.ptr, elems_per_block);
-                transport.recvBuf(blk.values.ptr, elems_per_block);
+                try transport.recvBuf(blk.keys.ptr, elems_per_block);
+                try transport.recvBuf(blk.values.ptr, elems_per_block);
                 blk.used = if (bi < n_blocks - 1) bs else @intCast(((seq_len - 1) % bs) + 1);
             }
         }

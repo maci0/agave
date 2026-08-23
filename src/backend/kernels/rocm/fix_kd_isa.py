@@ -203,36 +203,38 @@ def replace_note_section(d: bytearray, loc, transform):
     meta, _ = mp_decode(desc)
     renames = transform(meta)
     new_desc = mp_encode(meta)
+    # Length preservation: pad the top-level map with an ignorable entry so the
+    # rewritten note is byte-identical in size (no ELF layout shifts anywhere).
+    if len(new_desc) < len(desc):
+        # Filler entry: fixstr key + fixint value; iterate L until the encoded
+        # size lands exactly on the original (covers fixmap->map16 growth).
+        target = len(desc)
+        meta[""] = 0
+        for _ in range(8):
+            cur = mp_encode(meta)
+            diff = target - len(cur)
+            if diff == 0:
+                break
+            if diff < 2:
+                raise SystemExit(f'[fix_kd_isa] note pad {diff} unrepresentable')
+            key_len = diff - 2
+            meta.pop("")
+            meta["z" * key_len] = 0
+        else:
+            raise SystemExit('[fix_kd_isa] note padding failed to converge')
+        new_desc = mp_encode(meta)
+        if len(new_desc) != len(desc):
+            raise SystemExit(f'[fix_kd_isa] cannot pad note exactly: {len(desc)} -> {len(new_desc)}')
+    elif len(new_desc) > len(desc):
+        raise SystemExit(f'[fix_kd_isa] metadata grew: {len(desc)} -> {len(new_desc)}')
     old_dp = (len(desc) + 3) & ~3
     new_dp = (len(new_desc) + 3) & ~3
 
-    old_sh_size = struct.unpack_from('<I', d, hdr + 32)[0]
-    section = bytearray(d[sh_off:sh_off + old_sh_size])
+    rec_start_abs = sh_off + rec_pos
     rec_len = 12 + npad + old_dp
-    new_rec = section[rec_pos:rec_pos + 12 + npad] + new_desc
-    new_rec += b'\0' * (new_dp - len(new_desc))
-    new_section = section[:rec_pos] + new_rec + section[rec_pos + rec_len:]
-    delta = len(new_section) - old_sh_size
-
-    # Pure concatenation keeps this correct for both grow and shrink.
-    out = bytearray(d[:sh_off]) + new_section + bytearray(d[sh_off + old_sh_size:])
-    hdr_shift = delta if hdr > sh_off else 0
-    struct.pack_into('<I', out, hdr + hdr_shift + 32, old_sh_size + delta)
-    if delta != 0:
-        # Read old table positions from the ORIGINAL buffer; write into `out`
-        # at arithmetic-shifted positions (never through stale offsets).
-        e_shoff_old = struct.unpack_from('<Q', d, 0x28)[0]
-        e_shentsize = struct.unpack_from('<H', d, 0x3A)[0]
-        e_shnum = struct.unpack_from('<H', d, 0x3C)[0]
-        shift = lambda off: off + delta if off > sh_off else off
-        for j in range(e_shnum):
-            h_old = e_shoff_old + j * e_shentsize
-            off = struct.unpack_from('<Q', d, h_old + 24)[0]
-            if off != 0:
-                struct.pack_into('<Q', out, shift(h_old) + 24, shift(off))
-        struct.pack_into('<Q', out, 0x28, shift(e_shoff_old))
-        shdr_strndx = struct.unpack_from('<H', d, 0x3E)[0]
-    return out, renames
+    d[rec_start_abs:rec_start_abs + rec_len] = \
+        d[rec_start_abs:rec_start_abs + 12 + npad] + new_desc + b'\0' * (new_dp - len(new_desc))
+    return d, renames
 
 
 def normalize_and_fix_isa(d: bytearray):

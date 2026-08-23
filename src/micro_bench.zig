@@ -57,6 +57,7 @@ const synthetic_w_scale: f32 = 0.001;
 const synthetic_w_offset: f32 = -0.015;
 const output_buf_size: usize = 4096;
 const q8_0_block_bytes = backend_mod.q8_0_block_bytes;
+const q4_k_block_bytes = backend_mod.q4_k_block_bytes;
 const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
 const quant_group_size = backend_mod.quant_block_elems;
 /// Little-endian f16 ≈ 0.00875.
@@ -114,6 +115,7 @@ const Kernel = enum {
     gemv_bf16,
     gemv_f16,
     gemv_q8_0,
+    gemv_q4_k,
     gemv_q4_0,
     rms_norm,
     silu,
@@ -191,7 +193,7 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
     } else {
         result.kernel = parseKernelName(positional.?) orelse {
             eprint("Error: unknown kernel '{s}'\n", .{positional.?});
-            eprint("  Valid kernels: gemv_f32 gemv_bf16 gemv_f16 gemv_q8_0 gemv_q4_0\n", .{});
+            eprint("  Valid kernels: gemv_f32 gemv_bf16 gemv_f16 gemv_q8_0 gemv_q4_k gemv_q4_0\n", .{});
             eprint("                 rms_norm silu gelu softmax l2_norm add mul rope\n", .{});
             eprint("                 sdpa sdpa_turbo4 sdpa_turbo3 sdpa_turbo2\n", .{});
             eprint("Run 'agave-bench --help' for more information.\n", .{});
@@ -318,7 +320,7 @@ fn printUsage() void {
         \\  e2e            Load a model and run end-to-end inference timing
         \\
         \\KERNELS:
-        \\  gemv_f32  gemv_bf16  gemv_f16  gemv_q8_0  gemv_q4_0
+        \\  gemv_f32  gemv_bf16  gemv_f16  gemv_q8_0  gemv_q4_k  gemv_q4_0
         \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
         \\
@@ -516,6 +518,28 @@ fn fillSyntheticF16(buf: []f16) void {
 }
 
 /// Constructs a Q8_0 weight buffer with synthetic scale + data bytes.
+fn fillSyntheticQ4_K(buf: []u8, n_rows: usize, k: usize) void {
+    // Per 256-elem superblock: [f16 d][f16 dmin][12B 6-bit scales][128B nibbles].
+    // Scales get small finite fp16 patterns; nibbles arbitrary nibble values.
+    const nb = k / 256;
+    const row_bytes = nb * q4_k_block_bytes;
+    var r: usize = 0;
+    while (r < n_rows) : (r += 1) {
+        const row = buf[r * row_bytes ..][0..row_bytes];
+        @memset(row, 0x11); // nibble payload 0x1 pattern
+        var blk: usize = 0;
+        while (blk < nb) : (blk += 1) {
+            const base = blk * q4_k_block_bytes;
+            row[base] = synthetic_scale_byte_0; // f16 d lo
+            row[base + 1] = synthetic_scale_byte_1; // f16 d hi
+            row[base + 2] = synthetic_scale_byte_1; // f16 dmin lo
+            row[base + 3] = synthetic_scale_byte_0; // f16 dmin hi
+            // 12 bytes of 6-bit scale/min pairs at +4..+15: keep values <=63
+            for (4..16) |i| row[base + i] = 0x24;
+        }
+    }
+}
+
 fn fillSyntheticQ8_0(buf: []u8, n_rows: usize, k: usize) void {
     const nb = (k + quant_group_size - 1) / quant_group_size;
     for (buf, 0..) |*v, i| v.* = @truncate(i % 256);
@@ -675,6 +699,36 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+        },
+
+        .gemv_q4_k => {
+            const x = page.alloc(f32, k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const nb = k / 256;
+            const row_bytes = nb * q4_k_block_bytes;
+            const total_w = n * row_bytes;
+            const w = page.alloc(u8, total_w) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticQ4_K(w, n, k);
+
+            const td = TensorData{ .data = w.ptr, .dtype = .q4_k };
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .y = y,
+
+                .n = n,
+                .k = k,
+                .td = td,
+            };
+            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
+            const total_flops = 2 * n * k;
+            emitJson("gemv_q4_k", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
         },
 
         .gemv_q4_0 => {

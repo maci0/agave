@@ -12,8 +12,8 @@
 
 import { renderMermaidSVG } from 'beautiful-mermaid';
 import { Resvg } from '@resvg/resvg-js';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
-import { join, basename, extname } from 'path';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { join, basename, extname } from 'node:path';
 
 // All 7 colors required — resvg fails silently if any is missing.
 const THEME = {
@@ -29,13 +29,13 @@ const THEME = {
 // Resolve CSS custom properties (var(--xxx)) to hex values before rasterizing.
 function resolveVars(svg, theme) {
   return svg
-    .replace(/var\(--bg\)/g, theme.bg)
-    .replace(/var\(--fg\)/g, theme.fg)
-    .replace(/var\(--accent\)/g, theme.accent)
-    .replace(/var\(--line\)/g, theme.line)
-    .replace(/var\(--muted\)/g, theme.muted)
-    .replace(/var\(--surface\)/g, theme.surface)
-    .replace(/var\(--border\)/g, theme.border);
+    .replaceAll(/var\(--bg\)/g, theme.bg)
+    .replaceAll(/var\(--fg\)/g, theme.fg)
+    .replaceAll(/var\(--accent\)/g, theme.accent)
+    .replaceAll(/var\(--line\)/g, theme.line)
+    .replaceAll(/var\(--muted\)/g, theme.muted)
+    .replaceAll(/var\(--surface\)/g, theme.surface)
+    .replaceAll(/var\(--border\)/g, theme.border);
 }
 
 // Extract mermaid blocks from a Markdown file.
@@ -53,7 +53,7 @@ function extractDiagrams(md) {
 // Parse CLI args
 const args = process.argv.slice(2);
 const outDir = args.includes('--out-dir') ? args[args.indexOf('--out-dir') + 1] : 'docs/diagrams';
-const emitPng = args.includes('--png') || !args.includes('--svg');
+const emitPng = args.includes('--png') ?? !args.includes('--svg');
 const emitSvg = args.includes('--svg');
 
 mkdirSync(outDir, { recursive: true });
@@ -67,7 +67,7 @@ let errors = 0;
 for (const file of files) {
   const md = readFileSync(join(tutorialDir, file), 'utf8');
   const diagrams = extractDiagrams(md);
-  if (diagrams.length === 0) continue;
+  if (diagrams.length === 0) {continue;}
 
   const stem = basename(file, extname(file));
   const fileDir = join(outDir, stem);
@@ -89,8 +89,8 @@ for (const file of files) {
         writeFileSync(join(fileDir, `${name}.png`), png);
       }
       totalDiagrams++;
-    } catch (e) {
-      console.error(`ERROR: ${file} diagram ${index + 1}: ${e.message}`);
+    } catch (error) {
+      console.error(`ERROR: ${file} diagram ${index + 1}: ${error.message}`);
       errors++;
     }
   }
