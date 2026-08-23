@@ -1,4 +1,4 @@
-// oxlint-disable @rikalabs/no-standalone-classes import/unambiguous -- classic browser script loaded via <script src> in web/index.html; AgaveEngine is a stateful engine with a documented constructor API
+/* oxlint-disable @rikalabs/no-standalone-classes -- stateful engine class; public API is constructor-based per web/index.html */
 /**
  * Agave WASM browser inference glue (`web/`), not the HTTP chat UI.
  *
@@ -57,9 +57,7 @@ class AgaveEngine {
    */
   async loadModel(source) {
     let data = source;
-    // Runtime union discrimination at the API boundary. The JSDoc contract admits
-    // both shapes; there is no schema parser to delegate to.
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|ArrayBuffer union
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|ArrayBuffer union; no schema parser to delegate to
     if (typeof source === 'string') {
       const response = await fetch(source);
       data = await response.arrayBuffer();
@@ -95,8 +93,7 @@ class AgaveEngine {
    * @param {Object} options - { maxTokens: 100 }
    * @returns {Promise<string>} Generated text
    */
-  // Async signature is the documented API contract even though the body is sync.
-  // oxlint-disable-next-line eslint/require-await typescript-eslint/require-await -- Promise API contract
+  // oxlint-disable-next-line eslint/require-await, typescript-eslint/require-await -- async signature is the documented Promise API contract
   async generate(prompt, options = {}) {
     if (!this.ctx) { throw new Error('No model loaded'); }
 
@@ -138,6 +135,5 @@ class AgaveEngine {
   }
 }
 
-// Classic scripts expose the class implicitly; pin it explicitly so the
-// contract in web/index.html does not depend on declaration-position magic.
+// Explicit binding: classic scripts should not rely on declaration-position magic.
 globalThis.AgaveEngine = AgaveEngine;

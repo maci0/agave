@@ -605,9 +605,12 @@ pub const RocmBackend = struct {
             @ptrCast(&n_u32),
             @ptrCast(&k_u32),
         };
-        // Multi-row kernels: Q4_K/Q5_K/Q6_K use NR=2, Q4_0/Q8_0 use NR=4.
+        // Multi-row kernels: Q5_K/Q6_K use NR=2, Q4_0/Q8_0 use NR=4.
+        // Q4_K and BF16 are TileLang-derived single-row designs (lane/copy
+        // decomposition + block reduce) — grid = n.
         const grid_size: u32 = switch (w.dtype) {
-            .q4_k, .q5_k, .q6_k => @intCast((n + 1) / 2),
+            .q4_k => @intCast(n),
+            .q5_k, .q6_k => @intCast((n + 1) / 2),
             .q4_0, .q8_0 => @intCast((n + 3) / 4),
             else => @intCast(n),
         };

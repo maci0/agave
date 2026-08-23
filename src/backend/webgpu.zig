@@ -968,8 +968,10 @@ pub const WebGpuBackend = struct {
         self.cacheGpuResult(output, out_buf, size);
     }
 
-    /// Element-wise addition: out[i] = a[i] + b[i].
-    pub fn add(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+    /// Shared elementwise binary-op dispatch: upload both f32 inputs, bind
+    /// [a, b, out, n], launch one workgroup per workgroup_size elements,
+    /// and cache the GPU result for `out`.
+    fn dispatchBinaryOp(self: *WebGpuBackend, pipe: PipelineInfo, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         const size = n * @sizeOf(f32);
         const buf_a = self.getOrUpload(@ptrCast(a), size);
         const buf_b = self.getOrUpload(@ptrCast(b), size);
@@ -985,50 +987,23 @@ pub const WebGpuBackend = struct {
             storageEntry(2, out_buf, size),
             uniformEntry(3, params_buf, Params),
         };
-        self.dispatchCompute(self.pipe_add, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
+        self.dispatchCompute(pipe, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
         self.cacheGpuResult(out, out_buf, size);
+    }
+
+    /// Element-wise addition: out[i] = a[i] + b[i].
+    pub fn add(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
+        self.dispatchBinaryOp(self.pipe_add, a, b, out, n);
     }
 
     /// Element-wise multiplication: out[i] = a[i] * b[i].
     pub fn mul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
-        const buf_b = self.getOrUpload(@ptrCast(b), size);
-        const out_buf = self.createOutputBuf(size);
-
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, buf_a, size),
-            storageEntry(1, buf_b, size),
-            storageEntry(2, out_buf, size),
-            uniformEntry(3, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.cacheGpuResult(out, out_buf, size);
+        self.dispatchBinaryOp(self.pipe_mul, a, b, out, n);
     }
 
     /// Fused SiLU×mul (SwiGLU): out[i] = silu(a[i]) * b[i].
     pub fn siluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
-        const buf_b = self.getOrUpload(@ptrCast(b), size);
-        const out_buf = self.createOutputBuf(size);
-
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, buf_a, size),
-            storageEntry(1, buf_b, size),
-            storageEntry(2, out_buf, size),
-            uniformEntry(3, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_silu_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.cacheGpuResult(out, out_buf, size);
+        self.dispatchBinaryOp(self.pipe_silu_mul, a, b, out, n);
     }
 
     /// SwiGLU with clamped gate/up values to [-10, 10] (prevents exp overflow in SiLU).
@@ -1041,23 +1016,7 @@ pub const WebGpuBackend = struct {
 
     /// Fused GELU×mul (GeGLU): out[i] = gelu(a[i]) * b[i].
     pub fn geluMul(self: *WebGpuBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
-        const size = n * @sizeOf(f32);
-        const buf_a = self.getOrUpload(@ptrCast(a), size);
-        const buf_b = self.getOrUpload(@ptrCast(b), size);
-        const out_buf = self.createOutputBuf(size);
-
-        const Params = extern struct { n: u32, _pad: [12]u8 = .{0} ** 12 };
-        const params_buf = self.createUniformBuf(Params, .{ .n = @intCast(n) });
-        self.deferDestroy(params_buf);
-
-        const entries = [_]WGPUBindGroupEntry{
-            storageEntry(0, buf_a, size),
-            storageEntry(1, buf_b, size),
-            storageEntry(2, out_buf, size),
-            uniformEntry(3, params_buf, Params),
-        };
-        self.dispatchCompute(self.pipe_gelu_mul, &entries, @intCast((n + workgroup_size - 1) / workgroup_size));
-        self.cacheGpuResult(out, out_buf, size);
+        self.dispatchBinaryOp(self.pipe_gelu_mul, a, b, out, n);
     }
 
     /// RMS normalization with learned scale.
