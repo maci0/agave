@@ -102,3 +102,7 @@ outputs/
 progress.md
 .qwen/
 .pi-subagents/
+
+# JS tooling
+node_modules/
+.scratch/
