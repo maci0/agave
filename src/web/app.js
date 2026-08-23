@@ -239,7 +239,9 @@ function autoResize() {
 
 inp.addEventListener('input', autoResize);
 inp.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && !e.shiftKey) {
+  // Ignore Enter while an IME composition is active (CJK input): Enter there
+  // confirms the conversion, it must not send the message.
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
     document.getElementById('chat-form').requestSubmit();
   }
@@ -746,26 +748,11 @@ function handleCommand(cmd) {
   }
   if (cmd === '/reset') { clearChat(); return; }
   if (cmd === '/clear') { clearChat(); return; }
-  fetch('/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'message=' + encodeURIComponent(cmd) })
-  .then(function(resp) { return resp.text(); }).then(function(responseHtml) {
-    var tmp = document.createElement('div');
-    // DOMPurify sanitizes HTML; fallback escapes all entities to prevent XSS
-    if (typeof DOMPurify !== 'undefined') {
-      tmp.innerHTML = DOMPurify.sanitize(responseHtml);
-    } else {
-      tmp.textContent = responseHtml;
-    }
-    var msgEl = tmp.querySelector('.msg.assistant'); var msg = msgEl ? msgEl.textContent : 'Done';
-    var el3 = addAssistant(); renderContent(el3, msg, true);
-  })
-  .catch(function() {
-    var el4 = addAssistant();
-    var err = document.createElement('div'); err.className = 'error-msg';
-    err.setAttribute('role', 'alert');
-    err.textContent = 'Command failed';
-    el4.textContent = ''; el4.appendChild(err);
-    announceToSR('Command failed');
-  });
+  // Unknown command: give feedback like the REPL does, instead of silently
+  // sending the "/..." text to the model as a chat message.
+  var elUnknown = addAssistant();
+  renderContent(elUnknown, 'Unknown command: `' + cmd + '`\n\nType `/help` to see the available commands.', true);
+  announceToSR('Unknown command ' + cmd);
 }
 
 // oxlint-disable-next-line no-unused-vars -- called from HTML onsubmit
@@ -788,15 +775,16 @@ function showEmpty() {
   var icon = document.createElement('div'); icon.className = 'icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '\uD83C\uDF35';
   var h2 = document.createElement('h2'); h2.textContent = 'Start a conversation';
   var p = document.createElement('p'); p.textContent = 'Type a message below to chat with the model.';
-  var hints = document.createElement('div'); hints.className = 'hints';
-  ['Type a message to start', '/help for commands', 'Enter to send'].forEach(function(t) {
+  var hintsEl = document.createElement('div'); hintsEl.className = 'hints';
+  // Skip "type a message" filler: the paragraph above already says it.
+  ['/help for commands', 'Enter to send'].forEach(function(t) {
     var isHelp = t === '/help for commands';
     var s = document.createElement(isHelp ? 'button' : 'span');
     s.className = 'hint'; s.textContent = t;
     if (isHelp) { s.type = 'button'; s.onclick = function() { handleCommand('/help'); }; }
-    hints.appendChild(s);
+    hintsEl.appendChild(s);
   });
-  empty.appendChild(icon); empty.appendChild(h2); empty.appendChild(p); empty.appendChild(hints);
+  empty.appendChild(icon); empty.appendChild(h2); empty.appendChild(p); empty.appendChild(hintsEl);
   chat.appendChild(empty);
 }
 

@@ -3533,7 +3533,9 @@ fn initAndRun(
             .rate_limit_rpm = cli.rate_limit_rpm,
             .rate_limit_tpm = cli.rate_limit_tpm,
         }) catch |e| {
-            eprint("Error: server failed: {}\n", .{e});
+            // Listen failures already print a specific actionable message inside
+            // server.run(); re-printing the raw error name would just add noise.
+            if (e != error.ListenError) eprint("Error: server failed: {}\n", .{e});
             return false;
         };
     } else if (cli.disagg and cli.tp_peers != null) {
