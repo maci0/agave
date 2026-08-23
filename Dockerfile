@@ -52,6 +52,11 @@ RUN set -eux; \
 ARG ZIG_SHA256_X86_64=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 ARG ZIG_SHA256_AARCH64=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
 
+# Product SemVer for the OCI version label. Empty: derived from build.zig.zon
+# (.version, single source of truth); an explicit override must match it or the
+# build fails below. README shows how to stamp it from build.zig.zon.
+ARG AGAVE_VERSION=
+
 # Read pin before full COPY so the toolchain layer stays cacheable.
 COPY --link .zigversion /tmp/agave.zigversion
 
@@ -90,7 +95,15 @@ RUN PIN=$(tr -d '[:space:]' < .zigversion) && \
     elif [ "$INSTALLED" != "$ZIG_VERSION" ]; then \
       echo "error: zig version $INSTALLED does not match ZIG_VERSION=$ZIG_VERSION" >&2; exit 1; \
     fi && \
-    echo "Zig ok: $INSTALLED (pin=$PIN zon=$ZON${ZIG_VERSION:+ override=$ZIG_VERSION})"
+    PRODUCT_VER=$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1) && \
+    if [ -z "$PRODUCT_VER" ]; then \
+      echo "error: could not parse .version from build.zig.zon" >&2; exit 1; \
+    fi && \
+    if [ -n "$AGAVE_VERSION" ] && [ "$AGAVE_VERSION" != "$PRODUCT_VER" ]; then \
+      echo "error: AGAVE_VERSION ($AGAVE_VERSION) != build.zig.zon .version ($PRODUCT_VER)" >&2; exit 1; \
+    fi && \
+    printf '%s\n' "$PRODUCT_VER" > /agave-version && \
+    echo "Zig ok: $INSTALLED (pin=$PIN zon=$ZON${ZIG_VERSION:+ override=$ZIG_VERSION}) product=$PRODUCT_VER${AGAVE_VERSION:+ label=$AGAVE_VERSION}"
 
 # Cross-compile for the target platform.
 # Use glibc (-gnu) when any dlopen backend is enabled (CUDA/Vulkan/ROCm/WebGPU).
@@ -129,21 +142,28 @@ RUN --mount=type=cache,target=/src/.zig-cache \
 
 # Runtime image: Debian for glibc dlopen compatibility.
 # Musl static binaries also run fine on Debian.
-# Pin TARGETPLATFORM so multi-arch buildx does not inherit BUILDPLATFORM from the prior stage.
-FROM --platform=$TARGETPLATFORM debian:bookworm-20260713-slim
+# No --platform needed: under BuildKit each stage defaults to its own
+# TARGETPLATFORM, regardless of the build stage's BUILDPLATFORM pin above.
+FROM debian:bookworm-20260713-slim
 
 # Keep in sync with the build stage (same FROM day / snapshot).
 ARG DEBIAN_SNAPSHOT=20260713T000000Z
-ARG SOURCE_DATE_EPOCH=1783900800
+
+# Version label: build-arg validated against build.zig.zon in the build stage.
+# LABEL cannot read files, so plain builds fall back to "dev"; the authoritative
+# product version is always shipped at /usr/share/agave/version (parsed from
+# build.zig.zon). Pass --build-arg AGAVE_VERSION=<semver> for release images.
+ARG AGAVE_VERSION=dev
 
 LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.description="High-performance LLM inference engine" \
-      org.opencontainers.image.source="https://github.com/maci0/agave"
+      org.opencontainers.image.source="https://github.com/maci0/agave" \
+      org.opencontainers.image.version="${AGAVE_VERSION}" \
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C \
-    TZ=UTC \
-    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+    TZ=UTC
 
 # curl is only used by HEALTHCHECK (not on the inference hot path).
 # Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
@@ -159,6 +179,8 @@ RUN set -eux; \
     useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave
 
 COPY --link --from=build /out/bin/agave /usr/local/bin/agave
+# Authoritative product version parsed from build.zig.zon (see build-stage check).
+COPY --link --from=build /agave-version /usr/share/agave/version
 
 # Writable workdir for non-root runtime (logs, temp files, bind-mount targets).
 WORKDIR /home/agave
