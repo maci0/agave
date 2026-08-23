@@ -1626,16 +1626,18 @@ pub const Gemma4Model = struct {
     /// `layer_kvd[i]`, so dual-attention layers may differ in byte size.
     /// Returns bytes written (0 if dst too small or n_tokens > kv_seq_len).
     pub fn exportKvPrefix(self: *Gemma4Model, dst: []u8, n_tokens: usize) usize {
-        if (n_tokens > self.kv_seq_len) return 0;
+        if (n_tokens > self.kv_seq_len or n_tokens > self.max_seq_len) return 0;
         var offset: usize = 0;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
             const kvd = self.layer_kvd[i];
-            const k_bytes = n_tokens * kvd * @sizeOf(f32);
-            const v_bytes = n_tokens * kvd * @sizeOf(f32);
+            const k_floats = n_tokens * kvd;
+            if (k_floats > keys.len or k_floats > vals.len) return 0;
+            const k_bytes = k_floats * @sizeOf(f32);
+            const v_bytes = k_bytes;
             if (offset + k_bytes + v_bytes > dst.len) return 0;
-            @memcpy(dst[offset..][0..k_bytes], std.mem.sliceAsBytes(keys[0 .. n_tokens * kvd]));
+            @memcpy(dst[offset..][0..k_bytes], std.mem.sliceAsBytes(keys[0..k_floats]));
             offset += k_bytes;
-            @memcpy(dst[offset..][0..v_bytes], std.mem.sliceAsBytes(vals[0 .. n_tokens * kvd]));
+            @memcpy(dst[offset..][0..v_bytes], std.mem.sliceAsBytes(vals[0..k_floats]));
             offset += v_bytes;
         }
         return offset;
@@ -1643,16 +1645,23 @@ pub const Gemma4Model = struct {
 
     /// Import KV cache from a buffer (previously exported by exportKvPrefix).
     /// Sets kv_seq_len = n_tokens. Returns false on size mismatch.
+    /// `n_tokens` may come from untrusted input (server query string,
+    /// checkpoint file) and must never exceed the per-layer cache capacity:
+    /// an oversized value would slice past `keys`/`vals` or overflow the
+    /// byte-size math below.
     pub fn importKvPrefix(self: *Gemma4Model, src: []const u8, n_tokens: usize) bool {
+        if (n_tokens > self.max_seq_len) return false;
         var offset: usize = 0;
         for (self.layer_keys, self.layer_values, 0..) |keys, vals, i| {
             const kvd = self.layer_kvd[i];
-            const k_bytes = n_tokens * kvd * @sizeOf(f32);
-            const v_bytes = n_tokens * kvd * @sizeOf(f32);
+            const k_floats = n_tokens * kvd;
+            if (k_floats > keys.len or k_floats > vals.len) return false;
+            const k_bytes = k_floats * @sizeOf(f32);
+            const v_bytes = k_bytes;
             if (offset + k_bytes + v_bytes > src.len) return false;
-            @memcpy(std.mem.sliceAsBytes(keys[0 .. n_tokens * kvd]), src[offset..][0..k_bytes]);
+            @memcpy(std.mem.sliceAsBytes(keys[0..k_floats]), src[offset..][0..k_bytes]);
             offset += k_bytes;
-            @memcpy(std.mem.sliceAsBytes(vals[0 .. n_tokens * kvd]), src[offset..][0..v_bytes]);
+            @memcpy(std.mem.sliceAsBytes(vals[0..k_floats]), src[offset..][0..v_bytes]);
             offset += v_bytes;
         }
         self.kv_seq_len = n_tokens;
@@ -2999,6 +3008,149 @@ test "Gemma4 model vtable compiles" {
     try std.testing.expect(@hasDecl(Gemma4Model, "resetCache"));
     try std.testing.expect(@hasDecl(Gemma4Model, "cancel"));
     try std.testing.expect(@hasDecl(Gemma4Model, "model"));
+}
+
+/// Minimal KV-only model for export/import tests: capacity 4 tokens,
+/// one layer with kvd=2. Only fields touched by exportKvPrefix/importKvPrefix
+/// are initialized; deinit is never called (buffers freed by the caller).
+/// `layer_tables` must outlive every use of the returned model.
+fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32) Gemma4Model {
+    var m: Gemma4Model = .{
+        .n_layers = 1,
+        .n_embd = 0,
+        .vocab_size = 0,
+        .rms_eps = 0,
+        .final_logit_softcap = 0,
+        .embd_scale = 1,
+        .sl_n_head = 0,
+        .sl_n_kv_head = 0,
+        .sl_head_dim = 0,
+        .sl_rope_theta = 0,
+        .sl_rope_dim = 0,
+        .sliding_window = 0,
+        .gl_n_head = 0,
+        .gl_n_kv_head = 0,
+        .gl_head_dim = 0,
+        .gl_rope_theta = 0,
+        .gl_rope_dim = 0,
+        .gl_partial_rotary = 0,
+        .n_experts = 0,
+        .top_k_experts = 0,
+        .moe_intermediate = 0,
+        .dense_ff_dim = 0,
+        .global_layer_interval = 0,
+        .fmt = undefined,
+        .be = undefined,
+        .allocator = std.testing.allocator,
+        .norm_add_one = false,
+    };
+    m.max_seq_len = 4;
+    m.layer_kvd[0] = 2;
+    layer_tables[0] = .{keys};
+    layer_tables[1] = .{vals};
+    m.layer_keys = &layer_tables[0];
+    m.layer_values = &layer_tables[1];
+    return m;
+}
+
+test "Gemma4 importKvPrefix round-trips an exported prefix" {
+    const allocator = std.testing.allocator;
+    const cap: usize = 4;
+    const kvd: usize = 2;
+    const keys = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(keys);
+    const vals = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(vals);
+    for (keys, 0..) |*k, i| k.* = @floatFromInt(i);
+    for (vals, 0..) |*v, i| v.* = @floatFromInt(100 + i);
+    var layer_tables: [2][1][]f32 = undefined;
+    var m = kvOnlyModel(keys, vals, &layer_tables);
+
+    var blob: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
+    m.kv_seq_len = 3;
+    const n = m.exportKvPrefix(&blob, 3);
+    try std.testing.expectEqual(@as(usize, 3 * kvd * @sizeOf(f32) * 2), n);
+
+    // Import into a fresh cache restores the same floats.
+    const keys2 = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(keys2);
+    const vals2 = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(vals2);
+    @memset(keys2, 0);
+    @memset(vals2, 0);
+    var layer_tables2: [2][1][]f32 = undefined;
+    var m2 = kvOnlyModel(keys2, vals2, &layer_tables2);
+
+    try std.testing.expect(m2.importKvPrefix(blob[0..n], 3));
+    try std.testing.expectEqual(@as(usize, 3), m2.kv_seq_len);
+    try std.testing.expectEqualSlices(f32, keys[0 .. 3 * kvd], keys2[0 .. 3 * kvd]);
+    try std.testing.expectEqualSlices(f32, vals[0 .. 3 * kvd], vals2[0 .. 3 * kvd]);
+}
+
+test "Gemma4 importKvPrefix rejects oversized or short inputs" {
+    const allocator = std.testing.allocator;
+    const cap: usize = 4;
+    const kvd: usize = 2;
+    const keys = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(keys);
+    const vals = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(vals);
+    @memset(keys, 0);
+    @memset(vals, 0);
+    var layer_tables: [2][1][]f32 = undefined;
+    var m = kvOnlyModel(keys, vals, &layer_tables);
+
+    const full_bytes = cap * kvd * @sizeOf(f32) * 2;
+
+    // n_tokens beyond max_seq_len must be rejected even with a huge body:
+    // unbounded values previously sliced past the layer buffers (CWE-787).
+    {
+        const big_body = try allocator.alloc(u8, full_bytes * 4);
+        defer allocator.free(big_body);
+        @memset(big_body, 0xAA);
+        try std.testing.expect(!m.importKvPrefix(big_body, cap + 1));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+        // Multiplication-overflow probe: byte count wraps to 0 without the bound.
+        try std.testing.expect(!m.importKvPrefix(big_body, std.math.maxInt(usize)));
+    }
+
+    // Body shorter than n_tokens requires is rejected.
+    {
+        const small_body = try allocator.alloc(u8, full_bytes - 1);
+        defer allocator.free(small_body);
+        @memset(small_body, 0xBB);
+        try std.testing.expect(!m.importKvPrefix(small_body, cap));
+        try std.testing.expectEqual(@as(usize, 0), m.kv_seq_len);
+    }
+
+    // Exact-size import at capacity still succeeds.
+    {
+        const body = try allocator.alloc(u8, full_bytes);
+        defer allocator.free(body);
+        @memset(body, 0);
+        try std.testing.expect(m.importKvPrefix(body, cap));
+        try std.testing.expectEqual(@as(usize, cap), m.kv_seq_len);
+    }
+}
+
+test "Gemma4 exportKvPrefix rejects positions beyond capacity" {
+    const allocator = std.testing.allocator;
+    const cap: usize = 4;
+    const kvd: usize = 2;
+    const keys = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(keys);
+    const vals = try allocator.alloc(f32, cap * kvd);
+    defer allocator.free(vals);
+    @memset(keys, 0);
+    @memset(vals, 0);
+    var layer_tables: [2][1][]f32 = undefined;
+    var m = kvOnlyModel(keys, vals, &layer_tables);
+    m.kv_seq_len = cap;
+
+    var dst: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(&dst, cap + 1));
+    try std.testing.expectEqual(@as(usize, 0), m.exportKvPrefix(dst[0 .. dst.len - 1], cap));
+    try std.testing.expectEqual(dst.len, m.exportKvPrefix(&dst, cap));
 }
 
 test "fuzz: all gemma4 functions" {
