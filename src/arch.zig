@@ -21,6 +21,7 @@ pub const Arch = enum {
     glm4,
     deepseek4,
     llama4,
+    dflash2,
 
     /// Detect model architecture from GGUF/SafeTensors arch string.
     pub fn detect(name: []const u8) ?Arch {
@@ -57,6 +58,7 @@ pub const Arch = enum {
             .{ "deepseek_v4", .deepseek4 },
             .{ "deepseek4", .deepseek4 },
             .{ "dflash", .deepseek4 }, // DeepSeek V4 Flash DSpark draft model
+            .{ "dflash2", .dflash2 }, // DFlash2 block-diffusion drafter (Inco AI)
             .{ "llama4", .llama4 },
             .{ "llama4_text", .llama4 },
             .{ "diffusion_gemma", .diffusion_gemma },
@@ -81,6 +83,7 @@ pub const Arch = enum {
             .glm4 => "GLM-4",
             .deepseek4 => "DeepSeek V4 Flash",
             .llama4 => "Llama 4",
+            .dflash2 => "DFlash2 Drafter",
         };
     }
 
@@ -132,6 +135,7 @@ pub const Arch = enum {
             .glm4 => build_options.enable_glm4,
             .deepseek4 => build_options.enable_deepseek4,
             .llama4 => build_options.enable_llama4,
+            .dflash2 => build_options.enable_dflash2,
         };
     }
 
@@ -140,7 +144,7 @@ pub const Arch = enum {
     pub fn defaultBos(self: Arch) ?u32 {
         return switch (self) {
             .glm4, .deepseek4 => glm4_fallback_bos,
-            .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano => null,
+            .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2 => null,
             .llama4 => llama4_fallback_bos,
             .gemma3, .gemma4, .diffusion_gemma => default_bos_id,
         };
@@ -178,6 +182,7 @@ pub const Arch = enum {
             .glm4 => "glm4",
             .deepseek4 => "deepseek4",
             .llama4 => "llama4",
+            .dflash2 => "dflash2",
         };
     }
 };

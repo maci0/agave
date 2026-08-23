@@ -818,7 +818,12 @@ pub const Backend = union(enum) {
                     fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
                         const c: *const @This() = @ptrCast(@alignCast(ctx_ptr));
                         @import("kernels/cpu/gemv.zig").gemvSeq(
-                            c.x_ptr, c.w_data + start * c.row_bytes, c.dt, c.y_ptr + start, end - start, c.k_val,
+                            c.x_ptr,
+                            c.w_data + start * c.row_bytes,
+                            c.dt,
+                            c.y_ptr + start,
+                            end - start,
+                            c.k_val,
                         );
                     }
                 }{ .x_ptr = x, .w_data = w.data, .y_ptr = y, .k_val = k, .row_bytes = rb, .dt = w.dtype };

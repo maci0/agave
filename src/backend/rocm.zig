@@ -916,7 +916,9 @@ pub const RocmBackend = struct {
         };
         self.launch(self.fn_gemv_mlx_q4, @intCast(n), block_size, reduction_smem, &params);
     }
-    pub fn gemvMlxQGpu(self: *RocmBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void { self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs); }
+    pub fn gemvMlxQGpu(self: *RocmBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
+        self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs);
+    }
 
     /// MXFP4 SafeTensors GEMV.
     pub fn gemvMxfp4St(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
@@ -934,7 +936,9 @@ pub const RocmBackend = struct {
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
-    pub fn gemvMxfp4StGpu(self: *RocmBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void { self.gemvMxfp4St(x, w, s, y, n, k, gs, sf); }
+    pub fn gemvMxfp4StGpu(self: *RocmBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        self.gemvMxfp4St(x, w, s, y, n, k, gs, sf);
+    }
 
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])
     pub fn sigmoidMul(self: *RocmBackend, data: [*]f32, gate: [*]const f32, n: usize) void {

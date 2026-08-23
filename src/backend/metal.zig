@@ -265,7 +265,6 @@ pub const MetalBackend = struct {
     stable_cache: std.AutoHashMap(usize, BufferInfo),
 
     /// Volatile buffer tracking: list of uncached Metal buffers to release on sync.
-
     /// Host allocator for staging buffers (paged SDPA flats). Not used for
     /// page-aligned GPU zero-copy maps (those stay on page_allocator).
     allocator: std.mem.Allocator,
@@ -2301,8 +2300,6 @@ pub const MetalBackend = struct {
         cpu.gemvMxfp4St(x, weight, scale, y, n, k, gs, sf);
     }
 
-
-
     /// GPTQ INT4 GEMV on Metal GPU.
     pub fn gemvGptq(self: *MetalBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
         const words_per_row = k / 8;
@@ -3008,13 +3005,22 @@ pub const MetalBackend = struct {
     /// Single dispatch eliminates 5 barrier cycles per layer.
     pub fn ds4FusedAttnProj(
         self: *MetalBackend,
-        hidden: [*]f32, hidden2: [*]f32,
-        q_compressed: [*]f32, q_full: [*]f32, kv_proj: [*]f32,
+        hidden: [*]f32,
+        hidden2: [*]f32,
+        q_compressed: [*]f32,
+        q_full: [*]f32,
+        kv_proj: [*]f32,
         attn_norm_w: [*]const f32,
-        q_a_w: [*]const u8, q_a_s: [*]const u8, q_a_b: [*]const u8,
+        q_a_w: [*]const u8,
+        q_a_s: [*]const u8,
+        q_a_b: [*]const u8,
         q_a_norm_w: [*]const f32,
-        q_b_w: [*]const u8, q_b_s: [*]const u8, q_b_b: [*]const u8,
-        kv_a_w: [*]const u8, kv_a_s: [*]const u8, kv_a_b: [*]const u8,
+        q_b_w: [*]const u8,
+        q_b_s: [*]const u8,
+        q_b_b: [*]const u8,
+        kv_a_w: [*]const u8,
+        kv_a_s: [*]const u8,
+        kv_a_b: [*]const u8,
         kv_a_norm_w: [*]const f32,
         fused_params: [8]u32,
     ) void {
@@ -3109,15 +3115,24 @@ pub const MetalBackend = struct {
     pub fn ds4MoeGateUpMxfp4(
         self: *MetalBackend,
         x: [*]const f32,
-        gate_w: [*]const u8, gate_s: [*]const u8,
-        up_w: [*]const u8, up_s: [*]const u8,
-        gate_out: [*]f32, up_out: [*]f32,
+        gate_w: [*]const u8,
+        gate_s: [*]const u8,
+        up_w: [*]const u8,
+        up_s: [*]const u8,
+        gate_out: [*]f32,
+        up_out: [*]f32,
         expert_ids: [*]const u32,
-        k_experts: usize, ff: usize, n_in: usize,
-        w_stride_words: usize, s_stride: usize, gs: usize,
+        k_experts: usize,
+        ff: usize,
+        n_in: usize,
+        w_stride_words: usize,
+        s_stride: usize,
+        gs: usize,
         slot_offset: usize,
-        gate_w_bytes: usize, up_w_bytes: usize,
-        gate_s_bytes: usize, up_s_bytes: usize,
+        gate_w_bytes: usize,
+        up_w_bytes: usize,
+        gate_s_bytes: usize,
+        up_s_bytes: usize,
     ) void {
         const total_rows = k_experts * ff;
         const x_ref = self.getBufRef(@ptrCast(x), n_in * @sizeOf(f32));
@@ -3129,16 +3144,27 @@ pub const MetalBackend = struct {
         const uo_ref = self.getBufRef(@ptrCast(up_out), (slot_offset + k_experts) * ff * @sizeOf(f32));
         const ei_ref = self.getBufRef(@ptrCast(expert_ids), k_experts * @sizeOf(u32));
         const enc = self.getEncoder(self.pipe_ds4_moe_gate_up_mxfp4);
-        setBuf(enc, x_ref, 0); setBuf(enc, gw_ref, 1); setBuf(enc, gs_ref, 2);
-        setBuf(enc, uw_ref, 3); setBuf(enc, us_ref, 4);
-        setBuf(enc, go_ref, 5); setBuf(enc, uo_ref, 6); setBuf(enc, ei_ref, 7);
-        const ke: u32 = @intCast(k_experts); const ffv: u32 = @intCast(ff);
-        const ni: u32 = @intCast(n_in); const ws: u32 = @intCast(w_stride_words);
-        const ss: u32 = @intCast(s_stride); const gv: u32 = @intCast(gs);
+        setBuf(enc, x_ref, 0);
+        setBuf(enc, gw_ref, 1);
+        setBuf(enc, gs_ref, 2);
+        setBuf(enc, uw_ref, 3);
+        setBuf(enc, us_ref, 4);
+        setBuf(enc, go_ref, 5);
+        setBuf(enc, uo_ref, 6);
+        setBuf(enc, ei_ref, 7);
+        const ke: u32 = @intCast(k_experts);
+        const ffv: u32 = @intCast(ff);
+        const ni: u32 = @intCast(n_in);
+        const ws: u32 = @intCast(w_stride_words);
+        const ss: u32 = @intCast(s_stride);
+        const gv: u32 = @intCast(gs);
         const so: u32 = @intCast(slot_offset);
-        setBytes(enc, @ptrCast(&ke), 4, 8); setBytes(enc, @ptrCast(&ffv), 4, 9);
-        setBytes(enc, @ptrCast(&ni), 4, 10); setBytes(enc, @ptrCast(&ws), 4, 11);
-        setBytes(enc, @ptrCast(&ss), 4, 12); setBytes(enc, @ptrCast(&gv), 4, 13);
+        setBytes(enc, @ptrCast(&ke), 4, 8);
+        setBytes(enc, @ptrCast(&ffv), 4, 9);
+        setBytes(enc, @ptrCast(&ni), 4, 10);
+        setBytes(enc, @ptrCast(&ws), 4, 11);
+        setBytes(enc, @ptrCast(&ss), 4, 12);
+        setBytes(enc, @ptrCast(&gv), 4, 13);
         setBytes(enc, @ptrCast(&so), 4, 14);
         const tg = @min(threadgroup_size, @max(simd_width, ((n_in / gs + simd_width - 1) & ~(simd_width - 1))));
         self.endEncodeThreadgroups(enc, total_rows, tg);
@@ -3148,13 +3174,19 @@ pub const MetalBackend = struct {
     pub fn ds4MoeDownMxfp4(
         self: *MetalBackend,
         activated: [*]const f32,
-        down_w: [*]const u8, down_s: [*]const u8,
+        down_w: [*]const u8,
+        down_s: [*]const u8,
         expert_out: [*]f32,
         expert_ids: [*]const u32,
-        k_experts: usize, n_out: usize, ff: usize,
-        w_stride_words: usize, s_stride: usize, gs: usize,
+        k_experts: usize,
+        n_out: usize,
+        ff: usize,
+        w_stride_words: usize,
+        s_stride: usize,
+        gs: usize,
         slot_offset: usize,
-        w_bytes: usize, s_bytes: usize,
+        w_bytes: usize,
+        s_bytes: usize,
     ) void {
         const total_rows = k_experts * n_out;
         const a_ref = self.getBufRef(@ptrCast(activated), (slot_offset + k_experts) * ff * @sizeOf(f32));
@@ -3163,15 +3195,24 @@ pub const MetalBackend = struct {
         const eo_ref = self.getBufRef(@ptrCast(expert_out), (slot_offset + k_experts) * n_out * @sizeOf(f32));
         const ei_ref = self.getBufRef(@ptrCast(expert_ids), k_experts * @sizeOf(u32));
         const enc = self.getEncoder(self.pipe_ds4_moe_down_mxfp4);
-        setBuf(enc, a_ref, 0); setBuf(enc, dw_ref, 1); setBuf(enc, ds_ref, 2);
-        setBuf(enc, eo_ref, 3); setBuf(enc, ei_ref, 4);
-        const ke: u32 = @intCast(k_experts); const no: u32 = @intCast(n_out);
-        const ffv: u32 = @intCast(ff); const ws: u32 = @intCast(w_stride_words);
-        const ss: u32 = @intCast(s_stride); const gv: u32 = @intCast(gs);
+        setBuf(enc, a_ref, 0);
+        setBuf(enc, dw_ref, 1);
+        setBuf(enc, ds_ref, 2);
+        setBuf(enc, eo_ref, 3);
+        setBuf(enc, ei_ref, 4);
+        const ke: u32 = @intCast(k_experts);
+        const no: u32 = @intCast(n_out);
+        const ffv: u32 = @intCast(ff);
+        const ws: u32 = @intCast(w_stride_words);
+        const ss: u32 = @intCast(s_stride);
+        const gv: u32 = @intCast(gs);
         const so: u32 = @intCast(slot_offset);
-        setBytes(enc, @ptrCast(&ke), 4, 5); setBytes(enc, @ptrCast(&no), 4, 6);
-        setBytes(enc, @ptrCast(&ffv), 4, 7); setBytes(enc, @ptrCast(&ws), 4, 8);
-        setBytes(enc, @ptrCast(&ss), 4, 9); setBytes(enc, @ptrCast(&gv), 4, 10);
+        setBytes(enc, @ptrCast(&ke), 4, 5);
+        setBytes(enc, @ptrCast(&no), 4, 6);
+        setBytes(enc, @ptrCast(&ffv), 4, 7);
+        setBytes(enc, @ptrCast(&ws), 4, 8);
+        setBytes(enc, @ptrCast(&ss), 4, 9);
+        setBytes(enc, @ptrCast(&gv), 4, 10);
         setBytes(enc, @ptrCast(&so), 4, 11);
         const tg = @min(threadgroup_size, @max(simd_width, ((ff / gs + simd_width - 1) & ~(simd_width - 1))));
         self.endEncodeThreadgroups(enc, total_rows, tg);
@@ -4871,11 +4912,11 @@ test "fuzz: all metal functions" {
             // SSM
             "deltaNet",
             // DS4 hyper-connection and turbo hd512
-            "ds4HcWeights",                  "ds4HcPreMix",
-            "ds4HcPost",                     "ds4EmbBroadcast",
-            "ds4RopeTable",                  "ds4InvRopeTable",
-            "ds4WeightedAccum",              "ds4SdpaTurboHd512",
-            "ds4HcHeadWeights",
+                                 "ds4HcWeights",
+            "ds4HcPreMix",                   "ds4HcPost",
+            "ds4EmbBroadcast",               "ds4RopeTable",
+            "ds4InvRopeTable",               "ds4WeightedAccum",
+            "ds4SdpaTurboHd512",             "ds4HcHeadWeights",
             "ds4FusedAttnProj",
         };
         for (decls) |name| {

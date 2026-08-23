@@ -287,14 +287,17 @@ See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/k
 ## How to Run Tests
 
 ```bash
+# Format check (CI enforces this — run before pushing)
+zig fmt --check src/ tests/ build.zig build.zig.zon
+
 # Run all tests (includes leak detection via std.testing.allocator)
 zig build test
 
 # Full build (needed after changing backend/model interfaces — test target doesn't build agave-bench)
 zig build
 
-# Run a specific test file
-zig build test --test-filter "wht32"
+# Run only tests whose name contains a substring (repeatable flag to AND filters)
+zig build test -Dtest-filter=wht32
 
 # Run with a specific backend (tests that need GPU use target guards)
 zig build test -Denable-webgpu=false    # skip WebGPU tests

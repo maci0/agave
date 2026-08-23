@@ -36,7 +36,7 @@ pub const MtpWeights = struct {
 
     /// Load MTP weights from a safetensors file path.
     pub fn load(self: *MtpWeights, allocator: Allocator, path: anytype) !void {
-        // Open file  
+        // Open file
         const fd = posix.openat(posix.AT.FDCWD, path, .{}, 0) catch return error.FileNotFound;
         defer {
             if (comptime @import("builtin").os.tag == .linux)

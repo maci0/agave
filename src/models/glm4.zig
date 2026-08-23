@@ -242,8 +242,8 @@ pub const Glm4Model = struct {
         errdefer {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
-                &self.pf_hidden,   &self.pf_hidden2, &self.pf_q_a,       &self.pf_q,
-                &self.pf_kv_proj,  &self.pf_kv_latent, &self.pf_k,       &self.pf_v,
+                &self.pf_hidden,   &self.pf_hidden2,   &self.pf_q_a, &self.pf_q,
+                &self.pf_kv_proj,  &self.pf_kv_latent, &self.pf_k,   &self.pf_v,
                 &self.pf_attn_out,
             };
             inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
@@ -304,8 +304,8 @@ pub const Glm4Model = struct {
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
-                &self.pf_hidden, &self.pf_hidden2, &self.pf_q_a,      &self.pf_q,
-                &self.pf_kv_proj, &self.pf_kv_latent, &self.pf_k,     &self.pf_v,
+                &self.pf_hidden,   &self.pf_hidden2,   &self.pf_q_a, &self.pf_q,
+                &self.pf_kv_proj,  &self.pf_kv_latent, &self.pf_k,   &self.pf_v,
                 &self.pf_attn_out,
             };
             inline for (pf_bufs) |buf| if (buf.len > 0) pa.free(buf.*);
@@ -763,11 +763,11 @@ pub const Glm4Model = struct {
             for (0..nh) |h| {
                 const dst = self.pf_k[t * nh * q_head_dim + h * q_head_dim ..];
                 @memcpy(dst[0..nope_dim], self.k_buf[h * nope_dim ..][0..nope_dim]);
-                @memcpy(dst[nope_dim ..][0..rope_dim], k_pe);
+                @memcpy(dst[nope_dim..][0..rope_dim], k_pe);
             }
 
             // Copy V into batched buffer
-            @memcpy(self.pf_v[t * nh * vhd ..][0..nh * vhd], self.v_buf[0..nh * vhd]);
+            @memcpy(self.pf_v[t * nh * vhd ..][0 .. nh * vhd], self.v_buf[0 .. nh * vhd]);
 
             // RoPE (partial — only rope portion at offset nope_dim within each head)
             const saved_pos = self.kv_seq_len;

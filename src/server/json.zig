@@ -1054,7 +1054,6 @@ test "extractMessages keeps assistant tool-call turns with null content" {
     try std.testing.expectEqualStrings("call_1", extracted.messages[2].tool_call_id.?);
 }
 
-
 test "extractField returns null for missing field" {
     const json = "{\"model\": \"gpt-4\"}";
     try std.testing.expect(extractField(json, "prompt") == null);

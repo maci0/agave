@@ -97,7 +97,6 @@ pub fn gemvMXFP4(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
     }
 }
 
-
 /// SIMD-optimized MXFP4 GEMV. Processes 4 weight bytes (8 values) per vector iteration.
 /// Uses @Vector(4, f32) with @mulAdd for FMA accumulation on NEON/SSE.
 /// ~2× faster than scalar version on Apple Silicon (M4 Pro measured).
@@ -109,7 +108,7 @@ pub fn gemvMXFP4_V(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
     const half_qk = qk / 2; // 16
     const V4 = @Vector(4, f32);
     const lut = comptime [16]f32{
-        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+        0.0,  0.5,  1.0,  1.5,  2.0,  3.0,  4.0,  6.0,
         -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
     };
 
@@ -131,7 +130,7 @@ pub fn gemvMXFP4_V(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
                 while (j + 4 <= half_qk) : (j += 4) {
                     // Lo nibbles: 4 weight values at positions bk+j..bk+j+3
                     const wlo: V4 = .{
-                        lut[bp[1 + j] & 0x0F], lut[bp[1 + j + 1] & 0x0F],
+                        lut[bp[1 + j] & 0x0F],     lut[bp[1 + j + 1] & 0x0F],
                         lut[bp[1 + j + 2] & 0x0F], lut[bp[1 + j + 3] & 0x0F],
                     };
                     const xlo: V4 = x[bk + j ..][0..4].*;
@@ -139,7 +138,7 @@ pub fn gemvMXFP4_V(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
 
                     // Hi nibbles: 4 weight values at positions bk+half_qk+j..
                     const whi: V4 = .{
-                        lut[bp[1 + j] >> 4], lut[bp[1 + j + 1] >> 4],
+                        lut[bp[1 + j] >> 4],     lut[bp[1 + j + 1] >> 4],
                         lut[bp[1 + j + 2] >> 4], lut[bp[1 + j + 3] >> 4],
                     };
                     const xhi: V4 = x[bk + half_qk + j ..][0..4].*;
@@ -434,7 +433,7 @@ pub fn gemvMXFP4_I8(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
     // MXFP4 LUT as INT8 (×16 to get integer range):
     // 0, 0.5, 1, 1.5, 2, 3, 4, 6 → ×16 → 0, 8, 16, 24, 32, 48, 64, 96
     const lut_i8 = [16]i8{
-        0, 8, 16, 24, 32, 48, 64, 96,
+        0, 8,  16,  24,  32,  48,  64,  96,
         0, -8, -16, -24, -32, -48, -64, -96,
     };
     const inv16: f32 = 1.0 / 16.0;
