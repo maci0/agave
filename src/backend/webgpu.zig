@@ -742,7 +742,10 @@ pub const WebGpuBackend = struct {
         const buf = self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
         self.uploadToBuffer(buf, ptr, size);
         self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch |err| {
+            // Untracked buffer would leak on every subsequent call with this
+            // key — queue it for destruction after the pending submit instead.
             std.log.warn("webgpu: buf_cache.put failed (key={d}): {s}", .{ key, @errorName(err) });
+            self.deferDestroy(buf);
         };
         return buf;
     }
@@ -764,16 +767,20 @@ pub const WebGpuBackend = struct {
             return .{ .buf = buf, .idx = idx };
         }
         // Pool is full — return buffer without a valid pool index.
-        // Use act_pool_capacity as a sentinel so releasePooledBuf is a no-op.
+        // Use act_pool_capacity as a sentinel so releasePooledBuf destroys
+        // the buffer instead of returning it to the pool.
         std.log.warn("webgpu: activation pool full (capacity={d}), buffer not tracked", .{act_pool_capacity});
         return .{ .buf = buf, .idx = act_pool_capacity };
     }
 
-    fn releasePooledBuf(self: *WebGpuBackend, idx: u32) void {
+    fn releasePooledBuf(self: *WebGpuBackend, buf: WGPUBuffer, idx: u32) void {
         if (idx < act_pool_capacity) {
             self.act_pool[idx].in_use = false;
+            return;
         }
-        // idx == act_pool_capacity is the sentinel for untracked buffers — no-op.
+        // Sentinel index: untracked pool-full fallback. Queue destruction so
+        // transient buffers cannot accumulate across calls.
+        self.deferDestroy(buf);
     }
 
     fn downloadF32(self: *WebGpuBackend, src: WGPUBuffer, dst: [*]f32, count: usize) void {
@@ -894,6 +901,11 @@ pub const WebGpuBackend = struct {
             @panic("WebGPU: workgroup count exceeds max_workgroups_per_dim — chunk GEMV rows");
         self.fn_compute_pass_dispatch(pass, workgroups_x, 1, 1);
         self.fn_compute_pass_end(pass);
+        // Release our reference now: the command encoder retains the bind group
+        // for as long as pending/submitted work references it (wgpu retention
+        // semantics). Without this release the bind group leaks on every
+        // dispatch — one per op per layer per step in a long-lived server.
+        self.fn_bind_group_release(bind_group);
     }
 
     /// Submit all pending compute dispatches.
@@ -1720,7 +1732,7 @@ pub const WebGpuBackend = struct {
         const y_sz = n * @sizeOf(f32);
         // Always upload x: CPU rmsNorm writes the host vector between GEMVs.
         const x_pool = self.getPooledBuf(x_sz);
-        defer self.releasePooledBuf(x_pool.idx);
+        defer self.releasePooledBuf(x_pool.buf, x_pool.idx);
         self.uploadToBuffer(x_pool.buf, @ptrCast(x), x_sz);
         const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
         const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
@@ -1762,7 +1774,7 @@ pub const WebGpuBackend = struct {
         const y_sz = n * @sizeOf(f32);
         const storage_usage = wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst;
         const x_pool = self.getPooledBuf(x_sz);
-        defer self.releasePooledBuf(x_pool.idx);
+        defer self.releasePooledBuf(x_pool.buf, x_pool.idx);
         self.uploadToBuffer(x_pool.buf, @ptrCast(x), x_sz);
         // Upload-every-dispatch: SSD expert slices reuse host addresses.
         const w_buf = self.createBuffer(w_sz, storage_usage);
@@ -2033,7 +2045,7 @@ pub const WebGpuBackend = struct {
         @memcpy(qk_combined[qk_elems..][0..qk_elems], k_ptr[0..qk_elems]);
         const qk_sz = qk_elems * 2 * @sizeOf(f32);
         const qk_pool = self.getPooledBuf(qk_sz);
-        defer self.releasePooledBuf(qk_pool.idx);
+        defer self.releasePooledBuf(qk_pool.buf, qk_pool.idx);
         self.uploadToBuffer(qk_pool.buf, @ptrCast(&qk_combined), qk_sz);
         const v_buf = self.getOrUpload(@ptrCast(v_ptr), v_sz);
         // Merge gate+beta into one buffer: [gates..., betas...]
@@ -2042,12 +2054,12 @@ pub const WebGpuBackend = struct {
         @memcpy(gate_beta_arr[num_v_heads..][0..num_v_heads], beta_arr[0..num_v_heads]);
         const gb_sz = num_v_heads * 2 * @sizeOf(f32);
         const gb_pool = self.getPooledBuf(gb_sz);
-        defer self.releasePooledBuf(gb_pool.idx);
+        defer self.releasePooledBuf(gb_pool.buf, gb_pool.idx);
         self.uploadToBuffer(gb_pool.buf, @ptrCast(&gate_beta_arr), gb_sz);
         const z_buf_gpu = self.getOrUpload(@ptrCast(z_buf), z_sz);
         const norm_buf = self.getOrUpload(@ptrCast(ssm_norm_w), norm_sz);
         const state_pool = self.getPooledBuf(state_sz);
-        defer self.releasePooledBuf(state_pool.idx);
+        defer self.releasePooledBuf(state_pool.buf, state_pool.idx);
         self.uploadToBuffer(state_pool.buf, @ptrCast(ssm_state.ptr), state_sz);
         const out_buf = self.createOutputBuf(v_sz);
 
