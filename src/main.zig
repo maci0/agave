@@ -718,8 +718,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
         // --no-color flag
         if (res.flag("no-color")) break :blk false;
-        // NO_COLOR env var (https://no-color.org)
-        if (g_environ.get("NO_COLOR") != null) break :blk false;
+        // NO_COLOR env var (https://no-color.org): present and non-empty
+        if (noColorRequested(g_environ.get("NO_COLOR"))) break :blk false;
         // Auto: color only on TTY
         break :blk g_tty;
     };
@@ -1641,6 +1641,14 @@ fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
 }
 fn parseU64(s: ?[]const u8, comptime flag: []const u8) ?u64 {
     return parseUint(u64, s, flag);
+}
+
+/// True when the NO_COLOR env var disables color output.
+/// Per https://no-color.org the variable must be present and non-empty;
+/// `NO_COLOR=` (empty) keeps auto behavior.
+fn noColorRequested(val: ?[]const u8) bool {
+    const v = val orelse return false;
+    return v.len > 0;
 }
 fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 {
     return parseUint(u16, s, flag);
