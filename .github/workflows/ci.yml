@@ -39,9 +39,13 @@ jobs:
         run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
 
       - name: Check Zig version pins agree
+        env:
+          # Env indirection, not ${{ }} interpolation: step outputs derived from
+          # repo files must never be spliced into a shell command (injection).
+          ZIG_PIN: ${{ steps.zig.outputs.version }}
         run: |
           set -euo pipefail
-          pin="${{ steps.zig.outputs.version }}"
+          pin="$ZIG_PIN"
           zon="$(sed -n 's/^[[:space:]]*\.minimum_zig_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1)"
           if [[ -z "$zon" ]]; then
             echo "::error::Could not parse minimum_zig_version from build.zig.zon"

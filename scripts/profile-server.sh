@@ -56,7 +56,7 @@ echo ""
 
 # Analyze using the same parser as profile.sh
 TMP_XML=$(mktemp /tmp/agave-srv-XXXXXXXXXX)
-trap "rm -f '$TMP_XML'" EXIT
+trap 'rm -f "$TMP_XML"' EXIT
 
 xctrace export \
     --input "$OUTPUT" \
