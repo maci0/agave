@@ -17,7 +17,7 @@ done
 
 echo "Analyzing: $TRACE"
 TMP=$(mktemp /tmp/agave-analyze-XXXXXXXXXX)
-trap "rm -f '$TMP'" EXIT
+trap 'rm -f "$TMP"' EXIT
 
 xctrace export \
     --input "$TRACE" \

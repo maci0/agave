@@ -48,7 +48,7 @@ echo ""
 
 TMP_G=$(mktemp /tmp/agave-gpu-intv-XXXXXXXXXX)
 TMP_L=$(mktemp /tmp/agave-gpu-lbls-XXXXXXXXXX)
-trap "rm -f '$TMP_G' '$TMP_L'" EXIT
+trap 'rm -f "$TMP_G" "$TMP_L"' EXIT
 
 xctrace export --input "$OUTPUT" \
   --xpath '//table[@schema="metal-gpu-intervals"]' \
