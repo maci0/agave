@@ -553,6 +553,12 @@ docker buildx build --platform linux/amd64,linux/arm64 -t agave .
 # Build and load for current platform only
 docker buildx build --load -t agave .
 
+# Release build: stamp the OCI version label from build.zig.zon (the image
+# validates it against .version; plain builds label as "dev" but still ship
+# /usr/share/agave/version)
+docker buildx build --load -t agave \
+  --build-arg AGAVE_VERSION="$(sed -n 's/^[[:space:]]*\.version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1)" .
+
 # CPU-only build (static musl binary, smaller image)
 docker buildx build --load -t agave \
   --build-arg ENABLE_VULKAN=false \
