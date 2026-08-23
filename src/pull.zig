@@ -223,7 +223,7 @@ fn fileWrite(file: Io.File, bytes: []const u8) void {
 }
 
 /// Get an environment variable (Zig 0.16 idiom via C getenv).
-fn getenv(name: []const u8) ?[]const u8 {
+pub fn getenv(name: []const u8) ?[]const u8 {
     var buf: [256]u8 = undefined;
     if (name.len >= buf.len) return null;
     @memcpy(buf[0..name.len], name);
