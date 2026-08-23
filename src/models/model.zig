@@ -43,6 +43,22 @@ pub const ForwardError = error{
     OutOfMemory,
     /// No physical blocks available in PagedKvCache.
     OutOfBlocks,
+    /// A distributed-transport operation failed mid-forward: the peer did not
+    /// accept, send, or deliver data within bounds, or NCCL reported failure.
+    /// Results would be silently wrong if generation continued.
+    TransportFailed,
+    SendFailed,
+    RecvFailed,
+    NotConnected,
+    ShmNotConnected,
+    ShmSendTimeout,
+    ShmRecvTimeout,
+    CudaNotAvailable,
+    StagingAllocFailed,
+    NcclNotAvailable,
+    NcclSendFailed,
+    NcclRecvFailed,
+    NcclAllReduceFailed,
 };
 
 /// Model interface — all models implement this via comptime vtable generation.
@@ -1077,11 +1093,11 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Send KV cache via transport (disaggregated prefill).
-    pub fn sendKvCache(self: *ModelStorage, transport: *Transport) void {
+    pub fn sendKvCache(self: *ModelStorage, transport: *Transport) !void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
-                    if (comptime @hasDecl(@TypeOf(m.*), "sendKvCache")) m.sendKvCache(transport);
+                    if (comptime @hasDecl(@TypeOf(m.*), "sendKvCache")) try m.sendKvCache(transport);
                 }
             },
         }

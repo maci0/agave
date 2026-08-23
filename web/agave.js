@@ -12,8 +12,9 @@
  */
 
 class AgaveEngine {
-  constructor() {
-    this.wasm = null;
+  wasm = null;
+constructor() {
+    
     this.ctx = 0;
     this.ready = false;
   }
@@ -67,7 +68,7 @@ class AgaveEngine {
 
     // Allocate WASM memory and copy model data
     const ptr = this.wasm.exports.agave_alloc(data.byteLength);
-    if (ptr === 0) throw new Error('Failed to allocate WASM memory for model');
+    if (ptr === 0) {throw new Error('Failed to allocate WASM memory for model');}
 
     const wasmMem = new Uint8Array(this.wasm.exports.memory.buffer, ptr, data.byteLength);
     wasmMem.set(new Uint8Array(data));
@@ -75,7 +76,7 @@ class AgaveEngine {
     // Initialize inference context
     this.ctx = this.wasm.exports.agave_init(ptr, data.byteLength);
     // Model buffer is borrowed by GGUF — do NOT agave_dealloc until agave_free.
-    if (this.ctx === 0) throw new Error('Failed to initialize model');
+    if (this.ctx === 0) {throw new Error('Failed to initialize model');}
 
     // Read init status message
     const statusBufSize = 4096;
@@ -95,9 +96,9 @@ class AgaveEngine {
    * @returns {string} Generated text
    */
   async generate(prompt, options = {}) {
-    if (!this.ctx) throw new Error('No model loaded');
+    if (!this.ctx) {throw new Error('No model loaded');}
 
-    const maxTokens = options.maxTokens || 100;
+    const maxTokens = options.maxTokens ?? 100;
     const encoder = new TextEncoder();
     const promptBytes = encoder.encode(prompt);
 
@@ -111,7 +112,7 @@ class AgaveEngine {
     this.wasm.exports.agave_dealloc(promptPtr, promptBytes.length);
 
     // Read output
-    const outBufSize = 16384;
+    const outBufSize = 16_384;
     const outPtr = this.wasm.exports.agave_alloc(outBufSize);
     const outLen = this.wasm.exports.agave_get_output(this.ctx, outPtr, outBufSize);
     const outMem = new Uint8Array(this.wasm.exports.memory.buffer, outPtr, outLen);
@@ -134,4 +135,4 @@ class AgaveEngine {
 }
 
 // Export for module systems
-if (typeof module !== 'undefined') module.exports = AgaveEngine;
+if (typeof module !== 'undefined') {module.exports = AgaveEngine;}

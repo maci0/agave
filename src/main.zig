@@ -3601,10 +3601,16 @@ fn initAndRun(
                     first_tok = mdl.model().forward(token_ids[0]) catch break :disagg_blk;
                     for (token_ids[1..]) |tid| first_tok = mdl.model().forward(tid) catch break :disagg_blk;
                     std.log.info("Prefill done ({d} tokens, first_gen={d}). Sending KV cache...", .{ token_ids.len, first_tok });
-                    mdl.sendKvCache(dtr);
+                    mdl.sendKvCache(dtr) catch |err| {
+                        eprint("Error: failed to send KV cache to decode node: {s}\n", .{@errorName(err)});
+                        break :disagg_blk;
+                    };
                     // Send first generated token
                     var first_f32 = [1]f32{@floatFromInt(first_tok)};
-                    dtr.sendBuf(&first_f32, 1);
+                    dtr.sendBuf(&first_f32, 1) catch |err| {
+                        std.log.err("disagg: failed to send first token to decode node: {}", .{err});
+                        break :disagg_blk;
+                    };
                     std.log.info("KV cache sent. Prefill node done.", .{});
                 }
             } else {
@@ -3616,7 +3622,10 @@ fn initAndRun(
                 const kv_len = mdl.model().kvSeqLen();
                 // Receive first generated token from prefill node
                 var first_tok_f32: [1]f32 = undefined;
-                dtr.recvBuf(&first_tok_f32, 1);
+                dtr.recvBuf(&first_tok_f32, 1) catch |err| {
+                    eprint("Error: failed to receive first token from prefill node: {s}\n", .{@errorName(err)});
+                    break :disagg_blk;
+                };
                 const raw_tok = first_tok_f32[0];
                 var next: u32 = if (raw_tok >= 0 and raw_tok < @as(f32, @floatFromInt(std.math.maxInt(u32))))
                     @intFromFloat(raw_tok)

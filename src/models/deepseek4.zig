@@ -1881,7 +1881,7 @@ pub const Ds4Model = struct {
                 self.be.sync();
                 tr.allReduceAdd(self.hidden.ptr, e) catch |err| {
                     std.log.err("DS4 allReduceAdd failed: {}", .{err});
-                    return error.MissingTensor;
+                    return error.TransportFailed;
                 };
                 if (shexp_slots > 0) {
                     undoDuplicatedShared(self.hidden[0..e], self.expert_scratch[0..e], slot_weights[0]);
@@ -1934,7 +1934,7 @@ pub const Ds4Model = struct {
         // Later PP stages receive the 4-stream HC residual from the previous stage.
         if (pp_recv_hc) {
             if (self.pp_transport) |transport| {
-                transport.recvBuf(self.hc_state.ptr, hc_elems);
+                try transport.recvBuf(self.hc_state.ptr, hc_elems);
                 self.be.invalidateActivation(self.hc_state.ptr);
             }
         }
@@ -1967,9 +1967,9 @@ pub const Ds4Model = struct {
         if (self.pp_degree > 1 and self.pp_rank + 1 < self.pp_degree) {
             if (self.pp_transport) |transport| {
                 self.be.sync();
-                transport.sendBuf(self.hc_state.ptr, hc_elems);
+                try transport.sendBuf(self.hc_state.ptr, hc_elems);
                 var result_token: [1]f32 = undefined;
-                transport.recvBuf(&result_token, 1);
+                try transport.recvBuf(&result_token, 1);
                 self.kv_seq_len += 1;
                 const raw = result_token[0];
                 if (raw >= 0 and raw < @as(f32, @floatFromInt(std.math.maxInt(u32))) and std.math.isFinite(raw)) {
@@ -2036,7 +2036,7 @@ pub const Ds4Model = struct {
         if (self.pp_degree > 1 and self.pp_rank + 1 == self.pp_degree) {
             if (self.pp_transport) |transport| {
                 var tok_f32 = [1]f32{@floatFromInt(result)};
-                transport.sendBuf(&tok_f32, 1);
+                try transport.sendBuf(&tok_f32, 1);
             }
         }
         return result;
