@@ -49,7 +49,8 @@
         #url-error { color: var(--red-text); font-size: 0.85rem; width: 100%; display: none; }
         #url-error:not(:empty) { display: block; }
         #controls { padding: 1rem 2rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.5rem; }
-        #prompt { flex: 1; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; min-height: 44px; }
+        /* min-width: 0 lets the input shrink below intrinsic width at 320px (WCAG 1.4.10 Reflow). */
+        #prompt { flex: 1; min-width: 0; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--text); font-size: 1rem; transition: border-color 0.15s; min-height: 44px; }
         #prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
         #prompt:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
         button { padding: 0.75rem 1.5rem; border: none; border-radius: var(--r); background: var(--accent); color: var(--bg); cursor: pointer; font-size: 1rem; font-weight: 600; font-family: var(--mono); transition: background 0.15s, transform 0.1s; min-height: 44px; }
@@ -115,7 +116,7 @@
             Drop GGUF file or click
         </label>
         <input type="file" id="file-input" accept=".gguf" onchange="loadModelFromFile(event)" />
-        <div id="url-error" role="alert" aria-live="assertive"></div>
+        <div id="url-error" role="alert"></div>
     </div>
     <main aria-label="Chat">
     <div id="status" role="status" aria-live="polite">Load a GGUF model to begin</div>
@@ -308,7 +309,9 @@
         }
 
         promptInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+            // Ignore Enter during IME composition (CJK input): Enter there confirms
+            // the conversion, it must not send. Matches src/web/app.js behavior.
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
         });
 
         document.getElementById('model-url').addEventListener('input', (e) => {

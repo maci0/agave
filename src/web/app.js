@@ -29,6 +29,10 @@ var msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 var backendName = '';
 var streamTokenCount = 0, streamStartTime = 0;
+// The tok/s counter is a role="status" live region; rewriting it on every token
+// floods screen readers with announcements. Refresh at most once per second.
+var TOKS_UPDATE_INTERVAL_MS = 1000;
+var lastToksUpdate = 0;
 
 fetch('/v1/models').then(function(r) { return r.json(); }).then(function(d) {
   if (d.data && d.data[0]) {
@@ -174,7 +178,8 @@ function showToast(text, type) {
   toast.style.margin = '8px auto';
   chat.appendChild(toast);
   scrollBottom();
-  announceToSR(text);
+  // No announceToSR() here: the role="alert"/"status" on the toast already
+  // announces it; a second live region would read the same text twice.
   var reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var timeout = isError ? 12000 : 5000;
   if (reducedMotion) timeout *= 2;
@@ -301,7 +306,7 @@ function setStreaming(s) {
   chat.setAttribute('aria-busy', s ? 'true' : 'false');
   var tc = document.getElementById('toks-counter');
   if (s) {
-    streamTokenCount = 0; streamStartTime = performance.now();
+    streamTokenCount = 0; streamStartTime = performance.now(); lastToksUpdate = 0;
     tc.textContent = fmtNum(0, 1) + ' tok/s'; tc.classList.add('visible');
     announceToSR('Generating response…');
     // Move focus to Stop so keyboard users can cancel without hunting (2.4.3)
@@ -315,7 +320,10 @@ function setStreaming(s) {
 function updateToksCounter() {
   var tc = document.getElementById('toks-counter');
   if (!isStreaming) return;
-  var elapsed = (performance.now() - streamStartTime) / 1000;
+  var now = performance.now();
+  if (now - lastToksUpdate < TOKS_UPDATE_INTERVAL_MS) return;
+  lastToksUpdate = now;
+  var elapsed = (now - streamStartTime) / 1000;
   if (elapsed > 0) tc.textContent = fmtNum(streamTokenCount / elapsed, 1) + ' tok/s';
 }
 
@@ -592,6 +600,9 @@ function renderContent(el, content, final) {
       }
     });
     el.setAttribute('data-content', content);
+    // Capture before the Copy button is appended so its label is not read out
+    // as part of the response announcement.
+    var respondedText = truncateAnnounce(el.textContent, 200);
     var cb = document.createElement('button'); cb.type = 'button'; cb.className = 'msg-copy'; cb.textContent = 'Copy';
     cb.setAttribute('aria-label', 'Copy response');
     cb.onclick = function() {
@@ -602,7 +613,7 @@ function renderContent(el, content, final) {
       }).catch(function() { cb.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function() { cb.textContent = 'Copy'; }, 2000); });
     };
     el.appendChild(cb);
-    announceToSR('Agave responded: ' + truncateAnnounce(el.textContent, 200));
+    announceToSR('Agave responded: ' + respondedText);
     scrollBottom();
   };
   doRender();
@@ -956,6 +967,7 @@ function selectConv(id) {
   while (chat.firstChild) chat.removeChild(chat.firstChild);
   var loadEl = addAssistant();
   loadEl.textContent = 'Loading conversation\u2026';
+  announceToSR('Loading conversation…');
   fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=select&id=' + encodeURIComponent(id) })
   .then(function(r) { return r.json(); }).then(function(data) {
     if (mySeq !== selectSeq) return;
