@@ -189,7 +189,7 @@ function showToast(text, type) {
   // No announceToSR() here: the role="alert"/"status" on the toast already
   // Announces it; a second live region would read the same text twice.
   const reducedMotion = globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const baseTimeoutMs = isError ? 12_000 : 5_000;
+  const baseTimeoutMs = (isError ? 12 : 5) * 1000;
   let timeout = baseTimeoutMs;
   if (reducedMotion) {timeout *= 2;}
   let timerId = setTimeout(function() { if (toast.parentNode) {toast.remove();} }, timeout);
@@ -427,7 +427,7 @@ function exportConv() {
     const msgEl = w.querySelector('.msg');
     if (!msgEl) {continue;}
     // Empty data-content must fall back to rendered text.
-    // oxlint-disable-next-line unicorn/prefer-nullish-coalescing
+    // oxlint-disable-next-line unicorn/prefer-nullish-coalescing -- empty attribute must fall back to rendered text
     const content = (msgEl.dataset.content ?? msgEl.textContent) || '';
     md += `## ${role}\n\n${content.trim()}\n\n`;
   }
