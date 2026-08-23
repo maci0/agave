@@ -8,8 +8,10 @@ const Io = std.Io;
 const Mutex = Io.Mutex;
 const sim_clock = @import("../sim_clock.zig");
 
+/// Monotonic interval clock: bucket refill must not burst on an NTP step
+/// forward nor stall on a step backward, which REALTIME reads would cause.
 fn milliTimestamp() i64 {
-    return sim_clock.milliNow();
+    return sim_clock.monoMilli();
 }
 
 const ms_per_second: f64 = 1000.0;
@@ -87,7 +89,7 @@ pub const RateLimiter = struct {
 
     /// Refill both buckets based on elapsed time since last refill.
     /// Must be called under mutex. Caller should obtain `now` via
-    /// `milliTimestamp()` *before* acquiring the lock to keep
+    /// `milliTimestamp()` (monotonic) *before* acquiring the lock to keep
     /// the syscall outside the critical section.
     fn refillBuckets(self: *RateLimiter, now: i64) void {
         self.request_bucket.refill(now);

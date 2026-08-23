@@ -151,9 +151,12 @@ const stdout_file = Io.File.stdout();
 
 const sim_clock = @import("../sim_clock.zig");
 
-/// Millisecond timestamp (injectable via sim_clock for deterministic tests).
+/// Monotonic millisecond clock for all interval math (request latency,
+/// prefill/generation durations, idle detection) — injectable via sim_clock
+/// for deterministic tests. Immune to NTP steps that would skew or negate
+/// durations measured against REALTIME.
 fn milliTimestamp() i64 {
-    return sim_clock.milliNow();
+    return sim_clock.monoMilli();
 }
 
 /// Nanosecond timestamp for seed generation (same injectable clock).
@@ -6113,18 +6116,19 @@ pub fn run(config: ServerConfig) !void {
     if (server.scheduler_thread) |sched_t| sched_t.join();
     server.scheduler_thread = null;
 
-    // Drain active connections (wait up to 30 seconds)
-    const drain_timeout_sec: i64 = 30;
-    const drain_start = timestamp();
+    // Drain active connections (wait up to 30 seconds). Monotonic clock:
+    // a wall-clock step during shutdown must not truncate or extend the grace.
+    const drain_timeout_ms: i64 = 30 * std.time.ms_per_s;
+    const drain_start = milliTimestamp();
     const active_count = g_server.metrics.active_connections.load(.acquire);
     if (active_count > 0) {
         std.log.info("Draining {d} active connections...", .{active_count});
     }
 
     while (g_server.metrics.active_connections.load(.acquire) > 0) {
-        const elapsed = timestamp() - drain_start;
-        if (elapsed > drain_timeout_sec) {
-            std.log.warn("Drain timeout after {d}s, forcing shutdown", .{elapsed});
+        const elapsed = milliTimestamp() - drain_start;
+        if (elapsed > drain_timeout_ms) {
+            std.log.warn("Drain timeout after {d}ms, forcing shutdown", .{elapsed});
             break;
         }
         sleepNs(drain_poll_interval_ms * std.time.ns_per_ms);
