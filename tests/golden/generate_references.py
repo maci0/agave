@@ -6,6 +6,11 @@ Uses:
 - llama.cpp for GGUF models (Gemma3, Gemma4, Qwen3.5, DeepSeek-R1-Qwen3, Nemotron Nano, GLM-4, GPT-OSS)
 - Nemotron-H uses SafeTensors and is not supported by llama.cpp
 
+Requires:
+- llama.cpp built at ../llama.cpp/build/bin/llama-cli
+- Optional: torch + transformers, only for the HuggingFace nemotron_h reference
+  (skipped gracefully if not installed)
+
 Output: JSON files in tests/golden/references/ with deterministic token sequences.
 """
 

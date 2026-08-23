@@ -3385,6 +3385,11 @@ fn initAndRun(
             eprint("Error: unsupported draft model architecture '{s}'\n", .{draft_arch_str});
             return false;
         };
+        // HF DFlash2 checkpoints declare model_type "qwen3"; fingerprint them
+        // by their selector codebooks so they route to the dflash2 drafter.
+        if (draft_arch == .qwen35 and draft_fmt.getTensor("candidate_selector.predecessor_codebook") != null) {
+            draft_arch = .dflash2;
+        }
         if (draft_arch == .nemotron_h and draft_fmt.getTensor("backbone.embeddings.weight") != null)
             draft_arch = .nemotron_nano;
         if (!draft_arch.isEnabled()) {
@@ -3485,6 +3490,11 @@ fn initAndRun(
             eprint("Warning: DiffusionGemma in server mode uses autoregressive generation only\n", .{});
             eprint("         (block diffusion via --serve not yet implemented)\n", .{});
         }
+        // DFlash2 requires per-request capture/ingest plumbing the server
+        // scheduler does not provide yet; serve autoregressively instead.
+        if (cli.spec_mode == .dflash2) {
+            eprint("Warning: DFlash2 speculative decoding is CLI-only right now; server starts without speculation\n", .{});
+        }
         // Initialize shared n-gram pool for cross-request history sharing.
         // Server slots use this as a fallback when their own history has no match.
         if (cli.spec_mode == .ngram) {
@@ -3515,7 +3525,7 @@ fn initAndRun(
             .image_start_token_id = srv_start_id,
             .image_end_token_id = srv_end_id,
             .io = g_io,
-            .draft_model = draft_ptr,
+            .draft_model = if (cli.spec_mode == .dflash2) null else draft_ptr,
             .spec_tokens = cli.spec_tokens,
             .tree_budget = cli.tree_budget,
             .sleep_after_s = cli.sleep_after_s,
@@ -3620,10 +3630,10 @@ fn initAndRun(
         if (arch == .diffusion_gemma) {
             generateDiffusion(allocator, &model_if, tok, cli, tok_kind, arch, prompt, !g_quiet);
         } else {
-    // DFlash2 drafter + feature reader, resolved once where storage lives.
-    const df2_ptr: ?*DFlash2Model = if (draft_mdl_storage != null and draft_mdl_storage.? == .dflash2) &draft_mdl_storage.?.dflash2 else null;
-    const feat_reader: ?ModelStorage.FeatureReader = if (df2_ptr != null) mdl.featureReader() else null;
-    generateAndPrint(allocator, &model_if, df2_ptr, feat_reader, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
+            // DFlash2 drafter + feature reader, resolved once where storage lives.
+            const df2_ptr: ?*DFlash2Model = if (draft_mdl_storage != null and draft_mdl_storage.? == .dflash2) &draft_mdl_storage.?.dflash2 else null;
+            const feat_reader: ?ModelStorage.FeatureReader = if (df2_ptr != null) mdl.featureReader() else null;
+            generateAndPrint(allocator, &model_if, df2_ptr, feat_reader, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
         }
     } else {
         runRepl(allocator, &model_if, tok, cli, tok_kind, eog, arch, minfo, display, img_tokens, n_visual_tokens);
@@ -3996,6 +4006,41 @@ fn generateDiffusion(
 
 // ── Shared generation logic ──────────────────────────────────────
 
+/// Ingest newly captured target features into a DFlash2 drafter's context
+/// cache. Positions are processed strictly in order; when the target's capture
+/// ring has advanced past `ingested` (long contexts evict old entries), the
+/// cursor resyncs to the ring start, matching the drafter's sliding window.
+fn dflash2Ingest(
+    reader: ModelStorage.FeatureReader,
+    drafter: *DFlash2Model,
+    ingested: *usize,
+    stage: []f32,
+) void {
+    const begin = reader.begin();
+    const end = reader.end();
+    if (end <= ingested.*) return;
+    var start = ingested.*;
+    if (start < begin) start = begin;
+    if (start >= end) {
+        ingested.* = end;
+        return;
+    }
+    const concat_dim: usize = drafter.target_layer_ids.len * drafter.n_embd;
+    if (concat_dim == 0 or stage.len < concat_dim) return;
+    const chunk_positions = stage.len / concat_dim;
+    var pos = start;
+    while (pos < end) {
+        const n = @min(end - pos, chunk_positions);
+        for (0..n) |i| reader.readAt(pos + i, stage[i * concat_dim ..][0..concat_dim]);
+        drafter.ingestContext(stage[0 .. n * concat_dim], pos, n) catch |err| {
+            std.log.warn("dflash2: context ingest failed at {d}: {s}", .{ pos, @errorName(err) });
+            return;
+        };
+        pos += n;
+    }
+    ingested.* = pos;
+}
+
 /// Top-level generation entry point: delegates to speculative decoding if a draft model is available, otherwise standard autoregressive generation.
 fn generateAndPrint(
     allocator: std.mem.Allocator,
@@ -4022,7 +4067,6 @@ fn generateAndPrint(
         const response = generateAndPrintInner(allocator, mdl, tok, cli, tok_kind, eog, arch.chatTemplateForLayers(minfo.n_layers), prompt, true, false, show_stats, minfo, display, false, img_tokens, n_visual_tokens);
         if (response) |r| allocator.free(r);
     }
-}
 }
 
 /// Runs speculative decoding: tokenizes the prompt, prefills the target and draft models, then decodes with draft-verify speculation.
@@ -4109,8 +4153,9 @@ fn generateSpeculative(
             eprint("Error: target prefill failed: {}\n", .{e});
             return;
         };
-        // Only prefill draft model separately when it's a different model
-        if (target.ptr != draft_model.ptr) {
+        // Only prefill draft model separately when it's a different model.
+        // DFlash2 drafters take context via feature injection instead.
+        if (target.ptr != draft_model.ptr and df2 == null) {
             _ = draft_model.prefill(prefill_toks) catch |e| {
                 eprint("Error: draft prefill failed: {}\n", .{e});
                 return;
@@ -4118,6 +4163,21 @@ fn generateSpeculative(
         }
     }
     const prefill_ms = milliTimestamp(g_io) - prefill_start;
+
+    // DFlash2: ingest the prompt-tail features captured during target prefill
+    // into the drafter's context cache, and keep ingestion state for the loop.
+    var ctx_ingested: usize = 0;
+    var df2_stage: []f32 = &.{};
+    defer if (df2_stage.len > 0) allocator.free(df2_stage);
+    if (df2 != null and feat_reader != null) {
+        const concat_dim: usize = df2.?.target_layer_ids.len * df2.?.n_embd;
+        const ingest_chunk: usize = 32;
+        df2_stage = allocator.alloc(f32, ingest_chunk * concat_dim) catch |e| {
+            eprint("Error: DFlash2 ingest staging failed: {}\n", .{e});
+            return;
+        };
+        dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+    }
 
     // Sampling setup. Distributed pairs stay greedy so draft tokens match.
     const use_sampling = cli.temperature > 0 and !distributedLockstep(cli);
@@ -4159,7 +4219,12 @@ fn generateSpeculative(
     }
 
     // pflash only changes prefill; for decode, treat like ddtree when a separate draft model exists
-    const effective_spec_mode: SpecMode = if (cli.spec_mode == .pflash and target.ptr != draft_model.ptr) .ddtree else cli.spec_mode;
+    const effective_spec_mode: SpecMode = if (cli.spec_mode == .pflash and target.ptr != draft_model.ptr)
+        .ddtree
+    else if (df2 != null and (cli.spec_mode == .ddtree or cli.spec_mode == .standard))
+        .dflash2 // auto-select: a DFlash2 drafter overrides the default tree path
+    else
+        cli.spec_mode;
     const use_ddtree = (effective_spec_mode == .ddtree);
     const self_spec = (effective_spec_mode == .self_spec);
     const use_ngram = (effective_spec_mode == .ngram);
@@ -4171,11 +4236,13 @@ fn generateSpeculative(
     const use_mlp = (effective_spec_mode == .mlp);
     const use_lookahead = (effective_spec_mode == .lookahead);
     const use_dspark = (effective_spec_mode == .dspark);
+    const use_dflash2 = (effective_spec_mode == .dflash2);
     var la_state = ngram_mod.LookaheadState{};
     if (use_lookahead) la_state.seed(token_ids);
     var ngram_state = ngram_mod.NgramState{};
-    if (use_ngram) {
-        // Seed n-gram history with prefill tokens
+    if (use_ngram or use_dflash2) {
+        // Seed n-gram history with prefill tokens. In dflash2 mode the history
+        // powers hybrid block extension and cooldown-time drafting.
         for (token_ids) |tid| ngram_state.push(tid);
         if (!isEogToken(first_target, eog)) ngram_state.push(first_target);
     }
@@ -4218,33 +4285,61 @@ fn generateSpeculative(
 
     while (token_count < cli.max_tokens and !isEogToken(last, eog)) {
         const pre_draft_pos = target.kvSeqLen();
+        // Set when the cooldown branch produced pure n-gram drafts; skips the
+        // drafter so verification consumes those drafts directly.
+        var skip_draft_phase = false;
 
         // Adaptive: skip drafting during cooldown (low acceptance period)
         if (draft_cooldown > 0) {
             draft_cooldown -= 1;
-            if (use_suffix) target.setExpertBudget(3);
-            last = target.forward(last) catch break;
-            if (use_suffix) target.setExpertBudget(0);
-            if (use_sampling) {
-                const cl = target.getLogits();
-                if (cli.min_p > 0) math_ops.applyMinP(cl, cli.min_p);
-                if (cli.xtc_probability > 0) math_ops.applyXtc(cl, cli.xtc_probability, cli.xtc_threshold, prng.random());
-                last = math_ops.sampleToken(cl, cli.temperature, cli.top_k, cli.top_p, prng.random());
+            // DFlash2 hybrid cooldown: keep speculating with pure n-gram drafts
+            // instead of falling back to autoregressive decoding. Greedy only —
+            // sampled rounds would need q distributions n-grams cannot supply.
+            var cooldown_ng_drafted = false;
+            if (use_dflash2 and !use_sampling) {
+                const budget = @min(cli.spec_tokens, @as(u32, spec_decode.max_draft_tokens));
+                var prop: [spec_decode.max_draft_tokens]u32 = undefined;
+                var np: usize = ngram_state.propose(budget, &prop);
+                if (np == 0) {
+                    if (ngram_mod.global_pool) |*pl| {
+                        const tail_start = if (ngram_state.len >= 10) ngram_state.len - 10 else 0;
+                        np = pl.propose(ngram_state.history[tail_start..ngram_state.len], budget, &prop);
+                    }
+                }
+                if (np > 0) {
+                    @memcpy(spec_state.draft_tokens[0..np], prop[0..np]);
+                    spec_state.n_draft = @intCast(np);
+                    cooldown_ng_drafted = true;
+                    skip_draft_phase = true;
+                }
             }
-            if (isEogToken(last, eog)) break;
-            if (use_ngram or use_lookahead) ngram_state.push(last);
-            if (token_count < gen_ids_buf.len) {
-                gen_ids_buf[token_count] = last;
-                token_count += 1;
+            if (!cooldown_ng_drafted) {
+                if (use_suffix) target.setExpertBudget(3);
+                last = target.forward(last) catch break;
+                if (use_suffix) target.setExpertBudget(0);
+                if (use_sampling) {
+                    const cl = target.getLogits();
+                    if (cli.min_p > 0) math_ops.applyMinP(cl, cli.min_p);
+                    if (cli.xtc_probability > 0) math_ops.applyXtc(cl, cli.xtc_probability, cli.xtc_threshold, prng.random());
+                    last = math_ops.sampleToken(cl, cli.temperature, cli.top_k, cli.top_p, prng.random());
+                }
+                if (isEogToken(last, eog)) break;
+                if (use_ngram or use_lookahead or use_dflash2) ngram_state.push(last);
+                if (token_count < gen_ids_buf.len) {
+                    gen_ids_buf[token_count] = last;
+                    token_count += 1;
+                }
+                continue;
             }
-            continue;
         }
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp and !use_dspark);
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp and !use_dspark and !use_dflash2);
         const effective_k = spec_state.optimalK();
-        const n_drafted = if (use_mtp) blk: {
+        const n_drafted: u32 = if (skip_draft_phase) blk: {
+            break :blk spec_state.n_draft;
+        } else if (use_mtp) blk: {
             break :blk spec_decode.draftMtp(&spec_state, target, last);
         } else if (use_suffix) blk: {
             var n: usize = if (suffix_state_opt) |*ss|
@@ -4309,13 +4404,29 @@ fn generateSpeculative(
             // survival probability and trim draft to tokens with positive expected return.
             if (n > 0) spec_decode.dsparkTrimDraft(&spec_state);
             break :blk spec_state.n_draft;
+        } else if (use_dflash2) blk: {
+            // DFlash2 block-diffusion drafting: one parallel pass proposes the
+            // whole block; the candidate selector picks a coherent chain.
+            if (df2 == null) break :blk 0;
+            const drafter = df2.?;
+            const k_df2 = @min(spec_state.optimalK(), drafter.block_size -| 1);
+            // Selector samples at the generation temperature; greedy walks at T=0.
+            const sel_temp: f32 = if (use_sampling) cli.temperature else 0;
+            var n = spec_decode.draftDFlash2(&spec_state, drafter, last, drafter.contextLen(), sel_temp, prng.random());
+            // Hybrid n-gram composition (greedy only): confirm/extend the block
+            // with exact-match history continuations.
+            if (n > 0 and !use_sampling) {
+                spec_decode.dflash2HybridNgram(&spec_state, &ngram_state, if (ngram_mod.global_pool) |*pl| pl else null, k_df2);
+                n = spec_state.n_draft;
+            }
+            break :blk @as(u32, @intCast(n));
         } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
         else
             spec_decode.draftWithLogits(&spec_state, draft_model, last);
         if (n_drafted == 0) {
-            // N-gram / Suffix / Lookahead: no match — fall back to single-token decode
-            if (use_ngram or use_suffix or use_lookahead) {
+            // N-gram / Suffix / Lookahead / DFlash2: no draft — single-token decode
+            if (use_ngram or use_suffix or use_lookahead or use_dflash2) {
                 // Use reduced expert budget for fallback forward (50% less I/O)
                 if (use_suffix) target.setExpertBudget(3);
                 last = target.forward(last) catch break;
@@ -4455,6 +4566,17 @@ fn generateSpeculative(
                 ngram_state.push(result.next_token);
                 if (ngram_mod.global_pool) |*pool| pool.push(result.next_token);
             }
+        }
+
+        // DFlash2: maintain hybrid history and ingest the newly verified
+        // positions' captured features into the drafter's context cache.
+        if (use_dflash2 and feat_reader != null and df2 != null) {
+            for (0..result.accepted) |i| {
+                if (isEogToken(spec_state.draft_tokens[i], eog)) break;
+                ngram_state.push(spec_state.draft_tokens[i]);
+            }
+            if (!hit_eog) ngram_state.push(result.next_token);
+            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
         }
 
         // Stream

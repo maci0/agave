@@ -10,6 +10,5 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Triton only works on Linux with NVIDIA GPU — skip on macOS
-cuda = ["triton"]
+# Optuna-backed Bayesian search in autotune.py (lazy import)
 bayesian = ["optuna"]

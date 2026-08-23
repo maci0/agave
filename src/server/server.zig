@@ -612,6 +612,18 @@ const Server = struct {
 
 var g_server: *Server = undefined;
 
+/// Mark KV-cache bookkeeping invalid after a partially-applied prefill
+/// (cancel or forward error mid-loop). The KV cache then holds a partial
+/// prompt that matches neither `cached_prompt_ids` nor any continuation
+/// assumption, so the next request must fully reset and re-prefill.
+/// Without this, a later request can skip prefilling tokens whose KV
+/// entries were overwritten by the failed one, silently corrupting output.
+/// Caller must hold g_server.mutex (all generate paths do).
+fn invalidateKvBookkeeping() void {
+    g_server.kv_valid = false;
+    g_server.clearCachedPromptIds();
+}
+
 /// Acquire the scheduler's model mutex so direct-path forward loops
 /// (grammar / json_mode fallbacks) cannot run concurrently with the
 /// scheduler thread's Phase A/B forwards on the same KV cache.
@@ -3389,6 +3401,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     if (prefix_len == 0 and actual_reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
+            invalidateKvBookkeeping();
             return .{ .data = g_server.allocator.dupe(u8, "[BOS forward error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
         };
     }
@@ -3401,9 +3414,11 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
                 std.log.info("req={d} prefill cancelled", .{log_request_id});
+                invalidateKvBookkeeping();
                 return .{ .data = g_server.allocator.dupe(u8, "[cancelled]") catch &.{}, .finish_reason = "stop", .stats = .{ .tokens_generated = 0, .prompt_tokens = prompt_token_count, .time_ms = 0, .tokens_per_sec = 0, .prefill_ms = 0, .prefill_tps = 0 } };
             }
             std.log.warn("req={d} prefill forward failed: {}", .{ log_request_id, err });
+            invalidateKvBookkeeping();
             return .{ .data = g_server.allocator.dupe(u8, "[prefill error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
         };
     }
@@ -3983,6 +3998,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     if (actual_reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
+            invalidateKvBookkeeping();
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
             return .{ .data = g_server.allocator.dupe(u8, "") catch &.{}, .finish_reason = "error", .stats = zero_stats };
@@ -3996,11 +4012,13 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
                 std.log.info("req={d} chat stream prefill cancelled", .{log_request_id});
+                invalidateKvBookkeeping();
                 g_server.metrics.recordCancellation();
                 _ = sseWriteData(stream, "[DONE]");
                 return .{ .data = g_server.allocator.dupe(u8, "") catch &.{}, .finish_reason = "stop", .stats = zero_stats };
             }
             std.log.warn("req={d} prefill forward failed: {}", .{ log_request_id, err });
+            invalidateKvBookkeeping();
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "{\"t\":\"[prefill error]\",\"done\":true}");
             _ = sseWriteData(stream, "[DONE]");
@@ -5415,6 +5433,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     if (s_prefix_len == 0 and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.err("req={d} BOS forward failed: {}", .{ log_request_id, err });
+            invalidateKvBookkeeping();
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
             return;
@@ -5452,6 +5471,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     }
     // Fail closed: never stream unconstrained tokens when the client asked for a grammar.
     if (use_grammar_s and (s_grammar == null or s_grammar_state == null)) {
+        // The prefix rollback above already truncated KV seq_len; drop the
+        // bookkeeping so the next request re-prefills instead of trusting it.
+        invalidateKvBookkeeping();
         g_server.metrics.recordFailure();
         _ = sseWriteData(stream, "{\"error\":\"grammar setup failed\"}");
         _ = sseWriteData(stream, "[DONE]");
@@ -5468,11 +5490,13 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     for (token_ids[s_prefix_len..]) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
+                invalidateKvBookkeeping();
                 g_server.metrics.recordCancellation();
                 _ = sseWriteData(stream, "[DONE]");
                 return;
             }
             std.log.warn("req={d} prefill forward failed: {}", .{ log_request_id, err });
+            invalidateKvBookkeeping();
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
             return;
