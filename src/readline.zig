@@ -5,6 +5,7 @@
 const std = @import("std");
 const posix = std.posix;
 const term = @import("term.zig");
+const sim_clock = @import("sim_clock.zig");
 const Key = term.Key;
 const TextInput = term.TextInput;
 
@@ -15,13 +16,12 @@ const input_read_buf_size = 256;
 const ctrl_c_double_tap_ms: i64 = 1000;
 const poll_in: u16 = 0x0001;
 
-/// Millisecond timestamp via posix clock_gettime syscall (no libc).
-/// Uses MONOTONIC: this measures a between-keypress interval (Ctrl-C
-/// double-tap), which must not jump on manual clock or NTP step changes.
+/// Millisecond timestamp for the Ctrl-C double-tap interval.
+/// Routes through sim_clock's MONOTONIC timeline: the interval must not jump
+/// on manual clock or NTP step changes, and a test/sim override can drive the
+/// 1000 ms double-tap window without waiting on wall-clock time.
 fn milliTimestamp() i64 {
-    var ts: posix.timespec = undefined;
-    _ = posix.system.clock_gettime(posix.system.CLOCK.MONOTONIC, &ts);
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    return sim_clock.monoMilli();
 }
 const cursor_buf_size = 32;
 const simple_read_buf_size = 4096;

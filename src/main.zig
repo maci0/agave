@@ -202,6 +202,18 @@ fn dbg(comptime fmt: []const u8, args: anytype) void {
     eprint("[dbg] " ++ fmt ++ "\n", args);
 }
 
+/// Surface the effective sampling seed under --verbose. When --seed is
+/// omitted the seed derives from sim_clock, so echoing it is what makes a
+/// sampled run replayable byte-for-byte.
+fn noteSeed(cli: *const CliArgs) void {
+    if (!g_verbose) return;
+    if (cli.seed_explicit) {
+        eprint("[seed] {d}\n", .{cli.seed});
+    } else {
+        eprint("[seed] {d} (auto; pass --seed to reproduce)\n", .{cli.seed});
+    }
+}
+
 /// Parse a KV quantization type from an optional per-component override and
 /// a shared --kv-type fallback. Exits on unrecognized values.
 fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
@@ -519,6 +531,9 @@ const CliArgs = struct {
     /// layer boundaries where compression is most harmful. 0 = disabled.
     kv_boundary_v: u32 = 0,
     seed: u64,
+    /// True when --seed was given explicitly; false means clock-derived
+    /// (sim_clock.nanoNow), so the effective seed must be surfaced for replay.
+    seed_explicit: bool = false,
     // Tiered KV cache CLI options
     kv_tiers: ?[]const u8 = null,
     kv_ram_budget: ?u32 = null,
@@ -1234,6 +1249,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         },
         .no_kv_cache = res.flag("no-kv-cache"),
         .seed = parseU64(res.option("seed"), "seed") orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp(g_io))))),
+        .seed_explicit = res.option("seed") != null,
         .kv_type_k = blk: {
             if (res.option("kv-type-k")) |s| break :blk kvTypeOrExit(s, "--kv-type-k");
             if (res.option("cache-type-k")) |s| break :blk kvTypeOrExit(s, "--cache-type-k");
@@ -3908,6 +3924,7 @@ fn generateDiffusion(
         // Start with random tokens (uniform state diffusion uses random noise).
         // Mix CLI seed with block index so --seed fully determines the canvas.
         var rng = std.Random.DefaultPrng.init(cli.seed +% @as(u64, @intCast(block_count)) +% 1);
+        noteSeed(cli);
         const vocab_sz = model.vocabSize();
         for (canvas) |*t| t.* = rng.random().intRangeLessThan(u32, 4, @min(vocab_sz - 1, 32000));
 
@@ -4184,6 +4201,7 @@ fn generateSpeculative(
     // Sampling setup. Distributed pairs stay greedy so draft tokens match.
     const use_sampling = cli.temperature > 0 and !distributedLockstep(cli);
     var prng = std.Random.Xoshiro256.init(cli.seed);
+    noteSeed(cli);
     if (use_sampling) {
         first_target = math_ops.sampleToken(target.getLogits(), cli.temperature, cli.top_k, cli.top_p, prng.random());
     }
@@ -4752,6 +4770,7 @@ fn generateAndPrintInner(
     const use_sampling = cli.temperature > 0 and !distributedLockstep(cli);
     const use_repeat_penalty = cli.repeat_penalty != 1.0;
     var prng = std.Random.Xoshiro256.init(cli.seed);
+    noteSeed(cli);
     var cli_mirostat_mu: f32 = cli.mirostat_tau * 2.0;
 
     // Grammar-constrained decoding
@@ -4938,13 +4957,9 @@ fn generateAndPrintInner(
         if (cli.power_pct < 100 and gi > 0) {
             const idle_num = @as(u64, 100 - cli.power_pct);
             const idle_ns = power_last_forward_ns * idle_num / cli.power_pct;
-            if (idle_ns > 0) {
-                const ts = std.posix.timespec{
-                    .sec = @intCast(idle_ns / 1_000_000_000),
-                    .nsec = @intCast(idle_ns % 1_000_000_000),
-                };
-                _ = std.posix.system.nanosleep(&ts, null);
-            }
+            // Via sim_clock so a clock override advances virtual time instead
+            // of blocking wall-clock time in simulation runs.
+            if (idle_ns > 0) sim_clock.sleepNs(idle_ns);
         }
         var power_ts0: std.posix.timespec = undefined;
         _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts0);
