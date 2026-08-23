@@ -6654,3 +6654,69 @@ test "fuzz: all server functions" {
         }
     }.f, .{});
 }
+
+test "fuzz: readHttpRequest over socket" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            // Build the raw request bytes sent by the "client".
+            var payload_buf: [512]u8 = undefined;
+            smith.bytesWithHash(&payload_buf, 0);
+            var payload_len = smith.indexWithHash(payload_buf.len + 1, 1);
+
+            // Structure-aware seeding: half the time plant a well-formed
+            // skeleton so deep paths (Content-Length parsing, body read loop,
+            // split-header overlap scan) are reached instead of failing at the
+            // request line.
+            if (smith.valueWithHash(u8, 2) & 1 == 0) {
+                const body_len: usize = smith.valueWithHash(u8, 3) % 16;
+                const skeleton = std.fmt.bufPrint(
+                    &payload_buf,
+                    "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {d}\r\nHost: t\r\n\r\n",
+                    .{body_len},
+                ) catch unreachable;
+                const body_total = @min(body_len, payload_buf.len - skeleton.len);
+                for (payload_buf[skeleton.len..][0..body_total], 0..) |*b, i| {
+                    b.* = smith.valueWithHash(u8, @truncate(4 +% i));
+                }
+                payload_len = skeleton.len + body_total;
+            }
+            const payload = payload_buf[0..payload_len];
+
+            // AF_UNIX socketpair so readHttpRequest sees EOF after the payload:
+            // reads return 0 instead of blocking, so no iteration can hang.
+            var fds: [2]std.posix.fd_t = undefined;
+            if (std.c.socketpair(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0, &fds) != 0) return;
+            var client = TcpStream{ .handle = fds[0] };
+            var conn = TcpStream{ .handle = fds[1] };
+            defer client.close();
+            defer conn.close();
+
+            client.writeAll(payload) catch {};
+            _ = std.c.shutdown(fds[0], std.posix.SHUT.WR);
+
+            // Deliberately small buffer: oversized Content-Length must land in
+            // `.body_too_large`, exercising that branch without a 1 MB array.
+            var read_buf: [256]u8 = undefined;
+            switch (readHttpRequest(conn, &read_buf)) {
+                .ok => |req| {
+                    // Pair assertion across the trust boundary: the declared
+                    // Content-Length must equal the delivered body byte count.
+                    try std.testing.expectEqual(parseContentLength(req.headers).?, req.body.len);
+                    // Every parsed slice must live inside the read buffer.
+                    // Empty slices may be static literals — only check real ones.
+                    const slices = [_][]const u8{ req.method, req.path, req.query, req.headers, req.body };
+                    for (slices) |s| {
+                        if (s.len == 0) continue;
+                        try std.testing.expect(@intFromPtr(s.ptr) >= @intFromPtr(&read_buf));
+                        try std.testing.expect(@intFromPtr(s.ptr) + s.len <= @intFromPtr(&read_buf) + read_buf.len);
+                    }
+                    // The request-target is split on spaces before path/query exist.
+                    try std.testing.expect(std.mem.indexOfScalar(u8, req.path, ' ') == null);
+                },
+                // Both are valid outcomes for arbitrary input.
+                .malformed => {},
+                .body_too_large => {},
+            }
+        }
+    }.f, .{});
+}

@@ -943,6 +943,8 @@ test "fuzz: all bpe functions" {
             }
             const spm_ids = tok.encodeSpm(text_buf[0..text_len]) catch return;
             defer allocator.free(spm_ids);
+            // Invariant: every ID must be a valid vocab index (unk is 0).
+            for (spm_ids) |tid| try std.testing.expect(tid < vocab.len);
 
             // --- decodeSpm with the encoded ids ---
             const spm_decoded = tok.decodeSpm(spm_ids) catch return;
@@ -985,15 +987,23 @@ test "fuzz: all bpe functions" {
             const bpe_eos = smith.valueWithHash(u32, 3) % @as(u32, bpe_vocab.len);
             tok2.loadFromGGUF(&bpe_vocab_slice, &bpe_merges_slice, bpe_eos) catch return;
 
-            // --- encode (BPE mode) with random printable ASCII ---
+            // --- encode (BPE mode) with mixed vocab chars, special-token
+            // markers, and hostile bytes. Pure a/b/c input never reaches the
+            // '<' special-token scan or the byte→unicode mapping of controls
+            // and invalid UTF-8, so bias the generator toward those.
             var bpe_text: [8]u8 = undefined;
             const bpe_len = (smith.valueWithHash(u3, 4) | 1); // 1..7
             for (bpe_text[0..bpe_len]) |*b| {
-                // Printable ASCII only (maps 1:1 in GPT-2 byte encoder)
-                b.* = 'a' + (smith.valueWithHash(u8, 5) % 3); // a, b, or c
+                switch (smith.valueWithHash(u8, 5) % 4) {
+                    0 => b.* = 'a' + (smith.valueWithHash(u8, 6) % 3), // a, b, or c — merge logic
+                    1 => b.* = '<', // triggers special-token scanning
+                    else => b.* = smith.valueWithHash(u8, 7), // arbitrary bytes incl. invalid UTF-8
+                }
             }
             const bpe_ids = tok2.encode(bpe_text[0..bpe_len]) catch return;
             defer allocator.free(bpe_ids);
+            // Invariant: every ID must be a valid vocab index (unk is 0).
+            for (bpe_ids) |tid| try std.testing.expect(tid < bpe_vocab.len);
 
             // --- decode (BPE mode) ---
             const bpe_decoded = tok2.decode(bpe_ids) catch return;

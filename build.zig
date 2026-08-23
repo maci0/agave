@@ -286,10 +286,17 @@ pub fn build(b: *std.Build) void {
     // this host: children block in receiveMessage and the parent never sends
     // query_test_metadata after another artifact writes stderr. Simple mode
     // uses the same runner without the server protocol; failure is exit status.
+    // Exception: the main suite runs in server mode so its fuzz tests register
+    // with the build runner — without the protocol, `zig build test --fuzz`
+    // aborts with "no fuzz tests found" and CI's fuzz-smoke never fuzzes.
     const zig_lib = b.graph.zig_lib_directory.path orelse ".";
     const simple_test_runner: std.Build.Step.Compile.TestRunner = .{
         .path = .{ .cwd_relative = b.pathJoin(&.{ zig_lib, "compiler", "test_runner.zig" }) },
         .mode = .simple,
+    };
+    const fuzz_test_runner: std.Build.Step.Compile.TestRunner = .{
+        .path = simple_test_runner.path,
+        .mode = .server,
     };
 
     // Main test suite (inline tests from src/)
@@ -301,7 +308,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_test.addImport("build_options", backend_options.createModule());
         // No name filters: run the full inline suite from src/ (ReleaseSafe so asserts fire).
-        const t = b.addTest(.{ .root_module = mod_test, .test_runner = simple_test_runner });
+        const t = b.addTest(.{ .root_module = mod_test, .test_runner = fuzz_test_runner });
         link_platform(mod_test, t, target);
         if (link_metal) {
             mod_test.linkFramework("Metal", .{});
