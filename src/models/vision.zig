@@ -313,12 +313,11 @@ pub const VisionEncoder = struct {
         // attention processes queries in tiles, keeping peak memory bounded.
         const chunk: usize = @min(np, attention_chunk_size);
 
-        // Check environment variable for debug mode
-        const vision_debug = blk: {
-            var env_buf = [_]u8{0} ** 20;
-            @memcpy(env_buf[0..18], "AGAVE_VISION_DEBUG");
-            break :blk std.c.getenv(@ptrCast(env_buf[0..18 :0])) != null;
-        };
+        // Debug mode requires AGAVE_VISION_DEBUG=1 exactly (docs promise "=1",
+        // so "0"/empty must not turn buffer dumping on).
+        const vision_debug = visionDebugEnabled(std.mem.span(
+            std.c.getenv("AGAVE_VISION_DEBUG") orelse "",
+        ));
 
         var self = VisionEncoder{
             .debug = vision_debug,
