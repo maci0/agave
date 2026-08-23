@@ -51,6 +51,13 @@ const stdout_file = Io.File.stdout();
 const stderr_file = Io.File.stderr();
 const stdin_file = Io.File.stdin();
 
+/// Base directory for scratch files (overridable via TMPDIR).
+const default_tmp_base = "/tmp";
+/// Fixed-name fallback when the unique temp path does not fit its buffer.
+const video_tmp_fallback = "/tmp/agave_video";
+/// Buffer size for composing the video frame temp directory path.
+const tmp_path_buf_size = 256;
+
 fn milliTimestamp(io: Io) i64 {
     _ = io;
     return sim_clock.milliNow();
@@ -3243,20 +3250,12 @@ fn initAndRun(
             eprint("Warning: --video ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
         } else {
             const ve = &vision_enc.?;
-            // Create temp directory for extracted frames
-            var tmp_buf: [256]u8 = @splat(0);
-            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "/tmp/agave_video_{d}", .{milliTimestamp(g_io)}) catch "/tmp/agave_video";
-            // Ensure null-terminated for C calls
-            tmp_buf[tmp_dir_slice.len] = 0;
-            const tmp_dir: [*:0]const u8 = @ptrCast(&tmp_buf);
-            _ = std.c.mkdir(tmp_dir, 0o755);
-            defer {
-                const rm_argv = [_][]const u8{ "rm", "-rf", tmp_dir_slice };
-                if (std.process.spawn(g_io, .{ .argv = &rm_argv })) |rm_proc_val| {
-                    var rm_proc = rm_proc_val;
-                    _ = rm_proc.wait(g_io) catch null;
-                } else |_| {}
-            }
+            // Create temp directory for extracted frames under $TMPDIR (default /tmp)
+            const tmp_base = pull.getenv("TMPDIR") orelse default_tmp_base;
+            var tmp_buf: [tmp_path_buf_size]u8 = undefined;
+            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "{s}/agave_video_{d}", .{ tmp_base, milliTimestamp(g_io) }) catch video_tmp_fallback;
+            Io.Dir.cwd().createDir(g_io, tmp_dir_slice, .default_dir) catch {};
+            defer Io.Dir.cwd().deleteTree(g_io, tmp_dir_slice) catch {};
 
             // Extract frames using ffmpeg: one PNG per second (or custom fps)
             var fps_buf: [32]u8 = undefined;
