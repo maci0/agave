@@ -280,9 +280,10 @@ pub const TieredKvCache = struct {
         // Initialize VRAM tier blocks
         for (0..vram_blocks) |i| {
             const keys = try allocator.alloc(f32, slot_size);
-            errdefer allocator.free(keys);
-            const values = try allocator.alloc(f32, slot_size);
-            errdefer allocator.free(values);
+            const values = allocator.alloc(f32, slot_size) catch |err| {
+                allocator.free(keys);
+                return err;
+            };
             blocks[i] = .{
                 .base = .{ .keys = keys, .values = values, .ref_count = 0 },
                 .tier = .vram,
@@ -294,9 +295,10 @@ pub const TieredKvCache = struct {
         // Initialize RAM tier blocks
         for (vram_blocks..(vram_blocks + ram_blocks)) |i| {
             const keys = try allocator.alloc(f32, slot_size);
-            errdefer allocator.free(keys);
-            const values = try allocator.alloc(f32, slot_size);
-            errdefer allocator.free(values);
+            const values = allocator.alloc(f32, slot_size) catch |err| {
+                allocator.free(keys);
+                return err;
+            };
             blocks[i] = .{
                 .base = .{ .keys = keys, .values = values, .ref_count = 0 },
                 .tier = .ram,
@@ -425,6 +427,7 @@ pub const TieredKvCache = struct {
         // Fallback to SSD tier (promote from SSD to RAM before use)
         if (self.ssd_free_list.items.len > 0) {
             const block_id = self.ssd_free_list.pop().?;
+            errdefer self.ssd_free_list.appendAssumeCapacity(block_id);
             if (self.blocks[block_id].ssd_offset == null) {
                 // Fresh block never spilled to SSD — allocate RAM backing directly
                 const slot_size = std.math.mul(usize, @as(usize, self.block_size), self.kv_dim) catch return error.OutOfMemory;
@@ -553,8 +556,9 @@ pub const TieredKvCache = struct {
         // seek+write races when prefetcher and scheduler access the file concurrently.
         const keys_bytes = std.mem.sliceAsBytes(blk.base.keys);
         const values_bytes = std.mem.sliceAsBytes(blk.base.values);
-        try pwriteAll(ssd, keys_bytes, @intCast(offset));
-        try pwriteAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
+        const values_off = std.math.add(u64, offset, @as(u64, keys_bytes.len)) catch return error.Overflow;
+        try pwriteAll(ssd, keys_bytes, offset);
+        try pwriteAll(ssd, values_bytes, values_off);
 
         // Free RAM backing
         self.allocator.free(blk.base.keys);
@@ -591,15 +595,35 @@ pub const TieredKvCache = struct {
 
         const keys = try self.allocator.alloc(f32, slot_size);
         errdefer self.allocator.free(keys);
-        const values = try self.allocator.alloc(f32, slot_size);
-        errdefer self.allocator.free(values);
+        const values = self.allocator.alloc(f32, slot_size) catch |err| {
+            self.allocator.free(keys);
+            return err;
+        };
 
         // Read from SSD using positioned I/O (pread) to avoid
         // seek+read races when prefetcher and scheduler access the file concurrently.
         const keys_bytes = std.mem.sliceAsBytes(keys);
         const values_bytes = std.mem.sliceAsBytes(values);
-        _ = try preadAll(ssd, keys_bytes, @intCast(offset));
-        _ = try preadAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
+        const values_off = std.math.add(u64, offset, @as(u64, keys_bytes.len)) catch {
+            self.allocator.free(values);
+            return error.Overflow;
+        };
+        const n_k = preadAll(ssd, keys_bytes, offset) catch |err| {
+            self.allocator.free(values);
+            return err;
+        };
+        if (n_k != keys_bytes.len) {
+            self.allocator.free(values);
+            return error.ReadError;
+        }
+        const n_v = preadAll(ssd, values_bytes, values_off) catch |err| {
+            self.allocator.free(values);
+            return err;
+        };
+        if (n_v != values_bytes.len) {
+            self.allocator.free(values);
+            return error.ReadError;
+        }
 
         blk.base.keys = keys;
         blk.base.values = values;
@@ -633,8 +657,36 @@ pub const TieredKvCache = struct {
 
         const keys_bytes = std.mem.sliceAsBytes(keys);
         const values_bytes = std.mem.sliceAsBytes(values);
-        _ = try preadAll(ssd, keys_bytes, @intCast(offset));
-        _ = try preadAll(ssd, values_bytes, @intCast(offset + keys_bytes.len));
+        const values_off2 = std.math.add(u64, offset, @as(u64, keys_bytes.len)) catch {
+            self.allocator.free(keys);
+            self.allocator.free(values);
+            installed = true;
+            return error.Overflow;
+        };
+        const n_k2 = preadAll(ssd, keys_bytes, offset) catch |e| {
+            self.allocator.free(keys);
+            self.allocator.free(values);
+            installed = true;
+            return e;
+        };
+        if (n_k2 != keys_bytes.len) {
+            self.allocator.free(keys);
+            self.allocator.free(values);
+            installed = true;
+            return error.ReadError;
+        }
+        const n_v2 = preadAll(ssd, values_bytes, values_off2) catch |e| {
+            self.allocator.free(keys);
+            self.allocator.free(values);
+            installed = true;
+            return e;
+        };
+        if (n_v2 != values_bytes.len) {
+            self.allocator.free(keys);
+            self.allocator.free(values);
+            installed = true;
+            return error.ReadError;
+        }
 
         self.lockTier();
         defer self.unlockTier();
@@ -678,18 +730,31 @@ pub const TieredKvCache = struct {
             return;
         }
 
+        if (self.blocks[block_id].base.ref_count == 0) {
+            std.log.err("freeBlockInner: double-free of block {d} (ref_count==0)", .{block_id});
+            return;
+        }
+
         var blk = &self.blocks[block_id];
 
-        // Debug-mode per-block double-free check: scan the tier's free list.
+        // Debug-mode per-block double-free check: scan ALL tier free lists (tier
+        // may have changed since previous free due to promotion/demotion).
         if (std.debug.runtime_safety) {
-            const tier_list = switch (blk.tier) {
-                .vram => self.vram_free_list.items,
-                .ram => self.ram_free_list.items,
-                .ssd => self.ssd_free_list.items,
-            };
-            for (tier_list) |fid| {
+            for (self.vram_free_list.items) |fid| {
                 if (fid == block_id) {
-                    std.log.err("freeBlockInner: block {d} already on free list (double-free)", .{block_id});
+                    std.log.err("freeBlockInner: block {d} already on vram free list (double-free)", .{block_id});
+                    return;
+                }
+            }
+            for (self.ram_free_list.items) |fid| {
+                if (fid == block_id) {
+                    std.log.err("freeBlockInner: block {d} already on ram free list (double-free)", .{block_id});
+                    return;
+                }
+            }
+            for (self.ssd_free_list.items) |fid| {
+                if (fid == block_id) {
+                    std.log.err("freeBlockInner: block {d} already on ssd free list (double-free)", .{block_id});
                     return;
                 }
             }
@@ -808,6 +873,7 @@ pub const TieredKvCache = struct {
     /// Returns true if block is allocated (ref_count > 0) and in a lower tier than VRAM.
     /// Unallocated blocks in lower tiers are on free lists and must not be promoted.
     pub fn needsPromotion(self: *const TieredKvCache, block_id: u32) bool {
+        if (block_id >= self.blocks.len) return false;
         const blk = &self.blocks[block_id];
         return blk.base.ref_count > 0 and blk.tier != .vram;
     }

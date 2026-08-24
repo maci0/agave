@@ -34,8 +34,10 @@ pub fn allocKvCache(allocator: Allocator, n_layers: usize, kv_bytes_per_layer: u
 
     for (0..n_layers) |i| {
         keys[i] = try allocator.alloc(u8, kv_bytes_per_layer);
-        errdefer allocator.free(keys[i]);
-        values[i] = try allocator.alloc(u8, kv_bytes_per_layer);
+        values[i] = allocator.alloc(u8, kv_bytes_per_layer) catch |err| {
+            allocator.free(keys[i]);
+            return err;
+        };
         init_count = i + 1;
     }
 
@@ -114,28 +116,43 @@ pub const PagedKvView = struct {
         return if (self.block_mask != 0) position & self.block_mask else position % self.block_size;
     }
 
+    /// Checked: bounds-validate position and block translation.
+    inline fn physIdFor(self: PagedKvView, position: usize) u32 {
+        std.debug.assert(position < self.seq_len);
+        const li = self.blockIdx(position);
+        std.debug.assert(li < self.block_table.len);
+        const phys = self.block_table[li];
+        std.debug.assert(phys < self.blocks.len);
+        return phys;
+    }
+
+    inline fn physOffset(self: PagedKvView, position: usize) usize {
+        const off = std.math.mul(usize, self.posInBlock(position), self.kv_dim) catch @panic("phys offset overflow");
+        return off;
+    }
+
     /// Get key pointer for a specific position within the paged cache.
     pub inline fn keyPtr(self: PagedKvView, position: usize) [*]const f32 {
-        const phys_id = self.block_table[self.blockIdx(position)];
-        return self.blocks[phys_id].keys.ptr + self.posInBlock(position) * self.kv_dim;
+        const phys_id = self.physIdFor(position);
+        return self.blocks[phys_id].keys.ptr + self.physOffset(position);
     }
 
     /// Get value pointer for a specific position within the paged cache.
     pub inline fn valuePtr(self: PagedKvView, position: usize) [*]const f32 {
-        const phys_id = self.block_table[self.blockIdx(position)];
-        return self.blocks[phys_id].values.ptr + self.posInBlock(position) * self.kv_dim;
+        const phys_id = self.physIdFor(position);
+        return self.blocks[phys_id].values.ptr + self.physOffset(position);
     }
 
     /// Get mutable key pointer for writing (KV append).
     pub inline fn keyPtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const phys_id = self.block_table[self.blockIdx(position)];
-        return self.blocks[phys_id].keys.ptr + self.posInBlock(position) * self.kv_dim;
+        const phys_id = self.physIdFor(position);
+        return self.blocks[phys_id].keys.ptr + self.physOffset(position);
     }
 
     /// Get mutable value pointer for writing (KV append).
     pub inline fn valuePtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const phys_id = self.block_table[self.blockIdx(position)];
-        return self.blocks[phys_id].values.ptr + self.posInBlock(position) * self.kv_dim;
+        const phys_id = self.physIdFor(position);
+        return self.blocks[phys_id].values.ptr + self.physOffset(position);
     }
 };
 
@@ -163,8 +180,10 @@ pub const PagedKvCache = struct {
         for (0..num_blocks) |i| {
             const slot_size = std.math.mul(usize, @as(usize, block_size), kv_dim) catch return error.OutOfMemory;
             const block_keys = try allocator.alloc(f32, slot_size);
-            errdefer allocator.free(block_keys);
-            const block_values = try allocator.alloc(f32, slot_size);
+            const block_values = allocator.alloc(f32, slot_size) catch |err| {
+                allocator.free(block_keys);
+                return err;
+            };
             blocks[i] = .{ .keys = block_keys, .values = block_values };
             init_count = i + 1;
         }

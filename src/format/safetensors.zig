@@ -321,7 +321,7 @@ pub const SafeTensorsDir = struct {
     /// Returns the total mmap'd file size in bytes (sum of all shard lengths).
     pub fn totalBytes(self: *const SafeTensorsDir) usize {
         var total: usize = 0;
-        for (self.shard_data) |shard| total += shard.data.len;
+        for (self.shard_data) |shard| total = std.math.add(usize, total, shard.data.len) catch std.math.maxInt(usize);
         return total;
     }
 
@@ -1344,26 +1344,33 @@ fn fuseOneProjection(
         };
 
         for (0..n_experts) |ei| {
+            const ei_off = std.math.mul(usize, ei, w_bytes) catch continue;
+            const ei_s_off = std.math.mul(usize, ei, s_bytes) catch continue;
+            const ei_w_dst_end = std.math.add(usize, ei_off, w_bytes) catch continue;
+            const ei_s_dst_end = std.math.add(usize, ei_s_off, s_bytes) catch continue;
+            if (ei_w_dst_end > total_w or ei_s_dst_end > total_s) continue;
             // Copy weight_packed
             const ei_w_name2 = std.fmt.bufPrint(&en_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_packed", .{ prefix, layer, ei, hf_proj }) catch continue;
             const ei_w2 = tensors.get(ei_w_name2) orelse continue;
+            if (ei_w2.shard_idx >= shard_data.len) continue;
             const w_shard = shard_data[ei_w2.shard_idx];
             if (w_shard.data.len > 0) {
-                const w_src_start = w_shard.tensor_base + ei_w2.data_start;
-                const w_src_end = w_src_start + w_bytes;
+                const w_src_start = std.math.add(usize, w_shard.tensor_base, ei_w2.data_start) catch continue;
+                const w_src_end = std.math.add(usize, w_src_start, w_bytes) catch continue;
                 if (w_src_end <= w_shard.data.len) {
-                    @memcpy(repacked_w[ei * w_bytes ..][0..w_bytes], w_shard.data[w_src_start..w_src_end]);
+                    @memcpy(repacked_w[ei_off..][0..w_bytes], w_shard.data[w_src_start..w_src_end]);
                 }
             }
             // Copy weight_scale
             const ei_s_name2 = std.fmt.bufPrint(&sn_buf, "{s}layers.{d}.mlp.experts.{d}.{s}.weight_scale", .{ prefix, layer, ei, hf_proj }) catch continue;
             const ei_s2 = tensors.get(ei_s_name2) orelse continue;
+            if (ei_s2.shard_idx >= shard_data.len) continue;
             const s_shard = shard_data[ei_s2.shard_idx];
             if (s_shard.data.len > 0) {
-                const s_src_start = s_shard.tensor_base + ei_s2.data_start;
-                const s_src_end = s_src_start + s_bytes;
+                const s_src_start = std.math.add(usize, s_shard.tensor_base, ei_s2.data_start) catch continue;
+                const s_src_end = std.math.add(usize, s_src_start, s_bytes) catch continue;
                 if (s_src_end <= s_shard.data.len) {
-                    @memcpy(repacked_s[ei * s_bytes ..][0..s_bytes], s_shard.data[s_src_start..s_src_end]);
+                    @memcpy(repacked_s[ei_s_off..][0..s_bytes], s_shard.data[s_src_start..s_src_end]);
                 }
             }
         }
@@ -1387,7 +1394,7 @@ fn fuseOneProjection(
         try fused.put(owned_w_name2, TensorEntry{
             .shard_idx = max_shard_count, // sentinel: repacked data
             .data_start = @intFromPtr(repacked_w.ptr),
-            .data_end = @intFromPtr(repacked_w.ptr) + total_w,
+            .data_end = std.math.add(usize, @intFromPtr(repacked_w.ptr), total_w) catch return,
             .dtype = .nvfp4,
             .n_dims = 3,
             .dims = .{ w_rows, w_cols, n_experts, 0 },
@@ -1399,7 +1406,7 @@ fn fuseOneProjection(
         try fused.put(owned_s_name2, TensorEntry{
             .shard_idx = max_shard_count,
             .data_start = @intFromPtr(repacked_s.ptr),
-            .data_end = @intFromPtr(repacked_s.ptr) + total_s,
+            .data_end = std.math.add(usize, @intFromPtr(repacked_s.ptr), total_s) catch return,
             .dtype = .fp8_e4m3,
             .n_dims = 3,
             .dims = .{ s_rows, s_cols, n_experts, 0 },
@@ -1421,8 +1428,8 @@ fn fuseOneProjection(
                 if (tensors.get(gi_gs)) |gs_e| {
                     if (gs_e.shard_idx < shard_data.len and shard_data[gs_e.shard_idx].data.len > 0) {
                         const sh = shard_data[gs_e.shard_idx];
-                        const a = sh.tensor_base + gs_e.data_start;
-                        if (a + 4 <= sh.data.len) {
+                        const a = std.math.add(usize, sh.tensor_base, gs_e.data_start) catch continue;
+                        if (std.math.add(usize, a, 4) catch sh.data.len + 1 <= sh.data.len) {
                             gs_array2[gi] = std.mem.bytesToValue(f32, sh.data[a..][0..4]);
                             continue;
                         }
@@ -1434,7 +1441,8 @@ fn fuseOneProjection(
             const bn = gguf_weight_name[0 .. gguf_weight_name.len - ".weight".len];
             const gsn = std.fmt.bufPrint(&gguf_gs3, "blk.{d}.{s}.global_scale", .{ layer, bn }) catch return;
             const owned_gsn = try dupeString(allocator, owned, gsn);
-            try fused.put(owned_gsn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(gs_array2.ptr), .data_end = @intFromPtr(gs_array2.ptr) + n_experts * @sizeOf(f32), .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
+            const gs_end = std.math.add(usize, @intFromPtr(gs_array2.ptr), std.math.mul(usize, n_experts, @sizeOf(f32)) catch return) catch return;
+            try fused.put(owned_gsn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(gs_array2.ptr), .data_end = gs_end, .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
 
             // Also repack input_global_scale
             const is_array = try allocator.alloc(f32, n_experts);
@@ -1451,8 +1459,8 @@ fn fuseOneProjection(
                 if (tensors.get(gi_is)) |is_e| {
                     if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
                         const sh2 = shard_data[is_e.shard_idx];
-                        const a2 = sh2.tensor_base + is_e.data_start;
-                        if (a2 + 4 <= sh2.data.len) {
+                        const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch continue;
+                        if (std.math.add(usize, a2, 4) catch sh2.data.len + 1 <= sh2.data.len) {
                             is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
                             continue;
                         }
@@ -1463,7 +1471,8 @@ fn fuseOneProjection(
             var gguf_is3: [fusion_name_buf_size]u8 = undefined;
             const isn = std.fmt.bufPrint(&gguf_is3, "blk.{d}.{s}.input_scale", .{ layer, bn }) catch return;
             const owned_isn = try dupeString(allocator, owned, isn);
-            try fused.put(owned_isn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(is_array.ptr), .data_end = @intFromPtr(is_array.ptr) + n_experts * @sizeOf(f32), .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
+            const is_end = std.math.add(usize, @intFromPtr(is_array.ptr), std.math.mul(usize, n_experts, @sizeOf(f32)) catch return) catch return;
+            try fused.put(owned_isn, TensorEntry{ .shard_idx = max_shard_count, .data_start = @intFromPtr(is_array.ptr), .data_end = is_end, .dtype = .f32, .n_dims = 1, .dims = .{ n_experts, 0, 0, 0 } });
         }
         return;
     }
@@ -1476,7 +1485,7 @@ fn fuseOneProjection(
     try fused.put(owned_w_name, TensorEntry{
         .shard_idx = e0_w.shard_idx,
         .data_start = e0_w.data_start,
-        .data_end = e0_w.data_start + @as(usize, n_experts) * w_bytes,
+        .data_end = std.math.add(usize, e0_w.data_start, std.math.mul(usize, @as(usize, n_experts), w_bytes) catch return) catch return,
         .dtype = .nvfp4,
         .n_dims = 3,
         .dims = .{ w_rows, w_cols, n_experts, 0 },
@@ -1490,7 +1499,7 @@ fn fuseOneProjection(
     try fused.put(owned_s_name, TensorEntry{
         .shard_idx = e0_s.shard_idx,
         .data_start = e0_s.data_start,
-        .data_end = e0_s.data_start + @as(usize, n_experts) * s_bytes,
+        .data_end = std.math.add(usize, e0_s.data_start, std.math.mul(usize, @as(usize, n_experts), s_bytes) catch return) catch return,
         .dtype = .fp8_e4m3,
         .n_dims = 3,
         .dims = .{ s_rows, s_cols, n_experts, 0 },
@@ -1512,8 +1521,8 @@ fn fuseOneProjection(
             if (tensors.get(gi_gs_name)) |gs_entry| {
                 if (gs_entry.shard_idx < shard_data.len and shard_data[gs_entry.shard_idx].data.len > 0) {
                     const shard = shard_data[gs_entry.shard_idx];
-                    const abs = shard.tensor_base + gs_entry.data_start;
-                    if (abs + 4 <= shard.data.len) {
+                    const abs = std.math.add(usize, shard.tensor_base, gs_entry.data_start) catch { gs_array[gi] = 1.0; continue; };
+                    if (std.math.add(usize, abs, 4) catch shard.data.len + 1 <= shard.data.len) {
                         gs_array[gi] = std.mem.bytesToValue(f32, shard.data[abs..][0..4]);
                         continue;
                     }
@@ -1537,8 +1546,8 @@ fn fuseOneProjection(
             if (tensors.get(gi_is)) |is_e| {
                 if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
                     const sh2 = shard_data[is_e.shard_idx];
-                    const a2 = sh2.tensor_base + is_e.data_start;
-                    if (a2 + 4 <= sh2.data.len) {
+                    const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch { is_array[gi] = 1.0; continue; };
+                    if (std.math.add(usize, a2, 4) catch sh2.data.len + 1 <= sh2.data.len) {
                         is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
                         continue;
                     }
@@ -1551,10 +1560,11 @@ fn fuseOneProjection(
         const base_name = gguf_weight_name[0 .. gguf_weight_name.len - ".weight".len];
         const gguf_gs_name = std.fmt.bufPrint(&gguf_gs_buf, "blk.{d}.{s}.global_scale", .{ layer, base_name }) catch return;
         const owned_gs_name = try dupeString(allocator, owned, gguf_gs_name);
+        const gs_c_end = std.math.add(usize, @intFromPtr(gs_array.ptr), std.math.mul(usize, n_experts, @sizeOf(f32)) catch return) catch return;
         try fused.put(owned_gs_name, TensorEntry{
             .shard_idx = max_shard_count, // sentinel: repacked data
             .data_start = @intFromPtr(gs_array.ptr),
-            .data_end = @intFromPtr(gs_array.ptr) + n_experts * @sizeOf(f32),
+            .data_end = gs_c_end,
             .dtype = .f32,
             .n_dims = 1,
             .dims = .{ n_experts, 0, 0, 0 },
@@ -1563,10 +1573,11 @@ fn fuseOneProjection(
         var gguf_is_buf: [fusion_name_buf_size]u8 = undefined;
         const isn = std.fmt.bufPrint(&gguf_is_buf, "blk.{d}.{s}.input_scale", .{ layer, base_name }) catch return;
         const owned_isn = try dupeString(allocator, owned, isn);
+        const is_c_end = std.math.add(usize, @intFromPtr(is_array.ptr), std.math.mul(usize, n_experts, @sizeOf(f32)) catch return) catch return;
         try fused.put(owned_isn, TensorEntry{
             .shard_idx = max_shard_count,
             .data_start = @intFromPtr(is_array.ptr),
-            .data_end = @intFromPtr(is_array.ptr) + n_experts * @sizeOf(f32),
+            .data_end = is_c_end,
             .dtype = .f32,
             .n_dims = 1,
             .dims = .{ n_experts, 0, 0, 0 },

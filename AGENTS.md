@@ -194,7 +194,7 @@ These rules are non-negotiable. Every change must respect all of them.
 - **`main()` accepts `std.process.Init`** — provides `init.io` (Io context), `init.gpa` (allocator), `init.minimal.args` (CLI args). Thread `io` to all I/O code.
 - **File I/O via `Io`** — `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
 - **Stdout/stderr via `Io.File`** — `Io.File.stdout()`, `Io.File.stderr()`. Write via `posix.system.write(file.handle, ...)`.
-- **Timestamps** — `posix.system.clock_gettime(.REALTIME, &ts)` for hot-path timing (perf counters). Use `Io.Clock.real.now(io)` for non-hot-path.
+- **Timestamps** — interval/perf timing uses `CLOCK_MONOTONIC` (`sim_clock.monoMilli`, or direct `clock_gettime(.MONOTONIC)` in `perf.zig`/`pull.zig`); REALTIME/wall (`sim_clock.milliNow`) only for log timestamps, seeds, and epoch fields. Never measure durations with REALTIME.
 - **Futex** — `io.futexWaitUncancelable(u32, &atomic.raw, expected)` and `io.futexWake(u32, &atomic.raw, count)`. No raw `__ulock_wait`/`linux.futex_wait`.
 - **Mutex** — `Io.Mutex` with `lockUncancelable(io)`/`unlock(io)`. No custom spinlocks.
 - **Allocators** — `init.gpa` from Init, or `std.heap.DebugAllocator` for standalone tools.

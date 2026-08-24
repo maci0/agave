@@ -1486,7 +1486,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // Health check endpoint — lightweight, no mutex, no inference
     if (is_get and std.mem.eql(u8, path, "/health")) {
         var buf: [health_buf_size]u8 = undefined;
-        const uptime: i64 = if (g_server.start_time > 0) timestamp() - g_server.start_time else 0;
+        // Clamp: both reads are wall clock, so an NTP step backward must not
+        // report negative uptime in /health.
+        const uptime: i64 = if (g_server.start_time > 0) @max(0, timestamp() - g_server.start_time) else 0;
         const queue = g_server.metrics.queue_depth.load(.monotonic);
         const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
         const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);

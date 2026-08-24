@@ -594,7 +594,7 @@ pub const GGUFFile = struct {
         var total: u64 = 0;
         var it = self.tensors.valueIterator();
         while (it.next()) |info| {
-            total += @intCast(info.numElements());
+            total = std.math.add(u64, total, @as(u64, @intCast(info.numElements()))) catch std.math.maxInt(u64);
         }
         return total;
     }
@@ -658,7 +658,8 @@ pub const GGUFFile = struct {
         const slen: usize = std.math.cast(usize, try self.readU64(off)) orelse return error.OffsetOutOfBounds;
         // Use subtraction to avoid overflow: readU64(off) succeeded so off+8 <= file_size.
         if (slen > self.file_size - off - 8) return error.OffsetOutOfBounds;
-        return .{ .str = self.data()[off + 8 ..][0..slen], .len = 8 + slen };
+        const slen_plus_8 = std.math.add(usize, @as(usize, 8), slen) catch return error.OffsetOutOfBounds;
+        return .{ .str = self.data()[off + 8 ..][0..slen], .len = slen_plus_8 };
     }
 
     fn readMetaValue(self: *GGUFFile, off: usize) !struct { val: MetaValue, len: usize } {
@@ -696,11 +697,12 @@ pub const GGUFFile = struct {
             .int64 => return .{ .val = .{ .int64 = @bitCast(try self.readU64(pos)) }, .len = 12 },
             .float64 => return .{ .val = .{ .float64 = @bitCast(try self.readU64(pos)) }, .len = 12 },
             .array => {
+                const arr_pos = std.math.add(usize, pos, 4) catch return error.OffsetOutOfBounds;
                 const arr_type: MetaValueType = @enumFromInt(try self.readU32(pos));
-                const arr_len_u64 = try self.readU64(pos + 4);
+                const arr_len_u64 = try self.readU64(arr_pos);
                 if (arr_len_u64 > max_array_len) return error.ArrayTooLarge;
                 const arr_len: usize = std.math.cast(usize, arr_len_u64) orelse return error.ArrayTooLarge;
-                pos += 12;
+                pos = std.math.add(usize, pos, 12) catch return error.OffsetOutOfBounds;
                 if (arr_type == .string) {
                     const strings = try self.allocator.alloc([]const u8, arr_len);
                     errdefer self.allocator.free(strings);
@@ -711,24 +713,27 @@ pub const GGUFFile = struct {
                     for (0..arr_len) |i| {
                         const s = try self.readString(pos);
                         strings[i] = s.str;
-                        pos += s.len;
+                        pos = std.math.add(usize, pos, s.len) catch return error.OffsetOutOfBounds;
                     }
                     return .{ .val = .{ .array_str = strings }, .len = pos - off };
                 }
                 // Parse u32/i32 arrays (used for eog_token_id, head_count_kv, etc.)
                 if (arr_type == .uint32 or arr_type == .int32) {
+                    const bytes_needed = std.math.mul(usize, arr_len, 4) catch return error.OffsetOutOfBounds;
+                    if (bytes_needed > self.file_size or pos > self.file_size - bytes_needed) return error.OffsetOutOfBounds;
                     const ids = try self.allocator.alloc(u32, arr_len);
                     errdefer self.allocator.free(ids);
                     try self.owned_u32_arrays.append(self.allocator, ids);
                     errdefer _ = self.owned_u32_arrays.pop();
                     for (0..arr_len) |i| {
                         ids[i] = try self.readU32(pos);
-                        pos += 4;
+                        pos = std.math.add(usize, pos, 4) catch return error.OffsetOutOfBounds;
                     }
                     return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
                 }
                 // Parse bool arrays as u32 (used for sliding_window_pattern)
                 if (arr_type == .bool_type) {
+                    if (arr_len > self.file_size or pos > self.file_size - arr_len) return error.OffsetOutOfBounds;
                     const ids = try self.allocator.alloc(u32, arr_len);
                     errdefer self.allocator.free(ids);
                     try self.owned_u32_arrays.append(self.allocator, ids);
@@ -736,7 +741,7 @@ pub const GGUFFile = struct {
                     for (0..arr_len) |i| {
                         if (pos >= self.file_size) return error.OffsetOutOfBounds;
                         ids[i] = self.data()[pos];
-                        pos += 1;
+                        pos = std.math.add(usize, pos, 1) catch return error.OffsetOutOfBounds;
                     }
                     return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
                 }
@@ -750,7 +755,7 @@ pub const GGUFFile = struct {
                         else => return error.UnsupportedGGUFVersion,
                     };
                     if (self.file_size < elem_size or pos > self.file_size - elem_size) return error.OffsetOutOfBounds;
-                    pos += elem_size;
+                    pos = std.math.add(usize, pos, elem_size) catch return error.OffsetOutOfBounds;
                 }
                 return .{ .val = .{ .uint32 = 0 }, .len = pos - off };
             },
@@ -780,9 +785,9 @@ pub const GGUFFile = struct {
         for (0..@intCast(metadata_kv_count)) |_| {
             const key_info = try self.readString(off);
             const key = try self.own(key_info.str);
-            off += key_info.len;
+            off = std.math.add(usize, off, key_info.len) catch return error.OffsetOutOfBounds;
             const val_result = try self.readMetaValue(off);
-            off += val_result.len;
+            off = std.math.add(usize, off, val_result.len) catch return error.OffsetOutOfBounds;
             try self.metadata.put(key, val_result.val);
         }
 
@@ -797,10 +802,10 @@ pub const GGUFFile = struct {
         for (0..@intCast(self.tensor_count)) |_| {
             const name_info = try self.readString(off);
             const name = try self.own(name_info.str);
-            off += name_info.len;
+            off = std.math.add(usize, off, name_info.len) catch return error.OffsetOutOfBounds;
 
             const n_dims = try self.readU32(off);
-            off += 4;
+            off = std.math.add(usize, off, 4) catch return error.OffsetOutOfBounds;
             if (n_dims > 4) return error.TooManyDimensions;
 
             // Read dims and reverse to standard order (outermost first).
@@ -809,16 +814,16 @@ pub const GGUFFile = struct {
             var raw_dims: [4]u64 = .{ 0, 0, 0, 0 };
             for (0..n_dims) |d| {
                 raw_dims[d] = try self.readU64(off);
-                off += 8;
+                off = std.math.add(usize, off, 8) catch return error.OffsetOutOfBounds;
             }
             var dims: [4]u64 = .{ 0, 0, 0, 0 };
             for (0..n_dims) |d| dims[d] = raw_dims[n_dims - 1 - d];
 
             const ggml_type: GGMLType = @enumFromInt(try self.readU32(off));
-            off += 4;
+            off = std.math.add(usize, off, 4) catch return error.OffsetOutOfBounds;
 
             const tensor_offset = try self.readU64(off);
-            off += 8;
+            off = std.math.add(usize, off, 8) catch return error.OffsetOutOfBounds;
 
             try self.tensors.put(name, .{
                 .name = name,
