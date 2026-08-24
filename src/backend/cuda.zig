@@ -1615,6 +1615,19 @@ pub const CudaBackend = struct {
         // Use tensor core path on SM120+ (Blackwell), fallback on older
         const kernel = if (self.sm_major >= 12) self.fn_gemv_fp4_tc else self.fn_gemv_nvfp4_st;
         self.launch(kernel, @intCast(n), block_size, reduction_smem, &params);
+        self.syncGemvOutput(y, d_y, n);
+    }
+
+    /// After an MLX/MXFP4/NVFP4 GEMV, copy the output back to host immediately
+    /// and mark it stale. DS4 interleaves CPU ops (rmsNorm) between GEMVs and
+    /// reads activation buffers on the host; the per-call copy-back matches the
+    /// upload/download semantics of the Vulkan/WebGPU DS4 path. Without it the
+    /// cache would hand the next GPU op a device copy that misses CPU edits
+    /// (or the host would read stale data).
+    fn syncGemvOutput(self: *CudaBackend, y: [*]f32, d_y: CUdeviceptr, n: usize) void {
+        const byte_len = n * @sizeOf(f32);
+        self.downloadFromDevice(d_y, @ptrCast(y), byte_len);
+        if (self.act_cache.getPtr(@intFromPtr(y))) |act| act.state = .stale;
     }
 
     /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
@@ -1644,6 +1657,7 @@ pub const CudaBackend = struct {
             else => self.fn_gemv_mlx_q4,
         };
         self.launch(func, @intCast(n), block_size, reduction_smem, &params);
+        self.syncGemvOutput(y, d_y, n);
     }
     pub fn gemvMlxQGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
         self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs);
@@ -1668,6 +1682,7 @@ pub const CudaBackend = struct {
             @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
+        self.syncGemvOutput(y, d_y, n);
     }
     pub fn gemvMxfp4StGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         self.gemvMxfp4St(x, w, s, y, n, k, gs, sf);

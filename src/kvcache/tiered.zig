@@ -398,7 +398,9 @@ pub const TieredKvCache = struct {
             const vram_used = self.vram_used.load(.monotonic);
             const vram_total = self.vram_block_count;
 
-            if (vram_used * eviction_denom > vram_total * eviction_numer) {
+            const lhs = std.math.mul(usize, vram_used, eviction_denom) catch std.math.maxInt(usize);
+            const rhs = std.math.mul(usize, vram_total, eviction_numer) catch 0;
+            if (lhs > rhs) {
                 // Demote coldest VRAM block to RAM (block stays in-use, just re-tagged)
                 const evicted = try self.demoteToRam();
                 std.log.debug("Demoted block {d} from VRAM to RAM (usage: {d:.1}%)", .{

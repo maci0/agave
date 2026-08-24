@@ -2443,11 +2443,14 @@ pub const Ds4Model = struct {
         return .{ .cpu = &self.cpu };
     }
 
-    /// GEMV backend: native Vulkan/WebGPU shaders for Flash MLX-Q attention
+    /// GEMV backend: native Vulkan/WebGPU/CUDA shaders for Flash MLX-Q attention
     /// and MXFP4 experts. Other backends stay on the dedicated CpuBackend.
+    /// CUDA GEMVs copy outputs back synchronously (syncGemvOutput), matching the
+    /// Vulkan per-call upload/download semantics so the CPU-side pooling, LID,
+    /// and HC passes see fresh activations between GEMVs.
     fn gemvBackend(self: *Ds4Model) Backend {
         return switch (self.be) {
-            .vulkan, .webgpu => self.be,
+            .vulkan, .webgpu, .cuda => self.be,
             else => .{ .cpu = &self.cpu },
         };
     }
@@ -2506,7 +2509,7 @@ pub const Ds4Model = struct {
             const sf = mlx_ops.mxfp4ScaleFormat(self.fmt.is_safetensors, mxfp4_gs);
             const mlx = @import("../ops/mlx.zig");
             switch (self.be) {
-                .vulkan, .webgpu => {
+                .vulkan, .webgpu, .cuda => {
                     self.gemvBackend().gemvMxfp4StGpu(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, sf);
                 },
                 else => {
@@ -2543,7 +2546,7 @@ pub const Ds4Model = struct {
             const gs_e = model_mod.inferMlxGroupSize(st, k);
             const mlx2 = @import("../ops/mlx.zig");
             switch (self.be) {
-                .vulkan, .webgpu => {
+                .vulkan, .webgpu, .cuda => {
                     self.gemvBackend().gemvMlxQGpu(x, data, st.data_ptr + ei * s_stride, bt.data_ptr + ei * s_stride, y, n, k, bits, gs_e);
                 },
                 else => {
