@@ -1253,6 +1253,62 @@ fn splitThinkingContent(text: []const u8) ThinkingSplit {
     return .{ .reasoning = "", .content = text };
 }
 
+/// Build an Anthropic Messages API response from model output containing
+/// <tool_call> tags. Emits one `tool_use` content block per parsed call with
+/// stop_reason "tool_use". `input` must be a JSON object per the Anthropic
+/// spec: object arguments are embedded verbatim (structurally validated by the
+/// extractor); string arguments are unwrapped when they decode to an object,
+/// otherwise replaced with `{}` and logged — an invalid `input` would break
+/// spec-compliant clients. Returns "" when no <tool_call> payload parses;
+/// callers fall back to a plain text response.
+fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
+    const tc_start_tag = "<tool_call>";
+    const tc_end_tag = "</tool_call>";
+
+    var blocks_buf: [4096]u8 = undefined;
+    var blocks_pos: usize = 0;
+    var search_pos: usize = 0;
+    var call_idx: usize = 0;
+
+    while (search_pos < raw_text.len) {
+        const tc_start = std.mem.indexOfPos(u8, raw_text, search_pos, tc_start_tag) orelse break;
+        const json_start = tc_start + tc_start_tag.len;
+        const tc_end = std.mem.indexOfPos(u8, raw_text, json_start, tc_end_tag) orelse break;
+        const tc_json = raw_text[json_start..tc_end];
+        search_pos = tc_end + tc_end_tag.len;
+
+        const name = json.extractField(tc_json, "name") orelse continue;
+
+        // Resolve input as a JSON object text (see resolveAnthropicToolInput).
+        const resolved = resolveAnthropicToolInput(g_server.allocator, tc_json, call_idx);
+        defer if (resolved.owned) |p| g_server.allocator.free(p);
+        const args_obj = resolved.obj;
+
+        // Escape name only — args are embedded as raw JSON (validated above).
+        const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
+            std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
+            continue;
+        };
+        defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
+
+        const prefix: []const u8 = if (call_idx > 0) "," else "";
+        const entry = std.fmt.bufPrint(blocks_buf[blocks_pos..], "{s}" ++
+            \\{{"type":"tool_use","id":"toolu_{d}_{d}","name":"{s}","input":{s}}}
+        , .{ prefix, req_id, call_idx, escaped_name, args_obj }) catch {
+            std.log.warn("req={d} anthropic tool call response exceeded {d} byte buffer: dropped calls from index {d}", .{ log_request_id, blocks_buf.len, call_idx });
+            break;
+        };
+        blocks_pos += entry.len;
+        call_idx += 1;
+    }
+
+    if (call_idx == 0) return "";
+
+    return std.fmt.bufPrint(buf,
+        \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{s}],"model":"{s}","stop_reason":"tool_use","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
+    , .{ req_id, blocks_buf[0..blocks_pos], g_server.model_name, prompt_tokens, completion_tokens }) catch "";
+}
+
 /// Build tool_calls JSON response from model output containing <tool_call> tags.
 /// Supports multiple tool calls. Arguments are JSON-escaped strings per OpenAI spec.
 fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
@@ -1292,7 +1348,13 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
         const prefix: []const u8 = if (call_idx > 0) "," else "";
         const entry = std.fmt.bufPrint(tc_buf[tc_pos..], "{s}" ++
             \\{{"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}
-        , .{ prefix, req_id, call_idx, escaped_name, escaped_args }) catch break;
+        , .{ prefix, req_id, call_idx, escaped_name, escaped_args }) catch {
+            // Buffer full: remaining <tool_call> tags are dropped. Log loudly so
+            // lost calls are diagnosable — the client still sees finish_reason
+            // "tool_calls" for the calls that fit.
+            std.log.warn("req={d} tool call response exceeded {d} byte buffer: dropped calls from index {d}", .{ log_request_id, tc_buf.len, call_idx });
+            break;
+        };
         tc_pos += entry.len;
         call_idx += 1;
     }
@@ -2340,12 +2402,36 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const max_tokens_m = clampMaxTokens(json.extractIntField(body, "max_tokens"));
         var sampling_m = json.SamplingParams{};
         json.parseSampling(&sampling_m, body);
+
+        // Tools (Anthropic flat format). Normalize Anthropic tool_choice values:
+        // "any"/"tool" mean the model must call a tool, matching OpenAI "required".
+        var tool_params_m = json.parseToolsAnthropic(body);
+        if (std.mem.eql(u8, tool_params_m.tool_choice, "any") or std.mem.eql(u8, tool_params_m.tool_choice, "tool")) {
+            tool_params_m.tool_choice = "required";
+        }
+        const want_tools_m = toolsWanted(&tool_params_m);
+
         // Anthropic: system message is a top-level field, not in messages array
         const system_msg_raw = json.extractField(body, "system");
         const system_msg = if (system_msg_raw) |s| (json.jsonUnescape(g_server.allocator, s) catch @constCast(s)) else null;
         defer if (system_msg) |s| if (system_msg_raw) |r| {
             if (s.ptr != r.ptr) wipeFree(g_server.allocator, s);
         };
+
+        // Inject tool definitions into the system prompt ahead of the request's
+        // own system message (same contract as /v1/chat/completions).
+        var tool_system_m: ?[]u8 = null;
+        defer if (tool_system_m) |ts| wipeFree(g_server.allocator, ts);
+        if (want_tools_m) {
+            tool_system_m = buildToolSystemPrompt(g_server.allocator, &tool_params_m, system_msg, &g_server.tool_registry) catch |err| {
+                std.log.err("req={d} anthropic tool system prompt build failed: {}", .{ log_request_id, err });
+                sendAnthropicError(stream, "500", "api_error", "Failed to build tool definitions");
+                g_server.metrics.recordFailure();
+                logRequestDone(method, path, 500, elapsedMs(request_start));
+                return;
+            };
+        }
+        const effective_system_m: ?[]const u8 = if (tool_system_m) |ts| ts else system_msg;
 
         // Extract full messages array for multi-turn conversations
         const extracted_m = json.extractMessages(body, g_server.allocator);
@@ -2363,10 +2449,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Format with full conversation context when available
         const formatted_m = if (extracted_m) |ex|
-            g_server.chat_template.formatConversation(g_server.allocator, system_msg, ex.messages) catch
-                g_server.chat_template.format(g_server.allocator, system_msg, fallback_content_m) catch fallback_content_m
+            g_server.chat_template.formatConversation(g_server.allocator, effective_system_m, ex.messages) catch
+                g_server.chat_template.format(g_server.allocator, effective_system_m, fallback_content_m) catch fallback_content_m
         else
-            g_server.chat_template.format(g_server.allocator, system_msg, fallback_content_m) catch fallback_content_m;
+            g_server.chat_template.format(g_server.allocator, effective_system_m, fallback_content_m) catch fallback_content_m;
         defer if (formatted_m.ptr != fallback_content_m.ptr) wipeFree(g_server.allocator, @constCast(formatted_m));
         const prompt_ids_m_owned = g_server.tokenizer.encode(formatted_m) catch |err| blk: {
             std.log.warn("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
@@ -2409,7 +2495,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         };
 
         if (json.extractBoolField(body, "stream")) {
-            startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
+            if (want_tools_m) {
+                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
+            } else {
+                startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
+            }
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -2429,6 +2519,23 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         const req_id = currentRequestId();
         const stop_reason: []const u8 = if (std.mem.eql(u8, gen.finish_reason, "length")) "max_tokens" else "end_turn";
+
+        // Tool calls: emit Anthropic content blocks with stop_reason "tool_use".
+        // Falls back to the plain text response when no <tool_call> payload
+        // parses (small-model malformed output), mirroring /v1/chat/completions.
+        var resp_buf_tc: [response_buf_size]u8 = undefined;
+        if (want_tools_m and hasToolCalls(gen.raw)) {
+            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated);
+            if (anth_tc.len > 0) {
+                sendJson(stream, anth_tc);
+                g_server.metrics.recordLatency(elapsedMs(req_start_time));
+                g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
+                g_server.metrics.recordCompletion();
+                logRequestDone(method, path, 200, elapsedMs(request_start));
+                return;
+            }
+        }
+
         var resp_buf: [response_buf_size]u8 = undefined;
         const json_body = std.fmt.bufPrint(&resp_buf,
             \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{{"type":"text","text":"{s}"}}],"model":"{s}","stop_reason":"{s}","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
@@ -4450,6 +4557,175 @@ fn startAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens: us
         return;
     }
     generateAnthropicStream(stream, formatted, max_tokens, input_tokens, sampling);
+}
+
+/// Longest raw text piece handed to emitAnthropicDeltaPiece; its escaped form
+/// must fit sse_event_buf_size.
+const anthropic_delta_piece_len: usize = 256;
+
+/// Anthropic SSE streaming with tools. Tool calls cannot be detected mid-stream
+/// without holding back `<tool_call>` tokens, so — like the OpenAI tools path —
+/// generation runs to completion first and the parsed result is emitted as
+/// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
+/// the raw text as a `text` block when nothing parses (small-model fallback).
+fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
+    if (!sendSseHeaders(stream)) {
+        g_server.metrics.recordCancellation();
+        return;
+    }
+
+    const req_id = currentRequestId();
+    const tool_stream_start = milliTimestamp();
+    const gen = generateEscapedN(formatted, true, max_tokens, sampling);
+    defer gen.deinit();
+
+    // message_start event
+    var msg_buf: [response_buf_size]u8 = undefined;
+    const msg_start = std.fmt.bufPrint(&msg_buf,
+        \\{{"type":"message_start","message":{{"id":"msg_{d}","type":"message","role":"assistant","content":[],"model":"{s}","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":0}}}}}}
+    , .{ req_id, g_server.model_name, input_tokens }) catch return;
+    if (!sseWriteEvent(stream, "message_start", msg_start)) return;
+
+    if (std.mem.eql(u8, gen.finish_reason, "error")) {
+        g_server.metrics.recordFailure();
+        sendAnthropicFinalEvents(stream, "end_turn", 0);
+        return;
+    }
+
+    var call_idx: usize = 0;
+    if (hasToolCalls(gen.raw)) {
+        const tc_start_tag = "<tool_call>";
+        const tc_end_tag = "</tool_call>";
+        var search_pos: usize = 0;
+
+        while (search_pos < gen.raw.len) {
+            const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
+            const json_start = tc_start + tc_start_tag.len;
+            const tc_end = std.mem.indexOfPos(u8, gen.raw, json_start, tc_end_tag) orelse break;
+            const tc_json = gen.raw[json_start..tc_end];
+            search_pos = tc_end + tc_end_tag.len;
+
+            const name = json.extractField(tc_json, "name") orelse continue;
+            const resolved_input = resolveAnthropicToolInput(g_server.allocator, tc_json, call_idx);
+            defer if (resolved_input.owned) |p| g_server.allocator.free(p);
+            const args_obj = resolved_input.obj;
+            const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
+                std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
+                continue;
+            };
+            defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
+
+            var blk_buf: [sse_event_buf_size]u8 = undefined;
+            const block_start = std.fmt.bufPrint(&blk_buf,
+                \\{{"type":"content_block_start","index":{d},"content_block":{{"type":"tool_use","id":"toolu_{d}_{d}","name":"{s}"}}}}
+            , .{ call_idx, req_id, call_idx, escaped_name }) catch {
+                slog("req={d} stream anthropic tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
+                continue;
+            };
+            if (!sseWriteEvent(stream, "content_block_start", block_start)) return;
+
+            // input_json_delta carries the arguments as an escaped JSON string
+            // per the Anthropic streaming spec.
+            const escaped_args = json.jsonEscape(g_server.allocator, args_obj) catch "";
+            defer if (escaped_args.ptr != args_obj.ptr and escaped_args.len > 0) g_server.allocator.free(escaped_args);
+            if (escaped_args.len > 0) {
+                var dbuf: [response_buf_size]u8 = undefined;
+                const delta = std.fmt.bufPrint(&dbuf,
+                    \\{{"type":"content_block_delta","index":{d},"delta":{{"type":"input_json_delta","partial_json":"{s}"}}}}
+                , .{ call_idx, escaped_args }) catch {
+                    std.log.warn("req={d} anthropic tool input_json_delta exceeded buffer ({d} bytes), truncating call {d}", .{ log_request_id, escaped_args.len, call_idx });
+                    continue;
+                };
+                if (!sseWriteEvent(stream, "content_block_delta", delta)) return;
+            }
+
+            var stop_buf: [64]u8 = undefined;
+            const block_stop = std.fmt.bufPrint(&stop_buf,
+                \\{{"type":"content_block_stop","index":{d}}}
+            , .{call_idx}) catch continue;
+            if (!sseWriteEvent(stream, "content_block_stop", block_stop)) return;
+            call_idx += 1;
+        }
+    }
+
+    var stop_reason: []const u8 = "tool_use";
+    if (call_idx > 0) {
+        // Each tool_use block already emitted its own content_block_stop;
+        // close the message without another block event.
+        sendAnthropicMessageEnd(stream, stop_reason, gen.stats.tokens_generated);
+    } else {
+        // No parseable tool call: degrade to a text block with the full output,
+        // mirroring the non-streaming fallback and the OpenAI tools stream.
+        stop_reason = if (std.mem.eql(u8, gen.finish_reason, "length")) "max_tokens" else "end_turn";
+        if (!sseWriteEvent(stream, "content_block_start",
+            \\{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+        )) return;
+        var piece_start: usize = 0;
+        while (piece_start < gen.raw.len) {
+            var piece_end = @min(piece_start + anthropic_delta_piece_len, gen.raw.len);
+            // Never split a UTF-8 sequence across events.
+            while (piece_end > piece_start and piece_end < gen.raw.len and (gen.raw[piece_end] & 0xC0) == 0x80) piece_end -= 1;
+            if (!emitAnthropicDeltaPiece(stream, gen.raw[piece_start..piece_end])) return;
+            piece_start = piece_end;
+        }
+        sendAnthropicFinalEvents(stream, stop_reason, gen.stats.tokens_generated);
+    }
+
+    const tool_time_ms = elapsedMs(tool_stream_start);
+    g_server.metrics.recordLatency(tool_time_ms);
+    g_server.metrics.recordTokens(@intCast(gen.stats.tokens_generated));
+    g_server.metrics.recordThroughput(gen.stats.tokens_generated, tool_time_ms);
+    g_server.metrics.recordTPOT(gen.stats.tokens_generated, tool_time_ms);
+    g_server.metrics.recordPromptTokens(input_tokens);
+    g_server.metrics.recordGenerationTokens(gen.stats.tokens_generated);
+    g_server.metrics.recordCompletion();
+}
+
+/// Result of resolving a <tool_call> payload's `arguments` into JSON object text.
+/// `owned` must be freed by the caller when non-null; `obj` is valid while it is.
+const ResolvedToolInput = struct {
+    obj: []const u8,
+    owned: ?[]u8 = null,
+};
+
+/// Resolve the `input` object text for a <tool_call> payload: object arguments
+/// are embedded verbatim; string arguments are unwrapped when they decode to an
+/// object, otherwise `{}` is substituted (with a warning). Anthropic requires
+/// `input` to be a JSON object — an invalid value would break spec-compliant
+/// clients, so unparseable arguments never reach the wire verbatim.
+fn resolveAnthropicToolInput(allocator: Allocator, tc_json: []const u8, call_idx: usize) ResolvedToolInput {
+    if (json.extractObjectField(tc_json, "arguments")) |o| return .{ .obj = o };
+    const s = json.extractField(tc_json, "arguments") orelse return .{ .obj = "{}" };
+    const unescaped = json.jsonUnescape(allocator, s) catch s;
+    if (unescaped.ptr == s.ptr) {
+        // No allocation happened (nothing to unescape); borrow the input slice.
+        const trimmed_borrowed = std.mem.trim(u8, unescaped, " \t\r\n");
+        if (trimmed_borrowed.len > 0 and trimmed_borrowed[0] == '{') return .{ .obj = trimmed_borrowed };
+        std.log.warn("req={d} tool call {d}: arguments not a JSON object, substituting {{}}", .{ log_request_id, call_idx });
+        return .{ .obj = "{}" };
+    }
+    // Unescape allocated a new buffer; hand ownership to the caller.
+    errdefer allocator.free(@constCast(unescaped));
+    const trimmed = std.mem.trim(u8, unescaped, " \t\r\n");
+    if (trimmed.len > 0 and trimmed[0] == '{') return .{ .obj = trimmed, .owned = @constCast(unescaped) };
+    std.log.warn("req={d} tool call {d}: arguments not a JSON object, substituting {{}}", .{ log_request_id, call_idx });
+    allocator.free(@constCast(unescaped));
+    return .{ .obj = "{}" };
+}
+
+/// Emit message_delta + message_stop for an already-closed content block set.
+fn sendAnthropicMessageEnd(stream: TcpStream, stop_reason: []const u8, token_count: u32) void {
+    var delta_buf: [response_buf_size]u8 = undefined;
+    const delta = std.fmt.bufPrint(&delta_buf,
+        \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
+    , .{ stop_reason, token_count }) catch {
+        std.log.warn("Anthropic message_delta exceeded buffer", .{});
+        return;
+    };
+    _ = sseWriteEvent(stream, "message_delta", delta);
+    _ = sseWriteEvent(stream, "message_stop",
+        \\{"type":"message_stop"}
+    );
 }
 
 /// Run generation and stream tokens as Anthropic-format SSE events.
