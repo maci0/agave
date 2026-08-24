@@ -34,9 +34,10 @@ pub const FixedBufStream = struct {
 
         /// Append `data` to the buffer, or return `error.NoSpaceLeft` if it would overflow.
         pub fn writeAll(self: Writer, data: []const u8) !void {
-            if (self.fbs.pos + data.len > self.fbs.buf.len) return error.NoSpaceLeft;
+            const end = std.math.add(usize, self.fbs.pos, data.len) catch return error.NoSpaceLeft;
+            if (end > self.fbs.buf.len) return error.NoSpaceLeft;
             @memcpy(self.fbs.buf[self.fbs.pos..][0..data.len], data);
-            self.fbs.pos += data.len;
+            self.fbs.pos = end;
         }
 
         /// Format `args` with `fmt` and append the result, or return `error.NoSpaceLeft`.

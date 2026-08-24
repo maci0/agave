@@ -392,7 +392,8 @@ pub const VisionEncoder = struct {
         self.attn_out = try allocator.alloc(f32, np * ed);
         errdefer allocator.free(self.attn_out);
         // Scores buffer sized for chunked attention: n_heads * chunk * n_patches
-        self.scores = try allocator.alloc(f32, nh * chunk * np);
+        const scores_elems = std.math.mul(usize, std.math.mul(usize, nh, chunk) catch return error.OutOfMemory, np) catch return error.OutOfMemory;
+        self.scores = try allocator.alloc(f32, scores_elems);
         errdefer allocator.free(self.scores);
         if (ffn_has_gate) {
             self.ffn_gate = try allocator.alloc(f32, np * fd);

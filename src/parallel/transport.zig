@@ -445,7 +445,7 @@ pub const Transport = struct {
             } else {
                 // CPU fallback wrote to host — upload to device staging, NCCL allReduce, download
                 if (self.cuda_sync) |sync| _ = sync();
-                const byte_len = n * @sizeOf(f32);
+                const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
                 try self.ensureStagingBuf(byte_len);
                 if (self.cuda_memcpy_htod) |htod| _ = htod(self.nccl_dev_buf, @ptrCast(buf), byte_len);
                 const allreduce = self.nccl_allreduce orelse return error.NcclNotAvailable;
@@ -460,7 +460,7 @@ pub const Transport = struct {
             return;
         }
         if (self.kind == .shm) {
-            const byte_len = n * @sizeOf(f32);
+            const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
             if (byte_len > shm_buf_size) return error.BufferTooLarge;
             const recv = try self.ensureRecvBuf(n);
             try self.shmSend(@ptrCast(buf), byte_len);
@@ -473,7 +473,7 @@ pub const Transport = struct {
 
     fn tcpAllReduce(self: *Transport, buf: [*]f32, n: usize) !void {
         if (self.tcp_connected == 0) return;
-        const byte_len = n * @sizeOf(f32);
+        const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
 
         const recv = self.ensureRecvBuf(n) catch |err| {
             std.log.err("tcpAllReduce: recv buffer allocation failed ({d} floats): {s}", .{ n, @errorName(err) });
@@ -523,7 +523,7 @@ pub const Transport = struct {
 
     /// Point-to-point send: send buffer to peer.
     pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) !void {
-        const byte_len = n * @sizeOf(f32);
+        const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
         if (self.kind == .nccl and self.nccl_send != null) {
             self.ensureNcclComm();
             if (self.nccl_comm == null) {
@@ -611,7 +611,7 @@ pub const Transport = struct {
     /// Uses NCCL point-to-point recv (with device staging), SHM, or TCP
     /// depending on transport kind. Falls back to TCP when NCCL is unavailable.
     pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) !void {
-        const byte_len = n * @sizeOf(f32);
+        const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
         if (self.kind == .nccl and self.nccl_recv != null) {
             self.ensureNcclComm();
             if (self.nccl_comm == null) {

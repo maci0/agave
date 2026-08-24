@@ -337,8 +337,9 @@ pub const GrammarState = struct {
                 return self.tryNextAlternative(c, depth);
             },
             .char_not => {
-                if (@as(u32, c) < elem.lo or @as(u32, c) > elem.hi) {
-                    top.elem_idx += 1;
+                const run_len: u32 = @intCast(self.countCharNotRun(top.rule_id, top.elem_idx));
+                if (self.charNotRunAccepts(c, top.rule_id, top.elem_idx, @intCast(run_len))) {
+                    top.elem_idx += run_len;
                     self.advancePastEnd();
                     return true;
                 }
@@ -366,24 +367,23 @@ pub const GrammarState = struct {
                 return self.acceptCharInner(c, depth + 1);
             },
             .char_not_star => {
-                if (@as(u32, c) < elem.lo or @as(u32, c) > elem.hi) {
-                    return true; // match — stay at this element
+                const run_len: u32 = @intCast(self.countCharNotRun(top.rule_id, top.elem_idx));
+                if (self.charNotRunAccepts(c, top.rule_id, top.elem_idx, @intCast(run_len))) {
+                    return true; // match — stay at this run
                 }
-                // character is in excluded range — advance past (zero matches ok)
-                top.elem_idx += 1;
+                top.elem_idx += run_len;
                 self.advancePastEnd();
                 return self.acceptCharInner(c, depth + 1);
             },
             .char_not_plus => unreachable, // decomposed to char_not + char_not_star by parser
             .char_not_opt => {
-                // ? = zero or one: accept if NOT in range, else skip
-                if (@as(u32, c) < elem.lo or @as(u32, c) > elem.hi) {
-                    top.elem_idx += 1;
+                const run_len: u32 = @intCast(self.countCharNotRun(top.rule_id, top.elem_idx));
+                if (self.charNotRunAccepts(c, top.rule_id, top.elem_idx, @intCast(run_len))) {
+                    top.elem_idx += run_len;
                     self.advancePastEnd();
                     return true;
                 }
-                // character in excluded range — skip (zero matches ok)
-                top.elem_idx += 1;
+                top.elem_idx += run_len;
                 return self.acceptCharInner(c, depth + 1);
             },
             .rule_ref => {
@@ -460,8 +460,12 @@ pub const GrammarState = struct {
         const top = &self.stack.items[self.stack.items.len - 1];
         if (top.rule_id >= self.grammar.rules.len) return false;
         const rule = self.grammar.rules[top.rule_id];
-        // Scan forward to find next | in this rule
         var idx = top.elem_idx;
+        if (idx < rule.elements.len and rule.elements[idx].type == .char_not) {
+            idx = std.math.add(u32, idx, std.math.cast(u32, self.countCharNotRun(top.rule_id, idx)) orelse 1) catch 1;
+        } else {
+            idx = std.math.add(u32, idx, 1) catch return false;
+        }
         while (idx < rule.elements.len) : (idx += 1) {
             if (rule.elements[idx].type == .alt) {
                 top.elem_idx = idx + 1;
@@ -470,6 +474,31 @@ pub const GrammarState = struct {
             if (rule.elements[idx].type == .end) break;
         }
         return false;
+    }
+
+    fn countCharNotRun(self: *const GrammarState, rule_id: u32, start: u32) usize {
+        if (rule_id >= self.grammar.rules.len) return 1;
+        const elems = self.grammar.rules[rule_id].elements;
+        var n: usize = 0;
+        var i = start;
+        while (i < elems.len and elems[i].type == .char_not) : (i += 1) {
+            n += 1;
+        }
+        return if (n == 0) 1 else n;
+    }
+
+    fn charNotRunAccepts(self: *const GrammarState, c: u8, rule_id: u32, start: u32, run_len: usize) bool {
+        if (rule_id >= self.grammar.rules.len) return false;
+        const elems = self.grammar.rules[rule_id].elements;
+        const uc: u32 = @as(u32, c);
+        for (0..run_len) |k| {
+            const idx = start + k;
+            if (idx >= elems.len) break;
+            const e = elems[idx];
+            if (e.type != .char_not) break;
+            if (uc >= e.lo and uc <= e.hi) return false;
+        }
+        return true;
     }
 
     /// Feed a full token's text through the state machine, accepting characters one by one.
@@ -688,9 +717,10 @@ const Parser = struct {
             // Remove group elements from inline position
             self.elements.shrinkRetainingCapacity(group_start);
 
-            // Add synthetic rule — no local errdefer: once appended, parseGrammar's
-            // errdefer owns cleanup. A local errdefer here would double-free if a
-            // later try (elements.append below) fails.
+            if (self.rules.items.len >= max_rules) {
+                self.allocator.free(group_elems);
+                return error.OutOfMemory;
+            }
             const synth_id: u32 = @intCast(self.rules.items.len);
             try self.rules.append(self.allocator, .{ .name = "_group", .elements = group_elems });
 
@@ -857,8 +887,9 @@ const Parser = struct {
         if (rule_id != unresolved_rule_id) {
             try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = rule_id });
         } else {
-            // Forward reference — unique placeholder per ref
-            const placeholder: u32 = forward_ref_base + @as(u32, @intCast(self.unresolved.items.len));
+            if (self.unresolved.items.len >= 0xFF) return;
+            const placeholder: u32 = std.math.add(u32, forward_ref_base, @as(u32, @intCast(self.unresolved.items.len))) catch return;
+            if (placeholder == unresolved_rule_id) return;
             try self.elements.append(self.allocator, .{ .type = .rule_ref, .lo = placeholder });
             try self.unresolved.append(self.allocator, .{
                 .name = name,

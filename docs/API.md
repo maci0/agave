@@ -321,6 +321,8 @@ The `sleeping` field is `true` when the server has been idle longer than `--slee
 
 Readiness probe (no auth required). Returns 200 with `"status":"ready"` when healthy. Returns 503 with `"status":"degraded"` (KV cache pressure or high error rate) or `"status":"shutting_down"` during shutdown.
 
+When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"..."}` (plus `reason` when degraded), matching the minimal `/health` behavior.
+
 ```json
 {"status":"ready","queue_depth":0,"kv_cache_used":100,"kv_cache_total":8192}
 ```
@@ -504,7 +506,8 @@ Content-Type: application/octet-stream
 
 Missing or non-positive `n_tokens` returns `400` with `invalid_request_error`
 (same `type` string as other OpenAI-style 400s; was briefly `invalid_request` on
-this route only).
+this route only). Exporting more tokens than the cache currently holds
+(`n_tokens` > current `kv_seq_len`) also returns `400` (`code: invalid_value`).
 
 `/v1/kv_cache` and `/v1/kv_cache/info` require authentication if `--api-key` or
 `AGAVE_API_KEY` is configured. Use case: compute system-prompt KV on one instance,

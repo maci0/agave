@@ -74,6 +74,7 @@ pub fn scaledDotProductAttention(
     std.debug.assert(nh % nkv == 0);
     const kvd = std.math.mul(usize, nkv, hd) catch @panic("kvd overflow");
     const qkv_dim = std.math.mul(usize, nh, hd) catch @panic("attn dim overflow");
+    _ = qkv_dim;
 
     // Fast path: no window, no score offset → delegate KV append + attention to backend.
     // All backends handle KV append + attention in one call (GPU: fused kernel, CPU: inline).
@@ -105,15 +106,15 @@ pub fn scaledDotProductAttention(
         const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
         const SimdVec = @Vector(simd_width, f32);
 
-        @memset(attn_out[0 .. nh * hd], 0);
+        @memset(attn_out[0..qkv_dim], 0);
 
         for (0..nh) |h| {
             const kvh = h / hpg;
-            const q_base = h * hd;
+            const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
 
             for (0..win_len) |wi| {
                 const t = win_start + wi;
-                const k_base = t * kvd + kvh * hd;
+                const k_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("k_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("k_base overflow")) catch @panic("k_base overflow");
                 var acc: SimdVec = @splat(0.0);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -126,14 +127,14 @@ pub fn scaledDotProductAttention(
                 scores[score_offset + wi] = dot * scale;
             }
 
-            const n_scores = score_offset + win_len;
+            const n_scores = std.math.add(usize, score_offset, win_len) catch @panic("score offset overflow");
             cpuSoftmax(scores, n_scores);
 
             for (0..win_len) |wi| {
                 const score = scores[score_offset + wi];
-                if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
+                if (score < sparse_v_threshold) continue;
                 const t = win_start + wi;
-                const v_base = t * kvd + kvh * hd;
+                const v_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("v_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("v_base overflow")) catch @panic("v_base overflow");
                 const sv: SimdVec = @splat(score);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -150,7 +151,7 @@ pub fn scaledDotProductAttention(
     }
 
     // Quantized windowed fallback — use kvDot (kv_type_k) / kvMulAccum (kv_type_v)
-    @memset(attn_out[0 .. nh * hd], 0);
+    @memset(attn_out[0..qkv_dim], 0);
 
     for (0..nh) |h| {
         const kvh = h / hpg;
@@ -164,15 +165,15 @@ pub fn scaledDotProductAttention(
             scores[score_offset + wi] = kv_quant.kvDot(q + q_base, kv_keys[k_off..].ptr, hd, kv_type_k) * scale;
         }
 
-        const n_scores = score_offset + win_len;
+        const n_scores = std.math.add(usize, score_offset, win_len) catch @panic("score offset overflow");
         cpuSoftmax(scores, n_scores);
 
         // V accumulation (value type) with sparse V skip
         for (0..win_len) |wi| {
             const score = scores[score_offset + wi];
-            if (score < sparse_v_threshold) continue; // Sparse V: skip negligible positions
+            if (score < sparse_v_threshold) continue;
             const t = win_start + wi;
-            const elem_off = t * kvd + kvh * hd;
+            const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), std.math.mul(usize, kvh, hd) catch @panic("elem_off overflow")) catch @panic("elem_off overflow");
             const v_off = kv_quant.kvByteOffset(kv_type_v, elem_off);
             kv_quant.kvMulAccum(attn_out + q_base, score, kv_values[v_off..].ptr, hd, kv_type_v);
         }
@@ -282,8 +283,11 @@ pub fn pagedAttention(
     block_size: usize,
 ) void {
     std.debug.assert(nkv > 0);
+    std.debug.assert(hd > 0 and nh > 0);
+    std.debug.assert(nh % nkv == 0);
     std.debug.assert(block_size > 0);
-    const kvd = nkv * hd;
+    const kvd = std.math.mul(usize, nkv, hd) catch @panic("kvd overflow");
+    const qkv_dim = std.math.mul(usize, nh, hd) catch @panic("qkv_dim overflow");
 
     // Append current K/V to the block for position seq_len
     const logical_block = seq_len / block_size;
@@ -293,30 +297,33 @@ pub fn pagedAttention(
         const phys = block_table[logical_block];
         std.debug.assert(phys < blocks.len);
         const blk = &blocks[phys];
-        const off = block_offset * kvd;
+        const off = std.math.mul(usize, block_offset, kvd) catch @panic("paged off overflow");
+        std.debug.assert(off + kvd <= blk.keys.len and off + kvd <= blk.values.len);
         @memcpy(blk.keys[off..][0..kvd], k_buf[0..kvd]);
         @memcpy(blk.values[off..][0..kvd], v_buf[0..kvd]);
         blk.used = @intCast(@min(block_offset + 1, block_size));
     }
 
-    const sl = seq_len + 1;
+    const sl = std.math.add(usize, seq_len, 1) catch @panic("seq len overflow");
     const hpg = nh / nkv;
     const SimdVec = @Vector(simd_width, f32);
     const blk_shift: std.math.Log2Int(usize) = if (std.math.isPowerOfTwo(block_size)) @intCast(@ctz(block_size)) else 0;
     const blk_mask: usize = if (blk_shift != 0) block_size - 1 else 0;
 
-    @memset(attn_out[0 .. nh * hd], 0);
+    @memset(attn_out[0..qkv_dim], 0);
 
     for (0..nh) |h| {
         const kvh = h / hpg;
-        const q_base = h * hd;
+        const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
 
         // QK dot products — look up K from block table
         for (0..sl) |t| {
             const lb = if (blk_mask != 0) t >> blk_shift else t / block_size;
             const bo = if (blk_mask != 0) t & blk_mask else t % block_size;
+            std.debug.assert(lb < block_table.len);
             const phys = block_table[lb];
-            const k_start = bo * kvd + kvh * hd;
+            std.debug.assert(phys < blocks.len);
+            const k_start = std.math.add(usize, std.math.mul(usize, bo, kvd) catch @panic("k_start overflow"), std.math.mul(usize, kvh, hd) catch @panic("k_start overflow")) catch @panic("k_start overflow");
 
             var acc: SimdVec = @splat(0.0);
             var d: usize = 0;
@@ -339,8 +346,10 @@ pub fn pagedAttention(
                 if (scores[t] < sparse_v_threshold) continue;
                 const lb = if (blk_mask != 0) t >> blk_shift else t / block_size;
                 const bo = if (blk_mask != 0) t & blk_mask else t % block_size;
+                std.debug.assert(lb < block_table.len);
                 const phys = block_table[lb];
-                const v_start = bo * kvd + kvh * hd;
+                std.debug.assert(phys < blocks.len);
+                const v_start = std.math.add(usize, std.math.mul(usize, bo, kvd) catch @panic("v_start overflow"), std.math.mul(usize, kvh, hd) catch @panic("v_start overflow")) catch @panic("v_start overflow");
                 const sv: SimdVec = @splat(scores[t]);
                 const v_row = blocks[phys].values;
 
@@ -739,23 +748,26 @@ pub fn scaledDotProductAttentionCanvas(
     kv_type_v: KvQuantType,
 ) void {
     _ = be;
+    std.debug.assert(nkv > 0 and hd > 0 and nh > 0);
+    std.debug.assert(nh % nkv == 0);
     const hpg = nh / nkv;
-    const kvd = nkv * hd;
-    const total_kv = n_cached + cl;
+    const kvd = std.math.mul(usize, nkv, hd) catch @panic("kvd overflow");
+    const qkv_dim = std.math.mul(usize, nh, hd) catch @panic("qkv_dim overflow");
+    const total_kv = std.math.add(usize, n_cached, cl) catch @panic("total_kv overflow");
 
-    @memset(attn_out[0 .. nh * hd], 0);
+    @memset(attn_out[0..qkv_dim], 0);
 
     const SimdVec = @Vector(simd_width, f32);
 
     for (0..nh) |h| {
         const kvh = h / hpg;
-        const q_base = h * hd;
+        const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
 
         // 1. Score against all cached prompt tokens (f32 or quantized).
         if (kv_type_k == .f32) {
             const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
             for (0..n_cached) |t| {
-                const k_base = t * kvd + kvh * hd;
+                const k_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("k_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("k_base overflow")) catch @panic("k_base overflow");
                 var acc: SimdVec = @splat(0.0);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -769,7 +781,7 @@ pub fn scaledDotProductAttentionCanvas(
             }
         } else {
             for (0..n_cached) |t| {
-                const elem_off = t * kvd + kvh * hd;
+                const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), std.math.mul(usize, kvh, hd) catch @panic("elem_off overflow")) catch @panic("elem_off overflow");
                 const k_off = kv_quant.kvByteOffset(kv_type_k, elem_off);
                 scores[t] = kv_quant.kvDot(q + q_base, kv_keys[k_off..].ptr, hd, kv_type_k) * scale;
             }
@@ -777,7 +789,9 @@ pub fn scaledDotProductAttentionCanvas(
 
         // 2. Score against canvas tokens (bidirectional, all attend to all).
         for (0..cl) |ci| {
-            const k_ptr = canvas_k.ptr + ci * kvd + kvh * hd;
+            const ci_kvd = std.math.mul(usize, ci, kvd) catch @panic("ci kvd overflow");
+            const kvh_hd = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
+            const k_ptr = canvas_k.ptr + ci_kvd + kvh_hd;
             var acc: SimdVec = @splat(0.0);
             var d: usize = 0;
             while (d + simd_width <= hd) : (d += simd_width) {
@@ -799,7 +813,7 @@ pub fn scaledDotProductAttentionCanvas(
             for (0..n_cached) |t| {
                 const w = scores[t];
                 if (w < sparse_v_threshold) continue;
-                const v_base = t * kvd + kvh * hd;
+                const v_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("v_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("v_base overflow")) catch @panic("v_base overflow");
                 const sv: SimdVec = @splat(w);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -815,7 +829,7 @@ pub fn scaledDotProductAttentionCanvas(
             for (0..n_cached) |t| {
                 const w = scores[t];
                 if (w < sparse_v_threshold) continue;
-                const elem_off = t * kvd + kvh * hd;
+                const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), std.math.mul(usize, kvh, hd) catch @panic("elem_off overflow")) catch @panic("elem_off overflow");
                 const v_off = kv_quant.kvByteOffset(kv_type_v, elem_off);
                 kv_quant.kvMulAccum(attn_out + q_base, w, kv_values[v_off..].ptr, hd, kv_type_v);
             }
@@ -825,7 +839,9 @@ pub fn scaledDotProductAttentionCanvas(
         for (0..cl) |ci| {
             const w = scores[n_cached + ci];
             if (w < sparse_v_threshold) continue;
-            const v_ptr = canvas_v.ptr + ci * kvd + kvh * hd;
+            const ci_kvd2 = std.math.mul(usize, ci, kvd) catch @panic("ci kvd overflow");
+            const kvh_hd2 = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
+            const v_ptr = canvas_v.ptr + ci_kvd2 + kvh_hd2;
             const sv: SimdVec = @splat(w);
             var d: usize = 0;
             while (d + simd_width <= hd) : (d += simd_width) {

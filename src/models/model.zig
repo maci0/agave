@@ -59,6 +59,8 @@ pub const ForwardError = error{
     NcclSendFailed,
     NcclRecvFailed,
     NcclAllReduceFailed,
+    BufferTooLarge,
+    InvalidFormat,
 };
 
 /// Model interface — all models implement this via comptime vtable generation.
@@ -1556,6 +1558,45 @@ const MockModel = struct {
     }
 };
 
+/// Mock model variant that implements the optional KV prefix transfer methods
+/// (mirrors Gemma4; only models with these get 200s from /v1/kv_cache).
+const MockKvTransferModel = struct {
+    eos_token_id: u32 = 42,
+    vocab_size: u32 = 1000,
+    n_layers: u32 = 8,
+    n_embd: u32 = 256,
+    n_head: u32 = 4,
+    n_head_kv: u32 = 2,
+    kv_seq_len: usize = 10,
+    logits_buf: []f32 = &.{},
+    cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    be: MockModel.MockBackend = .{},
+    exported_n_tokens: usize = 0,
+
+    fn forward(_: *MockKvTransferModel, _: u32) ForwardError!u32 {
+        return 7;
+    }
+    fn prefill(_: *MockKvTransferModel, _: []const u32) ForwardError!u32 {
+        return 7;
+    }
+    fn resetCache(_: *MockKvTransferModel) void {}
+    fn cancel(self: *MockKvTransferModel) void {
+        signalCancel(&self.cancelled);
+    }
+    fn getBlockTable(_: *MockKvTransferModel) []const u32 {
+        return &.{};
+    }
+    fn exportKvPrefix(_: *MockKvTransferModel, dst: []u8, n_tokens: usize) usize {
+        const bytes = @min(dst.len, n_tokens * @sizeOf(f32));
+        @memset(dst[0..bytes], 0);
+        return bytes;
+    }
+    fn importKvPrefix(self: *MockKvTransferModel, _: []const u8, n_tokens: usize) bool {
+        self.exported_n_tokens = n_tokens;
+        return true;
+    }
+};
+
 test "Model.from and vtable dispatch — eosId" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
@@ -1654,6 +1695,24 @@ test "Model.from and vtable dispatch — getBlockTable" {
     var mock = MockModel{};
     const m = Model.from(MockModel, &mock);
     try std.testing.expectEqual(@as(usize, 0), m.getBlockTable().len);
+}
+
+test "Model.from and vtable dispatch — kv transfer capability probes" {
+    // MockModel omits exportKvPrefix/importKvPrefix: both probes must report
+    // unsupported (export returns 0, import returns false) so the HTTP layer
+    // can return 501 instead of a misleading 400.
+    var bare = MockModel{};
+    const m_bare = Model.from(MockModel, &bare);
+    try std.testing.expectEqual(@as(usize, 0), m_bare.exportKvPrefix(&.{}, 1));
+    try std.testing.expect(!m_bare.importKvPrefix(&.{}, 1));
+
+    // Variant implementing the methods: dispatch reaches them.
+    var full = MockKvTransferModel{};
+    const m_full = Model.from(MockKvTransferModel, &full);
+    var dst: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 8), m_full.exportKvPrefix(&dst, 2));
+    try std.testing.expect(m_full.importKvPrefix(&dst, 3));
+    try std.testing.expectEqual(@as(usize, 3), full.exported_n_tokens);
 }
 
 test "Model.from and vtable dispatch — setLayerSkip" {

@@ -37,11 +37,12 @@ fn deleteFileByPath(path: []const u8) void {
 
 /// Write all bytes to a file at the given offset using positioned I/O (pwrite).
 /// This avoids seek+write races when multiple threads access the file.
-fn pwriteAll(file: anytype, bytes: []const u8, offset: usize) !void {
+fn pwriteAll(file: anytype, bytes: []const u8, offset: u64) !void {
     if (comptime is_freestanding) return error.WriteError;
     var written: usize = 0;
     while (written < bytes.len) {
-        const result = std.c.pwrite(file.handle, bytes[written..].ptr, bytes[written..].len, @intCast(offset + written));
+        const cur_off = std.math.add(u64, offset, @as(u64, written)) catch return error.Overflow;
+        const result = std.c.pwrite(file.handle, bytes[written..].ptr, bytes[written..].len, @intCast(cur_off));
         const n: isize = @bitCast(result);
         if (n <= 0) return error.WriteError;
         written += @intCast(n);
@@ -49,11 +50,12 @@ fn pwriteAll(file: anytype, bytes: []const u8, offset: usize) !void {
 }
 
 /// Read all bytes from a file at the given offset using positioned I/O (pread).
-fn preadAll(file: anytype, buf: []u8, offset: usize) !usize {
+fn preadAll(file: anytype, buf: []u8, offset: u64) !usize {
     if (comptime is_freestanding) return 0;
     var total: usize = 0;
     while (total < buf.len) {
-        const result = std.c.pread(file.handle, buf[total..].ptr, buf[total..].len, @intCast(offset + total));
+        const cur_off = std.math.add(u64, offset, @as(u64, total)) catch return error.Overflow;
+        const result = std.c.pread(file.handle, buf[total..].ptr, buf[total..].len, @intCast(cur_off));
         const n: isize = @bitCast(result);
         if (n < 0) return error.ReadError; // I/O error — do not treat as EOF
         if (n == 0) break; // true EOF

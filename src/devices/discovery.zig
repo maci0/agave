@@ -588,9 +588,12 @@ pub fn printDeviceTable(list: *const DeviceList) void {
             dev.ccString(),
         }) catch break;
         pos += line.len;
+        if (pos >= buf.len) break;
     }
-    buf[pos] = '\n';
-    pos += 1;
+    if (pos < buf.len) {
+        buf[pos] = '\n';
+        pos += 1;
+    }
     _ = std.posix.system.write(1, buf[0..pos].ptr, pos);
 }
 
