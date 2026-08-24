@@ -4292,13 +4292,14 @@ fn generateSpeculative(
         if (suffix_state_opt) |*ss| {
             // Push non-special prompt tokens for suffix matching context.
             // Skip special tokens (template markers like <｜Assistant｜>, </think>)
-            // which cause the suffix to echo chat formatting.
-            // User text tokens provide context for faster suffix matching.
-            const special_token_start: u32 = 128000;
+            // which cause the suffix to echo chat formatting. Membership comes
+            // from the tokenizer's loaded special-token table so this stays
+            // correct for vocabs whose specials are not at the top of the ID
+            // range (e.g. Gemma's <start_of_turn> sits at 105).
             for (token_ids) |tid| {
-                if (tid < special_token_start) ss.push(tid);
+                if (!tok.isSpecialId(tid)) ss.push(tid);
             }
-            if (!isEogToken(first_target, eog) and first_target < special_token_start) ss.push(first_target);
+            if (!isEogToken(first_target, eog) and !tok.isSpecialId(first_target)) ss.push(first_target);
         }
     }
     defer if (suffix_state_opt) |*ss| ss.deinit();
