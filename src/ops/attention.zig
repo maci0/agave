@@ -74,7 +74,6 @@ pub fn scaledDotProductAttention(
     std.debug.assert(nh % nkv == 0);
     const kvd = std.math.mul(usize, nkv, hd) catch @panic("kvd overflow");
     const qkv_dim = std.math.mul(usize, nh, hd) catch @panic("attn dim overflow");
-    _ = qkv_dim;
 
     // Fast path: no window, no score offset → delegate KV append + attention to backend.
     // All backends handle KV append + attention in one call (GPU: fused kernel, CPU: inline).

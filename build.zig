@@ -48,7 +48,7 @@ pub fn build(b: *std.Build) void {
     // Compiles Zig CUDA kernels to PTX assembly. The resulting .s file
     // is placed in zig-out/ and can be embedded into cuda.zig via @embedFile.
     // Build with: zig build ptx [-Dcuda-sm=sm_80]
-    const CudaSm = enum { sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120 };
+    const CudaSm = enum { sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120, sm_121 };
     const cuda_sm = b.option(CudaSm, "cuda-sm", "CUDA SM target (default: sm_90)") orelse .sm_90;
     const sm_model: *const std.Target.Cpu.Model = switch (cuda_sm) {
         .sm_50 => &std.Target.nvptx.cpu.sm_50,
@@ -61,6 +61,9 @@ pub fn build(b: *std.Build) void {
         .sm_90 => &std.Target.nvptx.cpu.sm_90,
         .sm_100 => &std.Target.nvptx.cpu.sm_100,
         .sm_120 => &std.Target.nvptx.cpu.sm_120,
+        // GB10 (NVIDIA DGX Spark) — Blackwell Ultra. PTX for sm_121 is
+        // forward-compatible with the sm_120 model; JITs at load time.
+        .sm_121 => &std.Target.nvptx.cpu.sm_121,
     };
 
     // ── ROCm AMDGCN kernels ─────────────────────────────────────────
