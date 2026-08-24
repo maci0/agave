@@ -314,7 +314,7 @@ agave [OPTIONS] <model> [prompt]
       --grammar-string <G> Inline GBNF grammar string
       --json-schema <S>    JSON schema for structured output
       --json-output        Force valid JSON object output
-      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0, V=turbo4) [default: f16]
+      --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2 through planar4/pq4, iso2/iq2 through iso4/iq4, rotor2/rq2 through rotor4/rq4, turbo (preset: K=q8_0, V=turbo4) [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
       --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]
       --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd
