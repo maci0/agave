@@ -96,7 +96,16 @@ The composer automatically selects the correct GEMV function (Q8_0/Q4_K/Q5_K/Q6_
 
 ## GEMV by Data Type
 
-**NR multi-row optimization** is applied across all backends and quant formats. Each kernel computes NR output rows per thread/threadgroup, amortizing input vector loads. CPU: Q8_0/Q4_0/BF16/F16 use NR=4; K-quant formats (Q4_K/Q5_K/Q6_K) use NR=2. Metal: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4; Q2_K/Q3_K/BF16/F16 use NR=2. CUDA: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4. ROCm: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4.
+**NR multi-row optimization** is applied across all backends and quant formats. Each kernel computes NR output rows per thread/threadgroup, amortizing input vector loads. CPU: Q8_0/Q4_0/BF16/F16 use NR=4; K-quant formats (Q4_K/Q5_K/Q6_K) use NR=2. Metal: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4; Q2_K/Q3_K/BF16/F16 use NR=2. CUDA: Q4_K/Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4. ROCm: Q4_K uses a single-row lane/copy decomposition (see below); Q5_K/Q6_K use NR=2; Q4_0/Q8_0 use NR=4.
+
+**ROCm Q4_K / BF16 GEMV (TileLang-derived design)**: one output row per workgroup,
+256 threads split as copies x lanes. For Q4_K each lane owns one 32-element sub-block
+slice of a super-block read as u32 words with constant-shift nibble extraction; copies
+split the super-block range so threads stream contiguous dwords instead of striding
+byte-wise across 144-byte blocks. BF16 pairs weights into dword loads. Replaces
+tid-strided scalar walks that left most threads idle at decode shapes (~9x on
+17408x5120). Validated against a host reference in `agave-bench gemv_q4_k`
+(`max_rel_err` JSON line); see `research/kernels/tilelang/` for the generator study.
 
 WebGPU and Vulkan cap workgroups per dimension at 65535. Vocab-sized GEMV (Qwen3.8-27B `n=248320`) chunks on WebGPU via `row_offset` and uses a 2D grid on Vulkan (`gl_WorkGroupID.y * 65535 + x`). CUDA/ROCm/Metal grids are large enough for that vocab without splitting.
 
