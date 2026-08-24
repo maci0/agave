@@ -669,7 +669,10 @@ test "fuzz: all sdpa functions" {
             // 10. softmax
             var sm_buf: [4]f32 = undefined;
             const raw_sm = smith.valueWithHash([4]f32, 4);
-            for (0..4) |i| sm_buf[i] = std.math.clamp(raw_sm[i], -10.0, 10.0);
+            for (0..4) |i| {
+                const v = raw_sm[i];
+                sm_buf[i] = if (std.math.isNan(v) or !std.math.isFinite(v)) 0 else std.math.clamp(v, -10.0, 10.0);
+            }
             softmax(&sm_buf);
             var sm_sum: f32 = 0;
             for (sm_buf) |s| {
