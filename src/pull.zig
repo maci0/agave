@@ -1140,7 +1140,10 @@ fn downloadFileOnce(
         return PullError.DownloadFailed;
     };
     const file: Io.File = .{ .handle = fd, .flags = .{ .nonblocking = false } };
-    defer _ = std.c.close(file.handle);
+    // Success path closes explicitly below and checks the result: a failed
+    // close on a write handle means buffered data was lost (e.g. ENOSPC at
+    // flush). Error paths close best-effort via errdefer.
+    errdefer _ = std.c.close(file.handle);
 
     // Seek to resume offset for append.
     if (start_offset > 0) {
@@ -1235,6 +1238,11 @@ fn downloadFileOnce(
     // Verify downloaded size matches expected size (catches silent truncation).
     if (total_size > 0 and downloaded != total_size) {
         eprint("Error: downloaded {d} bytes but expected {d} — file may be truncated\n", .{ downloaded, total_size });
+        return PullError.DownloadFailed;
+    }
+
+    if (std.c.close(file.handle) != 0) {
+        eprint("Error: failed to close '{s}' after download (flush may have failed)\n", .{blob_path});
         return PullError.DownloadFailed;
     }
 }

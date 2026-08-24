@@ -2138,6 +2138,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const outcome: ExportOutcome = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
+                // server.mutex alone does not exclude the scheduler thread's
+                // Phase A/B forwards (they hold model_mutex without
+                // server.mutex). Take model_mutex too, or exportKvPrefix reads
+                // the KV cache mid-forward and hands out a torn prefix blob.
+                lockModelWithScheduler();
+                defer unlockModelWithScheduler();
                 var buf_len = estimateKvExportBytes(g_server.model.*, n_tokens);
                 var buf = g_server.allocator.alloc(u8, buf_len) catch break :blk .oom;
                 var n_written = g_server.model.exportKvPrefix(buf, n_tokens);
@@ -2181,6 +2187,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const ok = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
+                // Same scheduler exclusion as the export path: importKvPrefix
+                // writes the KV buffers a concurrent scheduled forward is
+                // reading, which would silently corrupt its attention state.
+                lockModelWithScheduler();
+                defer unlockModelWithScheduler();
                 if (!g_server.model.importKvPrefix(req.body, n_tokens)) break :blk false;
                 g_server.clearCachedPromptIds();
                 g_server.kv_valid = true;
@@ -6730,8 +6741,9 @@ test "Utf8Holdback reassembles a character split across tokens" {
     try std.testing.expectEqualStrings("", p2.head);
     try std.testing.expectEqualStrings("", p2.body);
     const p3 = hb.feed(&[_]u8{0x96});
-    try std.testing.expectEqualStrings("", p3.head);
-    try std.testing.expectEqualStrings("\xe4\xb8\x96", p3.body);
+    // Reassembled char arrives via `head` (built from held bytes), body empty.
+    try std.testing.expectEqualStrings("\xe4\xb8\x96", p3.head);
+    try std.testing.expectEqualStrings("", p3.body);
 
     // ASCII after a completed sequence flows straight through.
     const p4 = hb.feed("hi");

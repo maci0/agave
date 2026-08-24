@@ -245,6 +245,12 @@ pub const PagedKvCache = struct {
 
 /// Maximum children per radix tree node. Token IDs are hashed into buckets.
 const radix_fanout = 256;
+/// Hard cap on total RadixTree nodes. LRU eviction is not deployed yet, so
+/// without a bound the tree grows with every distinct prompt prefix for the
+/// lifetime of the server. Once the cap is reached insert() fails with
+/// error.RadixTreeFull and the caller continues uncached (matchPrefix still
+/// serves everything already stored).
+const radix_max_nodes: usize = 4096;
 
 /// Hash a token ID to a radix tree child bucket index.
 /// Uses multiplicative hashing (Knuth's golden ratio constant) for uniform
@@ -299,11 +305,15 @@ pub const PrefixMatch = struct { matched: usize, blocks: []const u32 };
 
 /// Radix tree for prefix-aware KV cache management.
 /// Supports insert (cache a token sequence) and match (find longest cached prefix).
+/// Bounded by `radix_max_nodes` live nodes; insert() returns error.RadixTreeFull
+/// at the cap so long-lived servers cannot grow the tree without limit.
 /// LRU eviction tracking is implemented via `last_access` timestamps; eviction policy not yet deployed.
 pub const RadixTree = struct {
     root: *RadixNode,
     allocator: Allocator,
     access_counter: i64 = 0,
+    /// Live node count (root included), bounded by radix_max_nodes.
+    node_count: usize = 1,
     /// xxHash fast-path cache: maps hash(tokens) → (matched_len, node pointer).
     /// Avoids full tree walk for repeated prefix queries (e.g., same system prompt).
     hash_cache: std.AutoHashMap(u64, HashCacheEntry) = undefined,
@@ -321,6 +331,21 @@ pub const RadixTree = struct {
         tree.hash_cache = std.AutoHashMap(u64, HashCacheEntry).init(allocator);
         tree.hash_cache_inited = true;
         return tree;
+    }
+
+    /// Allocate a node against the tree's node budget. Returns
+    /// error.RadixTreeFull once `radix_max_nodes` nodes are live.
+    fn createNode(self: *RadixTree, tokens: []const u32, block_ids: []const u32) !*RadixNode {
+        if (self.node_count >= radix_max_nodes) return error.RadixTreeFull;
+        const node = try RadixNode.init(self.allocator, tokens, block_ids);
+        self.node_count += 1;
+        return node;
+    }
+
+    /// Destroy a successfully created node and release its budget slot.
+    fn destroyNode(self: *RadixTree, node: *RadixNode) void {
+        node.deinit(self.allocator);
+        self.node_count -= 1;
     }
 
     /// Mark a node as recently accessed and advance the global counter.
@@ -451,8 +476,8 @@ pub const RadixTree = struct {
                         child.block_ids;
 
                     // 1. Allocate intermediate node for the shared prefix
-                    const mid = try RadixNode.init(self.allocator, edge[0..match_len], prefix_blocks);
-                    errdefer mid.deinit(self.allocator);
+                    const mid = try self.createNode(edge[0..match_len], prefix_blocks);
+                    errdefer self.destroyNode(mid);
 
                     // 2. Pre-allocate shortened suffix slices for existing child
                     const new_child_tokens = try self.allocator.dupe(u32, edge[match_len..]);
@@ -467,7 +492,7 @@ pub const RadixTree = struct {
                     pos += match_len;
                     const new_remaining = tokens[pos..];
                     var new_leaf: ?*RadixNode = null;
-                    errdefer if (new_leaf) |nl| nl.deinit(self.allocator);
+                    errdefer if (new_leaf) |nl| self.destroyNode(nl);
                     if (new_remaining.len > 0) {
                         const new_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
                         const suffix_bucket = tokenBucket(new_child_tokens[0]);
@@ -481,7 +506,7 @@ pub const RadixTree = struct {
                             leaf_bucket +%= 1;
                         }
                         if (leaf_probes < leaf_max_probes) {
-                            new_leaf = try RadixNode.init(self.allocator, new_remaining, new_blocks);
+                            new_leaf = try self.createNode(new_remaining, new_blocks);
                         }
                     }
 
@@ -516,7 +541,7 @@ pub const RadixTree = struct {
                         if (attach_probes >= attach_max) {
                             // Probe exhaustion — all slots occupied; free leaf to avoid
                             // overwriting an existing child or leaking memory.
-                            nl.deinit(self.allocator);
+                            self.destroyNode(nl);
                         } else {
                             mid.children[attach_bucket] = nl;
                         }
@@ -531,7 +556,7 @@ pub const RadixTree = struct {
                 const free_bucket = first_free_bucket orelse return error.RadixTreeFull;
                 const remaining_tokens = tokens[pos..];
                 const remaining_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
-                const new_child = try RadixNode.init(self.allocator, remaining_tokens, remaining_blocks);
+                const new_child = try self.createNode(remaining_tokens, remaining_blocks);
                 self.touchNode(new_child);
                 node.children[free_bucket] = new_child;
                 break;
@@ -631,6 +656,57 @@ test "RadixTree empty match" {
 
     const m = tree.matchPrefix(&.{ 1, 2, 3 });
     try std.testing.expectEqual(@as(usize, 0), m.matched);
+}
+
+test "RadixTree node count tracks inserts and splits" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    // Root only
+    try std.testing.expectEqual(@as(usize, 1), tree.node_count);
+
+    // One insert: one leaf under root
+    try tree.insert(&.{ 1, 2, 3 }, &.{ 7, 7 });
+    try std.testing.expectEqual(@as(usize, 2), tree.node_count);
+
+    // Disjoint insert: second leaf under root
+    try tree.insert(&.{ 9, 9 }, &.{ 8, 8 });
+    try std.testing.expectEqual(@as(usize, 3), tree.node_count);
+
+    // Branching insert forces an edge split: mid + leaf (child stays)
+    try tree.insert(&.{ 1, 2, 4 }, &.{});
+    try std.testing.expectEqual(@as(usize, 5), tree.node_count);
+}
+
+test "RadixTree insert is bounded by radix_max_nodes" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    // Grow one chain along a single root branch: every successful insert
+    // appends exactly one node, so the cap is reached without exhausting
+    // root's fanout slots.
+    var reached_cap = false;
+    var len: usize = 1;
+    while (len <= radix_max_nodes + 64) : (len += 1) {
+        const tokens = try allocator.alloc(u32, len);
+        defer allocator.free(tokens);
+        for (tokens, 0..) |*t, i| t.* = @intCast(i);
+        if (tree.insert(tokens, &.{})) |_| {
+            try std.testing.expect(tree.node_count <= radix_max_nodes);
+        } else |err| {
+            try std.testing.expectEqual(error.RadixTreeFull, err);
+            reached_cap = true;
+            break;
+        }
+    }
+    try std.testing.expect(reached_cap);
+    try std.testing.expectEqual(radix_max_nodes, tree.node_count);
+
+    // A full tree still serves matches; no further growth is possible.
+    try std.testing.expectEqual(@as(usize, 1), tree.matchPrefix(&.{0}).matched);
+    try std.testing.expectEqual(error.RadixTreeFull, tree.insert(&.{ @intCast(radix_max_nodes * 3), 42 }, &.{}));
 }
 
 test "tokenBucket distributes different IDs to different buckets" {
