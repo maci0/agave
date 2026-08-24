@@ -76,7 +76,17 @@ pub fn applyLoraGguf(
 ) !Handle {
     var lora_file = try gguf.GGUFFile.open(allocator, lora_path);
     defer lora_file.deinit();
+    return applyLoraGgufFile(allocator, base_gguf, &lora_file);
+}
 
+/// Apply an already-parsed adapter GGUF file to a base GGUFFile in place.
+/// Same contract as `applyLoraGguf`; split out so callers holding a parsed
+/// file (and tests) skip disk access.
+fn applyLoraGgufFile(
+    allocator: Allocator,
+    base_gguf: *gguf.GGUFFile,
+    lora_file: *const gguf.GGUFFile,
+) !Handle {
     const adapter_type = lora_file.getMetaStr("adapter.type") orelse
         lora_file.getMetaStr("general.type") orelse "";
     if (!std.mem.eql(u8, adapter_type, "lora")) return error.NotALoraAdapter;
@@ -300,4 +310,179 @@ test "lora handle dispose is idempotent" {
     var handle = Handle{ .allocator = allocator };
     handle.dispose();
     handle.dispose();
+}
+
+// ── Fuzzing ──────────────────────────────────────────────────────
+
+test "fuzz: LoRA adapter merge over hostile GGUF" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            const n: usize = 4;
+            const k: usize = 8;
+
+            // Base tensor data [n × k]: bounded finite floats.
+            var base_data: [n * k]f32 = undefined;
+            for (&base_data, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i)))) / 10.0;
+
+            var base_gguf = testGguf(allocator);
+            defer base_gguf.deinit();
+
+            // Adapter metadata: type marker and alpha.
+            var lora_gguf = testGguf(allocator);
+            defer lora_gguf.deinit();
+            const type_ok = smith.valueWithHash(u8, 61) & 1 == 0;
+            const adapter_type: []const u8 = if (type_ok) "lora" else "model";
+            lora_gguf.metadata.put("adapter.type", .{ .string = adapter_type }) catch return;
+            const alpha: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 62) % 8)) + 1.0;
+            lora_gguf.metadata.put("adapter.lora.alpha", .{ .float32 = alpha }) catch return;
+
+            // Adapter tensors. The well-formed shape is rank ∈ 1..8 paired
+            // [rank,k] / [n,rank]; mutations exercise every guard:
+            // rank mismatch, zero dims, missing pair, oversized name,
+            // oversized dims (alloc failure), non-F32 dtype.
+            const rank: usize = smith.indexWithHash(8, 0) + 1;
+            const variant = smith.indexWithHash(6, 1);
+
+            var name_buf: [640]u8 = undefined;
+            const long_name = variant == 4;
+            const p0_suffix: []const u8 = if (long_name) blk: {
+                @memset(&name_buf, 'x');
+                break :blk name_buf[0 .. name_buf.len - ".lora_a".len];
+            } else "p0";
+
+            var a_name_buf: [700]u8 = undefined;
+            var b_name_buf: [700]u8 = undefined;
+            const a0_name = std.fmt.bufPrint(&a_name_buf, "{s}.lora_a", .{p0_suffix}) catch return;
+            const b0_name = std.fmt.bufPrint(&b_name_buf, "{s}.lora_b", .{p0_suffix}) catch return;
+
+            // Data buffers sized for the largest declared shape; declared
+            // dims choose how much of each the merge actually reads, mirroring
+            // what the GGUF loader validated against real file sizes.
+            var a_data: [8 * k]f32 = undefined;
+            var b_data: [n * 8]f32 = undefined;
+            for (&a_data, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 10)))) / 10.0;
+            for (&b_data, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 30)))) / 10.0;
+
+            const a_dims: [4]u64 = switch (variant) {
+                2 => .{ 0, k, 0, 0 }, // zero rank
+                5 => .{ 1 << 20, 1 << 20, 0, 0 }, // alloc-failure scale
+                else => .{ rank, k, 0, 0 },
+            };
+            const b_rank: u64 = if (variant == 1) rank + 1 else rank; // rank mismatch
+            // BF16 keeps every converted value finite (top halves of bounded
+            // F32s), unlike F16 bitcasts which can produce Inf/NaN payloads.
+            const b_dtype: gguf.GGMLType = if (variant == 6) .bf16 else .f32;
+
+            const put_tensor = struct {
+                fn put(file: *gguf.GGUFFile, name: []const u8, dims: [4]u64, dt: gguf.GGMLType, data_ptr: *anyopaque) void {
+                    file.tensors.put(name, .{
+                        .name = name,
+                        .n_dims = 2,
+                        .dims = dims,
+                        .ggml_type = dt,
+                        .offset = 0,
+                        .abs_ptr = @ptrCast(data_ptr),
+                    }) catch unreachable;
+                }
+            }.put;
+
+            put_tensor(&lora_gguf, a0_name, a_dims, .f32, &a_data);
+            if (variant != 3) { // v3: lora_b missing entirely
+                put_tensor(&lora_gguf, b0_name, .{ n, b_rank, 0, 0 }, b_dtype, &b_data);
+            }
+            // Second pair with a short name: always passes the name guard so
+            // guard variants isolate to zero records while v4 isolates to one.
+            put_tensor(&lora_gguf, "p1.lora_a", a_dims, .f32, &a_data);
+            if (variant != 3) {
+                put_tensor(&lora_gguf, "p1.lora_b", .{ n, b_rank, 0, 0 }, b_dtype, &b_data);
+            }
+
+            // Base tensors: "p0.weight" resolves via the ".weight" fallback,
+            // "p1" via the bare-name path. Both share the same shape.
+            base_gguf.tensors.put("p0.weight", .{
+                .name = "p0.weight",
+                .n_dims = 2,
+                .dims = .{ n, k, 0, 0 },
+                .ggml_type = .f32,
+                .offset = 0,
+                .abs_ptr = @ptrCast(&base_data),
+            }) catch return;
+            base_gguf.tensors.put("p1", .{
+                .name = "p1",
+                .n_dims = 2,
+                .dims = .{ n, k, 0, 0 },
+                .ggml_type = .f32,
+                .offset = 0,
+                .abs_ptr = @ptrCast(&base_data),
+            }) catch return;
+            // Unrelated tensor must be ignored by the lora_a scan.
+            put_tensor(&lora_gguf, "decoy.weight", .{ 2, 2, 0, 0 }, .f32, &a_data);
+
+            // Stacked compose target lives on the fallback-resolved base.
+            var prev_data: [n * k]f32 = undefined;
+            const stacked = smith.valueWithHash(u8, 60) & 1 == 0;
+            if (stacked) {
+                for (&prev_data, 0..) |*v, i| v.* = 100.0 + @as(f32, @floatFromInt(i));
+                const prev_key = allocator.dupe(u8, "p0.weight") catch return;
+                base_gguf.lora_overrides.put(allocator, prev_key, .{
+                    .data = allocator.dupe(f32, &prev_data) catch {
+                        allocator.free(prev_key);
+                        return;
+                    },
+                    .n_dims = 2,
+                    .dims = .{ n, k, 0, 0 },
+                }) catch return;
+            }
+            const baseline_count = base_gguf.lora_overrides.count();
+
+            var handle = applyLoraGgufFile(allocator, &base_gguf, &lora_gguf) catch {
+                // A failed apply (oversized-dims alloc) must leave overrides
+                // exactly as before.
+                try std.testing.expectEqual(baseline_count, base_gguf.lora_overrides.count());
+                return;
+            };
+
+            // Variants 1-3 hit skip guards (rank mismatch, zero dim, missing
+            // pair) and merge nothing; v4 skips only the oversized-name pair.
+            const expected_total: usize = switch (variant) {
+                1, 2, 3 => 0,
+                4 => 1,
+                else => 2,
+            };
+            // Pre-dispose checks in a scope so errdefer cannot double-fire
+            // after the explicit dispose below.
+            {
+                errdefer handle.dispose();
+                try std.testing.expectEqual(expected_total, handle.records.items.len);
+                for (handle.records.items) |rec| {
+                    const ov = base_gguf.lora_overrides.get(rec.key).?;
+                    try std.testing.expect(ov.data.len == n * k);
+                    for (ov.data) |v| try std.testing.expect(std.math.isFinite(v));
+                }
+                // Resolution-path pins: fallback pair keyed by full base name,
+                // bare pair keyed without suffix.
+                var saw_fallback = false;
+                var saw_bare = false;
+                for (handle.records.items) |rec| {
+                    if (std.mem.eql(u8, rec.key, "p0.weight")) saw_fallback = true;
+                    if (std.mem.eql(u8, rec.key, "p1")) saw_bare = true;
+                }
+                try std.testing.expect(saw_bare == (expected_total >= 1));
+                try std.testing.expect(saw_fallback == (expected_total == 2));
+            }
+
+            // Dispose must restore the pre-apply state: planted override back,
+            // or keys fully removed when none existed.
+            handle.dispose();
+            try std.testing.expectEqual(baseline_count, base_gguf.lora_overrides.count());
+            if (stacked) {
+                const ov = base_gguf.lora_overrides.get("p0.weight").?;
+                try std.testing.expectEqualSlices(f32, &prev_data, ov.data);
+            } else {
+                try std.testing.expect(base_gguf.lora_overrides.get("p0.weight") == null);
+            }
+            try std.testing.expect(base_gguf.lora_overrides.get("p1") == null);
+        }
+    }.f, .{});
 }

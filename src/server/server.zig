@@ -7161,3 +7161,65 @@ test "fuzz: readHttpRequest over socket" {
         }
     }.f, .{});
 }
+
+test "fuzz: HTTP header and request-line helpers" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [192]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = smith.indexWithHash(buf.len + 1, 1);
+            const headers = buf[0..len];
+
+            // getHeaderValue: any returned value must be a subslice of the
+            // input, and must not contain the line separator.
+            if (getHeaderValue(headers, "host")) |val| {
+                const v0 = @intFromPtr(val.ptr);
+                const v1 = v0 + val.len;
+                const h0 = @intFromPtr(headers.ptr);
+                const h1 = h0 + headers.len;
+                try std.testing.expect(v0 >= h0 and v1 <= h1);
+                try std.testing.expect(std.mem.indexOf(u8, val, "\r\n") == null);
+            }
+
+            // parseRequestLine + splitPathQuery: parsed slices stay inside the
+            // line; path/query cannot contain spaces (split happens first).
+            if (parseRequestLine(headers)) |line| {
+                const h0 = @intFromPtr(headers.ptr);
+                const h1 = h0 + headers.len;
+                for ([_][]const u8{ line.method, line.path, line.query }) |s| {
+                    const s0 = @intFromPtr(s.ptr);
+                    try std.testing.expect(s0 >= h0 and s0 + s.len <= h1);
+                    try std.testing.expect(std.mem.indexOfScalar(u8, s, ' ') == null);
+                }
+            }
+
+            // extractQueryParam: returned value is a query subslice.
+            if (extractQueryParam(headers, "prompt")) |val| {
+                const v0 = @intFromPtr(val.ptr);
+                const h0 = @intFromPtr(headers.ptr);
+                try std.testing.expect(v0 >= h0 and v0 + val.len <= h0 + headers.len);
+            }
+
+            // parseContentLength: duplicate Content-Length must be rejected
+            // regardless of surrounding junk (RFC 7230 §3.3.3 smuggling guard).
+            _ = parseContentLength(headers);
+            var dup_buf: [128]u8 = undefined;
+            const dup = std.fmt.bufPrint(&dup_buf, "Content-Length: 5\r\n{s}\r\ncontent-length: 7", .{headers[0..@min(headers.len, 64)]}) catch return;
+            try std.testing.expect(parseContentLength(dup) == null);
+
+            // originMatchesHost: a positive verdict implies scheme-stripped
+            // case-insensitive equality with no delimiter characters.
+            const sep = smith.indexWithHash(len + 1, 2);
+            const origin = headers[0..sep];
+            const host = headers[@min(sep, len)..];
+            if (originMatchesHost(origin, host)) {
+                const rest = if (std.mem.startsWith(u8, origin, "https://"))
+                    origin["https://".len..]
+                else
+                    origin["http://".len..];
+                try std.testing.expect(std.ascii.eqlIgnoreCase(rest, host));
+                try std.testing.expect(std.mem.indexOfAny(u8, rest, "/@?#") == null);
+            }
+        }
+    }.f, .{});
+}
