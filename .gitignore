@@ -106,3 +106,4 @@ progress.md
 # JS tooling
 node_modules/
 .scratch/
+.web-ts-out/

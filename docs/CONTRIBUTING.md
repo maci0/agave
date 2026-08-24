@@ -13,8 +13,8 @@ Templates and step-by-step guides for extending the inference engine.
 | KV cache policy | `src/kvcache/` |
 | Speculative decoding | `src/spec/` |
 | HTTP API / scheduler / metrics | `src/server/` |
-| Built-in `--serve` chat UI | `src/web/` |
-| Browser WASM shell | `web/` (not `src/web/`) |
+| Built-in `--serve` chat UI | `src/web/` (TypeScript in `app.ts`; run `scripts/build-web.sh` to refresh `app.js`) |
+| Browser WASM shell | `web/` (not `src/web/`; TypeScript in `agave.ts` / `shell.ts`, same compile script) |
 | Tokenizer | `src/tokenizer/` |
 | Distributed TP/PP transport | `src/parallel/` |
 | Local GPU enumeration | `src/devices/` |

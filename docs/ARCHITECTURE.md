@@ -133,7 +133,8 @@ agave/
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
 │   │   └── checkpoint.zig # KV checkpoint header encode/validate (payload I/O not wired yet)
 │   ├── web/
-│   │   ├── app.js         # Chat UI JavaScript (SSE streaming, conversation management)
+│   │   ├── app.ts         # Chat UI TypeScript (SSE streaming, conversation management)
+│   │   ├── app.js         # Generated classic script; embedded by server.zig
 │   │   ├── body.html      # Chat UI HTML body
 │   │   ├── head.html      # Chat UI HTML head (meta, styles)
 │   │   └── style.css      # Chat UI stylesheet
@@ -142,7 +143,10 @@ agave/
 │       └── bpe.zig        # BPE + SPM tokenizer with byte-level encoding
 ├── web/                   # Browser WASM shell (distinct from src/web server chat UI)
 │   ├── index.html         # Standalone WASM demo page
-│   └── agave.js           # JS glue for agave.wasm (AgaveEngine)
+│   ├── agave.ts           # Typed glue for agave.wasm (AgaveEngine)
+│   ├── agave.js           # Generated classic script
+│   ├── shell.ts           # Demo page logic
+│   └── shell.js           # Generated classic script
 ```
 
 ## Design Decisions
