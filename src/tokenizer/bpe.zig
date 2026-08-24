@@ -90,6 +90,20 @@ pub const BpeTokenizer = struct {
         return self.id_to_token.items;
     }
 
+    /// True when `id` is one of the tokenizer's special tokens (chat-template
+    /// markers such as <|im_start|> or <start_of_turn>). Consults the loaded
+    /// special-token table rather than assuming specials occupy the top of the
+    /// ID range, which does not hold for every vocab (e.g. Gemma's
+    /// <start_of_turn> sits at 105). Init-path cost only: linear scan over the
+    /// special-token set.
+    pub fn isSpecialId(self: *const BpeTokenizer, id: u32) bool {
+        var it = self.special_tokens.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == id) return true;
+        }
+        return false;
+    }
+
     /// Create a new BPE tokenizer. Caller must call deinit() when done.
     pub fn init(allocator: Allocator) BpeTokenizer {
         return .{
@@ -914,6 +928,26 @@ test "BpeTokenizer interface via VTable" {
     // Use the VTable interface
     var iface = tok.tokenizer();
     try std.testing.expectEqual(@as(u32, 2), iface.vocabSize());
+}
+
+test "isSpecialId uses loaded special-token table, not id range" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    // Gemma-like layout: specials at the BOTTOM of the vocab, content above.
+    const vocab = [_][]const u8{ "<pad>", "<bos>", "hello", "world" };
+    var vocab_slice: [vocab.len][]const u8 = undefined;
+    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+    try tok.loadFromGGUFSpm(&vocab_slice, 1);
+
+    // Specials detected by table membership regardless of id value.
+    try std.testing.expect(tok.isSpecialId(0)); // <pad>
+    try std.testing.expect(tok.isSpecialId(1)); // <bos>
+    // Content ids stay content even when numerically adjacent.
+    try std.testing.expect(!tok.isSpecialId(2));
+    try std.testing.expect(!tok.isSpecialId(3));
+    try std.testing.expect(!tok.isSpecialId(9999));
 }
 
 test "BPE encode with merge rules" {
