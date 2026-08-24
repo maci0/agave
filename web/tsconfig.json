@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "preserve",
+    "moduleDetection": "legacy",
+    "strict": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "skipLibCheck": true,
+    "noEmitOnError": true,
+    "removeComments": false,
+    "outDir": "../.web-ts-out/wasm",
+    "rootDir": ".",
+    "types": []
+  },
+  "include": ["agave.ts", "shell.ts"]
+}

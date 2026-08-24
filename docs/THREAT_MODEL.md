@@ -49,7 +49,7 @@ Entry points found in code:
 | NCCL | dlopen `libnccl.so.2` (`transport.zig:288-292`) | 128-byte NCCL ID exchanged over the unauthenticated TCP link (:308-326) |
 | Disagg prefill->decode KV transfer | `src/main.zig:3523-3564`, KV stream `src/models/qwen35.zig:2207-2259` | Plaintext TCP 49456; carries the entire prompt as KV |
 | Environment variables | `AGAVE_PORT/HOST/API_KEY` (`main.zig:956,1157,1170`), `HF_TOKEN` (`pull.zig:295`), `NCCL_*` logging (`transport.zig:343-351`) | No runtime config files; recipes and chat templates are compile-time (`src/chat_template.zig` is string concatenation, not Jinja eval) |
-| Browser demo fetches | `web/agave.js:22,62` | Fetches arbitrary user-typed model URL into WASM memory; contained to browser sandbox |
+| Browser demo fetches | `web/agave.ts` (`loadModel`) | Fetches arbitrary user-typed model URL into WASM memory; contained to browser sandbox |
 | Container | `Dockerfile:165-185` (non-root `USER agave`, EXPOSE 49453, entrypoint binds 0.0.0.0), `docker-compose.yml:31-55` (127.0.0.1 mapping, `AGAVE_API_KEY` required, cap_drop ALL, read_only rootfs) | Compose is hardened; raw Dockerfile entrypoint relies on the API-key enforcement below |
 
 No stale entries exist yet: this is the first version of the model.
@@ -112,7 +112,7 @@ Docs-vs-code check: `docs/API.md` auth/CORS/rate-limit/security-header claims we
 2. **Cross-request state reach:** a key holder exports `/v1/kv_cache` after other users' traffic and receives hidden-state blocks derived from their prompts on a shared single-key deployment (`server.zig:2078`; the radix prefix cache is likewise global, `src/server/scheduler.zig:353`).
 3. **Latency gaming:** repeated user-supplied GBNF grammars force inline parse-and-constrain outside the batch scheduler, degrading concurrent clients (`server.zig:3244-3247`).
 4. **Cluster hijack (no auth needed):** a LAN host answers the UDP beacon first or wins the TCP connect race and becomes a trusted rank, then feeds garbage tensors that pass silently because truncation zero-fills (`transport.zig:614-628`).
-5. **Client-side trust note:** the web UI enforces nothing itself; all checks are server-side (correct posture). The standalone browser demo will load any model URL a visitor types/pastes (`web/agave.js:62`), so a linked model can serve attacker-chosen completions locally, inside the sandbox.
+5. **Client-side trust note:** the web UI enforces nothing itself; all checks are server-side (correct posture). The standalone browser demo will load any model URL a visitor types/pastes (`web/agave.ts` `loadModel`), so a linked model can serve attacker-chosen completions locally, inside the sandbox.
 
 ## 6. Gaps requiring sec-review follow-up (ranked)
 

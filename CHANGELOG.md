@@ -99,6 +99,7 @@ must still appear under **Changed** or **Breaking** below. See
   for clients that ignore unknown fields; see `docs/API.md`)
 - Web chat UI adopts the warm palette shared with `src/web/style.css` design tokens (visual only)
 - Docker: container stop grace period raised above the server drain timeout so in-flight requests finish on `docker stop`
+- Chat UI (`src/web/`) and WASM browser shell (`web/`) sources are TypeScript; committed `.js` is produced by `scripts/build-web.sh`
 
 ## 2026-08-18 — Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
 
