@@ -190,7 +190,9 @@ pub const Transport = struct {
             var so_err: c_int = 0;
             var so_len: c.socklen_t = @sizeOf(c_int);
             if (c.getsockopt(fd, posix.SOL.SOCKET, posix.SO.ERROR, @ptrCast(&so_err), &so_len) != 0 or so_err != 0) {
-                std.log.err("connectPeer({d}.{d}.{d}.{d}:{d}): connect failed (errno={d})", .{ host[0], host[1], host[2], host[3], port, so_err });
+                // Diagnostic only: the failure itself is propagated via
+                // error.ConnectFailed and handled by the caller.
+                std.log.warn("connectPeer({d}.{d}.{d}.{d}:{d}): connect failed (errno={d})", .{ host[0], host[1], host[2], host[3], port, so_err });
                 return error.ConnectFailed;
             }
         }
