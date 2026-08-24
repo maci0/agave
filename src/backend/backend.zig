@@ -239,71 +239,73 @@ pub const iq1_m_block_bytes: usize = 56;
 /// Used by GPU backends to determine upload buffer sizes. Accounts for
 /// quantization block structure (e.g., Q4_0 = 18 bytes per 32-element block).
 pub fn weightBytes(dtype: DType, n: usize, k: usize) usize {
-    const nb = (k + quant_block_elems - 1) / quant_block_elems;
-    const nsb = (k + quant_super_block_elems - 1) / quant_super_block_elems;
+    const nb = (std.math.add(usize, k, quant_block_elems - 1) catch std.math.maxInt(usize)) / quant_block_elems;
+    const nsb = (std.math.add(usize, k, quant_super_block_elems - 1) catch std.math.maxInt(usize)) / quant_super_block_elems;
+    const nvb = (std.math.add(usize, k, nvfp4_block_elems - 1) catch std.math.maxInt(usize)) / nvfp4_block_elems;
     return switch (dtype) {
-        .f32 => n * k * f32_elem_bytes,
-        .f16, .bf16 => n * k * f16_elem_bytes,
-        .fp8_e4m3, .fp8_e5m2 => n * k,
-        .q8_0 => n * nb * q8_0_block_bytes,
-        .q4_0 => n * nb * q4_0_block_bytes,
-        .q4_1 => n * nb * q4_1_block_bytes,
-        .q5_0 => n * nb * q5_0_block_bytes,
-        .q4_k => n * nsb * q4_k_block_bytes,
-        .q5_k => n * nsb * q5_k_block_bytes,
-        .q6_k => n * nsb * q6_k_block_bytes,
-        .mxfp4 => n * nb * mxfp4_block_bytes,
-        .q2_k => n * nsb * q2_k_block_bytes,
-        .q3_k => n * nsb * q3_k_block_bytes,
-        .iq4_nl => n * nb * iq4_nl_block_bytes,
-        .iq4_xs => n * nsb * iq4_xs_block_bytes,
-        .iq3_xxs => n * nsb * iq3_xxs_block_bytes,
-        .iq3_s => n * nsb * iq3_s_block_bytes,
-        .iq2_xxs => n * nsb * iq2_xxs_block_bytes,
-        .iq2_xs => n * nsb * iq2_xs_block_bytes,
-        .iq2_s => n * nsb * iq2_s_block_bytes,
-        .iq1_s => n * nsb * iq1_s_block_bytes,
-        .iq1_m => n * nsb * iq1_m_block_bytes,
-        .tq1_0 => n * nsb * tq1_0_block_bytes,
-        .tq2_0 => n * nsb * tq2_0_block_bytes,
-        .nvfp4 => n * ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
+        .f32 => std.math.mul(usize, std.math.mul(usize, n, k) catch std.math.maxInt(usize), f32_elem_bytes) catch std.math.maxInt(usize),
+        .f16, .bf16 => std.math.mul(usize, std.math.mul(usize, n, k) catch std.math.maxInt(usize), f16_elem_bytes) catch std.math.maxInt(usize),
+        .fp8_e4m3, .fp8_e5m2 => std.math.mul(usize, n, k) catch std.math.maxInt(usize),
+        .q8_0 => std.math.mul(usize, std.math.mul(usize, n, nb) catch std.math.maxInt(usize), q8_0_block_bytes) catch std.math.maxInt(usize),
+        .q4_0 => std.math.mul(usize, std.math.mul(usize, n, nb) catch std.math.maxInt(usize), q4_0_block_bytes) catch std.math.maxInt(usize),
+        .q4_1 => std.math.mul(usize, std.math.mul(usize, n, nb) catch std.math.maxInt(usize), q4_1_block_bytes) catch std.math.maxInt(usize),
+        .q5_0 => std.math.mul(usize, std.math.mul(usize, n, nb) catch std.math.maxInt(usize), q5_0_block_bytes) catch std.math.maxInt(usize),
+        .q4_k => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), q4_k_block_bytes) catch std.math.maxInt(usize),
+        .q5_k => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), q5_k_block_bytes) catch std.math.maxInt(usize),
+        .q6_k => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), q6_k_block_bytes) catch std.math.maxInt(usize),
+        .mxfp4 => std.math.mul(usize, std.math.mul(usize, n, nb) catch std.math.maxInt(usize), mxfp4_block_bytes) catch std.math.maxInt(usize),
+        .q2_k => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), q2_k_block_bytes) catch std.math.maxInt(usize),
+        .q3_k => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), q3_k_block_bytes) catch std.math.maxInt(usize),
+        .iq4_nl => std.math.mul(usize, std.math.mul(usize, n, nb) catch std.math.maxInt(usize), iq4_nl_block_bytes) catch std.math.maxInt(usize),
+        .iq4_xs => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq4_xs_block_bytes) catch std.math.maxInt(usize),
+        .iq3_xxs => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq3_xxs_block_bytes) catch std.math.maxInt(usize),
+        .iq3_s => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq3_s_block_bytes) catch std.math.maxInt(usize),
+        .iq2_xxs => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq2_xxs_block_bytes) catch std.math.maxInt(usize),
+        .iq2_xs => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq2_xs_block_bytes) catch std.math.maxInt(usize),
+        .iq2_s => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq2_s_block_bytes) catch std.math.maxInt(usize),
+        .iq1_s => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq1_s_block_bytes) catch std.math.maxInt(usize),
+        .iq1_m => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), iq1_m_block_bytes) catch std.math.maxInt(usize),
+        .tq1_0 => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), tq1_0_block_bytes) catch std.math.maxInt(usize),
+        .tq2_0 => std.math.mul(usize, std.math.mul(usize, n, nsb) catch std.math.maxInt(usize), tq2_0_block_bytes) catch std.math.maxInt(usize),
+        .nvfp4 => std.math.mul(usize, std.math.mul(usize, n, nvb) catch std.math.maxInt(usize), nvfp4_block_bytes) catch std.math.maxInt(usize),
         // GPTQ/AWQ: 8 INT4 nibbles per u32 word
-        .gptq, .awq => n * k / 2,
+        .gptq, .awq => (std.math.mul(usize, n, k) catch std.math.maxInt(usize)) / 2,
         // HQQ: 2 nibbles/byte, companion scale/zero handled separately
-        .hqq => n * k / 2,
+        .hqq => (std.math.mul(usize, n, k) catch std.math.maxInt(usize)) / 2,
         // Unsupported dtypes: assume f32 (4 bytes per element).
-        .mlx_q, .unknown => n * k * 4,
+        .mlx_q, .unknown => std.math.mul(usize, std.math.mul(usize, n, k) catch std.math.maxInt(usize), 4) catch std.math.maxInt(usize),
     };
 }
 
 /// Row stride in bytes for a given dtype and column count.
 /// Used by parallel GEMV and TP sharding to compute per-row offsets.
 pub fn gemvRowBytes(dtype: DType, k: usize) usize {
-    const nb = (k + quant_block_elems - 1) / quant_block_elems;
-    const nsb = (k + quant_super_block_elems - 1) / quant_super_block_elems;
+    const nb = (std.math.add(usize, k, quant_block_elems - 1) catch std.math.maxInt(usize)) / quant_block_elems;
+    const nsb = (std.math.add(usize, k, quant_super_block_elems - 1) catch std.math.maxInt(usize)) / quant_super_block_elems;
+    const nvb = (std.math.add(usize, k, nvfp4_block_elems - 1) catch std.math.maxInt(usize)) / nvfp4_block_elems;
     return switch (dtype) {
-        .q4_0 => nb * q4_0_block_bytes,
-        .q4_1 => nb * q4_1_block_bytes,
-        .q5_0 => nb * q5_0_block_bytes,
-        .q8_0 => nb * q8_0_block_bytes,
-        .q2_k => nsb * q2_k_block_bytes,
-        .q3_k => nsb * q3_k_block_bytes,
-        .q4_k => nsb * q4_k_block_bytes,
-        .q5_k => nsb * q5_k_block_bytes,
-        .q6_k => nsb * q6_k_block_bytes,
-        .iq4_nl => nb * iq4_nl_block_bytes,
-        .iq4_xs => nsb * iq4_xs_block_bytes,
-        .iq3_xxs => nsb * iq3_xxs_block_bytes,
-        .iq3_s => nsb * iq3_s_block_bytes,
-        .iq2_xxs => nsb * iq2_xxs_block_bytes,
-        .iq2_xs => nsb * iq2_xs_block_bytes,
-        .iq2_s => nsb * iq2_s_block_bytes,
-        .iq1_s => nsb * iq1_s_block_bytes,
-        .iq1_m => nsb * iq1_m_block_bytes,
-        .mxfp4 => nb * mxfp4_block_bytes,
-        .nvfp4 => ((k + nvfp4_block_elems - 1) / nvfp4_block_elems) * nvfp4_block_bytes,
-        .f16, .bf16 => k * f16_elem_bytes,
-        .f32 => k * f32_elem_bytes,
+        .q4_0 => std.math.mul(usize, nb, q4_0_block_bytes) catch std.math.maxInt(usize),
+        .q4_1 => std.math.mul(usize, nb, q4_1_block_bytes) catch std.math.maxInt(usize),
+        .q5_0 => std.math.mul(usize, nb, q5_0_block_bytes) catch std.math.maxInt(usize),
+        .q8_0 => std.math.mul(usize, nb, q8_0_block_bytes) catch std.math.maxInt(usize),
+        .q2_k => std.math.mul(usize, nsb, q2_k_block_bytes) catch std.math.maxInt(usize),
+        .q3_k => std.math.mul(usize, nsb, q3_k_block_bytes) catch std.math.maxInt(usize),
+        .q4_k => std.math.mul(usize, nsb, q4_k_block_bytes) catch std.math.maxInt(usize),
+        .q5_k => std.math.mul(usize, nsb, q5_k_block_bytes) catch std.math.maxInt(usize),
+        .q6_k => std.math.mul(usize, nsb, q6_k_block_bytes) catch std.math.maxInt(usize),
+        .iq4_nl => std.math.mul(usize, nb, iq4_nl_block_bytes) catch std.math.maxInt(usize),
+        .iq4_xs => std.math.mul(usize, nsb, iq4_xs_block_bytes) catch std.math.maxInt(usize),
+        .iq3_xxs => std.math.mul(usize, nsb, iq3_xxs_block_bytes) catch std.math.maxInt(usize),
+        .iq3_s => std.math.mul(usize, nsb, iq3_s_block_bytes) catch std.math.maxInt(usize),
+        .iq2_xxs => std.math.mul(usize, nsb, iq2_xxs_block_bytes) catch std.math.maxInt(usize),
+        .iq2_xs => std.math.mul(usize, nsb, iq2_xs_block_bytes) catch std.math.maxInt(usize),
+        .iq2_s => std.math.mul(usize, nsb, iq2_s_block_bytes) catch std.math.maxInt(usize),
+        .iq1_s => std.math.mul(usize, nsb, iq1_s_block_bytes) catch std.math.maxInt(usize),
+        .iq1_m => std.math.mul(usize, nsb, iq1_m_block_bytes) catch std.math.maxInt(usize),
+        .mxfp4 => std.math.mul(usize, nb, mxfp4_block_bytes) catch std.math.maxInt(usize),
+        .nvfp4 => std.math.mul(usize, nvb, nvfp4_block_bytes) catch std.math.maxInt(usize),
+        .f16, .bf16 => std.math.mul(usize, k, f16_elem_bytes) catch std.math.maxInt(usize),
+        .f32 => std.math.mul(usize, k, f32_elem_bytes) catch std.math.maxInt(usize),
         .fp8_e4m3, .fp8_e5m2 => k,
         .tq1_0, .tq2_0, .mlx_q, .gptq, .awq, .hqq, .unknown => 0,
     };

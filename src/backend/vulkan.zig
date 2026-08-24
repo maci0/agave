@@ -2106,10 +2106,11 @@ pub const VulkanBackend = struct {
 
     /// NVFP4 SafeTensors GEMV.
     pub fn gemvNvfp4St(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        const x_sz = k * @sizeOf(f32);
-        const w_sz = n * k / 2;
-        const s_sz = n * k / 16;
-        const y_sz = n * @sizeOf(f32);
+        const x_sz = std.math.mul(usize, k, @sizeOf(f32)) catch return;
+        const nk = std.math.mul(usize, n, k) catch return;
+        const w_sz = nk / 2;
+        const s_sz = nk / 16;
+        const y_sz = std.math.mul(usize, n, @sizeOf(f32)) catch return;
         const x_pool = self.getPooledBuf(x_sz);
         defer self.releasePooledBuf(x_pool);
         const w_vk = self.getOrUpload(@ptrCast(w_packed), w_sz);
@@ -2127,13 +2128,13 @@ pub const VulkanBackend = struct {
     /// MLX affine quantized GEMV.
     pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
         _ = bits;
-        const x_sz = k * @sizeOf(f32);
-        const gpr = (k + 63) / 64;
-        const wpr = gpr * 8;
-        const w_sz = n * wpr * @sizeOf(u32);
-        const s_sz = n * gpr * @sizeOf(u16);
+        const x_sz = std.math.mul(usize, k, @sizeOf(f32)) catch return;
+        const gpr = (std.math.add(usize, k, 63) catch return) / 64;
+        const wpr = std.math.mul(usize, gpr, 8) catch return;
+        const w_sz = std.math.mul(usize, std.math.mul(usize, n, wpr) catch return, @sizeOf(u32)) catch return;
+        const s_sz = std.math.mul(usize, n, gpr * @sizeOf(u16)) catch return;
         const b_sz = s_sz;
-        const y_sz = n * @sizeOf(f32);
+        const y_sz = std.math.mul(usize, n, @sizeOf(f32)) catch return;
         const x_pool = self.getPooledBuf(x_sz);
         defer self.releasePooledBuf(x_pool);
         const w_vk = self.getOrUpload(@ptrCast(w_packed), w_sz);
@@ -2157,12 +2158,12 @@ pub const VulkanBackend = struct {
     /// so SSD-streamed expert slices at reused host addresses stay coherent.
     pub fn gemvMxfp4St(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         const group_size: u32 = @intCast(@max(gs, mxfp4_min_group_size));
-        const gpr = (k + @as(usize, group_size) - 1) / @as(usize, group_size);
+        const gpr = (std.math.add(usize, k, @as(usize, group_size) - 1) catch return) / @as(usize, group_size);
         const wpg = @as(usize, group_size) / 8;
-        const x_sz = k * @sizeOf(f32);
-        const w_sz = n * gpr * wpg * @sizeOf(u32);
-        const s_sz = @max(n * gpr, 4);
-        const y_sz = n * @sizeOf(f32);
+        const x_sz = std.math.mul(usize, k, @sizeOf(f32)) catch return;
+        const w_sz = std.math.mul(usize, std.math.mul(usize, n, gpr) catch return, wpg * @sizeOf(u32)) catch return;
+        const s_sz = @max(std.math.mul(usize, n, gpr) catch return, 4);
+        const y_sz = std.math.mul(usize, n, @sizeOf(f32)) catch return;
         const x_pool = self.getPooledBuf(x_sz);
         defer self.releasePooledBuf(x_pool);
         const w_pool = self.getPooledBuf(w_sz);
@@ -2684,26 +2685,28 @@ pub const VulkanBackend = struct {
         @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
 
         // Gather scattered blocks into flat contiguous buffers.
-        const n_logical_blocks = (sl + @as(usize, kv_view.block_size) - 1) / @as(usize, kv_view.block_size);
+        const n_logical_blocks = (std.math.add(usize, sl, @as(usize, kv_view.block_size) - 1) catch return) / @as(usize, kv_view.block_size);
         var max_phys: u32 = 0;
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
-        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
-        const block_stride = @as(usize, kv_view.block_size) * kvd;
-        const flat_elems = n_phys_blocks * block_stride;
-        const flat_bytes = flat_elems * @sizeOf(f32);
+        const n_phys_blocks: usize = std.math.add(usize, @as(usize, max_phys), 1) catch return;
+        const block_stride = std.math.mul(usize, @as(usize, kv_view.block_size), kvd) catch return;
+        const flat_elems = std.math.mul(usize, n_phys_blocks, block_stride) catch return;
+        const flat_bytes = std.math.mul(usize, flat_elems, @sizeOf(f32)) catch return;
 
         // Reuse persistent staging buffers (grow 2x as needed, never shrink)
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
-            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
+            const doubled = if (self.sdpa_flat_keys) |old| std.math.mul(usize, old.len, 2) catch flat_elems else flat_elems;
+            const new_cap = @max(flat_elems, doubled);
+            const new_buf = self.allocator.alloc(f32, new_cap) catch @panic("Vulkan sdpaPaged: out of memory for flat key staging buffer");
             if (self.sdpa_flat_keys) |old| self.allocator.free(old);
-            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
-                @panic("Vulkan sdpaPaged: out of memory for flat key staging buffer");
+            self.sdpa_flat_keys = new_buf;
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
-            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
+            const doubled_v = if (self.sdpa_flat_vals) |old| std.math.mul(usize, old.len, 2) catch flat_elems else flat_elems;
+            const new_cap_v = @max(flat_elems, doubled_v);
+            const new_buf_v = self.allocator.alloc(f32, new_cap_v) catch @panic("Vulkan sdpaPaged: out of memory for flat value staging buffer");
             if (self.sdpa_flat_vals) |old| self.allocator.free(old);
-            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
-                @panic("Vulkan sdpaPaged: out of memory for flat value staging buffer");
+            self.sdpa_flat_vals = new_buf_v;
         }
         const flat_keys = self.sdpa_flat_keys.?;
         const flat_vals = self.sdpa_flat_vals.?;

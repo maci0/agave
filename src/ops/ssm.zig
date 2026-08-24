@@ -52,37 +52,48 @@ fn conv1dImpl(
     d_conv: usize,
 ) void {
     const d = D orelse d_conv;
-    std.debug.assert(d >= 2); // d_conv=1 is degenerate (no history); all models use d_conv >= 2
+    std.debug.assert(d >= 2);
+    std.debug.assert(conv_ch > 0);
     const hist = d - 1;
     for (0..conv_ch) |ch| {
         var sum: f32 = if (conv_b) |b| b[ch] else 0.0;
         if (D) |_| {
             inline for (0..D.? - 1) |k| {
-                sum += conv_state[k * conv_ch + ch] * conv_w[ch * d + k];
+                const s_idx = std.math.add(usize, std.math.mul(usize, k, conv_ch) catch @panic("conv_state idx overflow"), ch) catch @panic("conv_state idx overflow");
+                const w_idx = std.math.add(usize, std.math.mul(usize, ch, d) catch @panic("conv_w idx overflow"), k) catch @panic("conv_w idx overflow");
+                sum += conv_state[s_idx] * conv_w[w_idx];
             }
         } else {
             for (0..hist) |k| {
-                sum += conv_state[k * conv_ch + ch] * conv_w[ch * d + k];
+                const s_idx = std.math.add(usize, std.math.mul(usize, k, conv_ch) catch @panic("conv_state idx overflow"), ch) catch @panic("conv_state idx overflow");
+                const w_idx = std.math.add(usize, std.math.mul(usize, ch, d) catch @panic("conv_w idx overflow"), k) catch @panic("conv_w idx overflow");
+                sum += conv_state[s_idx] * conv_w[w_idx];
             }
         }
-        sum += conv_in[ch] * conv_w[ch * d + hist];
+        const w_tail = std.math.add(usize, std.math.mul(usize, ch, d) catch @panic("conv_w idx overflow"), hist) catch @panic("conv_w idx overflow");
+        sum += conv_in[ch] * conv_w[w_tail];
         conv_out[ch] = silu(sum);
     }
     if (D) |_| {
         if (D.? - 1 > 1) {
             inline for (0..D.? - 2) |p| {
-                @memcpy(conv_state[p * conv_ch ..][0..conv_ch], conv_state[(p + 1) * conv_ch ..][0..conv_ch]);
+                const dst_off = std.math.mul(usize, p, conv_ch) catch @panic("conv_state shift overflow");
+                const src_off = std.math.mul(usize, p + 1, conv_ch) catch @panic("conv_state shift overflow");
+                @memcpy(conv_state[dst_off..][0..conv_ch], conv_state[src_off..][0..conv_ch]);
             }
         }
     } else {
         if (hist > 1) {
             for (0..hist - 1) |p| {
-                @memcpy(conv_state[p * conv_ch ..][0..conv_ch], conv_state[(p + 1) * conv_ch ..][0..conv_ch]);
+                const dst_off = std.math.mul(usize, p, conv_ch) catch @panic("conv_state shift overflow");
+                const src_off = std.math.mul(usize, p + 1, conv_ch) catch @panic("conv_state shift overflow");
+                @memcpy(conv_state[dst_off..][0..conv_ch], conv_state[src_off..][0..conv_ch]);
             }
         }
     }
     if (hist > 0) {
-        @memcpy(conv_state[(hist - 1) * conv_ch ..][0..conv_ch], conv_in[0..conv_ch]);
+        const tail_off = std.math.mul(usize, hist - 1, conv_ch) catch @panic("conv_state tail overflow");
+        @memcpy(conv_state[tail_off..][0..conv_ch], conv_in[0..conv_ch]);
     }
 }
 
@@ -121,22 +132,32 @@ pub fn mamba2Recurrence(
     d_state: usize,
     heads_per_group: usize,
 ) void {
+    std.debug.assert(heads_per_group > 0 and num_heads > 0 and head_dim > 0 and d_state > 0);
+    std.debug.assert(num_heads % heads_per_group == 0);
+    const h_d_state = std.math.mul(usize, head_dim, d_state) catch @panic("mamba state stride overflow");
+    const expected = std.math.mul(usize, num_heads, h_d_state) catch @panic("mamba state size overflow");
+    std.debug.assert(state.len >= expected);
     for (0..num_heads) |h| {
         const group = h / heads_per_group;
-        const s_off = h * head_dim * d_state;
+        const s_off = std.math.mul(usize, h, h_d_state) catch @panic("mamba s_off overflow");
 
         const dt_h = math_ops.softplus(dt_raw[h] + dt_bias[h]);
         const decay = @exp(ssm_a[h] * dt_h);
 
-        const x_h = x + h * head_dim;
-        const B_g = B + group * d_state;
-        const C_g = C + group * d_state;
-        const y_h = y + h * head_dim;
+        const x_off = std.math.mul(usize, h, head_dim) catch @panic("mamba x_h overflow");
+        const x_h = x + x_off;
+        const b_off = std.math.mul(usize, group, d_state) catch @panic("mamba B_g overflow");
+        const B_g = B + b_off;
+        const c_off = std.math.mul(usize, group, d_state) catch @panic("mamba C_g overflow");
+        const C_g = C + c_off;
+        const y_off = std.math.mul(usize, h, head_dim) catch @panic("mamba y_h overflow");
+        const y_h = y + y_off;
 
         for (0..head_dim) |i| {
             const xd = x_h[i] * dt_h;
             var yi: f32 = ssm_d[h] * x_h[i];
-            const s_row = state[s_off + i * d_state ..][0..d_state];
+            const row_off = std.math.add(usize, s_off, std.math.mul(usize, i, d_state) catch @panic("mamba row overflow")) catch @panic("mamba row overflow");
+            const s_row = state[row_off..][0..d_state];
 
             // SIMD-vectorized state update + output accumulation
             const V8 = @Vector(8, f32);
@@ -185,13 +206,15 @@ pub fn groupRmsNormSiluGate(
     eps: f32,
 ) void {
     const V8 = @Vector(8, f32);
+    std.debug.assert(n_groups > 0 and d_inner > 0);
     if (d_inner % n_groups != 0) @panic("mamba2: d_inner must be divisible by n_groups");
     const elem_per_group: usize = d_inner / n_groups;
     for (0..n_groups) |g| {
-        const off = g * elem_per_group;
+        const off = std.math.mul(usize, g, elem_per_group) catch @panic("group offset overflow");
+        const w_off = std.math.mul(usize, g, elem_per_group) catch @panic("group offset overflow");
         const y_g = y + off;
         const z_g = z + off;
-        const w_g = norm_w + g * elem_per_group;
+        const w_g = norm_w + w_off;
 
         // 1. Apply SiLU gate in-place: y = y * silu(z) — SIMD vectorized
         const ones: V8 = @splat(1.0);

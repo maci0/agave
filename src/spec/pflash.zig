@@ -54,6 +54,7 @@ pub const PFlashState = struct {
     /// The number of blocks is derived from `cfg.block_size`. On partial allocation
     /// failure, previously allocated buffers are freed via `errdefer`.
     pub fn init(allocator: Allocator, cfg: PFlashConfig, max_tokens: usize) !PFlashState {
+        if (cfg.block_size == 0) return error.InvalidArgument;
         const bs = @as(usize, cfg.block_size);
         const n_blocks = (max_tokens + bs - 1) / bs;
         const block_scores = try allocator.alloc(f32, n_blocks);

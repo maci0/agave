@@ -527,8 +527,9 @@ pub const Ds4Model = struct {
         self.kv_proj = try allocator.alloc(f32, kd);
         errdefer allocator.free(self.kv_proj);
         // scores_buf: per-head slices for parallel attention (64 heads × score_stride).
-        self.score_stride = ctx + compSlotsPerLayer(ctx) + 1;
-        self.scores_buf = try allocator.alloc(f32, nh * self.score_stride);
+        self.score_stride = std.math.add(usize, ctx, std.math.add(usize, compSlotsPerLayer(ctx), 1) catch return error.OutOfMemory) catch return error.OutOfMemory;
+        const scores_elems = std.math.mul(usize, nh, self.score_stride) catch return error.OutOfMemory;
+        self.scores_buf = try allocator.alloc(f32, scores_elems);
         errdefer allocator.free(self.scores_buf);
         self.attn_out = try allocator.alloc(f32, nh * kd);
         errdefer allocator.free(self.attn_out);
@@ -546,12 +547,15 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.expert_accum);
         // Scratch for batched expert down GEMVs (max_experts = n_expert_used + n_expert_shared)
         const max_experts: usize = @as(usize, self.n_expert_used) + @as(usize, self.n_expert_shared);
-        self.expert_scratch = try allocator.alloc(f32, max_experts * e);
+        const expert_scratch_elems = std.math.mul(usize, max_experts, e) catch return error.OutOfMemory;
+        self.expert_scratch = try allocator.alloc(f32, expert_scratch_elems);
         errdefer allocator.free(self.expert_scratch);
-        self.ff_gate_scratch = try allocator.alloc(f32, max_experts * ff);
+        const ff_gate_elems = std.math.mul(usize, max_experts, ff) catch return error.OutOfMemory;
+        self.ff_gate_scratch = try allocator.alloc(f32, ff_gate_elems);
         errdefer allocator.free(self.ff_gate_scratch);
         // AMX dequant scratch: one expert weight matrix (ff × e for gate/up, e × ff for down)
-        self.amx_dequant_buf = try allocator.alloc(f32, @max(ff * e, e * ff));
+        const amx_elems = std.math.mul(usize, ff, e) catch return error.OutOfMemory;
+        self.amx_dequant_buf = try allocator.alloc(f32, amx_elems);
         errdefer allocator.free(self.amx_dequant_buf);
 
         // Expert data pool: heap staging for GPU-safe expert weight access.
@@ -559,24 +563,27 @@ pub const Ds4Model = struct {
         // For GGUF: pread from file into pool. For SafeTensors: memcpy from mmap.
         // Total: ~92MB on MXFP4. Heap-allocated → Metal GPU can safely read.
         {
-            const max_expert_bytes: u32 = @intCast(@max(backend_mod.weightBytes(.mxfp4, 1, ff * e), ff * e / 2)); // MXFP4 or MLX-Q4
+            const ff_e_elems = std.math.mul(usize, ff, e) catch return error.OutOfMemory;
+            const mxfp4_bytes = backend_mod.weightBytes(.mxfp4, 1, ff_e_elems);
+            const max_expert_bytes: u32 = @intCast(@max(mxfp4_bytes, ff_e_elems / 2)); // MXFP4 or MLX-Q4
             const n_pool_slots: u32 = (self.n_expert_used + self.n_expert_shared) * 3;
-            const pool_size = @as(usize, n_pool_slots) * max_expert_bytes;
+            const pool_size = std.math.mul(usize, n_pool_slots, max_expert_bytes) catch return error.OutOfMemory;
             self.expert_pool = try allocator.alloc(u8, pool_size);
             errdefer allocator.free(self.expert_pool);
             self.expert_pool_slots = n_pool_slots;
             self.expert_pool_slot_size = max_expert_bytes;
             // Companion pool for scales/biases: each slot holds one expert's
             // scales+biases data. Max size: n_out × groups_per_row × 2 (BF16).
+            if (e % 32 != 0) return error.InvalidFormat;
             const max_companion_bytes: u32 = @intCast(ff * (e / 32) * 2); // generous upper bound
-            const comp_pool_size = @as(usize, n_pool_slots) * max_companion_bytes;
+            const comp_pool_size = std.math.mul(usize, n_pool_slots, max_companion_bytes) catch return error.OutOfMemory;
             self.companion_pool = try allocator.alloc(u8, comp_pool_size);
             errdefer allocator.free(self.companion_pool);
             self.companion_pool_slot_size = max_companion_bytes;
         }
         self.tensor_overrides = std.StringHashMap([*]const u8).init(allocator);
         self.tensor_overrides_inited = true;
-        self.ff_up_scratch = try allocator.alloc(f32, max_experts * ff);
+        self.ff_up_scratch = try allocator.alloc(f32, ff_gate_elems);
         errdefer allocator.free(self.ff_up_scratch);
         self.router_logits = try allocator.alloc(f32, self.n_experts);
         errdefer allocator.free(self.router_logits);

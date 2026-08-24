@@ -362,8 +362,11 @@ pub fn resize(allocator: Allocator, src: []const u8, src_w: u32, src_h: u32, dst
     const dh: usize = dst_h;
     const sw: usize = src_w;
     const sh: usize = src_h;
-    if (src.len < sw * sh * rgb_channels) return error.InvalidImageSize;
+    const src_needed = std.math.mul(usize, std.math.mul(usize, sw, sh) catch return error.InvalidImageSize, rgb_channels) catch
+        return error.InvalidImageSize;
+    if (src.len < src_needed) return error.InvalidImageSize;
     const out_size = std.math.mul(usize, std.math.mul(usize, dw, dh) catch return error.InvalidImageSize, rgb_channels) catch return error.InvalidImageSize;
+    if (out_size > max_decompressed_size) return error.InvalidImageSize;
     const out = try allocator.alloc(u8, out_size);
     errdefer allocator.free(out);
 
@@ -441,22 +444,24 @@ inline fn readU32Be(b: *const [4]u8) u32 {
 ///
 /// Allocates and returns the decompressed output buffer.
 fn decompressZlib(allocator: Allocator, compressed: []const u8, expected_size: usize) ![]u8 {
+    if (expected_size > max_decompressed_size) return error.DecompressionFailed;
     var reader: std.Io.Reader = .fixed(compressed);
 
-    // Use a decompression window buffer
     var window_buf: [std.compress.flate.max_window_len]u8 = undefined;
     var decompress = std.compress.flate.Decompress.init(&reader, .zlib, &window_buf);
 
-    // Allocate output with some extra room
-    var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, expected_size);
-    errdefer aw.deinit();
+    const cap = std.math.add(usize, expected_size, 1) catch return error.DecompressionFailed;
+    const buf = try allocator.alloc(u8, cap);
+    defer allocator.free(buf);
+    var writer: std.Io.Writer = .fixed(buf);
 
-    _ = decompress.reader.streamRemaining(&aw.writer) catch |err| {
+    _ = decompress.reader.streamRemaining(&writer) catch |err| {
         std.log.warn("PNG zlib decompression failed: {s}", .{@errorName(err)});
         return error.DecompressionFailed;
     };
 
-    return aw.toOwnedSlice() catch error.OutOfMemory;
+    if (writer.end != expected_size) return error.DecompressionFailed;
+    return allocator.dupe(u8, buf[0..writer.end]) catch return error.OutOfMemory;
 }
 
 /// Reconstruct filtered scanlines in-place.
@@ -465,7 +470,8 @@ fn decompressZlib(allocator: Allocator, compressed: []const u8, expected_size: u
 /// filtered data. After unfiltering, the data bytes are the actual
 /// pixel values (the filter bytes remain but are skipped during extraction).
 fn unfilterScanlines(data: []u8, width: usize, height: usize, bpp: usize) !void {
-    const stride = 1 + width * bpp; // filter byte + pixel data
+    const row_len = std.math.mul(usize, width, bpp) catch return error.InvalidImageSize;
+    const stride = std.math.add(usize, 1, row_len) catch return error.InvalidImageSize;
 
     for (0..height) |y| {
         const row_start = y * stride;

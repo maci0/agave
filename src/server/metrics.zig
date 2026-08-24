@@ -391,7 +391,8 @@ pub const Metrics = struct {
     /// Record throughput from a completed request (tokens per second × 100).
     pub fn recordThroughput(self: *Metrics, tokens: u32, duration_ms: u64) void {
         if (duration_ms > 0) {
-            const tps_x100: u64 = @as(u64, tokens) * 100_000 / duration_ms;
+            const scaled = std.math.mul(u64, @as(u64, tokens), 100_000) catch std.math.maxInt(u64);
+            const tps_x100: u64 = scaled / duration_ms;
             self.last_tps_x100.store(tps_x100, .monotonic);
         }
     }

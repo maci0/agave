@@ -63,7 +63,8 @@ pub const SpecState = struct {
     /// `k`: maximum draft length. `vocab_size`: model vocabulary size.
     /// Caller owns the returned state and must call `deinit` with the same allocator.
     pub fn init(allocator: std.mem.Allocator, k: u32, vocab_size: u32) !SpecState {
-        const draft_log_probs = try allocator.alloc(f32, max_draft_tokens * vocab_size);
+        const n_log_probs = std.math.mul(usize, max_draft_tokens, vocab_size) catch return error.OutOfMemory;
+        const draft_log_probs = try allocator.alloc(f32, n_log_probs);
         errdefer allocator.free(draft_log_probs);
         const sampling_buf = try allocator.alloc(f32, vocab_size);
         return .{
@@ -531,12 +532,16 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
     defer content_list.deinit(allocator);
     var read_buf: [65536]u8 = undefined;
     var off: usize = 0;
+    const max_file_size: usize = 16 * 1024 * 1024;
     while (true) {
-        const result = std.posix.system.pread(fd, &read_buf, read_buf.len, @intCast(off));
+        if (off >= max_file_size) return error.FileTooLarge;
+        const remaining = max_file_size - off;
+        const to_read: usize = @min(read_buf.len, remaining);
+        const result = std.posix.system.pread(fd, read_buf[0..to_read].ptr, to_read, @intCast(off));
         const n: isize = @bitCast(result);
         if (n <= 0) break;
         try content_list.appendSlice(allocator, read_buf[0..@intCast(n)]);
-        off += @intCast(n);
+        off = std.math.add(usize, off, @intCast(n)) catch return error.FileTooLarge;
     }
     const content = content_list.items;
 

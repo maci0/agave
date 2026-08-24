@@ -419,9 +419,10 @@ pub fn calibrateSts(
 /// Apply calibrated temperature to a raw confidence score.
 /// c_calibrated = σ(logit(c) / T) where logit(c) = log(c/(1-c)).
 fn calibratedConf(c: f32, temp: f32) f32 {
+    const safe_temp = if (temp <= 0) logit_clamp_eps else temp;
     const clamped = @max(logit_clamp_eps, @min(1.0 - logit_clamp_eps, c));
     const logit = @log(clamped / (1.0 - clamped));
-    return sigmoid(logit / temp);
+    return sigmoid(logit / safe_temp);
 }
 
 inline fn sigmoid(x: f32) f32 {

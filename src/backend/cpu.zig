@@ -139,11 +139,13 @@ fn parseSysfsCacheSize(comptime path: []const u8) usize {
     var val: usize = 0;
     var i: usize = 0;
     while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
-        val = val * 10 + (data[i] - '0');
+        const d = data[i] - '0';
+        const scaled = std.math.mul(usize, val, 10) catch return 0;
+        val = std.math.add(usize, scaled, d) catch return 0;
     }
     if (i < data.len) {
-        if (data[i] == 'K') return val * kb_to_bytes;
-        if (data[i] == 'M') return val * mb_to_bytes;
+        if (data[i] == 'K') return std.math.mul(usize, val, kb_to_bytes) catch 0;
+        if (data[i] == 'M') return std.math.mul(usize, val, mb_to_bytes) catch 0;
     }
     return val;
 }
@@ -162,9 +164,11 @@ pub fn detectSystemMem() usize {
             while (i < data.len and data[i] == ' ') i += 1;
             var val: usize = 0;
             while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
-                val = val * 10 + (data[i] - '0');
+                const d = data[i] - '0';
+                const scaled = std.math.mul(usize, val, 10) catch return 0;
+                val = std.math.add(usize, scaled, d) catch return 0;
             }
-            return val * kb_to_bytes; // kB to bytes
+            return std.math.mul(usize, val, kb_to_bytes) catch 0; // kB to bytes
         }
     }
     return 0;
@@ -176,7 +180,7 @@ pub fn detectAvailMem() usize {
         // vm.page_free_count × hw.pagesize — conservative (free pages only)
         const free_pages = sysctlU64("vm.page_free_count");
         const page_size = sysctlU64("hw.pagesize");
-        if (free_pages > 0 and page_size > 0) return free_pages * page_size;
+        if (free_pages > 0 and page_size > 0) return std.math.mul(usize, free_pages, page_size) catch 0;
         return 0;
     } else if (comptime builtin.os.tag == .linux) {
         var read_buf: [memavail_read_buf_size]u8 = undefined;
@@ -188,9 +192,11 @@ pub fn detectAvailMem() usize {
             while (i < data.len and data[i] == ' ') i += 1;
             var val: usize = 0;
             while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
-                val = val * 10 + (data[i] - '0');
+                const d = data[i] - '0';
+                const scaled = std.math.mul(usize, val, 10) catch return 0;
+                val = std.math.add(usize, scaled, d) catch return 0;
             }
-            return val * kb_to_bytes; // kB to bytes
+            return std.math.mul(usize, val, kb_to_bytes) catch 0; // kB to bytes
         }
     }
     return 0;
@@ -702,7 +708,10 @@ pub const CpuBackend = struct {
             var total_n: usize = 0;
             var all_same = rb > 0;
             for (ops) |op| {
-                total_n += op.n;
+                total_n = std.math.add(usize, total_n, op.n) catch {
+                    all_same = false;
+                    break;
+                };
                 if (op.w.dtype != dtype or op.mlx_scales != null) all_same = false;
             }
 
@@ -790,12 +799,13 @@ pub const CpuBackend = struct {
     /// Appends all KV data in bulk, then computes attention per token
     /// with parallel head dispatch via the thread pool.
     pub fn sdpaPrefill(self: *CpuBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        const kvd = nkv * hd;
+        const kvd = std.math.mul(usize, nkv, hd) catch return;
 
         // Bulk KV append: store all n_tok key/value vectors into the cache
         for (0..n_tok) |t| {
-            const src_off = t * kvd;
-            const dst_elem = (prev_len + t) * kvd;
+            const src_off = std.math.mul(usize, t, kvd) catch continue;
+            const prev_off = std.math.add(usize, prev_len, t) catch continue;
+            const dst_elem = std.math.mul(usize, prev_off, kvd) catch continue;
             const dst_byte_k = kv_quant.kvByteOffset(kv_type_k, dst_elem);
             const dst_byte_v = kv_quant.kvByteOffset(kv_type_v, dst_elem);
             kv_quant.kvStore(kv_keys.ptr + dst_byte_k, k + src_off, kvd, kv_type_k);
@@ -807,9 +817,10 @@ pub const CpuBackend = struct {
             const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
             const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
             for (0..n_tok) |t| {
-                const sl = prev_len + t + 1;
-                const q_off = t * nh * hd;
-                const out_off = t * nh * hd;
+                const sl = (std.math.add(usize, prev_len, t) catch continue) + 1;
+                const n_h_hd = std.math.mul(usize, nh, hd) catch continue;
+                const q_off = std.math.mul(usize, t, n_h_hd) catch continue;
+                const out_off = q_off;
                 if (self.pool) |pool| {
                     if (nh >= sdpa_parallel_min_heads) {
                         var ctx = SdpaF32Ctx{
@@ -831,9 +842,10 @@ pub const CpuBackend = struct {
             }
         } else {
             for (0..n_tok) |t| {
-                const sl = prev_len + t + 1;
-                const q_off = t * nh * hd;
-                const out_off = t * nh * hd;
+                const sl = (std.math.add(usize, prev_len, t) catch continue) + 1;
+                const n_h_hd2 = std.math.mul(usize, nh, hd) catch continue;
+                const q_off = std.math.mul(usize, t, n_h_hd2) catch continue;
+                const out_off = q_off;
                 if (self.pool) |pool| {
                     if (nh >= sdpa_parallel_min_heads) {
                         var ctx = SdpaQuantCtx{
@@ -869,11 +881,13 @@ pub const CpuBackend = struct {
     /// Supports quantized KV cache: quantizes k_new/v_new on append,
     /// dequantizes during QK dot products and V accumulation.
     pub fn sdpa(self: *CpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
-        const kvd = nkv * hd;
+        const kvd = std.math.mul(usize, nkv, hd) catch return;
 
         // KV append: quantize k_new/v_new into cache at position seq_len
-        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
-        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+        const k_elem_off = std.math.mul(usize, seq_len, kvd) catch return;
+        const v_elem_off = k_elem_off;
+        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, k_elem_off);
+        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, v_elem_off);
         kv_quant.kvStore(keys.ptr + k_byte_off, k_new, kvd, kv_type_k);
         kv_quant.kvStore(values.ptr + v_byte_off, v_new, kvd, kv_type_v);
 

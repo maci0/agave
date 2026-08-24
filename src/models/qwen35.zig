@@ -559,9 +559,11 @@ pub const Qwen35Model = struct {
             self.mtp_hidden_pre_norm = try allocator.alloc(f32, self.n_embd);
             self.mtp_concat_buf = try allocator.alloc(f32, self.n_embd * 2);
             self.mtp_logits_buf = try allocator.alloc(f32, self.vocab_size);
-            const kvd_bytes = @as(usize, self.n_head_kv) * @as(usize, self.head_dim) * @sizeOf(f32);
-            self.mtp_kv_keys = try allocator.alloc(u8, self.max_seq_len * kvd_bytes);
-            self.mtp_kv_values = try allocator.alloc(u8, self.max_seq_len * kvd_bytes);
+            const kvd_bytes = std.math.mul(usize, @as(usize, self.n_head_kv) * @as(usize, self.head_dim), @sizeOf(f32)) catch return error.OutOfMemory;
+            const kv_alloc = std.math.mul(usize, self.max_seq_len, kvd_bytes) catch return error.OutOfMemory;
+            self.mtp_kv_keys = try allocator.alloc(u8, kv_alloc);
+            errdefer allocator.free(self.mtp_kv_keys);
+            self.mtp_kv_values = try allocator.alloc(u8, kv_alloc);
         }
         // Re-register at function scope so later allocation failures still free these.
         errdefer if (self.mtp_hidden_pre_norm.len > 0) allocator.free(self.mtp_hidden_pre_norm);

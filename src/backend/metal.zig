@@ -2706,26 +2706,28 @@ pub const MetalBackend = struct {
 
         // Gather scattered blocks into flat contiguous buffers for the GPU kernel.
         // K_flat/V_flat layout: block i at [i * block_size * kvd .. (i+1) * block_size * kvd].
-        const n_logical_blocks = (sl + @as(usize, kv_view.block_size) - 1) / @as(usize, kv_view.block_size);
+        const n_logical_blocks = (std.math.add(usize, sl, @as(usize, kv_view.block_size) - 1) catch return) / @as(usize, kv_view.block_size);
         var max_phys: u32 = 0;
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
-        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
-        const block_stride = @as(usize, kv_view.block_size) * kvd;
-        const flat_elems = n_phys_blocks * block_stride;
-        const flat_bytes = flat_elems * @sizeOf(f32);
+        const n_phys_blocks: usize = std.math.add(usize, @as(usize, max_phys), 1) catch return;
+        const block_stride = std.math.mul(usize, @as(usize, kv_view.block_size), kvd) catch return;
+        const flat_elems = std.math.mul(usize, n_phys_blocks, block_stride) catch return;
+        const flat_bytes = std.math.mul(usize, flat_elems, @sizeOf(f32)) catch return;
 
         // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
-            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
+            const doubled = if (self.sdpa_flat_keys) |old| std.math.mul(usize, old.len, 2) catch flat_elems else flat_elems;
+            const new_cap = @max(flat_elems, doubled);
+            const new_buf = self.allocator.alloc(f32, new_cap) catch @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
             if (self.sdpa_flat_keys) |old| self.allocator.free(old);
-            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
-                @panic("Metal sdpaPaged: out of memory for flat key staging buffer");
+            self.sdpa_flat_keys = new_buf;
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
-            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
+            const doubled_v = if (self.sdpa_flat_vals) |old| std.math.mul(usize, old.len, 2) catch flat_elems else flat_elems;
+            const new_cap_v = @max(flat_elems, doubled_v);
+            const new_buf_v = self.allocator.alloc(f32, new_cap_v) catch @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
             if (self.sdpa_flat_vals) |old| self.allocator.free(old);
-            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
-                @panic("Metal sdpaPaged: out of memory for flat value staging buffer");
+            self.sdpa_flat_vals = new_buf_v;
         }
         const flat_keys = self.sdpa_flat_keys.?;
         const flat_vals = self.sdpa_flat_vals.?;

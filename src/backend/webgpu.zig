@@ -1141,8 +1141,8 @@ pub const WebGpuBackend = struct {
 
     /// General matrix-vector multiply: y[n] = W[n,k] @ x[k]. Dispatches by quant type.
     pub fn gemv(self: *WebGpuBackend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-        const x_size = k * @sizeOf(f32);
-        const y_size = n * @sizeOf(f32);
+        const x_size = std.math.mul(usize, k, @sizeOf(f32)) catch return;
+        const y_size = std.math.mul(usize, n, @sizeOf(f32)) catch return;
         const x_buf = self.getOrUpload(@ptrCast(x), x_size);
         const out_buf = self.createOutputBuf(y_size);
 
@@ -1171,27 +1171,27 @@ pub const WebGpuBackend = struct {
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("WebGPU gemv: IQ2/IQ3/IQ1 kernels not implemented"),
             else => std.debug.panic("WebGPU gemv: unsupported weight dtype {s}", .{@tagName(w.dtype)}),
         };
-        const nb32 = (k + 31) / 32;
-        const nb256 = (k + 255) / 256;
+        const nb32 = (std.math.add(usize, k, 31) catch return) / 32;
+        const nb256 = (std.math.add(usize, k, 255) catch return) / 256;
         const w_size = switch (w.dtype) {
-            .f32 => n * k * @sizeOf(f32),
-            .bf16 => n * k * 2,
-            .f16 => n * k * 2,
-            .fp8_e4m3 => n * k,
-            .fp8_e5m2 => n * k,
-            .q8_0 => n * nb32 * 34,
-            .q4_0 => n * nb32 * 18,
-            .q4_1 => n * nb32 * 20,
-            .q5_0 => n * nb32 * 22,
-            .iq4_nl => n * nb32 * 18,
-            .q2_k => n * nb256 * 84,
-            .q3_k => n * nb256 * 110,
-            .q4_k => n * nb256 * 144,
-            .q5_k => n * nb256 * 176,
-            .q6_k => n * nb256 * 210,
-            .iq4_xs => n * nb256 * 136,
-            .tq1_0 => n * nb256 * 54,
-            .tq2_0 => n * nb256 * 66,
+            .f32 => std.math.mul(usize, std.math.mul(usize, n, k) catch return, @sizeOf(f32)) catch return,
+            .bf16 => std.math.mul(usize, std.math.mul(usize, n, k) catch return, 2) catch return,
+            .f16 => std.math.mul(usize, std.math.mul(usize, n, k) catch return, 2) catch return,
+            .fp8_e4m3 => std.math.mul(usize, n, k) catch return,
+            .fp8_e5m2 => std.math.mul(usize, n, k) catch return,
+            .q8_0 => std.math.mul(usize, std.math.mul(usize, n, nb32) catch return, 34) catch return,
+            .q4_0 => std.math.mul(usize, std.math.mul(usize, n, nb32) catch return, 18) catch return,
+            .q4_1 => std.math.mul(usize, std.math.mul(usize, n, nb32) catch return, 20) catch return,
+            .q5_0 => std.math.mul(usize, std.math.mul(usize, n, nb32) catch return, 22) catch return,
+            .iq4_nl => std.math.mul(usize, std.math.mul(usize, n, nb32) catch return, 18) catch return,
+            .q2_k => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 84) catch return,
+            .q3_k => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 110) catch return,
+            .q4_k => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 144) catch return,
+            .q5_k => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 176) catch return,
+            .q6_k => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 210) catch return,
+            .iq4_xs => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 136) catch return,
+            .tq1_0 => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 54) catch return,
+            .tq2_0 => std.math.mul(usize, std.math.mul(usize, n, nb256) catch return, 66) catch return,
             else => unreachable,
         };
         const w_buf = self.getOrUpload(w.data, w_size);
@@ -1492,26 +1492,28 @@ pub const WebGpuBackend = struct {
         @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
 
         // Gather scattered blocks into flat contiguous buffers.
-        const n_logical_blocks = (sl + @as(usize, kv_view.block_size) - 1) / @as(usize, kv_view.block_size);
+        const n_logical_blocks = (std.math.add(usize, sl, @as(usize, kv_view.block_size) - 1) catch return) / @as(usize, kv_view.block_size);
         var max_phys: u32 = 0;
         for (kv_view.block_table[0..n_logical_blocks]) |phys_id| max_phys = @max(max_phys, phys_id);
-        const n_phys_blocks: usize = @as(usize, max_phys) + 1;
-        const block_stride = @as(usize, kv_view.block_size) * kvd;
-        const flat_elems = n_phys_blocks * block_stride;
-        const flat_bytes = flat_elems * @sizeOf(f32);
+        const n_phys_blocks: usize = std.math.add(usize, @as(usize, max_phys), 1) catch return;
+        const block_stride = std.math.mul(usize, @as(usize, kv_view.block_size), kvd) catch return;
+        const flat_elems = std.math.mul(usize, n_phys_blocks, block_stride) catch return;
+        const flat_bytes = std.math.mul(usize, flat_elems, @sizeOf(f32)) catch return;
 
         // Grow with 2x capacity so decode rarely re-allocates as block count rises.
         if (self.sdpa_flat_keys == null or self.sdpa_flat_keys.?.len < flat_elems) {
-            const new_cap = @max(flat_elems, if (self.sdpa_flat_keys) |old| old.len * 2 else flat_elems);
+            const doubled = if (self.sdpa_flat_keys) |old| std.math.mul(usize, old.len, 2) catch flat_elems else flat_elems;
+            const new_cap = @max(flat_elems, doubled);
+            const new_buf = self.allocator.alloc(f32, new_cap) catch @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
             if (self.sdpa_flat_keys) |old| self.allocator.free(old);
-            self.sdpa_flat_keys = self.allocator.alloc(f32, new_cap) catch
-                @panic("WebGPU sdpaPaged: out of memory for flat key staging buffer");
+            self.sdpa_flat_keys = new_buf;
         }
         if (self.sdpa_flat_vals == null or self.sdpa_flat_vals.?.len < flat_elems) {
-            const new_cap_v = @max(flat_elems, if (self.sdpa_flat_vals) |old| old.len * 2 else flat_elems);
+            const doubled_v = if (self.sdpa_flat_vals) |old| std.math.mul(usize, old.len, 2) catch flat_elems else flat_elems;
+            const new_cap_v = @max(flat_elems, doubled_v);
+            const new_buf_v = self.allocator.alloc(f32, new_cap_v) catch @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
             if (self.sdpa_flat_vals) |old| self.allocator.free(old);
-            self.sdpa_flat_vals = self.allocator.alloc(f32, new_cap_v) catch
-                @panic("WebGPU sdpaPaged: out of memory for flat value staging buffer");
+            self.sdpa_flat_vals = new_buf_v;
         }
         const flat_keys = self.sdpa_flat_keys.?;
         const flat_vals = self.sdpa_flat_vals.?;
@@ -1651,10 +1653,11 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn gemvNvfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize) void {
-        const x_sz = k * @sizeOf(f32);
-        const w_sz = n * k / 2;
-        const s_sz = n * k / 16;
-        const y_sz = n * @sizeOf(f32);
+        const x_sz = std.math.mul(usize, k, @sizeOf(f32)) catch return;
+        const nk = std.math.mul(usize, n, k) catch return;
+        const w_sz = nk / 2;
+        const s_sz = nk / 16;
+        const y_sz = std.math.mul(usize, n, @sizeOf(f32)) catch return;
         const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
         const w_buf = self.getOrUpload(@ptrCast(w_packed), w_sz);
         const s_buf = self.getOrUpload(@ptrCast(w_scales), s_sz);
@@ -1727,12 +1730,12 @@ pub const WebGpuBackend = struct {
 
     pub fn gemvMxfp4St(self: *WebGpuBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         const group_size: u32 = @intCast(@max(gs, mxfp4_min_group_size));
-        const gpr = (k + @as(usize, group_size) - 1) / @as(usize, group_size);
+        const gpr = (std.math.add(usize, k, @as(usize, group_size) - 1) catch return) / @as(usize, group_size);
         const wpg = @as(usize, group_size) / 8;
-        const x_sz = k * @sizeOf(f32);
-        const w_sz = n * gpr * wpg * @sizeOf(u32);
-        const s_sz = @max(n * gpr, 4);
-        const y_sz = n * @sizeOf(f32);
+        const x_sz = std.math.mul(usize, k, @sizeOf(f32)) catch return;
+        const w_sz = std.math.mul(usize, std.math.mul(usize, n, gpr) catch return, wpg * @sizeOf(u32)) catch return;
+        const s_sz = @max(std.math.mul(usize, n, gpr) catch return, 4);
+        const y_sz = std.math.mul(usize, n, @sizeOf(f32)) catch return;
         const storage_usage = wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst;
         const x_pool = self.getPooledBuf(x_sz);
         defer self.releasePooledBuf(x_pool.buf, x_pool.idx);

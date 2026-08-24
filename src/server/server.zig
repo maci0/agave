@@ -101,8 +101,11 @@ fn estimateKvExportBytes(model: Model, n_tokens: usize) usize {
     const head_dim = n_embd / n_head;
     const kvd = n_head_kv * head_dim;
     // K+V per layer × headroom for dual-attn / MLA dim spread across layers.
-    const per_token = n_layers *% kvd *% 2 *% @sizeOf(f32) *% kv_export_dim_headroom;
-    const raw = n_tokens *% per_token;
+    const per_token = std.math.mul(usize, n_layers, kvd) catch return kv_export_max_bytes;
+    const per_token2 = std.math.mul(usize, per_token, 2) catch return kv_export_max_bytes;
+    const per_token3 = std.math.mul(usize, per_token2, @sizeOf(f32)) catch return kv_export_max_bytes;
+    const per_token4 = std.math.mul(usize, per_token3, kv_export_dim_headroom) catch return kv_export_max_bytes;
+    const raw = std.math.mul(usize, n_tokens, per_token4) catch return kv_export_max_bytes;
     return @min(if (raw == 0) kv_export_max_bytes else raw, kv_export_max_bytes);
 }
 const conv_title_max_len: usize = 48;
@@ -1048,7 +1051,7 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     // Read remaining body bytes if needed
     if (content_length > 0) {
         if (content_length > max_request_body_size) return .body_too_large;
-        const body_end = body_start + content_length;
+        const body_end = std.math.add(usize, body_start, content_length) catch return .body_too_large;
         if (body_end > buf.len) return .body_too_large;
         while (total < body_end) {
             const n = stream.read(buf[total..body_end]) catch return .read_error;
