@@ -70,7 +70,10 @@ pub fn scaledDotProductAttention(
     kv_type_v: KvQuantType,
 ) void {
     std.debug.assert(nkv > 0);
-    const kvd = nkv * hd;
+    std.debug.assert(hd > 0 and nh > 0);
+    std.debug.assert(nh % nkv == 0);
+    const kvd = std.math.mul(usize, nkv, hd) catch @panic("kvd overflow");
+    const qkv_dim = std.math.mul(usize, nh, hd) catch @panic("attn dim overflow");
 
     // Fast path: no window, no score offset → delegate KV append + attention to backend.
     // All backends handle KV append + attention in one call (GPU: fused kernel, CPU: inline).
@@ -84,11 +87,12 @@ pub fn scaledDotProductAttention(
     be.sync();
 
     // KV append: quantize k_buf/v_buf into cache (use respective types)
-    const k_byte_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
-    const v_byte_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+    const seq_kvd = std.math.mul(usize, seq_len, kvd) catch @panic("kv offset overflow");
+    const k_byte_off = kv_quant.kvByteOffset(kv_type_k, seq_kvd);
+    const v_byte_off = kv_quant.kvByteOffset(kv_type_v, seq_kvd);
     kv_quant.kvStore(kv_keys[k_byte_off..].ptr, k_buf.ptr, kvd, kv_type_k);
     kv_quant.kvStore(kv_values[v_byte_off..].ptr, v_buf.ptr, kvd, kv_type_v);
-    const sl = seq_len + 1;
+    const sl = std.math.add(usize, seq_len, 1) catch @panic("seq len overflow");
 
     const win_start = if (window) |w| w.start else 0;
     const win_len = if (window) |w| w.len else sl;

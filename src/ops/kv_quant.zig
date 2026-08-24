@@ -603,16 +603,34 @@ pub const KvQuantType = enum {
 /// Compute byte storage needed for `n` logical f32 elements.
 pub fn kvSliceBytes(kv_type: KvQuantType, n: usize) usize {
     return switch (kv_type) {
-        .f32 => n * 4,
-        .f16 => n * 2,
-        .q8_0 => ((n + block_size - 1) / block_size) * q8_0_block_bytes,
-        .int8 => ((n + block_size - 1) / block_size) * int8_block_bytes,
+        .f32 => std.math.mul(usize, n, 4) catch std.math.maxInt(usize),
+        .f16 => std.math.mul(usize, n, 2) catch std.math.maxInt(usize),
+        .q8_0 => blk: {
+            const nb = (std.math.add(usize, n, block_size - 1) catch std.math.maxInt(usize)) / block_size;
+            break :blk std.math.mul(usize, nb, q8_0_block_bytes) catch std.math.maxInt(usize);
+        },
+        .int8 => blk: {
+            const nb = (std.math.add(usize, n, block_size - 1) catch std.math.maxInt(usize)) / block_size;
+            break :blk std.math.mul(usize, nb, int8_block_bytes) catch std.math.maxInt(usize);
+        },
         .fp8_e4m3 => n,
-        .nvfp4 => ((n + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes,
+        .nvfp4 => blk: {
+            const nb = (std.math.add(usize, n, nvfp4_block - 1) catch std.math.maxInt(usize)) / nvfp4_block;
+            break :blk std.math.mul(usize, nb, nvfp4_block_bytes) catch std.math.maxInt(usize);
+        },
         .nvfp4_ds_mla => nvfp4DsMlaSliceBytes(n),
-        .turbo2, .planar2, .iso2, .rotor2 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo2_block_bytes,
-        .turbo3, .planar3, .iso3, .rotor3 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo3_block_bytes,
-        .turbo4, .planar4, .iso4, .rotor4 => ((n + turbo_block_size - 1) / turbo_block_size) * turbo4_block_bytes,
+        .turbo2, .planar2, .iso2, .rotor2 => blk: {
+            const nb = (std.math.add(usize, n, turbo_block_size - 1) catch std.math.maxInt(usize)) / turbo_block_size;
+            break :blk std.math.mul(usize, nb, turbo2_block_bytes) catch std.math.maxInt(usize);
+        },
+        .turbo3, .planar3, .iso3, .rotor3 => blk: {
+            const nb = (std.math.add(usize, n, turbo_block_size - 1) catch std.math.maxInt(usize)) / turbo_block_size;
+            break :blk std.math.mul(usize, nb, turbo3_block_bytes) catch std.math.maxInt(usize);
+        },
+        .turbo4, .planar4, .iso4, .rotor4 => blk: {
+            const nb = (std.math.add(usize, n, turbo_block_size - 1) catch std.math.maxInt(usize)) / turbo_block_size;
+            break :blk std.math.mul(usize, nb, turbo4_block_bytes) catch std.math.maxInt(usize);
+        },
     };
 }
 
@@ -623,25 +641,26 @@ pub fn kvSliceBytes(kv_type: KvQuantType, n: usize) usize {
 /// Not forced inline — the 10-arm switch is large; let the compiler decide.
 pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
     return switch (kv_type) {
-        .f32 => i * 4,
-        .f16 => i * 2,
-        .q8_0 => (i / block_size) * q8_0_block_bytes,
-        .int8 => (i / block_size) * int8_block_bytes,
+        .f32 => std.math.mul(usize, i, 4) catch std.math.maxInt(usize),
+        .f16 => std.math.mul(usize, i, 2) catch std.math.maxInt(usize),
+        .q8_0 => std.math.mul(usize, i / block_size, q8_0_block_bytes) catch std.math.maxInt(usize),
+        .int8 => std.math.mul(usize, i / block_size, int8_block_bytes) catch std.math.maxInt(usize),
         .fp8_e4m3 => i,
-        .nvfp4 => (i / nvfp4_block) * nvfp4_block_bytes,
+        .nvfp4 => std.math.mul(usize, i / nvfp4_block, nvfp4_block_bytes) catch std.math.maxInt(usize),
         .nvfp4_ds_mla => nvfp4DsMlaByteOffset(i),
-        .turbo2, .planar2, .iso2, .rotor2 => (i / turbo_block_size) * turbo2_block_bytes,
-        .turbo3, .planar3, .iso3, .rotor3 => (i / turbo_block_size) * turbo3_block_bytes,
-        .turbo4, .planar4, .iso4, .rotor4 => (i / turbo_block_size) * turbo4_block_bytes,
+        .turbo2, .planar2, .iso2, .rotor2 => std.math.mul(usize, i / turbo_block_size, turbo2_block_bytes) catch std.math.maxInt(usize),
+        .turbo3, .planar3, .iso3, .rotor3 => std.math.mul(usize, i / turbo_block_size, turbo3_block_bytes) catch std.math.maxInt(usize),
+        .turbo4, .planar4, .iso4, .rotor4 => std.math.mul(usize, i / turbo_block_size, turbo4_block_bytes) catch std.math.maxInt(usize),
     };
 }
 
 fn nvfp4SliceBytes(n: usize) usize {
-    return ((n + nvfp4_block - 1) / nvfp4_block) * nvfp4_block_bytes;
+    const nb = (std.math.add(usize, n, nvfp4_block - 1) catch std.math.maxInt(usize)) / nvfp4_block;
+    return std.math.mul(usize, nb, nvfp4_block_bytes) catch std.math.maxInt(usize);
 }
 
 fn nvfp4DsMlaRecordBytes() usize {
-    return nvfp4SliceBytes(ds_mla_nope_dim) + ds_mla_rope_dim * f16_elem_bytes;
+    return std.math.add(usize, nvfp4SliceBytes(ds_mla_nope_dim), std.math.mul(usize, ds_mla_rope_dim, f16_elem_bytes) catch std.math.maxInt(usize)) catch std.math.maxInt(usize);
 }
 
 fn nvfp4DsMlaBitsPerElement() f32 {
@@ -651,23 +670,32 @@ fn nvfp4DsMlaBitsPerElement() f32 {
 /// Packed size of `rem` leading elements of a 512-d MLA record.
 fn nvfp4DsMlaPrefixBytes(rem: usize) usize {
     if (rem <= ds_mla_nope_dim) return nvfp4SliceBytes(rem);
-    return nvfp4SliceBytes(ds_mla_nope_dim) + (rem - ds_mla_nope_dim) * f16_elem_bytes;
+    const tail = std.math.mul(usize, rem - ds_mla_nope_dim, f16_elem_bytes) catch std.math.maxInt(usize);
+    return std.math.add(usize, nvfp4SliceBytes(ds_mla_nope_dim), tail) catch std.math.maxInt(usize);
 }
 
 fn nvfp4DsMlaSliceBytes(n: usize) usize {
     const full = n / ds_mla_latent_dim;
     const rem = n % ds_mla_latent_dim;
-    return full * nvfp4DsMlaRecordBytes() + nvfp4DsMlaPrefixBytes(rem);
+    const rec_bytes = nvfp4DsMlaRecordBytes();
+    const head = std.math.mul(usize, full, rec_bytes) catch std.math.maxInt(usize);
+    const tail = nvfp4DsMlaPrefixBytes(rem);
+    return std.math.add(usize, head, tail) catch std.math.maxInt(usize);
 }
 
 fn nvfp4DsMlaByteOffset(i: usize) usize {
     const full = i / ds_mla_latent_dim;
     const rem = i % ds_mla_latent_dim;
     const rec = nvfp4DsMlaRecordBytes();
+    const head = std.math.mul(usize, full, rec) catch std.math.maxInt(usize);
     if (rem < ds_mla_nope_dim) {
-        return full * rec + (rem / nvfp4_block) * nvfp4_block_bytes;
+        const off = std.math.mul(usize, rem / nvfp4_block, nvfp4_block_bytes) catch std.math.maxInt(usize);
+        return std.math.add(usize, head, off) catch std.math.maxInt(usize);
     }
-    return full * rec + nvfp4SliceBytes(ds_mla_nope_dim) + (rem - ds_mla_nope_dim) * f16_elem_bytes;
+    const nope_bytes = nvfp4SliceBytes(ds_mla_nope_dim);
+    const tail = std.math.mul(usize, rem - ds_mla_nope_dim, f16_elem_bytes) catch std.math.maxInt(usize);
+    const without_tail = std.math.add(usize, head, nope_bytes) catch std.math.maxInt(usize);
+    return std.math.add(usize, without_tail, tail) catch std.math.maxInt(usize);
 }
 
 // ── Per-head KV quantization scales ──────────────────────────────
