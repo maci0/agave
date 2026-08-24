@@ -166,7 +166,7 @@ Fourteen dedicated Metal compute kernels for DeepSeek V4 Flash that eliminate al
 | `ds4_moe_down_mxfp4` | Batched MoE down GEMV (MXFP4) | 1D grid |
 | `ds4_rms_norm_noweight` | RMSNorm without learned weight | 1D grid |
 
-These kernels exist for GGUF models with native GPU GEMV types. Flash 0731 generate (MLX-Q SafeTensors, default q8_0 KV) routes the DS4 hot path through a dedicated `CpuBackend` on every backend: CSA/HCA pooling, LID, and HC mixing read host f32, and GPU GEMV would leave those slices stale or UMA-incoherent. `--backend metal|cuda|vulkan|rocm|webgpu` must match `--backend cpu`. Metal still has a q8_0 decode SDPA kernel for long sequences on other models; DS4 does not use it.
+These kernels exist for GGUF models with native GPU GEMV types. Flash 0731 generate (MLX-Q SafeTensors, default q8_0 KV) routes the DS4 hot path through a dedicated `CpuBackend` on every backend: CSA/HCA pooling, LID, and HC mixing read host f32, and the cache-based GPU GEMV path would leave those slices stale or UMA-incoherent. Vulkan/WebGPU/CUDA run the MLX-Q attention projections and MLX-Q/MXFP4 expert GEMVs on native shaders via `gemvBackend()`, with a per-call copy-back (`syncGemvOutput` on CUDA, pooled upload/download on Vulkan/WebGPU) so the CPU-side passes see fresh activations between GEMVs. `--backend metal|rocm` must match `--backend cpu`; `--backend vulkan|webgpu|cuda` must match `--backend cpu` only for the CPU-side passes. Metal still has a q8_0 decode SDPA kernel for long sequences on other models; DS4 does not use it.
 
 ## Sparse GEMV (Activation Sparsity)
 
@@ -201,7 +201,7 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 
 **KV cache `nvfp4_ds_mla`**: CPU `kvDot`/`kvMulAccum` on all backends (DeepSeek MLA: NVFP4 on 448 NoPE dims, f16 on 64 RoPE dims). No GPU SDPA kernel; GPU backends route this type through `CpuBackend`.
 
-**KV cache `q8_0` (DS4 default):** CUDA/ROCm/Vulkan/WebGPU have no q8_0 SDPA kernel and use CPU SDPA. Metal has a q8_0 decode kernel for long sequences; tree and prefill still use CPU. DS4 scores via the dedicated CpuBackend. Vulkan/WebGPU still run MLX-Q and MXFP4 GEMV on GPU (`gemv_mlx_q4`, `gemv_mxfp4_st` with `gs` + E8M0 for Flash experts).
+**KV cache `q8_0` (DS4 default):** CUDA/ROCm/Vulkan/WebGPU have no q8_0 SDPA kernel and use CPU SDPA. Metal has a q8_0 decode kernel for long sequences; tree and prefill still use CPU. DS4 scores via the dedicated CpuBackend. Vulkan/WebGPU/CUDA run MLX-Q and MXFP4 GEMV on GPU (`gemv_mlx_q4`, `gemv_mxfp4_st` with `gs` + E8M0 for Flash experts); CUDA copies outputs back per call (`syncGemvOutput` in `cuda.zig`) so host-side pooling/LID/HC reads are fresh. GGUF-quantized DS4 checkpoints (Q2_K/Q8_0 …) still route through cache-based `be.gemv` on CUDA/Vulkan — use `--backend cpu` for those until a sync variant is added.
 
 **Megakernel ports** (optimization, not correctness):
 - ROCm: gemma_q4k, gemma_q8, qwen35_q4k, nemotron_h_q8 (requires Metal→AMDGCN porting)

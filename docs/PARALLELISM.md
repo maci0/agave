@@ -28,6 +28,10 @@ agave model.gguf --backend cuda --tp 2 --rank 1 --peers 10.0.1.1 --transport ncc
 agave ds4-flash.gguf --backend cuda --pp 2 --rank 0 --peers 10.0.1.2 --transport nccl --spec-mode dspark "prompt"
 agave ds4-flash.gguf --backend cuda --tp 2 --rank 0 --peers 10.0.1.2 --transport nccl --spec-mode dspark "prompt"
 
+# Quick two-node TP smoke test (rank 1 first, then rank 0):
+#   Node A: scripts/test-tp-nccl.sh 0 10.0.1.2 ~/DeepSeek-V4-Flash-0731-MLX-Q4/
+#   Node B: scripts/test-tp-nccl.sh 1 10.0.1.1 ~/DeepSeek-V4-Flash-0731-MLX-Q4/
+
 # Hybrid TP+PP needs 4 ranks (2 TP groups × 2 PP stages). Transport is a 2-rank
 # pair, so this does not launch today; use --tp 2 or --pp 2, not both.
 

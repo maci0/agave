@@ -257,7 +257,7 @@ pub const BpeTokenizer = struct {
         if (tokens.len < 2) return .{ .pos = -1, .priority = best_pri };
         var key_buf: [merge_key_buf_size]u8 = undefined;
         for (0..tokens.len - 1) |i| {
-            const kl = tokens[i].len + 1 + tokens[i + 1].len;
+            const kl = std.math.add(usize, std.math.add(usize, tokens[i].len, 1) catch continue, tokens[i + 1].len) catch continue;
             if (kl > key_buf.len) continue;
             @memcpy(key_buf[0..tokens[i].len], tokens[i]);
             key_buf[tokens[i].len] = 0;
@@ -290,7 +290,8 @@ pub const BpeTokenizer = struct {
             const pos: usize = @intCast(m.pos);
             const a = current.items[pos];
             const b = current.items[pos + 1];
-            const merged = try self.allocator.alloc(u8, a.len + b.len);
+            const merged_len = std.math.add(usize, a.len, b.len) catch break;
+            const merged = try self.allocator.alloc(u8, merged_len);
             @memcpy(merged[0..a.len], a);
             @memcpy(merged[a.len..], b);
             try allocated.append(self.allocator, merged);
@@ -574,7 +575,8 @@ pub const BpeTokenizer = struct {
             const first = merge_line[0..sp];
             const second = merge_line[sp + 1 ..];
             var key_buf: [merge_key_buf_size]u8 = undefined;
-            const key_len = first.len + 1 + second.len;
+            const kl1 = std.math.add(usize, first.len, 1) catch continue;
+            const key_len = std.math.add(usize, kl1, second.len) catch continue;
             if (key_len > key_buf.len) continue;
             @memcpy(key_buf[0..first.len], first);
             key_buf[first.len] = 0;

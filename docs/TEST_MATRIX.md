@@ -24,7 +24,7 @@
 | 7b | Qwen 3.8 27B | MLX-4bit ST | 15.0 GB | PASS "Hi" | PASS "Hi" | — | Dense hybrid. Greedy "Say hi in one word." EOS after Hi. WebGPU PASS "Hi" (vocab GEMV chunked at 65535; DeltaNet cache must not bump generation on SSM download). Vulkan: no ICD here (CPU fallback PASS). BF16/GGUF not on disk. Skip extra RMSNorm +1 on MLX-sanitized ST. |
 | 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | — | GGUF issue — also fails in llama.cpp |
 | 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | — | Prompt-sensitive; answers correctly with clear prompts |
-| 10 | DeepSeek V4 | MLX-Q4 ST | 141 GB | PASS greedy France / 2+2 / sky (CpuBackend) | PASS (same) | Compile + q8_0 CPU SDPA (no NVIDIA here) | WebGPU PASS France + 2+2 (native MLX-Q / MXFP4 GEMV). Vulkan (KosmicKrisp) PASS France + 2+2 (same shaders). q8_0 SDPA stays CPU. Flash 0731 `--ssd-streaming --kv-type q8_0`. Metal/CUDA/ROCm still use dedicated CpuBackend for GEMV. |
+| 10 | DeepSeek V4 | MLX-Q4 ST | 141 GB | PASS greedy France / 2+2 / sky (CpuBackend) | PASS (same) | Compile + q8_0 CPU SDPA (no NVIDIA here) | WebGPU PASS France + 2+2 (native MLX-Q / MXFP4 GEMV). Vulkan (KosmicKrisp) PASS France + 2+2 (same shaders). CUDA: native MLX-Q/MXFP4 GEMV on GB10 (sync copy-back per call); q8_0 SDPA stays CPU. Flash 0731 `--ssd-streaming --kv-type q8_0`. TP=2 expert-parallel over NCCL (2 nodes) via `--tp 2 --peers <ip> --transport nccl`. Metal/ROCm still use dedicated CpuBackend for GEMV. |
 | 11 | Llama 4 | — | — | Not tested | Not tested | — | iRoPE, chunked attention, MoE |
 | 12 | DiffusionGemma | — | — | Not tested | Not tested | — | Block diffusion |
 | 13 | GPT-OSS Harmony | — | — | Not tested | Not tested | — | |

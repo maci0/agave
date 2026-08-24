@@ -81,6 +81,7 @@ pub const Prefetcher = struct {
         var to_queue: [prefetch_count]u32 = undefined;
         var n_queue: usize = 0;
         for (block_ids[start_idx..end]) |block_id| {
+            if (block_id >= self.cache.blocks.len) continue;
             const needs = blk: {
                 self.cache.lockTier();
                 defer self.cache.unlockTier();

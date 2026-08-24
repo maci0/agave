@@ -59,11 +59,17 @@ const video_tmp_fallback = "/tmp/agave_video";
 /// Buffer size for composing the video frame temp directory path.
 const tmp_path_buf_size = 256;
 
+/// Monotonic milliseconds for interval math (model load, preload, prefill,
+/// generation durations). Wall-clock reads would report negative or inflated
+/// durations after an NTP step or manual clock change mid-run; same convention
+/// as server.zig's interval clock.
 fn milliTimestamp(io: Io) i64 {
     _ = io;
-    return sim_clock.milliNow();
+    return sim_clock.monoMilli();
 }
 
+/// Nanoseconds since epoch (wall clock): PRNG seed derivation and
+/// process-unique tags where cross-process uniqueness matters.
 fn nanoTimestamp(io: Io) i96 {
     _ = io;
     return sim_clock.nanoNow();
@@ -3273,7 +3279,9 @@ fn initAndRun(
             // Create temp directory for extracted frames under $TMPDIR (default /tmp)
             const tmp_base = pull.getenv("TMPDIR") orelse default_tmp_base;
             var tmp_buf: [tmp_path_buf_size]u8 = undefined;
-            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "{s}/agave_video_{d}", .{ tmp_base, milliTimestamp(g_io) }) catch video_tmp_fallback;
+            // Wall nanos: the tag must stay unique across concurrent agave
+            // processes; monotonic time is boot-relative and can collide.
+            const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "{s}/agave_video_{d}", .{ tmp_base, nanoTimestamp(g_io) }) catch video_tmp_fallback;
             Io.Dir.cwd().createDir(g_io, tmp_dir_slice, .default_dir) catch {};
             defer Io.Dir.cwd().deleteTree(g_io, tmp_dir_slice) catch {};
 

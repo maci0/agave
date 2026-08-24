@@ -49,29 +49,48 @@ pub fn argmax(buf: []const f32) u32 {
     if (buf.len == 0) return 0;
     var best_idx: u32 = 0;
     var best_val: f32 = buf[0];
+    var found_finite = !std.math.isNan(best_val);
+    if (!found_finite) best_val = -std.math.inf(f32);
     var i: usize = 1;
     while (i + 8 <= buf.len) : (i += 8) {
         const chunk: V8 = buf[i..][0..8].*;
         const local_max = @reduce(.Max, chunk);
-        if (local_max > best_val) {
-            // Lane index must be comptime for @Vector access; unroll.
-            const lane: usize = blk: {
-                inline for (0..8) |l| {
-                    if (chunk[l] == local_max) break :blk l;
+        if (std.math.isNan(local_max)) {
+            const arr: [8]f32 = @bitCast(chunk);
+            for (arr, 0..) |val, l| {
+                if (std.math.isNan(val)) continue;
+                if (!found_finite or val > best_val) {
+                    best_val = val;
+                    best_idx = @intCast(i + l);
+                    found_finite = true;
                 }
-                break :blk 0;
-            };
+            }
+            continue;
+        }
+        if (!found_finite or local_max > best_val) {
+            const arr: [8]f32 = @bitCast(chunk);
+            var lane: usize = 0;
+            for (arr, 0..) |val, l| {
+                if (val == local_max) {
+                    lane = l;
+                    break;
+                }
+            }
             best_val = local_max;
             best_idx = @intCast(i + lane);
+            found_finite = true;
         }
     }
     while (i < buf.len) : (i += 1) {
-        if (buf[i] > best_val) {
-            best_val = buf[i];
+        const v = buf[i];
+        if (std.math.isNan(v)) continue;
+        if (!found_finite or v > best_val) {
+            best_val = v;
             best_idx = @intCast(i);
+            found_finite = true;
         }
     }
-    if (std.math.isNan(best_val)) {
+    if (!found_finite) {
         std.log.warn("argmax: NaN detected in logits", .{});
         return 0;
     }
@@ -285,9 +304,10 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     const min_bits = 6;
     const max_bits = 13;
     const set_bits = blk: {
+        const needed = std.math.mul(usize, gen_tokens.len, 2) catch (1 << max_bits);
         var bits: u5 = min_bits;
         while (bits < max_bits) : (bits += 1) {
-            if ((@as(usize, 1) << bits) >= gen_tokens.len * 2) break;
+            if ((@as(usize, 1) << bits) >= needed) break;
         }
         break :blk bits;
     };
@@ -543,6 +563,7 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     if (temperature == 0) return argmax(logits);
 
     const n = logits.len;
+    const fallback: u32 = argmax(logits);
     const neg_inf = -std.math.inf(f32);
 
     // 1. Temperature scaling (SIMD) — skip identity scaling
@@ -687,7 +708,7 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     // 5. Weighted random sampling (unnormalized — scale threshold by sum).
     // If sum <= 0 after filtering (all candidates zeroed), fall back to argmax
     // of the original logits to avoid a biased return of the last token index.
-    if (sum <= 0) return argmax(logits);
+    if (sum <= 0 or !std.math.isFinite(sum)) return fallback;
     var cumulative: f32 = 0;
     const sample_threshold = rng.float(f32) * sum;
     for (logits, 0..) |p, i| {
