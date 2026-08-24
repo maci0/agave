@@ -298,7 +298,7 @@ The GPU kernel binaries under `src/backend/kernels/` are **generated artifacts c
 
 Notes:
 - The committed PTX targets `sm_120` (see docs/KERNELS.md); a plain `zig build ptx` defaults to `sm_90` and will not match.
-- CI runs the PTX comparison as an informational job (`kernel-artifacts`); once committed artifacts are regenerated, remove its `continue-on-error` and add it to `ci-pass.needs`.
+- CI enforces the PTX comparison as a blocking job (`kernel-artifacts`, part of `ci-pass`); regenerate committed PTX whenever kernel sources change.
 - SPIR-V byte-compares are only exact for the glslang release that produced the commit; treat cross-version diffs as suspect.
 
 ## How to Run Tests
