@@ -165,7 +165,7 @@ const tiered_fallback_n_kv_heads: u32 = 8;
 const tiered_fallback_n_heads: u32 = 32;
 const max_eog_ids = arch_mod.max_eog_ids;
 /// Valid KV cache quantization type names (shared across all --kv-type* validation).
-const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4, turbo (preset: K=q8_0, V=turbo4)";
+const kv_valid_types = "f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3, planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, rotor2/rq2, rotor3/rq3, rotor4/rq4, turbo (preset: K=q8_0, V=turbo4)";
 
 // ── Output control ──────────────────────────────────────────────
 
@@ -2082,7 +2082,9 @@ fn printUsage() void {
         \\KV CACHE:
         \\      --kv-type <TYPE>      KV cache quantization [default: f16]
         \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla,
-        \\                                   turbo2-4/tq2-4, planar2-4/pq2-4, iso2-4/iq2-4, rotor2-4/rq2-4
+        \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3,
+        \\                                   planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, rotor2/rq2,
+        \\                                   rotor3/rq3, rotor4/rq4
         \\                            Preset: turbo (K=q8_0, V=turbo4)
         \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
         \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
@@ -2117,7 +2119,8 @@ fn printUsage() void {
         \\
         \\SPECULATIVE DECODING:
         \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark
+        \\      --mtp-model <PATH>    MTP weight file (safetensors) for multi-token prediction
+        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
         \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
         \\      --tree-budget <N>     DDTree node budget [default: 64]
         \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
@@ -2167,6 +2170,7 @@ fn printUsage() void {
         \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
         \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
         \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
+        \\  TMPDIR               Base directory for extracted video frames (default: /tmp)
         \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
         \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
         \\  XDG_CACHE_HOME       XDG cache base for pull (fallback: ~/.cache)
