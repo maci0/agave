@@ -8,7 +8,7 @@ const v8zero: V8 = @splat(0.0);
 const sparse_chunk = 32;
 
 const std = @import("std");
-const gemv_common = @import("gemv.zig");
+const sparsity = @import("activation_sparsity.zig");
 
 /// F16 GEMV: y = W @ x. 4-row batched with inline f16→f32 conversion.
 pub fn gemvF16(x: [*]const f32, w: [*]const f16, y: [*]f32, n: usize, k: usize) void {
@@ -24,7 +24,7 @@ pub fn gemvF16(x: [*]const f32, w: [*]const f16, y: [*]f32, n: usize, k: usize) 
         const r3 = r2 + k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }
@@ -61,7 +61,7 @@ pub fn gemvF16(x: [*]const f32, w: [*]const f16, y: [*]f32, n: usize, k: usize) 
         const roff = row * k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }

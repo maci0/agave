@@ -2,7 +2,7 @@
 //! 4-row batching with V8 SIMD.
 
 const quant = @import("../../../ops/quant.zig");
-const gemv_common = @import("gemv.zig");
+const sparsity = @import("activation_sparsity.zig");
 const V8 = @Vector(8, f32);
 const V8u16 = @Vector(8, u16);
 const V8u32 = @Vector(8, u32);
@@ -27,7 +27,7 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var i: usize = 0;
         while (i + 8 <= k) {
             // Sparse block skip: check every 32 elements
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }
@@ -64,7 +64,7 @@ pub fn gemvBF16(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const roff = row * k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }

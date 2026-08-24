@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
-const gemv_common = @import("gemv.zig");
+const sparsity = @import("activation_sparsity.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
@@ -43,7 +43,7 @@ pub fn gemvQ6_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp1 = w + (row + 1) * row_bytes;
 
         for (0..nb) |b| {
-            if (gemv_common.isBlockSparse(x, b * bs, bs)) continue;
+            if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
 
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
@@ -153,7 +153,7 @@ pub fn gemvQ6_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var sum: V8 = v8zero;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
-            if (gemv_common.isBlockSparse(x, b * bs, bs)) continue;
+            if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
 
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[q6_k_d_offset..][0..2], .little))));
