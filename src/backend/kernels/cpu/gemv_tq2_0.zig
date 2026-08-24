@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
-const gemv_common = @import("gemv.zig");
+const sparsity = @import("activation_sparsity.zig");
 
 /// Number of quantized elements (ternary values) packed into one TQ2_0 block.
 pub const block_elems: usize = 256;
@@ -38,7 +38,7 @@ pub fn gemvTQ2_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
             const block_start = b * block_bytes;
             const elements_in_block = @min(block_elems, k - bk);
 
-            if (gemv_common.isBlockSparse(x, bk, elements_in_block)) continue;
+            if (sparsity.isBlockSparse(x, bk, elements_in_block)) continue;
 
             // f16 scale at bytes [0..2], qs at bytes [2..66]
             const scale = f16ToF32(@as(*const u16, @ptrCast(@alignCast(rp + block_start))).*);

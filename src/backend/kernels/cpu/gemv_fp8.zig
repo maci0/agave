@@ -3,7 +3,7 @@
 //! 4-row batching with V8 SIMD, matching the F32/F16/BF16 kernel structure.
 
 const quant = @import("../../../ops/quant.zig");
-const gemv_common = @import("gemv.zig");
+const sparsity = @import("activation_sparsity.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 /// Sparse block-skip chunk size for element-level formats.
@@ -24,7 +24,7 @@ pub fn gemvFP8_E4M3(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         const r3 = r2 + k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }
@@ -67,7 +67,7 @@ pub fn gemvFP8_E4M3(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         const roff = row * k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }
@@ -112,7 +112,7 @@ pub fn gemvFP8_E5M2(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         const r3 = r2 + k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }
@@ -155,7 +155,7 @@ pub fn gemvFP8_E5M2(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usi
         const roff = row * k;
         var i: usize = 0;
         while (i + 8 <= k) {
-            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and gemv_common.isBlockSparse(x, i, sparse_chunk)) {
+            if (i % sparse_chunk == 0 and i + sparse_chunk <= k and sparsity.isBlockSparse(x, i, sparse_chunk)) {
                 i += sparse_chunk;
                 continue;
             }

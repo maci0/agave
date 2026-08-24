@@ -5,9 +5,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Block tier enum re-exported from tiered.zig for convenience.
-/// Used by split-attention to classify blocks without importing tiered.zig directly.
-pub const BlockTier = @import("tiered.zig").BlockTier;
+// Block tier classification lives in tiered.zig; import it from there directly
+// (a convenience re-export here used to create a manager <-> tiered import cycle).
 
 /// Result of allocating a KV cache.
 /// Slices are byte arrays — the actual format (f32, f16, q8_0, etc.)
@@ -945,13 +944,12 @@ test "fuzz: all manager functions" {
         fn f(_: void, smith: *std.testing.Smith) !void {
             const allocator = std.testing.allocator;
 
-            // ── Pub type existence: KvCache, CacheBlock, SeqBlockTable, PrefixMatch, BlockTier ──
+            // ── Pub type existence: KvCache, CacheBlock, SeqBlockTable, PrefixMatch ──
             comptime {
                 _ = KvCache;
                 _ = CacheBlock;
                 _ = SeqBlockTable;
                 _ = PrefixMatch;
-                _ = BlockTier;
             }
 
             // ── allocKvCache / freeKvCache ──

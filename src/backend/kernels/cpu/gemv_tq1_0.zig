@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
-const gemv_common = @import("gemv.zig");
+const sparsity = @import("activation_sparsity.zig");
 
 const block_elems: usize = 256;
 const block_bytes: usize = 54;
@@ -56,7 +56,7 @@ pub fn gemvTQ1_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
 
         for (0..nb) |b| {
             const bk = b * block_elems;
-            if (gemv_common.isBlockSparse(x, bk, @min(block_elems, k - bk))) continue;
+            if (sparsity.isBlockSparse(x, bk, @min(block_elems, k - bk))) continue;
 
             const bp = rp + b * block_bytes;
             const scale: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
