@@ -38,6 +38,19 @@ must still appear under **Changed** or **Breaking** below. See
   `--spec-mode mtp` on a model with no MTP heads exits after load (`waiting for mtp`).
 
 ### Added
+- **DFlash2 speculative decoding** (`--spec-mode dflash2`, alias `dflash`): block-diffusion
+  drafter for Qwen3.8-27B (z-lab checkpoints) with target-feature capture, rotating
+  injected-context KV, grouped dynamic convolutions, and a top-K candidate path selector;
+  lossless under greedy and rejection sampling. Hybrid n-gram mode extends blocks with
+  exact history matches and takes over during acceptance cooldowns. CLI-only for now
+  (server starts without speculation). New arch `dflash2` (`-Denable-dflash2`), kernels in
+  `src/models/dflash2.zig` + `src/spec/dflash2.zig`; HF pull works for drafter repos.
+- **TileLang kernel-research harness** (`research/kernels/tilelang/`, research-only):
+  HIP/CUDA kernel-generation experiments with a gguf.dequantize-validated Q4_K reference,
+  backend probe, and per-op benchmarks on RX 7900 XTX. Findings and porting notes in its README.
+- `agave-bench gemv_q4_k`: host-reference validation line
+  (`{"validation":{"max_rel_err":...}}`) alongside timing; reference mirrors the
+  gguf.dequantize-checked TileLang implementation.
 - **DeepSeek V4 Flash 0731**: full architecture support — hyper connections,
   MLA, CSA/HCA compressors, Lightning Indexer, hash routing. See 2026-07-31 entry.
 - Server env fallbacks: `AGAVE_HOST` and `AGAVE_PORT` when `--host` / `--port`
@@ -58,6 +71,14 @@ must still appear under **Changed** or **Breaking** below. See
 - DeepSeek V4 Flash full Metal path: 14 MSL kernels (HC mixing, RoPE, SDPA hd=512, batched MoE, fused attention megakernel) plus a dedicated CPU bypass for MLX-Q SafeTensors that is bit-identical to `--backend cpu`.
 
 ### Fixed
+- ROCm backend failed to load any kernel on ROCm 7.x hosts: Zig emits module-qualified
+  kernel names in HSACO metadata ("silu.silu_kernel") while `hipModuleGetFunction`
+  requests plain names. `fix_kd_isa.py` now normalizes metadata + renames `.kd` symbols
+  (length-preserving msgpack rewrite); committed `kernels.hsaco` regenerated for gfx1100.
+- ROCm GEMV Q4_K rewritten (TileLang-derived lane/copy decomposition, u32 word loads,
+  one row per workgroup): ~1480 us -> ~185 us at 17408x5120 (~9x), validated against a
+  host reference (rel err 1.2e-7); BF16 GEMV similarly reworked to paired dword loads.
+  Note: earlier "ROCm" bench numbers were silently CPU-fallback and have been discarded.
 - GPT-OSS / MXFP4 SafeTensors: group size corrected to 16 and block scales decoded
   as FP8 E4M3 (was group size 32 + E8M0, which garbled output)
 - IQ2/IQ3 GEMV: sign extraction and qs indexing; `iq4_nl` / `iq4_xs` dequant paths

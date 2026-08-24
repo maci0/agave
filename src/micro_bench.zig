@@ -429,6 +429,54 @@ const BenchCtx = struct {
 
 // ── Kernel runner functions ──────────────────────────────────────
 
+/// Reference Q4_K row dot on host — structure mirrors the validated TileLang
+/// reference implementation (research/kernels/tilelang), checked bit-exact
+/// against `gguf.dequantize` on real checkpoint tensors.
+fn dequantQ4KRowDotHost(row: []const u8, x: []const f32, out_y: *f32) void {
+    const nblk = row.len / 144;
+    var acc: f32 = 0;
+    const wu: [*]const u32 = @ptrCast(@alignCast(row.ptr));
+    var sb: usize = 0;
+    while (sb < nblk) : (sb += 1) {
+        const blk_u32 = sb * 36;
+        const head = wu[blk_u32];
+        const d: f32 = @floatCast(@as(f16, @bitCast(@as(u16, @truncate(head)))));
+        const dmin: f32 = @floatCast(@as(f16, @bitCast(@as(u16, @truncate(head >> 16)))));
+        const BB = sb * 144;
+        const scl = row[BB + 4 ..][0..12];
+        var ln: usize = 0;
+        while (ln < 8) : (ln += 1) {
+            var scv: u8 = undefined;
+            var mnv: u8 = undefined;
+            if (ln < 4) {
+                scv = scl[ln] & 63;
+                mnv = scl[ln + 4] & 63;
+            } else {
+                scv = (scl[ln + 4] & 0xF) | ((scl[ln - 4] >> 6) << 4);
+                mnv = (scl[ln + 4] >> 4) | ((scl[ln] >> 6) << 4);
+            }
+            const scf: f32 = @floatFromInt(scv);
+            const mnf: f32 = @floatFromInt(mnv);
+            const g = ln / 2;
+            const sh: u5 = @intCast(4 * (ln % 2));
+            const wbase = blk_u32 + 4 + g * 8;
+            const xb = sb * 256 + ln * 32;
+            var jj: usize = 0;
+            while (jj < 8) : (jj += 1) {
+                const word = wu[wbase + jj];
+                const eb = xb + jj * 4;
+                acc += (d * scf * @as(f32, @floatFromInt((word >> sh) & 0xF)) - dmin * mnf) * x[eb];
+                acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 8)) & 0xF)) - dmin * mnf) * x[eb + 1];
+                acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 16)) & 0xF)) - dmin * mnf) * x[eb + 2];
+                acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 24)) & 0xF)) - dmin * mnf) * x[eb + 3];
+            }
+        }
+    }
+    out_y.* = acc;
+}
+
+// ── Kernel runner functions ──────────────────────────────────────
+
 fn runGemv(ctx: *const BenchCtx) void {
     ctx.be.gemv(ctx.x.ptr, ctx.td, ctx.y.ptr, ctx.n, ctx.k);
     ctx.be.sync();
@@ -728,7 +776,38 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             const median_ns = collectMedian(runGemv, &ctx, iters);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
-            emitJson("gemv_q4_k", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+            // Validation: compare first rows against host reference.
+            {
+                const row_bytes_v = nb * q4_k_block_bytes;
+                var v: usize = 0;
+                var max_err: f32 = 0;
+                const check_rows = @min(n, 8);
+                while (v < check_rows) : (v += 1) {
+                    var ref_y: f32 = 0;
+                    dequantQ4KRowDotHost(w[v * row_bytes_v ..][0..row_bytes_v], x, &ref_y);
+                    const got = y[v];
+                    const err = @abs(got - ref_y) / @max(1.0, @abs(ref_y));
+                    if (err > max_err) max_err = err;
+                }
+                emitJson("gemv_q4_k", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+                var dbg: usize = 0;
+                while (dbg < @min(check_rows, 4)) : (dbg += 1) {
+                    var ref_y: f32 = 0;
+                    dequantQ4KRowDotHost(w[dbg * row_bytes_v ..][0..row_bytes_v], x, &ref_y);
+                    var b1: [64]u8 = undefined;
+                    var b2: [64]u8 = undefined;
+                    const rs = std.fmt.bufPrint(&b1, "{d:.6}", .{ref_y}) catch "?";
+                    const gs = std.fmt.bufPrint(&b2, "{d:.6}", .{y[dbg]}) catch "?";
+                    var b3: [160]u8 = undefined;
+                    const ln = std.fmt.bufPrint(&b3, "{{\"row\":{d},\"gpu\":{s},\"ref\":{s}}}\n", .{ dbg, gs, rs }) catch "";
+                    fdWriteAll(stdout_file.handle, ln);
+                }
+                var err_buf: [64]u8 = undefined;
+                const err_str = std.fmt.bufPrint(&err_buf, "{d}", .{max_err}) catch "?";
+                var buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "{{\"validation\":{{\"rows\":{d},\"max_rel_err\":\"{s}\"}}}}\n", .{ check_rows, err_str }) catch "";
+                fdWriteAll(stdout_file.handle, msg);
+            }
         },
 
         .gemv_q4_0 => {
