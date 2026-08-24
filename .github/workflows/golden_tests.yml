@@ -35,14 +35,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
 
       - name: Install Vulkan SDK
         if: matrix.backend == 'Vulkan'

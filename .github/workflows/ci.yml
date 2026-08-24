@@ -34,9 +34,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
 
       - name: Check Zig version pins agree
         env:
@@ -69,11 +68,6 @@ jobs:
           fi
           echo "Debian snapshot day OK: $from_day"
 
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
-
       - name: Check formatting
         run: zig fmt --check src/ tests/ build.zig build.zig.zon
 
@@ -87,14 +81,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -119,14 +107,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -231,14 +213,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -265,30 +241,24 @@ jobs:
   # These artifacts are @embedFile'd but NOT rebuilt by `zig build`, so a
   # kernel-source edit without regeneration ships stale GPU code (this has
   # already happened: committed all.ptx predates deltanet_recurrence.zig).
-  # Informational until the tree is regenerated once; then remove
-  # continue-on-error and add this job to ci-pass.needs to make it blocking.
-  # SPIR-V checking is local-only for now (needs glslangValidator, see
-  # scripts/check-shader-artifacts.sh) because runner glslang versions are
-  # not pinned and its output embeds the generator version.
+  # Blocking since the tree was regenerated (2026-08): PTX comes from the
+  # pinned zig 0.16.0 nvptx backend, so fresh builds are byte-identical on
+  # any runner. SPIR-V checking is local-only for now (needs
+  # glslangValidator, see scripts/check-shader-artifacts.sh) because runner
+  # glslang versions are not pinned and its output embeds the generator
+  # version.
   kernel-artifacts:
     name: Kernel artifact freshness
     needs: fmt-check
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
 
       - name: Compare committed PTX against fresh build
         run: scripts/check-shader-artifacts.sh --ptx-only
@@ -303,14 +273,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Read Zig version
+      - uses: ./.github/actions/setup-zig
         id: zig
-        run: echo "version=$(tr -d '[:space:]' < .zigversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ steps.zig.outputs.version }}
 
       - name: Cache Zig build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -329,7 +293,7 @@ jobs:
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, fuzz-smoke]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, fuzz-smoke, kernel-artifacts]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -343,7 +307,8 @@ jobs:
             "test-macos:${{ needs.test-macos.result }}" \
             "docker-build:${{ needs.docker-build.result }}" \
             "cross-compile-check:${{ needs.cross-compile-check.result }}" \
-            "fuzz-smoke:${{ needs.fuzz-smoke.result }}"
+            "fuzz-smoke:${{ needs.fuzz-smoke.result }}" \
+            "kernel-artifacts:${{ needs.kernel-artifacts.result }}"
           do
             name="${pair%%:*}"
             result="${pair#*:}"
