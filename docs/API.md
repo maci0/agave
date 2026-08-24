@@ -191,6 +191,8 @@ curl http://localhost:49453/v1/messages -d '{
 | max_tokens | int | 512 | Maximum tokens to generate, capped at 4096 |
 | stop_sequences | array | null | Stop sequence(s) |
 | stream | bool | false | Server-Sent Events streaming |
+| tools | array | null | Flat Anthropic format: `[{"name", "description", "input_schema"}]` |
+| tool_choice | string | auto | `auto`, `any`/`tool` (must call a tool), or `none` |
 
 All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, min_p, penalties, seed, etc.) are also accepted.
 
@@ -208,7 +210,7 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
 }
 ```
 
-`stop_reason` is `"end_turn"` (natural stop) or `"max_tokens"` (limit reached).
+`stop_reason` is `"end_turn"` (natural stop), `"max_tokens"` (limit reached), or `"tool_use"` (the model emitted `<tool_call>` output; each parsed call becomes a `tool_use` content block). Streaming with tools emits one content block per tool call (`input_json_delta` carries the arguments); unparseable tool-call payloads degrade to plain text output.
 
 ### POST /v1/chat
 

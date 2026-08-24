@@ -539,6 +539,68 @@ pub fn parseTools(body: []const u8) ToolParams {
     return result;
 }
 
+/// Parse tools from an Anthropic Messages API body into a ToolParams.
+/// Anthropic format is flat — `tools: [{"name", "description", "input_schema"}]` —
+/// without the OpenAI `"function"` wrapper, so this is a separate scanner.
+/// `tool_choice` accepts "auto"/"any"/"tool"/"none"; callers normalize "any"/"tool"
+/// to "required" semantics.
+pub fn parseToolsAnthropic(body: []const u8) ToolParams {
+    var result = ToolParams{};
+
+    // Locate the top-level "tools" array (same key as OpenAI).
+    const tools_arr = extractObjectField(body, "tools") orelse return result;
+    result.tool_choice = extractField(body, "tool_choice") orelse "auto";
+
+    // Walk each object element of the array.
+    var search_pos: usize = 0;
+    while (result.tool_count < max_tools) {
+        const obj_pos = findObjectStart(tools_arr, &search_pos) orelse break;
+        var depth: usize = 1;
+        var obj_end = obj_pos + 1;
+        while (obj_end < tools_arr.len and depth > 0) : (obj_end += 1) {
+            if (tools_arr[obj_end] == '{') {
+                depth += 1;
+            } else if (tools_arr[obj_end] == '}') {
+                depth -= 1;
+            } else if (tools_arr[obj_end] == '"') {
+                obj_end += 1;
+                while (obj_end < tools_arr.len and tools_arr[obj_end] != '"') : (obj_end += 1) {
+                    if (tools_arr[obj_end] == '\\' and obj_end + 1 < tools_arr.len) obj_end += 1;
+                }
+            }
+        }
+        const obj = tools_arr[obj_pos..obj_end];
+        search_pos = obj_end;
+
+        const name = extractField(obj, "name") orelse continue;
+        const desc = extractField(obj, "description") orelse "";
+        const params = extractObjectField(obj, "input_schema") orelse "{}";
+
+        const idx = result.tool_count;
+        result.tools[idx] = .{ .name = name, .description = desc, .parameters_json = params };
+        result.tool_count += 1;
+    }
+    return result;
+}
+
+/// Find the start index of the next `{` object at or after `*pos`, skipping
+/// whitespace, commas, and the surrounding array brackets. Advances `*pos`
+/// past the returned index.
+fn findObjectStart(json: []const u8, pos: *usize) ?usize {
+    while (pos.* < json.len) {
+        switch (json[pos.*]) {
+            '{' => {
+                const found = pos.*;
+                pos.* += 1;
+                return found;
+            },
+            ' ', '\n', '\r', '\t', ',', '[', ']' => pos.* += 1,
+            else => return null,
+        }
+    }
+    return null;
+}
+
 /// Extract all messages from an OpenAI-format `"messages"` JSON array.
 /// Returns conversation messages (user/assistant) and an optional system message.
 /// Message content slices point into the original JSON body — valid for the request lifetime.
@@ -1511,6 +1573,37 @@ test "parseTools no tools" {
     const tp = parseTools(body);
     try std.testing.expectEqual(@as(u32, 0), tp.tool_count);
     try std.testing.expectEqualStrings("auto", tp.tool_choice);
+}
+
+test "parseToolsAnthropic flat format" {
+    const body =
+        \\{"messages":[{"role":"user","content":"Hi"}],"tools":[{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}},{"name":"search","description":"Web search","input_schema":{"type":"object"}}],"tool_choice":"any"}
+    ;
+    const tp = parseToolsAnthropic(body);
+    try std.testing.expectEqual(@as(u32, 2), tp.tool_count);
+    try std.testing.expectEqualStrings("any", tp.tool_choice);
+    try std.testing.expectEqualStrings("get_weather", tp.tools[0].?.name);
+    try std.testing.expectEqualStrings("Get weather", tp.tools[0].?.description);
+    try std.testing.expect(std.mem.indexOf(u8, tp.tools[0].?.parameters_json, "properties") != null);
+    try std.testing.expectEqualStrings("search", tp.tools[1].?.name);
+}
+
+test "parseToolsAnthropic absent or malformed" {
+    // No tools key
+    const none = parseToolsAnthropic("{\"messages\":[]}");
+    try std.testing.expectEqual(@as(u32, 0), none.tool_count);
+    // Object without input_schema still registers with default empty schema
+    const partial = parseToolsAnthropic(
+        \\{"tools":[{"name":"ping"}]}
+    );
+    try std.testing.expectEqual(@as(u32, 1), partial.tool_count);
+    try std.testing.expectEqualStrings("{}", partial.tools[0].?.parameters_json);
+    // Entry without a name is skipped
+    const unnamed = parseToolsAnthropic(
+        \\{"tools":[{"description":"no name"},{"name":"ok"}]}
+    );
+    try std.testing.expectEqual(@as(u32, 1), unnamed.tool_count);
+    try std.testing.expectEqualStrings("ok", unnamed.tools[0].?.name);
 }
 
 test "extractTextFromContentArray" {
