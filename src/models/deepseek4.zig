@@ -56,6 +56,12 @@ const sparse_v_threshold: f32 = 1e-6;
 /// completed CSA/HCA groups. Learned per-head sinks participate in softmax.
 const ds4_raw_attn_window: usize = 128;
 
+/// FP4 group size of the official DeepSeek-V4-Flash-0731 routed experts
+/// (E2M1 packed 2 nibbles/byte with E8M0 scales, fp4_block_size=32). Used
+/// when the fused expert tensors are pointer tables whose scale shape cannot
+/// carry the group size.
+const ds4_flash_fp4_group_size: usize = 32;
+
 /// First raw KV index visible at `pos` under `ds4_raw_attn_window`.
 fn rawAttnStart(pos: usize) usize {
     return if (pos + 1 > ds4_raw_attn_window) pos + 1 - ds4_raw_attn_window else 0;
@@ -2477,20 +2483,41 @@ pub const Ds4Model = struct {
     }
 
     fn doGemv(self: *Ds4Model, x: [*]const f32, t_raw: TensorInfo, y: [*]f32, n: usize, k: usize) void {
-        // Native Vulkan/WebGPU GEMV; dedicated CpuBackend on Metal/CUDA/ROCm.
+        // MLX/MXFP4 dtypes use the native GPU backend with per-call sync
+        // copy-back. Other dtypes (bf16/f32 attention projections, shared
+        // experts): on CUDA the GPU runs the GEMV followed by a per-call
+        // copy-back (Backend.syncGemvOutput) so DS4's interleaved CPU reads
+        // (rmsNorm between projections) see fresh data; on other backends
+        // the cache-based GPU gemv would leave stale host copies, so the
+        // dedicated CpuBackend is used.
         const be = self.gemvBackend();
         if (t_raw.dtype == .mlx_q) {
             if (model_mod.mlxGemv(be, self.fmt, x, t_raw, y, n, k)) return;
         }
         const t = self.heapTensor(t_raw);
-        model_mod.dispatchGemv(be, self.fmt, x, t, y, n, k);
+        switch (self.be) {
+            .cuda => {
+                model_mod.dispatchGemv(self.gemvBackend(), self.fmt, x, t, y, n, k);
+                self.be.syncGemvOutput(y, n);
+            },
+            else => {
+                model_mod.dispatchGemv(self.computeBackend(), self.fmt, x, t, y, n, k);
+            },
+        }
     }
 
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
     /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
+    /// Expert tensors fused by the official DeepSeek-V4-Flash-0731 loader are
+    /// POINTER TABLES ([n_experts, 1] u64 mmap addresses — the checkpoint's
+    /// experts are at non-uniform file offsets, so direct stride math is
+    /// impossible) and are dereferenced per expert here.
     fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
-        // Use raw mmap pointer for CPU dispatch (same addresses on all backends).
-        const data = exp_t.data_ptr + ei * stride;
+        const is_tbl = (exp_t.n_dims == 2 and exp_t.dims[1] == 1);
+        const data = if (is_tbl)
+            (@as([*]const [*]const u8, @ptrCast(@alignCast(exp_t.data_ptr))))[ei]
+        else
+            exp_t.data_ptr + ei * stride;
         if (exp_t.dtype != .mlx_q) {
             self.computeBackend().gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
             return;
@@ -2501,16 +2528,21 @@ pub const Ds4Model = struct {
         const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return;
         const st = self.fmt.getTensor(s_name) orelse return;
         if (st.dtype == .unknown or st.dtype == .nvfp4) {
+            const s_is_tbl = (st.n_dims == 2 and st.dims[1] == 1);
             const s_stride = if (st.n_dims >= 3)
                 @as(usize, @intCast(st.dims[1])) * @as(usize, @intCast(st.dims[2]))
             else
                 n * @as(usize, @intCast(st.dims[st.n_dims - 1]));
-            const mxfp4_gs = model_mod.inferMxfp4GroupSize(st, k);
+            const s_data = if (s_is_tbl)
+                (@as([*]const [*]const u8, @ptrCast(@alignCast(st.data_ptr))))[ei]
+            else
+                st.data_ptr + ei * s_stride;
+            const mxfp4_gs = if (s_is_tbl) ds4_flash_fp4_group_size else model_mod.inferMxfp4GroupSize(st, k);
             const sf = mlx_ops.mxfp4ScaleFormat(self.fmt.is_safetensors, mxfp4_gs);
             const mlx = @import("../ops/mlx.zig");
             switch (self.be) {
                 .vulkan, .webgpu, .cuda => {
-                    self.gemvBackend().gemvMxfp4StGpu(x, data, st.data_ptr + ei * s_stride, y, n, k, mxfp4_gs, sf);
+                    self.gemvBackend().gemvMxfp4StGpu(x, data, s_data, y, n, k, mxfp4_gs, sf);
                 },
                 else => {
                     if (self.pool) |pool| {
@@ -2526,9 +2558,9 @@ pub const Ds4Model = struct {
                                 const c: *const @This() = @ptrCast(@alignCast(c_ptr));
                                 mlx.mlxMxfp4GemvRows(c.xp, @ptrCast(@alignCast(c.wp)), c.sp, @ptrCast(c.yp), start, end - start, c.kv, c.gs_v, c.sf_v);
                             }
-                        }{ .xp = x, .wp = data, .sp = st.data_ptr + ei * s_stride, .yp = y, .kv = k, .gs_v = mxfp4_gs, .sf_v = sf };
+                        }{ .xp = x, .wp = data, .sp = s_data, .yp = y, .kv = k, .gs_v = mxfp4_gs, .sf_v = sf };
                         pool.parallelFor(n, 128, @ptrCast(&ctx), @TypeOf(ctx).work);
-                    } else mlx.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(data)), st.data_ptr + ei * s_stride, @ptrCast(y), 0, n, k, mxfp4_gs, sf);
+                    } else mlx.mlxMxfp4GemvRows(x, @ptrCast(@alignCast(data)), s_data, @ptrCast(y), 0, n, k, mxfp4_gs, sf);
                 },
             }
         } else {

@@ -1070,6 +1070,19 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Copy a just-computed GEMV output back to host and mark it stale, so
+    /// CPU code can read the result between GPU GEMVs (DS4's interleaved
+    /// rmsNorm/pooling passes). No-op on backends without a device cache.
+    pub inline fn syncGemvOutput(self: Backend, y: [*]f32, n: usize) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "syncGemvOutput")) {
+                    be.syncGemvOutput(y, n);
+                }
+            },
+        }
+    }
+
     /// Get the CUDA device pointer for a host activation buffer.
     /// Returns 0 if not available or not a CUDA backend.
     pub inline fn getDevicePtr(self: Backend, ptr: anytype) u64 {

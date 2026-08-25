@@ -1615,19 +1615,33 @@ pub const CudaBackend = struct {
         // Use tensor core path on SM120+ (Blackwell), fallback on older
         const kernel = if (self.sm_major >= 12) self.fn_gemv_fp4_tc else self.fn_gemv_nvfp4_st;
         self.launch(kernel, @intCast(n), block_size, reduction_smem, &params);
-        self.syncGemvOutput(y, d_y, n);
+        self.syncGemvOutput(y, n);
     }
 
-    /// After an MLX/MXFP4/NVFP4 GEMV, copy the output back to host immediately
-    /// and mark it stale. DS4 interleaves CPU ops (rmsNorm) between GEMVs and
-    /// reads activation buffers on the host; the per-call copy-back matches the
-    /// upload/download semantics of the Vulkan/WebGPU DS4 path. Without it the
-    /// cache would hand the next GPU op a device copy that misses CPU edits
-    /// (or the host would read stale data).
-    fn syncGemvOutput(self: *CudaBackend, y: [*]f32, d_y: CUdeviceptr, n: usize) void {
+    /// After an MLX/MXFP4/NVFP4 (or bf16/f32 attention) GEMV, copy the output
+    /// back to host immediately and mark it stale. DS4 interleaves CPU ops
+    /// (rmsNorm/pooling) between GEMVs and reads activation buffers on the
+    /// host; the per-call copy-back matches the upload/download semantics of
+    /// the Vulkan/WebGPU DS4 path. Without it the cache would hand the next
+    /// GPU op a device copy that misses CPU edits (or the host would read
+    /// stale data). Also dispatched via Backend.syncGemvOutput for DS4's
+    /// non-MLX attention projections.
+    pub fn syncGemvOutput(self: *CudaBackend, y: [*]f32, n: usize) void {
+        const addr = @intFromPtr(y);
         const byte_len = n * @sizeOf(f32);
-        self.downloadFromDevice(d_y, @ptrCast(y), byte_len);
-        if (self.act_cache.getPtr(@intFromPtr(y))) |act| act.state = .stale;
+        // Exact match: download and mark stale (host is current).
+        if (self.act_cache.getPtr(addr)) |act| {
+            if (act.size >= byte_len) {
+                self.downloadFromDevice(act.dptr, @ptrCast(y), byte_len);
+                act.state = .stale;
+            }
+            return;
+        }
+        // Sub-region of a cached parent (e.g. compressor circular buffers):
+        // download the slice; the parent stays dirty and flushes at sync.
+        if (self.findContaining(addr, byte_len, false, false)) |dptr| {
+            self.downloadFromDevice(dptr, @ptrCast(y), byte_len);
+        }
     }
 
     /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
@@ -1657,17 +1671,19 @@ pub const CudaBackend = struct {
             else => self.fn_gemv_mlx_q4,
         };
         self.launch(func, @intCast(n), block_size, reduction_smem, &params);
-        self.syncGemvOutput(y, d_y, n);
+        self.syncGemvOutput(y, n);
     }
     pub fn gemvMlxQGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, b: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
         self.gemvMlxQ(x, w, s, b, y, n, k, bits, gs);
     }
 
-    /// MXFP4 SafeTensors GEMV: u32-packed nibbles + FP8 E4M3 scales, group_size=16.
-    pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, _: usize, _: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
-        const mxfp4_gs: usize = mlx_ops.mxfp4_group_size;
+    /// MXFP4 SafeTensors GEMV: u32-packed nibbles + per-group scales.
+    /// Group size and scale format come from the caller (16/E4M3 for NVIDIA
+    /// MXFP4, 32/E8M0 for MLX community experts and DeepSeek-V4-Flash-0731).
+    pub fn gemvMxfp4St(self: *CudaBackend, x: [*]const f32, weight: [*]const u8, scale: [*]const u8, y: [*]f32, n: usize, k: usize, gs_in: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
+        const mxfp4_gs: usize = if (gs_in > 0) gs_in else mlx_ops.mxfp4_group_size;
         const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
-        const wpg: usize = mxfp4_gs * 4 / 32; // 16 nibbles / 8 per word = 2
+        const wpg: usize = mxfp4_gs * 4 / 32; // nibbles per group / 8 per word
         const w_bytes = n * gpr * wpg * @sizeOf(u32);
 
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
@@ -1677,12 +1693,18 @@ pub const CudaBackend = struct {
 
         var n_u32: u32 = @intCast(n);
         var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = @intCast(mxfp4_gs);
+        var scale_mode: u32 = switch (sf) {
+            .e8m0 => 1,
+            .fp8_e4m3 => 0,
+        };
         var params = [_]?*anyopaque{
             @ptrCast(&d_x), @ptrCast(&d_w),   @ptrCast(&d_s),
             @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
+            @ptrCast(&gs_u32), @ptrCast(&scale_mode),
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
-        self.syncGemvOutput(y, d_y, n);
+        self.syncGemvOutput(y, n);
     }
     pub fn gemvMxfp4StGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         self.gemvMxfp4St(x, w, s, y, n, k, gs, sf);
