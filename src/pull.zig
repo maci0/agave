@@ -201,6 +201,8 @@ pub const PullError = error{
     /// HTTP request failed.
     HttpRequestFailed,
     /// Downloaded file failed integrity check (e.g. invalid GGUF magic bytes).
+    /// The corrupt blob is removed so the next run re-downloads instead of
+    /// accepting it via the size-based "already downloaded" check.
     IntegrityCheckFailed,
     /// Local blob size differs from the repository's current file (stale
     /// leftover from an older revision); the stale copy was removed so the
@@ -1327,6 +1329,32 @@ fn buildShardFilename(allocator: Allocator, shard1: []const u8, idx: u32, total:
     });
 }
 
+/// Verify the GGUF magic bytes of a downloaded blob.
+///
+/// A blob with an invalid header (wrong magic, fewer than 4 readable bytes)
+/// is removed before returning `false`: its size already matches the
+/// repository listing, so leaving it in place would make every rerun take
+/// the "already downloaded" path and fail this same check forever. Removing
+/// it keeps repeated `agave pull` invocations convergent. Returns `true`
+/// when the header is valid or the file cannot be opened for checking
+/// (nothing observed to act on).
+fn verifyGgufBlob(io: Io, blob_path: []const u8) bool {
+    const f = Io.Dir.cwd().openFile(io, blob_path, .{}) catch |err| {
+        eprint("Warning: could not open file for integrity check: {}\n", .{err});
+        return true;
+    };
+    defer f.close(io);
+    var magic: [4]u8 = undefined;
+    const n = f.readPositionalAll(io, &magic, 0) catch 0;
+    if (n >= 4 and std.mem.eql(u8, &magic, "GGUF")) return true;
+    Io.Dir.cwd().deleteFile(io, blob_path) catch |del_err| {
+        eprint("Warning: could not remove corrupt file '{s}': {}\n", .{ blob_path, del_err });
+    };
+    eprint("Error: downloaded file does not have valid GGUF header — corrupt file removed\n", .{});
+    eprint("  Re-run 'agave pull' to download a fresh copy\n", .{});
+    return false;
+}
+
 /// Download a single GGUF model file with cache layout and integrity check.
 /// Automatically downloads all shards when the selected file is part of a split GGUF.
 fn pullGgufModel(
@@ -1414,18 +1442,7 @@ fn pullGgufModel(
 
     // Verify GGUF magic bytes (catches truncation and corruption).
     if (std.mem.endsWith(u8, selected.filename, ".gguf")) {
-        if (Io.Dir.cwd().openFile(mod_io, blob_path, .{})) |f| {
-            defer f.close(mod_io);
-            var magic: [4]u8 = undefined;
-            const n = f.readPositionalAll(mod_io, &magic, 0) catch 0;
-            if (n < 4 or !std.mem.eql(u8, &magic, "GGUF")) {
-                eprint("Error: downloaded file does not have valid GGUF header — corrupt or truncated\n", .{});
-                eprint("  Delete and re-download: rm {s}\n", .{blob_path});
-                return PullError.IntegrityCheckFailed;
-            }
-        } else |err| {
-            eprint("Warning: could not open file for integrity check: {}\n", .{err});
-        }
+        if (!verifyGgufBlob(mod_io, blob_path)) return PullError.IntegrityCheckFailed;
     }
 
     // Create snapshot symlink (relative path).
@@ -1832,6 +1849,60 @@ test "classifyRangeNotSatisfiable stale undersized local file is rejected" {
 test "classifyRangeNotSatisfiable unknown expected size keeps legacy behavior" {
     // API listing without size metadata cannot contradict the local file.
     try std.testing.expectEqual(RangeNotSatisfiable.complete, classifyRangeNotSatisfiable(7000, 0));
+}
+
+// ── Rerun safety (corrupt blob removal) ─────────────────────────────────────
+
+// A corrupt-at-full-size blob must not survive a failed integrity check:
+// the next run's size-based "already downloaded" check would accept it and
+// fail the same magic-byte test forever. Removal is what makes reruns of
+// `agave pull` converge.
+test "verifyGgufBlob removes corrupt blob so rerun re-downloads" {
+    const io = std.testing.io;
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "test_pull_{d}.gguf", .{std.c.getpid()});
+    defer Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    // Corrupt content at full expected size: right size, wrong magic.
+    {
+        var f = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
+        defer f.close(io);
+        try f.writePositionalAll(io, "NOPE-not-a-gguf", 0);
+    }
+    try std.testing.expect(!verifyGgufBlob(io, path));
+    // The rerun must not find the stale blob: it was removed.
+    if (Io.Dir.cwd().statFile(io, path, .{})) |_| return error.TestFailed else |_| {}
+
+    // Convergence: a fresh valid download then passes the same check.
+    const valid_blob = "GGUF" ++ "\x00\x00\x00";
+    {
+        var f = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
+        defer f.close(io);
+        try f.writePositionalAll(io, valid_blob, 0);
+    }
+    try std.testing.expect(verifyGgufBlob(io, path));
+    try std.testing.expect((try Io.Dir.cwd().statFile(io, path, .{})).size == valid_blob.len);
+}
+
+test "verifyGgufBlob accepts valid header and short-magic file is removed" {
+    const io = std.testing.io;
+    var path_buf: [64]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "test_pull_short_{d}.gguf", .{std.c.getpid()});
+    defer Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    // Fewer than 4 readable bytes: truncated header counts as corrupt.
+    {
+        var f = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
+        defer f.close(io);
+        try f.writePositionalAll(io, "GG", 0);
+    }
+    try std.testing.expect(!verifyGgufBlob(io, path));
+    if (Io.Dir.cwd().statFile(io, path, .{})) |_| return error.TestFailed else |_| {}
+}
+
+test "verifyGgufBlob missing file passes without acting" {
+    // Cannot open for checking: nothing observed, pull proceeds with warning.
+    try std.testing.expect(verifyGgufBlob(std.testing.io, "test_pull_no_such_blob.gguf"));
 }
 
 // ── selectModel tests ───────────────────────────────────────────────────────
