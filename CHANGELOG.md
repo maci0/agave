@@ -38,6 +38,13 @@ must still appear under **Changed** or **Breaking** below. See
   `--spec-mode mtp` on a model with no MTP heads exits after load (`waiting for mtp`).
 
 ### Added
+- **Anthropic `/v1/messages` tool calling**: flat tools format (`name`,
+  `description`, `input_schema`) with `tool_choice` normalization (`any`/`tool`
+  → required). Tool definitions are injected into the system prompt; parsed
+  `<tool_call>` output is returned as `tool_use` content blocks with
+  `stop_reason: "tool_use"` in both non-streaming and SSE streaming responses
+  (`input_json_delta` carries arguments when streaming); unparseable payloads
+  degrade to plain text.
 - **DFlash2 speculative decoding** (`--spec-mode dflash2`, alias `dflash`): block-diffusion
   drafter for Qwen3.8-27B (z-lab checkpoints) with target-feature capture, rotating
   injected-context KV, grouped dynamic convolutions, and a top-K candidate path selector;
@@ -68,9 +75,32 @@ must still appear under **Changed** or **Breaking** below. See
 - DeepSeek V4 Flash 0731 multi-node: `--pp 2` transfers 4-stream HC state; `--tp 2` is expert-parallel with `allReduceAdd`. CUDA GEMV path for non-Metal backends. `--transport nccl` plus `--spec-mode dspark` on a 2-rank pair. `--tp`/`--pp` still cap at 2.
 - **Qwen3.8-27B**: dense hybrid DeltaNet+attention model loads and generates on Metal/CPU/WebGPU (in-checkpoint vision encoder; vocab GEMV chunked past the 65535 workgroup limit).
 - **DeepSeek V4 Flash on Vulkan and WebGPU**: native MLX-Q / MXFP4 GEMV shaders (E8M0 scales) with greedy output matching CPU; new `--kv-type nvfp4_ds_mla` preset (NoPE keys as NVFP4, 64-d RoPE tail in f16); Qwen3.5 vision uses mRoPE.
-- DeepSeek V4 Flash full Metal path: 14 MSL kernels (HC mixing, RoPE, SDPA hd=512, batched MoE, fused attention megakernel) plus a dedicated CPU bypass for MLX-Q SafeTensors that is bit-identical to `--backend cpu`.
+- DeepSeek V4 Flash full Metal path: 10 MSL kernels (HC mixing, RoPE, SDPA hd=512, fused attention megakernel) plus a dedicated CPU bypass for MLX-Q SafeTensors that is bit-identical to `--backend cpu`.
 
 ### Fixed
+- Suffix speculative decoding dropped real prompt tokens as "special" based on
+  an id >= 128000 guess; special-token detection now uses the loaded
+  special-token table (e.g. Gemma's `<start_of_turn>` sits at id 105).
+- NaN-safe sampling: argmax skips NaN lanes, and sampling falls back to a
+  finite max when filtered probabilities are non-positive or non-finite.
+- KV cache cleanup leaked or double-freed on partial allocation failure
+  (`errdefer` misuse); double-frees across tier free lists are now detected
+  and SSD read lengths verified.
+- Checked size math across GGUF/SafeTensors parsing, BPE merges, backend
+  buffer sizing, attention/KV-quant offset math, HTTP body limits, and
+  `/v1/kv_cache` export: extreme inputs fail fast instead of wrapping offsets
+  and corrupting memory.
+- GBNF grammar: consecutive negated character classes are consumed as one run
+  so alternatives after them resolve correctly.
+- CUDA DeepSeek V4 Flash path: quantized GEMV outputs sync to host per call so
+  CPU-side pooling/LID/HC passes read fresh activations (MLX-Q attention and
+  MXFP4 expert GEMVs now enabled on CUDA alongside Vulkan/WebGPU). Also adds
+  the sm_121 (GB10/DGX Spark) PTX target and fixes a tiered-KV VRAM eviction
+  threshold overflow.
+- Server prefix cache: RadixTree growth is capped (returns `RadixTreeFull` at
+  the limit instead of growing without bound); KV prefix export/import is
+  serialized against scheduler forwards; HF downloads fail when the final
+  `close()` errors, since buffered data may have been lost.
 - ROCm backend failed to load any kernel on ROCm 7.x hosts: Zig emits module-qualified
   kernel names in HSACO metadata ("silu.silu_kernel") while `hipModuleGetFunction`
   requests plain names. `fix_kd_isa.py` now normalizes metadata + renames `.kd` symbols
@@ -119,6 +149,7 @@ must still appear under **Changed** or **Breaking** below. See
 - HTTP JSON errors more often include machine-readable `param` and `code` (additive
   for clients that ignore unknown fields; see `docs/API.md`)
 - Web chat UI adopts the warm palette shared with `src/web/style.css` design tokens (visual only)
+- Web UI dependencies refreshed: DOMPurify pinned to 3.4.14; highlight.js theme switched from monokai-sublime to kimbie-dark for contrast on the warm palette (visual only)
 - Docker: container stop grace period raised above the server drain timeout so in-flight requests finish on `docker stop`
 - Chat UI (`src/web/`) and WASM browser shell (`web/`) sources are TypeScript; committed `.js` is produced by `scripts/build-web.sh`
 
