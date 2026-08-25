@@ -106,10 +106,6 @@ pub const Transport = struct {
     nccl_unique_id: NcclUniqueId = undefined,
     cuda_sync: ?*const fn () callconv(.c) c_int = null,
     cuda_ctx: ?*anyopaque = null,
-    /// Rolling token-prefix hash (ds4 approach): accumulated over every token ID
-    /// sent through this transport. Worker validates incoming hash to detect
-    /// transcript divergence (e.g. restart at position 0 receiving work meant for N).
-    prefix_hash: u64 = 0,
     cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
     cuda_host_register: ?*const fn (*const anyopaque, usize, c_uint) callconv(.c) c_int = null,
     cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
@@ -645,26 +641,6 @@ pub const Transport = struct {
             }
             got += @intCast(rc);
         }
-    }
-
-    /// Advance the rolling token-prefix hash with one more token ID (ds4 approach).
-    /// Called by the coordinator before each sendBuf. Workers call this after
-    /// receiving the token ID from a side-channel or during prefill replay.
-    /// The hash accumulates over the full token sequence; a restarted worker at
-    /// position 0 will immediately diverge from the coordinator at position N.
-    pub fn advanceTokenHash(self: *Transport, token_id: u32) void {
-        self.prefix_hash = std.hash.Wyhash.hash(self.prefix_hash, std.mem.asBytes(&token_id));
-    }
-
-    /// Check whether the remote's hash matches ours. Returns false on mismatch.
-    /// On mismatch the caller should trigger coordinator-side transcript replay.
-    pub fn verifyTokenHash(self: *const Transport, remote_hash: u64) bool {
-        return self.prefix_hash == remote_hash;
-    }
-
-    /// Reset the hash (e.g. at the start of a new session or after replay).
-    pub fn resetTokenHash(self: *Transport) void {
-        self.prefix_hash = 0;
     }
 };
 

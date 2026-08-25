@@ -97,8 +97,6 @@ pub const Model = struct {
         get_kv_seq_len: *const fn (self: *anyopaque) usize,
         set_kv_seq_len: *const fn (self: *anyopaque, len: usize) void,
         prefetch_all_layers: *const fn (self: *anyopaque) void,
-        freeze_expert_cache: *const fn (self: *anyopaque) void,
-        thaw_expert_cache: *const fn (self: *anyopaque) void,
         set_expert_budget: *const fn (self: *anyopaque, budget: u32) void,
         set_layer_skip: *const fn (self: *anyopaque, start: u32, end: u32) void,
         set_image_embeddings: *const fn (self: *anyopaque, embeddings: ?[]const f32, n_tokens: u32, pad_token_id: u32) void,
@@ -237,18 +235,6 @@ pub const Model = struct {
                 fn call(self: *T) void {
                     if (comptime @hasDecl(T, "prefetchAllLayers"))
                         self.prefetchAllLayers();
-                }
-            }.call),
-            .freeze_expert_cache = @ptrCast(&struct {
-                fn call(self: *T) void {
-                    if (comptime @hasField(T, "expert_cache"))
-                        if (self.expert_cache) |ec| ec.freeze();
-                }
-            }.call),
-            .thaw_expert_cache = @ptrCast(&struct {
-                fn call(self: *T) void {
-                    if (comptime @hasField(T, "expert_cache"))
-                        if (self.expert_cache) |ec| ec.thaw();
                 }
             }.call),
             .set_expert_budget = @ptrCast(&struct {
@@ -546,16 +532,6 @@ pub const Model = struct {
         self.vtable.set_expert_budget(self.ptr, budget);
     }
 
-    /// Freeze expert cache (no evictions during verification).
-    pub fn freezeExpertCache(self: Model) void {
-        self.vtable.freeze_expert_cache(self.ptr);
-    }
-
-    /// Thaw expert cache (resume normal eviction).
-    pub fn thawExpertCache(self: Model) void {
-        self.vtable.thaw_expert_cache(self.ptr);
-    }
-
     /// Pre-madvise expert weights for ALL layers before speculative verification.
     pub fn prefetchAllLayers(self: Model) void {
         self.vtable.prefetch_all_layers(self.ptr);
@@ -654,69 +630,6 @@ pub fn mlxGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32,
         be.gemvMlxQ(x, t.data_ptr, st.data_ptr, bt.data_ptr, y, n, k, bits, group_size);
     }
     return true;
-}
-
-/// GPU-native MLX GEMV for heap-resident weights. Same as mlxGemv but calls
-/// the GPU kernel (gemvMlxQGpu / gemvMxfp4StGpu) instead of CPU fallback.
-/// Caller must ensure weight data is heap-copied (not mmap'd).
-/// GPU-native MLX GEMV for heap-resident weights. heap_fn resolves data pointers
-/// to heap-resident copies (e.g. via Ds4Model.heapTensorData). This ensures
-/// weight, scale, and bias data are all heap-resident for safe GPU access.
-pub fn mlxGemvGpu(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize, heap_fn: ?*const fn (format_mod.TensorInfo) [*]const u8) bool {
-    if (t.dtype != .mlx_q) return false;
-    const wi = std.mem.lastIndexOf(u8, t.name, ".weight") orelse return false;
-    var sbuf: [tensor_name_buf_size]u8 = undefined;
-    var bbuf: [tensor_name_buf_size]u8 = undefined;
-    const prefix = t.name[0..wi];
-    const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return false;
-    const st = fmt.getTensor(s_name) orelse return false;
-    // Resolve all data pointers through heap_fn for GPU safety.
-    const s_data = if (heap_fn) |hf| hf(st) else st.data_ptr;
-
-    if (st.dtype == .unknown) {
-        const mxfp4_gs: usize = inferMxfp4GroupSize(st, k);
-        const sf = mlx_ops.mxfp4ScaleFormat(fmt.is_safetensors, mxfp4_gs);
-        be.gemvMxfp4StGpu(x, t.data_ptr, s_data, y, n, k, mxfp4_gs, sf);
-    } else {
-        const b_name = std.fmt.bufPrint(&bbuf, "{s}.biases", .{prefix}) catch return false;
-        const bt = fmt.getTensor(b_name) orelse return false;
-        const b_data = if (heap_fn) |hf| hf(bt) else bt.data_ptr;
-        const bits: u32 = if (t.n_dims >= 2 and k > 0)
-            @intCast(@as(u64, t.dims[t.n_dims - 1]) * bits_per_u32_word / @as(u64, @intCast(k)))
-        else
-            fmt.getMetaU32("bits") orelse default_mlx_bits;
-        const group_size = inferMlxGroupSize(st, k);
-        be.gemvMlxQGpu(x, t.data_ptr, s_data, b_data, y, n, k, bits, group_size);
-    }
-    return true;
-}
-
-/// Dispatch GEMV through GPU path for heap-safe data. Falls back to dispatchGemv.
-/// heap_fn resolves TensorInfo to heap-resident data pointers.
-pub fn dispatchGemvGpu(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize, heap_fn: ?*const fn (format_mod.TensorInfo) [*]const u8) void {
-    if (mlxGemvGpu(be, fmt, x, t, y, n, k, heap_fn)) return;
-    // Non-MLX-Q types: use standard path (already GPU-native for GGUF formats)
-    dispatchGemv(be, fmt, x, t, y, n, k);
-}
-
-/// Direct CPU MLX GEMV bypassing the backend entirely. Uses the thread pool
-/// directly for zero dispatch overhead. Produces bit-identical output regardless
-/// of which backend is active — critical for suffix speculation consistency.
-/// Direct CPU MLX GEMV using the CpuBackend's exact code path.
-/// Calls through CpuBackend.gemvMlxQ/gemvMxfp4St to ensure bit-identical
-/// output with --backend cpu (same compiled function, same struct layout).
-/// Direct CPU MLX GEMV. Routes through the same mlxGemv function as the
-/// CPU backend, using a thread-local CpuBackend to avoid lifetime issues.
-pub fn mlxGemvCpu(pool: ?*@import("../thread_pool.zig").ThreadPool, fmt: format_mod.Format, x: [*]const f32, t: format_mod.TensorInfo, y: [*]f32, n: usize, k: usize) bool {
-    _ = pool;
-    _ = fmt;
-    _ = x;
-    _ = t;
-    _ = y;
-    _ = n;
-    _ = k;
-    // Disabled: CpuBackend lifetime issues cause hangs. Standard dispatch is used.
-    return false;
 }
 
 /// MLX companion tensor lookup result.
@@ -1241,16 +1154,6 @@ pub const ModelStorage = union(enum) {
             },
         }
         return null;
-    }
-
-    pub fn truncateFeatureCaptures(self: *ModelStorage, end: usize) void {
-        switch (self.*) {
-            inline else => |*m| {
-                if (@TypeOf(m.*) != void and comptime @hasDecl(@TypeOf(m.*), "truncateCapturesTo")) {
-                    m.truncateCapturesTo(end);
-                }
-            },
-        }
     }
 
     /// Enable DFlash2 target-feature capture on models that support it.

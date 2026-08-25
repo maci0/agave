@@ -228,10 +228,6 @@ pub const MetalBackend = struct {
     pipe_ds4_sdpa_turbo_hd512: objc.id,
     pipe_ds4_hc_head_weights: objc.id,
     pipe_ds4_fused_attn_proj: objc.id,
-    pipe_ds4_topk_routing: objc.id,
-    pipe_ds4_moe_gate_up_mxfp4: objc.id,
-    pipe_ds4_moe_down_mxfp4: objc.id,
-    pipe_ds4_rms_norm_noweight: objc.id,
     /// Scratch buffer for multi-pass reductions: 8 bytes = 2 × f32.
     /// Used by softmax (3-pass: max at offset 0, sum at offset 4)
     /// and l2Norm (2-pass: sum-of-squares at offset 0).
@@ -441,10 +437,6 @@ pub const MetalBackend = struct {
             .pipe_ds4_sdpa_turbo_hd512 = undefined,
             .pipe_ds4_hc_head_weights = undefined,
             .pipe_ds4_fused_attn_proj = undefined,
-            .pipe_ds4_topk_routing = undefined,
-            .pipe_ds4_moe_gate_up_mxfp4 = undefined,
-            .pipe_ds4_moe_down_mxfp4 = undefined,
-            .pipe_ds4_rms_norm_noweight = undefined,
             .scratch_buf = scratch_buf,
             .active_cmd = null,
             .buf_cache = std.AutoHashMap(usize, BufferInfo).init(allocator),
@@ -561,16 +553,12 @@ pub const MetalBackend = struct {
         self.pipe_ds4_sdpa_turbo_hd512 = try self.makePipeline("sdpa_fa2_turbo_hd512");
         self.pipe_ds4_hc_head_weights = try self.makePipeline("ds4_hc_head_weights");
         self.pipe_ds4_fused_attn_proj = try self.makePipeline("ds4_fused_attn_proj");
-        self.pipe_ds4_topk_routing = try self.makePipeline("ds4_topk_routing");
-        self.pipe_ds4_moe_gate_up_mxfp4 = try self.makePipeline("ds4_moe_gate_up_mxfp4");
-        self.pipe_ds4_moe_down_mxfp4 = try self.makePipeline("ds4_moe_down_mxfp4");
-        self.pipe_ds4_rms_norm_noweight = try self.makePipeline("ds4_rms_norm_noweight");
 
         return self;
     }
 
     /// Number of MSL compute pipelines compiled at init.
-    pub const n_pipelines: u32 = 108;
+    pub const n_pipelines: u32 = 104;
 
     /// Returns the Metal device name (e.g., "Apple M4 Pro").
     pub fn deviceName(self: *const MetalBackend) []const u8 {
@@ -614,14 +602,6 @@ pub const MetalBackend = struct {
                 return fam.name;
         }
         return "";
-    }
-
-    /// Returns true if the device supports Metal 4 TensorOps (M5+ with macOS 26.2+).
-    /// Checks the MTLGPUFamily value `metal4_gpu_family` (5002) via `-[MTLDevice supportsFamily:]`.
-    /// When true, eligible linear algebra operations can use Neural Accelerators,
-    /// providing 3-4x TTFT speedup for quantized LLM inference (Apple ML Research, 2026).
-    pub fn supportsMetal4TensorOps(self: *const MetalBackend) bool {
-        return objc.msgSend(bool, self.device, objc.sel("supportsFamily:"), .{@as(c_long, metal4_gpu_family)});
     }
 
     /// Compile a named MSL kernel into a compute pipeline state.
@@ -3087,150 +3067,6 @@ pub const MetalBackend = struct {
         self.endEncodeThreadgroups(enc, n_tgs, threadgroup_size);
     }
 
-    /// GPU top-k routing for MoE expert selection. Single threadgroup.
-    /// Reads router_logits, writes top expert IDs + weights.
-    pub fn ds4TopkRouting(
-        self: *MetalBackend,
-        logits: [*]const f32,
-        top_ids: [*]u32,
-        top_weights: [*]f32,
-        n_experts: usize,
-        k: usize,
-        weight_scale: f32,
-    ) void {
-        const l_ref = self.getBufRef(@ptrCast(logits), n_experts * @sizeOf(f32));
-        const id_ref = self.getBufRef(@ptrCast(top_ids), k * @sizeOf(u32));
-        const w_ref = self.getBufRef(@ptrCast(top_weights), k * @sizeOf(f32));
-        const ne: u32 = @intCast(n_experts);
-        const kv: u32 = @intCast(k);
-        const enc = self.getEncoder(self.pipe_ds4_topk_routing);
-        setBuf(enc, l_ref, 0);
-        setBuf(enc, id_ref, 1);
-        setBuf(enc, w_ref, 2);
-        setBytes(enc, @ptrCast(&ne), @sizeOf(u32), 3);
-        setBytes(enc, @ptrCast(&kv), @sizeOf(u32), 4);
-        setBytes(enc, @ptrCast(&weight_scale), @sizeOf(f32), 5);
-        self.endEncodeOneThreadgroup(enc, 256);
-    }
-
-    /// Batched MoE gate+up GEMV for all selected experts in one dispatch.
-    pub fn ds4MoeGateUpMxfp4(
-        self: *MetalBackend,
-        x: [*]const f32,
-        gate_w: [*]const u8,
-        gate_s: [*]const u8,
-        up_w: [*]const u8,
-        up_s: [*]const u8,
-        gate_out: [*]f32,
-        up_out: [*]f32,
-        expert_ids: [*]const u32,
-        k_experts: usize,
-        ff: usize,
-        n_in: usize,
-        w_stride_words: usize,
-        s_stride: usize,
-        gs: usize,
-        slot_offset: usize,
-        gate_w_bytes: usize,
-        up_w_bytes: usize,
-        gate_s_bytes: usize,
-        up_s_bytes: usize,
-    ) void {
-        const total_rows = k_experts * ff;
-        const x_ref = self.getBufRef(@ptrCast(x), n_in * @sizeOf(f32));
-        const gw_ref = self.getBufRef(@ptrCast(gate_w), gate_w_bytes);
-        const gs_ref = self.getBufRef(@ptrCast(gate_s), gate_s_bytes);
-        const uw_ref = self.getBufRef(@ptrCast(up_w), up_w_bytes);
-        const us_ref = self.getBufRef(@ptrCast(up_s), up_s_bytes);
-        const go_ref = self.getBufRef(@ptrCast(gate_out), (slot_offset + k_experts) * ff * @sizeOf(f32));
-        const uo_ref = self.getBufRef(@ptrCast(up_out), (slot_offset + k_experts) * ff * @sizeOf(f32));
-        const ei_ref = self.getBufRef(@ptrCast(expert_ids), k_experts * @sizeOf(u32));
-        const enc = self.getEncoder(self.pipe_ds4_moe_gate_up_mxfp4);
-        setBuf(enc, x_ref, 0);
-        setBuf(enc, gw_ref, 1);
-        setBuf(enc, gs_ref, 2);
-        setBuf(enc, uw_ref, 3);
-        setBuf(enc, us_ref, 4);
-        setBuf(enc, go_ref, 5);
-        setBuf(enc, uo_ref, 6);
-        setBuf(enc, ei_ref, 7);
-        const ke: u32 = @intCast(k_experts);
-        const ffv: u32 = @intCast(ff);
-        const ni: u32 = @intCast(n_in);
-        const ws: u32 = @intCast(w_stride_words);
-        const ss: u32 = @intCast(s_stride);
-        const gv: u32 = @intCast(gs);
-        const so: u32 = @intCast(slot_offset);
-        setBytes(enc, @ptrCast(&ke), 4, 8);
-        setBytes(enc, @ptrCast(&ffv), 4, 9);
-        setBytes(enc, @ptrCast(&ni), 4, 10);
-        setBytes(enc, @ptrCast(&ws), 4, 11);
-        setBytes(enc, @ptrCast(&ss), 4, 12);
-        setBytes(enc, @ptrCast(&gv), 4, 13);
-        setBytes(enc, @ptrCast(&so), 4, 14);
-        const tg = @min(threadgroup_size, @max(simd_width, ((n_in / gs + simd_width - 1) & ~(simd_width - 1))));
-        self.endEncodeThreadgroups(enc, total_rows, tg);
-    }
-
-    /// Batched MoE down GEMV for all selected experts.
-    pub fn ds4MoeDownMxfp4(
-        self: *MetalBackend,
-        activated: [*]const f32,
-        down_w: [*]const u8,
-        down_s: [*]const u8,
-        expert_out: [*]f32,
-        expert_ids: [*]const u32,
-        k_experts: usize,
-        n_out: usize,
-        ff: usize,
-        w_stride_words: usize,
-        s_stride: usize,
-        gs: usize,
-        slot_offset: usize,
-        w_bytes: usize,
-        s_bytes: usize,
-    ) void {
-        const total_rows = k_experts * n_out;
-        const a_ref = self.getBufRef(@ptrCast(activated), (slot_offset + k_experts) * ff * @sizeOf(f32));
-        const dw_ref = self.getBufRef(@ptrCast(down_w), w_bytes);
-        const ds_ref = self.getBufRef(@ptrCast(down_s), s_bytes);
-        const eo_ref = self.getBufRef(@ptrCast(expert_out), (slot_offset + k_experts) * n_out * @sizeOf(f32));
-        const ei_ref = self.getBufRef(@ptrCast(expert_ids), k_experts * @sizeOf(u32));
-        const enc = self.getEncoder(self.pipe_ds4_moe_down_mxfp4);
-        setBuf(enc, a_ref, 0);
-        setBuf(enc, dw_ref, 1);
-        setBuf(enc, ds_ref, 2);
-        setBuf(enc, eo_ref, 3);
-        setBuf(enc, ei_ref, 4);
-        const ke: u32 = @intCast(k_experts);
-        const no: u32 = @intCast(n_out);
-        const ffv: u32 = @intCast(ff);
-        const ws: u32 = @intCast(w_stride_words);
-        const ss: u32 = @intCast(s_stride);
-        const gv: u32 = @intCast(gs);
-        const so: u32 = @intCast(slot_offset);
-        setBytes(enc, @ptrCast(&ke), 4, 5);
-        setBytes(enc, @ptrCast(&no), 4, 6);
-        setBytes(enc, @ptrCast(&ffv), 4, 7);
-        setBytes(enc, @ptrCast(&ws), 4, 8);
-        setBytes(enc, @ptrCast(&ss), 4, 9);
-        setBytes(enc, @ptrCast(&gv), 4, 10);
-        setBytes(enc, @ptrCast(&so), 4, 11);
-        const tg = @min(threadgroup_size, @max(simd_width, ((ff / gs + simd_width - 1) & ~(simd_width - 1))));
-        self.endEncodeThreadgroups(enc, total_rows, tg);
-    }
-
-    /// Weightless RMS norm (one threadgroup, in-place). For DS4 per-head Q norm.
-    pub fn ds4RmsNormNoweight(self: *MetalBackend, data: [*]f32, n: usize, eps: f32) void {
-        const d_ref = self.getBufRef(@ptrCast(data), n * @sizeOf(f32));
-        const n_val: u32 = @intCast(n);
-        const enc = self.getEncoder(self.pipe_ds4_rms_norm_noweight);
-        setBuf(enc, d_ref, 0);
-        setBytes(enc, @ptrCast(&n_val), 4, 1);
-        setBytes(enc, @ptrCast(&eps), 4, 2);
-        self.endEncodeOneThreadgroup(enc, @min(threadgroup_size, n));
-    }
-
     /// Turbo/Q8_0 SDPA for head_dim=512 (DS4 MLA: kv_lora_rank=512).
     /// Same as sdpa turbo but with block_size=8 to fit 32KB threadgroup memory.
     pub fn ds4SdpaTurboHd512(
@@ -4040,7 +3876,7 @@ test "Metal tuning constants are valid" {
 
 test "Metal n_pipelines count" {
     if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    try std.testing.expectEqual(@as(u32, 108), MetalBackend.n_pipelines);
+    try std.testing.expectEqual(@as(u32, 104), MetalBackend.n_pipelines);
 }
 
 // ── Helper to get a Metal backend or skip the test ──────────────

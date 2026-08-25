@@ -66,8 +66,6 @@ pub const ExpertCache = struct {
     pinned_ranges: []PinnedRange,
     n_pinned: u32 = 0,
     total_pinned_bytes: u64 = 0,
-    /// When true, admit() is a no-op (no eviction during verification).
-    frozen: bool = false,
     /// Index of the next slot that has never been occupied (monotone during fill).
     /// Once it reaches n_slots the cache is full and the LRU scan takes over.
     first_unoccupied: u32 = 0,
@@ -126,8 +124,6 @@ pub const ExpertCache = struct {
     /// Out-of-range layer/expert IDs do not occupy a slot (would be unfindable
     /// via `touch`); returns `std.math.maxInt(u32)` as a sentinel.
     pub fn admit(self: *ExpertCache, layer: u32, expert_id: u32) u32 {
-        // Frozen during verification: don't evict cached entries.
-        if (self.frozen) return self.n_slots;
         // Check if already present
         const key = @as(usize, layer) * self.n_experts + expert_id;
         if (key >= self.lookup.len) return std.math.maxInt(u32);
@@ -284,17 +280,6 @@ pub const ExpertCache = struct {
         const aligned = addr & ~(page_size - 1);
         const total = len + (addr - aligned);
         posix.madvise(@ptrFromInt(aligned), total, posix.system.MADV.WILLNEED) catch {};
-    }
-
-    /// Freeze the cache: admit() becomes no-op (no evictions).
-    /// Used during speculative verification to prevent cache thrashing.
-    pub fn freeze(self: *ExpertCache) void {
-        self.frozen = true;
-    }
-
-    /// Thaw the cache: resume normal admit/evict behavior.
-    pub fn thaw(self: *ExpertCache) void {
-        self.frozen = false;
     }
 
     /// Return the top-k most recently used expert IDs for a given layer.
