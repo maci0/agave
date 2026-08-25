@@ -278,6 +278,17 @@ pub const SafeTensorsDir = struct {
         if (fused_tensors.count() > 0)
             std.log.info("[st] fused {d} NVFP4 entries", .{fused_tensors.count()});
 
+        // --- 5b. Fuse official DeepSeek-V4-Flash-0731 format --------------
+        // Routed experts are FP4 (E2M1 packed 2 nibbles/byte, dtype "I8") with
+        // E8M0 scales; attention + shared experts are F8_E4M3 with E8M0
+        // per-128×128-block scales. Repack experts into the u32-packed MXFP4
+        // layout and dequantize the small fp8 tensors to bf16.
+        fuseDs4Flash0731(allocator, &tensors, &fused_tensors, &repacked_f32, &repacked_u8, shard_data, &config_meta, &owned_strings) catch |err| {
+            std.log.warn("DS4 Flash 0731 fusion failed: {}", .{err});
+        };
+        if (fused_tensors.count() > 0)
+            std.log.info("[st] fused {d} entries total", .{fused_tensors.count()});
+
         return SafeTensorsDir{
             .allocator = allocator,
             .tensors = tensors,
@@ -599,13 +610,21 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     // DeepSeek V4 LID indexer
     .{ "attn_indexer_q_b", "attn.indexer.wq_b" },
     .{ "attn_indexer_proj", "attn.indexer.weights_proj" },
-    // DeepSeek V4 hyper connections (layer-level, no .weight suffix in HF)
+    // DeepSeek V4 hyper connections (layer-level, no .weight suffix in HF).
+    // Official DeepSeek-V4-Flash-0731 stores them as layers.N.hc_attn_fn
+    // (identity name); older conventions used attn_hc.fn / ffn_hc.fn.
     .{ "hc_attn_fn", "attn_hc.fn" },
     .{ "hc_attn_base", "attn_hc.base" },
     .{ "hc_attn_scale", "attn_hc.scale" },
     .{ "hc_ffn_fn", "ffn_hc.fn" },
     .{ "hc_ffn_base", "ffn_hc.base" },
     .{ "hc_ffn_scale", "ffn_hc.scale" },
+    .{ "hc_attn_fn", "hc_attn_fn" },
+    .{ "hc_attn_base", "hc_attn_base" },
+    .{ "hc_attn_scale", "hc_attn_scale" },
+    .{ "hc_ffn_fn", "hc_ffn_fn" },
+    .{ "hc_ffn_base", "hc_ffn_base" },
+    .{ "hc_ffn_scale", "hc_ffn_scale" },
     // DeepSeek V4 MoE (packed switch_mlp tensors)
     .{ "ffn_gate_exps", "ffn.switch_mlp.gate_proj" },
     .{ "ffn_up_exps", "ffn.switch_mlp.up_proj" },
@@ -643,10 +662,15 @@ const gguf_hf_toplevel_map = [_]struct { []const u8, []const u8 }{
     .{ "output_norm.", "norm." },
     .{ "output.", "lm_head." },
     .{ "output.", "head." }, // DeepSeek V4
-    // DeepSeek V4 hyper connection output tensors
+    // DeepSeek V4 hyper connection output tensors.
+    // Official DeepSeek-V4-Flash-0731 stores them as hc_head_fn (no dot,
+    // no .weight suffix) — the trailing dot + suffix-strip handles that.
     .{ "output_hc_fn.", "hc_head.fn." },
     .{ "output_hc_base.", "hc_head.base." },
     .{ "output_hc_scale.", "hc_head.scale." },
+    .{ "output_hc_fn.", "hc_head_fn." },
+    .{ "output_hc_base.", "hc_head_base." },
+    .{ "output_hc_scale.", "hc_head_scale." },
 };
 
 /// Translate a GGUF-style tensor name to HuggingFace-style using a given prefix.
@@ -1655,6 +1679,352 @@ fn fuseSharedExpertProjection(
 
         break; // Found matching shared expert
     }
+}
+
+// ── DeepSeek-V4-Flash-0731 official-format fusion ───────────────────────────
+
+/// Fuse the official DeepSeek-V4-Flash-0731 checkpoint layout into agave's
+/// DS4 tensor convention.
+///
+/// The official checkpoint stores:
+///   - Routed experts: layers.{l}.ffn.experts.{e}.{w1,w2,w3}.weight — FP4
+///     E2M1 packed 2 nibbles/byte (safetensors dtype string "I8"), shape
+///     [out, in/2], plus .scale (F8_E8M0, [out, in/32], group 32).
+///   - Attention + shared experts: layers.{l}.attn.* / ffn.shared_experts.*
+///     — F8_E4M3 weights with F8_E8M0 per-128×128-block scales
+///     ([out/128, in/128]).
+///   - Hyper connections / norms / router / embed / head: F32 / BF16.
+///
+/// Routed experts are repacked into the u32-packed MXFP4 layout agave's DS4
+/// path expects (mlx_q weights + unknown-dtype scales → gemvMxfp4St with
+/// gs=32, E8M0). The small fp8 attention/shared-expert tensors are
+/// dequantized to bf16 so existing kernels run.
+fn fuseDs4Flash0731(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    repacked_f32: *std.ArrayList([]f32),
+    repacked_u8_list: *std.ArrayList([]align(std.heap.page_size_min) u8),
+    shard_data: []ShardInfo,
+    config_meta: *std.StringHashMap(MetaValue),
+    owned: *std.ArrayList([]u8),
+) !void {
+    _ = repacked_f32;
+
+    // Probe: official DS4 Flash layout has ffn.experts.0.w1.weight.
+    {
+        var probe_buf: [fusion_name_buf_size]u8 = undefined;
+        const probe = std.fmt.bufPrint(&probe_buf, "layers.0.ffn.experts.0.w1.weight", .{}) catch return;
+        if (!tensors.contains(probe)) return;
+    }
+    if (config_meta.get("model_type")) |mt| {
+        switch (mt) {
+            .string => |s| if (!std.mem.eql(u8, s, "deepseek_v4")) return,
+            else => return,
+        }
+    } else return;
+
+    const n_layers: u32 = blk: {
+        if (config_meta.get("num_hidden_layers")) |v| {
+            switch (v) {
+                .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else return,
+                .float => |f| break :blk if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else return,
+                else => return,
+            }
+        }
+        return;
+    };
+    const n_experts: u32 = blk: {
+        if (config_meta.get("n_routed_experts")) |v| {
+            switch (v) {
+                .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else return,
+                .float => |f| break :blk if (f >= 0 and f <= std.math.maxInt(u32)) @intFromFloat(f) else return,
+                else => return,
+            }
+        }
+        return;
+    };
+    if (n_experts == 0 or n_experts > 8192) return;
+    if (n_layers == 0 or n_layers > 512) return;
+
+    std.log.info("[st] detected official DeepSeek-V4-Flash-0731 format (fp4 experts, fp8 attention), fusing", .{});
+
+    for (0..n_layers) |li| {
+        // Routed experts: w1 → ffn_gate_exps, w3 → ffn_up_exps, w2 → ffn_down_exps
+        const routed = [_]struct { hf: []const u8, gguf: []const u8 }{
+            .{ .hf = "w1", .gguf = "ffn_gate_exps" },
+            .{ .hf = "w3", .gguf = "ffn_up_exps" },
+            .{ .hf = "w2", .gguf = "ffn_down_exps" },
+        };
+        for (routed) |pj| {
+            fuseDs4RoutedExperts(allocator, tensors, fused, repacked_u8_list, shard_data, @intCast(li), n_experts, pj.hf, pj.gguf, owned) catch |err| {
+                std.log.warn("DS4 Flash fusion: layer {d} {s} experts failed: {}", .{ li, pj.hf, err });
+            };
+        }
+
+        // Shared experts: w1 → ffn_gate_shexp, w3 → ffn_up_shexp, w2 → ffn_down_shexp
+        const shared = [_]struct { hf: []const u8, gguf: []const u8 }{
+            .{ .hf = "w1", .gguf = "ffn_gate_shexp" },
+            .{ .hf = "w3", .gguf = "ffn_up_shexp" },
+            .{ .hf = "w2", .gguf = "ffn_down_shexp" },
+        };
+        for (shared) |pj| {
+            var hf_buf: [fusion_name_buf_size]u8 = undefined;
+            const hf_name = std.fmt.bufPrint(&hf_buf, "layers.{d}.ffn.shared_experts.{s}.weight", .{ li, pj.hf }) catch continue;
+            fuseDs4Fp8ToBf16(allocator, tensors, fused, repacked_u8_list, shard_data, @intCast(li), hf_name, "blk.{d}.{s}.weight", pj.gguf, owned) catch |err| {
+                std.log.warn("DS4 Flash fusion: layer {d} shared {s} failed: {}", .{ li, pj.hf, err });
+            };
+        }
+
+        // Attention projections (only present on some layers for compressors).
+        const attn = [_]struct { hf: []const u8, gguf: []const u8 }{
+            .{ .hf = "attn.wq_a.weight", .gguf = "attn_q_a.weight" },
+            .{ .hf = "attn.wq_b.weight", .gguf = "attn_q_b.weight" },
+            .{ .hf = "attn.wkv.weight", .gguf = "attn_kv.weight" },
+            .{ .hf = "attn.wo_a.weight", .gguf = "attn_output_a.weight" },
+            .{ .hf = "attn.wo_b.weight", .gguf = "attn_output_b.weight" },
+            .{ .hf = "attn.compressor.wkv.weight", .gguf = "attn_compressor_kv.weight" },
+            .{ .hf = "attn.compressor.wgate.weight", .gguf = "attn_compressor_gate.weight" },
+            .{ .hf = "attn.indexer.wq_b.weight", .gguf = "attn_indexer_q_b.weight" },
+            .{ .hf = "attn.indexer.weights_proj.weight", .gguf = "attn_indexer_proj.weight" },
+        };
+        for (attn) |a| {
+            var hf_buf: [fusion_name_buf_size]u8 = undefined;
+            const hf_name = std.fmt.bufPrint(&hf_buf, "layers.{d}.{s}", .{ li, a.hf }) catch continue;
+            fuseDs4Fp8ToBf16(allocator, tensors, fused, repacked_u8_list, shard_data, @intCast(li), hf_name, "blk.{d}.{s}", a.gguf, owned) catch |err| {
+                std.log.warn("DS4 Flash fusion: layer {d} attn {s} failed: {}", .{ li, a.hf, err });
+            };
+        }
+    }
+}
+
+/// Fuse one routed-expert projection of a layer into a per-expert POINTER
+/// TABLE. The official checkpoint stores each expert's FP4-packed weight and
+/// E8M0 scale at non-uniform offsets, so direct mmap pointers with a fixed
+/// stride are impossible and copying the full 129 GB of experts would exhaust
+/// memory. Instead we emit two small tables:
+///   blk.{l}.{gguf}.weight  — mlx_q, [n_experts, 1] u64 pointers → each
+///                            expert's packed weight (byte layout identical to
+///                            the u32-packed MXFP4 layout agave expects).
+///   blk.{l}.{gguf}.scales  — unknown, [n_experts, 1] u64 pointers → each
+///                            expert's E8M0 [out, in/32] scale tensor.
+/// doGemvExpert dereferences the table for the selected expert. The fp4 group
+/// size is 32 for the official DeepSeek-V4-Flash-0731 format.
+fn fuseDs4RoutedExperts(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    repacked_u8_list: *std.ArrayList([]align(std.heap.page_size_min) u8),
+    shard_data: []ShardInfo,
+    layer: u32,
+    n_experts: u32,
+    hf_proj: []const u8,
+    gguf_name: []const u8,
+    owned: *std.ArrayList([]u8),
+) !void {
+    var name_buf: [fusion_name_buf_size]u8 = undefined;
+    const e0_name = std.fmt.bufPrint(&name_buf, "layers.{d}.ffn.experts.0.{s}.weight", .{ layer, hf_proj }) catch return;
+    const e0 = tensors.get(e0_name) orelse return;
+
+    // Sanity-check the packed weight shape (validate against expert 0).
+    if (e0.n_dims < 2) return;
+    const w_rows: u64 = e0.dims[0];
+    const w_cols: u64 = e0.dims[1];
+    if (w_rows == 0 or w_cols == 0 or w_rows > 1 << 20 or w_cols > 1 << 20) return;
+
+    const pa = std.heap.page_allocator;
+
+    // Weight pointer table: [n_experts] u64 mmap addresses.
+    const w_tbl = try paAllocZeroed(pa, @as(usize, n_experts) * @sizeOf(u64));
+    repacked_u8_list.append(allocator, w_tbl) catch {
+        pa.free(w_tbl);
+        return error.OutOfMemory;
+    };
+    // Scale pointer table.
+    const s_tbl = try paAllocZeroed(pa, @as(usize, n_experts) * @sizeOf(u64));
+    repacked_u8_list.append(allocator, s_tbl) catch {
+        pa.free(s_tbl);
+        return error.OutOfMemory;
+    };
+    const w_ptrs: [*]u64 = @ptrCast(@alignCast(w_tbl.ptr));
+    const s_ptrs: [*]u64 = @ptrCast(@alignCast(s_tbl.ptr));
+
+    var s_buf: [fusion_name_buf_size]u8 = undefined;
+    for (0..n_experts) |ei| {
+        const e_name = std.fmt.bufPrint(&name_buf, "layers.{d}.ffn.experts.{d}.{s}.weight", .{ layer, ei, hf_proj }) catch continue;
+        const e = tensors.get(e_name) orelse continue;
+        if (e.shard_idx >= shard_data.len) continue;
+        const sh = shard_data[e.shard_idx];
+        if (sh.data.len == 0) continue;
+        const src_start = std.math.add(usize, sh.tensor_base, e.data_start) catch continue;
+        const src_end = std.math.add(usize, src_start, std.math.mul(usize, @as(usize, @intCast(w_rows)), @as(usize, @intCast(w_cols))) catch continue) catch continue;
+        if (src_end > sh.data.len) continue;
+        w_ptrs[ei] = @intFromPtr(sh.data.ptr + src_start);
+
+        const es_name = std.fmt.bufPrint(&s_buf, "layers.{d}.ffn.experts.{d}.{s}.scale", .{ layer, ei, hf_proj }) catch continue;
+        const es = tensors.get(es_name) orelse continue;
+        if (es.shard_idx >= shard_data.len) continue;
+        const ssh = shard_data[es.shard_idx];
+        if (ssh.data.len == 0) continue;
+        const s_src_start = std.math.add(usize, ssh.tensor_base, es.data_start) catch continue;
+        if (s_src_start >= ssh.data.len) continue;
+        s_ptrs[ei] = @intFromPtr(ssh.data.ptr + s_src_start);
+    }
+
+    // Create the fused entries (pointer tables).
+    var gguf_w_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_w = std.fmt.bufPrint(&gguf_w_buf, "blk.{d}.{s}.weight", .{ layer, gguf_name }) catch return;
+    const owned_w = try dupeString(allocator, owned, gguf_w);
+    try fused.put(owned_w, TensorEntry{
+        .shard_idx = max_shard_count,
+        .data_start = @intFromPtr(w_tbl.ptr),
+        .data_end = @intFromPtr(w_tbl.ptr) + @as(usize, n_experts) * @sizeOf(u64),
+        .dtype = .mlx_q,
+        .n_dims = 2,
+        .dims = .{ n_experts, 1, 0, 0 },
+    });
+
+    var gguf_s_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_s = std.fmt.bufPrint(&gguf_s_buf, "blk.{d}.{s}.scales", .{ layer, gguf_name }) catch return;
+    const owned_s = try dupeString(allocator, owned, gguf_s);
+    try fused.put(owned_s, TensorEntry{
+        .shard_idx = max_shard_count,
+        .data_start = @intFromPtr(s_tbl.ptr),
+        .data_end = @intFromPtr(s_tbl.ptr) + @as(usize, n_experts) * @sizeOf(u64),
+        .dtype = .unknown,
+        .n_dims = 2,
+        .dims = .{ n_experts, 1, 0, 0 },
+    });
+}
+
+/// Dequantize one F8_E4M3 weight tensor with F8_E8M0 per-128×128-block scales
+/// into a bf16 buffer, creating a synthetic `{gguf_pattern}` entry.
+/// `hf_pattern` is the per-layer HF name with one `{s}` placeholder for the
+/// projection, `gguf_pattern` the GGUF name with `{d}` layer and `{s}` proj.
+fn fuseDs4Fp8ToBf16(
+    allocator: Allocator,
+    tensors: *std.StringHashMap(TensorEntry),
+    fused: *std.StringHashMap(TensorEntry),
+    repacked_u8_list: *std.ArrayList([]align(std.heap.page_size_min) u8),
+    shard_data: []ShardInfo,
+    layer: u32,
+    hf_name: []const u8,
+    comptime gguf_pattern: []const u8,
+    gguf_proj: []const u8,
+    owned: *std.ArrayList([]u8),
+) !void {
+    const w = tensors.get(hf_name) orelse return;
+    if (w.shard_idx >= shard_data.len) return;
+    const sh = shard_data[w.shard_idx];
+    if (sh.data.len == 0) return;
+    const w_rows: u64 = if (w.n_dims >= 1) w.dims[0] else return;
+    const w_cols: u64 = if (w.n_dims >= 2) w.dims[1] else return;
+    if (w_rows == 0 or w_cols == 0 or w_rows > 1 << 22 or w_cols > 1 << 22) return;
+    const out_dim: usize = @intCast(w_rows);
+    const in_dim: usize = @intCast(w_cols);
+    const w_bytes = std.math.mul(usize, out_dim, in_dim) catch return;
+    const w_src_start = std.math.add(usize, sh.tensor_base, w.data_start) catch return;
+    const w_src_end = std.math.add(usize, w_src_start, w_bytes) catch return;
+    if (w_src_end > sh.data.len) return;
+    const w_src = sh.data[w_src_start..w_src_end];
+
+    // Scale: [out/128, in/128] F8_E8M0. The checkpoint stores the companion
+    // as "<name>.scale" (the .weight suffix is dropped, not appended).
+    var s_buf: [fusion_name_buf_size]u8 = undefined;
+    const s_name = if (std.mem.endsWith(u8, hf_name, ".weight"))
+        (std.fmt.bufPrint(&s_buf, "{s}.scale", .{hf_name[0 .. hf_name.len - ".weight".len]}) catch return)
+    else
+        (std.fmt.bufPrint(&s_buf, "{s}.scale", .{hf_name}) catch return);
+    const s = tensors.get(s_name) orelse return;
+    if (s.shard_idx >= shard_data.len) return;
+    const ssh = shard_data[s.shard_idx];
+    if (ssh.data.len == 0) return;
+    const s_rows: u64 = if (s.n_dims >= 1) s.dims[0] else return;
+    const s_cols: u64 = if (s.n_dims >= 2) s.dims[1] else return;
+    if (s_rows == 0 or s_cols == 0) return;
+    const s_bytes = std.math.mul(usize, @as(usize, @intCast(s_rows)), @as(usize, @intCast(s_cols))) catch return;
+    const s_src_start = std.math.add(usize, ssh.tensor_base, s.data_start) catch return;
+    const s_src_end = std.math.add(usize, s_src_start, s_bytes) catch return;
+    if (s_src_end > ssh.data.len) return;
+    const s_src = ssh.data[s_src_start..s_src_end];
+
+    // Dequantize to bf16: out×in×2 bytes.
+    const pa = std.heap.page_allocator;
+    const bf16_bytes = std.math.mul(usize, w_bytes, 2) catch return;
+    const out_buf = try paAllocZeroed(pa, bf16_bytes);
+    repacked_u8_list.append(allocator, out_buf) catch {
+        pa.free(out_buf);
+        return error.OutOfMemory;
+    };
+    const out16: [*]u16 = @ptrCast(@alignCast(out_buf.ptr));
+    const block: usize = 128;
+    const ob = s_rows;
+    const ib = s_cols;
+    var i: usize = 0;
+    while (i < out_dim) : (i += 1) {
+        const ob_i = @min(i / block, @as(usize, @intCast(ob)) - 1);
+        const row = w_src[i * in_dim ..][0..in_dim];
+        const dst_row = out16 + i * in_dim;
+        var j: usize = 0;
+        while (j < in_dim) : (j += 1) {
+            const ib_j = @min(j / block, @as(usize, @intCast(ib)) - 1);
+            const scale = ds4E8m0ToF32(s_src[ob_i * @as(usize, @intCast(ib)) + ib_j]);
+            const f = ds4Fp8E4m3ToF32(row[j]) * scale;
+            dst_row[j] = f32ToBf16(f);
+        }
+    }
+
+    var gguf_buf: [fusion_name_buf_size]u8 = undefined;
+    const gguf_name = std.fmt.bufPrint(&gguf_buf, gguf_pattern, .{ layer, gguf_proj }) catch return;
+    const owned_name = try dupeString(allocator, owned, gguf_name);
+    try fused.put(owned_name, TensorEntry{
+        .shard_idx = max_shard_count,
+        .data_start = @intFromPtr(out_buf.ptr),
+        .data_end = @intFromPtr(out_buf.ptr) + bf16_bytes,
+        .dtype = .bf16,
+        .n_dims = 2,
+        .dims = .{ @intCast(out_dim), @intCast(in_dim), 0, 0 },
+    });
+}
+
+/// FP8 E4M3 → f32 (local copy; importing ops/quant.zig would create an
+/// import cycle through format.zig).
+fn ds4Fp8E4m3ToF32(val: u8) f32 {
+    const sign: u32 = @as(u32, val >> 7) << 31;
+    const exp: u32 = (val >> 3) & 0x0F;
+    const mant: u32 = val & 0x07;
+    if (exp == 0x0F and mant == 0x07) return @bitCast(sign | 0x7FC00000); // NaN
+    if (exp == 0) {
+        if (mant == 0) return @bitCast(sign); // ±0
+        // Denormal: mant × 2^(1-7-3) = mant × 2^-9
+        return @bitCast(sign | @as(u32, @bitCast(@as(f32, @floatFromInt(mant)) * 0.001953125)));
+    }
+    // Normal: (-1)^s × 2^(e-7) × (1 + m/8); f32 exponent = e - 7 + 127 = e + 120
+    const exp_f32: u32 = (exp + 120) << 23;
+    const mant_f32: u32 = mant << 20;
+    return @bitCast(sign | exp_f32 | mant_f32);
+}
+
+/// E8M0 scale → f32: 2^(e-127) (OCP Microscaling); e=0 → 0.0.
+fn ds4E8m0ToF32(e: u8) f32 {
+    if (e == 0) return 0.0;
+    return @bitCast(@as(u32, @intCast(e)) << 23);
+}
+
+/// Page-aligned zeroed allocation (GPU-safe like the other repack buffers).
+/// page_allocator returns page-aligned memory; alignCast documents it.
+fn paAllocZeroed(pa: std.mem.Allocator, n: usize) ![]align(std.heap.page_size_min) u8 {
+    const buf = try pa.alloc(u8, n);
+    @memset(buf, 0);
+    return @alignCast(buf);
+}
+
+/// Round f32 to bf16 (round-to-nearest-even, matching torch's conversion).
+fn f32ToBf16(f: f32) u16 {
+    const bits: u32 = @bitCast(f);
+    const rounding_bias: u32 = 0x7FFF + ((bits >> 16) & 1);
+    const rounded = bits +% rounding_bias;
+    return @truncate(rounded >> 16);
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -3565,11 +3935,15 @@ test "ggufToHfNameIter DeepSeek V4 attention" {
     try std.testing.expectEqualStrings("layers.0.attn.wo_a.weight", wo.?);
     try std.testing.expect(iter_wo.next(&buf) == null);
 
-    // DS V4 hyper connection (hc_attn_fn → attn_hc.fn)
+    // DS V4 hyper connection (hc_attn_fn → attn_hc.fn, and the official
+    // Flash-0731 identity name hc_attn_fn → hc_attn_fn)
     var iter_hc = ggufToHfNameIter("blk.0.hc_attn_fn.weight", "");
     const hc = iter_hc.next(&buf);
     try std.testing.expect(hc != null);
     try std.testing.expectEqualStrings("layers.0.attn_hc.fn.weight", hc.?);
+    const hc2 = iter_hc.next(&buf);
+    try std.testing.expect(hc2 != null);
+    try std.testing.expectEqualStrings("layers.0.hc_attn_fn.weight", hc2.?);
     try std.testing.expect(iter_hc.next(&buf) == null);
 }
 
@@ -3580,6 +3954,10 @@ test "ggufToHfNameIter DeepSeek V4 toplevel" {
     const first = iter.next(&buf);
     try std.testing.expect(first != null);
     try std.testing.expectEqualStrings("hc_head.fn.weight", first.?);
+    // Official Flash-0731 stores the head as hc_head_fn (no dot, no .weight).
+    const second = iter.next(&buf);
+    try std.testing.expect(second != null);
+    try std.testing.expectEqualStrings("hc_head_fn.weight", second.?);
     try std.testing.expect(iter.next(&buf) == null);
 
     // DS V4 top-level: output → lm_head then head
