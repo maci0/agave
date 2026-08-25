@@ -2582,10 +2582,6 @@ pub const Ds4Model = struct {
         self.layer_skip_start = s;
         self.layer_skip_end = end;
     }
-    /// Return the current hidden state after the last forward pass.
-    pub fn getHidden(self: *const Ds4Model) []const f32 {
-        return self.hidden;
-    }
     /// Return physical block IDs for the paged KV cache. DeepSeek V4 uses a flat
     /// KV layout (not paged), so this always returns an empty slice.
     pub fn getBlockTable(_: *const Ds4Model) []const u32 {

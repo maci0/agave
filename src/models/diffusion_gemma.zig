@@ -478,11 +478,6 @@ pub const DiffusionGemmaModel = struct {
         return self.logits_buf;
     }
 
-    /// Return the last-layer hidden state after the final norm.
-    pub fn getHiddenState(self: *const DiffusionGemmaModel) []const f32 {
-        return self.hidden;
-    }
-
     /// Return the last-layer hidden state before the final RMS norm.
     pub fn getPreNormHiddenState(self: *const DiffusionGemmaModel) []const f32 {
         if (self.hidden_pre_norm.len > 0) return self.hidden_pre_norm;

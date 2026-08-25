@@ -2424,17 +2424,6 @@ pub const Qwen35Model = struct {
         }
     }
 
-    /// Drop captures beyond position `end` (after speculative rejection rewind).
-    pub fn truncateCapturesTo(self: *Qwen35Model, end: usize) void {
-        const begin = self.captureBegin();
-        if (end >= begin + self.capture_count) return;
-        if (end <= begin) {
-            self.capture_count = 0;
-            return;
-        }
-        self.capture_count = end - begin;
-    }
-
     /// Ring slot index for capture layer id `l`, or null when not captured.
     fn captureSlot(self: *const Qwen35Model, l: u32) ?usize {
         for (self.capture_layer_ids, 0..) |id, i| {

@@ -15,8 +15,6 @@ const math = std.math;
 
 /// Maximum draft block size (positions).
 pub const max_block: usize = 32;
-/// Floor/ceil epsilon when mapping confidence into logit space (avoids log(0)).
-const logit_clamp_eps: f32 = 1e-7;
 /// Maximum RNN rank that fits in stack buffers for gate/candidate/output vectors.
 const max_rnn_rank: usize = 4096;
 
@@ -356,74 +354,6 @@ pub const ConfidenceHead = struct {
         return sigmoid(dot);
     }
 };
-
-/// Sequential Temperature Scaling (STS, §3.2.1): calibrates per-position
-/// cumulative survival probabilities to match empirical acceptance rates.
-/// Finds optimal scalar temperature T_k per position via 1D grid search.
-pub fn calibrateSts(
-    /// confidence[sample][position] — raw model outputs c_k.
-    confidence: []const []const f32,
-    /// accepted[sample][position] — binary: 1 if token k was accepted, 0 if not.
-    accepted: []const []const bool,
-    n_positions: u32,
-    allocator: std.mem.Allocator,
-) ![]f32 {
-    const temperatures = try allocator.alloc(f32, n_positions);
-    errdefer allocator.free(temperatures);
-    @memset(temperatures, 1.0);
-
-    const n_samples = confidence.len;
-    if (n_samples == 0) return temperatures;
-
-    // For each position k, find T_k minimising ECE of cumulative product.
-    for (0..n_positions) |k| {
-        var best_ece: f32 = math.inf(f32);
-        var best_t: f32 = 1.0;
-
-        var t: f32 = 0.01;
-        while (t <= 10.0) : (t += 0.05) {
-            // Compute cumulative product P_k(sample) = Π_{i≤k} c_i^(T_i/t_i)
-            // Since positions < k are already calibrated with their own T_i, we
-            // apply temperature only at position k.
-            var ece: f32 = 0.0;
-            for (confidence, accepted) |c_seq, a_seq| {
-                if (k >= c_seq.len) continue;
-                var cum: f32 = 1.0;
-                for (0..k) |i| {
-                    // Already-calibrated positions use identity (T_i cancels in sigmoid).
-                    cum *= calibratedConf(c_seq[i], temperatures[i]);
-                }
-                cum *= calibratedConf(c_seq[k], t);
-
-                // Label: 1 if prefix of length k+1 fully accepted.
-                var label: f32 = 1.0;
-                for (0..k + 1) |i| {
-                    if (i >= a_seq.len or !a_seq[i]) {
-                        label = 0.0;
-                        break;
-                    }
-                }
-                const diff = cum - label;
-                ece += diff * diff;
-            }
-            if (ece < best_ece) {
-                best_ece = ece;
-                best_t = t;
-            }
-        }
-        temperatures[k] = best_t;
-    }
-    return temperatures;
-}
-
-/// Apply calibrated temperature to a raw confidence score.
-/// c_calibrated = σ(logit(c) / T) where logit(c) = log(c/(1-c)).
-fn calibratedConf(c: f32, temp: f32) f32 {
-    const safe_temp = if (temp <= 0) logit_clamp_eps else temp;
-    const clamped = @max(logit_clamp_eps, @min(1.0 - logit_clamp_eps, c));
-    const logit = @log(clamped / (1.0 - clamped));
-    return sigmoid(logit / safe_temp);
-}
 
 inline fn sigmoid(x: f32) f32 {
     return 1.0 / (1.0 + @exp(-x));
