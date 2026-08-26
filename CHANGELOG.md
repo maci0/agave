@@ -148,6 +148,13 @@ must still appear under **Changed** or **Breaking** below. See
 - `zig build test` failed to compile with the CUDA backend enabled:
   `cuStreamSynchronize` is a required entry point, not an optional one, so
   unwrapping it as an optional was a type error.
+- `zig build test` never exited once the suite actually passed. Under the
+  server-mode test runner fd 1 carries the build-runner protocol, and three
+  fuzz tests printed plain text to it, which desynchronized the stream and left
+  both processes waiting. Only CI's job timeout bounded it. Contributors get a
+  gate that finishes; nothing about the shipped binary changes.
+- The `dflash2HybridNgram` unit test had never passed: its fixture used a token
+  history with no repeated n-gram, so the function under test was a no-op.
 
 ### Changed
 - Extracted video frames now default to a disk-backed cache directory
@@ -158,7 +165,12 @@ must still appear under **Changed** or **Breaking** below. See
 - Benchmark tables now state whether a backend's output is correct, not only its
   throughput. Qwen 3.5 decodes to garbage on ROCm and Vulkan on gfx1100
   (docs/TODO.md bug 10); the published tok/s for those two rows are speed-only
-  measurements.
+  measurements. `tests/test_backend_parity.zig` now compares every decode-loop op
+  against CPU on both backends and clears all of them, so the fault is above the
+  kernels; the search continues in bug 10.
+- Browser WASM glue (`web/agave.ts`) validates the module's exports at
+  instantiation. A mismatched `agave.wasm` now fails at load naming the missing
+  export instead of throwing "not a function" partway through a generate call.
 - Changelog entries are consumer-oriented; date-stamped sections below remain the
   historical log until the next tagged product release bumps `0.1.0`
 - `--diffusion-confidence` docs/help now report default `0.5` (runtime default was
