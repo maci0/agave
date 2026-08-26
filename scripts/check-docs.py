@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Lightweight docs hygiene checks for Agave.
 
 Validates relative links, mermaid vs diagram asset counts, backend kernel
@@ -12,7 +15,16 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+
+def find_root() -> Path:
+    """Walk up from this file to the directory holding build.zig.zon."""
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "build.zig.zon").is_file():
+            return candidate
+    sys.exit("check-docs: no build.zig.zon found above this script")
+
+
+ROOT = find_root()
 
 
 def check_links() -> list[str]:
