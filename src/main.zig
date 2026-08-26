@@ -52,12 +52,26 @@ const stdout_file = Io.File.stdout();
 const stderr_file = Io.File.stderr();
 const stdin_file = Io.File.stdin();
 
-/// Base directory for scratch files (overridable via TMPDIR).
+/// Last-resort base for extracted video frames when no env var resolves one.
 const default_tmp_base = "/tmp";
-/// Fixed-name fallback when the unique temp path does not fit its buffer.
+/// Fixed-name fallback when the unique frame path does not fit its buffer.
 const video_tmp_fallback = "/tmp/agave_video";
-/// Buffer size for composing the video frame temp directory path.
+/// Buffer size for composing the video frame directory path.
 const tmp_path_buf_size = 256;
+
+/// Resolve the base directory for extracted video frames, writing into `buf`.
+///
+/// Order matches `pull.hfCacheDir`: TMPDIR (an explicit operator choice) wins,
+/// then XDG_CACHE_HOME, then `$HOME/.cache`. The default is a disk-backed cache
+/// dir rather than `/tmp` because `/tmp` is tmpfs on most Linux distributions,
+/// where a minute of frames at 2fps would sit in RAM until the process exits.
+/// Returns a slice of `buf` or a static string; the caller owns neither.
+fn videoFrameBase(buf: []u8) []const u8 {
+    if (pull.getenv("TMPDIR")) |dir| return dir;
+    if (pull.getenv("XDG_CACHE_HOME")) |dir| return dir;
+    const home = pull.getenv("HOME") orelse return default_tmp_base;
+    return std.fmt.bufPrint(buf, "{s}/.cache", .{home}) catch default_tmp_base;
+}
 
 /// Monotonic milliseconds for interval math (model load, preload, prefill,
 /// generation durations). Wall-clock reads would report negative or inflated
@@ -135,7 +149,7 @@ const default_max_tokens: u32 = 512;
 const default_ctx_size: u32 = 4096;
 /// Default prefill chunk size (tokens per batch).
 const default_chunk_size: u32 = 512;
-/// Milliseconds per second — used for tok/s calculations.
+/// Milliseconds per second, used for tok/s calculations.
 const ms_per_second: f32 = 1000.0;
 /// Minimum prompt tokens before showing prefill progress indicator.
 const prefill_progress_threshold: usize = 50;
@@ -261,7 +275,7 @@ fn estimateExpertBytes(fmt: Format, n_experts: u32) usize {
 /// kernel readahead, then switches to RANDOM after pages are resident.
 fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
     const MADV = std.posix.MADV;
-    // Best-effort OS hint — failure is harmless
+    // Best-effort OS hint, failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     // Touch one byte per page to force all pages into RAM
@@ -271,7 +285,7 @@ fn preloadRegion(data: []align(std.heap.page_size_min) const u8) void {
         _ = @as(*const volatile u8, @ptrCast(&data[offset])).*;
     }
 
-    // Best-effort OS hint — failure is harmless
+    // Best-effort OS hint, failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
@@ -316,7 +330,7 @@ fn preloadModel(gguf: ?*GGUFFile, st: ?*SafeTensorsDir, quiet: bool, tty: bool, 
 /// and prints a progress bar to stderr at ~1% intervals (at least min_report_pages apart).
 fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded: *usize, total_bytes: usize, fsize: display_mod.FormattedSize) void {
     const MADV = std.posix.MADV;
-    // Best-effort OS hint — failure is harmless
+    // Best-effort OS hint, failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.SEQUENTIAL) catch {};
 
     const page_size = std.heap.page_size_min;
@@ -363,7 +377,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
         }
     }
 
-    // Best-effort OS hint — failure is harmless
+    // Best-effort OS hint, failure is harmless
     std.posix.madvise(@alignCast(@constCast(data.ptr)), data.len, MADV.RANDOM) catch {};
 }
 
@@ -839,7 +853,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     var kv_tiers_val = res.option("kv-tiers");
     if (kv_tiers_val) |tiers_str| {
         if (std.mem.eql(u8, tiers_str, "off")) {
-            // "off" is the documented default — treat as if the flag was not passed
+            // "off" is the documented default, treat as if the flag was not passed
             kv_tiers_val = null;
         } else if (!std.mem.eql(u8, tiers_str, "vram+ram") and !std.mem.eql(u8, tiers_str, "vram+ram+ssd")) {
             eprint("Error: unknown --kv-tiers value '{s}'\n", .{tiers_str});
@@ -1157,7 +1171,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --dir-steering-attn has no effect without --dir-steering-file\n", .{});
     }
 
-    // Early file existence checks — fail fast before slow model loading
+    // Early file existence checks, fail fast before slow model loading
     if (grammar_path) |p| validateFileExists(p, "--grammar");
     if (res.option("image")) |p| validateFileExists(p, "--image");
     if (res.option("video")) |p| validateFileExists(p, "--video");
@@ -2170,7 +2184,7 @@ fn printUsage() void {
         \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
         \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
         \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
-        \\  TMPDIR               Base directory for extracted video frames (default: /tmp)
+        \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
         \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
         \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
         \\  XDG_CACHE_HOME       XDG cache base for pull (fallback: ~/.cache)
@@ -2454,7 +2468,7 @@ pub fn main(init: std.process.Init) !void {
         const hd = disp_info.head_dim;
         const nl = disp_info.n_layers;
         if (n_kv > 0 and hd > 0 and nl > 0 and avail_mem > 0) {
-            // Use float arithmetic for per-token KV bytes — bitsPerElement() returns
+            // Use float arithmetic for per-token KV bytes, bitsPerElement() returns
             // fractional values (e.g. Q8_0 = 8.5). @intFromFloat on a non-integer
             // is UB in ReleaseFast, so compute in float and round up.
             const kv_bpe = cli.kv_type_k.bitsPerElement() + cli.kv_type_v.bitsPerElement();
@@ -2515,7 +2529,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // ── Preload weights into RAM (after banner so user sees info first) ──
-    // Skip preload when SSD streaming is enabled — the whole point is demand-paged
+    // Skip preload when SSD streaming is enabled, the whole point is demand-paged
     // access. Preloading 90-155GB through a 48GB page cache just thrashes.
     const warmup_ms: u64 = if (!cli.use_mmap and !cli.model_info and !cli.ssd_streaming)
         preloadModel(
@@ -2563,7 +2577,7 @@ pub fn main(init: std.process.Init) !void {
         fmt.getMetaU32("eos_token_id") orelse
         arch.defaultEos();
     const bos_id: u32 = blk: {
-        // GLM-4: template includes [gMASK]<sop> — don't also prepend metadata BOS
+        // GLM-4: template includes [gMASK]<sop>, don't also prepend metadata BOS
         if (arch == .glm4) break :blk 0;
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
         if (fmt.getMetaU32("bos_token_id")) |id| break :blk id;
@@ -2720,7 +2734,7 @@ fn initAndRun(
     load_info_in: display_mod.LoadInfo,
 ) bool {
     // Initialize optional tiered KV cache from CLI flags.
-    // This is model-independent — only reads format metadata.
+    // This is model-independent, only reads format metadata.
     var tiered_cache_storage: ?TieredKvCache = null;
     defer if (tiered_cache_storage) |*tc| tc.deinit();
 
@@ -2837,7 +2851,7 @@ fn initAndRun(
     }
     defer if (dir_steering) |*steer| steer.deinit(allocator);
 
-    // Peer discovery buffers — must outlive both TP and PP blocks because
+    // Peer discovery buffers, must outlive both TP and PP blocks because
     // cli.tp_peers may borrow into them and be read by the PP setup path.
     var tp_ip_buf: [16]u8 = undefined;
     var pp_ip_buf: [16]u8 = undefined;
@@ -2976,12 +2990,12 @@ fn initAndRun(
             cli.ssd_cache_slots // user override
         else blk: {
             // Auto-size based on how many unique experts fit in the page cache.
-            // The ExpertCache tracks metadata (~20 bytes/slot), not expert data —
+            // The ExpertCache tracks metadata (~20 bytes/slot), not expert data,
             // expert weights live in the mmap'd GGUF. We estimate how many unique
             // (layer, expert) pairs the OS can keep warm in physical RAM.
             const expert_bytes = estimateExpertBytes(fmt, n_exp);
             if (expert_bytes > 0) {
-                // Use total physical RAM (not free — mmap pages are reclaimable)
+                // Use total physical RAM (not free, mmap pages are reclaimable)
                 const total_ram = @import("backend/backend.zig").detectSystemMem();
                 // Budget: total RAM minus ~8GB for OS/KV/scratch, rest for page cache
                 const overhead: usize = 8 * 1024 * 1024 * 1024;
@@ -3005,7 +3019,7 @@ fn initAndRun(
         }
         // Enable volatile weights for Metal safety.
         // Heapification handles expert + non-expert weights,
-        // but Metal SDPA/wo_a still has issues — needs investigation.
+        // but Metal SDPA/wo_a still has issues, needs investigation.
         be.setVolatileWeights(true); // OFF: causes buf_cache invalidation race // disabled: buf_cache flush causes 0.002% drift
     }
 
@@ -3059,7 +3073,7 @@ fn initAndRun(
     // Auto-pin: when --ssd-streaming is active but no --expert-profile-in,
     // mlock the non-routed weights that are accessed every token (shared
     // expert weights and router gate weights). Disabled by default on
-    // memory-constrained systems (≤64GB) — benchmarks show mlock reduces
+    // memory-constrained systems (≤64GB), benchmarks show mlock reduces
     // available page cache space and hurts overall throughput when model >> RAM.
     const total_mem = @import("backend/backend.zig").detectSystemMem();
     if (cli.expert_profile_in == null and cli.ssd_streaming and expert_cache_opt != null and total_mem > 64 * 1024 * 1024 * 1024) {
@@ -3274,17 +3288,17 @@ fn initAndRun(
             if (!g_quiet) eprint("vision: encoded {d} visual tokens\n", .{n_visual_tokens});
         }
     } else if (cli.image != null) {
-        eprint("Warning: --image ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
+        eprint("Warning: --image ignored (no vision projector found, use --mmproj <path> to specify)\n", .{});
     }
 
     // ── Video input: extract frames via ffmpeg and encode with vision encoder ──
     if (cli.video) |video_path| {
         if (vision_enc == null) {
-            eprint("Warning: --video ignored (no vision projector found — use --mmproj <path> to specify)\n", .{});
+            eprint("Warning: --video ignored (no vision projector found, use --mmproj <path> to specify)\n", .{});
         } else {
             const ve = &vision_enc.?;
-            // Create temp directory for extracted frames under $TMPDIR (default /tmp)
-            const tmp_base = pull.getenv("TMPDIR") orelse default_tmp_base;
+            var base_buf: [tmp_path_buf_size]u8 = undefined;
+            const tmp_base = videoFrameBase(&base_buf);
             var tmp_buf: [tmp_path_buf_size]u8 = undefined;
             // Wall nanos: the tag must stay unique across concurrent agave
             // processes; monotonic time is boot-relative and can collide.
@@ -3564,7 +3578,7 @@ fn initAndRun(
             .rate_limit_rpm = cli.rate_limit_rpm,
             .rate_limit_tpm = cli.rate_limit_tpm,
         }) catch |e| {
-            // Listen failures already print a specific actionable message inside
+            // Listen failures already print a specific message inside
             // server.run(); re-printing the raw error name would just add noise.
             if (e != error.ListenError) eprint("Error: server failed: {}\n", .{e});
             return false;
@@ -3804,7 +3818,7 @@ fn runRepl(
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/debug")) {
                 g_debug = !g_debug;
-                // debug implies verbose — turning debug on enables verbose,
+                // debug implies verbose, turning debug on enables verbose,
                 // but turning debug off leaves verbose unchanged (user may
                 // have enabled it independently via /verbose).
                 if (g_debug) {
@@ -4344,7 +4358,7 @@ fn generateSpeculative(
         if (draft_cooldown > 0) {
             draft_cooldown -= 1;
             // DFlash2 hybrid cooldown: keep speculating with pure n-gram drafts
-            // instead of falling back to autoregressive decoding. Greedy only —
+            // instead of falling back to autoregressive decoding. Greedy only,
             // sampled rounds would need q distributions n-grams cannot supply.
             var cooldown_ng_drafted = false;
             if (use_dflash2 and !use_sampling) {
@@ -4476,7 +4490,7 @@ fn generateSpeculative(
         else
             spec_decode.draftWithLogits(&spec_state, draft_model, last);
         if (n_drafted == 0) {
-            // N-gram / Suffix / Lookahead / DFlash2: no draft — single-token decode
+            // N-gram / Suffix / Lookahead / DFlash2: no draft, single-token decode
             if (use_ngram or use_suffix or use_lookahead or use_dflash2) {
                 // Use reduced expert budget for fallback forward (50% less I/O)
                 if (use_suffix) target.setExpertBudget(3);
@@ -4530,7 +4544,7 @@ fn generateSpeculative(
         else if (use_suffix)
             // Note: verifyBatched uses forwardTree which has no HC/experts and gives 0% acceptance.
             // Suffix mode actually goes through is_self_draft (full forward) which gives 100% acceptance.
-            // This path is dead code — kept for reference.
+            // This path is dead code, kept for reference.
             spec_decode.verifyBatched(&spec_state, target, draft_model, last, pre_draft_pos)
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
@@ -4908,7 +4922,7 @@ fn generateAndPrintInner(
             defer if (text) |t| allocator.free(t);
             gs.acceptToken(text orelse "");
         }
-        // Track JSON brace depth (scan raw token text — avoids allocation)
+        // Track JSON brace depth (scan raw token text, avoids allocation)
         if (json_mode_active and first_gen_token < tok.id_to_token.items.len) {
             for (tok.id_to_token.items[first_gen_token]) |c| {
                 if (c == '{' or c == '[') json_depth += 1;
@@ -4917,7 +4931,7 @@ fn generateAndPrintInner(
         }
     }
 
-    // Generate — stream tokens to stdout immediately.
+    // Generate, stream tokens to stdout immediately.
     // Decode in small batches to balance responsiveness vs alloc count.
     // Stop early if the model enters a repetitive loop (same token 6+ times).
     const gen_start = milliTimestamp(g_io);
@@ -4958,7 +4972,7 @@ fn generateAndPrintInner(
             if (grammar) |*g| {
                 if (grammar_state) |*gs| {
                     if (g.singleValidToken(gs, tok.id_to_token.items)) |jump_tok| {
-                        // Use raw vocab text for grammar state — consistent with maskLogits.
+                        // Use raw vocab text for grammar state, consistent with maskLogits.
                         const jt_raw = if (jump_tok < tok.id_to_token.items.len) tok.id_to_token.items[jump_tok] else "";
                         gs.acceptToken(jt_raw);
                         if (token_count >= gen_ids_buf.len) break;
@@ -5031,7 +5045,7 @@ fn generateAndPrintInner(
         if (token_count >= gen_ids_buf.len) break;
         gen_ids_buf[token_count] = next;
         // Update grammar state with accepted token.
-        // Use raw vocab text (id_to_token) — NOT decoded text — so that
+        // Use raw vocab text (id_to_token), NOT decoded text, so that
         // getEffectiveText strips BPE prefixes consistently with maskLogits.
         if (grammar_state) |*gs| {
             const raw_text = if (next < tok.id_to_token.items.len) tok.id_to_token.items[next] else "";
@@ -5043,7 +5057,7 @@ fn generateAndPrintInner(
             }
         }
         // Track JSON brace depth and stop at balanced close
-        // (scan raw token text directly — avoids per-token allocation)
+        // (scan raw token text directly, avoids per-token allocation)
         if (json_mode_active and next < tok.id_to_token.items.len) {
             for (tok.id_to_token.items[next]) |c| {
                 if (c == '{' or c == '[') json_depth += 1;
@@ -5058,7 +5072,7 @@ fn generateAndPrintInner(
         last = next;
         token_count += 1;
 
-        // Repetition detection — stop if same token repeats 6+ times
+        // Repetition detection, stop if same token repeats 6+ times
         if (next == prev_token) {
             repeat_count += 1;
             if (repeat_count >= repeat_halt_threshold) break;
@@ -5067,7 +5081,7 @@ fn generateAndPrintInner(
             prev_token = next;
         }
 
-        // Stream batches — small batches for TTY (responsive), larger for pipes (efficient)
+        // Stream batches, small batches for TTY (responsive), larger for pipes (efficient)
         if (emitGeneratedTokens(cli) and token_count - batch_start >= batch_size) {
             if (display.mode != .json) {
                 flushTokenBatch(tok, tok_kind, allocator, gen_ids_buf[batch_start..@min(token_count, gen_ids_buf.len)], &started_output);
@@ -5101,7 +5115,7 @@ fn generateAndPrintInner(
     else
         null;
 
-    // JSON output — decode all tokens at once and print structured result
+    // JSON output, decode all tokens at once and print structured result
     if (display.mode == .json) {
         const stats = display_mod.GenStats{
             .token_count = token_count,
@@ -5145,7 +5159,7 @@ fn flushTokenBatch(tok: *BpeTokenizer, tok_kind: TokenizerKind, allocator: std.m
 
 test {
     // Force test discovery for all modules with test blocks.
-    // Zig 0.16 uses lazy test discovery — files imported at the top level
+    // Zig 0.16 uses lazy test discovery, files imported at the top level
     // but not referenced by any test block are silently excluded.
     _ = @import("cli.zig");
     _ = @import("display.zig");
