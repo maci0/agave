@@ -598,8 +598,14 @@ pub fn printDeviceTable(list: *const DeviceList) void {
 }
 
 test "fuzz: all discovery functions" {
+    const test_stdout = @import("../test_stdout.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
+            // fd 1 is the test-runner protocol pipe under the server-mode runner;
+            // printDeviceTable writes plain text there and would wedge the build.
+            const silencer = try test_stdout.Silencer.init();
+            defer silencer.release();
+
             // -- DeviceInfo.displayName --
             var dev = DeviceInfo{ .backend = .cpu, .device_id = smith.valueWithHash(u32, 0) };
             const name_len_raw = smith.valueWithHash(u8, 1);
@@ -642,15 +648,11 @@ test "fuzz: all discovery functions" {
             }
             try std.testing.expect(found_cpu);
 
-            // -- printDeviceTable (comptime signature check + call with empty list) --
-            // Cannot capture stdout in fuzz, so verify callable with minimal list
-            comptime {
-                _ = &printDeviceTable;
-            }
-            var empty_list = DeviceList{};
-            empty_list.add(.{ .backend = .cpu, .device_id = 0 });
-            // printDeviceTable writes to fd 1; safe to call, output is harmless
-            printDeviceTable(&empty_list);
+            // -- printDeviceTable: formats the fuzzed name/cc bytes; output goes to /dev/null --
+            var table_list = DeviceList{};
+            table_list.add(dev);
+            table_list.add(.{ .backend = .cpu, .device_id = 0 });
+            printDeviceTable(&table_list);
         }
     }.f, .{});
 }

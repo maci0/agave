@@ -1035,8 +1035,15 @@ test "formatSize zero" {
 }
 
 test "fuzz: all display functions" {
+    const test_stdout = @import("test_stdout.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
+            // printVersion and the json/model printers write to fd 1, which is the
+            // test-runner protocol pipe under the server-mode runner. Plain text
+            // there desynchronizes the stream and wedges the build runner.
+            const silencer = try test_stdout.Silencer.init();
+            defer silencer.release();
+
             // ── pub constants ──
             _ = version;
             _ = cactus;
@@ -1048,7 +1055,7 @@ test "fuzz: all display functions" {
             try std.testing.expect(fs.unit.len > 0);
 
             // ── pub fn printVersion ──
-            // Writes to stdout; just verify it doesn't crash.
+            // Writes to stdout (silenced above); verify it does not crash.
             printVersion();
 
             // ── ModelInfo.bitsPerWeight ──
@@ -1101,7 +1108,7 @@ test "fuzz: all display functions" {
 
             // ── Display.init ──
             const verbose = (smith.valueWithHash(u8, 22) & 1) != 0;
-            // Use .json mode to suppress stderr/stdout writes in banner/stats methods
+            // .json mode: printBanner/printStats are no-ops, the json printers write to fd 1
             const d = Display.init(.json, verbose);
 
             // ── Display.printBanner ──
