@@ -2,7 +2,7 @@
 
 **Tutorial:** [Server / HTTP API](tutorial/23-server-http-api.md)
 
-Product version **0.1.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
+Product version **0.2.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
 major bump; see [CHANGELOG](../CHANGELOG.md) and
 [Versioning & Releases](CONTRIBUTING.md#versioning--releases)).
 `system_fingerprint` and `/health` `version` report this string.
@@ -61,7 +61,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| messages | array | required | `[{"role": "user/system/assistant", "content": "..."}]` — content can be a string or an array of content parts (see [Vision](#vision)) |
+| messages | array | required | `[{"role": "user/system/assistant", "content": "..."}]`, content can be a string or an array of content parts (see [Vision](#vision)) |
 | max_tokens | int | 512 | Maximum tokens to generate, capped at 4096 (also accepts `max_completion_tokens`) |
 | temperature | float | 0 | 0 = greedy, >0 = sampling |
 | top_k | int | 0 | Top-k filtering, 0 = disabled |
@@ -86,7 +86,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | truncation_side | string | "right" | Which side of the prompt to drop when it exceeds the context window: `"right"` drops the tail, `"left"` drops the beginning (preserves recency) |
 | user | string | null | OpenAI compatibility only; accepted but ignored (not logged; often holds PII) |
 | stream | bool | false | Server-Sent Events streaming |
-| stream_options | object | null | `{"include_usage": true/false}` — gate usage chunk in streaming (usage included by default when omitted) |
+| stream_options | object | null | `{"include_usage": true/false}`, gate usage chunk in streaming (usage included by default when omitted) |
 | grammar | string | null | GBNF grammar for constrained decoding |
 | json_schema | string | null | JSON schema for structured output |
 | response_format | object | null | `{"type": "json_object"}` or `{"type": "json_schema", "json_schema": {"schema": {...}}}` |
@@ -100,7 +100,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
   "object": "chat.completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.1.0",
+  "system_fingerprint": "agave-v0.2.0",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "..."},
@@ -110,7 +110,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 }
 ```
 
-`finish_reason` is `"stop"` (natural stop or stop sequence), `"length"` (max_tokens reached), or `"tool_calls"` (model invoked a tool — see [Tool Calling](#tool-calling)).
+`finish_reason` is `"stop"` (natural stop or stop sequence), `"length"` (max_tokens reached), or `"tool_calls"` (model invoked a tool, see [Tool Calling](#tool-calling)).
 
 For thinking models, any `<think>...</think>` section is split out of the response and returned as a separate `reasoning_content` field on the message (`"message": {"role": "assistant", "reasoning_content": "...", "content": "..."}`); the field is omitted when the model produced no reasoning.
 
@@ -134,7 +134,7 @@ Same sampling parameters as chat completions. Prompt is raw text (no chat templa
   "object": "text_completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.1.0",
+  "system_fingerprint": "agave-v0.2.0",
   "choices": [{"text": "Paris.", "index": 0, "finish_reason": "stop"}],
   "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
 }
@@ -230,14 +230,14 @@ Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `
 
 Manage conversations.
 
-**GET** — List active conversations:
+**GET**, List active conversations:
 
 ```bash
 curl http://localhost:49453/v1/conversations
 # [{"id":1,"title":"Chat 1","active":true,"count":4}]
 ```
 
-**POST** — Create, select, or delete conversations via form-encoded `action` field:
+**POST**, Create, select, or delete conversations via form-encoded `action` field:
 
 ```bash
 # Create a new conversation
@@ -312,7 +312,7 @@ Returns status, uptime, active connections, KV cache utilization, and request co
 The `sleeping` field is `true` when the server has been idle longer than `--sleep-after`; it auto-clears on the next request.
 
 ```json
-{"status":"ok","reason":"none","version":"0.1.0","model":"model-name","backend":"metal",
+{"status":"ok","reason":"none","version":"0.2.0","model":"model-name","backend":"metal",
  "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
  "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
  "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096,
@@ -351,7 +351,7 @@ Requires authentication when `--api-key` or `AGAVE_API_KEY` is set (returns 401 
 
 Three ways to constrain output:
 
-**1. JSON mode** — forces valid JSON object:
+**1. JSON mode**, forces valid JSON object:
 ```bash
 curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "Generate a user profile"}],
@@ -359,7 +359,7 @@ curl localhost:49453/v1/chat/completions -d '{
 }'
 ```
 
-**2. JSON schema** — constrains to specific structure:
+**2. JSON schema**, constrains to specific structure:
 ```bash
 curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "User info for Alice"}],
@@ -375,7 +375,7 @@ curl localhost:49453/v1/chat/completions -d '{
 }'
 ```
 
-**3. GBNF grammar** — arbitrary format constraints:
+**3. GBNF grammar**, arbitrary format constraints:
 ```bash
 curl localhost:49453/v1/chat/completions -d '{
   "messages": [{"role": "user", "content": "Is the sky blue?"}],
@@ -466,15 +466,15 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | `"none"` | Tools stripped from prompt, no tool calls |
 | `"required"` | Model instructed to call at least one tool |
 
-Streaming with tools is supported — tool calls are emitted as delta chunks with `tool_calls` array, followed by `finish_reason: "tool_calls"`.
+Streaming with tools is supported, tool calls are emitted as delta chunks with `tool_calls` array, followed by `finish_reason: "tool_calls"`.
 
 ---
 
 ## Prompt Prefix Caching
 
-Consecutive API requests that share a common token prefix automatically reuse the KV cache from the previous request. When a chat application sends the full conversation history with each request (the standard OpenAI API pattern), only the new messages are prefilled — the system prompt and earlier messages remain in cache.
+Consecutive API requests that share a common token prefix automatically reuse the KV cache from the previous request. When a chat application sends the full conversation history with each request (the standard OpenAI API pattern), only the new messages are prefilled, the system prompt and earlier messages remain in cache.
 
-This is automatic and transparent — no API changes needed. The server logs prefix cache hits:
+This is automatic and transparent, no API changes needed. The server logs prefix cache hits:
 ```
 Prefix cache hit: 1847/2103 tokens reused
 ```
@@ -491,14 +491,14 @@ Per-layer K/V length is `n_tokens × kvd_layer × 4` bytes (`kvd` may differ acr
 Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4); others return `501`.
 The blob does **not** include prompt token IDs, so a following OpenAI-style request with `reset` still re-prefills unless the server already holds matching prefix-cache IDs from a prior local generation.
 
-**Export** — serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):
+**Export**, serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):
 ```bash
 GET /v1/kv_cache?n_tokens=512
 → 200 OK  Content-Type: application/octet-stream
    <binary KV data>
 ```
 
-**Import** — restore KV cache from a blob (sets `kv_seq_len = N`, clears prefix-cache token IDs, sets `kv_valid`):
+**Import**, restore KV cache from a blob (sets `kv_seq_len = N`, clears prefix-cache token IDs, sets `kv_valid`):
 ```bash
 POST /v1/kv_cache?n_tokens=512
 Content-Type: application/octet-stream
@@ -518,7 +518,7 @@ Warm-start that skips prefill on the API path needs matching prompt token IDs in
 the blob (not yet in the wire format); today import is coherent for chat
 continuation / `kv_valid` and for orchestrators that manage prefill themselves.
 
-**Metadata** — lightweight KV state query for external orchestrators (`GET` only; not shadowed by `/v1/kv_cache`):
+**Metadata**, lightweight KV state query for external orchestrators (`GET` only; not shadowed by `/v1/kv_cache`):
 ```bash
 GET /v1/kv_cache/info
 → 200 OK
@@ -531,7 +531,7 @@ GET /v1/kv_cache/info
 }
 ```
 
-`prefix_hash` is the FNV-1a hash of the cached prefix token IDs — use it for fast remote matching to route requests to the most cache-warm instance without full KV export.
+`prefix_hash` is the FNV-1a hash of the cached prefix token IDs, use it for fast remote matching to route requests to the most cache-warm instance without full KV export.
 
 ---
 
@@ -608,7 +608,7 @@ All endpoints return JSON error bodies on failure.
 | `429 Too Many Requests` | Token-bucket rate limiting via `--rate-limit-rpm` / `--rate-limit-tpm` (includes `Retry-After`) |
 | `500 Internal Server Error` | Model forward error or unexpected server failure |
 | `501 Not Implemented` | Endpoint exists but is not yet implemented (e.g., `/v1/embeddings`) |
-| `503 Service Unavailable` | Conversation limit reached, shutting down, connection capacity / spawn failure / request-buffer OOM (capacity responses include `Retry-After`), or degraded (`/ready` only — inference endpoints do not return 503 for degraded state) |
+| `503 Service Unavailable` | Conversation limit reached, shutting down, connection capacity / spawn failure / request-buffer OOM (capacity responses include `Retry-After`), or degraded (`/ready` only, inference endpoints do not return 503 for degraded state) |
 
 ---
 
