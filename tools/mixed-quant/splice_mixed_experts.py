@@ -100,7 +100,7 @@ def main():
             print(f"  {name} → {action}")
 
     if args.dry_run:
-        print("\n(dry run — no files written)")
+        print("\n(dry run, no files written)")
         return
 
     # TODO: implement GGUF header/tensor-table parsing and byte-level copy.

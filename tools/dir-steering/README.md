@@ -56,9 +56,9 @@ signals. Attention steering is available but more fragile.
 
 ## Implementation
 
-- `src/steering.zig` — `DirectionalSteering` struct, zero-alloc `apply()` in hot path
-- `src/models/qwen35.zig` — Hook points after attention and FFN outputs
-- `src/models/model.zig` — `setSteering()` dispatcher (field-presence comptime check)
-- `src/main.zig` — CLI flags, file loading, model attachment
+- `src/steering.zig`: `DirectionalSteering` struct, zero-alloc `apply()` in hot path
+- `src/models/qwen35.zig`: Hook points after attention and FFN outputs
+- `src/models/model.zig`: `setSteering()` dispatcher (field-presence comptime check)
+- `src/main.zig`: CLI flags, file loading, model attachment
 
 Based on the technique from [antirez/ds4](https://github.com/antirez/ds4).
