@@ -905,8 +905,14 @@ test "writeCalFile and readCalFile roundtrip" {
 }
 
 test "fuzz: all calibrate functions" {
+    const test_stdout = @import("test_stdout.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
+            // printUsage writes to fd 1, which is the test-runner protocol pipe
+            // under the server-mode runner; unsilenced it wedges the build runner.
+            const silencer = try test_stdout.Silencer.init();
+            defer silencer.release();
+
             // -- printUsage: no args, just writes usage text to stdout --
             printUsage();
 
