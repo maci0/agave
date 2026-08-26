@@ -1,4 +1,4 @@
-// Scaled Dot-Product Attention — FlashAttention-2 style
+// Scaled Dot-Product Attention, FlashAttention-2 style
 // One workgroup per attention head. Threads cooperate on KV block processing.
 // Online softmax with rescaling for numerical stability.
 

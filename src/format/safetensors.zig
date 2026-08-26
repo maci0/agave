@@ -18,7 +18,7 @@ const DType = format_mod.DType;
 /// Maximum allowed SafeTensors JSON header size (100 MB).
 /// Legitimate models have headers well under 10 MB even with thousands of tensors.
 const max_header_json_size: u64 = 100_000_000;
-/// Maximum allowed auxiliary JSON file size (200 MB — covers large tokenizer.json).
+/// Maximum allowed auxiliary JSON file size (200 MB, covers large tokenizer.json).
 const max_json_file_size: u64 = 200_000_000;
 /// Maximum vocabulary size to prevent OOM from crafted tokenizer.json with huge IDs.
 const max_vocab_size: usize = 10_000_000;
@@ -205,7 +205,7 @@ pub const SafeTensorsDir = struct {
             defer allocator.free(shard_z);
             const fd = std.posix.system.open(shard_z.ptr, .{}, @as(std.posix.mode_t, 0));
             if (fd < 0) {
-                // Skip missing optional shards (visual, MTP) — only text weights needed
+                // Skip missing optional shards (visual, MTP), only text weights needed
                 shard_data[si] = .{ .data = &.{}, .tensor_base = 0 };
                 continue;
             }
@@ -667,7 +667,7 @@ const gguf_hf_toplevel_map = [_]struct { []const u8, []const u8 }{
     .{ "output.", "head." }, // DeepSeek V4
     // DeepSeek V4 hyper connection output tensors.
     // Official DeepSeek-V4-Flash-0731 stores them as hc_head_fn (no dot,
-    // no .weight suffix) — the trailing dot + suffix-strip handles that.
+    // no .weight suffix), the trailing dot + suffix-strip handles that.
     .{ "output_hc_fn.", "hc_head.fn." },
     .{ "output_hc_base.", "hc_head.base." },
     .{ "output_hc_scale.", "hc_head.scale." },
@@ -1055,7 +1055,7 @@ const ct_projections = [_]struct { hf: []const u8, gguf_weight: []const u8, gguf
     .{ .hf = "down_proj", .gguf_weight = "ffn_down_exps.weight", .gguf_scales = "ffn_down_exps.scales" },
 };
 
-/// Shared expert projection types — same pattern but no expert index.
+/// Shared expert projection types, same pattern but no expert index.
 const ct_shared_projections = [_]struct { hf: []const u8, gguf_weight: []const u8, gguf_scales: []const u8 }{
     .{ .hf = "gate_proj", .gguf_weight = "ffn_gate_shexp.weight", .gguf_scales = "ffn_gate_shexp.scales" },
     .{ .hf = "up_proj", .gguf_weight = "ffn_up_shexp.weight", .gguf_scales = "ffn_up_shexp.scales" },
@@ -1066,13 +1066,13 @@ const ct_shared_projections = [_]struct { hf: []const u8, gguf_weight: []const u
 /// synthetic GGUF-named fused entries that the model code can look up.
 ///
 /// The compressed-tensors format stores each expert as separate tensors:
-///   layers.{l}.mlp.experts.{i}.{proj}.weight_packed   — U8 [out, in/2]
-///   layers.{l}.mlp.experts.{i}.{proj}.weight_scale     — F8_E4M3 [out, in/16]
-///   layers.{l}.mlp.experts.{i}.{proj}.weight_global_scale — F32 [1]
+///   layers.{l}.mlp.experts.{i}.{proj}.weight_packed  , U8 [out, in/2]
+///   layers.{l}.mlp.experts.{i}.{proj}.weight_scale    , F8_E4M3 [out, in/16]
+///   layers.{l}.mlp.experts.{i}.{proj}.weight_global_scale, F32 [1]
 ///
 /// This function creates synthetic fused entries:
-///   blk.{l}.ffn_{proj}_exps.weight — nvfp4 dtype, pointing to expert 0's weight_packed
-///   blk.{l}.ffn_{proj}_exps.scales — fp8_e4m3, pointing to expert 0's weight_scale
+///   blk.{l}.ffn_{proj}_exps.weight, nvfp4 dtype, pointing to expert 0's weight_packed
+///   blk.{l}.ffn_{proj}_exps.scales, fp8_e4m3, pointing to expert 0's weight_scale
 ///
 /// Expert stride is embedded in dims as [out, in/2, n_experts] so
 /// expertWeightStride() computes per-expert = dims[0]*dims[1] bytes.
@@ -1340,7 +1340,7 @@ fn fuseOneProjection(
     }
 
     // Experts are typically NOT contiguous in SafeTensors (interleaved with scale tensors).
-    // We still create synthetic fused entries regardless — the model accesses individual
+    // We still create synthetic fused entries regardless, the model accesses individual
     // experts via stride, and each expert's data is at the correct shard offset.
     // For non-contiguous layouts, we store expert 0's start and the actual per-expert
     // stride as dims[0]*dims[1]. The model's expertWeightStride() returns the stride,
@@ -1690,11 +1690,11 @@ fn fuseSharedExpertProjection(
 /// DS4 tensor convention.
 ///
 /// The official checkpoint stores:
-///   - Routed experts: layers.{l}.ffn.experts.{e}.{w1,w2,w3}.weight — FP4
+///   - Routed experts: layers.{l}.ffn.experts.{e}.{w1,w2,w3}.weight, FP4
 ///     E2M1 packed 2 nibbles/byte (safetensors dtype string "I8"), shape
 ///     [out, in/2], plus .scale (F8_E8M0, [out, in/32], group 32).
 ///   - Attention + shared experts: layers.{l}.attn.* / ffn.shared_experts.*
-///     — F8_E4M3 weights with F8_E8M0 per-128×128-block scales
+///    , F8_E4M3 weights with F8_E8M0 per-128×128-block scales
 ///     ([out/128, in/128]).
 ///   - Hyper connections / norms / router / embed / head: F32 / BF16.
 ///
@@ -1819,10 +1819,10 @@ fn fuseDs4Flash0731(
 /// E8M0 scale at non-uniform offsets, so direct mmap pointers with a fixed
 /// stride are impossible and copying the full 129 GB of experts would exhaust
 /// memory. Instead we emit two small tables:
-///   blk.{l}.{gguf}.weight  — mlx_q, [n_experts, 1] u64 pointers → each
+///   blk.{l}.{gguf}.weight , mlx_q, [n_experts, 1] u64 pointers → each
 ///                            expert's packed weight (byte layout identical to
 ///                            the u32-packed MXFP4 layout agave expects).
-///   blk.{l}.{gguf}.scales  — unknown, [n_experts, 1] u64 pointers → each
+///   blk.{l}.{gguf}.scales , unknown, [n_experts, 1] u64 pointers → each
 ///                            expert's E8M0 [out, in/32] scale tensor.
 /// doGemvExpert dereferences the table for the selected expert. The fp4 group
 /// size is 32 for the official DeepSeek-V4-Flash-0731 format.
@@ -2177,7 +2177,7 @@ fn dupeUnescaped(allocator: Allocator, owned: *std.ArrayList([]u8), s: []const u
                 'b' => try buf.append(allocator, 0x08),
                 'f' => try buf.append(allocator, 0x0C),
                 'u' => {
-                    // \uXXXX — parse 4 hex digits as a UTF-16 code unit
+                    // \uXXXX, parse 4 hex digits as a UTF-16 code unit
                     if (i + 4 < s.len) {
                         const hex = s[i + 1 .. i + 5];
                         const cp = std.fmt.parseInt(u16, hex, 16) catch {
@@ -2257,7 +2257,7 @@ fn expect(json: []const u8, pos: usize, ch: u8) !usize {
 
 /// Parse a JSON string literal (including surrounding `"`).
 /// Returns the content slice (no quotes) and the position after the closing `"`.
-/// Simple escape sequences are passed through as raw bytes — callers that need
+/// Simple escape sequences are passed through as raw bytes, callers that need
 /// unescaped values should unescape themselves.
 fn parseString(json: []const u8, pos: usize) !struct { val: []const u8, next: usize } {
     var i = skipWs(json, pos);
@@ -2345,11 +2345,11 @@ fn parseDType(s: []const u8) DType {
     if (std.mem.eql(u8, s, "BF16")) return .bf16;
     // SafeTensors U32 dtype indicates MLX-quantized packed weights.
     if (std.mem.eql(u8, s, "U32")) return .mlx_q;
-    // FP8 E4M3 — used by compressed-tensors NVFP4 scale tensors.
+    // FP8 E4M3, used by compressed-tensors NVFP4 scale tensors.
     if (std.mem.eql(u8, s, "F8_E4M3")) return .fp8_e4m3;
-    // U8 — packed FP4 bytes, used by compressed-tensors NVFP4 weight_packed tensors.
+    // U8, packed FP4 bytes, used by compressed-tensors NVFP4 weight_packed tensors.
     if (std.mem.eql(u8, s, "U8")) return .nvfp4;
-    // I32 — GPTQ packed INT4 weights (8 nibbles per i32 word).
+    // I32, GPTQ packed INT4 weights (8 nibbles per i32 word).
     if (std.mem.eql(u8, s, "I32")) return .gptq;
     return .unknown; // unsupported dtypes
 }
@@ -2501,7 +2501,7 @@ fn parseIndexJson(
                 i = skipWs(json, i);
                 if (i >= json.len or json[i] == '}') break;
 
-                // Tensor name — consumed but not stored.
+                // Tensor name, consumed but not stored.
                 const _tname = try parseString(json, i);
                 i = _tname.next;
                 i = try expect(json, i, ':');
@@ -2611,7 +2611,7 @@ fn parseConfigObject(
                     i += 1; // skip '['
                     i = skipWs(json, i);
                     if (i < json.len and json[i] != ']' and json[i] != '"' and json[i] != '{' and json[i] != '[') {
-                        // Looks like a number — try to parse the first element.
+                        // Looks like a number, try to parse the first element.
                         const num_start = i;
                         while (i < json.len and json[i] != ',' and json[i] != ']') : (i += 1) {}
                         if (parseU64Slice(json[num_start..i])) |u| {
@@ -2881,8 +2881,8 @@ fn parseVisionConfigObject(
 
 /// Parse `tokenizer.json`, extracting `model.vocab` and `model.merges`.
 ///
-/// `model.vocab`  — JSON object: token_string → integer id
-/// `model.merges` — JSON array of "A B" merge-rule strings
+/// `model.vocab` , JSON object: token_string → integer id
+/// `model.merges`, JSON array of "A B" merge-rule strings
 fn parseTokenizerJson(
     allocator: Allocator,
     json: []const u8,
@@ -3038,7 +3038,7 @@ fn parseMerges(
             const owned_m = try dupeString(allocator, owned, mr.val);
             try list.append(allocator, owned_m);
         } else if (json[i] == '[') {
-            // Array format: ["a", "b"] — join with space
+            // Array format: ["a", "b"], join with space
             i += 1; // skip '['
             i = skipWs(json, i);
             const first = try parseString(json, i);

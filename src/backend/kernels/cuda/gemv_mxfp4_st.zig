@@ -1,6 +1,6 @@
 //! MXFP4 SafeTensors GEMV: y[row] = dot(dequant(W[row,:]), x)
 //! Weights: u32-packed 4-bit nibbles (8 per word), group_size = gs (16 or 32).
-//! Scales: one byte per group — FP8 E4M3 (mode 0) or E8M0 (mode 1).
+//! Scales: one byte per group, FP8 E4M3 (mode 0) or E8M0 (mode 1).
 //! Dequant: float_val = mxfp4_lut[nibble] * scale_to_f32(scale).
 //! Grid: n blocks of 256 threads (one row per block).
 

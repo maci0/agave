@@ -1,7 +1,7 @@
 //! Transposed Q8_0 GEMV: y[out_dim] = W^T @ x[in_dim]
 //! W is stored as [in_dim rows, out_dim cols] in Q8_0 blocks.
 //! Each row has ceil(out_dim/32) Q8_0 blocks (34 bytes each: f16 scale + 32 int8).
-//! One block per output element — each block reduces across all in_dim rows.
+//! One block per output element, each block reduces across all in_dim rows.
 //! Grid: out_dim blocks of 256 threads.
 
 const cu = @import("common.zig");

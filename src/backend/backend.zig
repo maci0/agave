@@ -1,6 +1,6 @@
 //! Backend abstraction for compute operations.
 //! Uses a tagged union with `inline else` dispatch for zero-overhead
-//! backend selection — no VTable indirection in the hot path.
+//! backend selection, no VTable indirection in the hot path.
 //!
 //! ## UMA (Unified Memory Architecture) contract
 //!
@@ -13,7 +13,7 @@
 //!   - **CUDA**: `cudaMallocManaged` or `cudaHostAlloc(cudaHostAllocMapped)`
 //!   - **ROCm/HIP**: `hipMallocManaged` or `hipHostMalloc(hipHostMallocMapped)`
 //!
-//! All GPU backends use deferred dispatch — operations are encoded into command
+//! All GPU backends use deferred dispatch, operations are encoded into command
 //! buffers without blocking. Models call `be.sync()` only at points where CPU
 //! code reads GPU-produced data. On discrete GPUs, `sync()` must also copy
 //! results back; on UMA, results are already visible in CPU address space.
@@ -47,11 +47,11 @@ pub const GemvOp = struct {
     mlx_group_size: u32 = 64,
 };
 
-/// Supported tensor data types — canonical definition in format/format.zig,
+/// Supported tensor data types, canonical definition in format/format.zig,
 /// re-exported here for backend consumers.
 pub const DType = @import("../format/format.zig").DType;
 
-/// KV cache quantization type — re-exported for backend consumers.
+/// KV cache quantization type, re-exported for backend consumers.
 pub const KvQuantType = @import("../ops/kv_quant.zig").KvQuantType;
 
 /// Paged KV cache view for block-table-indexed SDPA.
@@ -74,7 +74,7 @@ pub const DeltaNetParams = struct {
     kqv_order: bool = false,
 };
 
-/// Backend and system startup information — partially filled by each backend
+/// Backend and system startup information, partially filled by each backend
 /// during init, remainder populated by the caller (see "populated by main" fields).
 /// Displayed in the system info line after the model banner.
 pub const BackendInfo = struct {
@@ -149,14 +149,14 @@ pub const detectAvailMem = @import("cpu.zig").detectAvailMem;
 /// Detect OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Re-exported from cpu.zig.
 pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 
-/// CPU softmax kernel — re-exported for the attention module.
+/// CPU softmax kernel, re-exported for the attention module.
 /// The windowed attention fallback runs entirely on CPU, so it needs a CPU-only
 /// softmax that avoids be.softmax() (which dispatches to GPU, causing an expensive sync).
 pub const CpuSoftmax = struct {
     pub const softmaxSimd = @import("kernels/cpu/softmax.zig").softmaxSimd;
 };
 
-/// CPU SDPA kernel functions — re-exported for the split-attention module.
+/// CPU SDPA kernel functions, re-exported for the split-attention module.
 /// Split-attention runs CPU SDPA concurrently with GPU SDPA for tiered KV cache
 /// offloading, so it needs direct access to per-head CPU kernel functions
 /// (bypassing Backend dispatch which would route to the active GPU backend).
@@ -315,12 +315,12 @@ pub fn gemvRowBytes(dtype: DType, k: usize) usize {
 /// The tagged union variant exists but can never be instantiated.
 /// init() is a @compileError; methods are unreachable stubs for inline else.
 pub const NullBackend = struct {
-    /// Compile error — this backend was disabled at build time.
+    /// Compile error, this backend was disabled at build time.
     pub fn init(_: std.mem.Allocator, _: u32) error{BackendDisabled}!NullBackend {
         @compileError("this backend was disabled at build time");
     }
 
-    // Stub methods — unreachable because the variant is never constructed.
+    // Stub methods, unreachable because the variant is never constructed.
 
     pub fn allocKvSlice(_: *NullBackend, _: std.mem.Allocator, _: usize) error{OutOfMemory}![]u8 {
         unreachable;
@@ -516,7 +516,7 @@ pub const NullBackend = struct {
     sync_count: u32 = 0,
 };
 
-/// CPU backend — accessed through Backend union dispatch.
+/// CPU backend, accessed through Backend union dispatch.
 /// Public for test access; production code should use Backend union, not concrete types.
 pub const CpuBackend = if (build_options.enable_cpu)
     @import("cpu.zig").CpuBackend
@@ -556,7 +556,7 @@ pub const WebGpuBackend = if (build_options.enable_webgpu)
 else
     NullBackend;
 
-/// Backend interface — all compute goes through this tagged union.
+/// Backend interface, all compute goes through this tagged union.
 /// Dispatch is resolved via `inline else`, giving the compiler full visibility
 /// into each backend's implementation for inlining and optimization.
 /// No VTable pointer indirection, no `*anyopaque` casts.
@@ -677,7 +677,7 @@ pub const Backend = union(enum) {
     }
 
     /// Fused rmsNorm + accumulate: b[i] += rmsNorm(a, weight, eps)[i].
-    /// Replaces rmsNorm(a, w, a) + add(b, a, b) — saves one dispatch per post-FFN boundary.
+    /// Replaces rmsNorm(a, w, a) + add(b, a, b), saves one dispatch per post-FFN boundary.
     pub inline fn rmsNormAdd(self: Backend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
         switch (self) {
             inline else => |be| be.rmsNormAdd(a, weight, b, n, eps),
@@ -849,7 +849,7 @@ pub const Backend = union(enum) {
         switch (self) {
             .metal => |be| {
                 // On non-macOS targets the metal slot is NullBackend, which has
-                // neither field — gate at comptime so Linux builds compile.
+                // neither field, gate at comptime so Linux builds compile.
                 if (comptime @hasField(@TypeOf(be.*), "volatile_weights")) {
                     be.volatile_weights = v;
                     // Immediately flush any existing cached buffers that may hold
@@ -886,10 +886,10 @@ pub const Backend = union(enum) {
     /// softmax statistics for online softmax merge in split-attention.
     /// Same as sdpa() but additionally outputs head_max[nh] and head_sum[nh]:
     ///   - head_max[h]: max QK score before exp (for each head).
-    ///   - head_sum[h]: sum of exp(scores - max) — the softmax denominator.
+    ///   - head_sum[h]: sum of exp(scores - max), the softmax denominator.
     /// These stats enable exact merging of partial attention outputs from
     /// different devices (GPU + CPU) via online softmax correction.
-    /// Note: GPU backends fill identity stats (max=0, sum=1) — their SDPA
+    /// Note: GPU backends fill identity stats (max=0, sum=1), their SDPA
     /// already produces normalized output, so the merge formula treats it
     /// as-is. Only the CPU backend computes real per-head stats.
     pub inline fn sdpaWithStats(self: Backend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
@@ -1189,7 +1189,7 @@ pub const BackendState = struct {
     name: []const u8 = "CPU",
 
     /// Initialize the requested compute backend, with automatic fallback.
-    /// Must be called on a stack-allocated `BackendState` — the `be` field
+    /// Must be called on a stack-allocated `BackendState`, the `be` field
     /// stores pointers into the struct's own backend fields.
     ///
     /// Parameters:
@@ -1401,25 +1401,25 @@ pub const BackendState = struct {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "DType — gemvRowBytes for F32" {
+test "DType, gemvRowBytes for F32" {
     // F32: 4 bytes per element, no quantization blocks.
     try std.testing.expectEqual(@as(usize, 4096 * 4), gemvRowBytes(.f32, 4096));
     try std.testing.expectEqual(@as(usize, 1 * 4), gemvRowBytes(.f32, 1));
 }
 
-test "DType — gemvRowBytes for F16 and BF16" {
+test "DType, gemvRowBytes for F16 and BF16" {
     // F16/BF16: 2 bytes per element.
     try std.testing.expectEqual(@as(usize, 4096 * 2), gemvRowBytes(.f16, 4096));
     try std.testing.expectEqual(@as(usize, 4096 * 2), gemvRowBytes(.bf16, 4096));
 }
 
-test "DType — gemvRowBytes for FP8" {
+test "DType, gemvRowBytes for FP8" {
     // FP8: 1 byte per element.
     try std.testing.expectEqual(@as(usize, 4096), gemvRowBytes(.fp8_e4m3, 4096));
     try std.testing.expectEqual(@as(usize, 4096), gemvRowBytes(.fp8_e5m2, 4096));
 }
 
-test "DType — gemvRowBytes for Q4_0" {
+test "DType, gemvRowBytes for Q4_0" {
     // Q4_0: 18 bytes per 32-element block.
     // k=4096 → 128 blocks → 128 * 18 = 2304 bytes per row.
     try std.testing.expectEqual(@as(usize, 128 * q4_0_block_bytes), gemvRowBytes(.q4_0, 4096));
@@ -1429,13 +1429,13 @@ test "DType — gemvRowBytes for Q4_0" {
     try std.testing.expectEqual(@as(usize, 2 * q4_0_block_bytes), gemvRowBytes(.q4_0, 33));
 }
 
-test "DType — gemvRowBytes for Q8_0" {
+test "DType, gemvRowBytes for Q8_0" {
     // Q8_0: 34 bytes per 32-element block.
     try std.testing.expectEqual(@as(usize, 128 * q8_0_block_bytes), gemvRowBytes(.q8_0, 4096));
     try std.testing.expectEqual(@as(usize, q8_0_block_bytes), gemvRowBytes(.q8_0, 32));
 }
 
-test "DType — gemvRowBytes for Q4_K super-block" {
+test "DType, gemvRowBytes for Q4_K super-block" {
     // Q4_K: 144 bytes per 256-element super-block.
     // k=4096 → 16 super-blocks → 16 * 144 = 2304.
     try std.testing.expectEqual(@as(usize, 16 * q4_k_block_bytes), gemvRowBytes(.q4_k, 4096));
@@ -1443,12 +1443,12 @@ test "DType — gemvRowBytes for Q4_K super-block" {
     try std.testing.expectEqual(@as(usize, q4_k_block_bytes), gemvRowBytes(.q4_k, 256));
 }
 
-test "DType — gemvRowBytes for Q6_K super-block" {
+test "DType, gemvRowBytes for Q6_K super-block" {
     // Q6_K: 210 bytes per 256-element super-block.
     try std.testing.expectEqual(@as(usize, 16 * q6_k_block_bytes), gemvRowBytes(.q6_k, 4096));
 }
 
-test "DType — weightBytes and gemvRowBytes for HQQ" {
+test "DType, weightBytes and gemvRowBytes for HQQ" {
     // HQQ 4-bit: 2 nibbles per byte → n*k/2 bytes total.
     try std.testing.expectEqual(@as(usize, 1 * 4096 / 2), weightBytes(.hqq, 1, 4096));
     try std.testing.expectEqual(@as(usize, 8 * 4096 / 2), weightBytes(.hqq, 8, 4096));
@@ -1456,13 +1456,13 @@ test "DType — weightBytes and gemvRowBytes for HQQ" {
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.hqq, 4096));
 }
 
-test "DType — gemvRowBytes for NVFP4" {
+test "DType, gemvRowBytes for NVFP4" {
     // NVFP4: 9 bytes per 16-element block.
     // k=4096 → 256 blocks → 256 * 9 = 2304.
     try std.testing.expectEqual(@as(usize, 256 * nvfp4_block_bytes), gemvRowBytes(.nvfp4, 4096));
 }
 
-test "DType — gemvRowBytes returns 0 for unsupported formats" {
+test "DType, gemvRowBytes returns 0 for unsupported formats" {
     // Formats that don't support standard row-based GEMV return 0.
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq1_0, 4096));
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.tq2_0, 4096));
@@ -1472,49 +1472,49 @@ test "DType — gemvRowBytes returns 0 for unsupported formats" {
     try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(.unknown, 4096));
 }
 
-test "DType — gemvRowBytes all dtypes handled" {
+test "DType, gemvRowBytes all dtypes handled" {
     // Ensure gemvRowBytes doesn't panic for any DType variant.
     inline for (comptime std.enums.values(DType)) |dtype| {
         _ = gemvRowBytes(dtype, 256);
     }
 }
 
-test "weightBytes — F32" {
+test "weightBytes, F32" {
     // F32: n * k * 4 bytes.
     try std.testing.expectEqual(@as(usize, 4 * 4096 * 4096), weightBytes(.f32, 4096, 4096));
     try std.testing.expectEqual(@as(usize, 4 * 10 * 20), weightBytes(.f32, 10, 20));
 }
 
-test "weightBytes — F16 and BF16" {
+test "weightBytes, F16 and BF16" {
     // F16/BF16: n * k * 2 bytes.
     try std.testing.expectEqual(@as(usize, 2 * 4096 * 4096), weightBytes(.f16, 4096, 4096));
     try std.testing.expectEqual(@as(usize, 2 * 4096 * 4096), weightBytes(.bf16, 4096, 4096));
 }
 
-test "weightBytes — Q4_0" {
+test "weightBytes, Q4_0" {
     // Q4_0: n * blocks * 18 bytes per block.
     // k=4096 → 128 blocks, n=4096.
     try std.testing.expectEqual(@as(usize, 4096 * 128 * q4_0_block_bytes), weightBytes(.q4_0, 4096, 4096));
 }
 
-test "weightBytes — Q4_K super-block" {
+test "weightBytes, Q4_K super-block" {
     // Q4_K: n * super-blocks * 144 bytes.
     // k=4096 → 16 super-blocks, n=4096.
     try std.testing.expectEqual(@as(usize, 4096 * 16 * q4_k_block_bytes), weightBytes(.q4_k, 4096, 4096));
 }
 
-test "weightBytes — GPTQ/AWQ" {
+test "weightBytes, GPTQ/AWQ" {
     // GPTQ/AWQ: n * k / 2 (4-bit packed).
     try std.testing.expectEqual(@as(usize, 4096 * 4096 / 2), weightBytes(.gptq, 4096, 4096));
     try std.testing.expectEqual(@as(usize, 4096 * 4096 / 2), weightBytes(.awq, 4096, 4096));
 }
 
-test "weightBytes — NVFP4" {
+test "weightBytes, NVFP4" {
     // NVFP4: n * ceil(k/16) * 9.
     try std.testing.expectEqual(@as(usize, 4096 * 256 * nvfp4_block_bytes), weightBytes(.nvfp4, 4096, 4096));
 }
 
-test "weightBytes — all dtypes handled" {
+test "weightBytes, all dtypes handled" {
     // Ensure weightBytes doesn't panic for any DType variant and stays bounded.
     inline for (comptime std.enums.values(DType)) |dtype| {
         const bytes = weightBytes(dtype, 256, 256);
@@ -1523,7 +1523,7 @@ test "weightBytes — all dtypes handled" {
     }
 }
 
-test "weightBytes — consistency with gemvRowBytes" {
+test "weightBytes, consistency with gemvRowBytes" {
     // For supported dtypes, weightBytes(dtype, n, k) == n * gemvRowBytes(dtype, k).
     const dtypes_to_check = [_]DType{ .f32, .f16, .bf16, .fp8_e4m3, .fp8_e5m2, .q4_0, .q4_1, .q5_0, .q8_0, .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_nl, .iq4_xs, .mxfp4, .nvfp4 };
     for (dtypes_to_check) |dtype| {
@@ -1534,7 +1534,7 @@ test "weightBytes — consistency with gemvRowBytes" {
     }
 }
 
-test "BackendInfo — default values" {
+test "BackendInfo, default values" {
     const info = BackendInfo{};
     try std.testing.expectEqualStrings("CPU", info.name);
     try std.testing.expectEqualStrings("", info.device_name);
@@ -1551,7 +1551,7 @@ test "BackendInfo — default values" {
     try std.testing.expectEqualStrings(@tagName(builtin.os.tag), info.os);
 }
 
-test "BackendInfo — custom values" {
+test "BackendInfo, custom values" {
     const info = BackendInfo{
         .name = "Metal",
         .device_name = "Apple M4 Pro",
@@ -1569,21 +1569,21 @@ test "BackendInfo — custom values" {
     try std.testing.expectEqual(@as(u32, 12), info.n_threads);
 }
 
-test "CacheSizes — default zeros" {
+test "CacheSizes, default zeros" {
     const cs = CacheSizes{};
     try std.testing.expectEqual(@as(usize, 0), cs.l1);
     try std.testing.expectEqual(@as(usize, 0), cs.l2);
     try std.testing.expectEqual(@as(usize, 0), cs.l3);
 }
 
-test "TensorData — construction" {
+test "TensorData, construction" {
     var data = [_]u8{ 0, 1, 2, 3 };
     const td = TensorData{ .data = &data, .dtype = .f32 };
     try std.testing.expectEqual(DType.f32, td.dtype);
     try std.testing.expectEqual(@as(u8, 0), td.data[0]);
 }
 
-test "GemvOp — default optional fields" {
+test "GemvOp, default optional fields" {
     var y_buf: [4]f32 = undefined;
     var w_data = [_]u8{ 0, 0, 0, 0 };
     const op = GemvOp{
@@ -1596,7 +1596,7 @@ test "GemvOp — default optional fields" {
     try std.testing.expectEqual(@as(u32, 0), op.mlx_bits);
 }
 
-test "DeltaNetParams — default kqv_order" {
+test "DeltaNetParams, default kqv_order" {
     const p = DeltaNetParams{
         .conv_ch = 1024,
         .d_conv = 4,
@@ -1628,13 +1628,13 @@ test "quant block constants" {
     try std.testing.expectEqual(@as(usize, 17), mxfp4_block_bytes); // 16B quants + 1B scale
 }
 
-test "BackendChoice — all variants exist" {
+test "BackendChoice, all variants exist" {
     // Verify the enum has all expected variants.
     const choices = [_]BackendChoice{ .auto, .cpu, .metal, .vulkan, .cuda, .rocm, .webgpu };
     try std.testing.expectEqual(@as(usize, 7), choices.len);
 }
 
-test "NullBackend — function signatures exist" {
+test "NullBackend, function signatures exist" {
     // Compile-time check that NullBackend has all required method signatures.
     comptime {
         _ = @TypeOf(NullBackend.gemv);
@@ -1662,12 +1662,12 @@ test "NullBackend — function signatures exist" {
     }
 }
 
-test "Backend union — size is reasonable" {
-    // Backend is a tagged union of pointers — should be pointer-sized + tag.
+test "Backend union, size is reasonable" {
+    // Backend is a tagged union of pointers, should be pointer-sized + tag.
     try std.testing.expect(@sizeOf(Backend) <= 16);
 }
 
-test "BackendState — default name is CPU" {
+test "BackendState, default name is CPU" {
     const state = BackendState{};
     try std.testing.expectEqualStrings("CPU", state.name);
 }
@@ -1676,7 +1676,7 @@ test "buf_cache_initial_capacity constant" {
     try std.testing.expectEqual(@as(usize, 512), buf_cache_initial_capacity);
 }
 
-test "DType — gemvRowBytes for remaining small-block dtypes" {
+test "DType, gemvRowBytes for remaining small-block dtypes" {
     // Q4_1: 20 bytes per 32-element block.
     try std.testing.expectEqual(@as(usize, 128 * q4_1_block_bytes), gemvRowBytes(.q4_1, 4096));
     try std.testing.expectEqual(@as(usize, q4_1_block_bytes), gemvRowBytes(.q4_1, 32));
@@ -1688,7 +1688,7 @@ test "DType — gemvRowBytes for remaining small-block dtypes" {
     try std.testing.expectEqual(@as(usize, 128 * mxfp4_block_bytes), gemvRowBytes(.mxfp4, 4096));
 }
 
-test "DType — gemvRowBytes for remaining super-block dtypes" {
+test "DType, gemvRowBytes for remaining super-block dtypes" {
     // Q2_K: 84 bytes per 256-element super-block.
     try std.testing.expectEqual(@as(usize, 16 * q2_k_block_bytes), gemvRowBytes(.q2_k, 4096));
     try std.testing.expectEqual(@as(usize, q2_k_block_bytes), gemvRowBytes(.q2_k, 256));
@@ -1700,7 +1700,7 @@ test "DType — gemvRowBytes for remaining super-block dtypes" {
     try std.testing.expectEqual(@as(usize, 16 * iq4_xs_block_bytes), gemvRowBytes(.iq4_xs, 4096));
 }
 
-test "DType — gemvRowBytes and weightBytes edge case k=0" {
+test "DType, gemvRowBytes and weightBytes edge case k=0" {
     // k=0 should produce 0 bytes for all dtypes.
     inline for (comptime std.enums.values(DType)) |dtype| {
         try std.testing.expectEqual(@as(usize, 0), gemvRowBytes(dtype, 0));
@@ -1709,7 +1709,7 @@ test "DType — gemvRowBytes and weightBytes edge case k=0" {
     }
 }
 
-test "DType — gemvRowBytes non-aligned k rounds up" {
+test "DType, gemvRowBytes non-aligned k rounds up" {
     // Q4_0 with k=33: ceil(33/32) = 2 blocks.
     try std.testing.expectEqual(@as(usize, 2 * q4_0_block_bytes), gemvRowBytes(.q4_0, 33));
     // Q4_K with k=257: ceil(257/256) = 2 super-blocks.
@@ -1722,7 +1722,7 @@ test "DType — gemvRowBytes non-aligned k rounds up" {
     try std.testing.expectEqual(@as(usize, 1 * q6_k_block_bytes), gemvRowBytes(.q6_k, 255));
 }
 
-test "weightBytes — remaining dtypes coverage" {
+test "weightBytes, remaining dtypes coverage" {
     const k = 4096;
     const n = 128;
     const nb = k / quant_block_elems; // 128
@@ -1758,12 +1758,12 @@ test "weightBytes — remaining dtypes coverage" {
     try std.testing.expectEqual(@as(usize, n * k * 4), weightBytes(.unknown, n, k));
 }
 
-test "weightBytes — NVFP4 non-aligned k" {
+test "weightBytes, NVFP4 non-aligned k" {
     // k=17 → ceil(17/16) = 2 blocks of 9 bytes each.
     try std.testing.expectEqual(@as(usize, 10 * 2 * nvfp4_block_bytes), weightBytes(.nvfp4, 10, 17));
 }
 
-test "BackendInfo — cache size fields" {
+test "BackendInfo, cache size fields" {
     const info = BackendInfo{
         .l1_cache = 64 * 1024,
         .l2_cache = 512 * 1024,
@@ -1774,7 +1774,7 @@ test "BackendInfo — cache size fields" {
     try std.testing.expectEqual(@as(usize, 16 * 1024 * 1024), info.l3_cache);
 }
 
-test "Backend union — all variant tags exist" {
+test "Backend union, all variant tags exist" {
     // Compile-time verification that Backend enum has all expected tags.
     const Tag = std.meta.Tag(Backend);
     comptime {
@@ -1789,7 +1789,7 @@ test "Backend union — all variant tags exist" {
     try std.testing.expectEqual(@as(usize, 6), std.enums.values(Tag).len);
 }
 
-test "KvQuantType — re-export accessible" {
+test "KvQuantType, re-export accessible" {
     // Verify KvQuantType re-export is usable.
     comptime {
         _ = @TypeOf(KvQuantType);
@@ -2116,8 +2116,8 @@ test "Backend.rmsNormBatched via CPU dispatch" {
     const be = Backend{ .cpu = &cpu };
     // 2 tokens, dim=8
     var input = [_]f32{
-        1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, // token 0 — rms = 1.0
-        2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, // token 1 — rms = 2.0
+        1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, // token 0, rms = 1.0
+        2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, // token 1, rms = 2.0
     };
     var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
     var output: [16]f32 = undefined;
@@ -2144,13 +2144,13 @@ test "Backend.ropeBatched via CPU dispatch" {
     try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[8], 1e-4);
 }
 
-test "Backend.sync via CPU dispatch — no-op" {
+test "Backend.sync via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     be.sync(); // Must not panic
 }
 
-test "Backend.beginBatch/endBatch via CPU dispatch — no-ops" {
+test "Backend.beginBatch/endBatch via CPU dispatch, no-ops" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     be.beginBatch();
@@ -2175,7 +2175,7 @@ test "Backend.allocKvSlice and freeKvSlice via CPU dispatch" {
     be.freeKvSlice(allocator, slice);
 }
 
-test "Backend.gemvMulti via CPU dispatch — single op" {
+test "Backend.gemvMulti via CPU dispatch, single op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
@@ -2193,7 +2193,7 @@ test "Backend.gemvMulti via CPU dispatch — single op" {
     try std.testing.expectApproxEqAbs(@as(f32, 10.0), y[0], 1e-5);
 }
 
-test "Backend.gemvMulti via CPU dispatch — empty ops" {
+test "Backend.gemvMulti via CPU dispatch, empty ops" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var x = [_]f32{1.0};
@@ -2288,17 +2288,17 @@ test "Backend.sdpaPrefill f32 via CPU dispatch" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
 }
 
-test "Backend.setThreadContext via CPU dispatch — no-op" {
+test "Backend.setThreadContext via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
-    be.setThreadContext(); // Must not panic — CpuBackend has no setThreadContext
+    be.setThreadContext(); // Must not panic, CpuBackend has no setThreadContext
 }
 
-test "Backend.invalidateActivation via CPU dispatch — no-op" {
+test "Backend.invalidateActivation via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var buf = [_]f32{ 1.0, 2.0 };
-    be.invalidateActivation(&buf); // CpuBackend has no invalidateAct — no-op
+    be.invalidateActivation(&buf); // CpuBackend has no invalidateAct, no-op
 }
 
 test "Backend.getDevicePtr via CPU dispatch returns 0" {
@@ -2309,14 +2309,14 @@ test "Backend.getDevicePtr via CPU dispatch returns 0" {
     try std.testing.expectEqual(@as(u64, 0), ptr);
 }
 
-test "Backend.invalidateWeight via CPU dispatch — no-op" {
+test "Backend.invalidateWeight via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var buf = [_]u8{ 0, 1, 2, 3 };
-    be.invalidateWeight(@as([*]const u8, &buf)); // CpuBackend has no invalidateWeight — no-op
+    be.invalidateWeight(@as([*]const u8, &buf)); // CpuBackend has no invalidateWeight, no-op
 }
 
-test "Backend.allReduceAdd via CPU dispatch — no-op" {
+test "Backend.allReduceAdd via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
@@ -2327,14 +2327,14 @@ test "Backend.allReduceAdd via CPU dispatch — no-op" {
     try std.testing.expectApproxEqAbs(@as(f32, 88.0), dst[7], 1e-5);
 }
 
-test "Backend.registerHostRegion via CPU dispatch — no-op" {
+test "Backend.registerHostRegion via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var data = [_]u8{ 0, 1, 2, 3 };
-    be.registerHostRegion(&data, 4); // CpuBackend has no registerHostRegion — no-op
+    be.registerHostRegion(&data, 4); // CpuBackend has no registerHostRegion, no-op
 }
 
-test "NullBackend — all method signatures are consistent with Backend" {
+test "NullBackend, all method signatures are consistent with Backend" {
     // Compile-time check that NullBackend has all methods matching Backend dispatch.
     comptime {
         _ = @TypeOf(NullBackend.allocKvSlice);
@@ -2360,7 +2360,7 @@ test "NullBackend — all method signatures are consistent with Backend" {
     }
 }
 
-test "weightBytes — TQ1_0 super-block" {
+test "weightBytes, TQ1_0 super-block" {
     // TQ1_0: 54 bytes per 256-element super-block.
     try std.testing.expectEqual(@as(usize, 54), weightBytes(.tq1_0, 1, 256));
     try std.testing.expectEqual(@as(usize, 4 * 16 * tq1_0_block_bytes), weightBytes(.tq1_0, 4, 4096));
@@ -2369,18 +2369,18 @@ test "weightBytes — TQ1_0 super-block" {
     try std.testing.expectEqual(@as(usize, 4 * 16 * tq2_0_block_bytes), weightBytes(.tq2_0, 4, 4096));
 }
 
-test "DType — gemvRowBytes for MXFP4" {
+test "DType, gemvRowBytes for MXFP4" {
     // MXFP4: 17 bytes per 32-element block.
     // k=4096 → 128 blocks → 128 × 17 = 2176
     try std.testing.expectEqual(@as(usize, 128 * mxfp4_block_bytes), gemvRowBytes(.mxfp4, 4096));
 }
 
-test "DType — gemvRowBytes for IQ4_XS super-block" {
+test "DType, gemvRowBytes for IQ4_XS super-block" {
     // IQ4_XS: 136 bytes per 256-element super-block.
     try std.testing.expectEqual(@as(usize, 16 * iq4_xs_block_bytes), gemvRowBytes(.iq4_xs, 4096));
 }
 
-test "BackendInfo — driver and compute fields" {
+test "BackendInfo, driver and compute fields" {
     const info = BackendInfo{
         .compute_cap = "sm_121",
         .driver_version = "CUDA 13.0",
@@ -2406,7 +2406,7 @@ test "Backend.gemv f32 all-ones dot product via CPU dispatch" {
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[1], 1e-5);
 }
 
-test "Backend.gemvMulti via CPU dispatch — two ops" {
+test "Backend.gemvMulti via CPU dispatch, two ops" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
@@ -2459,7 +2459,7 @@ test "Backend.l2Norm zero vector via CPU dispatch" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[7], 1e-6);
 }
 
-test "GemvOp — MLX companion pointers set" {
+test "GemvOp, MLX companion pointers set" {
     var y_buf: [4]f32 = undefined;
     var w_data = [_]u8{ 0, 0, 0, 0 };
     var scales = [_]u8{ 1, 2, 3 };
@@ -2477,7 +2477,7 @@ test "GemvOp — MLX companion pointers set" {
     try std.testing.expect(op.mlx_biases != null);
 }
 
-test "DeltaNetParams — kqv_order true" {
+test "DeltaNetParams, kqv_order true" {
     const p = DeltaNetParams{
         .conv_ch = 512,
         .d_conv = 4,
@@ -2756,7 +2756,7 @@ test "fuzz: all backend functions" {
                 be.sdpaPrefill(&s_q, &s_k, &s_v, &kv_keys, &kv_vals, &s_out, 1, 1, hd, 0, 1, 1.0, .f32, .f32);
                 for (&s_out) |v| try std.testing.expect(std.math.isFinite(v));
             }
-            // Comptime: NullBackend methods (init skipped — @compileError by design)
+            // Comptime: NullBackend methods (init skipped, @compileError by design)
             comptime {
                 _ = &NullBackend.allocKvSlice;
                 _ = &NullBackend.freeKvSlice;

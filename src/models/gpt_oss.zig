@@ -1,4 +1,4 @@
-//! GPT-OSS 20B — Mixture-of-Experts decoder with sliding-window attention,
+//! GPT-OSS 20B, Mixture-of-Experts decoder with sliding-window attention,
 //! learned attention sinks, and clamped SwiGLU.
 //!
 //! Architecture highlights
@@ -51,7 +51,7 @@ const min_mlx_bits: u64 = 1;
 const max_mlx_bits: u64 = 32;
 /// Default MLX quantization bits when inference fails.
 const default_mlx_bits = model_mod.default_mlx_bits;
-/// Bits per U32 word — used to compute MLX bit width from packed weight dimensions.
+/// Bits per U32 word, used to compute MLX bit width from packed weight dimensions.
 const bits_per_u32_word: u64 = 32;
 
 /// GPT-OSS 20B model state.
@@ -97,25 +97,25 @@ pub const GptOssModel = struct {
     // ── Working buffers (allocated once, reused every token) ──────
     hidden: []f32 = &.{},
     hidden2: []f32 = &.{},
-    /// Q projection output — n_head * head_dim elements.
+    /// Q projection output, n_head * head_dim elements.
     q_buf: []f32 = &.{},
-    /// K projection output — n_head_kv * head_dim elements.
+    /// K projection output, n_head_kv * head_dim elements.
     k_buf: []f32 = &.{},
-    /// V projection output — n_head_kv * head_dim elements.
+    /// V projection output, n_head_kv * head_dim elements.
     v_buf: []f32 = &.{},
-    /// Attention output before output projection — n_head * head_dim.
+    /// Attention output before output projection, n_head * head_dim.
     attn_out: []f32 = &.{},
-    /// Attention score buffer — max_seq_len + 1 (extra slot for sink).
+    /// Attention score buffer, max_seq_len + 1 (extra slot for sink).
     scores_buf: []f32 = &.{},
-    /// Router logits — one per expert.
+    /// Router logits, one per expert.
     router_logits: []f32 = &.{},
-    /// Gate path buffer inside active expert — n_ff elements.
+    /// Gate path buffer inside active expert, n_ff elements.
     expert_gate: []f32 = &.{},
-    /// Up path buffer inside active expert — n_ff elements.
+    /// Up path buffer inside active expert, n_ff elements.
     expert_up: []f32 = &.{},
-    /// Down projection output of active expert — n_embd elements.
+    /// Down projection output of active expert, n_embd elements.
     expert_down: []f32 = &.{},
-    /// Accumulated weighted MoE output — n_embd elements.
+    /// Accumulated weighted MoE output, n_embd elements.
     moe_out: []f32 = &.{},
     /// Final vocabulary logits.
     logits_buf: []f32 = &.{},
@@ -250,7 +250,7 @@ pub const GptOssModel = struct {
             const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
-            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            // BlockAllocator stores a pointer, must point to self.paged_cache (not a local copy).
             self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
@@ -269,7 +269,7 @@ pub const GptOssModel = struct {
 
         // ── Prefill chunk buffers ──────────────────────────────────
         // Allocate with page_allocator (one-time init, not hot path).
-        // Skip for MLX models — no batched GEMM kernel for MLX quantization.
+        // Skip for MLX models, no batched GEMM kernel for MLX quantization.
         if (self.mlx_bits == 0) {
             const cs: u32 = 256;
             self.chunk_size = cs;
@@ -306,7 +306,7 @@ pub const GptOssModel = struct {
             self.block_allocator.freeSeqTable(&self.seq_table);
             self.paged_cache.deinit();
         }
-        // Free prefill buffers (page_allocator — must match init allocation)
+        // Free prefill buffers (page_allocator, must match init allocation)
         if (self.chunk_size > 0) {
             const page = std.heap.page_allocator;
             page.free(self.pf_hidden);
@@ -346,7 +346,7 @@ pub const GptOssModel = struct {
 
         try model_mod.ensureKvBlock(self);
 
-        // Embedding lookup — no allocation, direct mmap read.
+        // Embedding lookup, no allocation, direct mmap read.
         const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         if (emb_t.dtype == .mlx_q) {
             const emb_s = self.fmt.getTensor("token_embd.scales") orelse return error.MissingTensor;
@@ -386,7 +386,7 @@ pub const GptOssModel = struct {
         self.kv_seq_len += 1;
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
         self.doGemv(self.hidden.ptr, ow, self.logits_buf.ptr, self.vocab_size, self.n_embd);
-        self.be.sync(); // GPU gemv wrote logits — sync before CPU argmax
+        self.be.sync(); // GPU gemv wrote logits, sync before CPU argmax
         return math_ops.argmax(self.logits_buf);
     }
 
@@ -461,7 +461,7 @@ pub const GptOssModel = struct {
             // Batched attention for the whole chunk.
             try self.prefillAttention(l, n_tok);
 
-            // Per-token MoE FFN (different expert routing per token — cannot batch).
+            // Per-token MoE FFN (different expert routing per token, cannot batch).
             self.be.sync();
             for (0..n_tok) |t| {
                 @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
@@ -660,14 +660,14 @@ pub const GptOssModel = struct {
         group_size: u32 = 64,
 
         /// Per-expert stride for U8 MXFP4 scales: rows × groups_per_row × 1 byte.
-        /// Dims are [n_experts, rows, groups_per_row] — per-expert = dims[1]*dims[2].
+        /// Dims are [n_experts, rows, groups_per_row], per-expert = dims[1]*dims[2].
         fn expertScaleStrideMxfp4(self: Companion) usize {
             if (self.scale_t.n_dims >= 3)
                 return @as(usize, @intCast(self.scale_t.dims[1])) * @as(usize, @intCast(self.scale_t.dims[2]));
             return self.scale_t.numElements();
         }
         /// Per-expert stride for BF16 affine scales: rows × groups_per_row × 2 bytes.
-        /// Dims are [n_experts, rows, groups_per_row] — per-expert = dims[1]*dims[2]*2.
+        /// Dims are [n_experts, rows, groups_per_row], per-expert = dims[1]*dims[2]*2.
         fn expertScaleStrideAffine(self: Companion) usize {
             if (self.scale_t.n_dims >= 3)
                 return @as(usize, @intCast(self.scale_t.dims[1])) * @as(usize, @intCast(self.scale_t.dims[2])) * 2;
@@ -676,7 +676,7 @@ pub const GptOssModel = struct {
     };
 
     /// Look up companion .scales/.biases tensors for an mlx_q weight tensor.
-    /// MXFP4 has .scales (U8 FP8) but NO .biases — the .bias tensor (singular)
+    /// MXFP4 has .scales (U8 FP8) but NO .biases, the .bias tensor (singular)
     /// is the model's linear layer bias, handled separately by addBias().
     /// MLX affine has both .scales (BF16) and .biases (BF16).
     fn findCompanion(self: *const GptOssModel, t: TensorInfo) ?Companion {
@@ -689,7 +689,7 @@ pub const GptOssModel = struct {
         // BF16 scales = MLX affine quantization. Both use 1 byte per block of 32 elements.
         const is_mxfp4 = (st.dtype == .nvfp4 or st.dtype == .unknown);
         if (is_mxfp4) {
-            // MXFP4: no quantization biases — only weight * fp8_scale
+            // MXFP4: no quantization biases, only weight * fp8_scale
             return .{
                 .scales = st.data_ptr,
                 .biases = undefined,
@@ -732,7 +732,7 @@ pub const GptOssModel = struct {
         // 1. Pre-attention RMS norm: hidden2 = norm(hidden, attn_norm)
         const nw = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
         self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
-        // 2. QKV projections — independent outputs, batch without barriers.
+        // 2. QKV projections, independent outputs, batch without barriers.
         const qw = self.fmt.layerTensor(li, "attn_q.weight") orelse return error.MissingTensor;
         const kw = self.fmt.layerTensor(li, "attn_k.weight") orelse return error.MissingTensor;
         const vw = self.fmt.layerTensor(li, "attn_v.weight") orelse return error.MissingTensor;
@@ -770,7 +770,7 @@ pub const GptOssModel = struct {
         const win: usize = if (is_sliding) @min(sl, self.sliding_window) else sl;
         const start: usize = if (is_sliding and sl > self.sliding_window) sl - self.sliding_window else 0;
 
-        // Learned attention sinks — optional per-head scalar logit prepended to scores.
+        // Learned attention sinks, optional per-head scalar logit prepended to scores.
         // SafeTensors stores sinks as BF16; dequant inline.
         const sinks_t = self.fmt.layerTensor(li, "attn_sinks.weight");
         var sinks_f32: [max_sink_heads]f32 = undefined;
@@ -817,7 +817,7 @@ pub const GptOssModel = struct {
                 self.scores_buf[score_off + wi] = dot * scale;
             }
 
-            // Inline CPU softmax over sink + window scores — avoids backend
+            // Inline CPU softmax over sink + window scores, avoids backend
             // dispatch overhead since QK dot products are CPU SIMD.
             const n_scores = score_off + win;
             {
@@ -919,8 +919,8 @@ pub const GptOssModel = struct {
         const down_bias_t = self.fmt.layerTensor(li, "ffn_down_exps.bias");
 
         // Byte stride per expert inside the packed weight tensor.
-        // GGUF (reversed): dims = [n_experts, rows, cols] — per-expert = dims[1]*dims[2]
-        // SafeTensors MLX: dims = [n_experts, rows, words] — per-expert = dims[1]*dims[2]*sizeof(u32)
+        // GGUF (reversed): dims = [n_experts, rows, cols], per-expert = dims[1]*dims[2]
+        // SafeTensors MLX: dims = [n_experts, rows, words], per-expert = dims[1]*dims[2]*sizeof(u32)
         const gate_stride = expertStride(gate_exps);
         const up_stride = expertStride(up_exps);
         const down_stride = expertStride(down_exps);
@@ -1002,7 +1002,7 @@ pub const GptOssModel = struct {
     fn normAsF32(self: *GptOssModel, t: TensorInfo, n: usize) [*]const f32 {
         if (t.dtype != .bf16) return @ptrCast(@alignCast(t.data_ptr));
 
-        // Check cache (linear scan — at most ~73 entries, first-token only on miss)
+        // Check cache (linear scan, at most ~73 entries, first-token only on miss)
         const key = @intFromPtr(t.data_ptr);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| {
             if (entry.key == key) return entry.data.ptr;
@@ -1011,7 +1011,7 @@ pub const GptOssModel = struct {
         // Cache miss: allocate, convert, and store permanently.
         // Guard capacity before allocating to avoid leaking uncached buffers.
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
         for (0..n) |i| buf[i] = quant.bf16ToF32(src[i]);
@@ -1237,7 +1237,7 @@ test "GptOss Companion expertScaleStrideAffine 2D fallback" {
 }
 
 test "inferMlxBits out-of-range returns default" {
-    // words_dim * 32 / k = 1000 * 32 / 1 = 32000 — exceeds max_mlx_bits (32)
+    // words_dim * 32 / k = 1000 * 32 / 1 = 32000, exceeds max_mlx_bits (32)
     const t = TensorInfo{
         .name = "test",
         .data_ptr = @ptrFromInt(0x1000),

@@ -1,7 +1,7 @@
 // ── True Megakernel: Gemma 3/4 Dense Q4_K ────────────────────────────────
 //
 // Single GPU dispatch for ALL dense layers (attention + GELU FFN).
-// Gemma 3/4 dense models have uniform layer structure — every layer is identical:
+// Gemma 3/4 dense models have uniform layer structure, every layer is identical:
 //   pre-norm → Q/K/V → QK norm → RoPE → SDPA → output → post-attn-norm → residual
 //   pre-norm → gate/up → GELU(gate)*up → down → post-FFN-norm → residual
 //

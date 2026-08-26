@@ -1,4 +1,4 @@
-// DeepSeek V4 — Fused attention projection kernel.
+// DeepSeek V4, Fused attention projection kernel.
 // Combines 6 operations into 1 GPU dispatch:
 //   rmsNorm(hidden→hidden2) → q_a GEMV → rmsNorm(q_compressed) →
 //   q_b GEMV → kv_a GEMV → rmsNorm(kv_proj)
@@ -227,7 +227,7 @@ kernel void ds4_fused_attn_proj(
 
     // Stage 4: q_b GEMV (q_compressed → q_full) [nhkd × ql]
     mega_gemv_mlx_q4(q_compressed, q_b_w, q_b_s, q_b_b, q_full, nhkd, ql, gs_qb, shared, tgid, tid, tg_size);
-    // kv_a can overlap with q_b completion — no sync needed between them
+    // kv_a can overlap with q_b completion, no sync needed between them
     // (different output buffers, same input hidden2)
 
     // Stage 5: kv_a GEMV (hidden2 → kv_proj) [kd × n_embd]

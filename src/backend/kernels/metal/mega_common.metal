@@ -25,7 +25,7 @@ using namespace metal;
 // requiring a reset between them. Each call auto-detects the current phase
 // from the counter value (phase = val / n_threadgroups) and waits for
 // (phase + 1) * n_threadgroups. This allows two back-to-back syncs on the
-// same counter (e.g. inside mega_rms_norm) to work correctly — the second
+// same counter (e.g. inside mega_rms_norm) to work correctly, the second
 // sync targets 2 * n_threadgroups instead of re-checking n_threadgroups.
 // Call mega_sync_reset after all syncs on a counter are done to prepare it
 // for reuse.
@@ -48,7 +48,7 @@ inline void mega_grid_sync(
         // Spin until all TGs in this phase have arrived
         if (val + 1 < target) {
             while (atomic_load_explicit(sync_counter, memory_order_relaxed) < target) {
-                // spin — minimal overhead on Apple Silicon (single-cycle atomic reads)
+                // spin, minimal overhead on Apple Silicon (single-cycle atomic reads)
             }
         }
     }
@@ -75,19 +75,19 @@ inline void mega_sync_reset(
 // Phase 2: Grid sync
 // Phase 3: All TGs normalize their element
 //
-// This is different from the single-TG norm in norm.metal — here we
+// This is different from the single-TG norm in norm.metal, here we
 // parallelize across elements, not across the reduction dimension.
 
 inline void mega_rms_norm(
     device const float* input,     // [n_dim]
     device const float* weight,    // [n_dim]
     device float* output,          // [n_dim]
-    device float* ss_scratch,      // [1] — shared sum-of-squares
+    device float* ss_scratch,      // [1], shared sum-of-squares
     device atomic_uint* sync_ctr,
     uint n_dim,
     uint n_tgs,
     float eps,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -101,7 +101,7 @@ inline void mega_rms_norm(
     // Reduce within TG
     local_ss = threadgroup_reduce_sum(local_ss, shared, tid, tg_size);
     // Atomically add to global sum using CAS loop (correct float atomic add).
-    // NOTE: atomic_fetch_add on uint with as_type<uint>(float) is WRONG —
+    // NOTE: atomic_fetch_add on uint with as_type<uint>(float) is WRONG,
     // integer addition of IEEE 754 bit patterns is not float addition.
     if (tid == 0 && local_ss != 0.0f) {
         device atomic_uint* p = (device atomic_uint*)ss_scratch;
@@ -136,7 +136,7 @@ inline void mega_rms_norm(
 
 // ── Add + RMS Norm (fused residual add + normalize) ──────────────────────
 inline void mega_add_rms_norm(
-    device float* a,               // [n_dim] — modified in place (a += b)
+    device float* a,               // [n_dim], modified in place (a += b)
     device const float* b,         // [n_dim]
     device const float* weight,    // [n_dim]
     device float* output,          // [n_dim]
@@ -145,7 +145,7 @@ inline void mega_add_rms_norm(
     uint n_dim,
     uint n_tgs,
     float eps,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -197,7 +197,7 @@ inline void mega_gemv_q8(
     device float* y,               // [n_out]
     uint n_out,
     uint k,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -220,7 +220,7 @@ inline void mega_gemv_q4k(
     device float* y,
     uint n_out,
     uint k,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -245,7 +245,7 @@ inline void mega_gemv_q4_0(
     device float* y,
     uint n_out,
     uint k,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -276,7 +276,7 @@ inline void mega_gemv_q5k(
     device float* y,
     uint n_out,
     uint k,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -301,7 +301,7 @@ inline void mega_gemv_q6k(
     device float* y,
     uint n_out,
     uint k,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -321,9 +321,9 @@ inline void mega_gemv_q6k(
 
 // ── Activation helpers ───────────────────────────────────────────────────
 
-// SiLU(gate) * up — per-element, only active TGs
+// SiLU(gate) * up, per-element, only active TGs
 inline void mega_silu_mul(
-    device float* gate,            // [n] — modified in place
+    device float* gate,            // [n], modified in place
     device const float* up,        // [n]
     uint n,
     uint tgid,
@@ -336,7 +336,7 @@ inline void mega_silu_mul(
     }
 }
 
-// GELU(gate) * up — per-element
+// GELU(gate) * up, per-element
 inline void mega_gelu_mul(
     device float* gate,
     device const float* up,
@@ -557,7 +557,7 @@ inline void mega_kv_append_tq(
                     packed[i] = uchar(byte);
                 }
             }
-            // bits_k == 3: 3-bit packing omitted for brevity — uses bit-level packing
+            // bits_k == 3: 3-bit packing omitted for brevity, uses bit-level packing
         } else {
             // f32 passthrough
             uint dst_off = seq_pos * kv_dim * 4 + blk * 32 * 4;
@@ -633,10 +633,10 @@ inline void mega_kv_append_tq(
 // Boundary V: caller passes the correct bits_v per layer (f16 for boundary layers).
 
 inline void mega_sdpa_inline(
-    device const float* q,         // [n_heads * head_dim] — query vectors
+    device const float* q,         // [n_heads * head_dim], query vectors
     device const uchar* kv_keys,   // KV cache keys (f32 or TQ encoded)
     device const uchar* kv_values, // KV cache values (f32 or TQ encoded)
-    device float* attn_out,        // [n_heads * head_dim] — output
+    device float* attn_out,        // [n_heads * head_dim], output
     uint n_heads,
     uint n_kv,                     // KV heads (n_heads / n_kv = heads_per_group for GQA)
     uint head_dim,
@@ -646,7 +646,7 @@ inline void mega_sdpa_inline(
     uint bits_v,
     uint block_bytes_k,
     uint block_bytes_v,
-    threadgroup float* shared,     // [8] — threadgroup scratch for reductions
+    threadgroup float* shared,     // [8], threadgroup scratch for reductions
     uint tgid,
     uint tid,
     uint tg_size
@@ -685,7 +685,7 @@ inline void mega_sdpa_inline(
                 score += q_local[d] * k_pos[d];
             }
         } else {
-            // TurboQuant K cache — dequant block by block
+            // TurboQuant K cache, dequant block by block
             thread float k_dequant[32];
             for (uint blk = 0; blk < n_blocks_per_pos; blk++) {
                 uint cache_off = (t * n_kv + kvh) * n_blocks_per_pos * block_bytes_k +

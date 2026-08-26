@@ -120,7 +120,7 @@ pub const RateLimiter = struct {
 
     /// Try to consume one request and the given number of tokens.
     /// Returns null on success (tokens consumed), or retry-after seconds on failure.
-    /// Single lock acquisition — avoids the TOCTOU gap and double-lock overhead
+    /// Single lock acquisition, avoids the TOCTOU gap and double-lock overhead
     /// of calling tryConsumeRequest() then retryAfter() separately.
     pub fn tryConsumeOrRetryAfter(self: *RateLimiter, token_count: u32) ?u32 {
         const now = milliTimestamp();
@@ -137,7 +137,7 @@ pub const RateLimiter = struct {
             return null; // Success
         }
 
-        // Rate limited — return retry-after under the same lock
+        // Rate limited, return retry-after under the same lock
         return @max(
             self.request_bucket.retryAfterSeconds(1.0),
             self.token_bucket.retryAfterSeconds(tokens_f64),
@@ -233,11 +233,11 @@ test "retry after matches calculation" {
 }
 
 test "token bucket exhaustion blocks even with requests available" {
-    // 100 requests/min but only 5 tokens/min — token bucket should be the bottleneck.
+    // 100 requests/min but only 5 tokens/min, token bucket should be the bottleneck.
     // Verifies the dual-bucket check: both must have capacity.
     var limiter = RateLimiter.init(100, 5, testIo());
 
-    // Consume 5 requests with 1 token each — exhausts token bucket
+    // Consume 5 requests with 1 token each, exhausts token bucket
     var i: u32 = 0;
     while (i < 5) : (i += 1) {
         try std.testing.expect(limiter.tryConsumeRequest(1));

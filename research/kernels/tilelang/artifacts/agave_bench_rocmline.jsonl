@@ -1,0 +1,6 @@
+{"mode":"kernel","kernel":"rms_norm","backend":"ROCm","ns_median":72987,"gb_s":0.8,"gflop_s":0.3,"iters":300}
+{"mode":"kernel","kernel":"silu","backend":"ROCm","ns_median":81924,"gb_s":1.7,"gflop_s":0.8,"iters":300}
+{"mode":"kernel","kernel":"gemv_bf16","backend":"ROCm","ns_median":909622,"gb_s":46.2,"gflop_s":46.1,"iters":300}
+{"mode":"kernel","kernel":"gemv_q8_0","backend":"ROCm","ns_median":135605,"gb_s":164.6,"gflop_s":309.3,"iters":300}
+{"mode":"kernel","kernel":"gemv_q4_k","backend":"ROCm","ns_median":1480346,"gb_s":33.9,"gflop_s":120.4,"iters":300}
+{"mode":"kernel","kernel":"gemv_q4_k","backend":"ROCm","ns_median":1476298,"gb_s":34.0,"gflop_s":120.7,"iters":300}

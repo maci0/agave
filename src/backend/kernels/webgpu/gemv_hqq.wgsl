@@ -1,7 +1,7 @@
 // HQQ INT4 GEMV: y[row] = dot(dequant(W[row, :]), x)
 //
 // HQQ format:
-//   w_q   : uint8, shape [n_out, k_in/2] — low nibble = even k, high nibble = odd k
+//   w_q   : uint8, shape [n_out, k_in/2], low nibble = even k, high nibble = odd k
 //   scale : bf16,  shape [n_out, k_in/group_size]
 //   zero  : bf16,  shape [n_out, k_in/group_size]
 //
@@ -20,12 +20,12 @@ struct Params {
     row_offset: u32,
 }
 
-// binding 0: x          — f32 activations [k]
-// binding 1: w_q        — packed uint8 nibbles stored as u32 words [n * k/2 / 4]
-// binding 2: scale      — bf16 packed two-per-u32 [n * k/group_size]
-// binding 3: zero       — bf16 packed two-per-u32 [n * k/group_size]
-// binding 4: y          — f32 output [n]
-// binding 5: params     — uniform Params
+// binding 0: x         , f32 activations [k]
+// binding 1: w_q       , packed uint8 nibbles stored as u32 words [n * k/2 / 4]
+// binding 2: scale     , bf16 packed two-per-u32 [n * k/group_size]
+// binding 3: zero      , bf16 packed two-per-u32 [n * k/group_size]
+// binding 4: y         , f32 output [n]
+// binding 5: params    , uniform Params
 @group(0) @binding(0) var<storage, read>       x_data:     array<f32>;
 @group(0) @binding(1) var<storage, read>       wq_data:    array<u32>;
 @group(0) @binding(2) var<storage, read>       scale_data: array<u32>;

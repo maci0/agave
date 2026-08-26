@@ -173,7 +173,7 @@ pub const ChatTemplate = struct {
 
     // ── Preset templates ─────────────────────────────────────
 
-    /// ChatML — Nemotron-H, Nemotron-Nano, and most open models.
+    /// ChatML, Nemotron-H, Nemotron-Nano, and most open models.
     pub const chatml = ChatTemplate{
         .system_prefix = "<|im_start|>system\n",
         .system_suffix = "<|im_end|>\n",
@@ -184,7 +184,7 @@ pub const ChatTemplate = struct {
         .eog_tokens = &.{ "<|im_end|>", "<|endoftext|>" },
     };
 
-    /// Qwen 3.5 — ChatML with thinking disabled (empty `<think>` block
+    /// Qwen 3.5, ChatML with thinking disabled (empty `<think>` block
     /// prepended to skip straight to the response). Greedy decoding without
     /// sampling makes open-ended thinking unstable.
     pub const qwen35 = ChatTemplate{
@@ -198,7 +198,7 @@ pub const ChatTemplate = struct {
         .generation_prefix = "<think>\n\n</think>\n\n",
     };
 
-    /// Gemma 3/2 — uses `<start_of_turn>`/`<end_of_turn>` markers.
+    /// Gemma 3/2, uses `<start_of_turn>`/`<end_of_turn>` markers.
     /// Gemma 2 auto-detects as gemma3 (backward compatible).
     pub const gemma = ChatTemplate{
         .system_prefix = "<start_of_turn>user\n",
@@ -210,12 +210,12 @@ pub const ChatTemplate = struct {
         .eog_tokens = &.{ "<end_of_turn>", "<eos>" },
     };
 
-    /// Gemma 4 — uses `<|turn>`/`<turn|>` markers (different from Gemma 3).
+    /// Gemma 4, uses `<|turn>`/`<turn|>` markers (different from Gemma 3).
     /// `generation_prefix` selects channel 0 (direct answer) and immediately
     /// closes it, preventing the model from emitting reasoning tokens.
     /// `<channel|>` is an EOG token so generation stops if the model outputs
     /// a channel-end marker.
-    /// Gemma 4 E2B / E4B (35 / 42 layers) — uses `<|turn>` / `<turn|>` markers.
+    /// Gemma 4 E2B / E4B (35 / 42 layers), uses `<|turn>` / `<turn|>` markers.
     /// `<|channel>0\n<channel|>` selects the primary output channel (channel 0),
     /// suppressing the thinking/reasoning channel and getting direct text output.
     pub const gemma4 = ChatTemplate{
@@ -229,7 +229,7 @@ pub const ChatTemplate = struct {
         .generation_prefix = "<|channel>0\n<channel|>",
     };
 
-    /// Gemma 4 12B "encoder-free unified" (48 layers) — same turn markers.
+    /// Gemma 4 12B "encoder-free unified" (48 layers), same turn markers.
     /// Injects empty thinking block `<|channel>thought\n<channel|>` to signal
     /// no thinking phase (model jumps straight to output).
     pub const gemma4_unified = ChatTemplate{
@@ -243,7 +243,7 @@ pub const ChatTemplate = struct {
         .generation_prefix = "<|channel>thought\n<channel|>",
     };
 
-    /// GLM-4 — uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts
+    /// GLM-4, uses `[gMASK]<sop>` prefix (BOS sends `[gMASK]`, template starts
     /// with `<sop>`) and `<|user|>`/`<|assistant|>` role markers.
     pub const glm4 = ChatTemplate{
         .system_prefix = "[gMASK]<sop>",
@@ -261,7 +261,7 @@ pub const ChatTemplate = struct {
         },
     };
 
-    /// DeepSeek V4 Flash — uses <｜User｜>/<｜Assistant｜> role markers with BOS prefix.
+    /// DeepSeek V4 Flash, uses <｜User｜>/<｜Assistant｜> role markers with BOS prefix.
     /// Format: <｜begin▁of▁sentence｜><｜User｜>PROMPT<｜Assistant｜></think>
     pub const deepseek4 = ChatTemplate{
         .system_prefix = "<｜begin▁of▁sentence｜>",
@@ -720,7 +720,7 @@ test "fuzz: all chat_template functions" {
 
 test "continuation matches full format suffix" {
     // Verify that formatContinuation produces the same trailing text as
-    // formatConversation — ensuring KV cache reuse sees identical tokens.
+    // formatConversation, ensuring KV cache reuse sees identical tokens.
     const alloc = std.testing.allocator;
     const response = "Hi there!";
     const user2 = "what is my name?";

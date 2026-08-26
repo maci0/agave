@@ -43,11 +43,11 @@ The model doesn't accept text; it accepts a sequence of integer **token IDs**. B
 
 Generation runs in two distinct phases that share the same underlying computation (a forward pass through every model layer) but differ in shape and cost:
 
-- **Prefill** processes the entire prompt's token IDs in one batched call. Every layer computes attention and feed-forward outputs for all prompt positions at once, and, critically, populates the **KV cache** — a per-layer store of previously computed Key/Value vectors (Chapter 5). Prefill is **compute-bound**: it's dominated by large matrix-matrix multiplies (GEMM), which parallelize well across GPU cores.
+- **Prefill** processes the entire prompt's token IDs in one batched call. Every layer computes attention and feed-forward outputs for all prompt positions at once, and, critically, populates the **KV cache**, a per-layer store of previously computed Key/Value vectors (Chapter 5). Prefill is **compute-bound**: it's dominated by large matrix-matrix multiplies (GEMM), which parallelize well across GPU cores.
 
 - **Decode** is the token-by-token loop that follows. Each iteration runs `forward()` on exactly one token (the last one produced), attending against the KV cache built by prefill and every prior decode step, so it never reprocesses earlier tokens. Decode is **memory-bandwidth-bound**: each step is dominated by matrix-vector multiplies (GEMV), where the bottleneck is reading weights from memory, not raw arithmetic.
 
-This split exists because generation is **autoregressive** — every output token becomes the input to produce the next one, so there is no way to batch the unknown future tokens the way the known prompt tokens can be batched.
+This split exists because generation is **autoregressive**, every output token becomes the input to produce the next one, so there is no way to batch the unknown future tokens the way the known prompt tokens can be batched.
 
 That asymmetry (batched prefill followed by sequential decode) is why prefill and decode get reported as separate throughput numbers rather than one blended figure.
 
@@ -60,7 +60,7 @@ Each `forward()` call ends with a **vocabulary projection**: a matrix multiply t
 
 On GPU backends the logits are written by the GPU asynchronously, so the CPU must **synchronize** (block until the GPU finishes and its writes are visible) before reading them for argmax or sampling. See the first gotcha below.
 
-Once a token ID is chosen, it's appended to the running list of generated IDs and checked against the model's end-of-sequence markers. When generation stops (end-of-sequence token, or a max-token limit), the full list of generated IDs is **detokenized** — converted back to a text string in one pass, the mirror image of the tokenization step in section 3.
+Once a token ID is chosen, it's appended to the running list of generated IDs and checked against the model's end-of-sequence markers. When generation stops (end-of-sequence token, or a max-token limit), the full list of generated IDs is **detokenized**, converted back to a text string in one pass, the mirror image of the tokenization step in section 3.
 
 ## 6. Timings and Tokens as Pipeline Artifacts
 

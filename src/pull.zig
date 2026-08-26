@@ -602,7 +602,7 @@ pub fn selectModel(result: *const ListResult, quant: ?[]const u8) PullError!Sele
             }
         }
         if (result.safetensors != null) {
-            eprint("  (SafeTensors also available — use --quant safetensors)\n", .{});
+            eprint("  (SafeTensors also available, use --quant safetensors)\n", .{});
         }
         return PullError.QuantNotFound;
     }
@@ -620,7 +620,7 @@ pub fn selectModel(result: *const ListResult, quant: ?[]const u8) PullError!Sele
         return .{ .gguf = result.files[0] };
     }
 
-    // No GGUF files — use SafeTensors.
+    // No GGUF files, use SafeTensors.
     if (result.safetensors) |st| {
         return .{ .safetensors = st };
     }
@@ -719,7 +719,7 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
     else
         null;
 
-    // Use privileged_headers for auth — stripped on redirect to prevent token leaking to CDN.
+    // Use privileged_headers for auth, stripped on redirect to prevent token leaking to CDN.
     var priv_headers_buf: [1]std.http.Header = undefined;
     const priv_headers: []const std.http.Header = if (auth_value) |av| blk: {
         priv_headers_buf[0] = .{ .name = "Authorization", .value = av };
@@ -973,7 +973,7 @@ fn downloadFile(
         return PullError.DownloadFailed;
     defer allocator.free(url);
 
-    // Detect TTY once for all attempts — progress bars use \r which
+    // Detect TTY once for all attempts, progress bars use \r which
     // produces garbled output when stderr is redirected to a file.
     const is_tty = std.c.isatty(stderr_file.handle) != 0;
 
@@ -1096,7 +1096,7 @@ fn downloadFileOnce(
                     // Local blob size differs from the repository's current
                     // file: leftover from an older revision or corrupted.
                     // Remove it so the retry starts from a clean state.
-                    eprint("Error: local file size ({d}) does not match repository file ({d}) — removing stale copy\n", .{ existing_size, expected_size });
+                    eprint("Error: local file size ({d}) does not match repository file ({d}), removing stale copy\n", .{ existing_size, expected_size });
                     Io.Dir.cwd().deleteFile(mod_io, blob_path) catch |del_err| {
                         eprint("Warning: could not remove stale file '{s}': {}\n", .{ blob_path, del_err });
                     };
@@ -1137,7 +1137,7 @@ fn downloadFileOnce(
     }
     const fd = std.posix.openat(Io.Dir.cwd().handle, blob_path, os_flags, 0o644) catch |err| {
         if (err == error.SymLinkLoop) {
-            eprint("Error: blob path is a symlink — refusing to write (possible symlink attack)\n", .{});
+            eprint("Error: blob path is a symlink, refusing to write (possible symlink attack)\n", .{});
         }
         return PullError.DownloadFailed;
     };
@@ -1188,7 +1188,7 @@ fn downloadFileOnce(
         };
         downloaded += bytes_read;
 
-        // Update progress bar periodically (TTY only — \r produces garbled
+        // Update progress bar periodically (TTY only, \r produces garbled
         // output when stderr is redirected to a file or pipe).
         if (is_tty) {
             const now = nanoTimestamp();
@@ -1239,7 +1239,7 @@ fn downloadFileOnce(
 
     // Verify downloaded size matches expected size (catches silent truncation).
     if (total_size > 0 and downloaded != total_size) {
-        eprint("Error: downloaded {d} bytes but expected {d} — file may be truncated\n", .{ downloaded, total_size });
+        eprint("Error: downloaded {d} bytes but expected {d}, file may be truncated\n", .{ downloaded, total_size });
         return PullError.DownloadFailed;
     }
 
@@ -1350,7 +1350,7 @@ fn verifyGgufBlob(io: Io, blob_path: []const u8) bool {
     Io.Dir.cwd().deleteFile(io, blob_path) catch |del_err| {
         eprint("Warning: could not remove corrupt file '{s}': {}\n", .{ blob_path, del_err });
     };
-    eprint("Error: downloaded file does not have valid GGUF header — corrupt file removed\n", .{});
+    eprint("Error: downloaded file does not have valid GGUF header, corrupt file removed\n", .{});
     eprint("  Re-run 'agave pull' to download a fresh copy\n", .{});
     return false;
 }
@@ -1366,7 +1366,7 @@ fn pullGgufModel(
     const size_gb = @as(f64, @floatFromInt(selected.size)) / bytes_per_gb;
     eprint("Selected: {s} ({d:.1} GB)\n", .{ selected.filename, size_gb });
 
-    // Build cache paths (arena-allocated — freed together at function exit).
+    // Build cache paths (arena-allocated, freed together at function exit).
     var path_arena = std.heap.ArenaAllocator.init(allocator);
     defer path_arena.deinit();
     const pa = path_arena.allocator();
@@ -1403,7 +1403,7 @@ fn pullGgufModel(
     // Detect split-GGUF and download remaining shards (shard 2..N).
     const total_shards = detectGgufShardCount(selected.filename);
     if (total_shards > 1) {
-        eprint("Split GGUF: {d} shards total — downloading remaining shards...\n", .{total_shards});
+        eprint("Split GGUF: {d} shards total, downloading remaining shards...\n", .{total_shards});
         for (2..total_shards + 1) |shard_idx| {
             const shard_name = buildShardFilename(pa, selected.filename, @intCast(shard_idx), total_shards) catch {
                 eprint("Warning: could not build shard {d}/{d} filename, skipping\n", .{ shard_idx, total_shards });

@@ -75,7 +75,7 @@ const itl_buckets = [_]HistBucket{
 /// Cache line size for padding to prevent false sharing between atomic groups.
 const cache_line: usize = 64;
 
-/// Milliseconds per second — used for ms→seconds conversion in Prometheus output.
+/// Milliseconds per second, used for ms→seconds conversion in Prometheus output.
 const ms_per_second: f64 = 1000.0;
 
 /// Prometheus metrics collector with atomic counters and gauges.
@@ -243,7 +243,7 @@ pub const Metrics = struct {
     }
 
     /// Increment failed request counter (5xx errors, encode/forward failures).
-    /// Do not use for client 4xx — those go to recordClientError() so readiness
+    /// Do not use for client 4xx, those go to recordClientError() so readiness
     /// error-rate checks are not poisoned by bad requests.
     pub fn recordFailure(self: *Metrics) void {
         _ = self.requests_failed.fetchAdd(1, .monotonic);
@@ -271,14 +271,14 @@ pub const Metrics = struct {
     }
 
     /// Increment connection rejection counter (503 at capacity).
-    /// Distinct from recordFailure() — capacity rejections indicate scaling needs,
+    /// Distinct from recordFailure(), capacity rejections indicate scaling needs,
     /// not broken inference. Operators can alert on this independently.
     pub fn recordConnectionRejection(self: *Metrics) void {
         _ = self.connections_rejected.fetchAdd(1, .monotonic);
     }
 
     /// Increment timeout counter (scheduler auto-cancel due to exceeded deadline).
-    /// Distinct from recordCancellation() — timeouts indicate server-side resource
+    /// Distinct from recordCancellation(), timeouts indicate server-side resource
     /// exhaustion or slow inference, not client-initiated cancellation.
     pub fn recordTimeout(self: *Metrics) void {
         _ = self.requests_timeout.fetchAdd(1, .monotonic);
@@ -503,7 +503,7 @@ pub const Metrics = struct {
         try writer.writeAll("# TYPE agave_kv_blocks_total gauge\n");
         try writer.print("agave_kv_blocks_total {d}\n", .{self.kv_blocks_total.load(.monotonic)});
 
-        // Histograms — Prometheus requires cumulative buckets (each includes all lower)
+        // Histograms, Prometheus requires cumulative buckets (each includes all lower)
         try self.renderHistogram(writer, "agave_request_duration_seconds", "Request latency histogram", .{
             "latency_10ms", "latency_50ms", "latency_100ms", "latency_500ms",
             "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",
@@ -528,7 +528,7 @@ pub const Metrics = struct {
         const tps: f64 = @as(f64, @floatFromInt(tps_x100)) / 100.0;
         try writer.print("agave_tokens_per_second {d:.2}\n", .{tps});
 
-        // Prefix cache metrics — expose raw counters for Prometheus rate() queries.
+        // Prefix cache metrics, expose raw counters for Prometheus rate() queries.
         // Derived ratios (hit_rate, reuse_ratio) should be computed in PromQL via
         // rate(hits) / (rate(hits) + rate(misses)) for proper windowed aggregation.
         try writer.writeAll("# HELP agave_kv_cache_hits_total Prefix cache hits\n");
@@ -779,7 +779,7 @@ test "Metrics: renderPrometheus outputs valid format" {
         var line_iter = std.mem.splitScalar(u8, output, '\n');
         while (line_iter.next()) |line| {
             const trimmed = std.mem.trimEnd(u8, line, " \t\r");
-            // Comment lines (# HELP) have trailing descriptions — use prefix match.
+            // Comment lines (# HELP) have trailing descriptions, use prefix match.
             // Metric lines must match exactly to catch value errors.
             const is_comment = expected[0] == '#';
             if ((is_comment and std.mem.startsWith(u8, trimmed, expected)) or
@@ -967,7 +967,7 @@ test "Metrics: updateGpuKvBlocks sets gauges" {
     metrics.updateGpuKvBlocks(50, 200);
     try std.testing.expectEqual(@as(u32, 50), metrics.gpu_kv_blocks_used.load(.monotonic));
     try std.testing.expectEqual(@as(u32, 200), metrics.gpu_kv_blocks_total.load(.monotonic));
-    // Update again — should overwrite
+    // Update again, should overwrite
     metrics.updateGpuKvBlocks(100, 200);
     try std.testing.expectEqual(@as(u32, 100), metrics.gpu_kv_blocks_used.load(.monotonic));
 }
@@ -980,7 +980,7 @@ test "Metrics: recordTokens accumulates count" {
     try std.testing.expectEqual(@as(u64, 30), metrics.tokens_generated_total.load(.monotonic));
 }
 
-test "Metrics: recordLatency — boundary values" {
+test "Metrics: recordLatency, boundary values" {
     var metrics = Metrics{};
     // Exactly at boundary: 10ms → latency_10ms
     metrics.recordLatency(10);
@@ -1125,7 +1125,7 @@ test "Metrics: renderPrometheus with process_start_time" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_process_start_time_seconds 1700000000\n") != null);
 }
 
-test "Metrics: renderPrometheus — TPOT histogram rendered" {
+test "Metrics: renderPrometheus, TPOT histogram rendered" {
     var metrics = Metrics{};
     metrics.recordTPOT(10, 50); // 5ms/tok → tpot_5ms bucket
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1135,7 +1135,7 @@ test "Metrics: renderPrometheus — TPOT histogram rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds") != null);
 }
 
-test "Metrics: renderPrometheus — queue time histogram rendered" {
+test "Metrics: renderPrometheus, queue time histogram rendered" {
     var metrics = Metrics{};
     metrics.recordQueueTime(25);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1145,7 +1145,7 @@ test "Metrics: renderPrometheus — queue time histogram rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds") != null);
 }
 
-test "Metrics: renderPrometheus — prompt token histogram rendered" {
+test "Metrics: renderPrometheus, prompt token histogram rendered" {
     var metrics = Metrics{};
     metrics.recordPromptTokens(100);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1155,7 +1155,7 @@ test "Metrics: renderPrometheus — prompt token histogram rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens") != null);
 }
 
-test "Metrics: renderPrometheus — generation token histogram rendered" {
+test "Metrics: renderPrometheus, generation token histogram rendered" {
     var metrics = Metrics{};
     metrics.recordGenerationTokens(200);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1165,7 +1165,7 @@ test "Metrics: renderPrometheus — generation token histogram rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens") != null);
 }
 
-test "Metrics: renderPrometheus — GPU KV cache rendered" {
+test "Metrics: renderPrometheus, GPU KV cache rendered" {
     var metrics = Metrics{};
     metrics.updateGpuKvBlocks(75, 300);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1175,7 +1175,7 @@ test "Metrics: renderPrometheus — GPU KV cache rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_gpu_cache_usage_perc") != null);
 }
 
-test "Metrics: renderPrometheus — ITL histogram rendered" {
+test "Metrics: renderPrometheus, ITL histogram rendered" {
     var metrics = Metrics{};
     metrics.recordInterTokenLatency(10);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1185,7 +1185,7 @@ test "Metrics: renderPrometheus — ITL histogram rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds") != null);
 }
 
-test "Metrics: renderPrometheus — preemptions rendered" {
+test "Metrics: renderPrometheus, preemptions rendered" {
     var metrics = Metrics{};
     metrics.recordPreemption();
     metrics.recordPreemption();
@@ -1196,7 +1196,7 @@ test "Metrics: renderPrometheus — preemptions rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_num_preemptions_total 2\n") != null);
 }
 
-test "Metrics: renderPrometheus — cache config rendered" {
+test "Metrics: renderPrometheus, cache config rendered" {
     var metrics = Metrics{};
     metrics.setCacheConfig(16, 512);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1206,7 +1206,7 @@ test "Metrics: renderPrometheus — cache config rendered" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_cache_config_info{block_size=\"16\",num_gpu_blocks=\"512\"} 1\n") != null);
 }
 
-test "Metrics: renderPrometheus — kv_cache_usage_perc calculated" {
+test "Metrics: renderPrometheus, kv_cache_usage_perc calculated" {
     var metrics = Metrics{};
     metrics.updateKvBlocks(50, 100);
     var buf: [test_render_buf_size]u8 = undefined;
@@ -1216,7 +1216,7 @@ test "Metrics: renderPrometheus — kv_cache_usage_perc calculated" {
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_usage_perc 0.5000\n") != null);
 }
 
-test "Metrics: renderPrometheus — prefix cache hit rate calculated" {
+test "Metrics: renderPrometheus, prefix cache hit rate calculated" {
     var metrics = Metrics{};
     metrics.recordCacheHit(10, 100);
     metrics.recordCacheHit(10, 100);
@@ -1288,7 +1288,7 @@ test "fuzz: all Metrics recording functions" {
     }.f, .{});
 }
 
-test "Metrics: renderPrometheus — throughput rendered" {
+test "Metrics: renderPrometheus, throughput rendered" {
     var metrics = Metrics{};
     metrics.recordThroughput(50, 1000); // 50 tok/s → tps_x100 = 5000
     var buf: [test_render_buf_size]u8 = undefined;

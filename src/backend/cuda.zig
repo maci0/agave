@@ -10,7 +10,7 @@
 //! ## Deferred Execution Model
 //!
 //! Kernel launches are non-blocking. Activation buffers stay on the GPU
-//! between operations — no per-op sync or download. The model calls
+//! between operations, no per-op sync or download. The model calls
 //! `sync()` only when CPU code needs to read GPU-produced data.
 //!
 //! Weight buffers are uploaded once and cached permanently (`buf_cache`).
@@ -48,7 +48,7 @@ const CUdeviceptr = u64;
 
 const CUDA_SUCCESS: CUresult = 0;
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC — interval timing only).
+/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
 fn perfMonoMs() u64 {
     var ts: std.posix.timespec = undefined;
     _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
@@ -94,7 +94,7 @@ const max_smem_bytes: u32 = 49152;
 /// SDPA prefill shared memory layout constants (must match sdpa_prefill.zig).
 const prefill_kv_tile: u32 = 32;
 const prefill_reduce_slots: u32 = 8;
-/// Bits per U32 word — used to compute MLX words-per-group from quantization bits.
+/// Bits per U32 word, used to compute MLX words-per-group from quantization bits.
 const bits_per_u32_word: usize = 32;
 
 /// Size of the buffer for retrieving the CUDA device name.
@@ -175,7 +175,7 @@ const FnLaunchKernel = *const fn (
 
 // ── Backend struct ───────────────────────────────────────────────
 
-/// CUDA GPU backend — PTX kernels with deferred execution and driver API loading.
+/// CUDA GPU backend, PTX kernels with deferred execution and driver API loading.
 pub const CudaBackend = struct {
     // CUDA handles
     context: CUcontext = null,
@@ -215,7 +215,7 @@ pub const CudaBackend = struct {
     cuMemAllocManaged: ?FnMemAllocManaged = null,
     cuLaunchKernel: FnLaunchKernel = undefined,
 
-    // GPUDirect Storage (cuFile) — optional, loaded via dlopen
+    // GPUDirect Storage (cuFile), optional, loaded via dlopen
     cufile_lib: ?std.DynLib = null,
     has_gds: bool = false,
 
@@ -344,7 +344,7 @@ pub const CudaBackend = struct {
     /// DS4's FFN batches ~18 expert GEMVs per phase; without this every GEMV
     /// round-trips a cuMemcpyDtoH that stalls the CPU on kernel completion
     /// (~1500 serialized GEMVs/token). The batch queues the copy-backs and
-    /// drains them at endBatch — the GPU pipelines the kernels, the CPU
+    /// drains them at endBatch, the GPU pipelines the kernels, the CPU
     /// waits once per phase.
     batch_depth: u32 = 0,
     batch_sync_count: u32 = 0,
@@ -395,16 +395,16 @@ pub const CudaBackend = struct {
         capacity: usize,
     };
 
-    /// Activation buffer state — tracks data freshness between host and device.
+    /// Activation buffer state, tracks data freshness between host and device.
     /// Transitions: clean→dirty (GPU kernel writes), dirty→clean (flushActivations
     /// downloads on sync), clean→stale (invalidateAct after CPU writes),
     /// stale→clean (getInputBuf re-uploads from host).
     const BufState = enum {
         /// Host and device data match.
         clean,
-        /// GPU wrote newer data — must download on sync().
+        /// GPU wrote newer data, must download on sync().
         dirty,
-        /// Host may have newer data (after sync + CPU work) — must re-upload on next GPU use.
+        /// Host may have newer data (after sync + CPU work), must re-upload on next GPU use.
         stale,
     };
 
@@ -467,7 +467,7 @@ pub const CudaBackend = struct {
         self.cuMemcpyHtoDAsync = self.lookup(FnMemcpyHtoDAsync, "cuMemcpyHtoDAsync_v2") orelse return error.CudaNotAvailable;
         self.cuStreamCreate = self.lookup(FnStreamCreate, "cuStreamCreate") orelse return error.CudaNotAvailable;
         self.cuStreamSynchronize = self.lookup(FnStreamSync, "cuStreamSynchronize") orelse return error.CudaNotAvailable;
-        // UMA zero-copy support (optional — only needed on integrated GPUs)
+        // UMA zero-copy support (optional, only needed on integrated GPUs)
         self.cuMemHostRegister = self.lookup(FnMemHostRegister, "cuMemHostRegister_v2");
         self.cuMemHostGetDevicePointer = self.lookup(FnMemHostGetDevicePointer, "cuMemHostGetDevicePointer_v2");
         self.cuMemHostUnregister = self.lookup(FnMemHostUnregister, "cuMemHostUnregister");
@@ -545,7 +545,7 @@ pub const CudaBackend = struct {
         if (self.cuStreamCreate(&stream, 0) != CUDA_SUCCESS) return error.CudaInitFailed;
         self.stream = stream;
 
-        // Load PTX module — must be null-terminated (heap-allocated, too large for stack)
+        // Load PTX module, must be null-terminated (heap-allocated, too large for stack)
         const ptx_buf = try allocator.alloc(u8, ptx_source.len + 1);
         defer allocator.free(ptx_buf);
         @memcpy(ptx_buf[0..ptx_source.len], ptx_source);
@@ -664,9 +664,7 @@ pub const CudaBackend = struct {
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
         if (self.module != null) _ = self.cuModuleUnload(self.module);
-        if (self.stream != null) {
-            if (self.cuStreamSynchronize) |stream_sync| _ = stream_sync(self.stream);
-        }
+        if (self.stream != null) _ = self.cuStreamSynchronize(self.stream);
         if (self.context != null) {
             _ = self.cuCtxSynchronize();
             _ = self.cuCtxDestroy(self.context);
@@ -692,17 +690,17 @@ pub const CudaBackend = struct {
 
     fn uploadToDevice(self: *CudaBackend, ptr: *const anyopaque, size: usize) CUdeviceptr {
         const dptr = self.allocAct(size);
-        if (dptr == 0) @panic("cuMemAlloc failed — out of device memory");
+        if (dptr == 0) @panic("cuMemAlloc failed, out of device memory");
         // Async on the compute stream: blocking H2D on the legacy null stream
         // costs ~2ms per call on GB10, and the kernel that consumes this
         // buffer is launched on the same stream right after, so ordering holds.
         if (!cuCheck(self.cuMemcpyHtoDAsync(dptr, ptr, size, self.stream), "cuMemcpyHtoDAsync"))
-            @panic("cuMemcpyHtoD failed — device memory left uninitialized");
+            @panic("cuMemcpyHtoD failed, device memory left uninitialized");
         return dptr;
     }
 
     /// Allocate device memory directly. cuMemAlloc under pressure is not the
-    /// hot-path bottleneck (measured) — the per-address allocations are
+    /// hot-path bottleneck (measured), the per-address allocations are
     /// one-time per buffer.
     fn allocAct(self: *CudaBackend, size: usize) CUdeviceptr {
         var dptr: CUdeviceptr = 0;
@@ -731,7 +729,7 @@ pub const CudaBackend = struct {
     /// cuMemHostGetDevicePointer without per-tensor registration.
     /// No-op on discrete GPUs or if cuMemHostRegister is unavailable.
     ///
-    /// UMA registration itself is disabled (max_uma_regions = 0 — the pin
+    /// UMA registration itself is disabled (max_uma_regions = 0, the pin
     /// faulted cold mmap pages at ~19MB/s). The range is still recorded so
     /// restoreMmapHints can reset the madvise advice after the resident copy.
     pub fn registerHostRegion(self: *CudaBackend, base: [*]const u8, size: usize) void {
@@ -793,14 +791,14 @@ pub const CudaBackend = struct {
     /// copy: cuMemcpyHtoD faults cold mmap pages one 4KB at a time through
     /// the driver path (measured 18MB/s on GB10), while a CPU read with the
     /// kernel's own fault handler runs at disk speed (~1GB/s+). After the
-    /// copy the clean source pages are DONTNEED'd — the device copy is the
+    /// copy the clean source pages are DONTNEED'd, the device copy is the
     /// source of truth and keeping both resident doubles the footprint
     /// (66GB device + 66GB host) past the 121GB limit.
     pub fn residentWeight(self: *CudaBackend, ptr: [*]const u8, len: usize) void {
         const addr = @intFromPtr(ptr);
         if (self.resident_map.contains(addr)) return;
         if (self.is_uma and self.isInUmaRegion(addr)) {
-            // Zero-copy region: the GPU reads host pages directly — prefault.
+            // Zero-copy region: the GPU reads host pages directly, prefault.
             prefaultRange(ptr, len);
             return;
         }
@@ -858,7 +856,7 @@ pub const CudaBackend = struct {
         if (self.resident_map.get(addr)) |dptr| return dptr;
         if (self.buf_cache.get(addr)) |cached| {
             if (cached.size >= size) return cached.dptr;
-            // Size mismatch — evict old entry
+            // Size mismatch, evict old entry
             if (cached.is_registered) {
                 if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
             } else {
@@ -945,7 +943,7 @@ pub const CudaBackend = struct {
     }
 
     /// Get device buffer for a write-only output.
-    /// Reuses existing allocation if available (no re-upload — kernel will write).
+    /// Reuses existing allocation if available (no re-upload, kernel will write).
     fn getOutputBuf(self: *CudaBackend, ptr: anytype, size: usize) CUdeviceptr {
         const addr = @intFromPtr(ptr);
         // Exact match
@@ -959,7 +957,7 @@ pub const CudaBackend = struct {
         }
         // Sub-region of a cached buffer
         if (self.findContaining(addr, size, true, false)) |dptr| return dptr;
-        // Allocate new device buffer (no upload — kernel will write)
+        // Allocate new device buffer (no upload, kernel will write)
         const dptr = self.allocAct(size);
         if (dptr == 0) @panic("cuMemAlloc(output) failed");
         self.act_cache.put(addr, .{ .dptr = dptr, .size = size, .state = .dirty }) catch |err| {
@@ -1031,7 +1029,7 @@ pub const CudaBackend = struct {
     /// GPU use will re-upload the CPU-written data.
     pub fn invalidateAct(self: *CudaBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
-        // Drop any deferred copy-back that would overwrite this host range —
+        // Drop any deferred copy-back that would overwrite this host range,
         // the host now has newer data than the GPU write.
         self.dropPendingSyncs(addr);
         // Mark as stale so next GPU access re-uploads from host
@@ -1049,7 +1047,7 @@ pub const CudaBackend = struct {
                 return;
             }
         }
-        // Not in cache — nothing to invalidate (will be uploaded fresh)
+        // Not in cache, nothing to invalidate (will be uploaded fresh)
     }
 
     /// Get the device pointer for a host activation buffer (for NCCL direct GPU access).
@@ -1131,8 +1129,8 @@ pub const CudaBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("CUDA GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
-            else => std.debug.panic("CUDA GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("CUDA GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented, add a GPU kernel"),
+            else => std.debug.panic("CUDA GEMV: unsupported dtype {s}, add a GPU kernel", .{@tagName(w.dtype)}),
         };
         if (func == null) @panic("CUDA GEMV: required kernel missing for dtype");
 
@@ -1636,7 +1634,7 @@ pub const CudaBackend = struct {
     pub fn rmsNorm(self: *CudaBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
         const sz = n * @sizeOf(f32);
         var d_in = self.getInputBuf(input, sz);
-        // Force re-upload of weight — models may reuse the same buffer for different
+        // Force re-upload of weight, models may reuse the same buffer for different
         // per-layer norm weights (e.g. Nemotron bf16_buf_small written by CPU each layer).
         // Mark stale so getInputBuf re-uploads to the existing device buffer (no realloc).
         if (self.act_cache.getPtr(@intFromPtr(weight))) |act| {
@@ -1699,7 +1697,7 @@ pub const CudaBackend = struct {
         const sz = n * @sizeOf(f32);
         var d_a = self.getInPlaceBuf(a, sz);
         var d_b = self.getInputBuf(b, sz);
-        // Force re-upload of weight — models may reuse the same buffer for different
+        // Force re-upload of weight, models may reuse the same buffer for different
         // per-layer norm weights. Mark stale so getInputBuf re-uploads (no realloc).
         if (self.act_cache.getPtr(@intFromPtr(weight))) |act| {
             act.state = .stale;
@@ -1814,7 +1812,7 @@ pub const CudaBackend = struct {
         @panic("ropeMrope: 3D multimodal RoPE is implemented for CPU and Metal only");
     }
 
-    /// Embedding lookup — CPU is faster than GPU dispatch for single-row read.
+    /// Embedding lookup, CPU is faster than GPU dispatch for single-row read.
     pub fn embLookup(self: *CudaBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         self.flushActivations();
         self.cpu.embLookup(table, token_id, output, dim);
@@ -1897,7 +1895,7 @@ pub const CudaBackend = struct {
 
     /// Execute all deferred GEMV copy-backs queued by the current batch.
     /// All copies are launched asynchronously, then ONE stream sync drains
-    /// them — the GPU pipelines the kernels and the copies back-to-back.
+    /// them, the GPU pipelines the kernels and the copies back-to-back.
     fn drainBatchSyncs(self: *CudaBackend) void {
         if (self.batch_sync_count == 0) return;
         const t_d = perfMonoMs();
@@ -2064,13 +2062,13 @@ pub const CudaBackend = struct {
 
     /// Commit pending GPU work and download results to host.
     /// Call before CPU code reads buffers written by deferred GPU ops.
-    /// After sync, all act_cache entries are marked stale — CPU may modify
+    /// After sync, all act_cache entries are marked stale, CPU may modify
     /// any host buffer before the next GPU op.
     pub fn sync(self: *CudaBackend) void {
         self.flushActivations();
     }
 
-    /// No-op — CUDA dispatches are not batched.
+    /// No-op, CUDA dispatches are not batched.
     /// Begin a deferred-sync batch window: GEMV outputs queued for copy-back
     /// are drained at the matching endBatch, letting the GPU pipeline kernels
     /// without the CPU waiting per GEMV (see syncGemvOutput).
@@ -2107,7 +2105,7 @@ pub const CudaBackend = struct {
     /// via registerRamKv(). On discrete GPUs, the caller manages VRAM
     /// mirroring separately via kv_dev_cache during SDPA.
     pub fn allocKvSlice(_: *CudaBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
-        // Use host allocator — cuMemAllocManaged on UMA (GB10) returns pointers
+        // Use host allocator, cuMemAllocManaged on UMA (GB10) returns pointers
         // that cause data corruption when used as both host and device memory.
         return allocator.alloc(u8, n);
     }
@@ -2120,7 +2118,7 @@ pub const CudaBackend = struct {
 
     /// Register RAM-tier KV block in act_cache without upload.
     /// On UMA platforms (GB10 Blackwell), host memory is GPU-accessible via
-    /// unified addressing — the host pointer is used directly as the device
+    /// unified addressing, the host pointer is used directly as the device
     /// pointer. No copy needed.
     ///
     /// On discrete GPUs, allocates device buffer and uploads once. Future
@@ -2192,7 +2190,7 @@ pub const CudaBackend = struct {
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
     /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
-    /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
+    /// KV cache (native GPU dequant, no CPU fallback for SDPA compute).
     /// KV append for turbo types uses CPU quantization (once per token per layer,
     /// not the SDPA hot path). q8_0 and nvfp4_ds_mla use CPU SDPA (no CUDA kernel).
     pub fn sdpa(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {
@@ -2211,7 +2209,7 @@ pub const CudaBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: not yet supported
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
-            @panic("CUDA SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
+            @panic("CUDA SDPA: unsupported KV type, use --kv-type f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
         var sl: u32 = @intCast(seq_len + 1);
@@ -2253,13 +2251,13 @@ pub const CudaBackend = struct {
             // launching with oversized smem (which silently produces garbage).
             if (smem > max_smem_bytes) {
                 std.log.err("CUDA SDPA: seq_len={d} requires {d} bytes shared memory (max {d}). Use paged attention or reduce context.", .{ seq_len + 1, smem, max_smem_bytes });
-                @panic("CUDA SDPA shared memory exceeded — context too long for non-paged kernel");
+                @panic("CUDA SDPA shared memory exceeded, context too long for non-paged kernel");
             } else {
                 self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
             }
         } else {
             // Turbo or mixed path: CPU KV append + GPU turbo SDPA kernel.
-            // KV append on CPU (one write per token per layer — not the hot path).
+            // KV append on CPU (one write per token per layer, not the hot path).
             self.flushActivations();
             const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
             const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
@@ -2300,14 +2298,14 @@ pub const CudaBackend = struct {
             const smem: u32 = (sl + 1) * @sizeOf(f32);
             if (smem > max_smem_bytes) {
                 std.log.err("CUDA SDPA turbo: seq_len={d} requires {d} bytes smem (max {d}).", .{ seq_len + 1, smem, max_smem_bytes });
-                @panic("CUDA SDPA shared memory exceeded — context too long for turbo kernel");
+                @panic("CUDA SDPA shared memory exceeded, context too long for turbo kernel");
             }
             self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
         }
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// Fills identity stats (max=0, sum=1) — GPU SDPA already produces
+    /// Fills identity stats (max=0, sum=1), GPU SDPA already produces
     /// normalized output, so the merge formula treats it as-is.
     pub fn sdpaWithStats(self: *CudaBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
@@ -2344,10 +2342,10 @@ pub const CudaBackend = struct {
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
-    /// Batched RMS normalization — single GPU dispatch, one block per row.
+    /// Batched RMS normalization, single GPU dispatch, one block per row.
     pub fn rmsNormBatched(self: *CudaBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
         var d_in = self.getInputBuf(input, n_tok * dim * @sizeOf(f32));
-        // Mark weight stale — may be a mutable per-layer buffer (see rmsNorm comment).
+        // Mark weight stale, may be a mutable per-layer buffer (see rmsNorm comment).
         if (self.act_cache.getPtr(@intFromPtr(weight))) |act| act.state = .stale;
         var d_w = self.getInputBuf(weight, dim * @sizeOf(f32));
         var d_out = self.getOutputBuf(output, n_tok * dim * @sizeOf(f32));
@@ -2361,7 +2359,7 @@ pub const CudaBackend = struct {
         self.launch(self.fn_rms_norm_batched, @intCast(n_tok), block_size, reduction_smem, &params);
     }
 
-    /// Batched RoPE — single GPU dispatch for all tokens.
+    /// Batched RoPE, single GPU dispatch for all tokens.
     pub fn ropeBatched(self: *CudaBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const half_rope = rope_dim / 2;
         const total = n_tok * n_heads * half_rope;
@@ -2383,7 +2381,7 @@ pub const CudaBackend = struct {
         self.launch(self.fn_rope_batched, grid, block_size, 0, &params);
     }
 
-    /// Prefill SDPA — FlashAttention-2 with causal masking.
+    /// Prefill SDPA, FlashAttention-2 with causal masking.
     /// Attends to both cached KV (prev_len positions) and new KV (n_tok positions).
     /// For f32 KV: native FA2 GPU kernel (single dispatch for all tokens).
     pub fn sdpaTree(self: *CudaBackend, q_all: [*]const f32, prefix_keys: [*]const u8, prefix_values: [*]const u8, tree_keys: [*]const f32, tree_values: [*]const f32, output: [*]f32, ancestor_masks: [*]const [8]u64, nh: usize, nkv: usize, hd: usize, prefix_len: usize, n_nodes: u32, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
@@ -2435,7 +2433,7 @@ pub const CudaBackend = struct {
         @memcpy(kv_view.valuePtrMut(kv_view.seq_len)[0..kvd], v_new[0..kvd]);
 
         if (self.fn_sdpa_paged == null) {
-            @panic("CUDA sdpaPaged: kernel not loaded — rebuild with `zig build ptx` or use --backend cpu");
+            @panic("CUDA sdpaPaged: kernel not loaded, rebuild with `zig build ptx` or use --backend cpu");
         }
 
         // Gather scattered blocks into flat contiguous staging buffers.
@@ -2497,11 +2495,11 @@ pub const CudaBackend = struct {
         const smem: u32 = (sl + 1) * @sizeOf(f32);
         if (smem > max_smem_bytes) {
             std.log.err("CUDA SDPA paged: seq_len={d} requires {d} bytes smem (max {d}).", .{ sl, smem, max_smem_bytes });
-            @panic("CUDA SDPA shared memory exceeded — context too long for paged kernel");
+            @panic("CUDA SDPA shared memory exceeded, context too long for paged kernel");
         }
         self.launch(self.fn_sdpa_paged.?, @intCast(nh), block_size, smem, &params);
 
-        // Free temporary device buffers (not cached — staging data changes every call)
+        // Free temporary device buffers (not cached, staging data changes every call)
         _ = self.cuMemFree(d_k);
         _ = self.cuMemFree(d_v);
         _ = self.cuMemFree(d_bt);
@@ -2577,7 +2575,7 @@ pub const CudaBackend = struct {
                 const smem: u32 = (sl + 1) * @sizeOf(f32);
                 if (smem > max_smem_bytes) {
                     std.log.err("CUDA SDPA tree: seq_len={d} requires {d} bytes smem (max {d}).", .{ sl, smem, max_smem_bytes });
-                    @panic("CUDA SDPA shared memory exceeded — context too long for tree kernel");
+                    @panic("CUDA SDPA shared memory exceeded, context too long for tree kernel");
                 }
                 self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
             }
@@ -2586,7 +2584,7 @@ pub const CudaBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: not yet supported
         if (kv_type_k != .f32 or kv_type_v != .f32)
-            @panic("CUDA SDPA prefill: unsupported KV type — use --kv-type f32 or turbo2/3/4");
+            @panic("CUDA SDPA prefill: unsupported KV type, use --kv-type f32 or turbo2/3/4");
 
         // Pure f32 path
         const kvd = nkv * hd;
@@ -2899,7 +2897,7 @@ test "CUDA internal struct layouts are well-formed" {
     try testing.expectEqual(CudaBackend.BufState.stale, ab_stale.state);
 
     // max_uma_regions: fits in u32; 0 = UMA zero-copy registration disabled
-    // (DS4 uses resident device copies instead — see residentWeight).
+    // (DS4 uses resident device copies instead, see residentWeight).
     try testing.expect(CudaBackend.max_uma_regions <= 256);
 
     // UmaRegion default state

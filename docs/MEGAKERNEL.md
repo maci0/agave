@@ -22,7 +22,7 @@ Supported: Qwen 3.5, Gemma 3/4, Nemotron-H, GLM-4 on Metal. Qwen 3.5, Gemma 3/4 
 
 Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Saves 2 dispatches per layer (48-84 saved per token depending on model).
 
-### Metal — 11 kernels in `megakernel.metal`
+### Metal: 11 kernels in `megakernel.metal`
 
 | Kernel | Activation | Quant | Models |
 |--------|-----------|-------|--------|
@@ -38,7 +38,7 @@ Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Sav
 | `fused_ffn_gate_up_gelu_q6_k` | GELU | Q6_K | Gemma 3/4 |
 | `fused_ffn_gate_up_gelu_q4_0` | GELU | Q4_0 | Gemma 3/4 |
 
-### CUDA — 4 kernel files (Q8_0, Q4_K, Q5_K, Q6_K)
+### CUDA: 4 kernel files (Q8_0, Q4_K, Q5_K, Q6_K)
 
 SiLU + GELU variants per quant format. PTX compiled and appended to `all.ptx`.
 
@@ -52,7 +52,7 @@ SiLU + GELU variants per quant format. PTX compiled and appended to `all.ptx`.
 | Gemma 4 E2B | Q4_K_M (100 tok) | 12.4 tok/s | 12.7 tok/s | +2% |
 | Gemma 4 E2B | Q4_K_M (prefill) | 2206 ms | 1702 ms | **−23%** |
 
-The +93% short-decode result comes from Q4_K_M mixed quant — with Q5_K/Q6_K fused kernels, ALL FFN layers use the fused path. Largest effect at short sequences where dispatch overhead dominates.
+The +93% short-decode result comes from Q4_K_M mixed quant, with Q5_K/Q6_K fused kernels, ALL FFN layers use the fused path. Largest effect at short sequences where dispatch overhead dominates.
 
 ## Tier 2: True Megakernels (Architecture Built)
 
@@ -225,11 +225,11 @@ Helper constructors simplify common patterns:
 | Qwen 3.5 | SiLU (all quants) | Q8_0 + Q4_K | Yes (SiLU, fused residual) | DeltaNet breaks out to standard dispatch |
 | Gemma 3 | GELU (all quants) | Q4_K + Q8_0 | Yes (GELU, uniform) | Cleanest megakernel |
 | Gemma 4 (dense) | GELU (all quants) | Q4_K + Q8_0 | Yes (GELU, uniform) | SL/GL attention complicates true megakernel |
-| Gemma 4 (MoE) | GELU (per-expert) | — | — | MoE routing is CPU-side |
-| GLM-4 | SiLU (MLX-Q4) | — | — | MLA attention is CPU-side |
-| Nemotron-H | — | Q8_0 (attn+FFN) | Yes (ReLU-squared) | SSM breaks out, FFN uses ReLU² (no gate) |
-| Nemotron-Nano | — | — | — | MoE + SSM, all CPU-side |
-| GPT-OSS | — | — | — | Bias+clamp between GEMV and activation |
+| Gemma 4 (MoE) | GELU (per-expert) | n/a | n/a | MoE routing is CPU-side |
+| GLM-4 | SiLU (MLX-Q4) | n/a | n/a | MLA attention is CPU-side |
+| Nemotron-H | n/a | Q8_0 (attn+FFN) | Yes (ReLU-squared) | SSM breaks out, FFN uses ReLU² (no gate) |
+| Nemotron-Nano | n/a | n/a | n/a | MoE + SSM, all CPU-side |
+| GPT-OSS | n/a | n/a | n/a | Bias+clamp between GEMV and activation |
 
 ## Pipeline/Kernel Counts
 
@@ -246,14 +246,14 @@ The composed megakernel (`mega_compose.zig`) generates an additional Metal pipel
 | File | Lines | Purpose |
 |------|-------|---------|
 | `src/backend/mega_compose.zig` | ~1,036 | Composable megakernel generator (ModelDesc, composeMSL) |
-| `src/backend/megakernel.zig` | — | Weight offset computation for fused FFN megakernels |
+| `src/backend/megakernel.zig` | n/a | Weight offset computation for fused FFN megakernels |
 | `src/backend/kernels/metal/mega_common.metal` | 732 | 18 composable building blocks |
-| `src/backend/kernels/metal/megakernel.metal` | — | 11 fused FFN kernels (Tier 1) |
-| `src/backend/kernels/metal/mega_*.metal` | — | 5 hand-written true megakernels (Tier 2) |
-| `src/backend/metal.zig` | — | `compileComposedMegakernel()`, `dispatchMegakernelAuto()` |
+| `src/backend/kernels/metal/megakernel.metal` | n/a | 11 fused FFN kernels (Tier 1) |
+| `src/backend/kernels/metal/mega_*.metal` | n/a | 5 hand-written true megakernels (Tier 2) |
+| `src/backend/metal.zig` | n/a | `compileComposedMegakernel()`, `dispatchMegakernelAuto()` |
 
 ## References
 
-- [Luce Megakernel](https://github.com/Luce-Org/luce-megakernel) — Qwen 3.5-0.8B CUDA megakernel, 3.4× prefill speedup
-- [Cooperative Groups (CUDA)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#cooperative-groups) — Grid-level synchronization
-- [Metal Atomic Operations](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf) — `atomic_fetch_add_explicit` with `memory_order_relaxed`
+- [Luce Megakernel](https://github.com/Luce-Org/luce-megakernel), Qwen 3.5-0.8B CUDA megakernel, 3.4× prefill speedup
+- [Cooperative Groups (CUDA)](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#cooperative-groups), Grid-level synchronization
+- [Metal Atomic Operations](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf), `atomic_fetch_add_explicit` with `memory_order_relaxed`

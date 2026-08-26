@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fetch-changelogs.sh — Download latest changelogs from major LLM inference engines
+# fetch-changelogs.sh, Download latest changelogs from major LLM inference engines
 # Usage: ./scripts/fetch-changelogs.sh [output_dir]
 # Output: One file per engine in output_dir (default: docs/changelogs/)
 
@@ -18,7 +18,7 @@ fetch_github_releases() {
     local out="$OUT/${name}.md"
     echo "  $name (github releases: $repo)"
     {
-        echo "# $name — GitHub Releases (fetched $DATE)"
+        echo "# $name, GitHub Releases (fetched $DATE)"
         echo "Source: https://github.com/$repo/releases"
         echo
         for page in $(seq 1 "$pages"); do
@@ -35,37 +35,10 @@ fetch_url() {
     local out="$OUT/${name}.md"
     echo "  $name ($url)"
     {
-        echo "# $name — Changelog (fetched $DATE)"
+        echo "# $name, Changelog (fetched $DATE)"
         echo "Source: $url"
         echo
         curl -fsSL "$url" 2>/dev/null || echo "(fetch failed)"
-    } > "$out"
-    echo "    → $out"
-}
-
-fetch_url_with_headers() {
-    local name="$1" url="$2"
-    local out="$OUT/${name}.md"
-    echo "  $name ($url)"
-    {
-        echo "# $name — Changelog (fetched $DATE)"
-        echo "Source: $url"
-        echo
-        curl -fsSL -H "Accept: application/json" "$url" 2>/dev/null \
-            | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    if isinstance(data, list):
-        for r in data[:90]:
-            print('##', r.get('tag_name','?'), '('+str(r.get('published_at',''))+')')
-            print(r.get('body','(no notes)'))
-            print()
-    else:
-        print(json.dumps(data, indent=2))
-except Exception as e:
-    print('(parse error:', e, ')')
-" || echo "(fetch/parse failed)"
     } > "$out"
     echo "    → $out"
 }
@@ -96,10 +69,10 @@ fetch_github_releases "mlx" "ml-explore/mlx" 4
 # MLX-LM (language model layer on top of MLX)
 fetch_github_releases "mlx-lm" "ml-explore/mlx-lm" 4
 
-# LM Studio — uses a public changelog page (no GitHub releases)
+# LM Studio, uses a public changelog page (no GitHub releases)
 fetch_url "lmstudio" "https://lmstudio.ai/changelog"
 
-# Modular MAX — docs changelog
+# Modular MAX, docs changelog
 fetch_url "modular-max" "https://docs.modular.com/max/changelog/"
 
 # ── Summary index ─────────────────────────────────────────────────────────────

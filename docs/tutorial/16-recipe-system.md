@@ -8,7 +8,7 @@
 
 Every model + hardware combination has **different optimal settings**. A small Qwen3.5 4-bit model on Apple Silicon might run best with creative sampling (temp=0.7), while a large MoE on CPU needs conservative defaults (ctx_size=2048) to avoid OOM. Hardcoding these in model code creates **configuration sprawl**.
 
-The **recipe system** provides **proven defaults** for specific scenarios while **preserving user control** — CLI flags always override recipe values.
+The **recipe system** provides **proven defaults** for specific scenarios while **preserving user control**, CLI flags always override recipe values.
 
 ## The Problem: Configuration Sprawl
 
@@ -603,7 +603,7 @@ computeCtxSize(avail_mem, model_size) -> u32:
     return min(16384, (safe_mem - model_size) / kv_per_token)
 ```
 
-**Not implemented** — recipes are currently static.
+**Not implemented**, recipes are currently static.
 
 ### User-Defined Recipes (Future)
 
@@ -613,7 +613,7 @@ computeCtxSize(avail_mem, model_size) -> u32:
 ./agave model.gguf --recipe my-recipe.json "prompt"
 ```
 
-**Not implemented** — recipes are currently compile-time defined.
+**Not implemented**, recipes are currently compile-time defined.
 
 ### Recipe Override CLI Flag (Future)
 
@@ -624,7 +624,7 @@ computeCtxSize(avail_mem, model_size) -> u32:
 # Use pure CLI defaults, ignore all recipes
 ```
 
-**Not implemented** — currently no way to disable matching.
+**Not implemented**, currently no way to disable matching.
 
 ## Testing Recipes
 
@@ -674,9 +674,9 @@ test "user override priority":
 
 ### Recipe Philosophy
 
-1. **Recipes are suggestions, not mandates** — users always have final control
-2. **Proven defaults only** — add recipes after testing, not speculation
-3. **Document rationale** — explain why these values were chosen
+1. **Recipes are suggestions, not mandates**, users always have final control
+2. **Proven defaults only**, add recipes after testing, not speculation
+3. **Document rationale**, explain why these values were chosen
 
 ### Adding a New Recipe
 
@@ -690,7 +690,7 @@ test "user override priority":
 
 - **Remove obsolete recipes** when model/hardware changes
 - **Update when defaults change** (e.g., better quantization methods)
-- **Keep it minimal** — don't add a recipe for every combination
+- **Keep it minimal**: don't add a recipe for every combination
 
 ## Gotchas
 
@@ -710,22 +710,22 @@ test "user override priority":
 
 ## Glossary
 
-**Applied** — The fully-resolved struct with concrete (non-optional) parameter values after merging CLI flags, recipe defaults, and baseline defaults.
+**Applied**, The fully-resolved struct with concrete (non-optional) parameter values after merging CLI flags, recipe defaults, and baseline defaults.
 
-**arch_prefix** — The leading substring of a model's architecture name used for prefix matching (e.g., `"qwen3"` matches `"qwen35"`).
+**arch_prefix**, The leading substring of a model's architecture name used for prefix matching (e.g., `"qwen3"` matches `"qwen35"`).
 
-**configuration sprawl** — The problem of scattered, duplicated magic numbers across model files for settings like temperature and context size.
+**configuration sprawl**, The problem of scattered, duplicated magic numbers across model files for settings like temperature and context size.
 
-**ctx_size (context size)** — The maximum number of tokens a model can process in a single sequence.
+**ctx_size (context size)**, The maximum number of tokens a model can process in a single sequence.
 
-**first-match-wins** — The matching rule returning the first preset whose criteria are satisfied, making array order determine priority.
+**first-match-wins**, The matching rule returning the first preset whose criteria are satisfied, making array order determine priority.
 
-**Overrides** — A struct of boolean flags tracking which parameters the user explicitly set via CLI, preventing recipe defaults from overriding user intent.
+**Overrides**, A struct of boolean flags tracking which parameters the user explicitly set via CLI, preventing recipe defaults from overriding user intent.
 
-**Preset** — A struct pairing a match pattern (arch_prefix, backend, quant) with a Recipe, stored in a priority-ordered array.
+**Preset**, A struct pairing a match pattern (arch_prefix, backend, quant) with a Recipe, stored in a priority-ordered array.
 
-**recipe** — A named set of optional inference-parameter defaults matched by model architecture, backend, and quantization type.
+**recipe**, A named set of optional inference-parameter defaults matched by model architecture, backend, and quantization type.
 
-**three-level priority chain** — The resolution order: (1) user CLI flag, (2) recipe default, (3) CLI baseline default.
+**three-level priority chain**, The resolution order: (1) user CLI flag, (2) recipe default, (3) CLI baseline default.
 
-**wildcard match** — An empty-string field in a preset matching any value for that criterion.
+**wildcard match**, An empty-string field in a preset matching any value for that criterion.

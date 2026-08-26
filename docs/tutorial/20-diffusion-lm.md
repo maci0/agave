@@ -8,7 +8,7 @@
 
 ## Overview
 
-DiffusionGemma is Google's first publicly released **diffusion language model (dLLM)**. Unlike autoregressive LLMs that generate one token at a time from left to right, DiffusionGemma generates entire 256-token blocks simultaneously using iterative denoising — the same idea as image diffusion but applied to discrete text tokens.
+DiffusionGemma is Google's first publicly released **diffusion language model (dLLM)**. Unlike autoregressive LLMs that generate one token at a time from left to right, DiffusionGemma generates entire 256-token blocks simultaneously using iterative denoising, the same idea as image diffusion but applied to discrete text tokens.
 
 This tutorial explains how block diffusion works, how it differs from autoregressive generation, and how Agave implements it.
 
@@ -28,7 +28,7 @@ DiffusionGemma breaks the sequential dependency by generating 256 tokens at once
 
 ### 1. Canvas Initialization
 
-A **canvas** of 256 token positions is initialized with random tokens from the vocabulary. There is no special [MASK] token — positions are filled with arbitrary vocabulary entries (uniform state diffusion).
+A **canvas** of 256 token positions is initialized with random tokens from the vocabulary. There is no special [MASK] token, positions are filled with arbitrary vocabulary entries (uniform state diffusion).
 
 ```text
 canvas = [random_tok, random_tok, ..., random_tok]  // 256 positions
@@ -36,7 +36,7 @@ canvas = [random_tok, random_tok, ..., random_tok]  // 256 positions
 
 ### 2. Bidirectional Attention
 
-During denoising, the canvas uses **bidirectional attention** — each canvas position can see all other canvas positions simultaneously. This is the key difference from autoregressive attention (where position N only sees positions 1..N-1).
+During denoising, the canvas uses **bidirectional attention**, each canvas position can see all other canvas positions simultaneously. This is the key difference from autoregressive attention (where position N only sees positions 1..N-1).
 
 Bidirectional attention lets the model produce internally consistent output: if it decides position 50 should be "Paris", it can use that information when resolving position 1.
 
@@ -54,7 +54,7 @@ else:
 
 **Implementation:** [`src/main.zig`](../../src/main.zig) (`generateDiffusion`, per-position confidence check against `--diffusion-confidence`)
 
-Accepted tokens become **anchors** for future denoising steps. Re-noised positions get fresh random tokens — not the rejected guess — so the model gets a clean slate rather than being biased by a bad early prediction.
+Accepted tokens become **anchors** for future denoising steps. Re-noised positions get fresh random tokens, not the rejected guess, so the model gets a clean slate rather than being biased by a bad early prediction.
 
 ### 4. Convergence
 
@@ -99,8 +99,8 @@ Takes a 256-token canvas, runs bidirectional attention over all canvas positions
 `scaledDotProductAttentionCanvas()` in `src/ops/attention.zig`:
 
 For each canvas query token:
-1. Score against all prompt tokens (from KV cache) — causal, all visible
-2. Score against all 256 canvas tokens — bidirectional (no causal mask)
+1. Score against all prompt tokens (from KV cache), causal, all visible
+2. Score against all 256 canvas tokens, bidirectional (no causal mask)
 3. Softmax over all scores
 4. Accumulate V from prompt cache + canvas V vectors
 
@@ -220,30 +220,30 @@ The self-correction property is unique to diffusion: if an early token becomes i
 
 ## Glossary
 
-**anchor token** — A canvas token that has been accepted (locked) during denoising; provides stable context for resolving remaining positions.
+**anchor token**, A canvas token that has been accepted (locked) during denoising; provides stable context for resolving remaining positions.
 
-**bidirectional attention** — Attention where each canvas position can see all other canvas positions simultaneously (no causal mask).
+**bidirectional attention**, Attention where each canvas position can see all other canvas positions simultaneously (no causal mask).
 
-**block autoregressive chaining** — Appending a fully denoised canvas to the KV cache and starting a new one conditioned on all prior context.
+**block autoregressive chaining**, Appending a fully denoised canvas to the KV cache and starting a new one conditioned on all prior context.
 
-**canvas** — A fixed-size buffer (default 256 tokens) initialized with random vocabulary tokens that is iteratively denoised to produce output.
+**canvas**, A fixed-size buffer (default 256 tokens) initialized with random vocabulary tokens that is iteratively denoised to produce output.
 
-**confidence-based acceptance** — Locking a canvas position when the model's softmax probability for its top token exceeds a threshold.
+**confidence-based acceptance**, Locking a canvas position when the model's softmax probability for its top token exceeds a threshold.
 
-**dLLM (diffusion language model)** — A language model generating text by iteratively denoising random tokens in parallel rather than autoregressively.
+**dLLM (diffusion language model)**, A language model generating text by iteratively denoising random tokens in parallel rather than autoregressively.
 
-**denoising step** — One forward pass over the canvas followed by acceptance/re-noising decisions at each position.
+**denoising step**, One forward pass over the canvas followed by acceptance/re-noising decisions at each position.
 
-**diffusion-canvas** — CLI parameter setting the canvas size (default 256 tokens).
+**diffusion-canvas**, CLI parameter setting the canvas size (default 256 tokens).
 
-**diffusion-confidence** — CLI parameter setting the probability threshold for locking a canvas position.
+**diffusion-confidence**, CLI parameter setting the probability threshold for locking a canvas position.
 
-**diffusion-steps** — CLI parameter controlling the maximum denoising iterations per canvas block (default 16).
+**diffusion-steps**, CLI parameter controlling the maximum denoising iterations per canvas block (default 16).
 
-**re-noising** — Replacing a rejected canvas token with a fresh random token to give the model a clean slate.
+**re-noising**, Replacing a rejected canvas token with a fresh random token to give the model a clean slate.
 
-**self-correction** — The property unique to diffusion: if an early token becomes inconsistent with later context, re-noising lets the model fix it.
+**self-correction**, The property unique to diffusion: if an early token becomes inconsistent with later context, re-noising lets the model fix it.
 
-**uniform state diffusion** — Initializing canvas positions with arbitrary vocabulary entries rather than special [MASK] tokens.
+**uniform state diffusion**, Initializing canvas positions with arbitrary vocabulary entries rather than special [MASK] tokens.
 
-**VLM (Vision Language Model)** — A model combining vision encoding and language generation for image understanding tasks.
+**VLM (Vision Language Model)**, A model combining vision encoding and language generation for image understanding tasks.

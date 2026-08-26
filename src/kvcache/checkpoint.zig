@@ -38,7 +38,7 @@ const Allocator = std.mem.Allocator;
 const magic = [4]u8{ 'K', 'V', 'C', 0x01 };
 /// Current file format version.
 const format_version: u32 = 1;
-/// Payload ABI version — bumped when the serialized KV layout changes.
+/// Payload ABI version, bumped when the serialized KV layout changes.
 const payload_abi: u32 = 1;
 
 /// Header size in bytes.

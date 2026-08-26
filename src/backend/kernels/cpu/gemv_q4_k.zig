@@ -76,7 +76,7 @@ pub fn gemvQ4_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                 quant.getScaleMinK4(g * 2 + 1, scales1, &sc_hi1, &m_hi1);
 
                 if (gi_lo + group_elems - 1 < k) {
-                    // Full group — vectorized
+                    // Full group, vectorized
                     // Low nibbles: elements gi_lo..gi_lo+31
                     var q_lo0: V8 = v8zero;
                     var q_lo1: V8 = v8zero;
@@ -123,7 +123,7 @@ pub fn gemvQ4_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                     sum0 += @reduce(.Add, q_hi0) * d_sc_hi0 - x_hi_sum * dm_m_hi0;
                     sum1 += @reduce(.Add, q_hi1) * d_sc_hi1 - x_hi_sum * dm_m_hi1;
                 } else {
-                    // Partial group — scalar fallback
+                    // Partial group, scalar fallback
                     var s0: f32 = 0.0;
                     var s1: f32 = 0.0;
                     const d1_0 = d_0 * @as(f32, @floatFromInt(sc_lo0));

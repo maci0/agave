@@ -55,7 +55,7 @@ pub const LayerOffsets = struct {
 
 /// Packed weight metadata with per-layer offset table.
 pub const WeightPack = struct {
-    /// Base pointer — earliest tensor data address in the mmap.
+    /// Base pointer, earliest tensor data address in the mmap.
     base_ptr: [*]const u8,
     /// Per-layer byte offsets relative to `base_ptr`.
     layer_offsets: [max_layers]LayerOffsets,
@@ -71,7 +71,7 @@ pub const WeightPack = struct {
 
 /// Scan all layer weight tensors and record their byte offsets relative to
 /// the earliest tensor data pointer. GGUF files memory-map weights contiguously,
-/// so no copying is needed — the kernel accesses `base_ptr + offset`.
+/// so no copying is needed, the kernel accesses `base_ptr + offset`.
 pub fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
     if (n_layers > max_layers) @panic("megakernel: n_layers exceeds max_layers");
     var pack = WeightPack{
@@ -116,7 +116,7 @@ pub fn computeOffsets(fmt: Format, n_layers: u32) WeightPack {
     }
 
     if (base_addr == std.math.maxInt(usize)) {
-        @panic("megakernel: no weight tensors found — wrong model format?");
+        @panic("megakernel: no weight tensors found, wrong model format?");
     }
     pack.base_ptr = @ptrFromInt(base_addr);
 
@@ -181,7 +181,7 @@ test "LayerOffsets default zero" {
 }
 
 test "fuzz: all megakernel functions" {
-    // computeOffsets requires a live Format with mmap'd tensors — verify signature at comptime.
+    // computeOffsets requires a live Format with mmap'd tensors, verify signature at comptime.
     comptime {
         const F = @TypeOf(computeOffsets);
         _ = @as(F, computeOffsets);

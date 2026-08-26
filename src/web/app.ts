@@ -101,7 +101,7 @@ let abortCtrl: AbortController | null = null;
 let isStreaming = false;
 let autoScroll = true;
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
-/** Latest stream paint target — updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
+/** Latest stream paint target, updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
 let pendingStreamRender: PendingStreamPaint | null = null;
 let msgRoleIdSeq = 0;
 sendBtn.disabled = true;
@@ -697,7 +697,7 @@ function renderFinal(el: HTMLElement, content: string) {
     }
   }
   const parsed = markdownToHtml(dc);
-  // DOMPurify guarantees safe HTML — render as rich content.
+  // DOMPurify guarantees safe HTML, render as rich content.
   // oxlint-disable-next-line anti-slop/no-runtime-typeof -- optional CDN dependency feature detection
   if (DOMPurify) {
     const sanitized = DOMPurify.sanitize(parsed, {ADD_TAGS: ['details', 'summary']});
@@ -907,7 +907,7 @@ function stopGen() { if (abortCtrl) {abortCtrl.abort();} }
 function showEmpty() {
   chat.replaceChildren();
   const empty = document.createElement('div'); empty.id = 'empty';
-  // Hardcoded HTML constant — no user input, safe without sanitization
+  // Hardcoded HTML constant, no user input, safe without sanitization
   const icon = document.createElement('div'); icon.className = 'icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '\uD83C\uDF35';
   const h2 = document.createElement('h2'); h2.textContent = 'Start a conversation';
   const p = document.createElement('p'); p.textContent = 'Type a message below to chat with the model.';

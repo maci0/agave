@@ -1,4 +1,4 @@
-//! KV cache eviction — norm-based scoring, victim selection, and cache compaction.
+//! KV cache eviction, norm-based scoring, victim selection, and cache compaction.
 //! Implements an attention-sink-aware eviction policy: always preserves the first
 //! `sink_size` positions (attention sinks) and the last `recent_window` positions
 //! (working context). From the middle region, positions with the highest K-vector
@@ -52,9 +52,9 @@ pub fn scorePositions(k_cache: [*]const f32, scores: [*]f32, seq_len: usize, kv_
 /// Select which positions to keep after eviction.
 ///
 /// The policy preserves three regions unconditionally:
-///   1. **Sinks** — the first `sink_size` positions (attention sinks).
-///   2. **Recent** — the last `recent_window` positions (working context).
-///   3. **Middle** — from the remaining positions, the highest-scoring ones up to
+///   1. **Sinks**, the first `sink_size` positions (attention sinks).
+///   2. **Recent**, the last `recent_window` positions (working context).
+///   3. **Middle**, from the remaining positions, the highest-scoring ones up to
 ///      `budget - sink_size - recent_window`.
 ///
 /// A binary search over score thresholds determines the cutoff that retains
@@ -371,7 +371,7 @@ test "selectVictims preserves sinks and recent window" {
     // 10 positions, budget 6, sink_size 2, recent_window 3
     // Sinks: 0, 1 (always kept)
     // Recent: 7, 8, 9 (always kept)
-    // Middle: 2, 3, 4, 5, 6 — need to pick best 1 (budget 6 - 5 protected = 1)
+    // Middle: 2, 3, 4, 5, 6, need to pick best 1 (budget 6 - 5 protected = 1)
     // Scores designed so position 4 has the highest middle score
     const scores = [_]f32{ 10, 10, 1, 2, 9, 3, 1, 10, 10, 10 };
     var keep: [10]bool = undefined;

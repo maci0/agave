@@ -15,7 +15,7 @@ import { Resvg } from '@resvg/resvg-js';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 
-// All 7 colors required — resvg fails silently if any is missing.
+// All 7 colors required, resvg fails silently if any is missing.
 const THEME = {
   bg:      '#ffffff',
   fg:      '#1a1a2e',

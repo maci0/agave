@@ -45,7 +45,7 @@ pub fn gemvQ8_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             const s3: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp3[0..2], .little))));
             const bk = b * qk;
 
-            // V8 accumulators — defers @reduce to end of block.
+            // V8 accumulators, defers @reduce to end of block.
             // @mulAdd maps to hardware FMA (single instruction vs mul+add chain).
             var acc0: V8 = v8zero;
             var acc1: V8 = v8zero;

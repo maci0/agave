@@ -57,7 +57,7 @@ fn preadAll(file: anytype, buf: []u8, offset: u64) !usize {
         const cur_off = std.math.add(u64, offset, @as(u64, total)) catch return error.Overflow;
         const result = std.c.pread(file.handle, buf[total..].ptr, buf[total..].len, @intCast(cur_off));
         const n: isize = @bitCast(result);
-        if (n < 0) return error.ReadError; // I/O error — do not treat as EOF
+        if (n < 0) return error.ReadError; // I/O error, do not treat as EOF
         if (n == 0) break; // true EOF
         total += @intCast(n);
     }
@@ -76,11 +76,11 @@ const shared_prefix_cost: f32 = 100.0;
 
 /// Block tier enum: VRAM (T0), RAM (T1), SSD (T2).
 pub const BlockTier = enum {
-    /// Tier 0 — GPU video memory (fastest, capacity-limited).
+    /// Tier 0, GPU video memory (fastest, capacity-limited).
     vram,
-    /// Tier 1 — host RAM (medium latency, larger capacity).
+    /// Tier 1, host RAM (medium latency, larger capacity).
     ram,
-    /// Tier 2 — SSD-backed sparse file (highest latency, virtually unlimited).
+    /// Tier 2, SSD-backed sparse file (highest latency, virtually unlimited).
     ssd,
 };
 
@@ -101,7 +101,7 @@ pub const TieredBlock = struct {
 };
 
 /// Callback for physical data transfer between tiers on discrete GPUs.
-/// UMA platforms (Apple Silicon, NVIDIA GB10) use null (no-op — shared memory).
+/// UMA platforms (Apple Silicon, NVIDIA GB10) use null (no-op, shared memory).
 /// Discrete GPUs implement this to copy data via cuMemcpyAsync / hipMemcpyAsync.
 pub const TransferCallback = struct {
     /// Copy block data from host (RAM) to device (VRAM).
@@ -224,7 +224,7 @@ pub const TieredKvCache = struct {
         var ssd_free: std.ArrayList(u32) = .empty;
         errdefer ssd_free.deinit(allocator);
 
-        // Reserve capacity for free lists — use total_blocks for each list because
+        // Reserve capacity for free lists, use total_blocks for each list because
         // blocks can migrate between tiers (e.g., a RAM block promoted to VRAM and
         // then freed pushes to vram_free_list). Tier-specific capacity would overflow
         // appendAssumeCapacity in freeBlockInner.
@@ -382,7 +382,7 @@ pub const TieredKvCache = struct {
 
     /// Allocate without acquiring tier_lock. Caller must hold tier_lock.
     fn allocBlockInner(self: *TieredKvCache) !u32 {
-        // Try VRAM first — loop with bounded demotion attempts (avoids unbounded recursion)
+        // Try VRAM first, loop with bounded demotion attempts (avoids unbounded recursion)
         var demotions: usize = 0;
         const max_demotions: usize = 16;
         while (demotions < max_demotions) : (demotions += 1) {
@@ -395,7 +395,7 @@ pub const TieredKvCache = struct {
                 return block_id;
             }
 
-            // VRAM exhausted — check if we can evict (trigger at eviction_numer/eviction_denom).
+            // VRAM exhausted, check if we can evict (trigger at eviction_numer/eviction_denom).
             // Integer comparison avoids float division on allocation path.
             const vram_used = self.vram_used.load(.monotonic);
             const vram_total = self.vram_block_count;
@@ -409,7 +409,7 @@ pub const TieredKvCache = struct {
                     evicted,
                     @as(f32, @floatFromInt(vram_used)) / @as(f32, @floatFromInt(vram_total)) * 100.0,
                 });
-                continue; // retry — vram_used decreased, eventually falls below threshold
+                continue; // retry, vram_used decreased, eventually falls below threshold
             }
             break; // no eviction possible, fall through to RAM/SSD
         }
@@ -429,7 +429,7 @@ pub const TieredKvCache = struct {
             const block_id = self.ssd_free_list.pop().?;
             errdefer self.ssd_free_list.appendAssumeCapacity(block_id);
             if (self.blocks[block_id].ssd_offset == null) {
-                // Fresh block never spilled to SSD — allocate RAM backing directly
+                // Fresh block never spilled to SSD, allocate RAM backing directly
                 const slot_size = std.math.mul(usize, @as(usize, self.block_size), self.kv_dim) catch return error.OutOfMemory;
                 const keys = try self.allocator.alloc(f32, slot_size);
                 errdefer self.allocator.free(keys);
@@ -461,19 +461,19 @@ pub const TieredKvCache = struct {
     ///
     /// Returns: Block ID of demoted block.
     fn demoteToRam(self: *TieredKvCache) !u32 {
-        // Check if RAM is full — if so, demote RAM → SSD first
+        // Check if RAM is full, if so, demote RAM → SSD first
         const ram_used = self.ram_used.load(.monotonic);
         if (ram_used >= self.ram_block_count and self.ssd_block_count > 0) {
             const ram_victim = try self.selectColdestRamBlock();
             try self.demoteToSsd(ram_victim);
-            std.log.debug("RAM full — demoted block {d} to SSD before VRAM→RAM demotion", .{ram_victim});
+            std.log.debug("RAM full, demoted block {d} to SSD before VRAM→RAM demotion", .{ram_victim});
         }
 
         var min_score: f32 = std.math.floatMax(f32);
         var victim_id: u32 = 0;
         var found = false;
 
-        // Scan ALL blocks — after promoteToVram, blocks at indices >= vram_block_count
+        // Scan ALL blocks, after promoteToVram, blocks at indices >= vram_block_count
         // can have tier .vram. Restricting to [0..vram_block_count] makes them invisible
         // to eviction.
         for (self.blocks, 0..) |*blk, id| {
@@ -516,7 +516,7 @@ pub const TieredKvCache = struct {
         var victim_id: u32 = 0;
         var found = false;
 
-        // Scan ALL blocks — after demoteToRam, blocks at indices < vram_block_count
+        // Scan ALL blocks, after demoteToRam, blocks at indices < vram_block_count
         // can have tier .ram. Restricting to the original RAM range misses them,
         // causing premature NoRamBlocksToEvict → OutOfKvMemory.
         for (self.blocks, 0..) |*blk, id| {
@@ -726,7 +726,7 @@ pub const TieredKvCache = struct {
         // Full-list guard: all blocks already free across all tiers.
         const total_free = self.vram_free_list.items.len + self.ram_free_list.items.len + self.ssd_free_list.items.len;
         if (total_free >= self.blocks.len) {
-            std.log.err("freeBlockInner: free lists full — double-free of block {d}", .{block_id});
+            std.log.err("freeBlockInner: free lists full, double-free of block {d}", .{block_id});
             return;
         }
 
@@ -779,7 +779,7 @@ pub const TieredKvCache = struct {
 
     /// Promote block from RAM or SSD to VRAM tier.
     ///
-    /// On UMA platforms, RAM→VRAM is just a tier tag change — no data movement.
+    /// On UMA platforms, RAM→VRAM is just a tier tag change, no data movement.
     /// Physical memory is shared between CPU and GPU, so "RAM" and "VRAM" are the
     /// same memory. Backends use zero-copy access (Metal newBufferWithBytesNoCopy,
     /// CUDA cuMemAllocManaged, Vulkan HOST_VISIBLE|DEVICE_LOCAL).
@@ -810,7 +810,7 @@ pub const TieredKvCache = struct {
         // Check if VRAM budget is exceeded (free list length can be non-zero
         // even when usage has reached the budget due to tier migrations).
         if (self.vram_used.load(.monotonic) >= self.vram_block_count) {
-            // VRAM budget full — evict coldest to make room
+            // VRAM budget full, evict coldest to make room
             const evicted = try self.demoteToRam();
             std.log.debug("Evicted block {d} to make room for promotion of {d}", .{ evicted, block_id });
         }
@@ -917,7 +917,7 @@ test "TieredKvCache allocBlock falls back to RAM when VRAM full" {
     const b0 = try cache.allocBlock();
     try std.testing.expectEqual(BlockTier.vram, cache.blocks[b0].tier);
 
-    // VRAM full — next alloc demotes b0 to RAM then falls back to RAM free list
+    // VRAM full, next alloc demotes b0 to RAM then falls back to RAM free list
     const b1 = try cache.allocBlock();
     try std.testing.expectEqual(BlockTier.ram, cache.blocks[b1].tier);
 
@@ -939,7 +939,7 @@ test "TieredKvCache needsPromotion" {
     const b1 = try cache.allocBlock();
     try std.testing.expect(!cache.needsPromotion(b1));
 
-    // Exhaust VRAM — next alloc falls back to RAM
+    // Exhaust VRAM, next alloc falls back to RAM
     const b2 = try cache.allocBlock();
     try std.testing.expectEqual(BlockTier.ram, cache.blocks[b2].tier);
     // Allocated RAM block needs promotion
@@ -1034,7 +1034,7 @@ test "TieredKvCache SSD round-trip preserves data" {
     var path_buf: [128]u8 = undefined;
     const ssd_path = std.fmt.bufPrint(&path_buf, "test_ssd_{d}.tmp", .{std.c.getpid()}) catch unreachable;
 
-    // 0 VRAM, 1 RAM, 1 SSD — first allocBlock goes to RAM
+    // 0 VRAM, 1 RAM, 1 SSD, first allocBlock goes to RAM
     var cache = try TieredKvCache.init(allocator, 1, 4, 0, 1, 1, 16, ssd_path);
     defer {
         cache.deinit();
@@ -1119,7 +1119,7 @@ test "fuzz: all tiered functions" {
             cache.unlockTier();
             std.debug.assert(cache.tier_lock.load(.monotonic) == 0);
 
-            // allocBlock — fill VRAM
+            // allocBlock, fill VRAM
             const n_alloc = smith.valueWithHash(u8, 7) % @as(u8, @intCast(vram_ct + ram_ct));
             var alloc_ids: [10]u32 = undefined;
             var alloc_count: usize = 0;
@@ -1139,20 +1139,20 @@ test "fuzz: all tiered functions" {
                 }
             }
 
-            // promoteToVram — promote any RAM blocks
+            // promoteToVram, promote any RAM blocks
             for (alloc_ids[0..alloc_count]) |bid| {
                 if (cache.blocks[bid].tier == .ram) {
                     cache.promoteToVram(bid) catch {};
                 }
             }
 
-            // batchPromoteToVram — empty and non-empty
+            // batchPromoteToVram, empty and non-empty
             cache.batchPromoteToVram(&[_]u32{}) catch {};
             if (alloc_count > 0) {
                 cache.batchPromoteToVram(alloc_ids[0..alloc_count]) catch {};
             }
 
-            // promoteFromSsd — no SSD tier so should be no-op or error
+            // promoteFromSsd, no SSD tier so should be no-op or error
             if (alloc_count > 0) {
                 cache.promoteFromSsd(alloc_ids[0]) catch {};
             }

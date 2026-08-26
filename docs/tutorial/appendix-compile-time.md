@@ -287,7 +287,7 @@ MetalBackend = build_options.enable_metal
 
 **Implementation:** [`build.zig`](../../build.zig) (`-Denable-<model>` / backend toggles), [`src/backend/backend.zig`](../../src/backend/backend.zig) (`build_options` gated imports)
 
-**Effect:** If `enable_metal=false`, the Metal backend is **not compiled at all** — `@import("metal.zig")` never happens, reducing binary size and compile time.
+**Effect:** If `enable_metal=false`, the Metal backend is **not compiled at all**, `@import("metal.zig")` never happens, reducing binary size and compile time.
 
 ## @embedFile for Kernel Source
 
@@ -342,7 +342,7 @@ flowchart LR
         Concat
     end
 
-    subgraph Binary["Agave Binary (.rodata — no external files needed)"]
+    subgraph Binary["Agave Binary (.rodata, no external files needed)"]
         ROData
         ROData2
     end
@@ -411,7 +411,7 @@ init():
 
 **Implementation:** [`src/backend/vulkan.zig`](../../src/backend/vulkan.zig) (`@embedFile` for pre-compiled SPIR-V)
 
-**SPIR-V is binary data** — `@embedFile` works with any file type, not just text.
+**SPIR-V is binary data**, `@embedFile` works with any file type, not just text.
 
 ## Type-Specialized Functions
 
@@ -433,7 +433,7 @@ dequantize(comptime T, quant, output):
 
 **Implementation:** [`src/ops/quant.zig`](../../src/ops/quant.zig) (comptime-dispatched dequantization per format)
 
-**No runtime dispatch** — the switch is resolved at compile time, and only the relevant function is called.
+**No runtime dispatch**, the switch is resolved at compile time, and only the relevant function is called.
 
 ```mermaid
 flowchart TD
@@ -453,7 +453,7 @@ flowchart TD
     BQ8["dequantizeQ8_0\n(direct call, inlined)"]:::success
     BBF["dequantizeBF16\n(direct call, inlined)"]:::success
 
-    subgraph CompileTime["Compiler — resolved at compile time (T is known)"]
+    subgraph CompileTime["Compiler, resolved at compile time (T is known)"]
         direction LR
         SW{"switch T"}
         Q4
@@ -463,7 +463,7 @@ flowchart TD
         SW --> Q4 & Q8 & BF & ERR
     end
 
-    subgraph Binary["Binary — only called variant present"]
+    subgraph Binary["Binary, only called variant present"]
         BQ4
         BQ8
         BBF
@@ -826,7 +826,7 @@ getNextId():
 2. **Use comptime for feature detection** to eliminate dead code
 3. **Use @embedFile for resources** that ship with the binary
 4. **Use comptime assertions** to validate invariants
-5. **Don't use comptime for runtime configuration** — use `const` or runtime parameters instead
+5. **Don't use comptime for runtime configuration**, use `const` or runtime parameters instead
 
 ## Gotchas
 
@@ -836,7 +836,7 @@ getNextId():
 
 **In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (fp8e4m3_lut, iq4nl_table), [src/backend/metal.zig](../../src/backend/metal.zig) (@embedFile for MSL shaders), [src/backend/backend.zig](../../src/backend/backend.zig) (inline else dispatch), [build.zig](../../build.zig) (build_options)
 
-**Related:** [Zig Language Reference — comptime](https://ziglang.org/documentation/master/#comptime), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (uses comptime LUTs)
+**Related:** [Zig Language Reference, comptime](https://ziglang.org/documentation/master/#comptime), [Chapter 9: CPU SIMD Optimization](09-cpu-simd-optimization.md#real-world-example-rmsnorm) (uses comptime LUTs)
 
 **Next:** [Appendix: Profiling and Debugging →](appendix-profiling.md) | **Back:** [Appendix: Mathematical Operations ←](appendix-math.md)
 
@@ -844,26 +844,26 @@ getNextId():
 
 ## Glossary
 
-**@compileError** — A Zig builtin halting compilation with a custom error message.
+**@compileError**, A Zig builtin halting compilation with a custom error message.
 
-**@embedFile** — A Zig builtin reading a file at compile time and embedding its contents as a byte-string constant in `.rodata`.
+**@embedFile**, A Zig builtin reading a file at compile time and embedding its contents as a byte-string constant in `.rodata`.
 
-**build_options** — Compile-time configuration values set in `build.zig` and imported via `@import("build_options")`.
+**build_options**, Compile-time configuration values set in `build.zig` and imported via `@import("build_options")`.
 
-**comptime** — Zig's compile-time execution feature: expressions evaluated during compilation whose results are baked into the binary.
+**comptime**, Zig's compile-time execution feature: expressions evaluated during compilation whose results are baked into the binary.
 
-**comptime assertion** — A `std.debug.assert()` evaluated at compile time; failure halts compilation before producing a binary.
+**comptime assertion**, A `std.debug.assert()` evaluated at compile time; failure halts compilation before producing a binary.
 
-**conditional compilation** — Using comptime feature detection (OS, CPU, build flags) to select code paths, ensuring only relevant code is compiled.
+**conditional compilation**, Using comptime feature detection (OS, CPU, build flags) to select code paths, ensuring only relevant code is compiled.
 
-**dead code elimination** — The compiler's removal of code branches that can never execute, reducing binary size.
+**dead code elimination**, The compiler's removal of code branches that can never execute, reducing binary size.
 
-**inline else** — A Zig switch pattern expanding to separate cases per tagged-union variant at compile time, enabling inlining without vtable dispatch.
+**inline else**, A Zig switch pattern expanding to separate cases per tagged-union variant at compile time, enabling inlining without vtable dispatch.
 
-**IQ4_NL** — A 4-bit non-linear quantization format using 16 non-uniformly-spaced dequantization values for better accuracy.
+**IQ4_NL**, A 4-bit non-linear quantization format using 16 non-uniformly-spaced dequantization values for better accuracy.
 
-**lookup table (LUT)** — A pre-computed array where a runtime input indexes directly into the result, replacing expensive arithmetic.
+**lookup table (LUT)**, A pre-computed array where a runtime input indexes directly into the result, replacing expensive arithmetic.
 
-**monomorphized** — When a generic function is duplicated for each type it is instantiated with, producing separate optimized copies.
+**monomorphized**, When a generic function is duplicated for each type it is instantiated with, producing separate optimized copies.
 
-**.rodata** — The read-only data section of an executable; compile-time constants and embedded files are stored here.
+**.rodata**, The read-only data section of an executable; compile-time constants and embedded files are stored here.

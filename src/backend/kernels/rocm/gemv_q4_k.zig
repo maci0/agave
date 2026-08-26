@@ -52,7 +52,7 @@ export fn gemv_q4_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
         const blk_u32 = (row * nblk + sb) * q4_k_block_words;
         const blk_byte = (row * nblk + sb) * q4_k_block_size;
 
-        // fp16 d at bytes [0,2), dmin at [2,4) — read via the u32 view.
+        // fp16 d at bytes [0,2), dmin at [2,4), read via the u32 view.
         const head = wu[blk_u32];
         const d: f32 = @floatCast(@as(f16, @bitCast(@as(u16, @truncate(head)))));
         const dmin_bits: u16 = @truncate(head >> 16);

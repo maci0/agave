@@ -6,7 +6,7 @@ const v8zero: V8 = @splat(0.0);
 
 /// Sparse V threshold: skip V accumulation for positions where softmax weight
 /// is below this value. At 1e-6, skipped positions contribute < 0.0001% to
-/// the output — zero measured PPL impact across tested models.
+/// the output, zero measured PPL impact across tested models.
 pub const sparse_v_threshold: f32 = 1e-6;
 
 /// Maximum sequence length supported by the CPU SDPA scores buffer.
@@ -35,7 +35,7 @@ pub fn sdpaHeads(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outp
 }
 
 /// Process a single query head with f32 KV: QK dot products, softmax, V accumulation.
-/// Thread-safe — each head writes to its own output region.
+/// Thread-safe, each head writes to its own output region.
 pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, output: [*]f32, h: usize, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32) void {
     const kvd = nkv * hd;
     const hpg = nh / nkv;
@@ -66,7 +66,7 @@ pub fn sdpaHead(q: [*]const f32, keys: [*]const f32, values: [*]const f32, outpu
     // Softmax
     softmax(scores_buf[0..sl]);
 
-    // V accumulation — position-outer, dimension-inner for cache locality.
+    // V accumulation, position-outer, dimension-inner for cache locality.
     // Each V row (hd floats) fits in L1; iterating dimensions sequentially
     // avoids the kvd-stride cache thrashing of the dimension-outer layout.
     {
@@ -137,7 +137,7 @@ pub fn sdpaQuantHeadWithStats(q: [*]const f32, keys: [*]const u8, values: [*]con
         scores_buf[t] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type_k) * scale;
     }
 
-    // Softmax — SIMD-accelerated, capture max and sum before normalization
+    // Softmax, SIMD-accelerated, capture max and sum before normalization
     const scores = scores_buf[0..sl];
     const stats = softmaxWithStats(scores);
 
@@ -191,7 +191,7 @@ pub inline fn mulAccumF32(out: [*]f32, weight: f32, v: [*]const f32, hd: usize) 
 const SoftmaxStats = struct { max_val: f32, sum_val: f32 };
 
 /// SIMD-accelerated softmax that returns pre-normalization stats (max, sum).
-/// Computes exp(x - max) in-place but does NOT normalize — caller divides by sum.
+/// Computes exp(x - max) in-place but does NOT normalize, caller divides by sum.
 /// Used by sdpaQuantHeadWithStats for online softmax merge across split attention chunks.
 fn softmaxWithStats(scores: []f32) SoftmaxStats {
     const n = scores.len;
@@ -541,7 +541,7 @@ pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: u
     const blk_mask: usize = kv_view.block_mask;
     const bs: usize = kv_view.block_size;
 
-    // QK dot products — walk block table
+    // QK dot products, walk block table
     for (0..sl) |t| {
         const block_idx = if (blk_mask != 0) t >> blk_shift else t / bs;
         const pos_in_block = if (blk_mask != 0) t & blk_mask else t % bs;
@@ -563,7 +563,7 @@ pub fn sdpaPagedHead(q: [*]const f32, kv_view: PagedKvView, output: [*]f32, h: u
 
     softmax(scores_buf[0..sl]);
 
-    // V accumulation — walk block table
+    // V accumulation, walk block table
     {
         var d: usize = 0;
         while (d + 8 <= hd) : (d += 8) output[q_base + d ..][0..8].* = v8zero;
@@ -620,19 +620,19 @@ test "fuzz: all sdpa functions" {
             var values: [2 * kvd]f32 = .{0} ** (2 * kvd);
             var output: [nh * hd]f32 = undefined;
 
-            // 1. sdpa — append at pos 0, compute over 1 position
+            // 1. sdpa, append at pos 0, compute over 1 position
             sdpa(&q, &keys, &values, &k_new, &v_new, &output, nh, nkv, hd, 0, scale);
             for (output) |o| std.debug.assert(std.math.isFinite(o));
 
-            // 2. sdpaHeads — run over 1 position
+            // 2. sdpaHeads, run over 1 position
             sdpaHeads(&q, &keys, &values, &output, nh, nkv, hd, sl, scale);
             for (output) |o| std.debug.assert(std.math.isFinite(o));
 
-            // 3. sdpaHead — single head
+            // 3. sdpaHead, single head
             sdpaHead(&q, &keys, &values, &output, 0, nh, nkv, hd, sl, scale);
             for (output) |o| std.debug.assert(std.math.isFinite(o));
 
-            // 4-5. sdpaQuantHeads / sdpaQuantHead — f16 quantized path
+            // 4-5. sdpaQuantHeads / sdpaQuantHead, f16 quantized path
             const kv_bytes = comptime kv_quant.kvSliceBytes(.f16, 2 * kvd);
             var qk_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
             var qv_buf: [kv_bytes]u8 = .{0} ** kv_bytes;
@@ -681,7 +681,7 @@ test "fuzz: all sdpa functions" {
             }
             std.debug.assert(sm_sum >= 0 and sm_sum <= 4.0 + 1e-3);
 
-            // 11-12. sdpaPagedHeads / sdpaPagedHead — paged KV path
+            // 11-12. sdpaPagedHeads / sdpaPagedHead, paged KV path
             var block_keys: [kvd]f32 = .{0} ** kvd;
             var block_values: [kvd]f32 = .{0} ** kvd;
             const block = @import("../../../kvcache/manager.zig").CacheBlock{

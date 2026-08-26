@@ -91,7 +91,7 @@ pub fn sgemv(n: usize, k: usize, x: [*]const f32, w: [*]const f32, y: [*]f32) vo
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "accelerate — function signatures exist" {
+test "accelerate, function signatures exist" {
     // Verify all public functions have correct types (compile-time check).
     // These are thin FFI wrappers so we only verify they compile.
     comptime {
@@ -102,14 +102,14 @@ test "accelerate — function signatures exist" {
     }
 }
 
-test "accelerate — cblas constants" {
+test "accelerate, cblas constants" {
     // Verify CBLAS constants match Apple Accelerate.framework header values.
     try std.testing.expectEqual(@as(c_int, 101), CblasRowMajor);
     try std.testing.expectEqual(@as(c_int, 111), CblasNoTrans);
     try std.testing.expectEqual(@as(c_int, 112), CblasTrans);
 }
 
-test "accelerate — sgemm via Accelerate.framework" {
+test "accelerate, sgemm via Accelerate.framework" {
     if (comptime !is_macos) return error.SkipZigTest;
 
     // 2×3 @ 3×2 = 2×2 (B transposed: B is [n=2, k=3] row-major)
@@ -127,7 +127,7 @@ test "accelerate — sgemm via Accelerate.framework" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), c_out[3], 1e-6);
 }
 
-test "accelerate — sdot" {
+test "accelerate, sdot" {
     if (comptime !is_macos) return error.SkipZigTest;
 
     const x = [_]f32{ 1, 2, 3, 4 };
@@ -137,7 +137,7 @@ test "accelerate — sdot" {
     try std.testing.expectApproxEqAbs(@as(f32, 40.0), result, 1e-6);
 }
 
-test "accelerate — vdspDot" {
+test "accelerate, vdspDot" {
     if (comptime !is_macos) return error.SkipZigTest;
 
     const a = [_]f32{ 1, 2, 3, 4 };
@@ -146,7 +146,7 @@ test "accelerate — vdspDot" {
     try std.testing.expectApproxEqAbs(@as(f32, 40.0), result, 1e-6);
 }
 
-test "accelerate — sdot and vdspDot agree" {
+test "accelerate, sdot and vdspDot agree" {
     if (comptime !is_macos) return error.SkipZigTest;
 
     const x = [_]f32{ 0.5, -1.2, 3.7, 0.0, -2.1, 1.0, 0.3, -0.8 };
@@ -156,7 +156,7 @@ test "accelerate — sdot and vdspDot agree" {
     try std.testing.expectApproxEqAbs(dot_result, vdsp_result, 1e-5);
 }
 
-test "accelerate — sgemv via sgemm" {
+test "accelerate, sgemv via sgemm" {
     if (comptime !is_macos) return error.SkipZigTest;
 
     // y[3] = W[3,4] @ x[4]
@@ -199,7 +199,7 @@ test "fuzz: all accelerate functions" {
     }.f, .{});
 }
 
-test "accelerate — sgemv identity matrix preserves input" {
+test "accelerate, sgemv identity matrix preserves input" {
     if (comptime @import("builtin").os.tag != .macos) return error.SkipZigTest;
 
     // Identity matrix: y = I @ x should yield y == x.

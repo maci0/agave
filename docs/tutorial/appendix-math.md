@@ -2,7 +2,7 @@
 
 > After this appendix you can implement dot product, softmax, RMSNorm, GEMV, and 1D convolution from scratch.
 
-A quick reference for the core mathematical operations used in LLM inference. Written for systems programmers — think of these as the "library functions" that get called thousands of times per token.
+A quick reference for the core mathematical operations used in LLM inference. Written for systems programmers, think of these as the "library functions" that get called thousands of times per token.
 
 ## Vector and Matrix Operations
 
@@ -70,7 +70,7 @@ Example (3×4 matrix × 4-element vector):
 
 **Usage**: Every linear projection in the model (Q/K/V projections, FFN layers, output logits).
 
-**Performance**: O(n×k) multiply-accumulates. For decode (generating one token at a time), this is ~95% of inference time. Memory-bandwidth bound — reading the weight matrix is the bottleneck.
+**Performance**: O(n×k) multiply-accumulates. For decode (generating one token at a time), this is ~95% of inference time. Memory-bandwidth bound, reading the weight matrix is the bottleneck.
 
 ### Outer Product
 
@@ -269,7 +269,7 @@ y[3] = 0.5*d + 0.3*c + 0.2*b
 y[4] = 0.5*e + 0.3*d + 0.2*c
 ```
 
-**Usage**: DeltaNet and Mamba-2 preprocessing — mixes information from recent time steps before the recurrence.
+**Usage**: DeltaNet and Mamba-2 preprocessing, mixes information from recent time steps before the recurrence.
 
 **Implementation**: Ring buffer stores last k-1 inputs to avoid shifting arrays.
 
@@ -305,7 +305,7 @@ flowchart TD
 
     Input["Raw scores x\ne.g. [1000, 1001, 999]"]:::setup
     Naive["Naive: exp(x) directly"]:::sync
-    Overflow["exp(1000) = Inf\noverflow — unusable"]:::danger
+    Overflow["exp(1000) = Inf\noverflow, unusable"]:::danger
     FindMax["Find max(x) = 1001"]:::sync
     Shift["Subtract max\nx_shifted = [-1, 0, -2]"]:::migration
     ExpSafe["exp(x_shifted)\n= [0.368, 1.0, 0.135]"]:::sync
@@ -423,7 +423,7 @@ Maps any value to (0, 1):
 sigmoid(x) = 1 / (1 + exp(-x))
 ```
 
-**Output range**: (0, 1) — never exactly 0 or 1.
+**Output range**: (0, 1), never exactly 0 or 1.
 
 **Usage**: Gating (how much signal to let through), MoE routing (GLM-4), attention gate (Qwen3.5).
 
@@ -437,7 +437,7 @@ softplus(x) = log(1 + exp(x))
 
 **Approximation**: Linear for x > 20, `≈ exp(x)` for x < -20.
 
-**Usage**: SSM `dt` (timestep) computation — ensures positive decay factors.
+**Usage**: SSM `dt` (timestep) computation, ensures positive decay factors.
 
 ### Tanh (Hyperbolic Tangent)
 
@@ -463,7 +463,7 @@ flowchart LR
 
     Input["Raw activation value x\n(any real number)"]:::setup
     GateUse["Controls how much\nsignal passes through"]:::success
-    ClampUse["Soft clamp — prevents\nlogit explosion"]:::success
+    ClampUse["Soft clamp, prevents\nlogit explosion"]:::success
     FFNUse["Gate × up projection\nin SwiGLU FFN"]:::success
     GELUUse["Drop-in for SiLU\nin Gemma3"]:::success
     DtUse["Ensures dt > 0\nfor stable SSM decay"]:::success
@@ -473,7 +473,7 @@ flowchart LR
         Tanh["tanh(x)\nRange: (-1, 1)\nFormula: 2·sigmoid(2x)-1\nUse: softcapping logits"]:::sync
     end
 
-    subgraph Unbounded["Unbounded outputs — pass large values through"]
+    subgraph Unbounded["Unbounded outputs, pass large values through"]
         SiLU["SiLU / Swish\nRange: (-0.28, ∞)\nFormula: x·sigmoid(x)\nUse: SwiGLU FFN layers"]:::sync
         GELU["GELU\nRange: (-0.17, ∞)\nFormula: 0.5x·(1+tanh(...))\nUse: Gemma3 FFN layers"]:::sync
     end
@@ -507,7 +507,7 @@ x = [0.1, 0.8, 0.3, 0.5]
 argmax(x) = 1    (x[1] = 0.8 is largest)
 ```
 
-**Usage**: Greedy decoding (temperature=0) — always pick the highest-scoring token.
+**Usage**: Greedy decoding (temperature=0), always pick the highest-scoring token.
 
 **Implementation**: Single-pass linear scan, O(n). SIMD-vectorised: each 8-element chunk finds the local max and its lane index in one sweep.
 
@@ -572,10 +572,10 @@ flowchart TD
 
     Logits --> TempCheck{"temperature\n= 0?"}
 
-    TempCheck -->|"yes — greedy"| Argmax
+    TempCheck -->|"yes, greedy"| Argmax
     Argmax --> Token
 
-    TempCheck -->|"no — sample"| TempScale
+    TempCheck -->|"no, sample"| TempScale
 
     TempScale --> TopK{"top_k\nenabled?"}
     TopK -->|"yes"| KFilter
@@ -603,7 +603,7 @@ flowchart TD
 
 **Usage**: Building blocks for softmax (sum/max), normalization (mean), reductions in GPU kernels.
 
-**GPU implementation**: Parallel reduction — each thread reduces a chunk, then combine results in shared memory using tree reduction.
+**GPU implementation**: Parallel reduction, each thread reduces a chunk, then combine results in shared memory using tree reduction.
 
 ### Element-wise Operations
 
@@ -655,7 +655,7 @@ Matrix-vector multiply is ~95% of decode time. Every linear layer (`Linear(in, o
 - Q/K/V projections: 3 GEMVs per layer
 - Attention output projection: 1 GEMV per layer
 - FFN: 3 GEMVs per layer (gate, up, down)
-- Output logits: 1 GEMV (largest — vocab_size rows)
+- Output logits: 1 GEMV (largest, vocab_size rows)
 
 A 28-layer model with vocab_size=128K does ~197 GEMVs per token.
 
@@ -680,15 +680,15 @@ flowchart LR
     Opt2["Optimization levers\nfor compute-bound:\n• FlashAttention (tiled SRAM)\n• Tensor parallelism\n• Higher-TFLOPS GPU"]:::optional
 
     subgraph BW["Bandwidth-bound operations\n(memory speed is the bottleneck)"]
-        GEMV2["GEMV — decode\nReads weight matrix row by row\nArithmetic intensity: ~0.25 FLOP/byte\nBottleneck: DRAM bandwidth"]:::setup
+        GEMV2["GEMV, decode\nReads weight matrix row by row\nArithmetic intensity: ~0.25 FLOP/byte\nBottleneck: DRAM bandwidth"]:::setup
         Norm["RMSNorm / LayerNorm\nReads vector, writes vector\nArithmetic intensity: ~2 FLOP/byte\nBottleneck: memory round-trips"]:::setup
         Activation["Activation functions\n(SiLU, GELU, sigmoid)\nElement-wise, trivial math\nBottleneck: reading/writing the tensor"]:::setup
         ElemWise["Element-wise ops\n(add, mul, residual)\nOne pass over data\nBottleneck: memory bandwidth"]:::setup
     end
 
     subgraph Compute["Compute-bound operations\n(ALU utilization is the bottleneck)"]
-        Prefill["GEMM — prefill\nMatrix × matrix (all tokens at once)\nArithmetic intensity: ~O(seq_len) FLOP/byte\nBottleneck: GPU TFLOPS"]:::sync
-        LongAttn["Attention — long sequences\nO(seq_len²) dot products per head\nArithmetic intensity grows with seq_len\nBottleneck: GPU TFLOPS"]:::sync
+        Prefill["GEMM, prefill\nMatrix × matrix (all tokens at once)\nArithmetic intensity: ~O(seq_len) FLOP/byte\nBottleneck: GPU TFLOPS"]:::sync
+        LongAttn["Attention, long sequences\nO(seq_len²) dot products per head\nArithmetic intensity grows with seq_len\nBottleneck: GPU TFLOPS"]:::sync
     end
 
     Opt1 --- BW
@@ -699,9 +699,9 @@ flowchart LR
 
 **In-place** (modifies input): `rope(x)` rotates x directly. Zero allocations.
 
-**In-place** (modifies input): `softmax(x)` operates **in-place** over three passes (find max, exp+sum, normalize). No allocation — the input buffer is reused as output.
+**In-place** (modifies input): `softmax(x)` operates **in-place** over three passes (find max, exp+sum, normalize). No allocation, the input buffer is reused as output.
 
-Inference hot path is allocation-free — all buffers pre-allocated, operations reuse scratch space.
+Inference hot path is allocation-free, all buffers pre-allocated, operations reuse scratch space.
 
 ---
 
@@ -720,22 +720,22 @@ Inference hot path is allocation-free — all buffers pre-allocated, operations 
 
 ## Glossary
 
-**arithmetic intensity** — The ratio of compute operations to bytes transferred (FLOP/byte); low = bandwidth-bound, high = compute-bound.
+**arithmetic intensity**, The ratio of compute operations to bytes transferred (FLOP/byte); low = bandwidth-bound, high = compute-bound.
 
-**bandwidth-bound** — Operations where time is dominated by memory reads/writes rather than arithmetic (GEMV, normalization).
+**bandwidth-bound**, Operations where time is dominated by memory reads/writes rather than arithmetic (GEMV, normalization).
 
-**CDF (Cumulative Distribution Function)** — The integral of a probability distribution; GELU approximates the Gaussian CDF.
+**CDF (Cumulative Distribution Function)**, The integral of a probability distribution; GELU approximates the Gaussian CDF.
 
-**compute-bound** — Operations where arithmetic dominates over memory access (attention for long sequences, GEMM during prefill).
+**compute-bound**, Operations where arithmetic dominates over memory access (attention for long sequences, GEMM during prefill).
 
-**FLOP (Floating-Point Operation)** — A single floating-point arithmetic operation (add, multiply, etc.).
+**FLOP (Floating-Point Operation)**, A single floating-point arithmetic operation (add, multiply, etc.).
 
-**L2 normalization** — Scaling a vector to unit length without learned weights.
+**L2 normalization**, Scaling a vector to unit length without learned weights.
 
-**numerical stability trick** — Subtracting the maximum value before exponentiating in softmax to prevent float overflow.
+**numerical stability trick**, Subtracting the maximum value before exponentiating in softmax to prevent float overflow.
 
-**RMSNorm** — Root Mean Square Normalization: scales a vector to unit RMS then applies learned weights.
+**RMSNorm**, Root Mean Square Normalization: scales a vector to unit RMS then applies learned weights.
 
-**scaled dot-product attention** — The formula softmax(Q·Kᵀ/√d)·V; division by √head_dim prevents scores from growing too large.
+**scaled dot-product attention**, The formula softmax(Q·Kᵀ/√d)·V; division by √head_dim prevents scores from growing too large.
 
-**TFLOPS (Teraflops)** — Trillion floating-point operations per second; a measure of compute throughput.
+**TFLOPS (Teraflops)**, Trillion floating-point operations per second; a measure of compute throughput.

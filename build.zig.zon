@@ -1,7 +1,7 @@
 .{
     .name = .agave,
     // Product SemVer (single source of truth; build.zig injects into build_options.version).
-    .version = "0.1.0",
+    .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0xc9298ceaeb79e334,
     .paths = .{""},

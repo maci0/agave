@@ -9,10 +9,10 @@ const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
 // Q6_K block layout offsets (total block = 210 bytes).
-// [0..128): ql — low 4 bits per element (128 bytes for 256 elements)
-// [128..192): qh — high 2 bits per element (64 bytes)
-// [192..208): sc — scales (16 signed bytes)
-// [208..210): d — super-block scale (f16)
+// [0..128): ql, low 4 bits per element (128 bytes for 256 elements)
+// [128..192): qh, high 2 bits per element (64 bytes)
+// [192..208): sc, scales (16 signed bytes)
+// [208..210): d, super-block scale (f16)
 const q6_k_ql_chunk_bytes: usize = 64;
 const q6_k_qh_offset: usize = 128;
 const q6_k_qh_chunk_bytes: usize = 32;
@@ -61,7 +61,7 @@ pub fn gemvQ6_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                 const base = bk + chunk * chunk_elems;
 
                 if (base + chunk_elems - 1 < k) {
-                    // Full chunk — process 8 l-values at a time with SIMD.
+                    // Full chunk, process 8 l-values at a time with SIMD.
                     inline for (0..4) |lblock| {
                         const l_start = lblock * 8;
                         const is: usize = l_start / 16;
@@ -105,7 +105,7 @@ pub fn gemvQ6_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                         sum1 += xv0 * ds1_q1 * q1v1 + xv1 * ds1_q2 * q2v1 + xv2 * ds1_q3 * q3v1 + xv3 * ds1_q4 * q4v1;
                     }
                 } else {
-                    // Partial chunk — scalar fallback
+                    // Partial chunk, scalar fallback
                     var s0: f32 = 0.0;
                     var s1: f32 = 0.0;
                     for (0..32) |l| {

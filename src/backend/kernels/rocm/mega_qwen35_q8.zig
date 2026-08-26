@@ -1,4 +1,4 @@
-//! True megakernel: Qwen 3.5 Q8_0 — single dispatch for all layers (ROCm/AMDGCN).
+//! True megakernel: Qwen 3.5 Q8_0, single dispatch for all layers (ROCm/AMDGCN).
 //!
 //! Eliminates ~330 kernel dispatches per token down to 1 dispatch.
 //! Uses atomic grid sync between stages (all workgroups must be co-resident).
@@ -37,7 +37,7 @@ const n_sync_slots: u32 = 32;
 /// Read grid dimension from the implicit kernel argument.
 /// On AMDGCN the grid size is passed as an implicit argument, but
 /// for the megakernel we pass n_blocks explicitly as a kernel parameter
-/// instead. This function is not used — we pass grid_dim directly.
+/// instead. This function is not used, we pass grid_dim directly.
 /// Atomic grid sync: all workgroups arrive before any proceed.
 /// Uses a global atomic counter; thread 0 of each workgroup increments,
 /// then spins until all workgroups have arrived. syncthreads() ensures
@@ -457,7 +457,7 @@ export fn megakernel_qwen35_q8_kernel(
             gridSyncReset(&sync_ctrs[sync_idx % n_sync_slots]);
             sync_idx += 1;
         } else {
-            // DeltaNet SSM layer — too complex for GPU megakernel (Phase 2).
+            // DeltaNet SSM layer, too complex for GPU megakernel (Phase 2).
             // Sequential recurrence has data dependencies that don't parallelize.
         }
 

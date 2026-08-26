@@ -10,7 +10,7 @@ During **autoregressive generation** (generating text one token at a time, where
 
 ## The KV Cache
 
-Each generated token extends the cache — every subsequent token attends to all previously stored K/V pairs.
+Each generated token extends the cache, every subsequent token attends to all previously stored K/V pairs.
 
 ### Code Flow
 
@@ -41,7 +41,7 @@ flowchart LR
     C1 -->|"attend to 1 position"| T2
     C2 -->|"attend to 2 positions"| T3
 
-    subgraph Growth["Cache grows every token — never shrinks"]
+    subgraph Growth["Cache grows every token, never shrinks"]
         C1
         C2
         C3
@@ -81,9 +81,9 @@ The KV cache can be quantized to reduce memory usage:
 
 ```
 Format     Bits/elem  Memory for 30L × 5KV × 128d × 4096 tokens  Rotation
-f32        32         600 MB                                      —
-f16        16         300 MB                                      —
-q8_0       8.5        159 MB                                      —
+f32        32         600 MB                                     none
+f16        16         300 MB                                     none
+q8_0       8.5        159 MB                                     none
 turbo4     4.5         84 MB  (3.6x vs f16)                       WHT-32
 planar4    4.5         84 MB  (3.6x vs f16)                       Givens 2D
 iso4       4.5         84 MB  (3.6x vs f16)                       Quaternion 4D
@@ -114,7 +114,7 @@ flowchart TB
     IQ3["IsoQuant iso3\nQuaternion 4D rotation"]:::sync
     TQ2["TurboQuant turbo2\nWHT-32 decorrelation\nmaximum compression"]:::success
 
-    subgraph Formats["KV Cache Quantization Formats — bits/element and memory reduction"]
+    subgraph Formats["KV Cache Quantization Formats, bits/element and memory reduction"]
         direction TB
 
         subgraph Full["Full Precision"]
@@ -123,20 +123,20 @@ flowchart TB
             Q8
         end
 
-        subgraph Turbo4Grp["4-bit tier  (3.6× vs f16 — 84 MB)"]
+        subgraph Turbo4Grp["4-bit tier  (3.6× vs f16, 84 MB)"]
             TQ4
             PQ4
             IQ4
             RQ4
         end
 
-        subgraph Turbo3Grp["3-bit tier  (4.6× vs f16 — 66 MB)"]
+        subgraph Turbo3Grp["3-bit tier  (4.6× vs f16, 66 MB)"]
             TQ3
             PQ3
             IQ3
         end
 
-        subgraph Turbo2Grp["2-bit tier  (6.4× vs f16 — 47 MB)"]
+        subgraph Turbo2Grp["2-bit tier  (6.4× vs f16, 47 MB)"]
             TQ2
         end
     end
@@ -154,14 +154,14 @@ flowchart TB
 ```
 
 Four rotation-based quantizers are available, differing only in the decorrelation transform:
-- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network — ~160 add/sub ops (32-element blocks, no multiplies)
-- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation — 256 FMAs (2× fewer than IsoQuant)
-- **IsoQuant** (`iq2/3/4`): Quaternion 4D rotation — 512 FMAs
-- **RotorQuant** (`rq2/3/4`): Clifford Cl(3,0) rotor — ~2,400 FMAs
+- **TurboQuant** (`tq2/3/4`): Walsh-Hadamard butterfly network, ~160 add/sub ops (32-element blocks, no multiplies)
+- **PlanarQuant** (`pq2/3/4`): Givens 2D rotation, 256 FMAs (2× fewer than IsoQuant)
+- **IsoQuant** (`iq2/3/4`): Quaternion 4D rotation, 512 FMAs
+- **RotorQuant** (`rq2/3/4`): Clifford Cl(3,0) rotor, ~2,400 FMAs
 
 All share the same storage format (f16 norm + Lloyd-Max packed indices) and codebook. See [Chapter 4: Quantization](04-quantization.md#geometric-kv-cache-quantization) for mathematical details.
 
-**Asymmetric K/V:** As demonstrated in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/2402.02750), keys and values have different sensitivity — value compression is nearly free while key compression drives quality loss. Agave supports independent types via `--kv-type-k` and `--kv-type-v`:
+**Asymmetric K/V:** As demonstrated in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/2402.02750), keys and values have different sensitivity, value compression is nearly free while key compression drives quality loss. Agave supports independent types via `--kv-type-k` and `--kv-type-v`:
 
 ```bash
 # q8_0 keys (high quality) + turbo4 values (3.6x compressed) = best of both worlds
@@ -175,7 +175,7 @@ All share the same storage format (f16 norm + Lloyd-Max packed indices) and code
 # Sets: K=q8_0, V=turbo4, boundary V protection (first/last 2 layers at f16)
 ```
 
-The preset also enables **boundary V protection** — the first and last 2 transformer layers keep V at f16 regardless of the configured V type. These boundary layers have outsized influence on output quality (early layers establish representations, final layers shape the distribution). Middle layers use turbo4 V, where compression is nearly free.
+The preset also enables **boundary V protection**, the first and last 2 transformer layers keep V at f16 regardless of the configured V type. These boundary layers have outsized influence on output quality (early layers establish representations, final layers shape the distribution). Middle layers use turbo4 V, where compression is nearly free.
 
 **Sparse V dequantization** further accelerates quantized V reads. After softmax, positions with weight below 1e-6 are skipped entirely: no V dequantization, no multiply-accumulate. At long context most softmax mass concentrates on a small number of positions, so skipping the rest improves decode speed with zero measured perplexity impact (`src/ops/attention.zig`). See [Chapter 4: Quantization](04-quantization.md#turboquant--the-turbo-preset) for implementation details.
 
@@ -200,12 +200,12 @@ flowchart LR
     BT0["slot 0 → block 4"]:::migration
     BT1["slot 1 → block 1"]:::migration
     BT2["slot 2 → block 7"]:::migration
-    B1["Block 1\n(shared — was used by Request B)"]:::optional
+    B1["Block 1\n(shared, was used by Request B)"]:::optional
     B4["Block 4\n(active)"]:::sync
     B7["Block 7\n(active)"]:::sync
-    BX["Block 2, 3, 5, 6…\n(free — available)"]:::success
+    BX["Block 2, 3, 5, 6…\n(free, available)"]:::success
 
-    subgraph Logical["Logical sequence (Request A — 48 tokens)"]
+    subgraph Logical["Logical sequence (Request A, 48 tokens)"]
         L0
         L1
         L2
@@ -229,9 +229,9 @@ flowchart LR
     L2 --> BT2 --> B7
 ```
 
-**The problem with contiguous allocation:** Without paging, you must pre-allocate the maximum context length for each sequence. If max_ctx=4096 and a request only generates 50 tokens, you've wasted 99% of that allocation. Worse, with 10 concurrent requests you need 10 × 4096 × 128 KB/token = 5 GB reserved — even if total actual usage is 50 MB. You can't reclaim the unused space because each sequence's cache must be contiguous in memory.
+**The problem with contiguous allocation:** Without paging, you must pre-allocate the maximum context length for each sequence. If max_ctx=4096 and a request only generates 50 tokens, you've wasted 99% of that allocation. Worse, with 10 concurrent requests you need 10 × 4096 × 128 KB/token = 5 GB reserved, even if total actual usage is 50 MB. You can't reclaim the unused space because each sequence's cache must be contiguous in memory.
 
-[PagedAttention (Kwon et al., 2023)](https://arxiv.org/abs/2309.06180) solves this the same way an OS handles virtual memory — by breaking the cache into fixed-size **blocks** (default 16 positions) allocated on demand:
+[PagedAttention (Kwon et al., 2023)](https://arxiv.org/abs/2309.06180) solves this the same way an OS handles virtual memory, by breaking the cache into fixed-size **blocks** (default 16 positions) allocated on demand:
 
 ```
 physical_block = block_table[position / block_size]
@@ -241,9 +241,9 @@ K[position] = blocks[physical_block].keys[offset * kv_dim ...]
 
 Benefits:
 
-- **No internal fragmentation** (wasted space within allocated regions) — blocks allocated on demand
-- **Memory sharing** — **reference counting** (tracking how many sequences use each block) enables **copy-on-write** (sharing read-only data, duplicating only when modified) between requests
-- **Continuous batching** — sequences can grow/shrink independently
+- **No internal fragmentation** (wasted space within allocated regions), blocks allocated on demand
+- **Memory sharing**: **reference counting** (tracking how many sequences use each block) enables **copy-on-write** (sharing read-only data, duplicating only when modified) between requests
+- **Continuous batching**: sequences can grow/shrink independently
 
 Each `CacheBlock` tracks: `keys`, `values`, `used` count, `ref_count` (for sharing), `access_count` (for eviction).
 
@@ -251,7 +251,7 @@ Each `CacheBlock` tracks: `keys`, `values`, `used` count, `ref_count` (for shari
 
 ## RadixAttention
 
-RadixAttention builds a **radix tree** (also called a **prefix trie** — a tree data structure where shared prefixes are stored only once) over token sequences to automatically detect and share common prefixes. If two requests share the same system prompt, the KV cache for that prefix is computed once and reused.
+RadixAttention builds a **radix tree** (also called a **prefix trie**, a tree data structure where shared prefixes are stored only once) over token sequences to automatically detect and share common prefixes. If two requests share the same system prompt, the KV cache for that prefix is computed once and reused.
 
 ```mermaid
 graph LR
@@ -263,7 +263,7 @@ graph LR
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
     Root(["root"]):::setup
-    Shared["You are helpful.\n(shared prefix — ref_count=2)"]:::sync
+    Shared["You are helpful.\n(shared prefix, ref_count=2)"]:::sync
     BranchA["What is 2+2?\nblock 3"]:::migration
     BranchB["Tell me a joke.\nblock 3'"]:::migration
     AnsA["4\nblock 4"]:::success
@@ -306,7 +306,7 @@ Request B path: root → "You are helpful." → " Tell me a" → " joke." → "W
                         shared prefix (blocks 0,1,2)
                         computed once, reused by both requests
 
-Eviction (planned): Shared blocks (ref_count > 1) will be weighted 100× against eviction to preserve reuse — tracking infrastructure is in place but policy dispatch is not yet deployed.
+Eviction (planned): Shared blocks (ref_count > 1) will be weighted 100× against eviction to preserve reuse, tracking infrastructure is in place but policy dispatch is not yet deployed.
 Benefit: 3 shared blocks = 48 positions × 2 requests = 96 positions saved
 ```
 
@@ -314,13 +314,13 @@ Key operations (all at the scheduler layer, never in the token generation hot pa
 
 - **Insert**: Cache a completed sequence's block IDs
 - **Lookup**: Find the longest cached prefix for a new prompt
-- **Eviction**: **LRU** (Least Recently Used — remove the oldest unused data first) based on access **timestamps** (recorded times when each block was last used); shared prefixes (ref_count > 1) will get 100× **eviction cost** (penalty score that makes them harder to remove) to preserve reuse — tracking infrastructure (`ref_count`, `last_access`) is in place but eviction policy dispatch is not yet deployed
+- **Eviction**: **LRU** (Least Recently Used, remove the oldest unused data first) based on access **timestamps** (recorded times when each block was last used); shared prefixes (ref_count > 1) will get 100× **eviction cost** (penalty score that makes them harder to remove) to preserve reuse, tracking infrastructure (`ref_count`, `last_access`) is in place but eviction policy dispatch is not yet deployed
 
 RadixAttention is the preferred strategy for production serving.
 
 ## Chunked Prefill and Bulk KV Population
 
-During **batched prefill**, all prompt tokens are processed through each layer together using GEMM instead of GEMV. The KV cache is populated in bulk — each layer's `sdpaPrefill` kernel appends all N key/value vectors at once.
+During **batched prefill**, all prompt tokens are processed through each layer together using GEMM instead of GEMV. The KV cache is populated in bulk, each layer's `sdpaPrefill` kernel appends all N key/value vectors at once.
 
 **Chunked prefill** limits memory usage by splitting long prompts into fixed-size chunks (default 512 tokens). Each chunk is one batched pass through all layers.
 
@@ -330,21 +330,21 @@ sequenceDiagram
     participant G as GPU (GEMM + FA2)
     participant K as KV Cache
 
-    P->>G: Chunk 0 — tokens[0..512]
+    P->>G: Chunk 0, tokens[0..512]
     G->>K: store K/V for positions 0-511
     Note over G: causal attention within chunk (prev_len=0)
 
-    P->>G: Chunk 1 — tokens[512..1024]
+    P->>G: Chunk 1, tokens[512..1024]
     G->>K: store K/V for positions 512-1023
     K-->>G: read cached positions 0-511
     Note over G: causal attention + attend to chunk 0 (prev_len=512)
 
-    P->>G: Chunk 2 — tokens[1024..1536]
+    P->>G: Chunk 2, tokens[1024..1536]
     G->>K: store K/V for positions 1024-1535
     K-->>G: read cached positions 0-1023
     Note over G: attend to chunks 0+1 (prev_len=1024)
 
-    P->>G: Chunk 3 — tokens[1536..2048]
+    P->>G: Chunk 3, tokens[1536..2048]
     G->>K: store K/V for positions 1536-2047
     K-->>G: read all prior positions
     Note over G: attend to chunks 0+1+2 (prev_len=1536)
@@ -373,7 +373,7 @@ Prefill buffers are allocated once at model init, sized to `chunk_size × dim`. 
 # info: ctx-size: auto → 16384 (48000 MB available, 128 B/token KV)
 ```
 
-The formula: `max_ctx = (available_memory - 2 × model_size) × 0.8 / per_token_kv_bytes`. The 2× model-size reservation is a safety margin for weight overhead. Per-token KV bytes depend on `n_layers × n_kv_heads × head_dim × 2 (K+V) × kv_type_bits / 8`. For a 28-layer model with 4 KV heads, 128-dim heads, and f16 KV cache: `28 × 4 × 128 × 2 × 2 = 56 KB per token`. With 40 GB available and a 15 GB model, auto computes `(40G - 2×15G) × 0.8 / 56K ≈ 143K tokens` — clamped to the model's max context.
+The formula: `max_ctx = (available_memory - 2 × model_size) × 0.8 / per_token_kv_bytes`. The 2× model-size reservation is a safety margin for weight overhead. Per-token KV bytes depend on `n_layers × n_kv_heads × head_dim × 2 (K+V) × kv_type_bits / 8`. For a 28-layer model with 4 KV heads, 128-dim heads, and f16 KV cache: `28 × 4 × 128 × 2 × 2 = 56 KB per token`. With 40 GB available and a 15 GB model, auto computes `(40G - 2×15G) × 0.8 / 56K ≈ 143K tokens`, clamped to the model's max context.
 
 Use `--ctx-size auto` to avoid OOM at startup without manually calculating how much context your hardware can handle.
 
@@ -383,7 +383,7 @@ When context grows beyond a fixed budget, **KV cache eviction** compresses the c
 
 ### Eviction Policies
 
-**Norm-based** (`--kv-eviction norm`): Scores each cached position by the L2 norm of its K vector. Positions with small K norms contribute less to attention (they produce smaller dot products with queries) and are evicted first. No calibration needed — works with any model out of the box.
+**Norm-based** (`--kv-eviction norm`): Scores each cached position by the L2 norm of its K vector. Positions with small K norms contribute less to attention (they produce smaller dot products with queries) and are evicted first. No calibration needed, works with any model out of the box.
 
 ```bash
 ./agave model.gguf --kv-eviction norm --kv-budget 2048 "long prompt..."
@@ -429,7 +429,7 @@ flowchart TD
     Check{"Cache exceeds\n--kv-budget?"}
     Modulo{"Every 128 tokens?\n(amortized trigger)"}
 
-    subgraph Protected["Always Protected — never evicted"]
+    subgraph Protected["Always Protected, never evicted"]
         Sink
         Recent
     end
@@ -443,7 +443,7 @@ flowchart TD
     Check -->|"within budget"| Generate
     Check -->|"over budget"| Modulo
     Modulo -->|"not yet"| Skip
-    Modulo -->|"yes — compress now"| Protected
+    Modulo -->|"yes, compress now"| Protected
     Protected --> Scoring
     NormScore --> Evict
     TriScore --> Evict
@@ -452,7 +452,7 @@ flowchart TD
 
 ### Stacking with TurboQuant
 
-TurboQuant and KV eviction are complementary — one compresses *bits per entry*, the other reduces the *number of entries*:
+TurboQuant and KV eviction are complementary, one compresses *bits per entry*, the other reduces the *number of entries*:
 
 ```
 f16 baseline:         16 bits × N entries
@@ -463,12 +463,12 @@ Combined:            4.5 bits × N/10 entries  (~36× reduction)
 
 ## Async Split-Attention (APEX)
 
-When a model's KV cache grows too large to fit entirely in VRAM, older entries can be demoted to CPU RAM. But attention still needs to read them. Rather than stalling the GPU to fetch cold data from RAM, Agave uses **split-attention** — running GPU and CPU SDPA concurrently and merging results — inspired by [APEX](https://arxiv.org/abs/2506.03296).
+When a model's KV cache grows too large to fit entirely in VRAM, older entries can be demoted to CPU RAM. But attention still needs to read them. Rather than stalling the GPU to fetch cold data from RAM, Agave uses **split-attention**, running GPU and CPU SDPA concurrently and merging results, inspired by [APEX](https://arxiv.org/abs/2506.03296).
 
 ```
 Token generation with split KV cache:
 
-1. Linear ops (Q/K/V projections) run on GPU — full batch, full speed
+1. Linear ops (Q/K/V projections) run on GPU, full batch, full speed
 2. At attention time, scan block tiers:
    ├─ GPU blocks (recent tokens, VRAM)  → GPU SDPA kernel
    └─ CPU blocks (cold prefix, RAM)     → CPU SDPA on thread pool
@@ -486,19 +486,19 @@ flowchart TB
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    Proj["Q/K/V projections\n(GPU — full speed)"]:::setup
-    GBlocks["Recent KV blocks\n(hot — VRAM resident)"]:::setup
+    Proj["Q/K/V projections\n(GPU, full speed)"]:::setup
+    GBlocks["Recent KV blocks\n(hot, VRAM resident)"]:::setup
     GSDPA["GPU SDPA kernel\nFlashAttention-2\ncausal masking"]:::sync
     GOut["Partial output Oᵍ\nlocal max mᵍ\nlocal sum lᵍ"]:::migration
-    CBlocks["Cold KV blocks\n(evicted — RAM resident)"]:::optional
+    CBlocks["Cold KV blocks\n(evicted, RAM resident)"]:::optional
     CSDPA["CPU SDPA\nthread pool\nonline softmax"]:::sync
     COut["Partial output Oᶜ\nlocal max mᶜ\nlocal sum lᶜ"]:::migration
     MaxMerge["m = max(mᵍ, mᶜ)\n(global max for rescaling)"]:::migration
     Rescale["Rescale each partial:\nOᵍ ← Oᵍ × exp(mᵍ - m)\nOᶜ ← Oᶜ × exp(mᶜ - m)"]:::migration
     Combine["O = (Oᵍ·lᵍ + Oᶜ·lᶜ) / (lᵍ + lᶜ)\n(weighted sum normalized by combined denominators)"]:::sync
-    FFN["FFN layer\n(GPU — continues normally)"]:::success
+    FFN["FFN layer\n(GPU, continues normally)"]:::success
 
-    subgraph Split["Concurrent split-attention — GPU and CPU overlap"]
+    subgraph Split["Concurrent split-attention, GPU and CPU overlap"]
         direction LR
         subgraph GPU["GPU SDPA (VRAM)"]
             GBlocks
@@ -513,7 +513,7 @@ flowchart TB
         end
     end
 
-    subgraph Merge["Online softmax merge (exact — no approximation)"]
+    subgraph Merge["Online softmax merge (exact, no approximation)"]
         MaxMerge
         Rescale
         Combine
@@ -528,11 +528,11 @@ flowchart TB
     MaxMerge --> Rescale --> Combine --> FFN
 ```
 
-**Online softmax merge:** Each split computes local softmax independently. The merge uses [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691)'s online correction: track per-head `max` and `sum`, then rescale and combine. This is exact — no approximation.
+**Online softmax merge:** Each split computes local softmax independently. The merge uses [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691)'s online correction: track per-head `max` and `sum`, then rescale and combine. This is exact, no approximation.
 
-**When it activates:** Automatically when `--kv-tiers vram+ram` is set and KV blocks get demoted to RAM under memory pressure. No extra flag needed — if all blocks are GPU-resident, the fast path runs with zero overhead.
+**When it activates:** Automatically when `--kv-tiers vram+ram` is set and KV blocks get demoted to RAM under memory pressure. No extra flag needed, if all blocks are GPU-resident, the fast path runs with zero overhead.
 
-**UMA optimization:** On Apple Silicon and NVIDIA GB10 (unified memory), both GPU and CPU read the same physical memory. No data transfer — just concurrent compute on the same cache.
+**UMA optimization:** On Apple Silicon and NVIDIA GB10 (unified memory), both GPU and CPU read the same physical memory. No data transfer, just concurrent compute on the same cache.
 
 ---
 
@@ -575,7 +575,7 @@ Useful for shared system prompts: compute the prefix KV once on one instance, di
 
 **Paged block-index math assumes a fixed block size**: `PagedKvView` (`src/kvcache/manager.zig`) converts a logical position to a block index and in-block offset via `position >> block_shift` / `position & block_mask` when `block_size` is a power of two, falling back to plain division/modulo otherwise. Both paths must agree on the same `block_size` for the life of a cache; resizing `block_size` after blocks have been allocated (rather than just adding more blocks of the existing size) would silently misalign every position lookup that follows.
 
-**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization — f16, q8_0, fp8, nvfp4, nvfp4_ds_mla, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
+**In the code:** [src/kvcache/manager.zig](../../src/kvcache/manager.zig) (KvCache, PagedKvCache, RadixTree, KV eviction), [src/kvcache/block_allocator.zig](../../src/kvcache/block_allocator.zig) (block allocation), [src/kvcache/tiered.zig](../../src/kvcache/tiered.zig) (VRAM + RAM + SSD tiers), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization, f16, q8_0, fp8, nvfp4, nvfp4_ds_mla, TurboQuant, PerHeadKvScales), [src/backend/cpu.zig](../../src/backend/cpu.zig) (CPU prefill attention), [src/backend/kernels/metal/sdpa.metal](../../src/backend/kernels/metal/sdpa.metal) (GPU prefill FA2, 64K seq limit)
 
 ```text
 block = blockTable[position / block_size]              # src/kvcache/manager.zig
@@ -591,34 +591,34 @@ attn   = softmax(scores) @ Vcache
 
 ## Glossary
 
-**attention sinks** — The first few token positions that accumulate disproportionate attention mass and should never be evicted.
+**attention sinks**, The first few token positions that accumulate disproportionate attention mass and should never be evicted.
 
-**block (KV cache)** — A fixed-size unit of KV cache storage (default 16 positions) allocated on demand.
+**block (KV cache)**, A fixed-size unit of KV cache storage (default 16 positions) allocated on demand.
 
-**block table** — A per-request mapping from logical sequence positions to physical memory blocks.
+**block table**, A per-request mapping from logical sequence positions to physical memory blocks.
 
-**chunked prefill** — Splitting long prompts into fixed-size chunks (e.g., 512 tokens) to bound memory usage during prefill.
+**chunked prefill**, Splitting long prompts into fixed-size chunks (e.g., 512 tokens) to bound memory usage during prefill.
 
-**continuous batching** — Processing multiple requests simultaneously where each can grow/shrink independently.
+**continuous batching**, Processing multiple requests simultaneously where each can grow/shrink independently.
 
-**cross-instance KV sharing** — Exporting and importing KV cache data between server instances to avoid redundant prefill computation.
+**cross-instance KV sharing**, Exporting and importing KV cache data between server instances to avoid redundant prefill computation.
 
-**KV cache** — Storage for previously computed Key and Value vectors so they don't need to be recomputed for each new token.
+**KV cache**, Storage for previously computed Key and Value vectors so they don't need to be recomputed for each new token.
 
-**KV cache eviction** — Removing low-value entries from the KV cache when context exceeds the budget, allowing generation to continue.
+**KV cache eviction**, Removing low-value entries from the KV cache when context exceeds the budget, allowing generation to continue.
 
-**norm-based eviction** — Scoring cached positions by L2 norm of their K vector; low-norm positions are evicted first.
+**norm-based eviction**, Scoring cached positions by L2 norm of their K vector; low-norm positions are evicted first.
 
-**OOM (Out Of Memory)** — An error when the system cannot allocate enough memory for the requested operation.
+**OOM (Out Of Memory)**, An error when the system cannot allocate enough memory for the requested operation.
 
-**PagedAttention** — A memory management technique mapping logical sequence positions to non-contiguous physical memory blocks, like OS virtual memory.
+**PagedAttention**, A memory management technique mapping logical sequence positions to non-contiguous physical memory blocks, like OS virtual memory.
 
-**per-head KV quantization** — Using one dynamic scale per KV head (tracked as running absmax) rather than per-block scales.
+**per-head KV quantization**, Using one dynamic scale per KV head (tracked as running absmax) rather than per-block scales.
 
-**RadixAttention** — A caching strategy using a radix tree (prefix trie) to detect and share common prompt prefixes across requests.
+**RadixAttention**, A caching strategy using a radix tree (prefix trie) to detect and share common prompt prefixes across requests.
 
-**radix tree / prefix trie** — A tree data structure where shared prefixes are stored once and branched at divergence points.
+**radix tree / prefix trie**, A tree data structure where shared prefixes are stored once and branched at divergence points.
 
-**split-attention** — Running GPU and CPU SDPA concurrently on different KV cache tiers, merging results via online softmax correction.
+**split-attention**, Running GPU and CPU SDPA concurrently on different KV cache tiers, merging results via online softmax correction.
 
-**tiered KV cache** — Storing KV cache blocks across multiple memory tiers (VRAM, RAM, SSD) based on access recency.
+**tiered KV cache**, Storing KV cache blocks across multiple memory tiers (VRAM, RAM, SSD) based on access recency.

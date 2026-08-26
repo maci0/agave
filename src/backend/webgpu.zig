@@ -718,7 +718,7 @@ pub const WebGpuBackend = struct {
         self.fn_queue_write_buffer(self.queue, buf, 0, data, size);
     }
 
-    const max_buffer_size: usize = 1024 * 1024 * 1024; // 1GB — requested via device limits
+    const max_buffer_size: usize = 1024 * 1024 * 1024; // 1GB, requested via device limits
 
     fn getOrUpload(self: *WebGpuBackend, ptr: *const anyopaque, size: usize) WGPUBuffer {
         const key = @intFromPtr(ptr);
@@ -743,7 +743,7 @@ pub const WebGpuBackend = struct {
         self.uploadToBuffer(buf, ptr, size);
         self.buf_cache.put(key, .{ .buffer = buf, .size = size, .generation = self.upload_generation }) catch |err| {
             // Untracked buffer would leak on every subsequent call with this
-            // key — queue it for destruction after the pending submit instead.
+            // key, queue it for destruction after the pending submit instead.
             std.log.warn("webgpu: buf_cache.put failed (key={d}): {s}", .{ key, @errorName(err) });
             self.deferDestroy(buf);
         };
@@ -766,7 +766,7 @@ pub const WebGpuBackend = struct {
             self.act_pool_count += 1;
             return .{ .buf = buf, .idx = idx };
         }
-        // Pool is full — return buffer without a valid pool index.
+        // Pool is full, return buffer without a valid pool index.
         // Use act_pool_capacity as a sentinel so releasePooledBuf destroys
         // the buffer instead of returning it to the pool.
         std.log.warn("webgpu: activation pool full (capacity={d}), buffer not tracked", .{act_pool_capacity});
@@ -833,7 +833,7 @@ pub const WebGpuBackend = struct {
     }
 
     /// Register a GPU buffer as the cached result for a CPU pointer.
-    /// Defers download to sync() — eliminates per-op CPU↔GPU round-trips.
+    /// Defers download to sync(), eliminates per-op CPU↔GPU round-trips.
     fn cacheGpuResult(self: *WebGpuBackend, ptr: [*]f32, buf: WGPUBuffer, size: usize) void {
         const key = @intFromPtr(ptr);
         if (self.buf_cache.getPtr(key)) |cached| {
@@ -857,7 +857,7 @@ pub const WebGpuBackend = struct {
         }
     }
 
-    /// Create a GPU buffer for output (not pooled — stays alive in cache).
+    /// Create a GPU buffer for output (not pooled, stays alive in cache).
     fn createOutputBuf(self: *WebGpuBackend, size: usize) WGPUBuffer {
         return self.createBuffer(size, wgpu_buffer_usage_storage | wgpu_buffer_usage_copy_src | wgpu_buffer_usage_copy_dst);
     }
@@ -879,7 +879,7 @@ pub const WebGpuBackend = struct {
     }
 
     /// Central dispatch: create bind group, encode compute pass into deferred encoder.
-    /// Accumulates dispatches — submit happens at submitPending()/sync().
+    /// Accumulates dispatches, submit happens at submitPending()/sync().
     fn dispatchCompute(self: *WebGpuBackend, pipe: PipelineInfo, entries: []const WGPUBindGroupEntry, workgroups_x: u32) void {
         var bg_desc = WGPUBindGroupDescriptor{
             .layout = pipe.bind_group_layout,
@@ -887,8 +887,8 @@ pub const WebGpuBackend = struct {
             .entries = entries.ptr,
         };
         const bind_group = self.fn_device_create_bind_group(self.device, &bg_desc);
-        if (bind_group == null) @panic("WebGPU: bind group creation failed — layout/entry mismatch");
-        // Don't release bind group here — defer until sync() so referenced
+        if (bind_group == null) @panic("WebGPU: bind group creation failed, layout/entry mismatch");
+        // Don't release bind group here, defer until sync() so referenced
         // buffers stay alive until the command buffer is submitted + completed.
 
         if (self.batch_encoder == null)
@@ -898,13 +898,13 @@ pub const WebGpuBackend = struct {
         self.fn_compute_pass_set_pipeline(pass, pipe.pipeline);
         self.fn_compute_pass_set_bind_group(pass, 0, bind_group, 0, null);
         if (workgroups_x > max_workgroups_per_dim)
-            @panic("WebGPU: workgroup count exceeds max_workgroups_per_dim — chunk GEMV rows");
+            @panic("WebGPU: workgroup count exceeds max_workgroups_per_dim, chunk GEMV rows");
         self.fn_compute_pass_dispatch(pass, workgroups_x, 1, 1);
         self.fn_compute_pass_end(pass);
         // Release our reference now: the command encoder retains the bind group
         // for as long as pending/submitted work references it (wgpu retention
         // semantics). Without this release the bind group leaks on every
-        // dispatch — one per op per layer per step in a long-lived server.
+        // dispatch, one per op per layer per step in a long-lived server.
         self.fn_bind_group_release(bind_group);
     }
 
@@ -1167,7 +1167,7 @@ pub const WebGpuBackend = struct {
             .q6_k => self.pipe_gemv_q6_k,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            // IQ2/IQ3/IQ1: no WebGPU shader — fail closed (no silent CPU fallback).
+            // IQ2/IQ3/IQ1: no WebGPU shader, fail closed (no silent CPU fallback).
             .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("WebGPU gemv: IQ2/IQ3/IQ1 kernels not implemented"),
             else => std.debug.panic("WebGPU gemv: unsupported weight dtype {s}", .{@tagName(w.dtype)}),
         };
@@ -1419,7 +1419,7 @@ pub const WebGpuBackend = struct {
             return;
         }
         if (kv_type_k != .f32 or kv_type_v != .f32)
-            @panic("WebGPU sdpa: only f32 KV supported — use --kv-type f32");
+            @panic("WebGPU sdpa: only f32 KV supported, use --kv-type f32");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
@@ -1437,7 +1437,7 @@ pub const WebGpuBackend = struct {
         const o_sz = q_sz;
 
         const q_buf = self.getOrUpload(@ptrCast(q), q_sz);
-        // KV cache was just memcpy'd on CPU — upload fresh each time
+        // KV cache was just memcpy'd on CPU, upload fresh each time
         const k_buf = self.createOutputBuf(k_sz);
         self.uploadToBuffer(k_buf, @ptrCast(f32_keys), k_sz);
         const v_buf = self.createOutputBuf(v_sz);
@@ -1469,7 +1469,7 @@ pub const WebGpuBackend = struct {
     /// SDPA with per-head max/sum statistics (for disaggregated attention merging).
     pub fn sdpaWithStats(self: *WebGpuBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
-        // Identity stats (max=0, sum=1) — GPU SDPA output is already normalized
+        // Identity stats (max=0, sum=1), GPU SDPA output is already normalized
         for (0..nh) |h| {
             head_max[h] = 0.0;
             head_sum[h] = 1.0;
@@ -1992,7 +1992,7 @@ pub const WebGpuBackend = struct {
         }
         self.sync();
 
-        // 4. Recurrence + gated output (GPU kernel — 1 thread per head)
+        // 4. Recurrence + gated output (GPU kernel, 1 thread per head)
         const q_ptr = conv_out + q_off;
         const k_ptr = conv_out + k_off;
         const v_off: usize = 2 * num_k_heads * head_k_dim;
@@ -2053,7 +2053,7 @@ pub const WebGpuBackend = struct {
         };
         self.dispatchCompute(self.pipe_deltanet, &entries, @intCast(num_v_heads));
         self.cacheGpuResult(output, out_buf, v_sz);
-        // ssm_state is persistent recurrent state — must download immediately
+        // ssm_state is persistent recurrent state, must download immediately
         self.downloadF32(state_pool.buf, @ptrCast(ssm_state.ptr), ssm_state.len);
     }
 
@@ -2067,10 +2067,10 @@ pub const WebGpuBackend = struct {
             self.deferred_destroy[self.deferred_count] = buf;
             self.deferred_count += 1;
         } else {
-            // Array is full — flush pending GPU work so all referenced buffers
+            // Array is full, flush pending GPU work so all referenced buffers
             // are consumed, then clear the deferred array and add this buffer.
             // sync() calls submitPending() which sets batch_encoder = null,
-            // and then iterates deferred_destroy[0..deferred_count] — it does
+            // and then iterates deferred_destroy[0..deferred_count], it does
             // not call deferDestroy, so there is no re-entrancy risk.
             self.sync();
             // sync() resets deferred_count to 0, so we can safely add now.
@@ -2083,7 +2083,7 @@ pub const WebGpuBackend = struct {
     pub fn sync(self: *WebGpuBackend) void {
         self.submitPending();
         // Flush dirty buffers: download GPU results to CPU.
-        // Deduplicate by pointer — only download the latest buffer for each CPU address.
+        // Deduplicate by pointer, only download the latest buffer for each CPU address.
         var di: u32 = self.dirty_count;
         while (di > 0) {
             di -= 1;

@@ -1,4 +1,4 @@
-// Scaled Dot-Product Attention (SDPA) — FlashAttention-2 tiling algorithm
+// Scaled Dot-Product Attention (SDPA), FlashAttention-2 tiling algorithm
 //
 // One threadgroup per query head. Uses online softmax to avoid materializing
 // full attention matrix in device memory. K,V are processed in blocks to fit
@@ -7,7 +7,7 @@
 // Algorithm: FlashAttention-2 (Tri Dao, 2023) with conservative block sizes.
 // Block sizes tuned for Apple Silicon M-series (32KB threadgroup memory):
 // - Bc = 16 (K,V block size along sequence dimension)
-// - Br = 1  (single Q head per threadgroup — decode only)
+// - Br = 1  (single Q head per threadgroup, decode only)
 // - max_d = 256 (maximum head dimension)
 //
 // Memory layout: K_block and V_block reuse same threadgroup memory (sequential processing).
@@ -17,7 +17,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Not used as array bound — kernel tiles over sl with sdpa_block_size; 64K matches Zig-side limit.
+// Not used as array bound, kernel tiles over sl with sdpa_block_size; 64K matches Zig-side limit.
 constant uint sdpa_max_seq_len = 65536;
 constant uint sdpa_max_head_dim = 256;
 constant uint sdpa_block_size = 16;  // Bc: K,V block size (16 to fit 32KB threadgroup limit)
@@ -49,7 +49,7 @@ inline void wht32(thread float* buf) {
 
 /// Dequantize one 32-element TurboQuant block into dst[0..32].
 /// block_ptr layout: [f16 norm (2 bytes)] [packed centroid indices].
-/// bits: 2, 3, or 4 — selects codebook and unpacking strategy.
+/// bits: 2, 3, or 4, selects codebook and unpacking strategy.
 ///
 /// Algorithm: unpack indices → codebook lookup → inverse WHT → rescale.
 /// The inverse WHT is a forward WHT followed by division by 32 (orthonormal).
@@ -254,7 +254,7 @@ kernel void sdpa_fa2(
     }
 }
 
-// ── Large head-dim SDPA — hd up to 512 ──────────────────────────
+// ── Large head-dim SDPA, hd up to 512 ──────────────────────────
 // Same FlashAttention-2 algorithm as sdpa_fa2 but with reduced block size (8 instead of 16)
 // to fit 32KB threadgroup memory budget:
 //   q_local[512] + kv_block[8*512] + out_acc[512] + scores[8] + shared[8]
@@ -397,7 +397,7 @@ kernel void sdpa_fa2_hd512(
     }
 }
 
-// ── Paged SDPA — block-table-indexed FlashAttention-2 ────────────
+// ── Paged SDPA, block-table-indexed FlashAttention-2 ────────────
 // Same algorithm as sdpa_fa2 but K/V access uses block-table indirection.
 // K_flat and V_flat store all physical blocks concatenated:
 //   block i occupies [i * paged_bs * kvd .. (i+1) * paged_bs * kvd]
@@ -559,9 +559,9 @@ kernel void sdpa_fa2_paged(
 
 kernel void sdpa_prefill_fa2(
     device const float* Q,       // [n_tok * nh * hd]
-    device const float* K_cache, // [>= prev_len * kvd] — cached positions
+    device const float* K_cache, // [>= prev_len * kvd], cached positions
     device const float* V_cache, // [>= prev_len * kvd]
-    device const float* K_new,   // [n_tok * kvd] — new positions from GEMM
+    device const float* K_new,   // [n_tok * kvd], new positions from GEMM
     device const float* V_new,   // [n_tok * kvd]
     device float* output,        // [n_tok * nh * hd]
     constant uint& nh,
@@ -612,7 +612,7 @@ kernel void sdpa_prefill_fa2(
         uint block_start = block * sdpa_block_size;
         uint block_len = min(sdpa_block_size, sl - block_start);
 
-        // Load K block — from cache (old positions) or K_new (new positions)
+        // Load K block, from cache (old positions) or K_new (new positions)
         for (uint t = tid; t < block_len; t += tg_sz) {
             uint t_global = block_start + t;
             if (t_global < prev_len) {
@@ -685,7 +685,7 @@ kernel void sdpa_prefill_fa2(
         threadgroup_barrier(mem_flags::mem_threadgroup);
         l_i += shared[0];
 
-        // Load V block — from cache or V_new, skip sparse positions
+        // Load V block, from cache or V_new, skip sparse positions
         for (uint t = tid; t < block_len; t += tg_sz) {
             if (scores[t] < sparse_v_threshold) continue; // Sparse V: skip negligible positions
             uint t_global = block_start + t;

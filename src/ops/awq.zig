@@ -1,11 +1,11 @@
 //! AWQ (Activation-Aware Weight Quantization) INT4 GEMV kernel.
 //!
 //! AWQ GEMM format: INT4 weights packed 8 per u32, COLUMN-major layout.
-//! qweight: [k, n/8] — 8 output channels packed per word at same input position
-//! scales:  [k/group_size, n] — FP16 per group per output channel (natural order)
-//! qzeros:  [k/group_size, n/8] — packed INT4 zero-points (GEMM interleaved order)
+//! qweight: [k, n/8], 8 output channels packed per word at same input position
+//! scales:  [k/group_size, n], FP16 per group per output channel (natural order)
+//! qzeros:  [k/group_size, n/8], packed INT4 zero-points (GEMM interleaved order)
 //!
-//! GEMM packing order: nibbles within each u32 follow [0,2,4,6,1,3,5,7] —
+//! GEMM packing order: nibbles within each u32 follow [0,2,4,6,1,3,5,7],
 //! even output indices in the lower 16 bits, odd indices in the upper 16 bits.
 //! Both qweight and qzeros use this interleaved order. Scales use natural order.
 //!

@@ -6,7 +6,7 @@
 
 > After this chapter you can explain `defer`/`errdefer`, the allocator pattern, and how to detect memory leaks in tests.
 
-Zig's approach to memory management: **explicit allocation, guaranteed cleanup**. No garbage collector, no hidden allocations, no surprises. When you call `allocator.alloc()`, you must call `allocator.free()` — and Zig provides tools to make this **automatic and bulletproof**.
+Zig's approach to memory management: **explicit allocation, guaranteed cleanup**. No garbage collector, no hidden allocations, no surprises. When you call `allocator.alloc()`, you must call `allocator.free()`, and Zig provides tools to make this **automatic and bulletproof**.
 
 ## Code Flow
 
@@ -43,7 +43,7 @@ flowchart LR
 
 ## defer: Guaranteed Cleanup
 
-`defer` executes a statement when the current scope exits — **always**, whether by normal return, error return, or early return:
+`defer` executes a statement when the current scope exits, **always**, whether by normal return, error return, or early return:
 
 ```text
 processFile(path):
@@ -63,7 +63,7 @@ processFile(path):
 
 **Implementation:** [`src/pull.zig`](../../src/pull.zig) (open/read/close pattern around model downloads)
 
-**Execution order:** Defers run in **reverse order** of declaration (stack unwinding — last declared, first executed):
+**Execution order:** Defers run in **reverse order** of declaration (stack unwinding, last declared, first executed):
 
 ```mermaid
 sequenceDiagram
@@ -86,7 +86,7 @@ defer print("First")
 # prints: First, Second, Third (reverse of declaration order)
 ```
 
-**Why reverse order?** Resources should be released in the opposite order they were acquired (last acquired, first released — like closing nested function calls).
+**Why reverse order?** Resources should be released in the opposite order they were acquired (last acquired, first released, like closing nested function calls).
 
 ## errdefer: Cleanup Only on Error
 
@@ -173,7 +173,7 @@ flowchart LR
     Acquire --> Exit
 ```
 
-**Quick decision guide** — which keyword to reach for:
+**Quick decision guide**, which keyword to reach for:
 
 ```mermaid
 flowchart TD
@@ -210,10 +210,10 @@ processTokens(tokens):                        # BUG
         if token >= vocab_size:
             return error(InvalidToken)        # defer still runs, fine here
 
-    return embeddings                         # WRONG: defer frees it before the caller sees it!
+    return embeddings                         # WRONG: defer frees it before the caller sees it
 ```
 
-**Bug:** `defer` runs before the return, so we're returning a pointer to freed memory!
+**Bug:** `defer` runs before the return, so we're returning a pointer to freed memory.
 
 **Fix:** Only use `defer` when you **don't** return the resource:
 
@@ -311,7 +311,7 @@ flowchart TD
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    subgraph BAD["BAD — defer in loop body (defers pile up)"]
+    subgraph BAD["BAD, defer in loop body (defers pile up)"]
         direction TB
         B1["iteration 1\nopen file_a\ndefer file_a.close()"]:::migration --> B2["iteration 2\nopen file_b\ndefer file_b.close()"]:::migration
         B2 --> B3["iteration 3\nopen file_c\ndefer file_c.close()"]:::migration
@@ -319,7 +319,7 @@ flowchart TD
         B4 --> B5["file_c.close()\nfile_b.close()\nfile_a.close()\nALL 3 files were open simultaneously"]:::danger
     end
 
-    subgraph GOOD["GOOD — explicit inner scope forces early run"]
+    subgraph GOOD["GOOD, explicit inner scope forces early run"]
         direction TB
         G1["iteration 1\n{ open file_a\n  defer file_a.close()\n  ... process ... }"]:::setup --> G1C["file_a.close() runs here"]:::success
         G1C --> G2["iteration 2\n{ open file_b\n  defer file_b.close()\n  ... process ... }"]:::setup
@@ -378,7 +378,7 @@ for path in files:
 # BAD: defer is unconditional, can't be scoped to just the if
 if use_cache:
     cache = alloc(u8, size)
-    defer free(cache)                          # runs when the function exits, not at end of if!
+    defer free(cache)                          # runs when the function exits, not at end of if
 # cache is out of scope here, but the defer still tries to free it -> use-after-free
 ```
 
@@ -437,7 +437,7 @@ flowchart TD
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    subgraph TestAllocator["std.testing.allocator — Leak Detection Lifecycle"]
+    subgraph TestAllocator["std.testing.allocator, Leak Detection Lifecycle"]
         direction TB
         T0["test begins\nallocator created\nalloc table = {}"]:::setup
 
@@ -484,7 +484,7 @@ test "leak example":
 #   All test allocations must be freed before test completion.
 ```
 
-This is **your safety net** — write tests, use `std.testing.allocator`, catch leaks before production.
+This is **your safety net**, write tests, use `std.testing.allocator`, catch leaks before production.
 
 ## Advanced Pattern: Arena Allocator
 
@@ -571,7 +571,7 @@ zig build test
 
 **In the code:** Every file with allocations ([src/main.zig](../../src/main.zig), [src/models/](../../src/models/), [src/backend/](../../src/backend/), [src/kvcache/](../../src/kvcache/))
 
-**Related:** [Zig Language Reference — defer](https://ziglang.org/documentation/master/#defer), [Zig Language Reference — errdefer](https://ziglang.org/documentation/master/#errdefer)
+**Related:** [Zig Language Reference, defer](https://ziglang.org/documentation/master/#defer), [Zig Language Reference, errdefer](https://ziglang.org/documentation/master/#errdefer)
 
 **Next:** [Chapter 11: Metal Backend Internals →](11-metal-backend-internals.md) | **Back:** [Chapter 9: CPU SIMD Optimization ←](09-cpu-simd-optimization.md) | **Product docs:** [Architecture](../ARCHITECTURE.md)
 
@@ -579,14 +579,14 @@ zig build test
 
 ## Glossary
 
-**arena allocator** — A bulk allocator that frees all allocations at once via `deinit()`, useful for short-lived temporary data.
+**arena allocator**, A bulk allocator that frees all allocations at once via `deinit()`, useful for short-lived temporary data.
 
-**defer** — Zig keyword scheduling a statement to execute when the current scope exits, regardless of normal or error exit.
+**defer**, Zig keyword scheduling a statement to execute when the current scope exits, regardless of normal or error exit.
 
-**deinit() pattern** — Convention where structs with owned resources provide a `deinit()` method that releases all internal allocations.
+**deinit() pattern**, Convention where structs with owned resources provide a `deinit()` method that releases all internal allocations.
 
-**errdefer** — Zig keyword scheduling cleanup only if the scope exits via an error return.
+**errdefer**, Zig keyword scheduling cleanup only if the scope exits via an error return.
 
-**explicit allocation** — Zig's memory model where every allocation must be paired with a manual free; no garbage collector.
+**explicit allocation**, Zig's memory model where every allocation must be paired with a manual free; no garbage collector.
 
-**std.testing.allocator** — Zig's test allocator that tracks all allocations and automatically detects memory leaks when a test completes.
+**std.testing.allocator**, Zig's test allocator that tracks all allocations and automatically detects memory leaks when a test completes.

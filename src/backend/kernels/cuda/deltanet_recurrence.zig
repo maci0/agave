@@ -1,5 +1,5 @@
 //! DeltaNet SSM recurrence kernel for CUDA.
-//! One block per v-head (single-threaded — recurrence is sequential).
+//! One block per v-head (single-threaded, recurrence is sequential).
 //! Launch: grid = num_v_heads, block = 1.
 
 const cu = @import("common.zig");

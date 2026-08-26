@@ -4,7 +4,7 @@
 
 > After this appendix you can explain `std.atomic.Value`, memory ordering levels, and lock-free patterns in Agave.
 
-Multi-threaded code needs **synchronization** to coordinate between threads. Zig provides **atomic operations** — CPU instructions that read-modify-write memory **atomically** (as one indivisible operation, preventing race conditions).
+Multi-threaded code needs **synchronization** to coordinate between threads. Zig provides **atomic operations**, CPU instructions that read-modify-write memory **atomically** (as one indivisible operation, preventing race conditions).
 
 ## The Problem: Race Conditions
 
@@ -41,7 +41,7 @@ workerThread():
 #   final value: 1 (expected: 2)
 ```
 
-**The issue:** `counter += 1` is **not atomic** — it compiles to:
+**The issue:** `counter += 1` is **not atomic**, it compiles to:
 
 ```asm
 mov  r0, [counter]   ; Read
@@ -114,7 +114,7 @@ flowchart LR
 
 ### The Four Orders (Weakest to Strongest)
 
-#### .monotonic — No Synchronization
+#### .monotonic: No Synchronization
 
 **Guarantees:**
 
@@ -142,9 +142,9 @@ start = task_counter.fetchAdd(grain, .monotonic)
 
 **Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (`task_counter.fetchAdd`)
 
-**Why monotonic?** The counter value doesn't carry ordering information — it's just work assignment. Each thread grabs a chunk independently.
+**Why monotonic?** The counter value doesn't carry ordering information, it's just work assignment. Each thread grabs a chunk independently.
 
-#### .acquire (Load) / .release (Store) — Publish/Subscribe
+#### .acquire (Load) / .release (Store): Publish/Subscribe
 
 **Release** (on store): All writes **before** this store become visible to other threads **before** the store itself.
 
@@ -207,15 +207,15 @@ local_gen = new_gen
 
 **Implementation:** [`src/thread_pool.zig`](../../src/thread_pool.zig) (dispatch and `workerLoop`)
 
-#### .seq_cst — Sequential Consistency
+#### .seq_cst: Sequential Consistency
 
 **Guarantees:** All threads see all operations in the **same global order**.
 
 **Use for:** When you need total ordering (rare).
 
-**Cost:** Slowest — requires full memory fence on most architectures.
+**Cost:** Slowest, requires full memory fence on most architectures.
 
-**Avoid unless necessary** — acquire/release is sufficient for most cases.
+**Avoid unless necessary**, acquire/release is sufficient for most cases.
 
 ### Choosing Memory Ordering
 
@@ -255,7 +255,7 @@ doWork():
 
 - We only care about **which chunk** each thread gets
 - No data dependency between chunks
-- No synchronization needed — each thread works independently
+- No synchronization needed, each thread works independently
 
 ### Generation Counter (Thread Wake-Up)
 
@@ -353,7 +353,7 @@ flowchart TD
         Dispatch["Dispatch work\nactive = n_workers\n(.acq_rel CAS)"]:::setup
         Spin{"active.load(.acquire)\n== 0?"}
         Hint["spinLoopHint()\nCPU pause / yield"]:::optional
-        Done(["All worker output\nvisible — safe to read results"]):::success
+        Done(["All worker output\nvisible, safe to read results"]):::success
     end
 
     subgraph Workers["Worker threads (run concurrently)"]
@@ -374,9 +374,9 @@ flowchart TD
     Sub1 -->|"active decrements"| Spin
     Sub2 -->|"active decrements"| Spin
     SubN -->|"last decrement\nactive → 0"| Spin
-    Spin -->|"no — still workers running"| Hint
+    Spin -->|"no, still workers running"| Hint
     Hint --> Spin
-    Spin -->|"yes — acquire fence\nsees all release writes"| Done
+    Spin -->|"yes, acquire fence\nsees all release writes"| Done
 ```
 
 ```text
@@ -447,8 +447,8 @@ flowchart TD
     Start --> Read
     Read --> Link
     Link --> CAS
-    CAS -->|"yes — swap succeeds\n(.release publishes item.next)"| Success
-    CAS -->|"no — spurious fail\nor concurrent push"| Retry
+    CAS -->|"yes, swap succeeds\n(.release publishes item.next)"| Success
+    CAS -->|"no, spurious fail\nor concurrent push"| Retry
     Retry --> Read
 ```
 
@@ -488,15 +488,15 @@ while pool.active.load(.acquire) != 0:
 
 **What it does:**
 
-- **x86:** `pause` — reduces power consumption, lets hyperthreading switch to other logical core
-- **ARM:** `yield` — hints scheduler to switch to another thread
+- **x86:** `pause`, reduces power consumption, lets hyperthreading switch to other logical core
+- **ARM:** `yield`, hints scheduler to switch to another thread
 - **Without hint:** CPU burns 100% power, spins at max frequency
 
 **Cost:** ~5-10 cycles per hint (negligible).
 
 ## Fence
 
-**Explicit memory barrier** — rarely needed in Zig (acquire/release is usually sufficient).
+**Explicit memory barrier**, rarely needed in Zig (acquire/release is usually sufficient).
 
 ```text
 atomic.fence(.release)     # all writes before this are visible
@@ -518,7 +518,7 @@ atomic.fence(.release)             # publish data writes
 ready.store(true, .monotonic)      # signal ready (no need for release here, the fence did it)
 ```
 
-**Agave doesn't use fences** — acquire/release on atomic operations is clearer and sufficient.
+**Agave doesn't use fences**, acquire/release on atomic operations is clearer and sufficient.
 
 ## Common Pitfalls
 
@@ -615,14 +615,14 @@ counter.fetchAdd(1, .seq_cst)    # should be .monotonic
 2. **Never use `.seq_cst`** unless you can articulate why total ordering is required
 3. **Pair `.release` stores with `.acquire` loads** for handoff
 4. **Use non-atomic for thread-local data** (faster)
-5. **Profile before optimizing** — atomics are usually not the bottleneck
+5. **Profile before optimizing**, atomics are usually not the bottleneck
 
 ## Testing for Race Conditions
 
 **ThreadSanitizer (TSan)** detects data races at runtime:
 
 ```bash
-# Note: -Dsanitize-thread is not currently in build.zig — it would need to be
+# Note: -Dsanitize-thread is not currently in build.zig: it would need to be
 # added as a build option before TSan can be used. The standard way to run
 # tests is `zig build test`, which produces zig-out/bin/agave-unit-test.
 zig build test
@@ -653,32 +653,32 @@ zig build test
 
 ## Glossary
 
-**.acquire** — Atomic load ordering ensuring all writes before a paired `.release` store are visible after this load.
+**.acquire**, Atomic load ordering ensuring all writes before a paired `.release` store are visible after this load.
 
-**.monotonic** — Weakest atomic ordering: guarantees atomicity but no cross-thread synchronization of surrounding memory.
+**.monotonic**, Weakest atomic ordering: guarantees atomicity but no cross-thread synchronization of surrounding memory.
 
-**.release** — Atomic store ordering ensuring all prior writes are visible before this store becomes visible.
+**.release**, Atomic store ordering ensuring all prior writes are visible before this store becomes visible.
 
-**.seq_cst (sequential consistency)** — Strongest ordering: all threads see all operations in the same global order; slowest, rarely needed.
+**.seq_cst (sequential consistency)**, Strongest ordering: all threads see all operations in the same global order; slowest, rarely needed.
 
-**atomic operation** — A CPU instruction performing a read-modify-write on memory as one indivisible step, preventing race conditions.
+**atomic operation**, A CPU instruction performing a read-modify-write on memory as one indivisible step, preventing race conditions.
 
-**CAS (Compare-And-Swap)** — An atomic operation updating a value only if it currently matches an expected value.
+**CAS (Compare-And-Swap)**, An atomic operation updating a value only if it currently matches an expected value.
 
-**cmpxchgStrong** — A CAS variant that only fails if values genuinely differ; used for one-shot CAS.
+**cmpxchgStrong**, A CAS variant that only fails if values genuinely differ; used for one-shot CAS.
 
-**cmpxchgWeak** — A CAS variant that may spuriously fail; faster on ARM, best in retry loops.
+**cmpxchgWeak**, A CAS variant that may spuriously fail; faster on ARM, best in retry loops.
 
-**fence** — An explicit memory barrier ordering non-atomic writes relative to atomic operations.
+**fence**, An explicit memory barrier ordering non-atomic writes relative to atomic operations.
 
-**futex (fast userspace mutex)** — A kernel primitive letting threads sleep cheaply until a memory location changes.
+**futex (fast userspace mutex)**, A kernel primitive letting threads sleep cheaply until a memory location changes.
 
-**hyperthreading** — Intel's simultaneous multithreading where two logical cores share one physical core's execution units.
+**hyperthreading**, Intel's simultaneous multithreading where two logical cores share one physical core's execution units.
 
-**race condition** — A bug where two threads read and write the same memory without coordination, corrupting data.
+**race condition**, A bug where two threads read and write the same memory without coordination, corrupting data.
 
-**spinLoopHint** — A CPU hint (`pause` on x86, `yield` on ARM) reducing power during busy-wait loops.
+**spinLoopHint**, A CPU hint (`pause` on x86, `yield` on ARM) reducing power during busy-wait loops.
 
-**std.atomic.Value(T)** — Zig's atomic wrapper providing load, store, fetchAdd, and compare-and-swap with configurable ordering.
+**std.atomic.Value(T)**, Zig's atomic wrapper providing load, store, fetchAdd, and compare-and-swap with configurable ordering.
 
-**torn read/write** — Reading a partially-updated value when a multi-byte write is split across two CPU operations.
+**torn read/write**, Reading a partially-updated value when a multi-byte write is split across two CPU operations.

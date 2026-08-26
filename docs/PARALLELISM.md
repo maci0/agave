@@ -1,4 +1,4 @@
-# Agave — Distributed Inference
+# Agave: Distributed Inference
 
 **Status**: PP implemented; TP FFN/expert-parallel all-reduce implemented for 2-rank pairs (`--tp 2`, `--pp 2`)  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
@@ -57,7 +57,7 @@ All distributed communication goes through `src/parallel/transport.zig`. Three t
 | **TCP** | BSD sockets, full send/recv loops | Cross-node, no RDMA | ~10 Gbps |
 | **POSIX shm** | `shm_open` + `mmap`, atomic spin-wait | Same-node, zero-copy | Memory bandwidth |
 | **NCCL** | `dlopen("libnccl.so.2")`, GPU-direct | CUDA multi-GPU, RoCE RDMA | Up to 400 Gbps |
-| **RCCL** | AMD's NCCL equivalent | ROCm multi-GPU | — |
+| **RCCL** | AMD's NCCL equivalent | ROCm multi-GPU | n/a |
 
 RCCL (`rccl`) is declared in `TransportKind` but not yet fully implemented. It shares the same API as NCCL and will use `dlopen("librccl.so")` when available.
 
@@ -67,26 +67,26 @@ Auto-selection (`--transport auto`): same-node peers (`localhost`/`127.0.0.1`) �
 
 ```
 Transport.init(allocator, kind, rank, world_size)
-Transport.allReduceAdd(buf, n)     — TP: sum partial results across ranks
-Transport.sendBuf(buf, n)          — PP: send activation to next stage
-Transport.recvBuf(buf, n)          — PP: receive activation from previous stage
+Transport.allReduceAdd(buf, n)    , TP: sum partial results across ranks
+Transport.sendBuf(buf, n)         , PP: send activation to next stage
+Transport.recvBuf(buf, n)         , PP: receive activation from previous stage
 ```
 
 All three operations dispatch to the active transport (TCP, shm, or NCCL) internally.
 
 ### NCCL Integration
 
-NCCL is loaded at runtime via `std.DynLib` — no compile-time linking, no vendored C code. Function pointers resolved: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclAllReduce`, `ncclSend`, `ncclRecv`, `ncclGroupStart`, `ncclGroupEnd`, `ncclCommDestroy`.
+NCCL is loaded at runtime via `std.DynLib`, no compile-time linking, no vendored C code. Function pointers resolved: `ncclGetUniqueId`, `ncclCommInitRank`, `ncclAllReduce`, `ncclSend`, `ncclRecv`, `ncclGroupStart`, `ncclGroupEnd`, `ncclCommDestroy`.
 
 **Initialization sequence:**
 1. TCP connection established between ranks (standard `connect`/`accept`)
 2. Rank 0 calls `ncclGetUniqueId`, sends 128-byte ID over TCP to rank 1
-3. Both ranks call `ncclCommInitRank` — **deferred** to the first NCCL operation (`allReduceAdd`, `sendBuf`, or `recvBuf`) (after CUDA kernels have initialized the primary context)
+3. Both ranks call `ncclCommInitRank`, **deferred** to the first NCCL operation (`allReduceAdd`, `sendBuf`, or `recvBuf`) (after CUDA kernels have initialized the primary context)
 4. After `ncclCommInitRank`, restore CUDA context via `cuCtxSetCurrent` (NCCL may change active context)
 
 **Critical requirement**: CUDA backend must use `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`). NCCL's runtime API uses the primary context; a separate driver API context causes context corruption and wrong results.
 
-**Device pointer optimization**: When the CUDA activation cache has data dirty on GPU (written by a kernel, not yet downloaded), `allReduceAdd` passes the device pointer directly to NCCL — no host↔device copy. When data is stale (CPU fallback wrote to host), uploads to a device staging buffer first, then calls `ncclAllReduce`, then downloads result.
+**Device pointer optimization**: When the CUDA activation cache has data dirty on GPU (written by a kernel, not yet downloaded), `allReduceAdd` passes the device pointer directly to NCCL, no host↔device copy. When data is stale (CPU fallback wrote to host), uploads to a device staging buffer first, then calls `ncclAllReduce`, then downloads result.
 
 ### POSIX Shared Memory
 
@@ -102,7 +102,7 @@ Each region: 16 MB data + 64-byte header (`ShmHeader` with atomic `ready` flag +
 
 ### Weight Sharding
 
-Follows the Megatron-LM pattern — 2 all-reduces per transformer layer:
+Follows the Megatron-LM pattern, 2 all-reduces per transformer layer:
 
 **Attention block:**
 - Q, K, V projections → **column-parallel** (each rank gets `n_heads/tp_degree` heads)
@@ -115,8 +115,8 @@ Follows the Megatron-LM pattern — 2 all-reduces per transformer layer:
 - One `allReduceAdd` after W_down
 
 **Implementation in model code** (e.g., `src/models/qwen35.zig`):
-- `shardColumnWeight(tensor, n_rows, k)` — returns pointer offset for this rank's column shard
-- `shardRowWeight(tensor, n, k_total, shard_buf)` — copies this rank's row shard into contiguous buffer, calls `be.invalidateWeight()` to evict stale GPU cache entry
+- `shardColumnWeight(tensor, n_rows, k)`: returns pointer offset for this rank's column shard
+- `shardRowWeight(tensor, n, k_total, shard_buf)`: copies this rank's row shard into contiguous buffer, calls `be.invalidateWeight()` to evict stale GPU cache entry
 
 TP degree must divide both `n_heads` and `n_kv_heads` for dense FFN sharding. Embedding table is replicated. Final logits computed on each rank independently.
 
@@ -167,10 +167,10 @@ Tested on dual NVIDIA GB10 (Blackwell sm_121) nodes with 4× ConnectX NICs each,
 
 | Model | Config | Transport | tok/s | vs Single GPU |
 | :--- | :--- | :--- | :--- | :--- |
-| Qwen3.5 0.8B Q8_0 | Single | — | 9.2 | 100% |
+| Qwen3.5 0.8B Q8_0 | Single | n/a | 9.2 | 100% |
 | Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **40.2** | 112% |
 | Qwen3.5 0.8B Q8_0 | TP=2 | NCCL RoCE | 5.1 | 56% |
-| Qwen3.5 9B Q4_K_M | Single | — | 2.2 | 100% |
+| Qwen3.5 9B Q4_K_M | Single | n/a | 2.2 | 100% |
 | Qwen3.5 9B Q4_K_M | PP=2 | NCCL RoCE | 2.2 | 100% |
 | Qwen3.5 9B Q4_K_M | TP=2 | NCCL RoCE | 1.7 | 77% |
 
@@ -229,8 +229,8 @@ Implemented in `src/parallel/peer_discovery.zig`.
 
 - **TP degree**: must divide `n_heads` and `n_kv_heads`
 - **NCCL**: requires `libnccl.so.2` at runtime (not bundled)
-- **RCCL**: declared in `TransportKind` but not yet implemented — ROCm multi-GPU requires future work
-- **NCCL primary context**: CUDA must use `cuDevicePrimaryCtxRetain` — `cuCtxCreate` will cause context corruption after `ncclCommInitRank`
+- **RCCL**: declared in `TransportKind` but not yet implemented, ROCm multi-GPU requires future work
+- **NCCL primary context**: CUDA must use `cuDevicePrimaryCtxRetain`, `cuCtxCreate` will cause context corruption after `ncclCommInitRank`
 - **K-quant CPU fallback on UMA**: Q4_K/Q5_K/Q6_K delegate to CPU on GB10 sm_121 (PTX register spilling). CPU allReduceAdd uploads to device staging buffer for NCCL
 - **PP bubble**: single-token decode has `1/pp_degree` utilization; only worthwhile for fitting larger models
 - **2 ranks only**: current transport supports rank 0 ↔ rank 1 pair. Multi-rank ring/tree not yet implemented

@@ -124,7 +124,7 @@ test "fuzz: applyMinP no crash" {
             for (&logits, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i))));
             const min_p: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 100))) / 255.0;
             math_ops.applyMinP(&logits, min_p);
-            // Invariant: max logit always survives — at least one token must remain
+            // Invariant: max logit always survives, at least one token must remain
             var n_alive: u32 = 0;
             for (logits) |v| {
                 if (v != -std.math.inf(f32)) n_alive += 1;
@@ -164,7 +164,7 @@ test "fuzz: applyDry no crash" {
             const mult: f32 = @as(f32, @floatFromInt(smith.valueWithHash(u8, 201))) / 50.0;
             const allowed: u32 = smith.valueWithHash(u4, 202);
             math_ops.applyDry(&logits, history[0..len], mult, allowed);
-            // Invariant: DRY only subtracts penalties — no NaN/Inf introduced
+            // Invariant: DRY only subtracts penalties, no NaN/Inf introduced
             for (logits) |v| try std.testing.expect(std.math.isFinite(v));
         }
     }.f, .{});
@@ -1506,7 +1506,7 @@ test "fuzz: CompiledTree findChild no crash" {
                 tree.child_indices[0][i] = @intCast(i);
             }
             tree.child_counts[0] = @intCast(n_children);
-            // Search for random token — must not crash
+            // Search for random token, must not crash
             const search_id = smith.valueWithHash(u16, 50);
             _ = tree.findChild(-1, search_id);
             _ = tree.findChild(0, search_id);
@@ -1696,7 +1696,7 @@ test "fuzz: Recipe.match no crash" {
             const arch = archs[smith.indexWithHash(archs.len, 0)];
             const backend = backends[smith.indexWithHash(backends.len, 1)];
             const quant = quants[smith.indexWithHash(quants.len, 2)];
-            // Must not crash — may return null or a recipe
+            // Must not crash, may return null or a recipe
             const result = recipe_mod.Recipe.match(arch, backend, quant);
             if (result) |r| {
                 try std.testing.expect(r.name.len > 0);
@@ -1757,7 +1757,7 @@ test "fuzz: ModelDesc layer accessors" {
             desc.layer_n_ff[override_layer] = smith.valueWithHash(u16, 13);
             desc.layer_rope_theta[override_layer] = @as(f32, @floatFromInt(smith.valueWithHash(u16, 14)));
 
-            // Access each layer — must not crash
+            // Access each layer, must not crash
             for (0..desc.n_layers) |li| {
                 const nh = desc.layerNHead(li);
                 const nkv = desc.layerNKv(li);
@@ -1910,7 +1910,7 @@ test "fuzz: gemvSeq dispatch Q4_0" {
 }
 
 // ════════════════════════════════════════════════════════════════
-// NEW FUZZ TARGETS — Categories below bring total to 143+
+// NEW FUZZ TARGETS, Categories below bring total to 143+
 // ════════════════════════════════════════════════════════════════
 
 // ── JSON Extended Fuzzing ──────────────────────────────────────
@@ -2162,7 +2162,7 @@ test "fuzz: KvQuantType name + bitsPerElement + classification" {
             try std.testing.expect(kv_type.name().len > 0);
             // bitsPerElement must be positive
             try std.testing.expect(kv_type.bitsPerElement() > 0);
-            // Classification methods — verify consistency
+            // Classification methods, verify consistency
             const is_rot = kv_type.isRotationQuant();
             if (kv_type.isTurbo() or kv_type.isPlanar() or kv_type.isIso() or kv_type.isRotor()) {
                 try std.testing.expect(is_rot);
@@ -2998,7 +2998,7 @@ test "fuzz: ngram push + propose many tokens" {
 
 // ── DDTree Extended Fuzzing ────────────────────────────────────
 
-test "fuzz: DDTree full pipeline — presort + build + compile + findChild" {
+test "fuzz: DDTree full pipeline, presort + build + compile + findChild" {
     const ddtree_mod = @import("spec/ddtree.zig");
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *Smith) !void {

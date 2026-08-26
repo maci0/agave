@@ -58,7 +58,7 @@ const default_nope_interval: u32 = 4;
 /// Default chunk size for local (RoPE) chunked attention.
 const default_chunk_size: u32 = 8192;
 /// Default prefill chunk size (tokens per batched GEMM).
-/// Must not exceed paged_block_size (256) — sdpaPrefill writes KV into a
+/// Must not exceed paged_block_size (256), sdpaPrefill writes KV into a
 /// single-block view returned by getLayerKvView, so a larger chunk would
 /// overflow the block boundary.
 const default_pf_chunk_size: u32 = 256;
@@ -191,7 +191,7 @@ pub const Llama4Model = struct {
         const n_experts = f.getArchU32(arch, "expert_count") orelse 0;
         const n_experts_active = f.getArchU32(arch, "expert_used_count") orelse 1;
 
-        // Determine the maximum FFN buffer size needed — fits both dense and expert paths.
+        // Determine the maximum FFN buffer size needed, fits both dense and expert paths.
         const expert_ff = f.getArchU32(arch, "expert_feed_forward_length") orelse n_ff;
         const max_ff: usize = @max(n_ff, expert_ff);
 
@@ -495,7 +495,7 @@ pub const Llama4Model = struct {
             self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, hd, self.rope_theta);
             self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, hd, self.rope_theta);
 
-            // QK RMSNorm — applied AFTER RoPE on local layers only
+            // QK RMSNorm, applied AFTER RoPE on local layers only
             if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |qn| {
                 const kn = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return error.MissingTensor;
                 self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
@@ -651,7 +651,7 @@ pub const Llama4Model = struct {
                 const down_data = down_exps.data_ptr + ei * down_stride;
                 self.be.gemv(self.ff_gate.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, expert_ff);
 
-                // GPU-side accumulation — no sync needed (same command queue).
+                // GPU-side accumulation, no sync needed (same command queue).
                 self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
             }
 
@@ -668,7 +668,7 @@ pub const Llama4Model = struct {
                 self.be.siluMul(self.ff_gate.ptr, self.ff_up.ptr, self.ff_gate.ptr, shared_ff);
                 self.doGemv(self.ff_gate.ptr, sd, self.attn_out.ptr, e, shared_ff);
 
-                // GPU-side accumulation — no sync needed (same command queue).
+                // GPU-side accumulation, no sync needed (same command queue).
                 self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
             }
 
@@ -738,7 +738,7 @@ pub const Llama4Model = struct {
             self.be.endBatch();
             self.perf.end(.rope, t);
 
-            // QK RMSNorm — applied AFTER RoPE on local layers only
+            // QK RMSNorm, applied AFTER RoPE on local layers only
             if (self.fmt.layerTensor(li, "attn_q_norm.weight")) |qn| {
                 t = self.perf.start();
                 const kn = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return error.MissingTensor;
@@ -977,7 +977,7 @@ pub const Llama4Model = struct {
             self.be.gemv(self.ff_gate.ptr, .{ .data = down_data, .dtype = down_exps.dtype }, self.attn_out.ptr, e, expert_ff);
             self.perf.end(.gemv_ffn, t);
 
-            // Weighted accumulation — GPU-side, no sync needed between gemv and
+            // Weighted accumulation, GPU-side, no sync needed between gemv and
             // addScaled (same command queue guarantees ordering).
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
         }
@@ -1104,7 +1104,7 @@ pub const Llama4Model = struct {
     fn normAsF32(self: *Llama4Model, t: TensorInfo, n: usize) [*]const f32 {
         if (t.dtype == .f32) return @ptrCast(@alignCast(t.data_ptr));
 
-        // Check cache (linear scan — bounded by max_norm_entries)
+        // Check cache (linear scan, bounded by max_norm_entries)
         const key = @intFromPtr(t.data_ptr);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| {
             if (entry.key == key) return entry.data.ptr;
@@ -1112,7 +1112,7 @@ pub const Llama4Model = struct {
 
         // Cache miss: allocate, convert, store permanently.
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         if (t.dtype == .bf16) {
             const src: [*]const u16 = @ptrCast(@alignCast(t.data_ptr));
@@ -1141,7 +1141,7 @@ test "Llama4 isNopeLayer with interval 4" {
     try std.testing.expect(m.isNopeLayer(11)); // 12 % 4 == 0
 }
 
-test "Llama4 isNopeLayer with interval 0 — no NoPE layers" {
+test "Llama4 isNopeLayer with interval 0, no NoPE layers" {
     var m: Llama4Model = undefined;
     m.nope_interval = 0;
     try std.testing.expect(!m.isNopeLayer(0));
@@ -1227,7 +1227,7 @@ test "Llama4 model vtable compiles" {
     try std.testing.expect(@hasDecl(Llama4Model, "model"));
 }
 
-test "Llama4 isNopeLayer with interval 1 — all NoPE" {
+test "Llama4 isNopeLayer with interval 1, all NoPE" {
     var m: Llama4Model = undefined;
     m.nope_interval = 1;
     // (layer+1) % 1 == 0 is always true
@@ -1236,7 +1236,7 @@ test "Llama4 isNopeLayer with interval 1 — all NoPE" {
     try std.testing.expect(m.isNopeLayer(47));
 }
 
-test "Llama4 isNopeLayer with interval 2 — alternating" {
+test "Llama4 isNopeLayer with interval 2, alternating" {
     var m: Llama4Model = undefined;
     m.nope_interval = 2;
     // NoPE when (layer+1) % 2 == 0 -> layers 1, 3, 5, ...
@@ -1257,7 +1257,7 @@ test "Llama4 layerVType boundary covers all layers" {
     }
 }
 
-test "Llama4 layerVType boundary = 1 — only first and last layer" {
+test "Llama4 layerVType boundary = 1, only first and last layer" {
     var m: Llama4Model = undefined;
     m.n_layers = 48;
     m.kv_type_v = .turbo3;
@@ -1280,7 +1280,7 @@ test "Llama4 default constants are consistent" {
     try std.testing.expectEqual(@as(u32, 0), default_n_layers % default_nope_interval);
 }
 
-test "Llama4 chunked attention window — chunk boundary edge cases" {
+test "Llama4 chunked attention window, chunk boundary edge cases" {
     const chunk_size: usize = 8192;
 
     // Position 0: first token
@@ -1305,7 +1305,7 @@ test "Llama4 chunked attention window — chunk boundary edge cases" {
     try std.testing.expectEqual(@as(usize, 1), win_len3);
 }
 
-test "Llama4 NoPE temperature scaling — large position" {
+test "Llama4 NoPE temperature scaling, large position" {
     const floor_scale: f32 = 8192.0;
     const attn_temp_scale: f32 = 0.1;
 

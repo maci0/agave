@@ -391,7 +391,7 @@ fn enumerateVulkan(list: *DeviceList) void {
         @memcpy(dev.name[0..@min(dev.name_len, name_buf_size)], props.deviceName[0..@min(dev.name_len, name_buf_size)]);
         if (dev.name_len > name_buf_size) dev.name_len = name_buf_size;
 
-        // Memory — sum device-local heaps
+        // Memory, sum device-local heaps
         if (vkGetPhysicalDeviceMemoryProperties) |getMemProps| {
             var mem_props: VkPhysicalDeviceMemoryProperties = .{};
             getMemProps(phys_devs[i], &mem_props);
@@ -412,7 +412,7 @@ fn enumerateVulkan(list: *DeviceList) void {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "DeviceInfo — displayName returns name slice" {
+test "DeviceInfo, displayName returns name slice" {
     var dev = DeviceInfo{ .backend = .cpu, .device_id = 0 };
     const name = "Test GPU";
     @memcpy(dev.name[0..name.len], name);
@@ -420,12 +420,12 @@ test "DeviceInfo — displayName returns name slice" {
     try @import("std").testing.expectEqualStrings("Test GPU", dev.displayName());
 }
 
-test "DeviceInfo — displayName empty when no name" {
+test "DeviceInfo, displayName empty when no name" {
     const dev = DeviceInfo{ .backend = .cpu, .device_id = 0 };
     try @import("std").testing.expectEqual(@as(usize, 0), dev.displayName().len);
 }
 
-test "DeviceInfo — ccString" {
+test "DeviceInfo, ccString" {
     var dev = DeviceInfo{ .backend = .cuda, .device_id = 0 };
     const cc = "sm_121";
     @memcpy(dev.compute_cap[0..cc.len], cc);
@@ -433,7 +433,7 @@ test "DeviceInfo — ccString" {
     try @import("std").testing.expectEqualStrings("sm_121", dev.ccString());
 }
 
-test "DeviceInfo — default values" {
+test "DeviceInfo, default values" {
     const dev = DeviceInfo{ .backend = .vulkan, .device_id = 3 };
     try @import("std").testing.expectEqual(BackendKind.vulkan, dev.backend);
     try @import("std").testing.expectEqual(@as(u32, 3), dev.device_id);
@@ -442,7 +442,7 @@ test "DeviceInfo — default values" {
     try @import("std").testing.expect(!dev.is_uma);
 }
 
-test "DeviceList — add and slice" {
+test "DeviceList, add and slice" {
     var list = DeviceList{};
     try @import("std").testing.expectEqual(@as(usize, 0), list.count);
     try @import("std").testing.expectEqual(@as(usize, 0), list.slice().len);
@@ -458,7 +458,7 @@ test "DeviceList — add and slice" {
     try @import("std").testing.expect(list.slice()[1].is_uma);
 }
 
-test "DeviceList — max capacity enforcement" {
+test "DeviceList, max capacity enforcement" {
     var list = DeviceList{};
     // Fill to max_devices.
     for (0..max_devices) |i| {
@@ -471,21 +471,21 @@ test "DeviceList — max capacity enforcement" {
     try @import("std").testing.expectEqual(max_devices, list.count);
 }
 
-test "DeviceList — max_devices constant" {
+test "DeviceList, max_devices constant" {
     try @import("std").testing.expectEqual(@as(usize, 16), max_devices);
 }
 
-test "DeviceInfo — name buffer size" {
+test "DeviceInfo, name buffer size" {
     try @import("std").testing.expectEqual(@as(usize, 64), name_buf_size);
     try @import("std").testing.expectEqual(@as(usize, 16), cc_buf_size);
 }
 
-test "BackendKind — all variants" {
+test "BackendKind, all variants" {
     const kinds = [_]BackendKind{ .cpu, .metal, .cuda, .rocm, .vulkan };
     try @import("std").testing.expectEqual(@as(usize, 5), kinds.len);
 }
 
-test "enumerate — always includes CPU" {
+test "enumerate, always includes CPU" {
     const list = enumerate();
     try @import("std").testing.expect(list.count >= 1);
     // Find CPU in the list (always last, added by enumerateCpu).
@@ -499,14 +499,14 @@ test "enumerate — always includes CPU" {
     try @import("std").testing.expect(found_cpu);
 }
 
-test "DeviceInfo — displayName with bufPrint" {
+test "DeviceInfo, displayName with bufPrint" {
     var dev = DeviceInfo{ .backend = .cpu, .device_id = 0 };
     const msg = std.fmt.bufPrint(&dev.name, "{d} threads", .{@as(u32, 12)}) catch "";
     dev.name_len = msg.len;
     try @import("std").testing.expectEqualStrings("12 threads", dev.displayName());
 }
 
-test "DeviceInfo — full construction with all fields" {
+test "DeviceInfo, full construction with all fields" {
     var dev = DeviceInfo{
         .backend = .cuda,
         .device_id = 2,
@@ -530,7 +530,7 @@ test "DeviceInfo — full construction with all fields" {
     try std.testing.expectEqualStrings("sm_121", dev.ccString());
 }
 
-test "DeviceList — slice preserves insertion order" {
+test "DeviceList, slice preserves insertion order" {
     var list = DeviceList{};
     list.add(.{ .backend = .metal, .device_id = 0, .is_uma = true });
     list.add(.{ .backend = .vulkan, .device_id = 1 });
@@ -545,7 +545,7 @@ test "DeviceList — slice preserves insertion order" {
     try std.testing.expectEqual(BackendKind.cpu, s[2].backend);
 }
 
-test "enumerate — returns DeviceList with at least one device" {
+test "enumerate, returns DeviceList with at least one device" {
     const list = enumerate();
     // enumerate() always adds CPU, so count >= 1
     try std.testing.expect(list.count >= 1);
@@ -560,7 +560,7 @@ test "enumerate — returns DeviceList with at least one device" {
     try std.testing.expect(std.mem.indexOf(u8, cpu_name, "threads") != null);
 }
 
-test "printDeviceTable — function signature comptime check" {
+test "printDeviceTable, function signature comptime check" {
     comptime {
         const T = @TypeOf(printDeviceTable);
         _ = T;

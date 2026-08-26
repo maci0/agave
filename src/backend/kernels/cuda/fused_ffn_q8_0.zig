@@ -97,7 +97,7 @@ export fn fused_ffn_gate_up_gelu_q8_0_kernel(
     up_sum = cu.blockReduceAdd(up_sum);
 
     if (tid == 0) {
-        // GELU(gate) * up — tanh approximation
+        // GELU(gate) * up, tanh approximation
         const c1: f32 = 0.7978845608; // sqrt(2/pi)
         const c2: f32 = 0.044715;
         const inner = c1 * (gate_sum + c2 * gate_sum * gate_sum * gate_sum);

@@ -196,7 +196,7 @@ pub const DFlash2Model = struct {
 
         // Causality: published DFlash2 checkpoints declare is_causal=false
         // (bools surface through getMetaU32 as 0/1). A causal (DFlash1-style)
-        // drafter cannot run through this path — fail loudly rather than
+        // drafter cannot run through this path, fail loudly rather than
         // drafting silently wrong.
         if (f.getMetaU32("is_causal")) |causal| {
             if (causal != 0) {
@@ -319,7 +319,7 @@ pub const DFlash2Model = struct {
             self.norm_q[li] = try self.loadLayerNorm(lid, .q_norm, hd);
             self.norm_k[li] = try self.loadLayerNorm(lid, .k_norm, hd);
             // Base kernels stacked as [stage][K*E]; dequantized to f32 (source
-            // may be bf16 — raw pointer casts are not alignment-safe).
+            // may be bf16, raw pointer casts are not alignment-safe).
             const cb_t = try self.layerTensor(lid, "conv_a_base");
             const elems: usize = 2 * @as(usize, self.conv_kernel) * e;
             if (cb_t.numElements() != elems) {
@@ -613,7 +613,7 @@ pub const DFlash2Model = struct {
         self.cancelled.store(true, .release);
     }
 
-    /// No paged block table — the context cache is a fixed rotating ring.
+    /// No paged block table, the context cache is a fixed rotating ring.
     pub fn getBlockTable(self: *DFlash2Model) []const u32 {
         _ = self;
         return &.{};

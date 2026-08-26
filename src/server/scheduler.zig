@@ -10,8 +10,8 @@ const Mutex = Io.Mutex;
 const sim_clock = @import("../sim_clock.zig");
 
 /// Monotonic millisecond clock (injectable via sim_clock for deterministic
-/// tests). All scheduler interval math — request timeouts, priority aging,
-/// TTFT stamps — uses this so NTP steps cannot spuriously time out running
+/// tests). All scheduler interval math, request timeouts, priority aging,
+/// TTFT stamps, uses this so NTP steps cannot spuriously time out running
 /// requests or invert queue priority.
 fn milliTimestamp() i64 {
     return sim_clock.monoMilli();
@@ -39,7 +39,7 @@ fn sleepNs(ns: u64) void {
 /// Higher values give more weight to cached prefix length.
 const cache_priority_alpha: f64 = 0.5;
 
-/// Milliseconds per second — converts alpha from per-second to per-millisecond units.
+/// Milliseconds per second, converts alpha from per-second to per-millisecond units.
 const ms_per_second: f64 = 1000.0;
 
 /// Maximum number of requests allowed in the waiting queue.
@@ -61,7 +61,7 @@ pub const max_running_requests_single_sequence: usize = 1;
 
 /// Initial token output buffer capacity per request.
 /// Must be >= server's gen_ids_buf_size (4096) + cancellation margin.
-/// Handler threads read tokens.items without locking — if append causes
+/// Handler threads read tokens.items without locking, if append causes
 /// reallocation, those reads hit freed memory. appendToken uses
 /// appendAssumeCapacity to enforce this: if capacity is exhausted, the
 /// request is cancelled instead of reallocating.
@@ -71,7 +71,7 @@ const initial_token_capacity: usize = 4096 + 8;
 /// Limits prefill blocking so decode requests get timely service.
 const prefill_chunk_size: u32 = 32;
 
-/// Logit-bias slot count — derived from SamplingParams so the scheduler
+/// Logit-bias slot count, derived from SamplingParams so the scheduler
 /// buffer cannot drift from JSON parse capacity.
 const max_scheduler_logit_bias: usize = @as(SamplingParams, .{}).logit_bias_ids.len;
 
@@ -187,7 +187,7 @@ pub const Request = struct {
 
     /// Append a token to the output sequence.
     /// If the token matches any EOG (end-of-generation) ID, sets is_finished
-    /// without appending the token — EOG tokens are stop signals, not output.
+    /// without appending the token, EOG tokens are stop signals, not output.
     pub fn appendToken(self: *Request, token: u32, eog_ids: []const u32) void {
         for (eog_ids) |eog_id| {
             if (token == eog_id) {
@@ -238,7 +238,7 @@ fn requestPriority(req: *const Request, now: i64) i64 {
 
 /// Total order for the waiting queue (ascending). Pop from the end admits first.
 /// Equal priority ties break by id descending so lower id (earlier enqueue) is
-/// admitted first — independent of swapRemove layout from cancellations.
+/// admitted first, independent of swapRemove layout from cancellations.
 fn waitingOrderLessThan(now: i64, a: *const Request, b: *const Request) bool {
     const pa = requestPriority(a, now);
     const pb = requestPriority(b, now);
@@ -327,7 +327,7 @@ pub const RequestManager = struct {
             .prefetcher = null,
         };
 
-        // Construct only — runSchedulerLoop starts the worker at the final address.
+        // Construct only, runSchedulerLoop starts the worker at the final address.
         if (tiered_cache) |cache| {
             mgr.prefetcher = Prefetcher.init(cache);
         }
@@ -430,7 +430,7 @@ pub const RequestManager = struct {
             defer self.mutex.unlock(self.io);
 
             // 1. Remove finished/cancelled from running list.
-            // Do NOT free the request here — the HTTP handler thread holds a
+            // Do NOT free the request here, the HTTP handler thread holds a
             // pointer to it (via rm.enqueue()) and frees it in its defer block.
             // Freeing here would cause a double-free race with the handler.
             var i: usize = 0;
@@ -478,7 +478,7 @@ pub const RequestManager = struct {
             }
 
             // 3. Sort waiting queue by cache-aware priority before filling batch.
-            // Skip sort when no new requests arrived — relative ordering is stable
+            // Skip sort when no new requests arrived, relative ordering is stable
             // because priority = α×cache_prefix − elapsed_ms and elapsed_ms changes
             // uniformly for all waiting requests between steps.
             if (self.queue_dirty and self.waiting.items.len > 1) {
@@ -659,7 +659,7 @@ pub const RequestManager = struct {
 
                 req.kv_position = model.kvSeqLen();
 
-                // Prefill complete — emit first generated token.
+                // Prefill complete, emit first generated token.
                 // Re-check is_cancelled: handler may have cancelled during prefill.
                 if (req.prefill_pos >= req.prompt_tokens and !req.is_cancelled.load(.acquire)) {
                     req.prefill_done_at = milliTimestamp();
@@ -691,7 +691,7 @@ pub const RequestManager = struct {
 
 /// Background scheduler loop.
 /// Continuously calls step() until shutdown flag is set.
-/// NOT auto-started — server controls lifecycle.
+/// NOT auto-started, server controls lifecycle.
 pub fn runSchedulerLoop(
     manager: *RequestManager,
     model: *Model,
@@ -728,7 +728,7 @@ pub fn runSchedulerLoop(
 /// Marking alone is not enough: RequestManager.deinit frees anything still
 /// in these lists, so an entry left listed while its handler destroys it is a
 /// deterministic double-free. Running requests must also observe
-/// `is_cancelled` — handler threads poll only `is_finished`/`is_cancelled`
+/// `is_cancelled`, handler threads poll only `is_finished`/`is_cancelled`
 /// in their main wait loops, so `scheduler_done` alone leaves them spinning
 /// forever (use-after-free once deinit runs).
 /// Only call once the scheduler loop has stopped: no step() may re-add.
@@ -756,7 +756,7 @@ fn testIo() Io {
     return threaded.io();
 }
 
-/// Tests enqueue without configureSchedulerSampling — mark ready so step can admit.
+/// Tests enqueue without configureSchedulerSampling, mark ready so step can admit.
 fn markSamplingReady(req: *Request) void {
     req.sampling_ready.store(true, .release);
 }
@@ -771,7 +771,7 @@ test "enqueue increments waiting count" {
     const tokens_a = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req1 = try manager.enqueue(&tokens_a);
     markSamplingReady(req1);
-    // Requests in waiting queue are freed by manager.deinit() — no defer needed.
+    // Requests in waiting queue are freed by manager.deinit(), no defer needed.
     const tokens_b = [_]u32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 };
     const req2 = try manager.enqueue(&tokens_b);
     markSamplingReady(req2);
@@ -789,7 +789,7 @@ test "step admits one request at a time while KV is single-sequence" {
     var manager = try RequestManager.init(allocator, &metrics, 2, 30, null, testIo());
     defer manager.deinit();
 
-    // Enqueue 3 requests — all freed by manager.deinit() (still in queues at test end)
+    // Enqueue 3 requests, all freed by manager.deinit() (still in queues at test end)
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     markSamplingReady(try manager.enqueue(&dummy_tokens));
     markSamplingReady(try manager.enqueue(&dummy_tokens));
@@ -799,7 +799,7 @@ test "step admits one request at a time while KV is single-sequence" {
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
 
-    // Step 1: only one request may be admitted — two interleaved requests
+    // Step 1: only one request may be admitted, two interleaved requests
     // share one physical KV sequence and would corrupt each other.
     try manager.step(&model, &[_]u32{});
 
@@ -867,12 +867,12 @@ test "step removes finished requests" {
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
     const req1 = try manager.enqueue(&dummy_tokens);
     markSamplingReady(req1);
-    // req1 is removed from running by step() when finished — handler (test) owns cleanup.
+    // req1 is removed from running by step() when finished, handler (test) owns cleanup.
     defer {
         req1.deinit();
         allocator.destroy(req1);
     }
-    // req2 stays in running — freed by manager.deinit()
+    // req2 stays in running, freed by manager.deinit()
     markSamplingReady(try manager.enqueue(&dummy_tokens));
 
     // Create mock model that returns non-EOS
@@ -890,7 +890,7 @@ test "step removes finished requests" {
     // Mark first request as finished
     req1.is_finished.store(true, .release);
 
-    // Step again — should remove the finished request from running and admit
+    // Step again, should remove the finished request from running and admit
     // the waiter in its place within the same iteration.
     try manager.step(&model, &[_]u32{1}); // Pass EOS token ID
 
@@ -920,7 +920,7 @@ test "step cancels timed-out requests" {
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
 
-    // At exactly timeout_sec seconds, elapsed > timeout is false — must not cancel yet.
+    // At exactly timeout_sec seconds, elapsed > timeout is false, must not cancel yet.
     sim_clock.advanceMs(1000);
     try manager.step(&model, &[_]u32{}); // admit to running
     try std.testing.expect(!req.is_cancelled.load(.acquire));

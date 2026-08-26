@@ -6,9 +6,9 @@
 
 > After this chapter you can explain GGUF vs SafeTensors differences, tensor naming, dimension order, and why mismatches cause silent failures.
 
-The same model can be stored in different file formats — **GGUF** (a single-file binary format designed by the llama.cpp project, optimized for mmap and quantized inference) and **SafeTensors** (a multi-file format from HuggingFace, the standard for PyTorch model distribution). They store identical weights but use **different conventions** for tensor layout, metadata keys, and even mathematical transformations.
+The same model can be stored in different file formats, **GGUF** (a single-file binary format designed by the llama.cpp project, optimized for mmap and quantized inference) and **SafeTensors** (a multi-file format from HuggingFace, the standard for PyTorch model distribution). They store identical weights but use **different conventions** for tensor layout, metadata keys, and even mathematical transformations.
 
-**Critical insight:** Using GGUF conventions on SafeTensors data (or vice versa) produces **silent correctness failures** — the model runs but outputs garbage. Agave found **6 separate bugs** when adding SafeTensors support for Qwen3.5.
+**Critical insight:** Using GGUF conventions on SafeTensors data (or vice versa) produces **silent correctness failures**, the model runs but outputs garbage. Agave found **6 separate bugs** when adding SafeTensors support for Qwen3.5.
 
 ## Why Formats Have Different Conventions
 
@@ -222,9 +222,9 @@ flowchart LR
     V4 & V5 & V6 & V7 -->|"HF: h*2/8=1"| K1
 ```
 
-**GGUF pattern:** `0,1,0,1,0,1,0,1` (tiling — alternates every head)
+**GGUF pattern:** `0,1,0,1,0,1,0,1` (tiling, alternates every head)
 
-**SafeTensors pattern:** `0,0,0,0,1,1,1,1` (interleaved groups — contiguous blocks)
+**SafeTensors pattern:** `0,0,0,0,1,1,1,1` (interleaved groups, contiguous blocks)
 
 **GGUF (llama.cpp TILING):** V-head maps to K-head via modulo wrapping
 
@@ -378,12 +378,12 @@ flowchart LR
     SHN["head nh-1\n[Q0, Q1, ..., Q_hd-1,\n G0, G1, ..., G_hd-1]"]:::setup
     SplitG["q_buf / g_buf\nsplit correctly"]:::success
 
-    subgraph GGUFMem["GGUF memory layout — interleaved per element"]
+    subgraph GGUFMem["GGUF memory layout, interleaved per element"]
         direction TB
         GH0 ~~~ GH1 ~~~ GHN
     end
 
-    subgraph STMem["SafeTensors memory layout — concatenated halves"]
+    subgraph STMem["SafeTensors memory layout, concatenated halves"]
         direction TB
         SH0 ~~~ SH1 ~~~ SHN
     end
@@ -441,7 +441,7 @@ normAsF32(self, t, n):
 
     # cache miss: allocate, convert, store permanently
     if self.norm_cache_len >= max_norm_entries:
-        @panic("norm cache overflow — increase max_norm_entries")
+        @panic("norm cache overflow, increase max_norm_entries")
 
     buf = allocate f32[n]  # falls back to dequant_buf on allocation failure
     dequantToF32(buf, t.data_ptr, t.dtype, n)
@@ -466,17 +466,17 @@ flowchart TD
     B1["dequant(norm_layer1, scratch)"]:::setup
     B2["getBufRef(scratch)\ncaches ptr → MTLBuffer A"]:::migration
     B3["dequant(norm_layer2, scratch)\noverwrites scratch memory"]:::danger
-    B4["getBufRef(scratch)\nreturns CACHED MTLBuffer A\n(stale — still points to layer1 data)"]:::danger
+    B4["getBufRef(scratch)\nreturns CACHED MTLBuffer A\n(stale, still points to layer1 data)"]:::danger
     B5["GPU reads layer1 norm weights\nfor layer2 forward pass\nSILENT CORRUPTION"]:::danger
     G1["normAsF32(tensor)\ncheck norm_cache by data_ptr key"]:::setup
     G3["return cached f32 buf\npermanent allocation\ncorrect MTLBuffer always"]:::success
     G4["allocate new f32 buf\ndequant once\nstore in norm_cache\nreturn stable ptr"]:::success
 
-    subgraph Bad["Bad pattern — scratch buffer reuse"]
+    subgraph Bad["Bad pattern, scratch buffer reuse"]
         B1 --> B2 --> B3 --> B4 --> B5
     end
 
-    subgraph Good["Fixed pattern — per-tensor cache"]
+    subgraph Good["Fixed pattern, per-tensor cache"]
         G1 --> G2{"cache hit?"}
         G2 -->|"yes"| G3
         G2 -->|"no"| G4
@@ -683,7 +683,7 @@ test "qwen35 GGUF vs SafeTensors equivalence":
 
 ```text
 # BAD: hardcoded GGUF convention
-kh = h % num_k_heads   # wrong for SafeTensors!
+kh = h % num_k_heads   # wrong for SafeTensors
 ```
 
 **Fix:** Detect format, apply correct convention.
@@ -694,7 +694,7 @@ kh = h % num_k_heads   # wrong for SafeTensors!
 # BAD: conflates format (GGUF vs SafeTensors) with quantization (MLX vs GGUF-Q)
 is_mlx = (tensor.dtype == mlx_q)
 if is_mlx:
-    # apply SafeTensors conventions  <- WRONG! BF16 SafeTensors exists
+    # apply SafeTensors conventions  <- WRONG: BF16 SafeTensors exists
 ```
 
 **Fix:** Use `is_safetensors` flag, not dtype.
@@ -706,7 +706,7 @@ if is_mlx:
 dequant(norm1, scratch)
 gpu_buffer = getBufRef(scratch)   # caches scratch -> GPU buffer mapping
 dequant(norm2, scratch)           # overwrites scratch
-# GPU buffer still points to old norm1 data!
+# GPU buffer still points to old norm1 data
 ```
 
 **Fix:** Per-tensor cache or disable caching for scratch buffers.
@@ -729,9 +729,9 @@ GGUF 3D expert tensors store dimensions as `[n_experts, rows, cols]`. Per-expert
 
 SafeTensors `config.json` files may store rope configuration doubly nested in `text_config.rope_parameters.rope_theta`. When reading `rope_theta` from SafeTensors metadata, check the nested `rope_parameters` object inside `text_config` before falling back to the top-level key.
 
-## mmproj GGUF — Vision Encoder Weights
+## mmproj GGUF: Vision Encoder Weights
 
-Multimodal models store vision encoder weights in a **separate GGUF file** (the "mmproj" file), distinct from the main language model GGUF. This keeps the text model self-contained — vision is an optional add-on.
+Multimodal models store vision encoder weights in a **separate GGUF file** (the "mmproj" file), distinct from the main language model GGUF. This keeps the text model self-contained, vision is an optional add-on.
 
 ```mermaid
 flowchart TD
@@ -784,14 +784,14 @@ flowchart TD
 Vision encoder tensors use a different prefix scheme than the main model:
 
 ```
-v.blk.0.attn_q.weight      — Vision transformer block 0, Q projection
-v.blk.0.attn_k.weight      — K projection
-v.blk.0.ffn_up.weight      — FFN up projection
-v.patch_embd.weight         — Patch embedding convolution
-v.position_embd.weight      — Positional embedding
-mm.input_projection.weight  — Final projection into LLM embedding space
-mm.soft_emb_norm.weight     — Soft embedding norm (Gemma 3)
-mm.0.weight, mm.2.weight    — MLP projector layers (Qwen VL)
+v.blk.0.attn_q.weight     , Vision transformer block 0, Q projection
+v.blk.0.attn_k.weight     , K projection
+v.blk.0.ffn_up.weight     , FFN up projection
+v.patch_embd.weight        , Patch embedding convolution
+v.position_embd.weight     , Positional embedding
+mm.input_projection.weight , Final projection into LLM embedding space
+mm.soft_emb_norm.weight    , Soft embedding norm (Gemma 3)
+mm.0.weight, mm.2.weight   , MLP projector layers (Qwen VL)
 ```
 
 The `v.` prefix denotes vision encoder layers, while `mm.` denotes the multimodal projection head that maps vision features into the language model's embedding dimension.
@@ -825,7 +825,7 @@ The mmproj GGUF carries its own architecture metadata under the `clip.vision` na
 | `clip.vision.block_count` | Number of ViT transformer blocks | 27 |
 | `clip.vision.attention.head_count` | Number of attention heads | 16 |
 
-The `projection_dim` is the critical interface parameter — it must match the language model's `n_embd` so that visual embeddings can replace token embeddings in the forward pass. The vision encoder auto-detects its architecture variant (Gemma 4 SigLIP-2, Gemma 3 SigLIP, Qwen VL) from the available tensors in the mmproj file.
+The `projection_dim` is the critical interface parameter, it must match the language model's `n_embd` so that visual embeddings can replace token embeddings in the forward pass. The vision encoder auto-detects its architecture variant (Gemma 4 SigLIP-2, Gemma 3 SigLIP, Qwen VL) from the available tensors in the mmproj file.
 
 ## Summary: Format Checklist
 
@@ -861,26 +861,26 @@ LoRA adapter merging in [Chapter 21: LoRA Adapters](21-lora.md) leans on this sa
 
 ## Glossary
 
-**A_log pre-conversion** — The convention where GGUF stores SSM decay as pre-computed `-exp(A_log)` while SafeTensors stores raw `A_log` requiring init-time conversion.
+**A_log pre-conversion**, The convention where GGUF stores SSM decay as pre-computed `-exp(A_log)` while SafeTensors stores raw `A_log` requiring init-time conversion.
 
-**dimension order normalization** — Reversing GGUF's inner-first dimension order so `dims[0]` always means the output (row) dimension, matching PyTorch convention.
+**dimension order normalization**, Reversing GGUF's inner-first dimension order so `dims[0]` always means the output (row) dimension, matching PyTorch convention.
 
-**Format VTable** — A struct of function pointers implementing format polymorphism (`getTensor`, `getMetaU32`, etc.).
+**Format VTable**, A struct of function pointers implementing format polymorphism (`getTensor`, `getMetaU32`, etc.).
 
-**GGUF (GPT-Generated Unified Format)** — A single-file binary model format with mmap-friendly layout, quantization metadata embedded in weight blocks.
+**GGUF (GPT-Generated Unified Format)**, A single-file binary model format with mmap-friendly layout, quantization metadata embedded in weight blocks.
 
-**is_safetensors flag** — A boolean on the Format interface decoupling format detection from convention selection.
+**is_safetensors flag**, A boolean on the Format interface decoupling format detection from convention selection.
 
-**metadata key mapping** — A bidirectional table translating between GGUF metadata keys and HuggingFace config.json keys.
+**metadata key mapping**, A bidirectional table translating between GGUF metadata keys and HuggingFace config.json keys.
 
-**mmproj** — A separate GGUF file containing vision encoder and multimodal projector weights, loaded alongside the main language model.
+**mmproj**, A separate GGUF file containing vision encoder and multimodal projector weights, loaded alongside the main language model.
 
-**norm weight caching** — Using a per-tensor fixed-size cache for dequantized norm weights, avoiding stale GPU buffer reads.
+**norm weight caching**, Using a per-tensor fixed-size cache for dequantized norm weights, avoiding stale GPU buffer reads.
 
-**Q/Gate split layout** — The memory layout difference for interleaved Q and gate values: element-interleaved per head (GGUF) vs. concatenated halves (SafeTensors).
+**Q/Gate split layout**, The memory layout difference for interleaved Q and gate values: element-interleaved per head (GGUF) vs. concatenated halves (SafeTensors).
 
-**SafeTensors** — A multi-file model format from HuggingFace storing tensors with JSON metadata headers.
+**SafeTensors**, A multi-file model format from HuggingFace storing tensors with JSON metadata headers.
 
-**silent correctness failure** — A bug where the model runs without errors but produces garbage output due to mismatched format conventions.
+**silent correctness failure**, A bug where the model runs without errors but produces garbage output due to mismatched format conventions.
 
-**tensor name mapping** — Translation between GGUF short names (e.g., `attn_qkv`) and HuggingFace full paths (e.g., `linear_attn.in_proj_qkv.weight`).
+**tensor name mapping**, Translation between GGUF short names (e.g., `attn_qkv`) and HuggingFace full paths (e.g., `linear_attn.in_proj_qkv.weight`).

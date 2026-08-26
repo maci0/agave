@@ -71,7 +71,7 @@ sequenceDiagram
     participant W1 as Worker 1
     participant W2 as Worker 2
 
-    Note over W1,W2: Idle — sleeping on generation=0
+    Note over W1,W2: Idle, sleeping on generation=0
     W1->>K: futexWait(&generation, 0)
     W2->>K: futexWait(&generation, 0)
 
@@ -90,7 +90,7 @@ sequenceDiagram
 
     W1->>M: active.fetchSub(1)
     W2->>M: active.fetchSub(1)
-    Note over W1,W2: Back to sleep — futexWait(&generation, 1)
+    Note over W1,W2: Back to sleep, futexWait(&generation, 1)
 ```
 
 In Zig 0.16, futex operations go through the `Io` context (threaded from `main(Init)` via `init.io`). The thread pool stores `io` at spawn time and uses `io.futexWaitUncancelable()` / `io.futexWake()` instead of the old `std.Thread.Futex` API.
@@ -124,7 +124,7 @@ Worker loop:
 
 ## Work Distribution: Atomic Counter
 
-Instead of pre-assigning rows to threads, use an **atomic counter** that threads increment to grab the next chunk. Each thread races to claim the next available chunk by atomically advancing the counter — no coordinator needed.
+Instead of pre-assigning rows to threads, use an **atomic counter** that threads increment to grab the next chunk. Each thread races to claim the next available chunk by atomically advancing the counter, no coordinator needed.
 
 ```mermaid
 flowchart LR
@@ -190,7 +190,7 @@ doWork(pool):
 
 ## Main Thread Participation
 
-The main thread should **not** just wait — it should do work too. Instead of sitting idle while workers run, it joins the counter race and takes chunks like any other thread, then spin-waits for the stragglers.
+The main thread should **not** just wait, it should do work too. Instead of sitting idle while workers run, it joins the counter race and takes chunks like any other thread, then spin-waits for the stragglers.
 
 ```mermaid
 flowchart TD
@@ -261,7 +261,7 @@ parallelFor(pool, total, grain, ctx, func):
 
 **Why participate?** If you have 8 cores and spawn 7 worker threads, the main thread sitting idle wastes 1/8 of your compute power.
 
-**Why spin-wait?** GEMV chunks are microsecond-scale. Futex wait/wake would add 1-2 µs overhead per operation — comparable to the work itself. Spinning is simpler and faster for short waits.
+**Why spin-wait?** GEMV chunks are microsecond-scale. Futex wait/wake would add 1-2 µs overhead per operation, comparable to the work itself. Spinning is simpler and faster for short waits.
 
 ## Thread Pool Lifecycle
 
@@ -285,7 +285,7 @@ stateDiagram-v2
 
     note right of Uninit
         ThreadPool.init() only sets
-        n_workers — no threads yet
+        n_workers, no threads yet
     end note
 
     note right of Working
@@ -415,9 +415,9 @@ sequenceDiagram
 
 ### .monotonic
 
-No synchronization — just atomicity. Use for counters: `task_counter.fetchAdd(grain, .monotonic)`.
+No synchronization, just atomicity. Use for counters: `task_counter.fetchAdd(grain, .monotonic)`.
 
-**Why monotonic?** The counter value doesn't synchronize memory — it's just work assignment. Workers don't need to see other threads' writes.
+**Why monotonic?** The counter value doesn't synchronize memory, it's just work assignment. Workers don't need to see other threads' writes.
 
 ### .acquire / .release
 
@@ -441,9 +441,9 @@ Worker thread (acquire):
 
 ### .seq_cst (Sequential Consistency)
 
-Strongest guarantee — all threads see the same order of operations. **Slowest** — use only when necessary.
+Strongest guarantee, all threads see the same order of operations. **Slowest**, use only when necessary.
 
-Agave doesn't use `.seq_cst` — acquire/release is sufficient for thread pool handoff.
+Agave doesn't use `.seq_cst`, acquire/release is sufficient for thread pool handoff.
 
 ## Tuning Parameters
 
@@ -577,7 +577,7 @@ flowchart TB
     Ping["Cache line\nping-pong\n(5-30x slowdown)"]:::danger
     Solo["Each write\nindependent\nno cross-core traffic"]:::success
 
-    subgraph bad ["BAD: [8]f32 — 32 bytes, fits in one 64-byte cache line"]
+    subgraph bad ["BAD: [8]f32, 32 bytes, fits in one 64-byte cache line"]
         direction LR
         CL1["Cache line (64 bytes)"]:::danger
         PS0["ps[0]\n4B\nCore 0"]:::migration
@@ -598,7 +598,7 @@ flowchart TB
         CL1 --- PS7
     end
 
-    subgraph good ["GOOD: [8]CacheLinePadded — each value owns a full 64-byte cache line"]
+    subgraph good ["GOOD: [8]CacheLinePadded, each value owns a full 64-byte cache line"]
         direction LR
         CL_A["Cache line A\n(64 bytes)"]:::setup
         CL_B["Cache line B\n(64 bytes)"]:::setup
@@ -616,7 +616,7 @@ flowchart TB
     good -->|"Core 1 writes pa[1]\nonly its own line\nis invalidated"| Solo
 ```
 
-Agave avoids this by using per-chunk reduction in the worker function — no shared array.
+Agave avoids this by using per-chunk reduction in the worker function, no shared array.
 
 ### Pitfall 3: Forgetting to Call spawn()
 
@@ -664,28 +664,28 @@ The same atomic-counter work-distribution idea scales past one machine in [Chapt
 
 ## Glossary
 
-**cache line** — The smallest unit of data transfer between CPU cache levels; typically 64 bytes.
+**cache line**, The smallest unit of data transfer between CPU cache levels; typically 64 bytes.
 
-**cache-line padding** — Inserting unused bytes so frequently-written variables by different threads occupy separate cache lines, avoiding false sharing.
+**cache-line padding**, Inserting unused bytes so frequently-written variables by different threads occupy separate cache lines, avoiding false sharing.
 
-**CAS (Compare-And-Swap)** — An atomic operation that updates a value only if it currently matches an expected value; foundational for lock-free data structures.
+**CAS (Compare-And-Swap)**, An atomic operation that updates a value only if it currently matches an expected value; foundational for lock-free data structures.
 
-**cmpxchgWeak** — A CAS variant that may spuriously fail; faster on ARM, best used in retry loops.
+**cmpxchgWeak**, A CAS variant that may spuriously fail; faster on ARM, best used in retry loops.
 
-**false sharing** — Performance degradation when different threads write to variables sharing the same cache line, causing cross-core invalidation.
+**false sharing**, Performance degradation when different threads write to variables sharing the same cache line, causing cross-core invalidation.
 
-**fetchAdd** — An atomic operation that reads, adds, and returns the original value in one indivisible step.
+**fetchAdd**, An atomic operation that reads, adds, and returns the original value in one indivisible step.
 
-**futex (fast userspace mutex)** — A kernel primitive for efficient thread sleep/wake without busy-waiting.
+**futex (fast userspace mutex)**, A kernel primitive for efficient thread sleep/wake without busy-waiting.
 
-**generation counter** — An atomic variable workers sleep on; incrementing it signals new work.
+**generation counter**, An atomic variable workers sleep on; incrementing it signals new work.
 
-**grain size** — The number of work units assigned per atomic fetch-add; controls contention vs. load balance trade-off.
+**grain size**, The number of work units assigned per atomic fetch-add; controls contention vs. load balance trade-off.
 
-**main thread participation** — The pattern where the main thread does useful work alongside pool workers instead of idly waiting.
+**main thread participation**, The pattern where the main thread does useful work alongside pool workers instead of idly waiting.
 
-**spin-wait** — Busy-looping on a condition instead of sleeping; appropriate for microsecond-scale waits.
+**spin-wait**, Busy-looping on a condition instead of sleeping; appropriate for microsecond-scale waits.
 
-**spinLoopHint** — A CPU hint (`pause` on x86, `yield` on ARM) reducing power during spin-wait loops.
+**spinLoopHint**, A CPU hint (`pause` on x86, `yield` on ARM) reducing power during spin-wait loops.
 
-**thread pool** — A set of persistent worker threads that sleep when idle and wake on demand, avoiding per-operation thread creation overhead.
+**thread pool**, A set of persistent worker threads that sleep when idle and wake on demand, avoiding per-operation thread creation overhead.

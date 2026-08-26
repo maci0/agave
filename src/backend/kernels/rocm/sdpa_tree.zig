@@ -1,4 +1,4 @@
-//! Tree-Masked SDPA kernel for CUDA — FlashAttention-2 with ancestor bitmask.
+//! Tree-Masked SDPA kernel for CUDA, FlashAttention-2 with ancestor bitmask.
 //! One block per (node, head) pair. Threads cooperate on KV block processing.
 //! Used during DDTree speculative decoding batch verification.
 //!
@@ -59,7 +59,7 @@ export fn sdpa_tree_kernel(
         const block_start = block * tree_block_size;
         const block_len = @min(tree_block_size, prefix_len - block_start);
 
-        // Compute scores for this block — store in shared memory
+        // Compute scores for this block, store in shared memory
         var t: u32 = tid;
         var block_max: f32 = -3.402823e+38;
 
@@ -104,7 +104,7 @@ export fn sdpa_tree_kernel(
         cu.syncthreads();
         l_i += cu.sharedLoad(bcast_off);
 
-        // V accumulate — all threads read shared scores
+        // V accumulate, all threads read shared scores
         t = 0;
         while (t < block_len) : (t += 1) {
             const w = cu.sharedLoad(sc_off + t);
@@ -129,7 +129,7 @@ export fn sdpa_tree_kernel(
         const mask_word = ancestor_masks[node_i * 8 + j / 64];
         if ((mask_word & (@as(u64, 1) << @as(u6, @intCast(j % 64)))) == 0) continue;
 
-        // Score — thread 0 computes dot product, then broadcast via shared memory
+        // Score, thread 0 computes dot product, then broadcast via shared memory
         if (tid == 0) {
             var dot_val: f32 = 0.0;
             var d: u32 = 0;

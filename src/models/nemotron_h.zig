@@ -1,4 +1,4 @@
-//! NVIDIA Nemotron-H — Hybrid Mamba-2 + Attention + FFN decoder.
+//! NVIDIA Nemotron-H, Hybrid Mamba-2 + Attention + FFN decoder.
 //!
 //! Architecture overview
 //! ---------------------
@@ -97,25 +97,25 @@ pub const NemotronHModel = struct {
     // ── Working buffers (allocated once, reused every token) ──────
     hidden: []f32 = &.{},
     hidden2: []f32 = &.{},
-    /// Q projection output — n_head * head_dim elements.
+    /// Q projection output, n_head * head_dim elements.
     q_buf: []f32 = &.{},
-    /// K projection output — n_head_kv * head_dim elements.
+    /// K projection output, n_head_kv * head_dim elements.
     k_buf: []f32 = &.{},
-    /// V projection output — n_head_kv * head_dim elements.
+    /// V projection output, n_head_kv * head_dim elements.
     v_buf: []f32 = &.{},
     /// Attention / SSM output before output projection.
     attn_out: []f32 = &.{},
-    /// Dot-product attention score buffer — max_seq_len elements.
+    /// Dot-product attention score buffer, max_seq_len elements.
     scores_buf: []f32 = &.{},
     /// FFN first half (gate or up).
     ff_buf1: []f32 = &.{},
-    /// SSM input projection output — [z(ssm_d_inner) | conv_in(conv_ch) | dt(ssm_dt_rank)].
+    /// SSM input projection output, [z(ssm_d_inner) | conv_in(conv_ch) | dt(ssm_dt_rank)].
     ssm_proj_buf: []f32 = &.{},
-    /// Causal conv1d output — conv_ch elements.
+    /// Causal conv1d output, conv_ch elements.
     ssm_conv_out: []f32 = &.{},
-    /// SSM output (y) before gating — ssm_d_inner elements.
+    /// SSM output (y) before gating, ssm_d_inner elements.
     ssm_y_buf: []f32 = &.{},
-    /// Final vocabulary logits — vocab_size elements.
+    /// Final vocabulary logits, vocab_size elements.
     logits_buf: []f32 = &.{},
 
     // ── Batched-prefill buffers (page_allocator, chunk_size tokens) ──
@@ -314,7 +314,7 @@ pub const NemotronHModel = struct {
             const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
-            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            // BlockAllocator stores a pointer, must point to self.paged_cache (not a local copy).
             self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
@@ -403,7 +403,7 @@ pub const NemotronHModel = struct {
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
 
-        // Prefill buffers (page_allocator — must match init allocation).
+        // Prefill buffers (page_allocator, must match init allocation).
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
@@ -432,7 +432,7 @@ pub const NemotronHModel = struct {
 
         try model_mod.ensureKvBlock(self);
 
-        // Embedding lookup — zero-copy read from mmap.
+        // Embedding lookup, zero-copy read from mmap.
         const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         self.be.embLookup(
             .{ .data = emb_t.data_ptr, .dtype = emb_t.dtype },
@@ -468,7 +468,7 @@ pub const NemotronHModel = struct {
             self.be.rmsNorm(self.hidden.ptr, self.normAsF32(nw, self.n_embd), self.hidden.ptr, self.n_embd, self.rms_eps);
         }
         self.be.gemv(self.hidden.ptr, .{ .data = ow.data_ptr, .dtype = ow.dtype }, self.logits_buf.ptr, self.vocab_size, self.n_embd);
-        self.be.sync(); // GPU wrote logits — sync before CPU argmax
+        self.be.sync(); // GPU wrote logits, sync before CPU argmax
         return math_ops.argmax(self.logits_buf);
     }
 
@@ -499,7 +499,7 @@ pub const NemotronHModel = struct {
         }
 
         // Final: rmsNorm + logits on the LAST token only.
-        // In batched mode, residuals are never deferred — pf_hidden has the
+        // In batched mode, residuals are never deferred, pf_hidden has the
         // complete residual stream, so plain rmsNorm suffices.
         const last_in_chunk = (token_ids.len - 1) % cs;
         const e: usize = self.n_embd;
@@ -614,7 +614,7 @@ pub const NemotronHModel = struct {
         );
 
         // Split projection.
-        self.be.sync(); // GPU gemv wrote ssm_proj_buf — flush before CPU reads
+        self.be.sync(); // GPU gemv wrote ssm_proj_buf, flush before CPU reads
         const z_ptr = self.ssm_proj_buf.ptr; // [d_inner] gate
         const conv_in_ptr = self.ssm_proj_buf.ptr + d_inner; // [conv_ch] conv input
         const dt_raw_ptr = self.ssm_proj_buf.ptr + d_inner + conv_ch; // [num_heads] dt
@@ -772,7 +772,7 @@ pub const NemotronHModel = struct {
         // 2. Up projection → squared ReLU.
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
         self.be.gemv(self.hidden2.ptr, .{ .data = uw.data_ptr, .dtype = uw.dtype }, self.ff_buf1.ptr, ff, e);
-        self.be.sync(); // GPU gemv wrote ff_buf1 — flush before CPU squared-ReLU
+        self.be.sync(); // GPU gemv wrote ff_buf1, flush before CPU squared-ReLU
         math_ops.applyReluSquared(self.ff_buf1[0..ff]);
 
         // 3. Down projection.
@@ -830,7 +830,7 @@ pub const NemotronHModel = struct {
                     try self.prefillAttention(l, n_tok);
                 },
                 .ssm => {
-                    // SSM recurrence is inherently sequential — fall back to per-token.
+                    // SSM recurrence is inherently sequential, fall back to per-token.
                     self.be.sync();
                     for (0..n_tok) |t| {
                         @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
@@ -938,7 +938,7 @@ pub const NemotronHModel = struct {
         }
 
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         quant_ops.dequantToF32(buf, t.data_ptr, t.dtype, n);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
@@ -1076,7 +1076,7 @@ test "NemotronH getBlockTable compiles" {
     try std.testing.expect(@hasDecl(NemotronHModel, "getBlockTable"));
 }
 
-// argmax is tested in src/ops/math.zig — no need to duplicate here.
+// argmax is tested in src/ops/math.zig, no need to duplicate here.
 
 test "fuzz: all nemotron_h functions" {
     try std.testing.fuzz({}, struct {

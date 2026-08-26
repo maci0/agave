@@ -61,7 +61,7 @@ Write a Python function to sort a list.
 
 ## Implementation
 
-- `src/eval.zig` — `scoreCase()`, `EvalResult`, token-by-token NLL computation
-- `tools/quality-testing/collect_continuations.py` — API continuation collector
+- `src/eval.zig`: `scoreCase()`, `EvalResult`, token-by-token NLL computation
+- `tools/quality-testing/collect_continuations.py`: API continuation collector
 
 Based on the quality testing approach from [antirez/ds4](https://github.com/antirez/ds4).
