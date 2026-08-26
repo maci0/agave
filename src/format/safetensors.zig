@@ -222,8 +222,11 @@ pub const SafeTensorsDir = struct {
                 fd,
                 0,
             );
-            // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
-            std.posix.madvise(mapped.ptr, mapped.len, std.posix.MADV.SEQUENTIAL) catch {};
+            // RANDOM access hint: weights are read in scattered expert-sized
+            // chunks across the shards. SEQUENTIAL would make the OS readahead
+            // pull in entire 3.5GB shards (measured: 156GB read vs 66GB local
+            // working set on the DS4 2-node TP, stalling decode for ~1h).
+            std.posix.madvise(mapped.ptr, mapped.len, std.posix.MADV.RANDOM) catch {};
             const json_len = std.mem.readInt(u64, mapped[0..8], .little);
             const total_header_size = std.math.add(u64, 8, json_len) catch return error.InvalidSafeTensors;
             if (total_header_size > max_header_json_size or total_header_size > file_size) {
@@ -1748,6 +1751,19 @@ fn fuseDs4Flash0731(
     if (n_layers == 0 or n_layers > 512) return;
 
     std.log.info("[st] detected official DeepSeek-V4-Flash-0731 format (fp4 experts, fp8 attention), fusing", .{});
+
+    // SEQUENTIAL readahead for the repack reads: the fp8 attention tensors
+    // are scattered across all 48 shards, and cold scattered 4KB faults run
+    // at ~22MB/s. With readahead the fuse pulls each shard once (~1GB/s).
+    // RANDOM is restored before returning so decode stays demand-paged.
+    for (shard_data) |sh| {
+        if (sh.data.len > 0) std.posix.madvise(@constCast(sh.data.ptr), sh.data.len, std.posix.system.MADV.SEQUENTIAL) catch {};
+    }
+    defer {
+        for (shard_data) |sh| {
+            if (sh.data.len > 0) std.posix.madvise(@constCast(sh.data.ptr), sh.data.len, std.posix.system.MADV.RANDOM) catch {};
+        }
+    }
 
     for (0..n_layers) |li| {
         // Routed experts: w1 → ffn_gate_exps, w3 → ffn_up_exps, w2 → ffn_down_exps

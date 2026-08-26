@@ -38,6 +38,13 @@ const TensorData = backend_mod.TensorData;
 
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 const n_hc: usize = 4;
+
+/// Monotonic milliseconds (CLOCK_MONOTONIC — interval timing only).
+fn perfMonoMs() u64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
+}
 const hc_mix_dim: usize = (2 + n_hc) * n_hc; // = 24
 /// Must match GGUF deepseek4.hyper_connection.sinkhorn_iterations (default 20).
 const hc_sinkhorn_iters: usize = 20;
@@ -261,6 +268,11 @@ pub const Ds4Model = struct {
     // Vtable compatibility
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     megakernel_enabled: bool = false,
+    /// True after prefaultLocalExperts device-copied the EP-local experts.
+    /// When set, the FFN skips its per-token madvise(WILLNEED) prefetch —
+    /// the host pages were DONTNEED'd after the copy, so prefetching them
+    /// again would re-read the whole expert working set from disk per token.
+    experts_resident: bool = false,
     layer_skip_start: u32 = 0,
     layer_skip_end: u32 = 0,
     pool: ?*@import("../thread_pool.zig").ThreadPool = null,
@@ -844,7 +856,14 @@ pub const Ds4Model = struct {
             break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
         };
 
-        if (hc_fn.dtype == .q8_0) {
+        if (self.be == .cuda) {
+            // CUDA: run the HC GEMV on the GPU (weights cached in buf_cache
+            // after first touch). The CPU branches below read the mmap'd
+            // weights directly, which demand-page at 4KB-fault speed when
+            // memory pressure evicts them (measured 10s/token on GB10).
+            self.doGemv(self.hc_state.ptr, hc_fn, self.hc_mixes.ptr, hc_mix_dim, flat_size);
+            self.be.sync();
+        } else if (hc_fn.dtype == .q8_0) {
             cpuGemvQ8_0(hc_fn.data_ptr, self.hc_state, self.hc_mixes, flat_size);
         } else if (hc_fn.dtype == .f32) {
             cpuGemvF32(hc_fn.data_ptr, self.hc_state, self.hc_mixes[0..hc_mix_dim], flat_size);
@@ -1336,13 +1355,13 @@ pub const Ds4Model = struct {
             break :blk olr * row_bytes;
         };
         // wo_a groups: 8 independent GEMVs, batch for no barriers.
-        self.computeBackend().beginBatch();
+        self.gemvBackend().beginBatch();
         for (0..og) |g| {
             const xp = self.attn_out.ptr + g * group_in;
             const yp = self.lora_out.ptr + g * olr;
             self.doGemvExpert(xp, wo_a, g, group_stride, yp, olr, group_in);
         }
-        self.computeBackend().endBatch();
+        self.gemvBackend().endBatch();
         const wo_b = try self.layerTensorReq(li, "attn_output_b.weight");
         // Write wo_b output directly to hidden (avoids 16KB attn_result → hidden copy)
         self.doGemv(self.lora_out.ptr, wo_b, self.hidden.ptr, e, og * olr);
@@ -1573,6 +1592,15 @@ pub const Ds4Model = struct {
     fn ffnLayer(self: *Ds4Model, li: usize, token_id: u32) !void {
         const e = self.n_embd;
         const ff: usize = self.ff_exp;
+        const t_ffn_start = perfMonoMs();
+        // TEMP PERF: per-phase instrumentation (first 3 layers only).
+        var t_norm: u64 = 0;
+        var t_route: u64 = 0;
+        var t_phase1: u64 = 0;
+        var t_silu: u64 = 0;
+        var t_phase3: u64 = 0;
+        var t_combine: u64 = 0;
+        var t_prev = t_ffn_start;
         // MoE-Spec: use reduced expert budget during verification for fewer SSD reads.
         const nk: usize = if (self.expert_budget > 0) self.expert_budget else self.n_expert_used;
         const ne: usize = self.n_experts;
@@ -1580,6 +1608,8 @@ pub const Ds4Model = struct {
         // Pre-norm: GPU only (no sync — expert GEMVs and routing GEMV also GPU)
         const nw = try self.layerTensorReq(li, "ffn_norm.weight");
         self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
+        t_norm += perfMonoMs() - t_prev;
+        t_prev = perfMonoMs();
 
         // Route
         var top_ids: [8]usize = undefined;
@@ -1654,6 +1684,8 @@ pub const Ds4Model = struct {
         // Batched FFN: gate+up+activation per expert, then down GEMVs.
         // Try fused kernel (gate+up+clampedSiluMul in 1 dispatch per expert)
         // when Q2_K weights on Metal. Falls back to 3-phase unfused path.
+        t_route += perfMonoMs() - t_prev;
+        t_prev = perfMonoMs();
         var n_scratch: usize = 0;
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
@@ -1712,7 +1744,10 @@ pub const Ds4Model = struct {
             // SSD streaming: cache-aware expert prefetch.
             // With expert cache: track residency via LRU, only madvise on misses.
             // Without cache: unconditional madvise (original behavior).
-            if (comptime @import("builtin").os.tag == .macos or @import("builtin").os.tag == .linux) {
+            // Skipped entirely when the experts are already device-resident
+            // (prefaultLocalExperts) — the host pages were DONTNEED'd, so a
+            // WILLNEED here would re-read the working set from disk per token.
+            if (!self.experts_resident and (comptime @import("builtin").os.tag == .macos or @import("builtin").os.tag == .linux)) {
                 if (self.expert_cache) |ec| {
                     // Record activations for profiling
                     if (self.expert_profile) |prof| {
@@ -1766,7 +1801,7 @@ pub const Ds4Model = struct {
                 fused_experts = false;
                 // Batch expert gate+up GEMVs: all read hidden2, write independent slots.
                 // Suppresses per-dispatch barriers for ~2× dispatch throughput.
-                self.computeBackend().beginBatch();
+                self.gemvBackend().beginBatch();
                 for (0..n_active) |j| {
                     const eid = top_ids[j];
                     if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
@@ -1792,17 +1827,22 @@ pub const Ds4Model = struct {
                     slot_weights[n_scratch] = top_weights[j];
                     n_scratch += 1;
                 }
-                self.computeBackend().endBatch(); // end gate+up batch
+                self.gemvBackend().endBatch(); // end gate+up batch
             }
         }
+
+        t_phase1 += perfMonoMs() - t_prev;
+        t_prev = perfMonoMs();
 
         // Phase 2: clampedSiluMul — skip when fused path already applied activation.
         if (!fused_experts and n_scratch > 0) {
             self.computeBackend().clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
+        t_silu += perfMonoMs() - t_prev;
+        t_prev = perfMonoMs();
 
         // Phase 3: all down GEMVs into expert_scratch — batch for no barriers.
-        self.computeBackend().beginBatch();
+        self.gemvBackend().beginBatch();
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
                 self.doGemv(self.ff_gate_scratch.ptr, dt, self.expert_scratch.ptr, e, ff);
@@ -1826,7 +1866,10 @@ pub const Ds4Model = struct {
             }
         }
 
-        self.computeBackend().endBatch(); // end down GEMVs batch
+        self.gemvBackend().endBatch(); // end down GEMVs batch
+
+        t_phase3 += perfMonoMs() - t_prev;
+        t_prev = perfMonoMs();
 
         // Hash layers 0-2 defer expert weights until after gate logits are on host.
         if (li < self.hash_layer_count) {
@@ -1901,6 +1944,14 @@ pub const Ds4Model = struct {
                 }
             }
         }
+        t_combine += perfMonoMs() - t_prev;
+
+        // TEMP PERF: per-phase timing for the first 3 layers.
+        if (li < 3) {
+            std.log.info("FFNPERF layer {d}: norm {d}ms route {d}ms phase1 {d}ms silu {d}ms phase3 {d}ms combine {d}ms total {d}ms", .{
+                li, t_norm, t_route, t_phase1, t_silu, t_phase3, t_combine, perfMonoMs() - t_ffn_start,
+            });
+        }
     }
 
     // ── Forward pass ─────────────────────────────────────────────
@@ -1952,6 +2003,13 @@ pub const Ds4Model = struct {
             }
         }
 
+        // TEMP PERF: per-phase timing instrumentation
+        var t_attn_ms: u64 = 0;
+        var t_ffn_ms: u64 = 0;
+        var t_hc_ms: u64 = 0;
+        const t_total_start = perfMonoMs();
+        var t_prev = t_total_start;
+
         for (0..nl) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
 
@@ -1964,17 +2022,30 @@ pub const Ds4Model = struct {
             const ab = try self.layerTensorReq(li, "hc_attn_base.weight");
             const as_ = try self.layerTensorReq(li, "hc_attn_scale.weight");
             self.hcPre(af, ab, as_);
+            t_hc_ms += perfMonoMs() - t_prev;
+            t_prev = perfMonoMs();
             try self.attentionLayer(li);
+            t_attn_ms += perfMonoMs() - t_prev;
+            t_prev = perfMonoMs();
             self.hcPost();
+            t_hc_ms += perfMonoMs() - t_prev;
 
             // FFN: HC pre → ffn → HC post
             const ff = try self.layerTensorReq(li, "hc_ffn_fn.weight");
             const fb = try self.layerTensorReq(li, "hc_ffn_base.weight");
             const fs = try self.layerTensorReq(li, "hc_ffn_scale.weight");
+            t_prev = perfMonoMs();
             self.hcPre(ff, fb, fs);
+            t_hc_ms += perfMonoMs() - t_prev;
+            t_prev = perfMonoMs();
             try self.ffnLayer(li, token_id);
+            t_ffn_ms += perfMonoMs() - t_prev;
+            t_prev = perfMonoMs();
             self.hcPost();
+            t_hc_ms += perfMonoMs() - t_prev;
         }
+
+        std.log.info("DS4PERF token {d} seq={d}: total {d}ms attn {d}ms ffn {d}ms hc {d}ms", .{ token_id, self.kv_seq_len, perfMonoMs() - t_total_start, t_attn_ms, t_ffn_ms, t_hc_ms });
 
         // Non-last PP stage: send HC state downstream and wait for the sampled token.
         if (self.pp_degree > 1 and self.pp_rank + 1 < self.pp_degree) {
@@ -2465,6 +2536,111 @@ pub const Ds4Model = struct {
     /// expert (mmap pages for unused shards stay cold once EP is active).
     fn epDegree(self: *const Ds4Model) u32 {
         return if (self.tp_transport != null) self.tp_degree else 1;
+    }
+
+    /// Prefault (CPU-touch + device-copy) the routed-expert pages this TP
+    /// rank owns, releasing the host pages after each copy. On a unified-
+    /// memory part the device copy becomes the source of truth, so the
+    /// EP-local working set (~half the model) is the only resident footprint
+    /// (measured: the demand-paged mmap thrashed at 8-30s/token of FFN
+    /// page-fault stalls). Both the FP4 packed weights AND their E8M0 scale
+    /// tensors are made resident — the scales are read on every expert gemv
+    /// and would otherwise demand-page during decode.
+    ///
+    /// Ranges are processed in address order (file order within each shard)
+    /// so the disk reads during the copy are sequential rather than jumping
+    /// between 48 shards per layer.
+    pub fn prefaultLocalExperts(self: *Ds4Model) void {
+        if (self.epDegree() <= 1) return;
+        const ne = self.n_experts;
+        const Range = struct { ptr: [*]const u8, len: usize };
+        var ranges: std.ArrayListUnmanaged(Range) = .empty;
+        defer ranges.deinit(self.allocator);
+        for (0..self.n_layers) |li| {
+            const projs = [_][]const u8{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" };
+            for (projs) |tn| {
+                const t = self.layerTensor(li, tn) orelse continue;
+                if (t.n_dims != 2 or t.dims[1] != 1) continue; // fused pointer table
+                const tbl: [*]const [*]const u8 = @ptrCast(@alignCast(t.data_ptr));
+                const w_size = self.expertPackSize(tn);
+                // Companion E8M0 scale table (MLX FP4 gs=32): scales are
+                // [out, in/32] bytes vs [out, in/2] for the packed weights.
+                var s_tbl: ?[*]const [*]const u8 = null;
+                var s_buf: [name_buf_size]u8 = undefined;
+                const prefix = tn[0 .. tn.len - ".weight".len];
+                const s_name = std.fmt.bufPrint(&s_buf, "{s}.scales", .{prefix}) catch null;
+                if (s_name) |sn| {
+                    if (self.fmt.getTensor(sn)) |st| {
+                        if (st.n_dims == 2 and st.dims[1] == 1) {
+                            s_tbl = @ptrCast(@alignCast(st.data_ptr));
+                        }
+                    }
+                }
+                const s_size = w_size / (ds4_flash_fp4_group_size / 2); // E8M0 [out, in/32] for gs=32 FP4
+                for (0..ne) |eid| {
+                    if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
+                    ranges.append(self.allocator, .{ .ptr = tbl[eid], .len = w_size }) catch continue;
+                    if (s_tbl) |stp| ranges.append(self.allocator, .{ .ptr = stp[eid], .len = s_size }) catch continue;
+                }
+            }
+        }
+        std.mem.sort(Range, ranges.items, {}, struct {
+            fn lt(_: void, a: Range, b: Range) bool {
+                return @intFromPtr(a.ptr) < @intFromPtr(b.ptr);
+            }
+        }.lt);
+        var n_ranges: usize = 0;
+        var n_bytes: usize = 0;
+        for (ranges.items) |r| {
+            self.be.residentWeight(r.ptr, r.len);
+            n_ranges += 1;
+            n_bytes += r.len;
+        }
+        // Residual mmap'd weights the GPU reads every token (router, HC
+        // streams, LM head): make them resident too so their host pages can
+        // be released below. Otherwise the decode's first-touch uploads would
+        // re-fault them from disk at 4KB speed and their resident pages would
+        // keep the 121GB machine under constant memory pressure (measured:
+        // multi-second cuMemAlloc stalls at every layer's combine sync).
+        const residual_names = [_][]const u8{
+            "ffn_gate_inp.weight",
+            "hc_attn_fn.weight", "hc_attn_base.weight", "hc_attn_scale.weight",
+            "hc_ffn_fn.weight", "hc_ffn_base.weight", "hc_ffn_scale.weight",
+        };
+        for (0..self.n_layers) |li| {
+            for (residual_names) |tn| {
+                if (self.layerTensor(li, tn)) |t| {
+                    if (t.n_dims > 0) {
+                        self.be.residentWeight(t.data_ptr, t.dataByteLen());
+                        n_ranges += 1;
+                        n_bytes += t.dataByteLen();
+                    }
+                }
+            }
+        }
+        if (self.fmt.getTensor("output.weight")) |t| {
+            if (t.n_dims > 0) {
+                self.be.residentWeight(t.data_ptr, t.dataByteLen());
+                n_ranges += 1;
+                n_bytes += t.dataByteLen();
+            }
+        }
+        // The copy set SEQUENTIAL readahead on the shard mmaps; decode must
+        // go back to RANDOM so scattered reads don't over-read whole shards.
+        // The non-expert shard pages are also DONTNEED'd — everything the GPU
+        // needs is device-resident or heap-repacked, so keeping ~50GB of dead
+        // mmap pages resident only fuels the allocation-pressure stalls.
+        self.be.restoreMmapHints();
+        self.experts_resident = true;
+        std.log.info("DS4: made {d} local expert ranges ({d} MiB) resident (rank {d})", .{ n_ranges, n_bytes >> 20, self.tp_rank });
+    }
+
+    /// Packed byte size of one routed-expert tensor slice (FP4: out × in/2).
+    fn expertPackSize(self: *const Ds4Model, tensor_name: []const u8) usize {
+        const e = self.n_embd;
+        const ff = self.ff_exp;
+        if (std.mem.indexOf(u8, tensor_name, "down") != null) return e * (ff / 2);
+        return ff * (e / 2);
     }
 
     /// Dispatch a single GEMV through the format-aware path.

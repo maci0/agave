@@ -1007,6 +1007,18 @@ pub const ModelStorage = union(enum) {
         }
     }
 
+    /// Prefault the local expert pages for distributed TP (see Ds4Model).
+    /// No-op for models without the capability.
+    pub fn prefaultLocalExperts(self: *ModelStorage) void {
+        switch (self.*) {
+            inline else => |*m| {
+                if (@TypeOf(m.*) != void) {
+                    if (comptime @hasDecl(@TypeOf(m.*), "prefaultLocalExperts")) m.prefaultLocalExperts();
+                }
+            },
+        }
+    }
+
     /// Send KV cache via transport (disaggregated prefill).
     pub fn sendKvCache(self: *ModelStorage, transport: *Transport) !void {
         switch (self.*) {

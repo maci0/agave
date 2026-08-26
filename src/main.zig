@@ -2880,6 +2880,9 @@ fn initAndRun(
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
             if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, tp_discovery_port, be)) |tr| {
                 mdl.setTpTransport(tr);
+                // Prefault this rank's expert pages so decode never stalls on
+                // demand paging (the local EP working set fits in memory).
+                mdl.prefaultLocalExperts();
             }
         };
     }
