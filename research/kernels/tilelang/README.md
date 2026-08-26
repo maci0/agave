@@ -117,7 +117,7 @@ GEMV correctly against real checkpoints with modest effort; reaching the
 hand-tuned-kernel bandwidth class needs the structural changes above, which is
 exactly the prototype-then-port workflow AGENTS.md prescribes.
 
-## Head-to-head: agave native (Zig/HIP) vs TileLang — RX 7900 XTX
+## Head-to-head: agave native (Zig/HIP) vs TileLang, RX 7900 XTX
 
 **Measurement correction:** the first "native" bench round ran while
 `hipModuleGetFunction` was broken (Bug 3 below); agave-bench silently fell
