@@ -4,7 +4,7 @@
 
 <p align="center">
   A high-performance LLM inference engine written in Zig.<br>
-  Zero external ML libraries — all kernels, quantization, and model logic from scratch.
+  Zero external ML libraries, all kernels, quantization, and model logic from scratch.
 </p>
 
 <p align="center">
@@ -16,18 +16,54 @@
 
 ---
 
+## Why Agave
+
+The usual way to run a model locally is a C++ engine with a large dependency
+graph: BLAS, a vendor math library per GPU, a build system that has to find all
+of them. Agave has none. Every kernel, quantizer, tokenizer and model is written
+here, in Zig, and the only thing you need to build it is a Zig compiler.
+
+That buys two things. Cross-compiling to another OS or CPU is one flag, because
+there is no native toolchain to satisfy on the other side. And a quantization
+format or a new architecture can be added without negotiating with an upstream
+tensor library, which is why the backend and quant matrices below are as wide as
+they are.
+
+The cost is honest: this is a 0.x project, several backends still have
+correctness gaps (see [Benchmarks](#benchmarks) and
+[docs/TEST_MATRIX.md](docs/TEST_MATRIX.md)), and llama.cpp supports far more
+architectures. Use Agave if you want a readable, dependency-free engine to build
+on. Use llama.cpp if you want maximum model coverage today.
+
+## It Works
+
+```console
+$ ./zig-out/bin/agave qwen2.5-1.5b-instruct-q4k.gguf --backend cpu -n 60 --seed 42 \
+    "Explain what a KV cache is, in two sentences."
+agave qwen2.5-1.5b-instruct · Qwen 3.5/3.8 · Q4_K · 1.0GB · CPU
+system: Linux 7.2.0-1-cachyos (x86_64) · CPU · AMD Ryzen 9 9950X 16-Core Processor · 32 threads
+loading 1.0 GB... done (39ms)
+recipe: CPU generic
+context: 2048 (model supports 32768, use --ctx-size to increase)
+loaded: GGUF v3 · 339 tensors · bpe tokenizer · 151K vocab · eos=151645 bos=151643 · qwen35 template
+
+A KV cache is a type of data storage system that stores key-value pairs, allowing for quick retrieval of data.
+
+23 tok · 4.6 tok/s · 4810ms prefill
+```
+
 ## Features
 
 - **10 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
-- **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU — individually toggleable at build time
+- **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU, individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
-- **18 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit — with asymmetric K/V support and paged SDPA
+- **18 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
 - **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch (`--kv-tiers vram+ram+ssd`)
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS, Llama 4)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
-- **Model Download**: `agave pull <org/repo>` — download GGUF models from HuggingFace Hub with auto quant selection
+- **Model Download**: `agave pull <org/repo>`, download GGUF models from HuggingFace Hub with auto quant selection
 - **Interactive REPL**: Multi-turn chat with `/help`, `/clear`, `/stats`, `/model`, `/quit`
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, Bearer token auth
 - **Multimodal**: Image (`--image`) and video frames (`--video`, `--video-fps`) via Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL encoders; also HTTP API
@@ -36,7 +72,7 @@
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
 - **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
 - **Speculative Decoding**: Modes: standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark; plus FR-Spec vocab map and LoRA (`--lora`)
-- **Fused Megakernels**: Composable GPU megakernels — gate+up+SiLU fused into single dispatch (3→1)
+- **Fused Megakernels**: Composable GPU megakernels, gate+up+SiLU fused into single dispatch (3→1)
 - **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
 - **~125 tok/s** on Qwen3.5 0.8B Q8_0 Metal (M4 Pro; see [docs/BENCHMARKS.md](docs/BENCHMARKS.md) as the source of truth), **24.9 tok/s** on Qwen3.5 9B MLX-4bit
 
@@ -142,7 +178,7 @@ Supports heterogeneous setups: different backends (CUDA + Vulkan + CPU), archite
 | Gemma 4 | E2B, E4B, 26B-A4B | Working | Q8_0, Q4_K, MLX 4-bit | MoE (top-8), channel-based chat template, multimodal vision (SigLIP-2) |
 | Qwen 3.5 | 0.8B, 9B, 27B, 35B | Working | Q4_0, Q4_K_M, Q8_0, BF16, MLX 4-bit | Hybrid DeltaNet SSM + attention |
 | GPT-OSS | 20B | Partial | Q4_0 | MoE, sliding window, attention sinks (poor output quality) |
-| Nemotron-H | — | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
+| Nemotron-H | n/a | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
 | Nemotron Nano | 30B | Partial | MLX 4-bit, NVFP4 | SSM + MoE + attention hybrid, SafeTensors (poor output quality) |
 | GLM-4 MoE Lite | 4.7B | Partial | MLX 4/6/8-bit | MLA + MoE (GGUF compatibility issue, poor output quality) |
 | DiffusionGemma | 26B-A4B | Working | BF16 | Block diffusion: 256-token canvas, MoE top-8, SafeTensors only |
@@ -198,7 +234,7 @@ AGAVE_API_KEY=sk-mykey ./zig-out/bin/agave model.gguf --serve
 | `/v1/messages` | POST | Anthropic Messages API |
 | `/v1/responses` | POST | OpenAI Responses API |
 | `/v1/models` | GET | List loaded models |
-| `/v1/embeddings` | POST | Embedding generation (stub — returns 501) |
+| `/v1/embeddings` | POST | Embedding generation (stub, returns 501) |
 | `/v1/chat` | POST | Built-in web chat UI |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
 | `/v1/conversations` | GET, POST | Conversation management |
@@ -241,35 +277,42 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 
 | Model | Quant | Backend | Decode (tok/s) | vs llama.cpp |
 |-------|-------|---------|---------------:|-------------:|
-| Qwen3.5 0.8B | Q8_0 | Metal | 125† | — |
+| Qwen3.5 0.8B | Q8_0 | Metal | 125† | n/a |
 | Qwen3.5 9B | Q8_0 | Metal | 41.7 | **1.67x** |
-| Gemma 3 4B | MLX-Q4 | Metal | 78.1 | — |
+| Gemma 3 4B | MLX-Q4 | Metal | 78.1 | n/a |
 | Gemma 3 12B | Q8_0 | Metal | 22.3 | **1.19x** |
-| Gemma 4 E2B | Q4_K_M | Metal | 21.8 | — |
-| Gemma 4 E4B | Q4_K_M | Metal | 14.4 | — |
-| Gemma 4 26B-A4B | Q4_K_M | Metal | 4.2 | — |
-| Gemma 3 27B | QAT 4-bit | Metal | 6.3 | — |
-| Qwen3.5 9B | MLX-4bit | Metal | 24.9 | — |
+| Gemma 4 E2B | Q4_K_M | Metal | 21.8 | n/a |
+| Gemma 4 E4B | Q4_K_M | Metal | 14.4 | n/a |
+| Gemma 4 26B-A4B | Q4_K_M | Metal | 4.2 | n/a |
+| Gemma 3 27B | QAT 4-bit | Metal | 6.3 | n/a |
+| Qwen3.5 9B | MLX-4bit | Metal | 24.9 | n/a |
 
 ### Multi-Backend (Qwen3.5 0.8B Q8_0)
 
-| Backend | Hardware | Decode (tok/s) |
-|---------|----------|---------------:|
-| Metal | Apple M4 Pro | 125† |
-| ROCm | AMD RX 7900 XTX | 50.8 |
-| CPU | Ryzen 9 9950X (32T) | 44 |
-| CUDA | NVIDIA GB10 (aarch64) | 35 |
-| Vulkan | AMD RX 7900 XTX | 2.7 |
+| Backend | Hardware | Decode (tok/s) | Output correct |
+|---------|----------|---------------:|----------------|
+| Metal | Apple M4 Pro | 125† | yes |
+| ROCm | AMD RX 7900 XTX | 50.8 | **no**, see below |
+| CPU | Ryzen 9 9950X (32T) | 44 | yes |
+| CUDA | NVIDIA GB10 (aarch64) | 35 | yes |
+| Vulkan | AMD RX 7900 XTX | 2.7 | **no**, see below |
+
+> **Known bug (2026-08-26):** on AMD RX 7900 XTX, Qwen 3.5 GGUF decodes to
+> incoherent text on both ROCm and Vulkan while CPU is correct for the same
+> model, prompt and seed. Both backends emit the same wrong tokens, so the
+> fault is in a path they share, not in two separate kernels. Treat the ROCm
+> and Vulkan throughput above as speed-only measurements, not working
+> configurations. Tracked in [docs/TODO.md](docs/TODO.md).
 
 ### Distributed Inference (dual NVIDIA GB10 over RoCE RDMA)
 
 | Model | Config | Transport | Decode (tok/s) |
 |-------|--------|-----------|---------------:|
-| 9B Q8_0 | Single GPU | — | 9.1 |
+| 9B Q8_0 | Single GPU | n/a | 9.1 |
 | 9B Q8_0 | PP=2 | NCCL RoCE | **8.5** |
 | 9B Q8_0 | TP=2 | NCCL RoCE | 5.1 |
 | 9B Q8_0 | TP=2 | TCP RoCE | 4.9 |
-| 27B Q4_K_M | Single GPU | — | 2.2 |
+| 27B Q4_K_M | Single GPU | n/a | 2.2 |
 | 27B Q4_K_M | PP=2 | NCCL RoCE | 2.2 |
 | 27B Q4_K_M | TP=2 | NCCL RoCE | 1.7 |
 
@@ -281,7 +324,7 @@ All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GP
 
 - **Zig 0.16.0**
 - macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU, WebGPU backends)
-- GPU backends load drivers at runtime via dlopen — no SDK needed at build time
+- GPU backends load drivers at runtime via dlopen, no SDK needed at build time
 
 ## CLI Options
 
@@ -382,7 +425,7 @@ zig build -Denable-cuda=false -Denable-rocm=false
 # CPU-only build (no GPU backends)
 zig build -Denable-metal=false -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false
 
-# GPU-only (disable CPU fallback — compile error if GPU init fails)
+# GPU-only (disable CPU fallback: compile error if GPU init fails)
 zig build -Denable-cpu=false
 
 # Disable specific model architectures
@@ -446,99 +489,12 @@ Current presets: Qwen3.5 Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, GLM-4 generic,
 
 ## Project Structure
 
-```
-src/
-├── main.zig           # CLI, format detection, model init, REPL, recipe application
-├── arch.zig           # Architecture enum, detection, chat template mapping
-├── pull.zig           # Model download from HuggingFace Hub (agave pull)
-├── server/            # HTTP server
-│   ├── server.zig     #   HTTP server (OpenAI + Anthropic API + chat UI)
-│   ├── json.zig       #   JSON field extraction, encoding, and form-parsing
-│   ├── scheduler.zig  #   Continuous batching request scheduler
-│   ├── metrics.zig    #   Prometheus metrics collector
-│   └── rate_limiter.zig #  Token bucket rate limiter
-├── display.zig        # Rich CLI output (banner, stats, progress)
-├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma4, Qwen3.5, GLM-4, GPT-OSS, Llama 4)
-├── recipe.zig         # Optional preset configs per model/hardware/quant combo
-├── thread_pool.zig    # Futex-based work-stealing thread pool
-├── image.zig          # PNG/PPM image decoder and resize for multimodal inference
-├── perf.zig           # Performance timer utilities
-├── readline.zig       # Line editor for interactive REPL
-├── micro_bench.zig    # Standalone micro-benchmark binary
-├── format/            # Weight file loaders
-│   ├── format.zig     #   Format interface (getTensor, getMetaStr, ...)
-│   ├── gguf.zig       #   GGUF v2/v3 with mmap
-│   └── safetensors.zig#   Multi-shard SafeTensors + config.json
-├── models/            # Model architectures
-│   ├── model.zig      #   Model interface + shared helpers (expertWeightStride, etc.)
-│   ├── gemma3.zig     #   Gemma 3 (GQA, GELU, post-norms)
-│   ├── gemma4.zig     #   Gemma 4 (MoE, dual attention, PLE)
-│   ├── qwen35.zig     #   Qwen 3.5 (DeltaNet SSM hybrid)
-│   ├── gpt_oss.zig    #   GPT-OSS (MoE, sliding window)
-│   ├── nemotron_h.zig #   Nemotron-H (Mamba-2 hybrid, GGUF)
-│   ├── nemotron_nano.zig # Nemotron Nano (SSM+MoE+attn, SafeTensors NVFP4)
-│   ├── glm4.zig       #   GLM-4 MoE Lite (MLA, MoE)
-│   ├── deepseek4.zig  #   DeepSeek V4 Flash (MLA, hyper connections, MoE)
-│   ├── diffusion_gemma.zig # DiffusionGemma (block diffusion generation)
-│   ├── llama4.zig     #   Llama 4 (iRoPE, chunked attention, MoE)
-│   └── vision.zig     #   Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
-├── ops/               # Shared compute kernels
-│   ├── attention.zig  #   SDPA with SIMD + sliding window + backend dispatch
-│   ├── math.zig       #   argmax, softplus, sigmoid, GELU, sampleToken
-│   ├── ssm.zig        #   SSM ops: causal conv1d, Mamba-2 recurrence, group norm+gate
-│   ├── quant.zig      #   Quantization helpers (bf16, mxfp4, fp8, iq4nl, nvfp4_st)
-│   ├── kv_quant.zig   #   KV cache quantization (f32/f16/q8_0/int8/fp8/nvfp4/turbo/planar/iso/rotor)
-│   ├── mlx.zig        #   MLX 4/6/8-bit affine dequant
-│   ├── gptq.zig       #   GPTQ INT4 GEMV kernel (packed u32 weights, per-group scales/zeros)
-│   ├── kv_evict.zig   #   KV eviction: norm-based scoring, cache compaction
-│   └── split_attention.zig # Split-attention: async CPU-GPU KV offloading
-├── backend/           # Hardware backends (all individually toggleable)
-│   ├── backend.zig    #   Tagged union dispatcher + NullBackend stub
-│   ├── cpu.zig        #   CPU with SIMD (AVX2, NEON, SVE)
-│   ├── metal.zig      #   Metal GPU (Apple Silicon)
-│   ├── vulkan.zig     #   Vulkan GPU (runtime dlopen)
-│   ├── cuda.zig       #   CUDA GPU (runtime dlopen, Zig PTX kernels)
-│   ├── rocm.zig       #   ROCm GPU (runtime dlopen)
-│   ├── webgpu.zig     #   WebGPU (WGSL shaders, browser + native)
-│   ├── megakernel.zig #   Weight offsets for fused FFN megakernels
-│   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL)
-│   ├── accelerate.zig #   Apple Accelerate.framework BLAS bindings (AMX-accelerated SGEMM)
-│   ├── objc.zig       #   Objective-C runtime bridge for Metal
-│   └── kernels/       #   GPU shader/kernel sources
-│       ├── metal/     #     MSL compute shaders
-│       ├── vulkan/    #     SPIR-V compute shaders
-│       ├── cuda/      #     Zig CUDA kernels (compiled to PTX)
-│       ├── rocm/      #     AMDGCN kernels (compiled to HSACO)
-│       └── webgpu/    #     WGSL compute shaders
-├── spec/              # Speculative decoding
-│   ├── spec_decode.zig #  Orchestrator: draft, verify, accept
-│   ├── caps.zig       #   Spec-mode provider requirements (named waits)
-│   ├── ddtree.zig     #   DDTree tree construction
-│   ├── pflash.zig     #   PFlash speculative prefill
-│   ├── dspark.zig     #   DSpark confidence-scheduled verification
-│   └── ngram.zig      #   N-gram history-based draft (no draft model)
-├── parallel/          # Distributed inference
-│   ├── transport.zig  #   TCP, POSIX shm, NCCL transport
-│   ├── tp.zig         #   Tensor parallelism utilities
-│   └── peer_discovery.zig #   UDP peer discovery
-├── devices/
-│   └── discovery.zig  #   GPU device enumeration (--list-devices)
-├── kvcache/
-│   ├── manager.zig    #   KV cache alloc/free, PagedKvCache, RadixTree
-│   ├── block_allocator.zig # Block allocation for paged KV cache
-│   ├── tiered.zig     #   Tiered KV cache (VRAM + RAM + SSD)
-│   └── prefetch.zig   #   Async block prefetching for tiered cache
-└── tokenizer/
-    ├── tokenizer.zig  #   Tokenizer interface
-    └── bpe.zig        #   BPE + SPM tokenizer
-
-research/kernels/          # Kernel research (not part of main build)
-├── reference.py           #   PyTorch reference implementations
-├── generate_golden.py     #   Golden test data generator
-├── autotune.py            #   Benchmarking and optimization orchestrator
-├── registry.py            #   Kernel registry and search spaces
-└── golden/                #   Generated .bin files for Zig @embedFile
-```
+The annotated source tree lives in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#project-structure), together with the
+inference pipeline and the reasoning behind each layer. In short: `src/backend/`
+holds one file per backend behind a comptime dispatcher, `src/models/` one file
+per architecture behind a vtable, `src/ops/` the shared math and quantization,
+and `research/kernels/` prototypes that are not part of the build.
 
 ## Docker
 
@@ -617,18 +573,18 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## Documentation
 
-- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)** — 25-chapter progressive tutorial + 5 appendixes
-- **[Architecture](docs/ARCHITECTURE.md)** — Project structure, module reference, inference pipeline
-- **[Models](docs/MODELS.md)** — Supported models, parameters, per-model details
-- **[Benchmarks](docs/BENCHMARKS.md)** — Performance comparisons vs llama.cpp
-- **[Kernel Status](docs/KERNELS.md)** — Per-backend kernel implementation status
-- **[Distributed Inference](docs/PARALLELISM.md)** — TP, PP, disaggregated prefill/decode
-- **[Contributing](docs/CONTRIBUTING.md)** — How to add backends, models, quantization; [versioning & releases](docs/CONTRIBUTING.md#versioning--releases)
-- **[Changelog](CHANGELOG.md)** — User-facing history (product version `0.1.0`, 0.x SemVer)
-- **[API Reference](docs/API.md)** — HTTP API endpoints, request/response formats
-- **[Megakernel System](docs/MEGAKERNEL.md)** — Composable fused GPU dispatch
-- **[CLAUDE.md](CLAUDE.md)** — Engineering standards for contributors
-- **[research/kernels/](research/kernels/)** — Kernel research tools (benchmarks, golden tests)
+- **[Tutorial: LLM Inference From Scratch](docs/tutorial/README.md)**: 25-chapter progressive tutorial + 5 appendixes
+- **[Architecture](docs/ARCHITECTURE.md)**: Project structure, module reference, inference pipeline
+- **[Models](docs/MODELS.md)**: Supported models, parameters, per-model details
+- **[Benchmarks](docs/BENCHMARKS.md)**: Performance comparisons vs llama.cpp
+- **[Kernel Status](docs/KERNELS.md)**: Per-backend kernel implementation status
+- **[Distributed Inference](docs/PARALLELISM.md)**: TP, PP, disaggregated prefill/decode
+- **[Contributing](docs/CONTRIBUTING.md)**: How to add backends, models, quantization; [versioning & releases](docs/CONTRIBUTING.md#versioning--releases)
+- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.1.0`, 0.x SemVer)
+- **[API Reference](docs/API.md)**: HTTP API endpoints, request/response formats
+- **[Megakernel System](docs/MEGAKERNEL.md)**: Composable fused GPU dispatch
+- **[CLAUDE.md](CLAUDE.md)**: Engineering standards for contributors
+- **[research/kernels/](research/kernels/)**: Kernel research tools (benchmarks, golden tests)
 
 ## License
 
