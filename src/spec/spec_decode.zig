@@ -1274,17 +1274,20 @@ test "dflash2HybridNgram extends agreeing blocks, keeps disagreeing ones" {
     var s = try SpecState.init(std.testing.allocator, 8, 64);
     defer s.deinit(std.testing.allocator);
     var ng = ngram_mod.NgramState{};
-    // History: ... 10 11 12 → n-gram continuation depends on matches.
-    for ([_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 }) |t| ng.push(t);
+    // NgramState.propose matches the tail of *history* against an earlier
+    // occurrence in history; it never sees draft_tokens. So the history has to
+    // repeat a run of at least min_ngram (3) tokens or propose returns 0 and
+    // this function is a no-op. Here the trailing "10 11 12" repeats the run at
+    // index 0, so the proposal is whatever followed it: 13 14 7 8 9 10 11 12.
+    for ([_]u32{ 10, 11, 12, 13, 14, 7, 8, 9, 10, 11, 12 }) |t| ng.push(t);
 
-    // Drafter agrees on first two tokens (10, 11) then diverges; the n-gram
-    // continuation after "10 11" is "12 13 14", so the block should extend.
-    s.draft_tokens[0] = 10;
-    s.draft_tokens[1] = 11;
+    // Drafter's picks match the proposal head, so the block extends to budget.
+    s.draft_tokens[0] = 13;
+    s.draft_tokens[1] = 14;
     s.n_draft = 2;
     dflash2HybridNgram(&s, &ng, null, 8);
-    try std.testing.expect(s.n_draft >= 3);
-    try std.testing.expectEqual(@as(u32, 12), s.draft_tokens[2]);
+    try std.testing.expectEqual(@as(u32, 8), s.n_draft);
+    try std.testing.expectEqual(@as(u32, 7), s.draft_tokens[2]);
 
     // Pure disagreement: drafter proposes unrelated tokens; untouched.
     s.draft_tokens[0] = 99;
