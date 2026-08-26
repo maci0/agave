@@ -43,14 +43,40 @@ const CUdevice = c_int;
 const CUcontext = ?*anyopaque;
 const CUmodule = ?*anyopaque;
 const CUfunction = ?*anyopaque;
+const CUstream = ?*anyopaque;
 const CUdeviceptr = u64;
 
 const CUDA_SUCCESS: CUresult = 0;
+
+/// Monotonic milliseconds (CLOCK_MONOTONIC — interval timing only).
+fn perfMonoMs() u64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
+}
 
 // ── Tuning constants ─────────────────────────────────────────────
 
 /// Block size for elementwise and reduction kernels.
 const block_size: u32 = 256;
+
+/// Resident weight chunk allocation (DS4 EP-local experts): 16 chunks of 8GiB
+/// cover the ~66GiB local expert working set without per-expert cuMemAlloc.
+const resident_max_chunks: usize = 16;
+const resident_chunk_size: usize = 8 << 30; // 8 GiB per chunk
+
+/// Deferred GEMV copy-back batching (see CudaBackend.beginBatch).
+const max_batch_syncs: usize = 64;
+const PendingSync = struct {
+    y: [*]f32,
+    n: usize,
+};
+
+/// Mmap'd weight ranges tracked for madvise hint management (see
+/// CudaBackend.restoreMmapHints). 48 safetensors shards + headroom.
+const max_shard_ranges: usize = 64;
+const ShardRange = struct { base: usize = 0, size: usize = 0 };
+
 
 /// Shared memory for block reductions (8 warps × 4 bytes).
 const reduction_smem: u32 = 32;
@@ -124,6 +150,10 @@ const CU_MEM_ATTACH_GLOBAL: c_uint = 1;
 const FnMemcpyHtoD = *const fn (CUdeviceptr, *const anyopaque, usize) callconv(.c) CUresult;
 const FnMemcpyDtoH = *const fn (*anyopaque, CUdeviceptr, usize) callconv(.c) CUresult;
 const FnMemcpyDtoD = *const fn (CUdeviceptr, CUdeviceptr, usize) callconv(.c) CUresult;
+const FnMemcpyDtoHAsync = *const fn (*anyopaque, CUdeviceptr, usize, CUstream) callconv(.c) CUresult;
+const FnMemcpyHtoDAsync = *const fn (CUdeviceptr, *const anyopaque, usize, CUstream) callconv(.c) CUresult;
+const FnStreamCreate = *const fn (*CUstream, c_uint) callconv(.c) CUresult;
+const FnStreamSync = *const fn (CUstream) callconv(.c) CUresult;
 const FnMemHostRegister = *const fn (*const anyopaque, usize, c_uint) callconv(.c) CUresult;
 const FnMemHostGetDevicePointer = *const fn (*CUdeviceptr, *const anyopaque, c_uint) callconv(.c) CUresult;
 const FnMemHostUnregister = *const fn (*const anyopaque) callconv(.c) CUresult;
@@ -163,6 +193,22 @@ pub const CudaBackend = struct {
     cuMemcpyHtoD: FnMemcpyHtoD = undefined,
     cuMemcpyDtoH: FnMemcpyDtoH = undefined,
     cuMemcpyDtoD: FnMemcpyDtoD = undefined,
+    cuMemcpyDtoHAsync: FnMemcpyDtoHAsync = undefined,
+    cuMemcpyHtoDAsync: FnMemcpyHtoDAsync = undefined,
+    cuStreamCreate: FnStreamCreate = undefined,
+    cuStreamSynchronize: FnStreamSync = undefined,
+    /// TEMP PERF: launch latency sampling.
+    launch_count: u64 = 0,
+    launch_total_ms: u64 = 0,
+    /// TEMP PERF: drain sampling.
+    drain_count: u64 = 0,
+
+
+    /// Dedicated compute stream. All kernel launches and copy-backs go here
+    /// (never the legacy null stream): blocking copies on the null stream
+    /// cost ~2ms per call on GB10, so the deferred-sync drains batch the
+    /// copy-backs asynchronously and sync once.
+    stream: CUstream = null,
     cuMemHostRegister: ?FnMemHostRegister = null,
     cuMemHostGetDevicePointer: ?FnMemHostGetDevicePointer = null,
     cuMemHostUnregister: ?FnMemHostUnregister = null,
@@ -243,6 +289,17 @@ pub const CudaBackend = struct {
     /// Whether the GPU uses unified memory architecture (integrated GPU).
     is_uma: bool = false,
 
+    /// Permanent device copies of resident weights (DS4 EP-local experts):
+    /// host address → device pointer. Populated by residentWeight at load so
+    /// getOrUpload never demand-pages the mmap during decode. Copies land in
+    /// large chunk allocations (resident_chunks) to avoid per-expert
+    /// cuMemAlloc overhead. Initialized in init().
+    resident_map: std.AutoHashMap(usize, CUdeviceptr) = undefined,
+    resident_chunks: [resident_max_chunks]CUdeviceptr = @splat(0),
+    resident_chunk_count: u32 = 0,
+    /// Current chunk fill state (the last allocated chunk).
+    resident_buf_used: usize = 0,
+
     /// Cached staging buffers for paged SDPA (avoid hot-path allocation).
     sdpa_flat_keys: ?[]f32 = null,
     sdpa_flat_vals: ?[]f32 = null,
@@ -283,12 +340,36 @@ pub const CudaBackend = struct {
     /// KV cache: device mirrors of per-layer KV buffers with incremental upload.
     kv_dev_cache: std.AutoHashMap(usize, KvDevCache) = undefined,
 
+    /// Deferred D2H copy-backs queued inside a beginBatch/endBatch window.
+    /// DS4's FFN batches ~18 expert GEMVs per phase; without this every GEMV
+    /// round-trips a cuMemcpyDtoH that stalls the CPU on kernel completion
+    /// (~1500 serialized GEMVs/token). The batch queues the copy-backs and
+    /// drains them at endBatch — the GPU pipelines the kernels, the CPU
+    /// waits once per phase.
+    batch_depth: u32 = 0,
+    batch_sync_count: u32 = 0,
+    batch_syncs: [max_batch_syncs]PendingSync = undefined,
+
     /// Registered UMA host memory regions (mmap'd weight files).
-    /// Pointers within registered regions can use cuMemHostGetDevicePointer.
+    /// Disabled (max = 0): cuMemHostRegister pins every page of the mapping,
+    /// which faulted the 155GB DS4 checkpoint at ~19MB/s on a cold load
+    /// (23 min for the first 8 shards) and locked 26GB permanently. The DS4
+    /// working set is fully covered without zero-copy: expert weights get
+    /// permanent device copies (residentWeight → resident_chunks), attention
+    /// weights are repacked into heap buffers at load, and anything else is
+    /// uploaded on first use (buf_cache). Keeping the mechanism allows
+    /// re-enabling with a nonzero cap if a future model needs it.
     uma_regions: [max_uma_regions]UmaRegion = @splat(.{}),
     uma_region_count: u32 = 0,
 
-    const max_uma_regions: usize = 8;
+    /// Mmap'd weight ranges seen by registerHostRegion. Even with UMA
+    /// registration disabled, the ranges are tracked so restoreMmapHints can
+    /// flip their madvise advice back to RANDOM after the resident copy
+    /// (which uses SEQUENTIAL readahead to fault the experts in fast).
+    shard_ranges: [max_shard_ranges]ShardRange = @splat(.{}),
+    shard_range_count: u32 = 0,
+
+    const max_uma_regions: usize = 0;
     const UmaRegion = struct {
         base: usize = 0,
         size: usize = 0,
@@ -349,6 +430,8 @@ pub const CudaBackend = struct {
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
+        self.resident_map = std.AutoHashMap(usize, CUdeviceptr).init(allocator);
+        errdefer self.resident_map.deinit();
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
         errdefer self.act_cache.deinit();
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
@@ -380,6 +463,10 @@ pub const CudaBackend = struct {
         self.cuMemcpyHtoD = self.lookup(FnMemcpyHtoD, "cuMemcpyHtoD_v2") orelse return error.CudaNotAvailable;
         self.cuMemcpyDtoH = self.lookup(FnMemcpyDtoH, "cuMemcpyDtoH_v2") orelse return error.CudaNotAvailable;
         self.cuMemcpyDtoD = self.lookup(FnMemcpyDtoD, "cuMemcpyDtoD_v2") orelse return error.CudaNotAvailable;
+        self.cuMemcpyDtoHAsync = self.lookup(FnMemcpyDtoHAsync, "cuMemcpyDtoHAsync_v2") orelse return error.CudaNotAvailable;
+        self.cuMemcpyHtoDAsync = self.lookup(FnMemcpyHtoDAsync, "cuMemcpyHtoDAsync_v2") orelse return error.CudaNotAvailable;
+        self.cuStreamCreate = self.lookup(FnStreamCreate, "cuStreamCreate") orelse return error.CudaNotAvailable;
+        self.cuStreamSynchronize = self.lookup(FnStreamSync, "cuStreamSynchronize") orelse return error.CudaNotAvailable;
         // UMA zero-copy support (optional — only needed on integrated GPUs)
         self.cuMemHostRegister = self.lookup(FnMemHostRegister, "cuMemHostRegister_v2");
         self.cuMemHostGetDevicePointer = self.lookup(FnMemHostGetDevicePointer, "cuMemHostGetDevicePointer_v2");
@@ -452,6 +539,11 @@ pub const CudaBackend = struct {
             if (cuCtxCreate(&self.context, 0, dev) != CUDA_SUCCESS) return error.CudaInitFailed;
         }
         errdefer _ = self.cuCtxDestroy(self.context);
+
+        // Dedicated compute stream (see the `stream` field doc comment).
+        var stream: CUstream = null;
+        if (self.cuStreamCreate(&stream, 0) != CUDA_SUCCESS) return error.CudaInitFailed;
+        self.stream = stream;
 
         // Load PTX module — must be null-terminated (heap-allocated, too large for stack)
         const ptx_buf = try allocator.alloc(u8, ptx_source.len + 1);
@@ -565,9 +657,16 @@ pub const CudaBackend = struct {
         }
         self.buf_cache.deinit();
 
+        // Free the permanent resident weight chunks (DS4 EP-local experts).
+        for (self.resident_chunks[0..self.resident_chunk_count]) |dptr| _ = self.cuMemFree(dptr);
+        self.resident_map.deinit();
+
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
         if (self.module != null) _ = self.cuModuleUnload(self.module);
+        if (self.stream != null) {
+            if (self.cuStreamSynchronize) |stream_sync| _ = stream_sync(self.stream);
+        }
         if (self.context != null) {
             _ = self.cuCtxSynchronize();
             _ = self.cuCtxDestroy(self.context);
@@ -592,11 +691,22 @@ pub const CudaBackend = struct {
     // ── Low-level buffer operations ─────────────────────────────
 
     fn uploadToDevice(self: *CudaBackend, ptr: *const anyopaque, size: usize) CUdeviceptr {
-        var dptr: CUdeviceptr = 0;
-        if (!cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc"))
-            @panic("cuMemAlloc failed — out of device memory");
-        if (!cuCheck(self.cuMemcpyHtoD(dptr, ptr, size), "cuMemcpyHtoD"))
+        const dptr = self.allocAct(size);
+        if (dptr == 0) @panic("cuMemAlloc failed — out of device memory");
+        // Async on the compute stream: blocking H2D on the legacy null stream
+        // costs ~2ms per call on GB10, and the kernel that consumes this
+        // buffer is launched on the same stream right after, so ordering holds.
+        if (!cuCheck(self.cuMemcpyHtoDAsync(dptr, ptr, size, self.stream), "cuMemcpyHtoDAsync"))
             @panic("cuMemcpyHtoD failed — device memory left uninitialized");
+        return dptr;
+    }
+
+    /// Allocate device memory directly. cuMemAlloc under pressure is not the
+    /// hot-path bottleneck (measured) — the per-address allocations are
+    /// one-time per buffer.
+    fn allocAct(self: *CudaBackend, size: usize) CUdeviceptr {
+        var dptr: CUdeviceptr = 0;
+        if (!cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc")) return 0;
         return dptr;
     }
 
@@ -620,21 +730,43 @@ pub const CudaBackend = struct {
     /// within the region can be mapped to a device pointer via
     /// cuMemHostGetDevicePointer without per-tensor registration.
     /// No-op on discrete GPUs or if cuMemHostRegister is unavailable.
+    ///
+    /// UMA registration itself is disabled (max_uma_regions = 0 — the pin
+    /// faulted cold mmap pages at ~19MB/s). The range is still recorded so
+    /// restoreMmapHints can reset the madvise advice after the resident copy.
     pub fn registerHostRegion(self: *CudaBackend, base: [*]const u8, size: usize) void {
         if (!self.is_uma) return;
-        const reg = self.cuMemHostRegister orelse return;
-        if (self.uma_region_count >= max_uma_regions) return;
-
         const addr = @intFromPtr(base);
         const page = std.heap.page_size_min;
         const aligned_base = addr & ~@as(usize, page - 1);
         const aligned_size = ((addr + size + page - 1) & ~@as(usize, page - 1)) - aligned_base;
+        if (self.shard_range_count < max_shard_ranges) {
+            self.shard_ranges[self.shard_range_count] = .{ .base = aligned_base, .size = aligned_size };
+            self.shard_range_count += 1;
+        }
+        const reg = self.cuMemHostRegister orelse return;
+        if (self.uma_region_count >= max_uma_regions) return;
 
         if (reg(@ptrFromInt(aligned_base), aligned_size, CU_MEMHOSTREGISTER_DEVICEMAP) == CUDA_SUCCESS) {
             self.uma_regions[self.uma_region_count] = .{ .base = aligned_base, .size = aligned_size };
             self.uma_region_count += 1;
         } else {
             std.log.warn("UMA cuMemHostRegister failed for region {x}+{d}", .{ aligned_base, aligned_size });
+        }
+    }
+
+    /// Restore RANDOM access hint on all tracked mmap ranges and drop the
+    /// non-expert pages. The resident copy sets SEQUENTIAL (readahead) per
+    /// range to fault the experts in fast; decode must go back to RANDOM so
+    /// scattered expert/router reads don't pull whole 3.5GB shards through
+    /// the page cache. The DONTNEED frees the ~50GB of non-expert mmap pages
+    /// that would otherwise keep the machine at the memory limit (everything
+    /// the GPU reads at decode is device-resident or heap-repacked).
+    pub fn restoreMmapHints(self: *CudaBackend) void {
+        for (self.shard_ranges[0..self.shard_range_count]) |r| {
+            const ptr: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(r.base);
+            std.posix.madvise(ptr, r.size, std.posix.system.MADV.RANDOM) catch {};
+            std.posix.madvise(ptr, r.size, std.posix.system.MADV.DONTNEED) catch {};
         }
     }
 
@@ -648,11 +780,82 @@ pub const CudaBackend = struct {
 
     // ── Weight cache (permanent, read-only) ─────────────────────
 
+    /// Make a weight range GPU-resident: zero-copy UMA regions are prefaulted
+    /// (WILLNEED); other ranges get a permanent device copy cached in
+    /// resident_map so getOrUpload never touches the mmap again (the OS
+    /// evicts the now-cold host pages). This is the vLLM-style resident
+    /// working set: without it the demand-paged 155GB model thrashes on the
+    /// 121GB unified-memory GB10 (measured: 8-30s/token FFN page-fault
+    /// stalls). Used by Ds4Model.prefaultLocalExperts for the EP-local
+    /// experts.
+    ///
+    /// The source is CPU-touched (page-granular volatile read) before the
+    /// copy: cuMemcpyHtoD faults cold mmap pages one 4KB at a time through
+    /// the driver path (measured 18MB/s on GB10), while a CPU read with the
+    /// kernel's own fault handler runs at disk speed (~1GB/s+). After the
+    /// copy the clean source pages are DONTNEED'd — the device copy is the
+    /// source of truth and keeping both resident doubles the footprint
+    /// (66GB device + 66GB host) past the 121GB limit.
+    pub fn residentWeight(self: *CudaBackend, ptr: [*]const u8, len: usize) void {
+        const addr = @intFromPtr(ptr);
+        if (self.resident_map.contains(addr)) return;
+        if (self.is_uma and self.isInUmaRegion(addr)) {
+            // Zero-copy region: the GPU reads host pages directly — prefault.
+            prefaultRange(ptr, len);
+            return;
+        }
+        // Copy into the current chunk; grow a new chunk when full.
+        if (self.resident_chunk_count == 0 or
+            self.resident_buf_used + len > resident_chunk_size)
+        {
+            if (self.resident_chunk_count >= resident_max_chunks) return;
+            var dptr: CUdeviceptr = 0;
+            if (!cuCheck(self.cuMemAlloc(&dptr, resident_chunk_size), "cuMemAlloc(resident)")) return;
+            self.resident_chunks[self.resident_chunk_count] = dptr;
+            self.resident_chunk_count += 1;
+            self.resident_buf_used = 0;
+        }
+        // Fault the source pages in via the fast CPU path (see doc comment).
+        // SEQUENTIAL readahead is required: cold mmap pages fault at ~22MB/s
+        // with the RANDOM advice, ~1GB/s with readahead. The advice is reset
+        // to RANDOM by restoreMmapHints after the whole copy completes.
+        {
+            const page_size: usize = std.heap.page_size_min;
+            const base = @intFromPtr(ptr);
+            const aligned = base & ~@as(usize, page_size - 1);
+            const total = (base - aligned) + len;
+            std.posix.madvise(@ptrFromInt(aligned), total, std.posix.system.MADV.SEQUENTIAL) catch {};
+            var off: usize = 0;
+            while (off < len) : (off += page_size) {
+                _ = @as(*const volatile u8, @ptrFromInt(aligned + off)).*;
+            }
+        }
+        const dptr = self.resident_chunks[self.resident_chunk_count - 1] + self.resident_buf_used;
+        if (!cuCheck(self.cuMemcpyHtoD(dptr, @ptrCast(ptr), len), "cuMemcpyHtoD(resident)")) return;
+        const page_size: usize = std.heap.page_size_min;
+        const aligned = addr & ~@as(usize, page_size - 1);
+        const warm_len = (addr - aligned) + len;
+        std.posix.madvise(@ptrFromInt(aligned), warm_len, std.posix.system.MADV.DONTNEED) catch {};
+        self.resident_buf_used += len;
+        self.resident_map.put(addr, dptr) catch {};
+    }
+
+    /// madvise WILLNEED on an aligned range (prefault into the page cache).
+    fn prefaultRange(ptr: [*]const u8, len: usize) void {
+        const page_size: usize = std.heap.page_size_min;
+        const addr = @intFromPtr(ptr);
+        const aligned = addr & ~(page_size - 1);
+        const total = (addr - aligned) + len;
+        std.posix.madvise(@ptrFromInt(aligned), total, std.posix.system.MADV.WILLNEED) catch {};
+    }
+
     /// Get device pointer for a weight buffer. Uploads once, reused forever.
     /// On UMA: uses cuMemHostGetDevicePointer for zero-copy if region registered.
     /// On discrete GPU: allocates device memory and uploads.
     fn getOrUpload(self: *CudaBackend, ptr: [*]const u8, size: usize) CUdeviceptr {
         const addr = @intFromPtr(ptr);
+        // Resident weights (DS4 EP-local experts): device copy is permanent.
+        if (self.resident_map.get(addr)) |dptr| return dptr;
         if (self.buf_cache.get(addr)) |cached| {
             if (cached.size >= size) return cached.dptr;
             // Size mismatch — evict old entry
@@ -697,9 +900,10 @@ pub const CudaBackend = struct {
             const act = entry.value_ptr;
             if (addr >= base and addr + size <= base + act.size) {
                 if (refresh_stale and act.state == .stale) {
-                    // Re-upload entire parent buffer so all sub-regions are fresh
+                    // Re-upload entire parent buffer so all sub-regions are fresh.
+                    // Async on the compute stream (ordered before the next kernel).
                     const host_ptr: *const anyopaque = @ptrFromInt(base);
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, host_ptr, act.size), "cuMemcpyHtoD(act reupload)");
+                    _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, host_ptr, act.size, self.stream), "cuMemcpyHtoDAsync(act reupload)");
                     act.state = .clean;
                 }
                 if (mark_dirty) act.state = .dirty;
@@ -718,7 +922,7 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(act upload)");
+                    _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, @ptrCast(ptr), size, self.stream), "cuMemcpyHtoDAsync(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
@@ -756,8 +960,8 @@ pub const CudaBackend = struct {
         // Sub-region of a cached buffer
         if (self.findContaining(addr, size, true, false)) |dptr| return dptr;
         // Allocate new device buffer (no upload — kernel will write)
-        var dptr: CUdeviceptr = 0;
-        _ = cuCheck(self.cuMemAlloc(&dptr, @max(size, 4)), "cuMemAlloc(output)");
+        const dptr = self.allocAct(size);
+        if (dptr == 0) @panic("cuMemAlloc(output) failed");
         self.act_cache.put(addr, .{ .dptr = dptr, .size = size, .state = .dirty }) catch |err| {
             std.log.warn("activation cache put failed (output, size={d}): {}", .{ size, err });
         };
@@ -772,7 +976,7 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(weight upload)");
+                    _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, @ptrCast(ptr), size, self.stream), "cuMemcpyHtoDAsync(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -790,18 +994,36 @@ pub const CudaBackend = struct {
         return dptr;
     }
 
+    /// Remove deferred copy-backs whose host range contains `addr` (the host
+    /// data is newer than the pending GPU download).
+    fn dropPendingSyncs(self: *CudaBackend, addr: usize) void {
+        var i: usize = 0;
+        while (i < self.batch_sync_count) {
+            const ps = self.batch_syncs[i];
+            const base = @intFromPtr(ps.y);
+            const size = ps.n * @sizeOf(f32);
+            if (addr >= base and addr < base + size) {
+                self.batch_syncs[i] = self.batch_syncs[self.batch_sync_count - 1];
+                self.batch_sync_count -= 1;
+            } else i += 1;
+        }
+    }
+
     /// Sync GPU, download dirty buffers to host, then mark all entries stale.
     /// Called before CPU code that may read or modify activation buffers.
     pub fn flushActivations(self: *CudaBackend) void {
-        _ = cuCheck(self.cuCtxSynchronize(), "cuCtxSynchronize");
+        // Drain deferred copy-backs first so no queued GEMV output is lost.
+        self.drainBatchSyncs();
+        _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
         var it = self.act_cache.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.state == .dirty) {
                 const host_ptr: *anyopaque = @ptrFromInt(entry.key_ptr.*);
-                self.downloadFromDevice(entry.value_ptr.dptr, host_ptr, entry.value_ptr.size);
+                _ = cuCheck(self.cuMemcpyDtoHAsync(host_ptr, entry.value_ptr.dptr, entry.value_ptr.size, self.stream), "cuMemcpyDtoHAsync");
             }
             entry.value_ptr.state = .stale;
         }
+        _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
     }
 
     /// Remove a specific activation buffer from the cache.
@@ -809,6 +1031,9 @@ pub const CudaBackend = struct {
     /// GPU use will re-upload the CPU-written data.
     pub fn invalidateAct(self: *CudaBackend, ptr: anytype) void {
         const addr = @intFromPtr(ptr);
+        // Drop any deferred copy-back that would overwrite this host range —
+        // the host now has newer data than the GPU write.
+        self.dropPendingSyncs(addr);
         // Mark as stale so next GPU access re-uploads from host
         if (self.act_cache.getPtr(addr)) |act| {
             act.state = .stale;
@@ -867,7 +1092,14 @@ pub const CudaBackend = struct {
     }
 
     fn launch(self: *CudaBackend, func: CUfunction, grid: u32, block: u32, smem: u32, params: [*]?*anyopaque) void {
-        _ = cuCheck(self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, null, params, null), "cuLaunchKernel");
+        // TEMP PERF: sample kernel launch latency.
+        const t_l = perfMonoMs();
+        _ = cuCheck(self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, self.stream, params, null), "cuLaunchKernel");
+        self.launch_total_ms += perfMonoMs() - t_l;
+        self.launch_count += 1;
+        if (self.launch_count % 300 == 0) {
+            std.log.info("CUDA: {d} launches, avg {d}µs (last {d}ms)", .{ self.launch_count, @as(u64, self.launch_total_ms * 1000) / self.launch_count, perfMonoMs() - t_l });
+        }
     }
 
     // ── Weight size helper ──────────────────────────────────────
@@ -1626,13 +1858,31 @@ pub const CudaBackend = struct {
     /// GPU op a device copy that misses CPU edits (or the host would read
     /// stale data). Also dispatched via Backend.syncGemvOutput for DS4's
     /// non-MLX attention projections.
+    ///
+    /// Inside a beginBatch/endBatch window the copy-back is deferred: the
+    /// CPU does not read the output until endBatch, so the GEMVs pipeline on
+    /// the GPU and one drain covers the whole phase (see beginBatch).
     pub fn syncGemvOutput(self: *CudaBackend, y: [*]f32, n: usize) void {
+        if (self.batch_depth > 0) {
+            if (self.batch_sync_count >= max_batch_syncs) self.drainBatchSyncs();
+            self.batch_syncs[self.batch_sync_count] = .{ .y = y, .n = n };
+            self.batch_sync_count += 1;
+            return;
+        }
+        self.doSyncGemvOutput(y, n);
+    }
+
+    /// Immediate copy-back for one GEMV output (see syncGemvOutput).
+    /// Async on the dedicated stream + one stream sync: blocking copies on
+    /// the legacy null stream cost ~2ms per call on GB10.
+    fn doSyncGemvOutput(self: *CudaBackend, y: [*]f32, n: usize) void {
         const addr = @intFromPtr(y);
         const byte_len = n * @sizeOf(f32);
         // Exact match: download and mark stale (host is current).
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= byte_len) {
-                self.downloadFromDevice(act.dptr, @ptrCast(y), byte_len);
+                _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(y), act.dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
+                _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
                 act.state = .stale;
             }
             return;
@@ -1640,8 +1890,38 @@ pub const CudaBackend = struct {
         // Sub-region of a cached parent (e.g. compressor circular buffers):
         // download the slice; the parent stays dirty and flushes at sync.
         if (self.findContaining(addr, byte_len, false, false)) |dptr| {
-            self.downloadFromDevice(dptr, @ptrCast(y), byte_len);
+            _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(y), dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
+            _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
         }
+    }
+
+    /// Execute all deferred GEMV copy-backs queued by the current batch.
+    /// All copies are launched asynchronously, then ONE stream sync drains
+    /// them — the GPU pipelines the kernels and the copies back-to-back.
+    fn drainBatchSyncs(self: *CudaBackend) void {
+        if (self.batch_sync_count == 0) return;
+        const t_d = perfMonoMs();
+        for (self.batch_syncs[0..self.batch_sync_count]) |ps| {
+            const addr = @intFromPtr(ps.y);
+            const byte_len = ps.n * @sizeOf(f32);
+            if (self.act_cache.getPtr(addr)) |act| {
+                if (act.size >= byte_len) {
+                    _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(ps.y), act.dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
+                    act.state = .stale;
+                }
+                continue;
+            }
+            if (self.findContaining(addr, byte_len, false, false)) |dptr| {
+                _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(ps.y), dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
+            }
+        }
+        _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
+        // TEMP PERF: drain latency + cache size sampling.
+        self.drain_count += 1;
+        if (self.drain_count % 20 == 0) {
+            std.log.info("CUDA drain: {d}ms for {d} copies, act_cache {d} entries", .{ perfMonoMs() - t_d, self.batch_sync_count, self.act_cache.count() });
+        }
+        self.batch_sync_count = 0;
     }
 
     /// MLX affine quantized GEMV: packed int (4/6/8-bit) + BF16 scales/biases, group_size=64.
@@ -1791,9 +2071,18 @@ pub const CudaBackend = struct {
     }
 
     /// No-op — CUDA dispatches are not batched.
-    pub fn beginBatch(_: *CudaBackend) void {}
-    /// No-op — CUDA dispatches are not batched.
-    pub fn endBatch(_: *CudaBackend) void {}
+    /// Begin a deferred-sync batch window: GEMV outputs queued for copy-back
+    /// are drained at the matching endBatch, letting the GPU pipeline kernels
+    /// without the CPU waiting per GEMV (see syncGemvOutput).
+    pub fn beginBatch(self: *CudaBackend) void {
+        self.batch_depth += 1;
+    }
+    /// End the batch window and drain all deferred GEMV copy-backs.
+    pub fn endBatch(self: *CudaBackend) void {
+        std.debug.assert(self.batch_depth > 0);
+        self.batch_depth -= 1;
+        if (self.batch_depth == 0) self.drainBatchSyncs();
+    }
 
     /// Returns backend startup information for display.
     pub fn backendInfo(self: *const CudaBackend) backend_mod.BackendInfo {
@@ -2609,8 +2898,8 @@ test "CUDA internal struct layouts are well-formed" {
     try testing.expectEqual(CudaBackend.BufState.dirty, ab_dirty.state);
     try testing.expectEqual(CudaBackend.BufState.stale, ab_stale.state);
 
-    // max_uma_regions: must be at least 1 and fit in u32
-    try testing.expect(CudaBackend.max_uma_regions >= 1);
+    // max_uma_regions: fits in u32; 0 = UMA zero-copy registration disabled
+    // (DS4 uses resident device copies instead — see residentWeight).
     try testing.expect(CudaBackend.max_uma_regions <= 256);
 
     // UmaRegion default state
