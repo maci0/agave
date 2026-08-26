@@ -1,5 +1,5 @@
 #!/bin/bash
-# DS4 Benchmark Suite — speed + coherence across quants and KV types
+# DS4 Benchmark Suite, speed + coherence across quants and KV types
 set -euo pipefail
 
 AGAVE="./zig-out/bin/agave"
@@ -7,7 +7,7 @@ BLOB_DIR="/Users/mwysocki/.cache/huggingface/hub/models--ggml-org--DeepSeek-V4-F
 PROMPT="Explain the theory of relativity step by step."
 
 echo "============================================"
-echo "DS4 Benchmark Suite — $(date)"
+echo "DS4 Benchmark Suite, $(date)"
 echo "============================================"
 echo ""
 
@@ -53,5 +53,5 @@ benchmark_model "Q2_K_S" "$BLOB_DIR/DeepSeek-V4-Flash-0731-Q2_K_S-00001-of-00002
 benchmark_model "MXFP4" "$BLOB_DIR/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf"
 
 echo "============================================"
-echo "Done — $(date)"
+echo "Done, $(date)"
 echo "============================================"
