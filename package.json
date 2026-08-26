@@ -1,0 +1,14 @@
+{
+  "name": "agave",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.57.0",
+    "@rikalabs/oxlint-standards": "0.8.1",
+    "oxlint": "1.57.0",
+    "oxlint-tsgolint": "0.17.4"
+  }
+}

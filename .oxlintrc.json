@@ -1,0 +1,84 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"options": {
+		"typeAware": true
+	},
+	"env": {
+		"browser": true
+	},
+	"extends": [
+		"./node_modules/@rikalabs/oxlint-standards/presets/strict.json"
+	],
+	"jsPlugins": [
+		"@rikalabs/oxlint-standards/plugin",
+		{
+			"name": "anti-slop",
+			"specifier": "./tools/oxlint/anti-slop/index.ts"
+		}
+	],
+	"rules": {
+		"anti-slop/no-chained-type-assertions": "error",
+		"anti-slop/no-conditional-empty-object-spread": "error",
+		"anti-slop/no-known-value-widening": "error",
+		"anti-slop/no-module-mocking": "error",
+		"anti-slop/no-object-parameters": "error",
+		"anti-slop/no-reflect-apply": "error",
+		"anti-slop/no-reflect-get": "error",
+		"anti-slop/no-runtime-typeof": "error",
+		"anti-slop/no-shape-in-symbol-names": "error",
+		"anti-slop/no-unknown-parameters": "error",
+		"anti-slop/no-unknown-returns": "error",
+		"anti-slop/no-unknown-type-aliases": "error",
+		"anti-slop/no-unsafe-dictionary-type": "error",
+		"anti-slop/no-widen-then-assert": "error",
+		"anti-slop/require-safety-comment-for-type-assertion": "error",
+		"jest/require-hook": "off"
+	},
+	"overrides": [
+		{
+			"files": [
+				"**/*.d.ts",
+				"src/web/app.ts",
+				"web/agave.ts",
+				"web/shell.ts"
+			],
+			"rules": {
+				"import/unambiguous": "off"
+			}
+		},
+		{
+			"files": [
+				"docs/**/*.mjs"
+			],
+			"env": {
+				"node": true
+			},
+			"rules": {
+				"import/no-nodejs-modules": "off",
+				"no-console": "off",
+				"@rikalabs/no-unlisted-external-imports": "off",
+				"typescript/no-unsafe-call": "off",
+				"typescript/no-unsafe-member-access": "off",
+				"typescript/no-unsafe-assignment": "off",
+				"typescript/no-unsafe-argument": "off",
+				"typescript/no-unsafe-return": "off",
+				"typescript/strict-boolean-expressions": "off"
+			}
+		}
+	],
+	"ignorePatterns": [
+		"node_modules/**",
+		"tools/oxlint/anti-slop/**",
+		".claude/**",
+		".opencode/**",
+		".pi-subagents/**",
+		"zig-out/**",
+		".zig-cache/**",
+		".web-ts-out/**",
+		"src/web/app.js",
+		"web/agave.js",
+		"web/shell.js",
+		"src/web/app.ts",
+		"web/shell.ts"
+	]
+}
