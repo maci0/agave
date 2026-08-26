@@ -4,7 +4,7 @@
 
 ### A. Pre-packed AMX SGEMM for Attention (arXiv 2606.25426)
 **Paper:** "Exceeding Accelerate at LLM Prefill GEMM on M1 AMX"
-**Key finding:** Custom AMX kernel beats Apple Accelerate by 1.58-2.04× for SGEMM!
+**Key finding:** Custom AMX kernel beats Apple Accelerate by 1.58-2.04x for SGEMM.
 - Weight PRE-PACKING at model load → amortized packing cost
 - Fine multi-thread panels (N_c=64) → engages BOTH AMX blocks
 - Accelerate leaves E-cluster AMX block IDLE → 2× wasted hardware
@@ -20,7 +20,7 @@
 
 ### B. SP-MoE Expert Prediction During Drafting (arXiv 2510.10302)
 **Paper:** "SP-MoE: Speculative Decoding and Prefetching for MoE Inference"
-**Key finding:** Use draft model's attention output to predict target experts!
+**Key finding:** Use draft model's attention output to predict target experts.
 - During suffix drafting: predict which experts verification will need
 - Async prefetch predicted experts WHILE drafting runs (idle I/O window)
 - Cross-model predictor: draft attention → target gating → 88.94% top-1 accuracy
@@ -37,7 +37,7 @@
 
 ### C. PreScope Layer-Aware Expert Prediction (arXiv 2509.23638)
 **Paper:** "PreScope: Unleashing Prefetching for MoE Inference"
-**Key finding:** Layer-group-aware predictor (LLaPor) achieves 94% accuracy!
+**Key finding:** Layer-group-aware predictor (LLaPor) achieves 94% accuracy.
 - Expert activations have distinct patterns per layer GROUP (input/middle/output)
 - Learned lightweight predictor per layer group → much better than LRU
 - Cross-layer scheduling: quantify prefetch gain vs loss globally
@@ -99,13 +99,13 @@ rANS order-0 on nibbles achieves 1.37× compression:
 - 155GB MXFP4 → ~113GB compressed
 - 42GB fewer SSD bytes to read per model pass
 - Decompression: ~1 cycle per nibble (negligible vs SSD latency)
-- "No context model can do better — it's a theorem" (white nibble statistics)
+- "No context model can do better, it's a theorem" (white nibble statistics)
 - Implementation: ~200 lines in fse_coli.h, pure C, no dependencies
 
 ### J. pread + O_DIRECT Expert Loading (Priority: HIGH)
 Bypass the OS page cache entirely for expert weights:
 - Direct SSD → RAM transfer, no page cache pollution
-- Eliminates our Metal mmap page fault issue!
+- Eliminates our Metal mmap page fault issue
 - Colibri measured: 6.2 → 4.9 s/token on same hardware (21% faster)
 - Requires: open with O_DIRECT flag, aligned buffers, pread syscall
 - Implementation: ~100 lines to replace mmap with pread in expert dispatch
