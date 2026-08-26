@@ -51,7 +51,7 @@ const bits_per_byte: f32 = 8.0;
 const avail_display_threshold_pct: usize = 98;
 /// Maximum number of content lines in the TTY banner box.
 const max_content_lines: usize = 6;
-/// Milliseconds per second — used for tok/s calculations.
+/// Milliseconds per second, used for tok/s calculations.
 const ms_per_second: f32 = 1000.0;
 /// Bytes per GiB (binary gigabyte).
 const bytes_per_gib: usize = 1024 * 1024 * 1024;
@@ -262,7 +262,7 @@ fn sanitizeMetadata(buf: *[max_meta_len]u8, s: []const u8) []const u8 {
 // ── Display Struct ───────────────────────────────────────────────
 
 /// Main display controller. Dispatches all output through the selected
-/// OutputMode (tty, plain, json). No allocator needed — uses only
+/// OutputMode (tty, plain, json). No allocator needed, uses only
 /// stack-buffered writes to stderr/stdout.
 pub const Display = struct {
     mode: OutputMode,
@@ -272,7 +272,7 @@ pub const Display = struct {
     const out_buf_size: usize = 8192;
 
     /// Initialize a Display with the given output mode and verbosity.
-    /// No allocator required — all output is stack-buffered.
+    /// No allocator required, all output is stack-buffered.
     pub fn init(mode: OutputMode, verbose: bool) Display {
         return .{ .mode = mode, .verbose = verbose };
     }
@@ -292,7 +292,7 @@ pub const Display = struct {
     /// Verbose mode appends full model dimensions and timing.
     pub fn printBannerPlain(self: Display, info: ModelInfo) void {
         const fsize = formatSize(info.file_size_bytes);
-        // Sanitize model name — GGUF metadata is untrusted (CWE-150).
+        // Sanitize model name, GGUF metadata is untrusted (CWE-150).
         var name_san_buf: [max_meta_len]u8 = undefined;
         const safe_name = sanitizeMetadata(&name_san_buf, info.name);
         var buf: [out_buf_size]u8 = undefined;
@@ -349,7 +349,7 @@ pub const Display = struct {
         var lines: [max_content_lines][]const u8 = undefined;
         var n_lines: usize = 0;
 
-        // Line 0: model name (sanitized — metadata is untrusted)
+        // Line 0: model name (sanitized, metadata is untrusted)
         var name_san_buf: [max_meta_len]u8 = undefined;
         lines[n_lines] = sanitizeMetadata(&name_san_buf, info.name);
         n_lines += 1;
@@ -487,7 +487,7 @@ pub const Display = struct {
             }
         }.f;
 
-        // ╭─ 🌵 agave v0.1.0 ──────╮
+        // ╭─ 🌵 agave v0.2.0 ──────╮
         const green = comptime std.fmt.comptimePrint(ctl.fg_base, .{2});
         // cactus emoji from module-level constant
         const title = " agave v" ++ version ++ " ";
@@ -902,12 +902,12 @@ test "displayWidth ascii" {
 }
 
 test "displayWidth middot" {
-    // "a · b" — the middot (U+00B7) is 2 bytes in UTF-8 but occupies 1 terminal column
+    // "a · b", the middot (U+00B7) is 2 bytes in UTF-8 but occupies 1 terminal column
     try std.testing.expectEqual(@as(usize, 5), term.displayWidth("a \xc2\xb7 b"));
 }
 
 test "displayWidth CJK double-width" {
-    // "世界" — two CJK characters, each 3 bytes UTF-8, each 2 terminal columns
+    // "世界", two CJK characters, each 3 bytes UTF-8, each 2 terminal columns
     try std.testing.expectEqual(@as(usize, 4), term.displayWidth("世界"));
     // Mixed ASCII + CJK: "hi世界" = 2 + 4 = 6
     try std.testing.expectEqual(@as(usize, 6), term.displayWidth("hi世界"));

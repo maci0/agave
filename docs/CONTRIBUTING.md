@@ -31,12 +31,12 @@ Import through package dispatchers (`backend/backend.zig`, `models/model.zig`, `
 Existing backends: CPU (`cpu.zig`), Metal (`metal.zig`), Vulkan (`vulkan.zig`), CUDA (`cuda.zig`), ROCm (`rocm.zig`), WebGPU (`webgpu.zig`).
 
 1. Create `src/backend/yourbackend.zig`
-2. Implement the full backend interface — core ops (`gemv`, `rmsNorm`, `rope`, `sdpa`, `sync`, etc.) plus fused variants (`siluMul`, `addRmsNorm`, `sdpaPrefill`, `gemvMulti`, ...). See `src/backend/backend.zig` for the complete dispatch interface; every function must be implemented or `@panic` on unsupported ops
+2. Implement the full backend interface, core ops (`gemv`, `rmsNorm`, `rope`, `sdpa`, `sync`, etc.) plus fused variants (`siluMul`, `addRmsNorm`, `sdpaPrefill`, `gemvMulti`, ...). See `src/backend/backend.zig` for the complete dispatch interface; every function must be implemented or `@panic` on unsupported ops
 3. Add variant to the `Backend` tagged union in `src/backend/backend.zig`
 4. Add backend-specific tests in your implementation file
 5. Update `build.zig` with target-specific compilation flags
 6. Add entry to `docs/KERNELS.md`
-7. Add GPU kernels in `src/backend/kernels/yourbackend/` — shader format depends on backend (MSL for Metal, SPIR-V for Vulkan, PTX for CUDA, HSACO for ROCm, WGSL for WebGPU)
+7. Add GPU kernels in `src/backend/kernels/yourbackend/`, shader format depends on backend (MSL for Metal, SPIR-V for Vulkan, PTX for CUDA, HSACO for ROCm, WGSL for WebGPU)
 
 **Template:**
 ```zig
@@ -159,7 +159,7 @@ The composer selects the correct GEMV, activation, residual pattern, and SDPA bu
 ## How to Add a New Quantization Scheme
 
 1. Add variant to `DType` enum in `src/format/format.zig` and wire up byte-size calculation in `src/backend/backend.zig` (`weightBytes()`)
-2. Implement GEMV kernel: CPU SIMD in `src/backend/kernels/cpu/` and native GPU versions per backend (no CPU fallback in GPU backends). Dequantization happens in-kernel — never pre-dequant to f32
+2. Implement GEMV kernel: CPU SIMD in `src/backend/kernels/cpu/` and native GPU versions per backend (no CPU fallback in GPU backends). Dequantization happens in-kernel, never pre-dequant to f32
 3. Add conversion helpers in `src/ops/quant.zig` if the format needs custom type conversions (e.g., `fp8e4m3ToF32`)
 4. Update backend dispatch to include new format (add GEMV variant in `backend.zig`)
 5. Add GEMM kernel for batched prefill: Metal in `gemm.metal` (reuse `block_dot` from GEMV), pipeline in `metal.zig`, dispatch in `gemm()`. Pattern: one threadgroup per output row, loop over n_tok tokens
@@ -220,7 +220,7 @@ Run `python3 scripts/check-docs.py` (when present) for link and count hygiene.
 
 **Template fields** (add to your model struct):
 ```zig
-// Optional vision fields — vtable detects these via @hasField
+// Optional vision fields, vtable detects these via @hasField
 image_embeddings: ?[]const f32 = null,
 n_visual_tokens: u32 = 0,
 image_pad_token_id: u32 = 0,
@@ -235,7 +235,7 @@ KV cache quantization compresses stored K/V vectors. The pipeline is: normalize 
 2. Add entries to: `name()`, `bitsPerElement()`, `turboBits()`, `fromString()`, `kvSliceBytes()`, `kvByteOffset()`
 3. Implement `myStore()`: normalize → forward rotation → Lloyd-Max quantize → pack indices
 4. Implement `myDot()`: forward rotation on query → dot with codebook values (K cache path)
-5. Implement `myMulAccum()`: unpack → codebook → **inverse rotation** → accumulate (V cache path — inverse rotation critical for correctness)
+5. Implement `myMulAccum()`: unpack → codebook → **inverse rotation** → accumulate (V cache path, inverse rotation critical for correctness)
 6. Wire into `kvStore()`, `kvDot()`, `kvMulAccum()` switch statements
 7. All rotation-based types share the same storage format (f16 norm + packed indices) and Lloyd-Max codebook
 
@@ -252,7 +252,7 @@ Existing examples: `turboStore/turboDot/turboMulAccum` (WHT), `planarStore/plana
 
 ## How to Add Speculative Decoding Support to a New Model
 
-Layer skip for self-speculative mode is automatic — the `layer_skip_start`/`layer_skip_end` fields and the skip check in `forward()` are required in every model. The pattern is:
+Layer skip for self-speculative mode is automatic, the `layer_skip_start`/`layer_skip_end` fields and the skip check in `forward()` are required in every model. The pattern is:
 
 ```zig
 // In model struct:
@@ -267,7 +267,7 @@ for (0..self.n_layers) |li| {
 }
 ```
 
-The `Model` VTable provides `setLayerSkip(start, end)` via `@hasField` detection — no manual wiring needed.
+The `Model` VTable provides `setLayerSkip(start, end)` via `@hasField` detection, no manual wiring needed.
 
 For tree attention support (`forwardTree`), implement a batch forward that:
 1. Processes B queries through all layers with position IDs (not sequential)
@@ -293,8 +293,8 @@ The GPU kernel binaries under `src/backend/kernels/` are **generated artifacts c
 | CUDA | `src/backend/kernels/cuda/*.zig` | `zig build ptx -Dcuda-sm=sm_120`, then copy `zig-out/ptx/*.ptx` to `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` |
 | Vulkan | `src/backend/kernels/vulkan/*.comp` | `glslangValidator -V --target-env vulkan1.1 foo.comp -o foo.spv` (per shader) | `scripts/check-shader-artifacts.sh` |
 | ROCm | `src/backend/kernels/rocm/all.zig` | `zig build amdgcn` on Linux with ROCm + `ld.lld`; copy `zig-out/rocm/kernels.hsaco` to `src/backend/kernels/rocm/` | manual (needs HIP runtime) |
-| Metal | `src/backend/kernels/metal/*.metal` | none — MSL is compiled from source at runtime | n/a |
-| WebGPU | `src/backend/kernels/webgpu/*.wgsl` | none — WGSL is the source of truth | n/a |
+| Metal | `src/backend/kernels/metal/*.metal` | none, MSL is compiled from source at runtime | n/a |
+| WebGPU | `src/backend/kernels/webgpu/*.wgsl` | none, WGSL is the source of truth | n/a |
 
 Notes:
 - The committed PTX targets `sm_120` (see docs/KERNELS.md); a plain `zig build ptx` defaults to `sm_90` and will not match.
@@ -304,13 +304,13 @@ Notes:
 ## How to Run Tests
 
 ```bash
-# Format check (CI enforces this — run before pushing)
+# Format check (CI enforces this: run before pushing)
 zig fmt --check src/ tests/ build.zig build.zig.zon
 
 # Run all tests (includes leak detection via std.testing.allocator)
 zig build test
 
-# Full build (needed after changing backend/model interfaces — test target doesn't build agave-bench)
+# Full build (needed after changing backend/model interfaces: test target doesn't build agave-bench)
 zig build
 
 # Run only tests whose name contains a substring (repeatable flag to AND filters)
@@ -326,7 +326,7 @@ zig build test -Denable-webgpu=false    # skip WebGPU tests
 
 **Test categories:**
 - **Unit tests**: `test` blocks at the bottom of each source file (run via `zig build test`)
-- **Leak detection**: All tests use `std.testing.allocator` — any unfreed allocation fails the test
+- **Leak detection**: All tests use `std.testing.allocator`, any unfreed allocation fails the test
 - **Golden tests**: Manual comparison against reference implementations (llama.cpp, HuggingFace)
 - **Model × Backend matrix**: See [TEST_MATRIX.md](TEST_MATRIX.md)
 
@@ -359,7 +359,7 @@ pub fn processRequest(allocator: Allocator, config: Config) !Result {
 
 ### Dispatcher Pattern
 ```zig
-// src/backend/backend.zig — tagged union with inline else dispatch
+// src/backend/backend.zig, tagged union with inline else dispatch
 pub const Backend = union(enum) {
     cpu: *CpuBackend,
     metal: *MetalBackend,
@@ -374,11 +374,11 @@ pub const Backend = union(enum) {
 ```
 
 ```zig
-// main.zig — GOOD: use dispatcher
+// main.zig, GOOD: use dispatcher
 be.gemv(x, weight, output, n, k);
 
-// BAD: never import implementations directly!
-// const cuda = @import("backend/cuda.zig"); // WRONG!
+// BAD: never import implementations directly
+// const cuda = @import("backend/cuda.zig"); // WRONG
 ```
 
 ### Memory-Safe Test
@@ -398,9 +398,9 @@ Existing transports: TCP, POSIX shared memory (shm), NCCL (RoCE RDMA).
 
 Transports are implemented in `src/parallel/transport.zig`. Each transport must implement:
 
-1. **allReduceAdd(buf, n)** — Sum partial results across ranks (TP)
-2. **sendBuf(buf, n)** — Point-to-point send (PP)
-3. **recvBuf(buf, n)** — Point-to-point receive (PP)
+1. **allReduceAdd(buf, n)**, Sum partial results across ranks (TP)
+2. **sendBuf(buf, n)**, Point-to-point send (PP)
+3. **recvBuf(buf, n)**, Point-to-point receive (PP)
 
 ### Transport Selection
 
@@ -413,7 +413,7 @@ UDP peer discovery (`src/parallel/peer_discovery.zig`) is a separate mechanism: 
 
 ### NCCL Architecture
 
-NCCL uses the CUDA primary context (`cuDevicePrimaryCtxRetain`) — NOT `cuCtxCreate`. This ensures NCCL's internal runtime API operations share the same context as our driver API kernel launches.
+NCCL uses the CUDA primary context (`cuDevicePrimaryCtxRetain`), NOT `cuCtxCreate`. This ensures NCCL's internal runtime API operations share the same context as our driver API kernel launches.
 
 ```
 setupNccl():
@@ -464,8 +464,8 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
 
 ### SemVer (0.x)
 
-- Product version: **0.1.0**, reported by `agave --version`, `/health` `version`,
-  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.1.0`).
+- Product version: **0.2.0**, reported by `agave --version`, `/health` `version`,
+  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.2.0`).
 - On **0.x**, breaking changes are allowed without bumping the major digit, but
   they must be called out in `CHANGELOG.md` under **Breaking** (or **Changed**
   with an explicit compatibility note) before merge.
@@ -474,7 +474,7 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
   features as minor; fixes as patch.
 - Git tag `v1.0` (2026-03-22) is a **milestone name only**. It is not product
   SemVer `1.0.0`. Prefer tags that match the product version (for example
-  `v0.1.0`) for future releases.
+  `v0.2.0`) for future releases.
 
 ### Single sources of truth
 
