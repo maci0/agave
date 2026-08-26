@@ -471,6 +471,22 @@ pub const NullBackend = struct {
         unreachable;
     }
 
+    /// Batched MXFP4 expert GEMV (one launch for many slots). Only CUDA
+    /// implements it; other backends fall back to per-slot calls.
+    pub fn gemvMxfp4StBatched(_: *NullBackend, _: []const u64, _: []const u64, _: []const u64, _: []const [*]f32, _: usize, _: usize, _: usize, _: Mxfp4ScaleFormat) void {
+        unreachable;
+    }
+
+    /// Device pointer for a weight range (see CudaBackend.getWeightDevicePtr).
+    pub fn getWeightDevicePtr(_: *NullBackend, _: [*]const u8, _: usize) u64 {
+        unreachable;
+    }
+
+    /// Device pointer for an input activation (see CudaBackend.getInputDevicePtr).
+    pub fn getInputDevicePtr(_: *NullBackend, _: [*]const f32, _: usize) u64 {
+        unreachable;
+    }
+
     const Mxfp4ScaleFormat = @import("../ops/mlx.zig").Mxfp4ScaleFormat;
 
     pub fn gemvMulti(_: *NullBackend, _: [*]const f32, _: []const GemvOp, _: usize) void {
@@ -996,6 +1012,41 @@ pub const Backend = union(enum) {
         switch (self) {
             inline else => |be| be.gemvMxfp4StGpu(x, weight, scale, y, n, k, gs, sf),
         }
+    }
+
+    /// Batched MXFP4 expert GEMV: one launch for n_slots independent
+    /// row-reductions (active experts' gate+up or down). Falls back to the
+    /// per-slot path on backends without the batched kernel.
+    pub inline fn gemvMxfp4StBatched(self: Backend, x_devs: []const u64, w_devs: []const u64, s_devs: []const u64, y_hosts: []const [*]f32, n: usize, k: usize, gs: usize, sf: Mxfp4ScaleFormat) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "gemvMxfp4StBatched")) {
+                    be.gemvMxfp4StBatched(x_devs, w_devs, s_devs, y_hosts, n, k, gs, sf);
+                } else {
+                    unreachable;
+                }
+            },
+        }
+    }
+
+    /// Device pointer for a weight range. No-op (0) on non-CUDA backends.
+    pub inline fn getWeightDevicePtr(self: Backend, ptr: [*]const u8, size: usize) u64 {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "getWeightDevicePtr")) return be.getWeightDevicePtr(ptr, size);
+            },
+        }
+        return 0;
+    }
+
+    /// Device pointer for an input activation. No-op (0) on non-CUDA backends.
+    pub inline fn getInputDevicePtr(self: Backend, ptr: [*]const f32, size: usize) u64 {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "getInputDevicePtr")) return be.getInputDevicePtr(ptr, size);
+            },
+        }
+        return 0;
     }
 
     /// GPTQ INT4 GEMV: y[n] = dequant(qweight[n,k/8]) @ x[k].

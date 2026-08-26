@@ -273,6 +273,9 @@ pub const Ds4Model = struct {
     /// the host pages were DONTNEED'd after the copy, so prefetching them
     /// again would re-read the whole expert working set from disk per token.
     experts_resident: bool = false,
+    /// True after the first forward released the large repacked host buffers
+    /// (their device copies are permanent — see fmt.releaseRepacked).
+    repacked_freed: bool = false,
     layer_skip_start: u32 = 0,
     layer_skip_end: u32 = 0,
     pool: ?*@import("../thread_pool.zig").ThreadPool = null,
@@ -1802,30 +1805,75 @@ pub const Ds4Model = struct {
                 // Batch expert gate+up GEMVs: all read hidden2, write independent slots.
                 // Suppresses per-dispatch barriers for ~2× dispatch throughput.
                 self.gemvBackend().beginBatch();
-                for (0..n_active) |j| {
-                    const eid = top_ids[j];
-                    if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
-                    if (ge.dtype == .mlx_q) {
-                        self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
-                    } else if (self.expert_cache != null) {
-                        // SSD streaming: pread expert data into heap pool buffer.
-                        // Heap buffers are Metal-safe (no mmap page fault risk).
-                        const gate_data = self.preadExpert(ge.data_ptr + eid * gs, gs, @intCast(n_scratch * 3));
-                        const up_data = self.preadExpert(ue.data_ptr + eid * us, us, @intCast(n_scratch * 3 + 1));
-                        // MLX mxfp4 mode: override dtype for correct GEMV kernel
-                        const gate_dtype: DType = if (self.mlxExpertIsMxfp4(ge)) .mxfp4 else ge.dtype;
-                        const up_dtype: DType = if (self.mlxExpertIsMxfp4(ue)) .mxfp4 else ue.dtype;
-                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = gate_dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = up_dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
-                    } else {
-                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
-                        self.computeBackend().gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                if (ge.dtype == .mlx_q and self.be == .cuda) {
+                    // Batched gate+up: ONE launch for all active experts — the
+                    // sustained memory traffic keeps the GB10 memory clock
+                    // ramped (per-expert 25µs bursts leave it idle and each
+                    // 4.2MB read costs 2-5ms).
+                    var bx: [16]u64 = undefined;
+                    var bw: [16]u64 = undefined;
+                    var bss: [16]u64 = undefined;
+                    var by: [16][*]f32 = undefined;
+                    var n_b: usize = 0;
+                    const x_dev = self.be.getInputDevicePtr(self.hidden2.ptr, e * @sizeOf(f32));
+                    const sf = mlx_ops.mxfp4ScaleFormat(self.fmt.is_safetensors, ds4_flash_fp4_group_size);
+                    for (0..n_active) |j| {
+                        const eid = top_ids[j];
+                        if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
+                        var wg: u64 = 0;
+                        var sg: u64 = 0;
+                        var wu: u64 = 0;
+                        var su: u64 = 0;
+                        const ok_g = self.expertDevicePair(ge, eid, ff, e, &wg, &sg);
+                        const ok_u = self.expertDevicePair(ue, eid, ff, e, &wu, &su);
+                        if (ok_g and ok_u and n_b + 2 <= 16) {
+                            bx[n_b] = x_dev;
+                            bw[n_b] = wg;
+                            bss[n_b] = sg;
+                            by[n_b] = self.ff_gate_scratch.ptr + n_scratch * ff;
+                            n_b += 1;
+                            bx[n_b] = x_dev;
+                            bw[n_b] = wu;
+                            bss[n_b] = su;
+                            by[n_b] = self.ff_up_scratch.ptr + n_scratch * ff;
+                            n_b += 1;
+                        } else {
+                            // Fallback: per-slot calls (broken data or overflow).
+                            self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        }
+                        de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                        de_slot_eids[n_scratch] = eid;
+                        slot_weights[n_scratch] = top_weights[j];
+                        n_scratch += 1;
                     }
-                    de_ptrs[n_scratch] = de.data_ptr + eid * ds;
-                    de_slot_eids[n_scratch] = eid;
-                    slot_weights[n_scratch] = top_weights[j];
-                    n_scratch += 1;
+                    if (n_b > 0) self.gemvBackend().gemvMxfp4StBatched(bx[0..n_b], bw[0..n_b], bss[0..n_b], by[0..n_b], ff, e, ds4_flash_fp4_group_size, sf);
+                } else {
+                    for (0..n_active) |j| {
+                        const eid = top_ids[j];
+                        if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
+                        if (ge.dtype == .mlx_q) {
+                            self.doGemvExpert(self.hidden2.ptr, ge, eid, gs, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            self.doGemvExpert(self.hidden2.ptr, ue, eid, us, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        } else if (self.expert_cache != null) {
+                            // SSD streaming: pread expert data into heap pool buffer.
+                            // Heap buffers are Metal-safe (no mmap page fault risk).
+                            const gate_data = self.preadExpert(ge.data_ptr + eid * gs, gs, @intCast(n_scratch * 3));
+                            const up_data = self.preadExpert(ue.data_ptr + eid * us, us, @intCast(n_scratch * 3 + 1));
+                            // MLX mxfp4 mode: override dtype for correct GEMV kernel
+                            const gate_dtype: DType = if (self.mlxExpertIsMxfp4(ge)) .mxfp4 else ge.dtype;
+                            const up_dtype: DType = if (self.mlxExpertIsMxfp4(ue)) .mxfp4 else ue.dtype;
+                            self.computeBackend().gemv(self.hidden2.ptr, .{ .data = gate_data, .dtype = gate_dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            self.computeBackend().gemv(self.hidden2.ptr, .{ .data = up_data, .dtype = up_dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        } else {
+                            self.computeBackend().gemv(self.hidden2.ptr, .{ .data = ge.data_ptr + eid * gs, .dtype = ge.dtype }, self.ff_gate_scratch.ptr + n_scratch * ff, ff, e);
+                            self.computeBackend().gemv(self.hidden2.ptr, .{ .data = ue.data_ptr + eid * us, .dtype = ue.dtype }, self.ff_up_scratch.ptr + n_scratch * ff, ff, e);
+                        }
+                        de_ptrs[n_scratch] = de.data_ptr + eid * ds;
+                        de_slot_eids[n_scratch] = eid;
+                        slot_weights[n_scratch] = top_weights[j];
+                        n_scratch += 1;
+                    }
                 }
                 self.gemvBackend().endBatch(); // end gate+up batch
             }
@@ -1849,15 +1897,39 @@ pub const Ds4Model = struct {
             }
         }
         if (de_exp_tensor) |de_t| {
-            for (shexp_slots..n_scratch) |slot| {
-                if (de_t.dtype == .mlx_q) {
-                    self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
-                } else if (self.expert_cache != null) {
-                    const down_data = self.preadExpert(de_ptrs[slot], @intCast(de_exp_stride), @intCast(slot * 3 + 2));
-                    const down_dt: DType = if (de_exp_tensor) |det| (if (self.mlxExpertIsMxfp4(det)) .mxfp4 else de_dtype) else de_dtype;
-                    self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = down_dt }, self.expert_scratch.ptr + slot * e, e, ff);
-                } else {
-                    self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+            if (de_t.dtype == .mlx_q and self.be == .cuda and n_scratch > shexp_slots) {
+                // Batched down: one launch for all active experts' down
+                // projections (sustained memory traffic — see phase 1).
+                var bx: [16]u64 = undefined;
+                var bw: [16]u64 = undefined;
+                var bss: [16]u64 = undefined;
+                var by: [16][*]f32 = undefined;
+                var n_b: usize = 0;
+                const sf = mlx_ops.mxfp4ScaleFormat(self.fmt.is_safetensors, ds4_flash_fp4_group_size);
+                for (shexp_slots..n_scratch) |slot| {
+                    const eid = de_slot_eids[slot];
+                    var wd: u64 = 0;
+                    var sd: u64 = 0;
+                    if (!self.expertDevicePair(de_t, eid, e, ff, &wd, &sd)) continue;
+                    if (n_b >= 16) break;
+                    bx[n_b] = self.be.getInputDevicePtr(self.ff_gate_scratch.ptr + slot * ff, ff * @sizeOf(f32));
+                    bw[n_b] = wd;
+                    bss[n_b] = sd;
+                    by[n_b] = self.expert_scratch.ptr + slot * e;
+                    n_b += 1;
+                }
+                if (n_b > 0) self.gemvBackend().gemvMxfp4StBatched(bx[0..n_b], bw[0..n_b], bss[0..n_b], by[0..n_b], e, ff, ds4_flash_fp4_group_size, sf);
+            } else {
+                for (shexp_slots..n_scratch) |slot| {
+                    if (de_t.dtype == .mlx_q) {
+                        self.doGemvExpert(self.ff_gate_scratch.ptr + slot * ff, de_t, de_slot_eids[slot], de_exp_stride, self.expert_scratch.ptr + slot * e, e, ff);
+                    } else if (self.expert_cache != null) {
+                        const down_data = self.preadExpert(de_ptrs[slot], @intCast(de_exp_stride), @intCast(slot * 3 + 2));
+                        const down_dt: DType = if (de_exp_tensor) |det| (if (self.mlxExpertIsMxfp4(det)) .mxfp4 else de_dtype) else de_dtype;
+                        self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = down_data, .dtype = down_dt }, self.expert_scratch.ptr + slot * e, e, ff);
+                    } else {
+                        self.computeBackend().gemv(self.ff_gate_scratch.ptr + slot * ff, .{ .data = de_ptrs[slot], .dtype = de_dtype }, self.expert_scratch.ptr + slot * e, e, ff);
+                    }
                 }
             }
         } else {
@@ -2117,6 +2189,13 @@ pub const Ds4Model = struct {
         }
 
         const result = math_ops.argmax(self.logits_buf);
+        // First forward: the attention weights' device copies are done — free
+        // the large repacked host buffers (26GB on DS4 Flash) that are dead
+        // weight now and keep the 121GB GB10 at the OOM edge.
+        if (!self.repacked_freed and self.be == .cuda) {
+            self.fmt.releaseRepacked();
+            self.repacked_freed = true;
+        }
         if (self.pp_degree > 1 and self.pp_rank + 1 == self.pp_degree) {
             if (self.pp_transport) |transport| {
                 var tok_f32 = [1]f32{@floatFromInt(result)};
@@ -2675,11 +2754,46 @@ pub const Ds4Model = struct {
             .cuda => {
                 model_mod.dispatchGemv(self.gemvBackend(), self.fmt, x, t, y, n, k);
                 self.be.syncGemvOutput(y, n);
+                // The device copy is cached now — the large repacked host
+                // buffer is dead weight. Free it incrementally so the first
+                // forward's ~26GB of attention uploads don't OOM the node.
+                self.fmt.freeRepackedTensor(t.data_ptr);
             },
             else => {
                 model_mod.dispatchGemv(self.computeBackend(), self.fmt, x, t, y, n, k);
             },
         }
+    }
+
+    /// Resolve a routed expert's packed-weight + scale DEVICE pointers from
+    /// the fused pointer table (batched-CUDA path). Returns false when the
+    /// expert is invalid (broken routing ids, NULL entries) or not the
+    /// MLX-FP4 table form.
+    fn expertDevicePair(self: *Ds4Model, exp_t: TensorInfo, ei: usize, n: usize, k: usize, out_w: *u64, out_s: *u64) bool {
+        const is_tbl = (exp_t.n_dims == 2 and exp_t.dims[1] == 1);
+        if (!is_tbl) return false;
+        if (ei >= exp_t.dims[0]) return false; // broken routing id
+        const tbl: [*]const [*]const u8 = @ptrCast(@alignCast(exp_t.data_ptr));
+        const data = tbl[ei];
+        if (@intFromPtr(data) == 0) return false;
+        const wi = std.mem.lastIndexOf(u8, exp_t.name, ".weight") orelse return false;
+        var sbuf: [name_buf_size]u8 = undefined;
+        const prefix = exp_t.name[0..wi];
+        const s_name = std.fmt.bufPrint(&sbuf, "{s}.scales", .{prefix}) catch return false;
+        const st = self.fmt.getTensor(s_name) orelse return false;
+        if (!(st.dtype == .unknown or st.dtype == .nvfp4)) return false;
+        if (!(st.n_dims == 2 and st.dims[1] == 1)) return false;
+        if (ei >= st.dims[0]) return false;
+        const stbl: [*]const [*]const u8 = @ptrCast(@alignCast(st.data_ptr));
+        const s_data = stbl[ei];
+        if (@intFromPtr(s_data) == 0) return false;
+        const mxfp4_gs: usize = ds4_flash_fp4_group_size;
+        const gpr = (k + mxfp4_gs - 1) / mxfp4_gs;
+        const wpg: usize = mxfp4_gs * 4 / 32;
+        const w_bytes = n * gpr * wpg * @sizeOf(u32);
+        out_w.* = self.be.getWeightDevicePtr(data, w_bytes);
+        out_s.* = self.be.getWeightDevicePtr(s_data, n * gpr);
+        return true;
     }
 
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
@@ -2690,10 +2804,18 @@ pub const Ds4Model = struct {
     /// impossible) and are dereferenced per expert here.
     fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
         const is_tbl = (exp_t.n_dims == 2 and exp_t.dims[1] == 1);
+        // Out-of-range routing id (broken checkpoints: the tiny-random test
+        // model emits expert ids beyond the table size). Skip like the CPU
+        // path, the fused tables only cover [0, n_experts).
+        if (is_tbl and ei >= exp_t.dims[0]) return;
         const data = if (is_tbl)
             (@as([*]const [*]const u8, @ptrCast(@alignCast(exp_t.data_ptr))))[ei]
         else
             exp_t.data_ptr + ei * stride;
+        if (@intFromPtr(data) == 0) {
+            std.log.err("DS4 doGemvExpert: NULL weight pointer for {s} eid={d} is_tbl={}", .{ exp_t.name, ei, is_tbl });
+            return;
+        }
         if (exp_t.dtype != .mlx_q) {
             self.computeBackend().gemv(x, .{ .data = data, .dtype = exp_t.dtype }, y, n, k);
             return;

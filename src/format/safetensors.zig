@@ -18,6 +18,11 @@ const DType = format_mod.DType;
 /// Maximum allowed SafeTensors JSON header size (100 MB).
 /// Legitimate models have headers well under 10 MB even with thousands of tensors.
 const max_header_json_size: u64 = 100_000_000;
+/// Repacked buffers above this size are released after their device uploads
+/// (CUDA path) — the fp8→bf16 attention repacks are multi-MB; the expert
+/// pointer tables and global scales are KB-sized and must stay (the model
+/// dereferences them every token).
+const release_repacked_min_bytes: usize = 1 << 20;
 /// Maximum allowed auxiliary JSON file size (200 MB, covers large tokenizer.json).
 const max_json_file_size: u64 = 200_000_000;
 /// Maximum vocabulary size to prevent OOM from crafted tokenizer.json with huge IDs.
@@ -534,7 +539,73 @@ pub const SafeTensorsDir = struct {
         return self.merges;
     }
 
+    /// Free large repacked buffers (the fp8→bf16 attention repacks) after
+    /// their device uploads on the CUDA path — the host copies are dead
+    /// weight (26GB on DS4 Flash) and keep the 121GB GB10 at the OOM edge.
+    /// Small buffers (expert pointer tables, global scales) are kept — the
+    /// model dereferences them every token.
+    pub fn releaseRepacked(self: *SafeTensorsDir) void {
+        const pa = std.heap.page_allocator;
+        var i: usize = 0;
+        while (i < self.repacked_u8.items.len) {
+            const buf = self.repacked_u8.items[i];
+            if (buf.len > release_repacked_min_bytes) {
+                pa.free(buf);
+                _ = self.repacked_u8.orderedRemove(i);
+            } else i += 1;
+        }
+        i = 0;
+        while (i < self.repacked_f32.items.len) {
+            const buf = self.repacked_f32.items[i];
+            if (buf.len > release_repacked_min_bytes) {
+                self.allocator.free(buf);
+                _ = self.repacked_f32.orderedRemove(i);
+            } else i += 1;
+        }
+    }
+
+    /// Free a single repacked buffer if it is a large (> 1MB) host copy —
+    /// its device copy is permanent once uploaded, so the host copy is dead
+    /// weight (frees the 26GB of attention repacks incrementally during the
+    /// first forward instead of OOMing the 121GB node).
+    pub fn freeRepackedIfLarge(self: *SafeTensorsDir, ptr: [*]const u8) void {
+        const pa = std.heap.page_allocator;
+        const addr = @intFromPtr(ptr);
+        var i: usize = 0;
+        while (i < self.repacked_u8.items.len) {
+            const buf = self.repacked_u8.items[i];
+            if (@intFromPtr(buf.ptr) == addr and buf.len > release_repacked_min_bytes) {
+                pa.free(buf);
+                _ = self.repacked_u8.orderedRemove(i);
+                return;
+            }
+            i += 1;
+        }
+        i = 0;
+        while (i < self.repacked_f32.items.len) {
+            const buf = self.repacked_f32.items[i];
+            if (@intFromPtr(buf.ptr) == addr and buf.len > release_repacked_min_bytes) {
+                self.allocator.free(buf);
+                _ = self.repacked_f32.orderedRemove(i);
+                return;
+            }
+            i += 1;
+        }
+    }
+
     const vtable = Format.VTable{
+        .release_repacked = struct {
+            fn f(self: *anyopaque) void {
+                const st: *SafeTensorsDir = @ptrCast(@alignCast(self));
+                st.releaseRepacked();
+            }
+        }.f,
+        .free_repacked_tensor = struct {
+            fn f(self: *anyopaque, ptr: [*]const u8) void {
+                const st: *SafeTensorsDir = @ptrCast(@alignCast(self));
+                st.freeRepackedIfLarge(ptr);
+            }
+        }.f,
         .get_tensor = getTensorImpl,
         .get_meta_str = getMetaStrImpl,
         .get_meta_u32 = getMetaU32Impl,
@@ -1761,7 +1832,14 @@ fn fuseDs4Flash0731(
     }
     defer {
         for (shard_data) |sh| {
-            if (sh.data.len > 0) std.posix.madvise(@constCast(sh.data.ptr), sh.data.len, std.posix.system.MADV.RANDOM) catch {};
+            if (sh.data.len > 0) {
+                // RANDOM for decode-time demand paging, and DONTNEED: the
+                // SEQUENTIAL readahead above pulled whole shards into RSS
+                // (measured ~155GB), which OOMs the 121GB node when the
+                // resident copy allocates its 67GB of device chunks.
+                std.posix.madvise(@constCast(sh.data.ptr), sh.data.len, std.posix.system.MADV.RANDOM) catch {};
+                std.posix.madvise(@constCast(sh.data.ptr), sh.data.len, std.posix.system.MADV.DONTNEED) catch {};
+            }
         }
     }
 
