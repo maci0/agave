@@ -97,7 +97,7 @@ pub fn build(b: *std.Build) void {
             "gemv_q4_0_batch", "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",
             "gemv_q6_k",       "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
             // FP8/FP4
-            "gemv_fp8_e4m3",   "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_fp4_tc",
+            "gemv_fp8_e4m3",   "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_mxfp4_st_batched", "gemv_fp4_tc",
             // MLX / TQ
             "gemv_mlx_q4",     "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",     "gemv_tq2_0",
             // Specialist formats

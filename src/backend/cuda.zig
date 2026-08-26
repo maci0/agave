@@ -260,6 +260,9 @@ pub const CudaBackend = struct {
     fn_gemv_mlx_q6: CUfunction = null,
     fn_gemv_mlx_q8: CUfunction = null,
     fn_gemv_mxfp4_st: CUfunction = null,
+    fn_gemv_mxfp4_st_batched: CUfunction = null,
+    /// Device scratch for the batched-GEMV pointer tables (16 slots × 4 tables × 8B).
+    batched_tab: CUdeviceptr = 0,
     fn_gemv_gptq: CUfunction = null,
     fn_gemv_awq: CUfunction = null,
     fn_gemv_hqq: CUfunction = null,
@@ -599,6 +602,7 @@ pub const CudaBackend = struct {
         self.fn_gemv_mlx_q6 = try self.getFunction("gemv_mlx_q6_kernel");
         self.fn_gemv_mlx_q8 = try self.getFunction("gemv_mlx_q8_kernel");
         self.fn_gemv_mxfp4_st = try self.getFunction("gemv_mxfp4_st_kernel");
+        self.fn_gemv_mxfp4_st_batched = try self.getFunction("gemv_mxfp4_st_batched_kernel");
         self.fn_gemv_gptq = self.getFunction("gemv_gptq_kernel") catch null;
         self.fn_gemv_awq = self.getFunction("gemv_awq_kernel") catch null;
         self.fn_gemv_hqq = self.getFunction("gemv_hqq_kernel") catch null;
@@ -691,11 +695,13 @@ pub const CudaBackend = struct {
     fn uploadToDevice(self: *CudaBackend, ptr: *const anyopaque, size: usize) CUdeviceptr {
         const dptr = self.allocAct(size);
         if (dptr == 0) @panic("cuMemAlloc failed, out of device memory");
-        // Async on the compute stream: blocking H2D on the legacy null stream
-        // costs ~2ms per call on GB10, and the kernel that consumes this
-        // buffer is launched on the same stream right after, so ordering holds.
-        if (!cuCheck(self.cuMemcpyHtoDAsync(dptr, ptr, size, self.stream), "cuMemcpyHtoDAsync"))
+        // Blocking H2D: cuMemcpyHtoDAsync requires pinned host memory and
+        // fails (CUDA_ERROR_INVALID_VALUE) on the mmap'd weight pages.
+        const rc_htod = self.cuMemcpyHtoD(dptr, ptr, size);
+        if (rc_htod != CUDA_SUCCESS) {
+            std.log.err("CUDA uploadToDevice: size={d} ptr={x} rc={d}", .{ size, @intFromPtr(ptr), rc_htod });
             @panic("cuMemcpyHtoD failed, device memory left uninitialized");
+        }
         return dptr;
     }
 
@@ -899,7 +905,8 @@ pub const CudaBackend = struct {
             if (addr >= base and addr + size <= base + act.size) {
                 if (refresh_stale and act.state == .stale) {
                     // Re-upload entire parent buffer so all sub-regions are fresh.
-                    // Async on the compute stream (ordered before the next kernel).
+                    // Async: these are heap activation buffers (pinned-safe);
+                    // the consuming kernel is on the same stream.
                     const host_ptr: *const anyopaque = @ptrFromInt(base);
                     _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, host_ptr, act.size, self.stream), "cuMemcpyHtoDAsync(act reupload)");
                     act.state = .clean;
@@ -1986,6 +1993,83 @@ pub const CudaBackend = struct {
     }
     pub fn gemvMxfp4StGpu(self: *CudaBackend, x: [*]const f32, w: [*]const u8, s: [*]const u8, y: [*]f32, n: usize, k: usize, gs: usize, sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat) void {
         self.gemvMxfp4St(x, w, s, y, n, k, gs, sf);
+    }
+
+    /// Device pointer for a weight range (resident_map / buf_cache / upload).
+    pub fn getWeightDevicePtr(self: *CudaBackend, ptr: [*]const u8, size: usize) u64 {
+        return self.getOrUpload(ptr, size);
+    }
+
+    /// Device pointer for an input activation (act_cache, uploads if stale).
+    pub fn getInputDevicePtr(self: *CudaBackend, ptr: anytype, size: usize) u64 {
+        return self.getInputBuf(ptr, size);
+    }
+
+    /// Batched MXFP4 expert GEMV: one launch computes n_slots independent
+    /// row-reductions (the active experts' gate+up or down projections).
+    /// The sustained memory traffic keeps the GB10 memory clock ramped,
+    /// per-expert 25µs bursts leave it at the idle rate and each 4.2MB read
+    /// costs 2-5ms (measured). Pointers arrive as host arrays of device
+    /// addresses; they are packed into a device scratch (async H2D, ordered
+    /// before the kernel on the same stream) and the outputs copy back
+    /// through the deferred-sync batch (syncGemvOutput per slot).
+    pub fn gemvMxfp4StBatched(
+        self: *CudaBackend,
+        x_devs: []const u64,
+        w_devs: []const u64,
+        s_devs: []const u64,
+        y_hosts: []const [*]f32,
+        n: usize,
+        k: usize,
+        gs: usize,
+        sf: @import("../ops/mlx.zig").Mxfp4ScaleFormat,
+    ) void {
+        const n_slots: usize = x_devs.len;
+        if (n_slots == 0) return;
+        std.debug.assert(n_slots <= 16);
+        // Per-slot output device pointers + host copy-back targets.
+        var y_devs: [16]u64 = undefined;
+        for (0..n_slots) |i| {
+            y_devs[i] = self.getOutputBuf(y_hosts[i], n * @sizeOf(f32));
+        }
+        if (self.batched_tab == 0) {
+            var dptr: CUdeviceptr = 0;
+            if (!cuCheck(self.cuMemAlloc(&dptr, 4 * 16 * @sizeOf(u64)), "cuMemAlloc(batched tab)")) return;
+            self.batched_tab = dptr;
+        }
+        // Pack [x, w, s, y] tables into one host buffer and upload (async,
+        // the kernel below is on the same stream, so ordering holds).
+        var host_tab: [4 * 16]u64 = undefined;
+        for (0..n_slots) |i| {
+            host_tab[i] = x_devs[i];
+            host_tab[16 + i] = w_devs[i];
+            host_tab[32 + i] = s_devs[i];
+            host_tab[48 + i] = y_devs[i];
+        }
+        _ = cuCheck(self.cuMemcpyHtoDAsync(self.batched_tab, &host_tab, 4 * n_slots * @sizeOf(u64), self.stream), "cuMemcpyHtoDAsync(tab)");
+
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var gs_u32: u32 = @intCast(gs);
+        var n_slots_u32: u32 = @intCast(n_slots);
+        var scale_mode: u32 = switch (sf) {
+            .e8m0 => 1,
+            .fp8_e4m3 => 0,
+        };
+        const tab = self.batched_tab;
+        var t_x = tab;
+        var t_w = tab + 16 * @sizeOf(u64);
+        var t_s = tab + 32 * @sizeOf(u64);
+        var t_y = tab + 48 * @sizeOf(u64);
+        var params = [_]?*anyopaque{
+            @ptrCast(&t_x),  @ptrCast(&t_w),
+            @ptrCast(&t_s),  @ptrCast(&t_y),
+            @ptrCast(&n_u32), @ptrCast(&k_u32),
+            @ptrCast(&gs_u32), @ptrCast(&scale_mode),
+            @ptrCast(&n_slots_u32),
+        };
+        self.launch(self.fn_gemv_mxfp4_st_batched, @intCast(n), block_size, reduction_smem, &params);
+        for (0..n_slots) |i| self.syncGemvOutput(y_hosts[i], n);
     }
 
     /// GPTQ INT4 GEMV on CUDA GPU.

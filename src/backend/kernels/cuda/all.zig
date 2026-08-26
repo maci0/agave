@@ -64,6 +64,7 @@ comptime {
     _ = @import("gemv_mlx_q6.zig");
     _ = @import("gemv_mlx_q8.zig");
     _ = @import("gemv_mxfp4_st.zig");
+    _ = @import("gemv_mxfp4_st_batched.zig");
     _ = @import("gemv_gptq.zig");
     _ = @import("gemv_awq.zig");
     _ = @import("gemv_hqq.zig");

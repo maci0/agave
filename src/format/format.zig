@@ -136,11 +136,26 @@ pub const Format = struct {
         get_meta_u32_array: *const fn (self: *anyopaque, key: []const u8) ?[]const u32,
         get_vocab: *const fn (self: *anyopaque) ?[]const []const u8,
         get_merges: *const fn (self: *anyopaque) ?[]const []const u8,
+        /// Free large repacked weight buffers after their device uploads
+        /// (CUDA path — the host copies are dead weight). No-op for formats
+        /// without repacked buffers.
+        release_repacked: *const fn (self: *anyopaque) void,
+        /// Free one large repacked buffer (host copy) after its device upload.
+        free_repacked_tensor: *const fn (self: *anyopaque, ptr: [*]const u8) void,
     };
 
     /// Look up a tensor by name, returning its metadata and data pointer.
     pub fn getTensor(self: Format, name: []const u8) ?TensorInfo {
         return self.vtable.get_tensor(self.ptr, name);
+    }
+    /// Free large repacked weight buffers (host copies) after their device
+    /// uploads — see SafeTensorsDir.releaseRepacked.
+    pub fn releaseRepacked(self: Format) void {
+        self.vtable.release_repacked(self.ptr);
+    }
+    /// Free one large repacked host buffer after its device upload.
+    pub fn freeRepackedTensor(self: Format, ptr: [*]const u8) void {
+        self.vtable.free_repacked_tensor(self.ptr, ptr);
     }
     /// Get a string metadata value by key.
     pub fn getMetaStr(self: Format, key: []const u8) ?[]const u8 {

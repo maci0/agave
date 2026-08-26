@@ -488,6 +488,12 @@ pub const GGUFFile = struct {
     }
 
     const format_vtable = Format.VTable{
+        .release_repacked = struct {
+            fn f(_: *anyopaque) void {}
+        }.f,
+        .free_repacked_tensor = struct {
+            fn f(_: *anyopaque, _: [*]const u8) void {}
+        }.f,
         .get_tensor = @ptrCast(&fmtGetTensor),
         .get_meta_str = @ptrCast(&fmtGetMetaStr),
         .get_meta_u32 = @ptrCast(&fmtGetMetaU32),
