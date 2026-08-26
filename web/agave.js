@@ -12,9 +12,40 @@
  *   await agave.loadModel('https://example.com/model.gguf');
  *   const output = await agave.generate('What is 2+2?', { maxTokens: 100 });
  */
-function wasmExports(instance) {
-    return instance.exports;
-}
+/** Token budget used when the caller omits one or passes zero. */
+const default_max_tokens = 100;
+/** Every function export this glue calls, checked once at instantiation. */
+const required_exports = [
+    'agave_alloc',
+    'agave_dealloc',
+    'agave_init',
+    'agave_get_output',
+    'agave_generate',
+    'agave_free',
+];
+/**
+ * Narrow a freshly instantiated module's exports to the shape this file calls.
+ *
+ * `WebAssembly.Instance.exports` is an untyped record, so this is a trust
+ * boundary: a mismatched agave.wasm otherwise fails much later as "not a
+ * function" inside a generate call. Throws naming the missing export instead.
+ */
+const wasmExports = (instance) => {
+    const { exports } = instance;
+    if (!(exports.memory instanceof WebAssembly.Memory)) {
+        throw new TypeError('agave.wasm: missing or invalid memory export');
+    }
+    for (const name of required_exports) {
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary check on an untyped wasm export record
+        if (typeof exports[name] !== 'function') {
+            throw new TypeError(`agave.wasm: missing export ${name}`);
+        }
+    }
+    // SAFETY: Memory and every entry of required_exports were verified just above.
+    // Together they are the whole of AgaveWasmExports.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowing after the checks above
+    return exports;
+};
 class AgaveEngine {
     wasm = null;
     ctx = 0;
@@ -104,9 +135,10 @@ class AgaveEngine {
             throw new Error('No model loaded');
         }
         const exp = wasmExports(this.wasm);
-        // Explicit zero must not fall back to the default token budget.
-        // oxlint-disable-next-line unicorn/prefer-nullish-coalescing -- falsy-or semantics intended for numeric options
-        const maxTokens = options.maxTokens || 100;
+        // Both an omitted and an explicitly zero budget mean "use the default".
+        const maxTokens = options.maxTokens === undefined || options.maxTokens === 0
+            ? default_max_tokens
+            : options.maxTokens;
         const encoder = new TextEncoder();
         const promptBytes = encoder.encode(prompt);
         // Copy prompt to WASM memory
@@ -137,4 +169,5 @@ class AgaveEngine {
     }
 }
 // Explicit binding: classic scripts should not rely on declaration-position magic.
-globalThis.AgaveEngine = AgaveEngine;
+// Object.assign widens globalThis structurally, so no cast is needed.
+Object.assign(globalThis, { AgaveEngine });
