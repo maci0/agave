@@ -1,0 +1,41 @@
+{
+  "gemv_q4_k": {
+    "tensor": "blk.1.ffn_gate.weight",
+    "val_rows": 512,
+    "shape": [
+      17408,
+      5120
+    ],
+    "rel_err": 1.751195242150061e-07
+  },
+  "gemv_q4_k_v2": {
+    "rel_err": 1.3133964671396825e-07
+  },
+  "ffn_gate/up_v1": {
+    "shape": [
+      17408,
+      5120
+    ],
+    "tilelang_us": 481.45606994628906,
+    "weight_MB": 50.13504,
+    "eff_GBps": 104.13211740292948
+  },
+  "ffn_gate/up_v2": {
+    "shape": [
+      17408,
+      5120
+    ],
+    "tilelang_us": 455.53577423095703,
+    "weight_MB": 50.13504,
+    "eff_GBps": 110.05730578380765
+  },
+  "ffn_down_v2": {
+    "shape": [
+      5120,
+      17408
+    ],
+    "tilelang_us": 653.2329559326172,
+    "weight_MB": 50.13504,
+    "eff_GBps": 76.74909776776721
+  }
+}
