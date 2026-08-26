@@ -1,4 +1,4 @@
-// Fused FFN megakernels — eliminates per-layer dispatch overhead.
+// Fused FFN megakernels, eliminates per-layer dispatch overhead.
 //
 // Standard FFN path: 4 dispatches per layer (gate GEMV, up GEMV, siluMul, down GEMV)
 //   = 96 dispatches for 24 layers.
@@ -25,12 +25,12 @@
 // with a single dispatch that computes all three in one pass per row.
 //
 // Buffer layout:
-//   buffer(0): x[n_embd]                — normalized hidden state (f32)
-//   buffer(1): W_gate[n_ff * nb * 34]   — gate weights, Q8_0 row-major
-//   buffer(2): W_up[n_ff * nb * 34]     — up weights, Q8_0 row-major
-//   buffer(3): ff_out[n_ff]             — output: silu(gate) * up (f32)
-//   buffer(4): n_ff                     — FFN intermediate dimension
-//   buffer(5): n_embd                   — model embedding dimension
+//   buffer(0): x[n_embd]               , normalized hidden state (f32)
+//   buffer(1): W_gate[n_ff * nb * 34]  , gate weights, Q8_0 row-major
+//   buffer(2): W_up[n_ff * nb * 34]    , up weights, Q8_0 row-major
+//   buffer(3): ff_out[n_ff]            , output: silu(gate) * up (f32)
+//   buffer(4): n_ff                    , FFN intermediate dimension
+//   buffer(5): n_embd                  , model embedding dimension
 //
 // Dispatch: n_ff threadgroups x 256 threads.
 // Each TG computes ff_out[tgid] = silu(dot(W_gate[tgid,:], x)) * dot(W_up[tgid,:], x).
@@ -51,7 +51,7 @@ kernel void fused_ffn_gate_up_silu_q8(
     uint nb = n_embd / 32; // Q8_0 blocks per row
 
     // Accumulate gate and up dot products in parallel.
-    // Both rows read the same x blocks — compiler hoists x loads
+    // Both rows read the same x blocks, compiler hoists x loads
     // because q8_0_block_dot is inlined.
     float gate_sum = 0.0f;
     float up_sum = 0.0f;
@@ -72,7 +72,7 @@ kernel void fused_ffn_gate_up_silu_q8(
     // Reduce up sum across threadgroup
     up_sum = threadgroup_reduce_sum(up_sum, shared, tid, tg_size);
 
-    // SiLU(gate) * up — only thread 0 writes the final result
+    // SiLU(gate) * up, only thread 0 writes the final result
     if (tid == 0) {
         float silu_gate = gate_sum / (1.0f + exp(-gate_sum));
         ff_out[tgid] = silu_gate * up_sum;
@@ -117,12 +117,12 @@ kernel void fused_ffn_gate_up_gelu_q8(
 // Uses q4_k_block_dot from gemv.metal for both gate and up rows.
 //
 // Buffer layout:
-//   buffer(0): x[n_embd]                — normalized hidden state (f32)
-//   buffer(1): W_gate[n_ff * nb * 144]  — gate weights, Q4_K row-major (raw bytes)
-//   buffer(2): W_up[n_ff * nb * 144]    — up weights, Q4_K row-major (raw bytes)
-//   buffer(3): ff_out[n_ff]             — output: silu(gate) * up (f32)
-//   buffer(4): n_ff                     — FFN intermediate dimension
-//   buffer(5): n_embd                   — model embedding dimension
+//   buffer(0): x[n_embd]               , normalized hidden state (f32)
+//   buffer(1): W_gate[n_ff * nb * 144] , gate weights, Q4_K row-major (raw bytes)
+//   buffer(2): W_up[n_ff * nb * 144]   , up weights, Q4_K row-major (raw bytes)
+//   buffer(3): ff_out[n_ff]            , output: silu(gate) * up (f32)
+//   buffer(4): n_ff                    , FFN intermediate dimension
+//   buffer(5): n_embd                  , model embedding dimension
 //
 // Dispatch: n_ff threadgroups x 256 threads.
 
@@ -168,12 +168,12 @@ kernel void fused_ffn_gate_up_silu_q4_k(
 // Uses q4_0_block_dot from gemv.metal with pre-loaded float4 x values.
 //
 // Buffer layout:
-//   buffer(0): x[n_embd]                    — normalized hidden state (f32)
-//   buffer(1): W_gate[n_ff * nb]            — gate weights, Q4_0 row-major
-//   buffer(2): W_up[n_ff * nb]              — up weights, Q4_0 row-major
-//   buffer(3): ff_out[n_ff]                 — output: silu(gate) * up (f32)
-//   buffer(4): n_ff                         — FFN intermediate dimension
-//   buffer(5): n_embd                       — model embedding dimension
+//   buffer(0): x[n_embd]                   , normalized hidden state (f32)
+//   buffer(1): W_gate[n_ff * nb]           , gate weights, Q4_0 row-major
+//   buffer(2): W_up[n_ff * nb]             , up weights, Q4_0 row-major
+//   buffer(3): ff_out[n_ff]                , output: silu(gate) * up (f32)
+//   buffer(4): n_ff                        , FFN intermediate dimension
+//   buffer(5): n_embd                      , model embedding dimension
 //
 // Dispatch: n_ff threadgroups x 256 threads.
 
@@ -299,12 +299,12 @@ kernel void fused_ffn_gate_up_gelu_q4_0(
 // Uses q6_k_block_dot from gemv.metal for both gate and up rows.
 //
 // Buffer layout:
-//   buffer(0): x[n_embd]                — normalized hidden state (f32)
-//   buffer(1): W_gate[n_ff * nb * 210]  — gate weights, Q6_K row-major (raw bytes)
-//   buffer(2): W_up[n_ff * nb * 210]    — up weights, Q6_K row-major (raw bytes)
-//   buffer(3): ff_out[n_ff]             — output: silu(gate) * up (f32)
-//   buffer(4): n_ff                     — FFN intermediate dimension
-//   buffer(5): n_embd                   — model embedding dimension
+//   buffer(0): x[n_embd]               , normalized hidden state (f32)
+//   buffer(1): W_gate[n_ff * nb * 210] , gate weights, Q6_K row-major (raw bytes)
+//   buffer(2): W_up[n_ff * nb * 210]   , up weights, Q6_K row-major (raw bytes)
+//   buffer(3): ff_out[n_ff]            , output: silu(gate) * up (f32)
+//   buffer(4): n_ff                    , FFN intermediate dimension
+//   buffer(5): n_embd                  , model embedding dimension
 //
 // Dispatch: n_ff threadgroups x 256 threads.
 
@@ -378,12 +378,12 @@ kernel void fused_ffn_gate_up_gelu_q6_k(
 // Uses q5_k_block_dot from gemv.metal for both gate and up rows.
 //
 // Buffer layout:
-//   buffer(0): x[n_embd]                — normalized hidden state (f32)
-//   buffer(1): W_gate[n_ff * nb * 176]  — gate weights, Q5_K row-major (raw bytes)
-//   buffer(2): W_up[n_ff * nb * 176]    — up weights, Q5_K row-major (raw bytes)
-//   buffer(3): ff_out[n_ff]             — output: silu(gate) * up (f32)
-//   buffer(4): n_ff                     — FFN intermediate dimension
-//   buffer(5): n_embd                   — model embedding dimension
+//   buffer(0): x[n_embd]               , normalized hidden state (f32)
+//   buffer(1): W_gate[n_ff * nb * 176] , gate weights, Q5_K row-major (raw bytes)
+//   buffer(2): W_up[n_ff * nb * 176]   , up weights, Q5_K row-major (raw bytes)
+//   buffer(3): ff_out[n_ff]            , output: silu(gate) * up (f32)
+//   buffer(4): n_ff                    , FFN intermediate dimension
+//   buffer(5): n_embd                  , model embedding dimension
 //
 // Dispatch: n_ff threadgroups x 256 threads.
 
@@ -616,7 +616,7 @@ kernel void fused_ffn_gate_up_clamped_silu_mxfp4(
         float u_d = e8m0_to_f32(W_up[g_bp]);
 
         if (bk + qk <= k) {
-            // Fast path: scalar LUT lookups (avoid float4 LUT constructor — Metal compiler bug).
+            // Fast path: scalar LUT lookups (avoid float4 LUT constructor, Metal compiler bug).
             float g_dot = 0.0f;
             float u_dot = 0.0f;
             for (uint j = 0; j < qk / 2; j++) {

@@ -1,4 +1,4 @@
-// Tiled GEMV — x vector cached in threadgroup memory for multi-row reuse.
+// Tiled GEMV, x vector cached in threadgroup memory for multi-row reuse.
 //
 // The key insight: in standard NR=2 GEMV, each thread processes different
 // superblocks (b = tid, b += tg_size). The x vector for each superblock
@@ -92,7 +92,7 @@ kernel void gemv_tiled_q4_k(
 // ── Tiled Q8_0 GEMV ─────────────────────────────────────────────
 // TILE_N = 8 output rows per TG.
 // Q8_0 blocks are small (34 bytes, 32 elements), so higher TILE_N
-// is feasible — more rows share the same x vector loads.
+// is feasible, more rows share the same x vector loads.
 
 constant uint TILE_N_Q8 = 8;
 

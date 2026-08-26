@@ -3,7 +3,7 @@
 //! IQ2/IQ3/IQ1 codebook quantization types are not yet implemented (will @panic).
 //!
 //! The Vulkan library (libvulkan.so / libkosmickrisp.dylib) is loaded at runtime
-//! via std.DynLib — no link-time dependency. If the library is not available,
+//! via std.DynLib, no link-time dependency. If the library is not available,
 //! init() returns error.VulkanNotAvailable and the caller falls back to
 //! another backend.
 
@@ -404,7 +404,7 @@ const VkSubmitInfo = extern struct {
     pSignalSemaphores: ?*const anyopaque = null,
 };
 
-/// VkPhysicalDeviceProperties — device name, type, API/driver version, limits.
+/// VkPhysicalDeviceProperties, device name, type, API/driver version, limits.
 /// VkPhysicalDeviceLimits (504 bytes) and VkPhysicalDeviceSparseProperties (20 bytes)
 /// are defined as opaque blobs since we only need the header fields.
 const VkPhysicalDeviceProperties = extern struct {
@@ -672,7 +672,7 @@ const mxfp4_scale_e8m0: u32 = 1;
 
 // ── Backend struct ───────────────────────────────────────────────
 
-/// Vulkan GPU backend — SPIR-V compute shaders with dynamic library loading.
+/// Vulkan GPU backend, SPIR-V compute shaders with dynamic library loading.
 pub const VulkanBackend = struct {
     instance: VkInstance = null,
     phys_device: VkPhysicalDevice = null,
@@ -901,7 +901,7 @@ pub const VulkanBackend = struct {
                 return;
             }
         }
-        // Not in pool (pool was full when created) — destroy it
+        // Not in pool (pool was full when created), destroy it
         self.destroyBuffer(buf);
     }
 
@@ -1107,7 +1107,7 @@ pub const VulkanBackend = struct {
 
         self.vkGetDeviceQueue(self.device, self.queue_family, 0, &self.queue);
 
-        // Push descriptor: disabled — RADV crashes during command buffer execution.
+        // Push descriptor: disabled, RADV crashes during command buffer execution.
         // Descriptor set layout flag and function are correct but GPU segfaults.
         // Needs RenderDoc / RADV debug build for further investigation.
         // self.vkCmdPushDescriptorSet = self.lookup(FnCmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
@@ -1188,7 +1188,7 @@ pub const VulkanBackend = struct {
             if (initial_data != null) std.log.info("Vulkan: loaded pipeline cache", .{});
         }
 
-        // Create pipelines — bindings, push_size
+        // Create pipelines, bindings, push_size
         // Elementwise: 2 bufs (in, out), 4 bytes push (n)
         self.pipe_silu = try self.createPipeline(spv_silu, 2, 4);
         self.pipe_gelu = try self.createPipeline(spv_gelu, 2, 4);
@@ -1258,7 +1258,7 @@ pub const VulkanBackend = struct {
         self.pipe_sdpa = try self.createPipeline(spv_sdpa, 4, 20);
         // SDPA TurboQuant: 4 bufs (Q, K_raw, V_raw, out), 36 bytes push
         // (nh, nkv, hd, sl, scale, bits_k, bits_v, block_bytes_k, block_bytes_v)
-        // ponytail: optional — subgroup ops missing on some drivers (e.g. KosmicKrisp)
+        // ponytail: optional, subgroup ops missing on some drivers (e.g. KosmicKrisp)
         self.pipe_sdpa_turbo = self.createPipeline(spv_sdpa_turbo, 4, 36) catch blk: {
             std.log.warn("Vulkan: sdpa_turbo unavailable (no subgroup support), TurboQuant KV disabled", .{});
             break :blk .{};
@@ -1601,7 +1601,7 @@ pub const VulkanBackend = struct {
         };
         var mem: VkDeviceMemory = null;
         if (!vkCheck(self.vkAllocateMemory(self.device, &alloc_info, null, &mem), "vkAllocateMemory"))
-            @panic("vkAllocateMemory failed — out of device memory");
+            @panic("vkAllocateMemory failed, out of device memory");
         if (!vkCheck(self.vkBindBufferMemory(self.device, buf, mem, 0), "vkBindBufferMemory"))
             @panic("vkBindBufferMemory failed");
 
@@ -1609,7 +1609,7 @@ pub const VulkanBackend = struct {
     }
 
     fn destroyBuffer(self: *VulkanBackend, b: VkBuf) void {
-        // Flush pending commands before destroying — a buffer recorded in the command
+        // Flush pending commands before destroying, a buffer recorded in the command
         // buffer becomes invalid once destroyed, corrupting the command buffer state.
         if (self.cmd_recording) self.submitPending();
         self.vkDestroyBuffer(self.device, b.buf, null);
@@ -1726,7 +1726,7 @@ pub const VulkanBackend = struct {
                 .pSetLayouts = &pipe.desc_layout,
             };
             if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS) {
-                // Pool exhausted — flush pending work, reset pool, retry
+                // Pool exhausted, flush pending work, reset pool, retry
                 self.submitPending();
                 _ = self.vkResetDescriptorPool(self.device, self.desc_pool, 0);
                 if (self.vkAllocateDescriptorSets(self.device, &ds_ai, &desc_set) != VK_SUCCESS)
@@ -1813,8 +1813,8 @@ pub const VulkanBackend = struct {
             .fp8_e5m2 => self.pipe_gemv_fp8_e5m2,
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Vulkan GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU shader"),
-            else => std.debug.panic("Vulkan GEMV: unsupported dtype {s} — add a GPU shader", .{@tagName(w.dtype)}),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Vulkan GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented, add a GPU shader"),
+            else => std.debug.panic("Vulkan GEMV: unsupported dtype {s}, add a GPU shader", .{@tagName(w.dtype)}),
         };
 
         const x_sz = k * @sizeOf(f32);
@@ -2061,7 +2061,7 @@ pub const VulkanBackend = struct {
         defer self.releasePooledBuf(output_buf);
         const conv_w_buf = self.getOrUpload(@ptrCast(conv_w), conv_w_sz);
 
-        // Bias buffer — use zeros if no bias
+        // Bias buffer, use zeros if no bias
         var zero_buf: [1]f32 = .{0.0};
         const bias_vk = if (conv_b) |b| self.getOrUpload(@ptrCast(b), conv_ch_sz) else self.getOrUpload(@ptrCast(&zero_buf), @sizeOf(f32));
 
@@ -2354,7 +2354,7 @@ pub const VulkanBackend = struct {
         self.dispatch(self.pipe_split_qgate, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
     }
 
-    /// Batched GEMV — sequential dispatch on Vulkan.
+    /// Batched GEMV, sequential dispatch on Vulkan.
     pub fn gemvMulti(self: *VulkanBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         for (ops) |op| {
             if (op.mlx_scales) |s| {
@@ -2365,7 +2365,7 @@ pub const VulkanBackend = struct {
         }
     }
 
-    /// Allocate a KV cache slice — plain allocator on Vulkan.
+    /// Allocate a KV cache slice, plain allocator on Vulkan.
     pub fn allocKvSlice(_: *VulkanBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
         return allocator.alloc(u8, n);
     }
@@ -2379,17 +2379,17 @@ pub const VulkanBackend = struct {
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
-    /// Sequential loop-of-GEMV fallback — no native Vulkan GEMM kernel yet.
+    /// Sequential loop-of-GEMV fallback, no native Vulkan GEMM kernel yet.
     pub fn gemm(self: *VulkanBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
-    /// Batched RMS normalization — each of n_tok rows normalized independently.
+    /// Batched RMS normalization, each of n_tok rows normalized independently.
     pub fn rmsNormBatched(self: *VulkanBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
         for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
     }
 
-    /// Batched RoPE — each of n_tok vectors at positions[0..n_tok].
+    /// Batched RoPE, each of n_tok vectors at positions[0..n_tok].
     pub fn ropeBatched(self: *VulkanBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const stride = n_heads * head_dim;
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
@@ -2440,7 +2440,7 @@ pub const VulkanBackend = struct {
         @panic("Vulkan sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
-    /// Prefill SDPA — sequential loop over tokens, calling single-token sdpa.
+    /// Prefill SDPA, sequential loop over tokens, calling single-token sdpa.
     pub fn sdpaPrefill(self: *VulkanBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
         for (0..n_tok) |t| {
@@ -2567,13 +2567,13 @@ pub const VulkanBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: no GPU kernel yet
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v)) {
-            @panic("Vulkan SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
+            @panic("Vulkan SDPA: unsupported KV type, use --kv-type f32 or turbo2/3/4");
         }
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
-        if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim) @panic("Vulkan SDPA: sequence or head dim exceeds GPU limit — reduce --ctx-size");
+        if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim) @panic("Vulkan SDPA: sequence or head dim exceeds GPU limit, reduce --ctx-size");
 
         // Flush pending GPU work so k_new/v_new host data is readable
         self.flushActivations();
@@ -2675,7 +2675,7 @@ pub const VulkanBackend = struct {
         const sl = kv_view.seq_len + 1;
 
         if (sl > sdpa_max_seq_len or hd > sdpa_max_head_dim)
-            @panic("Vulkan sdpaPaged: sequence or head dim exceeds GPU limit — reduce --ctx-size");
+            @panic("Vulkan sdpaPaged: sequence or head dim exceeds GPU limit, reduce --ctx-size");
 
         // Flush pending GPU work so CPU can read k_new/v_new
         self.flushActivations();
@@ -2750,7 +2750,7 @@ pub const VulkanBackend = struct {
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// Fills identity stats (max=0, sum=1) — GPU SDPA already produces
+    /// Fills identity stats (max=0, sum=1), GPU SDPA already produces
     /// normalized output, so the merge formula treats it as-is.
     pub fn sdpaWithStats(self: *VulkanBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
@@ -2888,7 +2888,7 @@ test "Vulkan pipeline binding counts" {
     // GPTQ/AWQ: 5 bufs, 12 bytes push
     // SDPA: 4 bufs, 20 bytes push
     // SDPA turbo: 4 bufs, 36 bytes push
-    // These are validated by successful init() — but we can verify the constants make sense.
+    // These are validated by successful init(), but we can verify the constants make sense.
     const testing = std.testing;
 
     // Push constant sizes must be multiples of 4 (GLSL std430 alignment)
@@ -3224,7 +3224,7 @@ test "VulkanBackend rope" {
     var x = [_]f32{ 1.0, 0.0, 0.0, 1.0 };
     vk_be.rope(&x, 1, 1, 4, 4, 10000.0);
     vk_be.sync();
-    // RoPE is a rotation — magnitude of each pair must be preserved
+    // RoPE is a rotation, magnitude of each pair must be preserved
     const mag0 = @sqrt(x[0] * x[0] + x[2] * x[2]);
     const mag1 = @sqrt(x[1] * x[1] + x[3] * x[3]);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), mag0, 0.01);

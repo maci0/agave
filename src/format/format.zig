@@ -65,7 +65,7 @@ pub const TensorInfo = struct {
     /// Compute the raw byte size of this tensor's data on disk.
     /// Accounts for quantization block structure (e.g., Q4_K = 144 bytes per
     /// 256-element super-block). Uses ceiling division to match gguf.zig's
-    /// tensorBytes — correctly handles non-block-aligned element counts.
+    /// tensorBytes, correctly handles non-block-aligned element counts.
     /// Used by prefetchLayer to size madvise hints.
     pub fn dataByteLen(self: *const TensorInfo) usize {
         const n = self.numElements();
@@ -110,7 +110,7 @@ fn ceilDiv(n: usize, comptime bs: usize) usize {
     return (std.math.add(usize, n, bs - 1) catch std.math.maxInt(usize)) / bs;
 }
 
-/// Model format interface — all model loading goes through this
+/// Model format interface, all model loading goes through this
 pub const Format = struct {
     ptr: *anyopaque,
     vtable: *const VTable,
@@ -213,7 +213,7 @@ pub const Format = struct {
         return conv1dIsMlxNative(conv);
     }
 
-    /// Weight tensor suffixes to prefetch — covers the most bandwidth-heavy
+    /// Weight tensor suffixes to prefetch, covers the most bandwidth-heavy
     /// tensors (GEMV projections and expert weights). Norms are tiny and
     /// almost always cache-resident, so they're excluded.
     const prefetch_suffixes = [_][]const u8{
@@ -246,7 +246,7 @@ pub const Format = struct {
         if (self.getTensor("backbone.layers.0.mixer.in_proj.scales") != null or
             self.getTensor("backbone.layers.0.mixer.in_proj.weight_scale") != null) return "NVFP4";
 
-        // MoE expert weights first — they dominate model size and represent
+        // MoE expert weights first, they dominate model size and represent
         // the primary quantization for MoE architectures (GPT-OSS, Nemotron-Nano, GLM-4).
         const test_names = [_][]const u8{ "blk.0.ffn_gate_exps.weight", "blk.0.ffn_up_exps.weight", "blk.0.attn_q.weight", "blk.0.attn_qkv.weight", "blk.0.ffn_gate.weight", "blk.0.ffn_up.weight", "blk.0.ssm_in.weight", "blk.1.ffn_up.weight", "output.weight" };
         for (test_names) |tname| {
@@ -307,10 +307,10 @@ fn prefetchRegion(data: [*]const u8, len: usize) void {
     };
 }
 
-/// GGUF file format implementation — re-exported so callers use format.zig as the single import.
+/// GGUF file format implementation, re-exported so callers use format.zig as the single import.
 pub const GGUFFile = @import("gguf.zig").GGUFFile;
 
-/// SafeTensors directory loader — re-exported so callers use format.zig as the single import.
+/// SafeTensors directory loader, re-exported so callers use format.zig as the single import.
 pub const SafeTensorsDir = @import("safetensors.zig").SafeTensorsDir;
 
 // ── Tests ─────────────────────────────────────────────────────────

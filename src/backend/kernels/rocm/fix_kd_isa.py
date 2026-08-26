@@ -295,7 +295,7 @@ def globalize_kd(obj_path: str, out_path: str, renames=()):
         if '.kd' in line and 'LOCAL' in line
     ]
     if not kd_syms:
-        # No LOCAL .kd symbols — still copy, but warn if no .kd at all.
+        # No LOCAL .kd symbols, still copy, but warn if no .kd at all.
         if '.kd' not in result.stdout:
             raise SystemExit('[fix_kd_isa] error: no .kd symbols found in object')
         subprocess.run(['cp', obj_path, out_path], check=True)

@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 // (a convenience re-export here used to create a manager <-> tiered import cycle).
 
 /// Result of allocating a KV cache.
-/// Slices are byte arrays — the actual format (f32, f16, q8_0, etc.)
+/// Slices are byte arrays, the actual format (f32, f16, q8_0, etc.)
 /// is tracked by the model's `kv_type` field.
 pub const KvCache = struct {
     keys: [][]u8,
@@ -81,7 +81,7 @@ pub const SeqBlockTable = struct {
     seq_len: usize = 0,
 };
 
-/// View into paged KV cache for one layer — passed to SDPA kernels.
+/// View into paged KV cache for one layer, passed to SDPA kernels.
 /// Enables block-table indirection: kernel walks block_table to find
 /// physical blocks instead of assuming contiguous memory.
 pub const PagedKvView = struct {
@@ -118,7 +118,11 @@ pub const PagedKvView = struct {
 
     /// Checked: bounds-validate position and block translation.
     inline fn physIdFor(self: PagedKvView, position: usize) u32 {
-        std.debug.assert(position < self.seq_len);
+        // `seq_len` is the length before this step's append. `sdpaPagedHeads`
+        // writes the new K/V at index `seq_len` and then attends over
+        // `seq_len + 1` positions, so index `seq_len` itself is in contract.
+        // Physical bounds are enforced by the two asserts below.
+        std.debug.assert(position <= self.seq_len);
         const li = self.blockIdx(position);
         std.debug.assert(li < self.block_table.len);
         const phys = self.block_table[li];
@@ -480,11 +484,11 @@ pub const RadixTree = struct {
                 {}
 
                 if (match_len == edge.len) {
-                    // Full edge match — descend
+                    // Full edge match, descend
                     pos += match_len;
                     node = child;
                 } else {
-                    // Partial match — split the edge.
+                    // Partial match, split the edge.
                     // Pre-allocate all new memory before mutating the tree,
                     // so a failed allocation leaves the tree untouched.
 
@@ -528,7 +532,7 @@ pub const RadixTree = struct {
                         }
                     }
 
-                    // === All allocations succeeded — now mutate (cannot fail) ===
+                    // === All allocations succeeded, now mutate (cannot fail) ===
 
                     self.touchNode(mid);
 
@@ -557,7 +561,7 @@ pub const RadixTree = struct {
                             attach_bucket +%= 1;
                         }
                         if (attach_probes >= attach_max) {
-                            // Probe exhaustion — all slots occupied; free leaf to avoid
+                            // Probe exhaustion, all slots occupied; free leaf to avoid
                             // overwriting an existing child or leaking memory.
                             self.destroyNode(nl);
                         } else {
@@ -570,7 +574,7 @@ pub const RadixTree = struct {
                     break;
                 }
             } else {
-                // No matching child — create one at first free slot
+                // No matching child, create one at first free slot
                 const free_bucket = first_free_bucket orelse return error.RadixTreeFull;
                 const remaining_tokens = tokens[pos..];
                 const remaining_blocks = if (pos < block_ids.len) block_ids[pos..] else &[_]u32{};
@@ -648,7 +652,7 @@ test "RadixTree insert and match" {
     // Insert a sequence [1, 2, 3] with block IDs [10, 11, 12]
     try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
 
-    // Full prefix match — verify both count and block IDs
+    // Full prefix match, verify both count and block IDs
     const m1 = tree.matchPrefix(&.{ 1, 2, 3, 4, 5 });
     try std.testing.expectEqual(@as(usize, 3), m1.matched);
     try std.testing.expectEqual(@as(usize, 3), m1.blocks.len);
@@ -826,7 +830,7 @@ test "PagedKvCache freeBlock and reallocation" {
     paged.freeBlock(ids[3]);
     try std.testing.expectEqual(@as(usize, 2), paged.freeCount());
 
-    // Reallocate — should get back the freed blocks
+    // Reallocate, should get back the freed blocks
     const r0 = paged.allocBlock().?;
     const r1 = paged.allocBlock().?;
     try std.testing.expect(r0 == ids[1] or r0 == ids[3]);
@@ -860,7 +864,7 @@ test "RadixTree insert and overwrite" {
     var tree = try RadixTree.init(allocator);
     defer tree.deinit();
 
-    // Insert same prefix twice — second should update
+    // Insert same prefix twice, second should update
     try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
     try tree.insert(&.{ 1, 2, 3, 4, 5 }, &.{ 10, 11, 12, 13, 14 });
 
@@ -901,7 +905,7 @@ test "RadixTree edge splitting" {
     var tree = try RadixTree.init(allocator);
     defer tree.deinit();
 
-    // Insert [1, 2, 3] then [1, 2, 4] — should split at position 2
+    // Insert [1, 2, 3] then [1, 2, 4], should split at position 2
     try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
     try tree.insert(&.{ 1, 2, 4 }, &.{ 10, 11, 14 });
 

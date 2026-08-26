@@ -4,7 +4,7 @@ zig-out/
 zig-out-linux/
 
 # Model weights at repo root (bind-mounted at runtime).
-# MUST be /models/ — a bare models/ also excludes src/models/ (architecture code).
+# MUST be /models/, a bare models/ also excludes src/models/ (architecture code).
 /models/
 *.gguf
 *.safetensors
@@ -20,7 +20,7 @@ __pycache__/
 # Review / planning outputs (not needed in image)
 /outputs/
 .planning/
-notes/
+.scratch/
 progress.md
 /scripts/
 /graphify-out/

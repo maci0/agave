@@ -136,7 +136,7 @@ pub const Glm4Model = struct {
         if (f.getMetaU32("hidden_size")) |v| self.n_embd = v;
         if (f.getMetaU32("num_attention_heads")) |v| self.n_head = v;
         if (f.getMetaU32("vocab_size")) |v| self.vocab_size = v;
-        // MLA parameters — try HF keys first, then GGUF arch-prefixed keys (deepseek2.*)
+        // MLA parameters, try HF keys first, then GGUF arch-prefixed keys (deepseek2.*)
         const arch = f.getMetaStr("general.architecture") orelse "glm4";
         if (f.getMetaU32("q_lora_rank") orelse f.getArchU32(arch, "attention.q_lora_rank")) |v| self.q_lora_rank = v;
         if (f.getMetaU32("kv_lora_rank") orelse f.getArchU32(arch, "attention.kv_lora_rank")) |v| self.kv_lora_rank = v;
@@ -211,7 +211,7 @@ pub const Glm4Model = struct {
         self.mla_scratch = try allocator.alloc(f32, mla_scratch_size);
         errdefer allocator.free(self.mla_scratch);
 
-        // Prefill buffers (page_allocator for GPU zero-copy — Metal's
+        // Prefill buffers (page_allocator for GPU zero-copy, Metal's
         // newBufferWithBytesNoCopy requires page-aligned pointers).
         {
             const pa = std.heap.page_allocator;
@@ -269,7 +269,7 @@ pub const Glm4Model = struct {
             const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, max_kv_dim, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
-            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            // BlockAllocator stores a pointer, must point to self.paged_cache (not a local copy).
             self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
@@ -300,7 +300,7 @@ pub const Glm4Model = struct {
             &self.logits_buf, &self.mla_scratch,
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
-        // Prefill buffers (page_allocator — must match init allocation)
+        // Prefill buffers (page_allocator, must match init allocation)
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
@@ -323,9 +323,9 @@ pub const Glm4Model = struct {
     /// Run one decode step, returning the argmax next-token ID.
     ///
     /// Error conditions:
-    /// - `error.KVCacheFull`   — sequence length has reached `max_seq_len`.
-    /// - `error.MissingTensor` — a required weight tensor was not found in the model file.
-    /// - `error.Cancelled`     — the inference was cancelled via the `cancelled` flag.
+    /// - `error.KVCacheFull`  , sequence length has reached `max_seq_len`.
+    /// - `error.MissingTensor`, a required weight tensor was not found in the model file.
+    /// - `error.Cancelled`    , the inference was cancelled via the `cancelled` flag.
     pub fn forward(self: *Glm4Model, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
@@ -360,7 +360,7 @@ pub const Glm4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
-    /// Batched prefill — MLA attention uses batched GEMM for projections
+    /// Batched prefill, MLA attention uses batched GEMM for projections
     /// and sdpaPrefill for fused causal attention.  MoE FFN routing selects
     /// different experts per token, so FFN is always per-token.
     /// Falls back to per-token forward when prefill buffers are absent
@@ -389,7 +389,7 @@ pub const Glm4Model = struct {
         }
 
         // Final: rmsNorm + logits on the LAST token only.
-        // In batched mode, residuals are never deferred — pf_hidden has the
+        // In batched mode, residuals are never deferred, pf_hidden has the
         // complete residual stream, so plain rmsNorm suffices (no addRmsNorm).
         const last_in_chunk = (token_ids.len - 1) % cs;
         const e: usize = self.n_embd;
@@ -562,7 +562,7 @@ pub const Glm4Model = struct {
                 for (0..q_head_dim) |i| dot += self.q_full[q_base + i] * k_ptr[i];
                 self.scores_buf[t] = dot * scale;
             }
-            // Inline CPU softmax — avoids backend dispatch + sync overhead
+            // Inline CPU softmax, avoids backend dispatch + sync overhead
             // since QK dot products and V accumulation are already on CPU.
             {
                 var max_val: f32 = self.scores_buf[0];
@@ -677,7 +677,7 @@ pub const Glm4Model = struct {
             // Batched MLA attention.
             try self.prefillMlaAttention(l, n_tok);
 
-            // Per-token FFN (MoE routing is per-token — cannot batch).
+            // Per-token FFN (MoE routing is per-token, cannot batch).
             // Residual is deferred: pf_hidden holds pre-attention residual,
             // pf_hidden2 holds post-attention output.  denseFfn/moeFfn
             // fuses the add internally via addRmsNorm.
@@ -769,7 +769,7 @@ pub const Glm4Model = struct {
             // Copy V into batched buffer
             @memcpy(self.pf_v[t * nh * vhd ..][0 .. nh * vhd], self.v_buf[0 .. nh * vhd]);
 
-            // RoPE (partial — only rope portion at offset nope_dim within each head)
+            // RoPE (partial, only rope portion at offset nope_dim within each head)
             const saved_pos = self.kv_seq_len;
             self.kv_seq_len = self.pf_positions[t];
             self.ropePartial(self.pf_q.ptr + t * nh * q_head_dim, nh, q_head_dim, nope_dim, rope_dim);
@@ -910,7 +910,7 @@ pub const Glm4Model = struct {
             for (0..top_k) |ti| top_scores[ti] /= score_sum;
         }
 
-        // Accumulate expert outputs — GPU addScaled avoids per-expert sync
+        // Accumulate expert outputs, GPU addScaled avoids per-expert sync
         @memset(self.expert_buf, 0);
         for (0..top_k) |ti| {
             try self.expertFfn(li, @intCast(top_experts[ti]), self.hidden2, self.ff_down, ff, e);
@@ -931,7 +931,7 @@ pub const Glm4Model = struct {
         try self.mlxExpertGemv(li, "mlp.switch_mlp.gate_proj", expert_id, input, self.ff_gate[0..ff], ff, e);
         try self.mlxExpertGemv(li, "mlp.switch_mlp.up_proj", expert_id, input, self.ff_up[0..ff], ff, e);
 
-        // SwiGLU chains with preceding GPU gemv — no sync needed
+        // SwiGLU chains with preceding GPU gemv, no sync needed
         self.applySwiGlu(ff);
 
         try self.mlxExpertGemv(li, "mlp.switch_mlp.down_proj", expert_id, self.ff_gate[0..ff], output, e, ff);
@@ -941,7 +941,7 @@ pub const Glm4Model = struct {
         try self.mlxLayerGemv(li, "mlp.shared_experts.gate_proj", input, self.ff_gate[0..ff], ff, e);
         try self.mlxLayerGemv(li, "mlp.shared_experts.up_proj", input, self.ff_up[0..ff], ff, e);
 
-        // SwiGLU chains with preceding GPU gemv — no sync needed
+        // SwiGLU chains with preceding GPU gemv, no sync needed
         self.applySwiGlu(ff);
 
         try self.mlxLayerGemv(li, "mlp.shared_experts.down_proj", self.ff_gate[0..ff], output, e, ff);
@@ -959,7 +959,7 @@ pub const Glm4Model = struct {
         }
 
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         quant_ops.dequantToF32(buf, t.data_ptr, t.dtype, n);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
@@ -1129,19 +1129,19 @@ pub const Glm4Model = struct {
             const head_bytes = dtypeBytes(w_t.dtype, out_dim * in_dim);
             const transposed = (w_t.n_dims >= 2 and w_t.dims[0] == out_dim);
             if (!transposed) {
-                // Standard layout — backend handles dequant in-kernel.
+                // Standard layout, backend handles dequant in-kernel.
                 for (0..nh) |h| {
                     const w_ptr = w_t.data_ptr + h * head_bytes;
                     self.be.gemv(x.ptr, .{ .data = w_ptr, .dtype = w_t.dtype }, y + h * out_dim, out_dim, in_dim);
                 }
             } else if (w_t.dtype == .q8_0) {
-                // Transposed Q8_0 — backend gemvT handles in-kernel.
+                // Transposed Q8_0, backend gemvT handles in-kernel.
                 for (0..nh) |h| {
                     const w_ptr = w_t.data_ptr + h * head_bytes;
                     self.be.gemvT(x.ptr, w_ptr, y + h * out_dim, out_dim, in_dim);
                 }
             } else {
-                // Transposed non-Q8_0 — gemvT only supports Q8_0, so CPU dequant
+                // Transposed non-Q8_0, gemvT only supports Q8_0, so CPU dequant
                 // fallback until gemvT gains dtype support.
                 const head_elems = out_dim * in_dim;
                 if (head_elems > self.mla_scratch.len) @panic("glm4: head_elems exceeds mla_scratch buffer");

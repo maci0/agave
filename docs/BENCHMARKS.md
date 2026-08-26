@@ -1,4 +1,4 @@
-# Agave vs llama.cpp — Performance Benchmarks
+# Agave vs llama.cpp: Performance Benchmarks
 
 **Source of truth for throughput claims.** README, MODELS, and TEST_MATRIX should cite this file rather than inventing parallel numbers.
 
@@ -14,12 +14,12 @@ Single-token autoregressive generation (batch=1). This is the primary metric for
 
 | Model | Quant | Size | llama.cpp Metal | Agave Metal | Agave CPU | Ratio (Metal) |
 |-------|-------|------|---------------:|------------:|----------:|--------------:|
-| Qwen3.5 0.8B | Q8_0 | 764 MB | 140.4 | 125† | 51.7† | — |
+| Qwen3.5 0.8B | Q8_0 | 764 MB | 140.4 | 125† | 51.7† | n/a |
 | Qwen3.5 9B | Q8_0 | 8.9 GB | 25.0 | 41.7 | 11.3 | **1.67x** |
-| Qwen3.5 9B | Q4_K_M | 5.2 GB | 36.4 | 15.6† | 6.4† | — |
-| Qwen3.5 9B | MLX-4bit | 5.5 GB | — | 24.9† | — | — |
-| Gemma 4 E2B | Q4_K_M | — | — | 21.8† | — | — |
-| Gemma 4 26B-A4B | Q4_K_M | — | — | 4.2† | — | — |
+| Qwen3.5 9B | Q4_K_M | 5.2 GB | 36.4 | 15.6† | 6.4† | n/a |
+| Qwen3.5 9B | MLX-4bit | 5.5 GB | n/a | 24.9† | n/a | n/a |
+| Gemma 4 E2B | Q4_K_M | n/a | n/a | 21.8† | n/a | n/a |
+| Gemma 4 26B-A4B | Q4_K_M | n/a | n/a | 4.2† | n/a | n/a |
 | Gemma 3 12B | Q8_0 | 11.6 GB | 18.7 | 22.3 | 6.3 | **1.19x** |
 
 †Updated 2026-05-26 with sparse GEMV + Accelerate.framework
@@ -63,9 +63,9 @@ Agave uses batched GEMM + fused FlashAttention-2 for Gemma 3 prefill. Other mode
 
 | Model | Quant | Prompt | llama.cpp | Agave Sequential | Agave Batched | Speedup |
 |-------|-------|--------|----------:|------------------:|--------------:|--------:|
-| Gemma 3 12B | Q8_0 | 58 tok | — | 14.9 tok/s | 21.9 tok/s | **1.47×** |
+| Gemma 3 12B | Q8_0 | 58 tok | n/a | 14.9 tok/s | 21.9 tok/s | **1.47×** |
 | Gemma 3 12B | Q8_0 | 208 tok | 280 tok/s | 12.4 tok/s | 20.6 tok/s | **1.65×** |
-| Gemma 3 1B | Q4_0 | 208 tok (CUDA GB10) | — | — | 44.7 tok/s | **1.19×** |
+| Gemma 3 1B | Q4_0 | 208 tok (CUDA GB10) | n/a | n/a | 44.7 tok/s | **1.19×** |
 
 The batched prefill speedup comes from:
 - **GEMM weight reuse**: each weight row loaded once from memory, multiplied against all N input tokens (N× bandwidth savings)
@@ -87,7 +87,7 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 | f16 | ✅ | ✅ | ✅ |
 | MLX-Q4 | ✅ | ✅ | ❌ |
 | NVFP4 (GGUF) | ✅ | ❌ | ✅ |
-| NVFP4 (SafeTensors) | ✅ | ✅ | — |
+| NVFP4 (SafeTensors) | ✅ | ✅ | n/a |
 | MXFP4 | ✅ | ✅ | ✅ |
 | IQ4_XS/NL | ✅ | ✅ | ✅ |
 
@@ -102,9 +102,9 @@ CLI: `--prefill-batch-size <N>` (default 512). Use `--prefill-batch-size 1` for 
 | Nemotron-Nano | 4B, 30B | ✅ Working | Hybrid SSM/Attention/MoE |
 | Nemotron-H | 56B | ✅ Working | Hybrid SSM/MoE |
 | GPT-OSS | 20B | ✅ Working | |
-| GLM-4 | 4.7B Flash | ⚠️ GGUF issue | Also broken in llama.cpp — model format problem |
+| GLM-4 | 4.7B Flash | ⚠️ GGUF issue | Also broken in llama.cpp, model format problem |
 | Llama 4 | Scout | ✅ Working | iRoPE, chunked attention, MoE top-1 + shared expert |
-| DeepSeek V4 | — | ✅ Working | Hyper connections, MLA, CSA/HCA compressors, LID |
+| DeepSeek V4 | n/a | ✅ Working | Hyper connections, MLA, CSA/HCA compressors, LID |
 | DiffusionGemma | 26B-A4B | ✅ Working | Block diffusion generation |
 
 ## KV Cache Quantization (Gemma 4 26B, Metal)
@@ -131,7 +131,7 @@ The `--kv-eviction` flag enables generating beyond the `--ctx-size` limit by per
 |-------|----------|--------|----------|:----------------:|:---------------:|-------|
 | Gemma 4 E2B | 256 | 64 | norm | 188 | 2 | Coherent output past ctx limit |
 
-Eviction is complementary to TurboQuant — one reduces entry count, the other reduces bits per entry.
+Eviction is complementary to TurboQuant, one reduces entry count, the other reduces bits per entry.
 
 ## Vision / Multimodal
 
@@ -151,7 +151,7 @@ Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool
 
 | Model | Quant | Size | CUDA tok/s | CPU tok/s | Speedup | Prefill (CUDA) |
 |-------|-------|------|:----------:|:---------:|:-------:|:--------------:|
-| Qwen2.5 0.5B | Q8_0 | 644 MB | 95.2 | — | — | 232ms |
+| Qwen2.5 0.5B | Q8_0 | 644 MB | 95.2 | n/a | n/a | 232ms |
 | Qwen3 0.6B | Q8_0 | 610 MB | 89.3 | 71.4 | 1.25x | 245ms |
 | Qwen3 1.7B | Q8_0 | 1.7 GB | 44.7 | 28.6 | **1.56x** | 488ms |
 | Qwen3 4B | Q8_0 | 4.0 GB | 21.4 | 13.9 | **1.54x** | 1031ms |
@@ -173,14 +173,14 @@ Notes:
 
 | Model | Config | Transport | tok/s | vs Single GPU |
 |-------|--------|-----------|:-----:|:-------------:|
-| Qwen3.5 0.8B Q8_0 | Single GPU | — | 9.2 | 100% |
+| Qwen3.5 0.8B Q8_0 | Single GPU | n/a | 9.2 | 100% |
 | Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **40.2** | 112% |
 | Qwen3.5 0.8B Q8_0 | TP=2 | NCCL RoCE | 5.1 | 56% |
-| Qwen3.5 9B Q4_K_M | Single GPU | — | 2.2 | 100% |
+| Qwen3.5 9B Q4_K_M | Single GPU | n/a | 2.2 | 100% |
 | Qwen3.5 9B Q4_K_M | PP=2 | NCCL RoCE | 2.2 | 100% |
 | Qwen3.5 9B Q4_K_M | TP=2 | NCCL RoCE | 1.7 | 77% |
 
-NCCL loaded at runtime via `dlopen("libnccl.so.2")`. Unique ID exchanged over TCP, then all collectives run over RoCE RDMA. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL — no host↔device copy for GPU-dirty buffers.
+NCCL loaded at runtime via `dlopen("libnccl.so.2")`. Unique ID exchanged over TCP, then all collectives run over RoCE RDMA. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL, no host↔device copy for GPU-dirty buffers.
 
 ### TCP (Heterogeneous x86_64 + aarch64)
 
@@ -232,6 +232,6 @@ See [DS4_BENCHMARK.md](DS4_BENCHMARK.md) for full methodology, Metal investigati
 
 - **Decode throughput**: Measured from the stats line output by the engine after generating N tokens with greedy sampling (temperature=0). Prompt: "Hello" with model-appropriate chat template.
 - **llama.cpp**: `llama-bench -p 16 -n 32/128 -r 1` with Metal enabled.
-- **Agave**: `agave <model.gguf> -n N --backend {cpu,metal} "Hello"` — tok/s from stats output.
+- **Agave**: `agave <model.gguf> -n N --backend {cpu,metal} "Hello"`, tok/s from stats output.
 - All runs are single-pass (no averaging), cold-start (model loaded from disk each run).
 - Memory pressure from other processes was minimal during benchmarks.

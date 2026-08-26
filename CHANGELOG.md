@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.1.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.2.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,8 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-08-26
 
 ### Breaking
 - GPU backends (CUDA and peers): missing GPTQ/AWQ/MXFP4 kernels now fail closed
@@ -58,7 +60,7 @@ must still appear under **Changed** or **Breaking** below. See
 - `agave-bench gemv_q4_k`: host-reference validation line
   (`{"validation":{"max_rel_err":...}}`) alongside timing; reference mirrors the
   gguf.dequantize-checked TileLang implementation.
-- **DeepSeek V4 Flash 0731**: full architecture support — hyper connections,
+- **DeepSeek V4 Flash 0731**: full architecture support, hyper connections,
   MLA, CSA/HCA compressors, Lightning Indexer, hash routing. See 2026-07-31 entry.
 - Server env fallbacks: `AGAVE_HOST` and `AGAVE_PORT` when `--host` / `--port`
   are omitted (`--host` / `--port` still win when set). Documented in `--help`
@@ -137,8 +139,26 @@ must still appear under **Changed** or **Breaking** below. See
   replaced while still referenced by pending GPU dispatches.
 - DeepSeek V4 Flash `--pp`: later pipeline stages skip the unused embedding
   lookup; expert prefetch respects the TP rank.
+- Paged CPU SDPA aborted in any build with safety checks on. `PagedKvView`
+  required `position < seq_len`, but the kernel appends the new K/V at index
+  `seq_len` and then attends over `seq_len + 1` positions, so the very first
+  paged call tripped the assert. Only `--backend cpu` builds with safety checks
+  (`agave-debug`, `zig build test`) were affected; `ReleaseFast` compiles the
+  assert out.
+- `zig build test` failed to compile with the CUDA backend enabled:
+  `cuStreamSynchronize` is a required entry point, not an optional one, so
+  unwrapping it as an optional was a type error.
 
 ### Changed
+- Extracted video frames now default to a disk-backed cache directory
+  (`XDG_CACHE_HOME`, else `~/.cache`) instead of `/tmp`. `/tmp` is tmpfs on most
+  Linux distributions, so a long clip at `--video-fps 2` previously held every
+  extracted PNG in RAM until exit. Set `TMPDIR` to choose the location
+  explicitly; it still takes precedence.
+- Benchmark tables now state whether a backend's output is correct, not only its
+  throughput. Qwen 3.5 decodes to garbage on ROCm and Vulkan on gfx1100
+  (docs/TODO.md bug 10); the published tok/s for those two rows are speed-only
+  measurements.
 - Changelog entries are consumer-oriented; date-stamped sections below remain the
   historical log until the next tagged product release bumps `0.1.0`
 - `--diffusion-confidence` docs/help now report default `0.5` (runtime default was
@@ -153,7 +173,7 @@ must still appear under **Changed** or **Breaking** below. See
 - Docker: container stop grace period raised above the server drain timeout so in-flight requests finish on `docker stop`
 - Chat UI (`src/web/`) and WASM browser shell (`web/`) sources are TypeScript; committed `.js` is produced by `scripts/build-web.sh`
 
-## 2026-08-18 — Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
+## 2026-08-18: Metal Backend: Coherent Output for MLX 4-bit (Autoresearch/DS4-Metal Iter 1)
 
 ### Fixed
 - **Metal MLX-Q GEMV CPU fallback**: Metal's native MLX-Q GEMV kernel produces wrong
@@ -166,15 +186,15 @@ must still appear under **Changed** or **Breaking** below. See
 
 ### Result
 - **First coherent output on Metal for MLX 4-bit**: "The capital of France is Paris."
-- 0.4 tok/s (limited by 430 Metal syncs per forward — per-GEMV sync overhead)
+- 0.4 tok/s (limited by 430 Metal syncs per forward, per-GEMV sync overhead)
 - L0 FFN L2=543.882 (matches CPU baseline exactly)
 
-## 2026-08-16 — MLX 4-bit Expert Dequantization Fix (Autoresearch Iter 14)
+## 2026-08-16: MLX 4-bit Expert Dequantization Fix (Autoresearch Iter 14)
 
 ### Fixed
 - **MLX 4-bit expert weights**: three bugs fixed in `doGemvExpert` for MLX community
   DeepSeek V4 Flash 4-bit model:
-  1. U8 scale tensors parsed as `.nvfp4` dtype, not `.unknown` — code silently
+  1. U8 scale tensors parsed as `.nvfp4` dtype, not `.unknown`, code silently
      skipped expert GEMV (returned without computing). Fixed by checking both.
   2. Scale format was FP8 E4M3 (NVIDIA MXFP4) but MLX community experts use E8M0
      (OCP Microscaling, `2^(val-127)`). Added `Mxfp4ScaleFormat` enum.
@@ -252,7 +272,7 @@ must still appear under **Changed** or **Breaking** below. See
 - forwardTree layer skip increased from 10 to 33 (10 active layers instead of 33).
   Non-monotonic sweep found skip=33 as local optimum for factual+code.
 - forwardTree FFN completely skipped (attention-only verification).
-  Shared expert FFN was ~0% of forwardTree time — all cost is attention projections.
+  Shared expert FFN was ~0% of forwardTree time, all cost is attention projections.
 - **New best: Factual 6.0-6.2 tok/s (exceeds ds4), Code 3.5 (+25%), Prose 3.1-3.2**
 
 ### Performance (2026-08-17, Autoresearch Iters 41-46)
@@ -325,11 +345,11 @@ must still appear under **Changed** or **Breaking** below. See
   - Prose (-n 256): 11.2 tok/s (1.90× ds4)
   - All output verified coherent ("capital of France is **Paris**")
 
-### Performance (2026-08-18, Autoresearch Final — 49 iterations)
+### Performance (2026-08-18, Autoresearch Final: 49 iterations)
 - **ALL WORKLOADS EXCEED ds4 5.9 tok/s by 22-44% on pure CPU + NVMe SSD:**
-  - Factual (-n 64): 8.4-8.5 tok/s (1.42-1.44× ds4) — 3-run stable
-  - Code (-n 128): 7.2-7.5 tok/s (1.22-1.27× ds4) — 3-run stable
-  - Prose (-n 128): 7.2-7.4 tok/s (1.22-1.25× ds4) — 3-run stable
+  - Factual (-n 64): 8.4-8.5 tok/s (1.42-1.44× ds4), 3-run stable
+  - Code (-n 128): 7.2-7.5 tok/s (1.22-1.27× ds4), 3-run stable
+  - Prose (-n 128): 7.2-7.4 tok/s (1.22-1.25× ds4), 3-run stable
   - At -n 256: Factual 9.1 (1.54×), Prose 11.2 (1.90×)
   - Baseline: 1.4 tok/s
   - Quality verified: "The capital of France is **Paris**"
@@ -349,7 +369,7 @@ must still appear under **Changed** or **Breaking** below. See
 - Also removed min_match_gap and anti-repetition compaction (over-aggressive,
   caused 2-3× speed regression).
 
-## 2026-08-13 — DeepSeek V4 Flash Performance Autoresearch
+## 2026-08-13: DeepSeek V4 Flash Performance Autoresearch
 
 ### Fixed
 - **Metal buffer cache staleness**: Added `volatile_weights` mode that flushes
@@ -410,7 +430,7 @@ must still appear under **Changed** or **Breaking** below. See
 - Implementing MTP for DS V4 requires loading from HF safetensors (not GGUF)
   or converting MTP tensors to GGUF format
 
-## 2026-07-31 — DeepSeek V4 Flash 0731
+## 2026-07-31: DeepSeek V4 Flash 0731
 
 ### DeepSeek V4 Flash Full Architecture Support
 
@@ -442,23 +462,23 @@ New model architecture in `src/models/deepseek4.zig` with complete inference sup
 - Batched CSA+HCA compressor GEMVs in single GPU command buffer
 - Hoist sink tensor lookup outside per-head attention loop
 
-## 2026-06-30 — DSpark Speculative Decoding
+## 2026-06-30: DSpark Speculative Decoding
 
 ### DSpark: Confidence-Scheduled Speculative Decoding (Cheng et al., 2026)
 
 Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/main/DSpark_paper.pdf) from DeepSeek-AI in `src/spec/dspark.zig`.
 
 **`src/spec/dspark.zig`** (new file):
-- `SpsProfile` — pre-profiled steps-per-second table for target-model token-batch sizes; `syntheticComputeBound()` for offline use
-- `ConfidenceBlock` + `computeSurvival()` — per-request per-position survival probs `a_{r,j} = Π_{i≤j} c_i`
-- `scheduleVerification()` — **Algorithm 1** (Hardware-Aware Prefix Scheduler): globally sorts `(request, position)` candidates by survival probability descending, greedily admits tokens while `Θ = τ × SPS(B)` improves, stops on first drop (non-anticipating property). `O(Rγ log Rγ)`.
-- `MarkovHead` — low-rank `V×V` transition bias `B(x_{k-1},·) = W1[x_{k-1}]W2` (§3.1 Eq. 5), `rank=256` default
-- `RnnHead` — gated recurrent sequential head with full prefix history (§3.1 Eq. 6)
-- `ConfidenceHead` — `c_k = σ(w^T [h_k; W1[x_{k-1}]])` (§3.2.1 Eq. 7)
-- `calibrateSts()` — Sequential Temperature Scaling: per-position 1D grid search minimising ECE of cumulative product (§3.2.1)
+- `SpsProfile`: pre-profiled steps-per-second table for target-model token-batch sizes; `syntheticComputeBound()` for offline use
+- `ConfidenceBlock` + `computeSurvival()`, per-request per-position survival probs `a_{r,j} = Π_{i≤j} c_i`
+- `scheduleVerification()`: **Algorithm 1** (Hardware-Aware Prefix Scheduler): globally sorts `(request, position)` candidates by survival probability descending, greedily admits tokens while `Θ = τ × SPS(B)` improves, stops on first drop (non-anticipating property). `O(Rγ log Rγ)`.
+- `MarkovHead`: low-rank `V×V` transition bias `B(x_{k-1},·) = W1[x_{k-1}]W2` (§3.1 Eq. 5), `rank=256` default
+- `RnnHead`: gated recurrent sequential head with full prefix history (§3.1 Eq. 6)
+- `ConfidenceHead`: `c_k = σ(w^T [h_k; W1[x_{k-1}]])` (§3.2.1 Eq. 7)
+- `calibrateSts()`: Sequential Temperature Scaling: per-position 1D grid search minimising ECE of cumulative product (§3.2.1)
 
 **`src/spec/spec_decode.zig`**:
-- `dsparkTrimDraft()` — single-request draft trim using per-position acceptance history as survival-probability proxy; drops suffix below 0.15 expected survival
+- `dsparkTrimDraft()`: single-request draft trim using per-position acceptance history as survival-probability proxy; drops suffix below 0.15 expected survival
 
 **`src/main.zig`**:
 - `--spec-mode dspark` wired into decode loop: drafts via existing draft model, trims via `dsparkTrimDraft()`
@@ -466,7 +486,7 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 
 4/4 unit tests pass (Markov bias correctness, scheduler greedy/load cases, SPS profile).
 
-## 2026-06-18 — Vulkan: KosmicKrisp + Pipeline Cache
+## 2026-06-18: Vulkan: KosmicKrisp + Pipeline Cache
 
 ### Vulkan macOS Backend
 - **KosmicKrisp** replaces MoltenVK as the macOS Vulkan testing target
@@ -474,7 +494,7 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 - `sdpa_turbo` pipeline gracefully skipped when driver lacks `GroupNonUniform` subgroup ops (lavapipe/KosmicKrisp don't implement them); TurboQuant KV falls back to standard SDPA
 - **Disk-backed `VkPipelineCache`**: compiled shaders saved to `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 kernels), loaded on subsequent runs; note lavapipe re-JITs LLVM IR each run regardless (~5 min; driver limitation)
 
-## 2026-06-16 — IQ2/IQ3 Quant Support + LoRA + MTP Fix
+## 2026-06-16: IQ2/IQ3 Quant Support + LoRA + MTP Fix
 
 ### IQ2/IQ3/IQ1 Quantization Support
 - Added DType entries: `iq2_xxs`, `iq2_xs`, `iq2_s`, `iq3_xxs`, `iq3_s`, `iq1_s`, `iq1_m`
@@ -496,20 +516,20 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 
 ### MTP Spec Decode Fix (Qwopus)
 
-- `qwen35.zig`: MTP detection now handles two GGUF layouts — layout A has block_count excluding MTP heads (nextn at blk.{n_layers}), layout B has block_count including MTP heads (nextn at blk.{n_layers-1}). Layout B adjusts n_layers down so mtpForward uses the correct mtp_lid.
+- `qwen35.zig`: MTP detection now handles two GGUF layouts, layout A has block_count excluding MTP heads (nextn at blk.{n_layers}), layout B has block_count including MTP heads (nextn at blk.{n_layers-1}). Layout B adjusts n_layers down so mtpForward uses the correct mtp_lid.
 - `qwen35.zig`: All nextn tensor lookups now try `.weight` suffix first (e.g. `nextn.eh_proj.weight`) before falling back to bare name, matching Qwopus GGUF storage convention.
 - `qwen35.zig`: `nextn.embed_tokens` falls back to shared `token_embd.weight`; `nextn.shared_head_head` falls back to shared `output.weight`.
-- Verified: Qwopus3.6-27B-Coder-MTP — 74% accept rate, 0.7 mean tokens/step.
+- Verified: Qwopus3.6-27B-Coder-MTP, 74% accept rate, 0.7 mean tokens/step.
 
-## 2026-06-15 — Vulkan Correctness Fixes
+## 2026-06-15: Vulkan Correctness Fixes
 
 ### Vulkan DeltaNet Fixes (2026-06-16)
-- `deltanet_recurrence.comp`: GQA head mapping wrong for `num_k != num_v` — CPU uses `h % num_k` (round-robin) but shader used `h * num_k / num_v` (blocked). Fixes garbled output for Qwen3.5-4B and any model with mismatched k/v head counts.
-- `vulkan.zig`: `gate_arr`/`beta_arr` too small (64) — should be 128 to match `max_ssm_v_heads`. Prevents stack overflow for models with >64 v_heads.
+- `deltanet_recurrence.comp`: GQA head mapping wrong for `num_k != num_v`, CPU uses `h % num_k` (round-robin) but shader used `h * num_k / num_v` (blocked). Fixes garbled output for Qwen3.5-4B and any model with mismatched k/v head counts.
+- `vulkan.zig`: `gate_arr`/`beta_arr` too small (64), should be 128 to match `max_ssm_v_heads`. Prevents stack overflow for models with >64 v_heads.
 
 ### Vulkan Backend Fixes
-- `destroyBuffer`: submits pending GPU commands before destroying — prevents VUID-vkCmd invalid state (buffer destroyed while recorded in command buffer)
-- `downloadF32`: submits pending work before host readback — prevents reading stale deferred dispatch results
+- `destroyBuffer`: submits pending GPU commands before destroying, prevents VUID-vkCmd invalid state (buffer destroyed while recorded in command buffer)
+- `downloadF32`: submits pending work before host readback, prevents reading stale deferred dispatch results
 - Qwen3.5 Vulkan garbled output fixed: DeltaNet causalConv1d was reading stale conv output due to deferred dispatch not executing before downloadF32
 - Vulkan Q8_0 Qwen2.5: confirmed correct at 14.2 tok/s on RX 7900 XTX
 - `n_pipelines`: updated 44→49 (5 new pipelines added without updating count)
@@ -517,7 +537,7 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 ### Build
 - `-Denable-debug=false`: new flag to skip `agave-debug` binary on Linux x86_64 with GCC ≥16 (R_X86_64_PC64 relocation unsupported in debug builds)
 
-## 2026-06-12 — Feature Release
+## 2026-06-12: Feature Release
 
 ### Bug Fixes
 - tiered KV cache (`--kv-tiers vram+ram`) crash fixed: `isMultiBlock` now guards against `paged_cache.block_size == 0` (all 10 model architectures)
@@ -527,7 +547,7 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 - ARM Linux CPU detection: `implementer+part` fallback for aarch64 `/proc/cpuinfo` (no `model name`)
 
 ### CUDA Full Validation (GB10 / sm_121 / CUDA 13.0)
-- `callconv(.nvptx_device)` replaces `callconv(.kernel)` — fixes Zig 0.16/LLVM NVPTX alias crash
+- `callconv(.nvptx_device)` replaces `callconv(.kernel)`, fixes Zig 0.16/LLVM NVPTX alias crash
 - Build PTX fixup: Python script promotes `.func *_kernel` → `.entry` post-compilation
 - All 60 kernel .zig files now in PTX build list (was 19); 61 kernels registered at runtime
 - CUDA KV cache fix: `getOrAllocKvBuf` uploads host data on first allocation (was reading garbage)
@@ -538,7 +558,7 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 - Performance: 22.3 tok/s decode Qwen3.5-0.8B-Q8_0 on GB10 (UMA; CPU 48 tok/s)
 
 ### DiffusionGemma (Block Diffusion LLM)
-- Added `diffusion_gemma` architecture — Google's DiffusionGemma 26B-A4B (SafeTensors BF16)
+- Added `diffusion_gemma` architecture, Google's DiffusionGemma 26B-A4B (SafeTensors BF16)
 - `src/models/diffusion_gemma.zig`: Gemma 4 26B A4B backbone with block diffusion inference
 - `src/ops/attention.zig`: `scaledDotProductAttentionCanvas()` for bidirectional canvas attention
 - Inference loop: encoder prefill → iterative denoising (uniform state diffusion) → block autoregressive chaining
@@ -570,11 +590,11 @@ Implements the [DSpark framework](https://github.com/deepseek-ai/DeepSpec/blob/m
 - Metal n_pipelines count: 70 → 71
 - MXFP4 scale dtype detection (U8 → `.nvfp4` not `.unknown`)
 
-## 2026-05-20 — NCCL RoCE RDMA Performance Fix
+## 2026-05-20: NCCL RoCE RDMA Performance Fix
 
 **PP=2 NCCL over RoCE: 4.2 → 40.2 tok/s (9.6x speedup)**
 
-Root cause: CUDA interop (context, mem_alloc, memcpy) was not wired for PP transport — NCCL couldn't allocate device staging buffers and fell back to TCP sockets silently.
+Root cause: CUDA interop (context, mem_alloc, memcpy) was not wired for PP transport, NCCL couldn't allocate device staging buffers and fell back to TCP sockets silently.
 
 Fixes:
 - Wire CUDA interop inside `setupTransport` before `setupNccl`
@@ -590,7 +610,7 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 16 p2p channels, 0.27s init time
 - PP=2 now **faster than single GPU** (40.2 vs 36.0 tok/s)
 
-## 2026-05-19 — Major Feature Release (59 commits)
+## 2026-05-19: Major Feature Release (59 commits)
 
 ### GPU Kernels (32 new files)
 - **All quantized GEMV formats now native on all 6 backends** (was 14 gaps)
@@ -638,7 +658,7 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 ### Documentation
 - PARALLELISM.md: rewritten from 2569-line design doc to 200-line impl reference
 - Tutorials improved: chapters 2 (attention), 3 (FFN), 5 (memory), 6 (SSMs),
-  7 (sampling), 8 (backends), 17 (spec decode) — worked numerical examples
+  7 (sampling), 8 (backends), 17 (spec decode), worked numerical examples
 - KERNELS.md: systematic audit fixed 8+ stale entries, file listings updated
 - TODO.md + IDEAS.md merged into single unified document
 - 26-item roadmap from vLLM, llama.cpp, Exo, Mesh-LLM analysis

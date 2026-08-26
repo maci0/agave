@@ -21,7 +21,7 @@ pub const MtpTensor = struct {
     n_dims: u32 = 0,
 };
 
-/// MTP weight storage — mmap'd safetensors with tensor name → pointer lookup.
+/// MTP weight storage, mmap'd safetensors with tensor name → pointer lookup.
 pub const MtpWeights = struct {
     mmap_ptr: ?[*]align(std.heap.page_size_min) const u8 = null,
     mmap_len: usize = 0,
@@ -45,7 +45,7 @@ pub const MtpWeights = struct {
                 _ = std.c.close(fd);
         }
 
-        // Get file size — same pattern as gguf.zig: statx on Linux (posix fstat
+        // Get file size, same pattern as gguf.zig: statx on Linux (posix fstat
         // wrappers were removed in Zig 0.16), std.c.fstat elsewhere.
         const file_size: usize = blk: {
             if (comptime @import("builtin").os.tag == .linux) {

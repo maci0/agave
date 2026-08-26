@@ -4,7 +4,7 @@
 //! tokens. When a match is found, the tokens that followed that match in history
 //! are proposed as draft tokens for tree verification.
 //!
-//! Zero overhead — no draft model, no extra forward passes for drafting.
+//! Zero overhead, no draft model, no extra forward passes for drafting.
 //! Works best for repetitive text: code, lists, structured output, templates.
 //!
 //! Inspired by vLLM's n-gram speculative decoding (v0.10.1).
@@ -56,14 +56,14 @@ pub const NgramState = struct {
         var best_match_pos: usize = 0;
         var best_match_len: usize = 0;
 
-        // Try longest n-gram first (greedy — longer match = better prediction)
+        // Try longest n-gram first (greedy, longer match = better prediction)
         const max_n = @min(max_ngram, self.len - 1);
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
             // Pattern = last n tokens
             const pattern = hist[self.len - n ..];
 
-            // Search backward — most recent occurrence is a better predictor.
+            // Search backward, most recent occurrence is a better predictor.
             // max_n <= len - 1 leaves at least one earlier alignment to try.
             const search_end = self.len - n;
             var pos: usize = search_end - 1;
@@ -134,7 +134,7 @@ pub const SharedNgramPool = struct {
     /// `tail` is the most recent tokens (the n-gram query); writes into `out`.
     /// Returns number of tokens proposed (0 if no match).
     ///
-    /// The lock is held only for the memcpy snapshot — the O(hist × ngram_levels)
+    /// The lock is held only for the memcpy snapshot, the O(hist × ngram_levels)
     /// search runs outside the lock so concurrent server slots do not spin waiting.
     pub fn propose(self: *SharedNgramPool, tail: []const u32, max_draft: usize, out: []u32) usize {
         if (tail.len < min_ngram or max_draft == 0) return 0;
@@ -158,7 +158,7 @@ pub const SharedNgramPool = struct {
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
             const pat = tail[tail.len - n ..];
-            // Search backward so the most recent occurrence wins — recency is a
+            // Search backward so the most recent occurrence wins, recency is a
             // better predictor than position for cross-request shared history.
             // Tail is an external query, so every alignment with ≥1 continuation
             // token is a valid match (no self-match exclusion needed here).
@@ -214,7 +214,7 @@ pub const SuffixState = struct {
         };
     }
 
-    /// Free the suffix cache. Safe to call multiple times —
+    /// Free the suffix cache. Safe to call multiple times,
     /// subsequent calls are no-ops after the first free.
     pub fn deinit(self: *SuffixState) void {
         if (self.history.len == 0) return;
@@ -243,7 +243,7 @@ pub const SuffixState = struct {
             const suffix = hist[self.len - n ..];
             const search_end = self.len - n;
 
-            // Search backward — most recent occurrence is a better predictor,
+            // Search backward, most recent occurrence is a better predictor,
             // mirroring the NgramState approach.
             if (search_end >= n) {
                 var pos: usize = search_end - n;
@@ -279,7 +279,7 @@ test "suffix propose basic" {
     var s = try SuffixState.init(std.testing.allocator);
     defer s.deinit();
 
-    // Sequence: [10,20,30,40,10,20] — last 2 tokens "10,20" appear at pos 0.
+    // Sequence: [10,20,30,40,10,20], last 2 tokens "10,20" appear at pos 0.
     // Suffix matching should find hist[0..2] matches hist[4..6], propose hist[2..4] = [30,40].
     const tokens = [_]u32{ 10, 20, 30, 40, 10, 20 };
     for (tokens) |t| s.push(t);
@@ -298,7 +298,7 @@ test "suffix no match" {
 
     // History with no suffix match for current tail
     for ([_]u32{ 1, 2, 3, 4 }) |t| s.push(t);
-    // Current tail (from history last 2 = "3 4") — no match earlier
+    // Current tail (from history last 2 = "3 4"), no match earlier
     var draft: [4]u32 = undefined;
     const n = s.propose(&draft);
     try std.testing.expect(n == 0);
@@ -545,7 +545,7 @@ test "NgramState propose returns 0 with insufficient history" {
 
 test "NgramState propose finds repeated pattern" {
     var state = NgramState{};
-    // Pattern: [10,20,30,40,50,10,20,30] — last 3 tokens "10,20,30" match at pos 0
+    // Pattern: [10,20,30,40,50,10,20,30], last 3 tokens "10,20,30" match at pos 0
     // Should propose continuation after that match: "40,50"
     for ([_]u32{ 10, 20, 30, 40, 50, 10, 20, 30 }) |t| state.push(t);
     var draft: [8]u32 = undefined;

@@ -78,7 +78,7 @@ pub fn gemvQ5_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
 
                 const gi_base = bk + j;
                 if (gi_base + group_elems - 1 < k) {
-                    // Full sub-block — vectorized (first 32: low nibble, next 32: high nibble)
+                    // Full sub-block, vectorized (first 32: low nibble, next 32: high nibble)
                     const d_sc_a0: V8 = @splat(d_0 * @as(f32, @floatFromInt(sc_a0)));
                     const dm_m_a0: V8 = @splat(dmin_0 * @as(f32, @floatFromInt(m_a0)));
                     const d_sc_b0: V8 = @splat(d_0 * @as(f32, @floatFromInt(sc_b0)));
@@ -126,7 +126,7 @@ pub fn gemvQ5_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                         sum1 += xv * (d_sc_b1 * qv1 - dm_m_b1);
                     }
                 } else {
-                    // Partial sub-block — scalar fallback
+                    // Partial sub-block, scalar fallback
                     var s0: f32 = 0.0;
                     var s1: f32 = 0.0;
                     const d1_0 = d_0 * @as(f32, @floatFromInt(sc_a0));

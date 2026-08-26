@@ -6,11 +6,11 @@
 
 > After this chapter you can explain UMA zero-copy, Metal command buffers, buffer caching, and the 32 KB threadgroup limit.
 
-The Metal backend is Agave's primary GPU path on Apple Silicon. It's designed around **zero-copy UMA** (Unified Memory Architecture — CPU and GPU share the same physical RAM), **deferred dispatch** (batching operations without blocking), and **cache-aware resource management** (reusing GPU buffer wrappers to avoid ObjC allocation overhead).
+The Metal backend is Agave's primary GPU path on Apple Silicon. It's designed around **zero-copy UMA** (Unified Memory Architecture, CPU and GPU share the same physical RAM), **deferred dispatch** (batching operations without blocking), and **cache-aware resource management** (reusing GPU buffer wrappers to avoid ObjC allocation overhead).
 
 ## Unified Memory Architecture (UMA)
 
-On Apple Silicon (M1, M2, M3, M4), the CPU and GPU share the **same physical DRAM** — there's no separate VRAM. This is different from discrete GPUs (NVIDIA, AMD) where data must be copied between host RAM and GPU memory.
+On Apple Silicon (M1, M2, M3, M4), the CPU and GPU share the **same physical DRAM**, there's no separate VRAM. This is different from discrete GPUs (NVIDIA, AMD) where data must be copied between host RAM and GPU memory.
 
 ```mermaid
 flowchart LR
@@ -57,9 +57,9 @@ id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:ptr
 
 **Storage modes:**
 
-- `MTLResourceStorageModeShared` — CPU and GPU both access the same memory (UMA)
-- `MTLResourceStorageModePrivate` — GPU-only (used for scratch buffers)
-- `MTLResourceStorageModeManaged` — Discrete GPU mode (not used on Apple Silicon)
+- `MTLResourceStorageModeShared`: CPU and GPU both access the same memory (UMA)
+- `MTLResourceStorageModePrivate`: GPU-only (used for scratch buffers)
+- `MTLResourceStorageModeManaged`: Discrete GPU mode (not used on Apple Silicon)
 
 Agave wraps all model weights (mmap'd from GGUF/SafeTensors) and activation buffers as **shared** Metal buffers.
 
@@ -168,11 +168,11 @@ return BufRef{ buf: buf, offset: offset }
 - Metal sees: buffer starting at `0x100004000`, length = rounded up to next 16 KB boundary
 - Kernel access: `buffer[offset + idx]` to skip the leading bytes
 
-**Cost:** Negligible — Metal doesn't copy the page, just references it with an offset.
+**Cost:** Negligible, Metal doesn't copy the page, just references it with an offset.
 
 ## Command Buffer Batching
 
-Metal kernels are dispatched via **command buffers** — sequences of GPU operations that execute together. Creating a new command buffer for every kernel would serialize execution and waste CPU time.
+Metal kernels are dispatched via **command buffers**, sequences of GPU operations that execute together. Creating a new command buffer for every kernel would serialize execution and waste CPU time.
 
 **Pattern:** Maintain a **persistent command buffer** and **compute encoder** across multiple dispatches.
 
@@ -198,11 +198,11 @@ sequenceDiagram
 
     Model->>BE: sync()
     BE->>BE: endEncoding()
-    BE->>GPU: commit() — submit all work at once
+    BE->>GPU: commit(), submit all work at once
     GPU-->>BE: waitUntilCompleted()
     BE->>BE: active_enc = nil, active_cmd = nil
 
-    Model->>Model: argmax(logits) — safe to read GPU output
+    Model->>Model: argmax(logits), safe to read GPU output
 ```
 
 ### Active Command Buffer State
@@ -267,7 +267,7 @@ flush(self):
 
 ## Batch Mode: Suppressing Intermediate Barriers
 
-Metal's memory barrier (`memoryBarrierWithScope`) ensures write visibility but **serializes execution** — the GPU must finish all prior work before starting the next kernel.
+Metal's memory barrier (`memoryBarrierWithScope`) ensures write visibility but **serializes execution**, the GPU must finish all prior work before starting the next kernel.
 
 **Problem:** Independent operations (e.g., normalizing Q and K in parallel) don't need a barrier between them.
 
@@ -343,7 +343,7 @@ be.rmsNormMulti(k_buf, norm_w, nh_kv, hd, eps)   # barrier after
 
 ## Deferred Dispatch Contract
 
-**Key principle:** GPU operations are **deferred** — they're encoded into the command buffer but don't execute immediately.
+**Key principle:** GPU operations are **deferred**, they're encoded into the command buffer but don't execute immediately.
 
 **Implications:**
 
@@ -386,7 +386,7 @@ sequenceDiagram
     participant CMB as Command Buffer<br/>(GPU queue)
     participant GPU as GPU Hardware
 
-    Note over CPU,GPU: Forward pass begins — GPU ops encoded, not yet executing
+    Note over CPU,GPU: Forward pass begins, GPU ops encoded, not yet executing
 
     CPU->>CMB: encode gemv(W_q) [deferred]
     CPU->>CMB: encode gemv(W_k) [deferred]
@@ -394,16 +394,16 @@ sequenceDiagram
     CPU->>CMB: encode sdpa(q,k,v) [deferred]
 
     Note over CPU: CPU tries to read logits here WITHOUT sync
-    CPU->>CPU: argmax(logits) — READS STALE DATA (write hazard)
+    CPU->>CPU: argmax(logits), READS STALE DATA (write hazard)
 
     Note over CPU,GPU: Correct pattern: sync before CPU read
 
     CPU->>CMB: encode gemv(lm_head) [deferred]
-    CPU->>CMB: commit() — submit all at once
+    CPU->>CMB: commit(), submit all at once
     CMB->>GPU: execute all encoded ops
-    GPU-->>CPU: waitUntilCompleted() — CPU blocks here
+    GPU-->>CPU: waitUntilCompleted(), CPU blocks here
     Note over CPU: GPU writes are now visible in UMA shared memory
-    CPU->>CPU: argmax(logits) — CORRECT: reads fresh logits
+    CPU->>CPU: argmax(logits), CORRECT: reads fresh logits
 
     Note over CPU,GPU: Total syncs per token: 1-2 (not 800+)
 ```
@@ -589,8 +589,8 @@ flowchart TD
 
     Entry --> TokCheck{"n_tok == 1?\n(token generation)"}
 
-    TokCheck -->|"yes — single token"| GEMV
-    TokCheck -->|"no — batch / prefill"| DtypeCheck{"Weight dtype?"}
+    TokCheck -->|"yes, single token"| GEMV
+    TokCheck -->|"no, batch / prefill"| DtypeCheck{"Weight dtype?"}
 
     DtypeCheck -->|"f32"| GemmF32
     DtypeCheck -->|"bf16 / f16"| GemmBF16
@@ -609,7 +609,7 @@ flowchart TD
 
 ## Vision Encoder GPU Acceleration
 
-When a vision encoder (mmproj) is loaded, its transformer blocks run on the GPU via the standard `gemm()` dispatch. The vision encoder calls `be.gemm()` for all linear projections (Q/K/V/O, FFN up/gate/down, output projection), which dispatches to the appropriate Metal kernel based on weight dtype — f32, bf16, q8_0, q4_0, q4_k, q5_k, or q6_k.
+When a vision encoder (mmproj) is loaded, its transformer blocks run on the GPU via the standard `gemm()` dispatch. The vision encoder calls `be.gemm()` for all linear projections (Q/K/V/O, FFN up/gate/down, output projection), which dispatches to the appropriate Metal kernel based on weight dtype, f32, bf16, q8_0, q4_0, q4_k, q5_k, or q6_k.
 
 The key synchronization pattern: `be.sync()` is required between GPU GEMM operations and CPU operations (like softmax or activation functions that run on the CPU thread pool). Without it, the CPU reads stale data from shared UMA memory.
 
@@ -619,7 +619,7 @@ sequenceDiagram
     participant UMA as Shared DRAM<br/>(UMA buffer)
     participant CPU as CPU Thread Pool<br/>attention + softmax
 
-    Note over GPU,CPU: Vision encoder — one transformer block (n_patches tokens)
+    Note over GPU,CPU: Vision encoder, one transformer block (n_patches tokens)
 
     GPU->>UMA: gemm(hidden, W_q) → q_buf [encoded, deferred]
     GPU->>UMA: gemm(hidden, W_k) → k_buf [encoded, deferred]
@@ -629,7 +629,7 @@ sequenceDiagram
 
     UMA->>CPU: read q_buf, k_buf, v_buf
     CPU->>CPU: compute n_patches × n_patches attention scores
-    CPU->>CPU: softmax(scores) — full non-causal attention
+    CPU->>CPU: softmax(scores), full non-causal attention
     CPU->>CPU: weighted sum → attn_out
     CPU->>UMA: write attn_out
 
@@ -644,7 +644,7 @@ sequenceDiagram
     Note over GPU,CPU: GEMM projections (bulk compute) run on GPU<br/>Softmax + score matrix run on CPU thread pool
 ```
 
-This interleaving is necessary because the vision encoder uses full (non-causal) attention with `n_patches x n_patches` score matrices, which currently runs on the CPU. The GEMM projections — the bulk of the compute — run on the GPU.
+This interleaving is necessary because the vision encoder uses full (non-causal) attention with `n_patches x n_patches` score matrices, which currently runs on the CPU. The GEMM projections, the bulk of the compute, run on the GPU.
 
 ## Best Practices
 
@@ -681,15 +681,15 @@ flowchart TD
     Flag --> T2
     Flag --> T3
 
-    subgraph T1["Tier 1 — Fused FFN\n(megakernel.metal)"]
+    subgraph T1["Tier 1, Fused FFN\n(megakernel.metal)"]
         T1Desc
     end
 
-    subgraph T2["Tier 2 — True Megakernels\n(mega_common.metal)"]
+    subgraph T2["Tier 2, True Megakernels\n(mega_common.metal)"]
         T2Desc
     end
 
-    subgraph T3["Tier 3 — Composed Megakernels\n(mega_compose.zig)"]
+    subgraph T3["Tier 3, Composed Megakernels\n(mega_compose.zig)"]
         T3Desc
     end
 
@@ -739,24 +739,24 @@ Measured 2026-03-24 on Apple M4 Pro (14-core CPU, 20-core GPU), full methodology
 
 ## Glossary
 
-**batch mode** — A Metal backend mode (`beginBatch`/`endBatch`) that suppresses intermediate memory barriers between independent operations.
+**batch mode**, A Metal backend mode (`beginBatch`/`endBatch`) that suppresses intermediate memory barriers between independent operations.
 
-**BufRef** — A struct containing a Metal buffer object and a byte offset, referencing sub-regions within a page-aligned buffer.
+**BufRef**, A struct containing a Metal buffer object and a byte offset, referencing sub-regions within a page-aligned buffer.
 
-**buffer caching** — Storing MTLBuffer wrappers keyed by host pointer to avoid repeated ObjC allocation overhead.
+**buffer caching**, Storing MTLBuffer wrappers keyed by host pointer to avoid repeated ObjC allocation overhead.
 
-**command buffer batching** — Maintaining a persistent command buffer and encoder across dispatches, committing all work at once.
+**command buffer batching**, Maintaining a persistent command buffer and encoder across dispatches, committing all work at once.
 
-**memory barrier** — A GPU synchronization primitive ensuring write visibility between kernel dispatches.
+**memory barrier**, A GPU synchronization primitive ensuring write visibility between kernel dispatches.
 
-**ModelDesc** — A struct describing model architecture used by `mega_compose.zig` to auto-generate megakernel MSL.
+**ModelDesc**, A struct describing model architecture used by `mega_compose.zig` to auto-generate megakernel MSL.
 
-**page alignment** — The requirement that `newBufferWithBytesNoCopy` pointers be aligned to 16 KB page boundaries on Apple Silicon.
+**page alignment**, The requirement that `newBufferWithBytesNoCopy` pointers be aligned to 16 KB page boundaries on Apple Silicon.
 
-**profiling counters** — Runtime counters (dispatch_count, barrier_count, sync_count) tracked when `--profile` is enabled.
+**profiling counters**, Runtime counters (dispatch_count, barrier_count, sync_count) tracked when `--profile` is enabled.
 
-**threadgroup memory** — Fast on-chip shared memory accessible by all threads in a threadgroup; limited to 32 KB on Apple Silicon.
+**threadgroup memory**, Fast on-chip shared memory accessible by all threads in a threadgroup; limited to 32 KB on Apple Silicon.
 
-**token tiling** — GEMM optimization where multiple input tokens share a single weight load (e.g., TILE_T=8 for Q8_0).
+**token tiling**, GEMM optimization where multiple input tokens share a single weight load (e.g., TILE_T=8 for Q8_0).
 
-**zero-copy buffer wrapping** — Creating a Metal GPU buffer that references existing CPU memory without copying data, via `newBufferWithBytesNoCopy`.
+**zero-copy buffer wrapping**, Creating a Metal GPU buffer that references existing CPU memory without copying data, via `newBufferWithBytesNoCopy`.

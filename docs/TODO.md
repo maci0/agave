@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-08-09
+**Last updated**: 2026-08-26
 
 ---
 
@@ -10,9 +10,11 @@ Bugs, performance issues, and future work. Detailed designs inline.
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| 1 | GLM-4.7 Flash — degenerate output (also broken in llama.cpp) | Low (upstream) | Won't fix |
+| 1 | GLM-4.7 Flash, degenerate output (also broken in llama.cpp) | Low (upstream) | Won't fix |
 | ~~6~~ | ~~ROCm HSACO: wrong ISA triple + LOCAL .kd symbols~~ | ~~Fixed~~ | ~~Two Zig 0.16 bugs: (1) amdhsa semver appended to ISA triple, (2) .kd symbols emitted LOCAL. Worked around via fix_kd_isa.py (ET_REL patch + llvm-objcopy). hipModuleLoad now returns hipSuccess on ROCm 7.2.4 / gfx1100~~ |
 | 4 | Vulkan push descriptor crashes on RADV gfx1100 | Medium | Suspected RADV driver issue. Worked around: push descriptors disabled, deferred path used |
+| 11 | `zig build test` never exits on an all-pass run | High | Open. Every step reports (2076 passed, 6 skipped, 0 failed), then the main suite's test binary blocks reading its stdin pipe while the build runner sits in `poll`, both at 0% CPU indefinitely. The main suite is the one step using the `.server` test runner (build.zig:302) so `--fuzz` can see its fuzz tests; the simple-mode steps all exit cleanly. Until now the run always ended on a failure, so the deadlock was never reached. CI's 60-minute job timeout is the only thing bounding it. Check whether Zig 0.16.0's build runner sends the exit message to a server-mode runner that registered fuzz tests; if not, weigh simple mode for the main suite against keeping `zig build test --fuzz` working. |
+| 10 | Qwen 3.5 GGUF decodes to garbage on ROCm and Vulkan (gfx1100) | High | Open. Reproduced 2026-08-26 on RX 7900 XTX with `qwen2.5-0.5b` Q8_0 and `qwen2.5-1.5b` Q4_K: `--backend cpu` answers "The answer is 4.", `--backend rocm` and `--backend vulkan` both emit `  1  (  (1)  (9` for the same prompt and `--seed 42`. Identical wrong tokens from two independent backends point at a shared path (`qwen35.zig` GPU branch or a common kernel), not at two separate kernel bugs. Bisect the per-op outputs against the CPU path starting at the first layer's attention. |
 | ~~8~~ | ~~Gemma 4 26B-A4B MoE garbled output~~ | ~~Fixed~~ | ~~expertWeightStride used dims[0]*dims[1] instead of dims[1]*dims[2]~~ |
 | ~~9~~ | ~~GPT-OSS MXFP4 garbled output~~ | ~~Fixed~~ | ~~Two bugs: mxfp4_group_size=32 (should be 16 per NVIDIA spec), scale decoded as E8M0 (should be FP8 E4M3). Fixed across CPU + all 6 GPU backends (Metal/CUDA/Vulkan/WebGPU/ROCm) + host buffer sizing~~ |
 
@@ -32,6 +34,10 @@ Bugs, performance issues, and future work. Detailed designs inline.
 
 All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md).
 
+"Complete" below means every kernel is present, not that every model decodes
+correctly on that backend. Bug 10 above has Qwen 3.5 producing garbage on ROCm
+and Vulkan (gfx1100) despite full kernel coverage.
+
 | Backend | Status | Notes |
 |---------|:------:|-------|
 | Metal | Complete | 104 pipelines, GPTQ, paged SDPA, 10 DS4 kernels |
@@ -46,10 +52,10 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 
 | # | Issue | Status |
 |---|-------|--------|
-| 1 | Q4_K Metal GEMV slower than llama.cpp | Optimized — needs benchmarking |
-| 2 | WebGPU decode 0.7 tok/s | Fixed — deferred buffer lifecycle + lazy readback (0.6 tok/s) |
-| 3 | Gemma 4 E4B CPU prefill ~60s | Partial — MoE batched via gemvMulti |
-| 4 | NVFP4 accuracy lower than MLX-4bit | Open — may be community quant quality |
+| 1 | Q4_K Metal GEMV slower than llama.cpp | Optimized, needs benchmarking |
+| 2 | WebGPU decode 0.7 tok/s | Fixed, deferred buffer lifecycle + lazy readback (0.6 tok/s) |
+| 3 | Gemma 4 E4B CPU prefill ~60s | Partial, MoE batched via gemvMulti |
+| 4 | NVFP4 accuracy lower than MLX-4bit | Open, may be community quant quality |
 
 ---
 
@@ -74,35 +80,35 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | Downstream-first stage startup (RTT handshake) | Mesh-LLM |
 | Peer RTT measurement | Mesh-LLM |
 | Pre-sharded weight files (design) | Mesh-LLM |
-| `agave pull` (HF Hub model download with resume) | — |
-| Deferred dispatch (Vulkan/WebGPU single-submit) | — |
-| All quantized GEMV kernel gaps closed (32 new kernel files) | — |
+| `agave pull` (HF Hub model download with resume) | n/a |
+| Deferred dispatch (Vulkan/WebGPU single-submit) | n/a |
+| All quantized GEMV kernel gaps closed (32 new kernel files) | n/a |
 | MTP speculative decoding (`--spec-mode mtp`, nextn heads) | llama.cpp |
-| Llama 4 architecture (iRoPE, chunked attention, top-1 MoE, temperature scaling) | — |
+| Llama 4 architecture (iRoPE, chunked attention, top-1 MoE, temperature scaling) | n/a |
 | Jump decoding (skip forward pass for deterministic grammar tokens) | vLLM |
 | API prompt prefix caching (KV reuse for shared conversation prefix) | vLLM |
 | Batched KV swap (TransferCallback + batchPromoteToVram) | vLLM |
-| TurboQuant in SDPA kernel (sdpa_fa2_turbo) | — |
-| Spec decode thinking budget (adaptive cooldown) | — |
+| TurboQuant in SDPA kernel (sdpa_fa2_turbo) | n/a |
+| Spec decode thinking budget (adaptive cooldown) | n/a |
 | Topology-aware auto partitioning (device cap exchange) | Partial |
 | Sparse GEMV for all GPU backends (Metal +12%, Vulkan, WebGPU) | PowerInfer/TurboSparse |
-| WebGPU buffer lifecycle fix (defer params + cache destruction) | — |
-| WebGPU backend enabled by default | — |
-| Apple Accelerate.framework (AMX BLAS for F32 CPU GEMV/GEMM) | — |
+| WebGPU buffer lifecycle fix (defer params + cache destruction) | n/a |
+| WebGPU backend enabled by default | n/a |
+| Apple Accelerate.framework (AMX BLAS for F32 CPU GEMV/GEMM) | n/a |
 | Word-level BPE cache (skip applyBpe for recurring pretokens) | gigatoken |
-| MLX-4bit SafeTensors rope_theta + vocab_size fix | — |
-| GGUF MoE expert stride fix (dims[1]*dims[2]) | — |
+| MLX-4bit SafeTensors rope_theta + vocab_size fix | n/a |
+| GGUF MoE expert stride fix (dims[1]*dims[2]) | n/a |
 | LoRA adapter loading (`--lora <path>`, load-time merge, all quant formats) | llama.cpp |
 
 ### High Priority
 
-(empty — all high priority items done)
+(empty, all high priority items done)
 
 ### Medium Priority
 
 | # | Feature | Impact | Source |
 |---|---------|--------|--------|
-| 14 | gRPC server (HTTP/2) | Lower overhead serving — use nginx/envoy for now | vLLM |
+| 14 | gRPC server (HTTP/2) | Lower overhead serving, use nginx/envoy for now | vLLM |
 
 ### Low Priority
 
@@ -121,7 +127,7 @@ All quantized GEMV formats native on all 6 backends. See [KERNELS.md](KERNELS.md
 | 25 | Inter-model collaboration (MoM) | Mesh-LLM |
 | 26 | Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured) | Done (CPU +21%, Metal +12%) |
 | 27 | DeepSeek V4 Flash 0731 full support | Done | All components: HC, MLA, CSA/HCA, LID, hash routing. **10 Metal GPU kernels** (ds4.metal + ds4_fused.metal): HC mixing, RoPE/invRoPE, weighted accum, turbo SDPA hd512, fused attention megakernel (unused MoE/top-k kernels removed). **Dedicated CpuBackend bypass** for MLX-Q SafeTensors: bit-identical output between --backend cpu and --backend metal, 10.7-21.2 tok/s with suffix speculation. |
-| 28 | AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major — wrong packing) | Done (all 6 backends + nibble order fix) |
+| 28 | AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major, wrong packing) | Done (all 6 backends + nibble order fix) |
 | 29 | TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte) | Done (all 6 backends) |
 | 30 | TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2) | Done (all 6 backends) |
 | 31 | EXL2 mixed-precision codebook (NVIDIA only) | ExLlama |
@@ -186,4 +192,4 @@ PlanarQuant uses ~2.5x fewer FMAs than TurboQuant. All share Lloyd-Max codebook 
 
 | Issue | Status |
 |-------|--------|
-| Golden tests need model files | By design — manual trigger |
+| Golden tests need model files | By design, manual trigger |

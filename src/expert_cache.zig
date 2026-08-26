@@ -41,7 +41,7 @@ const PinnedRange = struct {
 /// Maximum number of pinned ranges (6 experts × 3 tensors × ~100 layers).
 const max_pin_ranges: usize = 2048;
 
-/// Maximum total bytes to pin (~30 GB — leave headroom for non-expert data).
+/// Maximum total bytes to pin (~30 GB, leave headroom for non-expert data).
 const max_pinned_bytes: u64 = 30 * 1024 * 1024 * 1024;
 
 /// LRU cache for MoE expert weights, tracking residency and eviction
@@ -214,7 +214,7 @@ pub const ExpertCache = struct {
     /// The raw pointer and length are page-aligned internally.
     /// Returns true if successfully pinned, false if the wire limit would
     /// be exceeded, the pin table is full, or the mlock syscall fails.
-    /// Startup-only — never call on the hot path.
+    /// Startup-only, never call on the hot path.
     pub fn pinExpert(self: *ExpertCache, ptr: [*]const u8, len: usize) bool {
         if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return false;
         if (self.n_pinned >= self.pinned_ranges.len) return false;
@@ -283,7 +283,7 @@ pub const ExpertCache = struct {
     }
 
     /// Return the top-k most recently used expert IDs for a given layer.
-    /// Does NOT issue any madvise/prefetch — just returns the IDs.
+    /// Does NOT issue any madvise/prefetch, just returns the IDs.
     pub fn getTopResidents(self: *ExpertCache, layer: u32, out_ids: []u32) u32 {
         const k = @min(@as(u32, @intCast(out_ids.len)), max_prefetch_k);
         var best_slots: [max_prefetch_k]u32 = .{0} ** max_prefetch_k;
@@ -347,7 +347,7 @@ test "ExpertCache LRU eviction" {
     defer cache.deinit(allocator);
 
     try std.testing.expectEqual(@as(u32, 0), cache.admit(0, 0)); // slot 0, access=1
-    try std.testing.expectEqual(@as(u32, 1), cache.admit(0, 1)); // slot 1, access=2 — cache full
+    try std.testing.expectEqual(@as(u32, 1), cache.admit(0, 1)); // slot 1, access=2, cache full
 
     // Touch expert 1 to make expert 0 the LRU
     try std.testing.expect(cache.touch(0, 1)); // access=3

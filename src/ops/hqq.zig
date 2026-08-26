@@ -12,7 +12,7 @@
 const std = @import("std");
 
 /// HQQ GEMV: y[n_out] = dequant(W_q[n_out, k_in/2]) @ x[k_in]
-/// Companion tensors passed separately — they are bf16 and f16 respectively.
+/// Companion tensors passed separately, they are bf16 and f16 respectively.
 pub fn hqqGemv(
     x: [*]const f32,
     w_q: [*]const u8,

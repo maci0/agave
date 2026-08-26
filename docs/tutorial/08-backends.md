@@ -6,13 +6,13 @@
 
 > After this chapter you can explain the tagged-union dispatch pattern, backend selection, and the no-CPU-fallback rule.
 
-Inference can run on different compute backends: **CPU** (universal, always available), **GPU** (massively parallel — thousands of cores organized into **warps/wavefronts** that execute via **SIMT** — Single Instruction Multiple Thread, where groups of 32-64 threads run the same instruction in lockstep on different data), or specialized **accelerators** (purpose-built hardware like TPUs, NPUs, or FPGAs optimized for specific workloads). Each backend provides a **compute API** that lets you write **kernels** (small programs that run on the hardware) and dispatch them.
+Inference can run on different compute backends: **CPU** (universal, always available), **GPU** (massively parallel, thousands of cores organized into **warps/wavefronts** that execute via **SIMT**, Single Instruction Multiple Thread, where groups of 32-64 threads run the same instruction in lockstep on different data), or specialized **accelerators** (purpose-built hardware like TPUs, NPUs, or FPGAs optimized for specific workloads). Each backend provides a **compute API** that lets you write **kernels** (small programs that run on the hardware) and dispatch them.
 
-**SIMD vs SIMT:** CPUs use **SIMD** (one instruction operates on a vector register of packed values, e.g., 8 f32s in AVX2 — see [Chapter 9](09-cpu-simd-optimization.md)). GPUs use **SIMT** (one instruction is executed by many threads simultaneously, each with its own registers and program counter). The distinction matters: SIMD has no divergence — all lanes do the same thing. SIMT threads can branch independently, but divergent branches serialize.
+**SIMD vs SIMT:** CPUs use **SIMD** (one instruction operates on a vector register of packed values, e.g., 8 f32s in AVX2, see [Chapter 9](09-cpu-simd-optimization.md)). GPUs use **SIMT** (one instruction is executed by many threads simultaneously, each with its own registers and program counter). The distinction matters: SIMD has no divergence, all lanes do the same thing. SIMT threads can branch independently, but divergent branches serialize.
 
 ## The GPU Landscape
 
-Each hardware **vendor** (manufacturer — NVIDIA, Apple, AMD, etc.) has its own API. Every backend compiles kernel source to an intermediate representation, then the GPU driver translates that to native machine code at runtime.
+Each hardware **vendor** (manufacturer, NVIDIA, Apple, AMD, etc.) has its own API. Every backend compiles kernel source to an intermediate representation, then the GPU driver translates that to native machine code at runtime.
 
 ```mermaid
 flowchart LR
@@ -78,7 +78,7 @@ flowchart LR
 | **Vulkan** | Khronos | GLSL | SPIR-V | All vendors (cross-platform) |
 | **WebGPU** | W3C | WGSL | WGSL source | All vendors (browser + native) |
 
-The "Compiled Format" column shows the **IR** (Intermediate Representation — compiled bytecode that the GPU driver converts to native machine code at runtime, not final executable code).
+The "Compiled Format" column shows the **IR** (Intermediate Representation, compiled bytecode that the GPU driver converts to native machine code at runtime, not final executable code).
 
 **Agave's strategy**: Use vendor-specific APIs for maximum performance, with Vulkan and WebGPU as cross-platform fallbacks. The `Backend` interface abstracts all six behind a single dispatch.
 
@@ -92,7 +92,7 @@ The "Compiled Format" column shows the **IR** (Intermediate Representation — c
 
 ## Kernels
 
-A **kernel** is a single computational function dispatched to the GPU. Agave has separate kernels per operation per data type — for example, the CPU backend has `gemvQ4_0`, `gemvQ8_0`, `gemvBF16`, `gemvF32` because each quantization format has completely different bit layout.
+A **kernel** is a single computational function dispatched to the GPU. Agave has separate kernels per operation per data type, for example, the CPU backend has `gemvQ4_0`, `gemvQ8_0`, `gemvBF16`, `gemvF32` because each quantization format has completely different bit layout.
 
 **Kernel fusion** combines multiple sequential operations into a single kernel to eliminate intermediate memory traffic. Without fusion, each operation must write its results to memory and the next operation must read them back. With fusion, intermediate results stay in fast registers (on-chip storage, ~100× faster than RAM/VRAM) and never touch slow memory.
 
@@ -106,9 +106,9 @@ fused_mlp: load from VRAM → compute gate+up → gelu in-register → multiply 
            ↑ once                              ↑ stays in registers ~100× faster        ↑ once
 ```
 
-**Why it matters**: GPUs are compute-rich but memory-bandwidth-starved. A modern GPU can do 300+ **TFLOPS** (teraflops — trillion floating-point operations per second) but only read ~900 **GB/s** (gigabytes per second) from VRAM. For small operations like GELU (one input, one output), the GPU spends 95% of its time waiting for memory, not computing. Fusion keeps data on-chip and lets the GPU actually use its compute power.
+**Why it matters**: GPUs are compute-rich but memory-bandwidth-starved. A modern GPU can do 300+ **TFLOPS** (teraflops, trillion floating-point operations per second) but only read ~900 **GB/s** (gigabytes per second) from VRAM. For small operations like GELU (one input, one output), the GPU spends 95% of its time waiting for memory, not computing. Fusion keeps data on-chip and lets the GPU actually use its compute power.
 
-**Example**: Gemma3's FFN does `down_proj(GELU(gate_proj(x)) * up_proj(x))` — that's 4 matrix operations. Unfused = 8 memory passes. Fused = 2 memory passes (4× speedup from memory reduction alone).
+**Example**: Gemma3's FFN does `down_proj(GELU(gate_proj(x)) * up_proj(x))`, that's 4 matrix operations. Unfused = 8 memory passes. Fused = 2 memory passes (4× speedup from memory reduction alone).
 
 ```mermaid
 flowchart LR
@@ -158,7 +158,7 @@ flowchart LR
 
 ## The Dispatcher Pattern
 
-Model code never imports backend implementations directly. Instead, the `Backend` tagged union with `inline else` dispatch resolves **at compile time** (during compilation, not when the program runs — zero runtime overhead). Every model calls the same `be.gemv()` regardless of which hardware is present.
+Model code never imports backend implementations directly. Instead, the `Backend` tagged union with `inline else` dispatch resolves **at compile time** (during compilation, not when the program runs, zero runtime overhead). Every model calls the same `be.gemv()` regardless of which hardware is present.
 
 ```text
 Backend = union { cpu, metal, vulkan, cuda, rocm, webgpu }
@@ -219,7 +219,7 @@ fn gemv(self, args):
 
 **Implementation:** [`src/backend/backend.zig`](../../src/backend/backend.zig) (`Backend`, `Backend.gemv`)
 
-This gives zero-overhead dispatch (no **vtable** — virtual function table used for dynamic dispatch in object-oriented languages, no function pointers) while keeping model code hardware-agnostic.
+This gives zero-overhead dispatch (no **vtable**, virtual function table used for dynamic dispatch in object-oriented languages, no function pointers) while keeping model code hardware-agnostic.
 
 ## UMA (Unified Memory Architecture)
 
@@ -259,7 +259,7 @@ flowchart TD
 - **CUDA**: `cudaMallocManaged` for transparent access
 - **Vulkan**: `HOST_VISIBLE | HOST_COHERENT | DEVICE_LOCAL` memory type
 
-All GPU backends use **deferred dispatch** — operations are encoded into **command buffers** (queues of GPU operations) without blocking. Models call `be.sync()` only when CPU code needs to read GPU-produced data.
+All GPU backends use **deferred dispatch**, operations are encoded into **command buffers** (queues of GPU operations) without blocking. Models call `be.sync()` only when CPU code needs to read GPU-produced data.
 
 ### sdpaWithStats
 
@@ -275,11 +275,11 @@ sdpaWithStats(q, keys, values, k_new, v_new, output,
 
 Used by the split-attention path when KV cache spans GPU and CPU tiers. The `head_max` and `head_sum` arrays enable online softmax merging of partial attention outputs from different devices.
 
-`sdpaWithStats` wraps native SDPA on all backends — no CPU delegates. Stats (head max/sum) are exported alongside the attention output for online softmax merging.
+`sdpaWithStats` wraps native SDPA on all backends, no CPU delegates. Stats (head max/sum) are exported alongside the attention output for online softmax merging.
 
 ### sdpaPaged
 
-Paged SDPA handles non-contiguous KV cache blocks via `PagedKvView` — a block table that maps logical positions to physical blocks:
+Paged SDPA handles non-contiguous KV cache blocks via `PagedKvView`, a block table that maps logical positions to physical blocks:
 
 ```text
 sdpaPaged(q, kv_view, k_new, v_new, output, nh, nkv, hd, scale, kv_type_k, kv_type_v)
@@ -310,7 +310,7 @@ flowchart TD
     BlockIdx -->|"dereference"| PhysBlock
     PhysBlock -->|"t % block_size"| KVSlot
 
-    subgraph BlockTable["PagedKvView — block table indirection"]
+    subgraph BlockTable["PagedKvView, block table indirection"]
         direction LR
         BT0["block_table[0] = phys#4"]:::setup
         BT1["block_table[1] = phys#11"]:::setup
@@ -335,7 +335,7 @@ flowchart TD
 
 ## Batched Prefill Dispatch
 
-During prefill, the backend dispatches **batched** versions of the core ops — GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:
+During prefill, the backend dispatches **batched** versions of the core ops, GEMM (instead of GEMV), batched RMSNorm, batched RoPE, and fused causal SDPA:
 
 ```mermaid
 flowchart TD
@@ -379,7 +379,7 @@ flowchart TD
     FFN -->|"next layer"| NextLayer
 ```
 
-**Metal**: all batched ops are native GPU kernels. The GEMM uses one threadgroup per output row with weight reuse across tokens. The `sdpa_prefill_fa2` kernel reads old K/V from the cache and new K/V directly from GEMM output (dual-source), then a `copy_f32` kernel populates the cache — all in one command buffer with zero CPU-GPU flush.
+**Metal**: all batched ops are native GPU kernels. The GEMM uses one threadgroup per output row with weight reuse across tokens. The `sdpa_prefill_fa2` kernel reads old K/V from the cache and new K/V directly from GEMM output (dual-source), then a `copy_f32` kernel populates the cache, all in one command buffer with zero CPU-GPU flush.
 
 **CUDA**: native GPU GEMM (Q8_0), batched RMSNorm and RoPE kernels compiled to PTX. The f32 SDPA uses a native batched GPU sdpa_prefill kernel. The turbo KV path uses sequential single-token GPU sdpa calls.
 
@@ -389,13 +389,13 @@ flowchart TD
 
 **Metal** (`metal.zig`): MSL compute shaders with **threadgroup**-level (a group of threads that execute together and can share fast on-chip memory) `simd_sum` reduction. Buffer caching eliminates ~800 ObjC alloc/release per token. [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) with block_size=16 (fits 32KB threadgroup memory). Prefill: native GEMM (f32/Q8_0/Q4_0), batched RoPE, dual-source FA2, zero per-layer flush. **Megakernel**: 104 pipelines including 13 fused FFN kernels, 10 DS4 kernels, and 5 true megakernels with atomic grid sync. Sparse V threshold in SDPA.
 
-**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target — no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 61 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
+**CUDA** (`cuda.zig`): Zig kernels compiled to PTX via `nvptx64-cuda` target, no CUDA C++ dependency. Driver API loaded dynamically via `dlopen`. Deferred execution with activation caching for zero-sync SDPA. Prefill: native GEMM (Q8_0), batched RMSNorm/RoPE. **Megakernel**: 61 kernels including 5 fused FFN kernels (SiLU × Q8_0/Q4_K/Q5_K/Q6_K and GELU × Q8_0) and 3 true megakernels. Sparse V threshold in SDPA.
 
-**WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations — `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. ~48 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction — params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
+**WebGPU** (`webgpu.zig`): WGSL compute shaders loaded via wgpu-native C API. Dynamic library loading (`dlopen`). Enabled by default in the build system. **Lazy readback cache**: activation buffers stay on GPU between operations, `cacheGpuResult` registers GPU output in `buf_cache`, and `getOrUpload` finds it on next access. Downloads only happen on `sync()`. This eliminates ~200 CPU↔GPU round-trips per token. ~48 WGSL compute shaders covering all core ops including quantized GEMV for all formats. Buffer lifecycle uses deferred destruction, params and cache-evicted buffers are queued for cleanup during `sync()` to avoid destroying buffers still referenced by pending command buffers.
 
 **Browser / WASM** (`wasm_entry.zig`): A separate WASM entry point exports `agave_init`, `agave_generate`, `agave_get_output`, `agave_free`, `agave_alloc`, and `agave_dealloc` for calling from JavaScript. Model data is passed as a byte buffer from JS (no file I/O). The WASM build uses CPU backend only (no GPU in wasm32 freestanding). Note: full forward-pass inference is currently blocked by a Zig 0.16 + LLVM 21 wasm32 codegen bug; model init, GGUF parsing, and tokenization work.
 
-**Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp — use `libvulkan.1.dylib` loader, not MoltenVK directly). `sdpa_turbo` (TurboQuant KV) requires `GroupNonUniform` subgroup ops and is skipped gracefully on drivers that lack it (e.g. lavapipe/KosmicKrisp). **Disk-backed VkPipelineCache** at `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 shaders); speeds up re-init on drivers that honour it. No megakernel support.
+**Vulkan** (`vulkan.zig`): Pre-compiled SPIR-V compute shaders. Subgroup arithmetic for reductions. Fused single-dispatch normalization/softmax. Works on all vendors including Apple (via KosmicKrisp, use `libvulkan.1.dylib` loader, not MoltenVK directly). `sdpa_turbo` (TurboQuant KV) requires `GroupNonUniform` subgroup ops and is skipped gracefully on drivers that lack it (e.g. lavapipe/KosmicKrisp). **Disk-backed VkPipelineCache** at `~/.cache/agave/vk_pipeline_cache.bin` (1.2 MB for 49 shaders); speeds up re-init on drivers that honour it. No megakernel support.
 
 **ROCm** (`rocm.zig`): HIP Runtime API loaded dynamically. AMDGCN kernels compiled from Zig via `amdgcn-amdhsa` target. Same deferred execution pattern as CUDA. **Megakernel**: 49 kernels including 1 true megakernel (Qwen Q8). Sparse V threshold in SDPA.
 
@@ -407,7 +407,7 @@ See [Chapter 22: Distributed Inference](22-distributed-inference.md) for the ful
 
 All GPU backends support distributed inference via `src/parallel/transport.zig`. Three transports: **TCP** (cross-node), **POSIX shm** (same-node zero-copy), **NCCL** (GPU-optimized RoCE RDMA, loaded via `dlopen`). Modes: tensor parallelism (`--tp 2` splits weights), pipeline parallelism (`--pp 2` splits layers), hybrid TP+PP, disaggregated prefill/decode (`--disagg`). Device selection via `--device N`.
 
-NCCL integration requires `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`) — NCCL uses the CUDA primary context and will corrupt a separate driver API context. Device pointer `allReduceAdd` passes GPU activation cache pointers directly to NCCL when data is dirty on device; when CPU fallback has written to host (stale on GPU), uploads to a device staging buffer first.
+NCCL integration requires `cuDevicePrimaryCtxRetain` (not `cuCtxCreate`), NCCL uses the CUDA primary context and will corrupt a separate driver API context. Device pointer `allReduceAdd` passes GPU activation cache pointers directly to NCCL when data is dirty on device; when CPU fallback has written to host (stale on GPU), uploads to a device staging buffer first.
 
 ```mermaid
 flowchart TD
@@ -472,7 +472,7 @@ See [Parallelism docs](../PARALLELISM.md) for full details.
 
 **Metal threadgroup memory limit**: Must stay under 32KB total. Calculate: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging in `makePipeline`.
 
-**WebGPU buffer cache generation**: The lazy readback cache uses `upload_generation` to track freshness. Every `sync()` bumps the generation, invalidating all cached activation buffers. Weight buffer objects survive across sync() cycles, but their data is re-uploaded from CPU on the next access after each sync() — a known overhead for stable data.
+**WebGPU buffer cache generation**: The lazy readback cache uses `upload_generation` to track freshness. Every `sync()` bumps the generation, invalidating all cached activation buffers. Weight buffer objects survive across sync() cycles, but their data is re-uploaded from CPU on the next access after each sync(), a known overhead for stable data.
 
 **In the code:** [src/backend/backend.zig](../../src/backend/backend.zig) (dispatcher), [src/backend/](../../src/backend/) (cpu, metal, cuda, vulkan, rocm implementations), [src/backend/kernels/](../../src/backend/kernels/) (GPU kernel sources)
 
@@ -482,54 +482,54 @@ See [Parallelism docs](../PARALLELISM.md) for full details.
 
 ## Glossary
 
-**AMX (Apple Matrix coprocessor)** — Dedicated matrix multiplication hardware on Apple Silicon, accessed via Accelerate.framework.
+**AMX (Apple Matrix coprocessor)**, Dedicated matrix multiplication hardware on Apple Silicon, accessed via Accelerate.framework.
 
-**backend** — An abstraction layer that routes compute operations to a specific hardware implementation (CPU, Metal, CUDA, Vulkan, ROCm, WebGPU).
+**backend**, An abstraction layer that routes compute operations to a specific hardware implementation (CPU, Metal, CUDA, Vulkan, ROCm, WebGPU).
 
-**command buffer** — A queue of GPU operations submitted together for execution.
+**command buffer**, A queue of GPU operations submitted together for execution.
 
-**compute API** — A vendor-specific programming interface for dispatching work to a processor (e.g., Metal, CUDA, Vulkan).
+**compute API**, A vendor-specific programming interface for dispatching work to a processor (e.g., Metal, CUDA, Vulkan).
 
-**CUDA (Compute Unified Device Architecture)** — NVIDIA's GPU compute platform.
+**CUDA (Compute Unified Device Architecture)**, NVIDIA's GPU compute platform.
 
-**deferred dispatch** — Encoding GPU operations into command buffers without blocking; execution happens when the buffer is committed.
+**deferred dispatch**, Encoding GPU operations into command buffers without blocking; execution happens when the buffer is committed.
 
-**disaggregated inference** — Separating prefill (prompt processing) and decode (token generation) onto different nodes.
+**disaggregated inference**, Separating prefill (prompt processing) and decode (token generation) onto different nodes.
 
-**dispatcher pattern** — A compile-time dispatch using Zig's tagged union with `inline else` to route calls to the correct backend at zero runtime cost.
+**dispatcher pattern**, A compile-time dispatch using Zig's tagged union with `inline else` to route calls to the correct backend at zero runtime cost.
 
-**dlopen** — A POSIX function for loading shared libraries at runtime, avoiding compile-time dependencies on vendor SDKs.
+**dlopen**, A POSIX function for loading shared libraries at runtime, avoiding compile-time dependencies on vendor SDKs.
 
-**GLSL (OpenGL Shading Language)** — The shader language for Vulkan compute kernels; compiled to SPIR-V.
+**GLSL (OpenGL Shading Language)**, The shader language for Vulkan compute kernels; compiled to SPIR-V.
 
-**HIP (Heterogeneous-compute Interface for Portability)** — AMD's GPU programming interface, API-compatible with CUDA.
+**HIP (Heterogeneous-compute Interface for Portability)**, AMD's GPU programming interface, API-compatible with CUDA.
 
-**HSACO (HSA Code Object)** — The compiled binary format for AMD GPU kernels.
+**HSACO (HSA Code Object)**, The compiled binary format for AMD GPU kernels.
 
-**IR (Intermediate Representation)** — Compiled bytecode (PTX, SPIR-V, Metal IR) that a GPU driver translates to native machine code at runtime.
+**IR (Intermediate Representation)**, Compiled bytecode (PTX, SPIR-V, Metal IR) that a GPU driver translates to native machine code at runtime.
 
-**kernel fusion** — Combining multiple sequential operations into a single kernel to eliminate intermediate memory traffic.
+**kernel fusion**, Combining multiple sequential operations into a single kernel to eliminate intermediate memory traffic.
 
-**mmap (memory-mapped I/O)** — Mapping a file directly into virtual memory so the OS handles paging, avoiding explicit read calls.
+**mmap (memory-mapped I/O)**, Mapping a file directly into virtual memory so the OS handles paging, avoiding explicit read calls.
 
-**MSL (Metal Shading Language)** — Apple's GPU shader/compute language for Metal.
+**MSL (Metal Shading Language)**, Apple's GPU shader/compute language for Metal.
 
-**NCCL (NVIDIA Collective Communications Library)** — A library for multi-GPU collective operations (all-reduce, broadcast) over PCIe or network.
+**NCCL (NVIDIA Collective Communications Library)**, A library for multi-GPU collective operations (all-reduce, broadcast) over PCIe or network.
 
-**PCIe (Peripheral Component Interconnect Express)** — The bus connecting discrete GPUs to the CPU.
+**PCIe (Peripheral Component Interconnect Express)**, The bus connecting discrete GPUs to the CPU.
 
-**pipeline parallelism** — Distributing transformer layers across multiple GPUs; activations flow sequentially between stages.
+**pipeline parallelism**, Distributing transformer layers across multiple GPUs; activations flow sequentially between stages.
 
-**PTX (Parallel Thread Execution)** — NVIDIA's intermediate assembly language for CUDA kernels, JIT-compiled to native GPU code.
+**PTX (Parallel Thread Execution)**, NVIDIA's intermediate assembly language for CUDA kernels, JIT-compiled to native GPU code.
 
-**RDMA (Remote Direct Memory Access)** — Hardware-level network data transfer bypassing the CPU and OS, for ultra-low-latency GPU communication.
+**RDMA (Remote Direct Memory Access)**, Hardware-level network data transfer bypassing the CPU and OS, for ultra-low-latency GPU communication.
 
-**RoCE (RDMA over Converged Ethernet)** — RDMA over standard Ethernet infrastructure.
+**RoCE (RDMA over Converged Ethernet)**, RDMA over standard Ethernet infrastructure.
 
-**ROCm (Radeon Open Compute)** — AMD's open GPU compute platform.
+**ROCm (Radeon Open Compute)**, AMD's open GPU compute platform.
 
-**SPIR-V (Standard Portable Intermediate Representation)** — Vulkan's binary shader format.
+**SPIR-V (Standard Portable Intermediate Representation)**, Vulkan's binary shader format.
 
-**tensor parallelism** — Distributing weight shards across multiple GPUs; each computes a partial result, then all-reduce merges them.
+**tensor parallelism**, Distributing weight shards across multiple GPUs; each computes a partial result, then all-reduce merges them.
 
-**WGSL (WebGPU Shading Language)** — The shader language for WebGPU compute kernels.
+**WGSL (WebGPU Shading Language)**, The shader language for WebGPU compute kernels.

@@ -9,7 +9,7 @@ const ChatTemplate = @import("chat_template.zig").ChatTemplate;
 /// Re-exported `ImageTokens` type from `image_tokens.zig` for a stable public path.
 pub const ImageTokens = @import("image_tokens.zig").ImageTokens;
 
-/// Supported model architectures — used for dispatch, display, and build-time toggles.
+/// Supported model architectures, used for dispatch, display, and build-time toggles.
 pub const Arch = enum {
     qwen35,
     gemma3,
@@ -207,8 +207,8 @@ pub const max_eog_ids: usize = 8;
 // ── Image token IDs for multimodal models ─────────────────────
 
 /// Gemma 4 uses <|image|> (258880) as the image placeholder token.
-/// Note: 255999 is <|image> (without trailing |) — different token.
-/// 219 is <img> — used in Gemma 3, not Gemma 4.
+/// Note: 255999 is <|image> (without trailing |), different token.
+/// 219 is <img>, used in Gemma 3, not Gemma 4.
 const gemma4_image_start: u32 = 258880;
 /// Gemma 3 uses <img> (219) as the image placeholder token.
 const gemma3_image_start: u32 = 219;

@@ -1,6 +1,6 @@
 //! Math primitives (argmax, softplus, sigmoid, GELU), sampling strategies
 //! (top-k/top-p/min-p/XTC/Mirostat), repetition penalties (frequency/presence/DRY),
-//! and log-probability extraction — shared across model architectures and the HTTP server.
+//! and log-probability extraction, shared across model architectures and the HTTP server.
 
 const std = @import("std");
 
@@ -26,7 +26,7 @@ const log_prob_epsilon: f32 = 1e-10;
 /// Mirostat mu clamp multiplier: mu is clamped to [0, mirostat_mu_clamp_factor * tau]
 /// after each update to prevent exp(-mu) overflow when mu drifts very negative.
 const mirostat_mu_clamp_factor: f32 = 2.0;
-/// 8-wide SIMD vector type for f32 — used across all SIMD helpers in this module.
+/// 8-wide SIMD vector type for f32, used across all SIMD helpers in this module.
 const V8 = @Vector(8, f32);
 
 /// SIMD max-reduce over f32 slice. Used by argmax, softmax, log-sum-exp, and sampling.
@@ -42,7 +42,7 @@ inline fn simdMaxF32(buf: []const f32) f32 {
 }
 
 /// Return index of maximum element (first occurrence on ties).
-/// Single pass over `buf` (SIMD chunks + scalar tail) — avoids the prior
+/// Single pass over `buf` (SIMD chunks + scalar tail), avoids the prior
 /// max-then-rescan pattern that touched every logit twice on greedy decode.
 /// Returns 0 for empty input.
 pub fn argmax(buf: []const f32) u32 {
@@ -100,7 +100,7 @@ pub fn argmax(buf: []const f32) u32 {
 /// Select the top-k elements from `scores` by value.
 /// Uses min-replacement: for each score, replaces the smallest current
 /// top-k entry if the new score is larger. O(n*k), no heap allocation.
-/// Output order is not sorted — callers that need sorted results must
+/// Output order is not sorted, callers that need sorted results must
 /// sort the output arrays themselves.
 pub fn topKExperts(
     scores: []const f32,
@@ -455,7 +455,7 @@ pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: st
 /// Mirostat 2.0 sampling: maintain target surprise (entropy) during generation.
 /// `mu` tracks the running surprise estimate, adjusted by learning rate `eta`.
 /// Returns the sampled token ID. `mu` is updated in place for the next step.
-/// When Mirostat is active, top-k/top-p are bypassed — Mirostat controls its own truncation.
+/// When Mirostat is active, top-k/top-p are bypassed, Mirostat controls its own truncation.
 pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: f32, rng: std.Random) u32 {
     const n = logits.len;
     if (n == 0) return 0;
@@ -522,7 +522,7 @@ pub fn sampleMirostat(logits: []f32, tau: f32, eta: f32, mu: *f32, temperature: 
         }
     }
 
-    // Sample from filtered distribution — scale threshold by sum
+    // Sample from filtered distribution, scale threshold by sum
     // instead of renormalizing the entire array (saves one SIMD pass over vocab).
     var r = rng.float(f32) * new_sum;
     var chosen: u32 = 0;
@@ -566,7 +566,7 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     const fallback: u32 = argmax(logits);
     const neg_inf = -std.math.inf(f32);
 
-    // 1. Temperature scaling (SIMD) — skip identity scaling
+    // 1. Temperature scaling (SIMD), skip identity scaling
     if (temperature != 1.0 and temperature > 0) {
         const inv_temp = 1.0 / temperature;
         const inv_v: V8 = @splat(inv_temp);
@@ -652,7 +652,7 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
                 top_vals[n_top] = v;
                 n_top += 1;
                 if (n_top == nucleus_max_candidates) {
-                    // Buffer just filled — find initial minimum
+                    // Buffer just filled, find initial minimum
                     for (1..nucleus_max_candidates) |j| {
                         if (top_vals[j] < top_vals[mi2]) mi2 = j;
                     }
@@ -705,7 +705,7 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
         }
     }
 
-    // 5. Weighted random sampling (unnormalized — scale threshold by sum).
+    // 5. Weighted random sampling (unnormalized, scale threshold by sum).
     // If sum <= 0 after filtering (all candidates zeroed), fall back to argmax
     // of the original logits to avoid a biased return of the last token index.
     if (sum <= 0 or !std.math.isFinite(sum)) return fallback;
@@ -985,7 +985,7 @@ test "topKExperts duplicate scores tie breaking" {
     var indices: [1]usize = undefined;
     var values: [1]f32 = undefined;
     topKExperts(&scores, 1, &indices, &values);
-    // First 0.5 (index 0) wins — ties broken by position
+    // First 0.5 (index 0) wins, ties broken by position
     try std.testing.expectEqual(@as(usize, 0), indices[0]);
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), values[0], 1e-6);
 }
@@ -1184,7 +1184,7 @@ test "applyXtc no-op at probability 0" {
 
 test "applyDry penalizes repeated sequence" {
     var logits = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0 };
-    // History: [1, 2, 3, 1, 2] — token 3 would continue the repeat.
+    // History: [1, 2, 3, 1, 2], token 3 would continue the repeat.
     // search_pos=0: [1,2] matches tail [1,2]; no backward extension possible.
     // match_len=2, penalty = 1.0 * 2 = 2.0.
     const history = [_]u32{ 1, 2, 3, 1, 2 };

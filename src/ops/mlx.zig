@@ -68,15 +68,15 @@ fn unpackU8(w: [*]const u32, idx: usize) u8 {
 /// Dequant: float_val = scale * int_val + bias, per group of `gs` elements.
 ///
 /// Parameters:
-///   x    — input vector [k]
-///   pw   — packed weight matrix (uint2/4/6/8 values stored in u32 words)
-///   sc   — per-group scales (bf16, one per gs-element group)
-///   bi   — per-group biases (bf16, one per gs-element group)
-///   y    — output vector [n]
-///   n    — number of output rows
-///   k    — input dimension (columns per row)
-///   bits — quantization width (2, 4, 6, or 8)
-///   gs   — quantization group size (elements per scale/bias pair, e.g. 32 or 64)
+///   x   , input vector [k]
+///   pw  , packed weight matrix (uint2/4/6/8 values stored in u32 words)
+///   sc  , per-group scales (bf16, one per gs-element group)
+///   bi  , per-group biases (bf16, one per gs-element group)
+///   y   , output vector [n]
+///   n   , number of output rows
+///   k   , input dimension (columns per row)
+///   bits, quantization width (2, 4, 6, or 8)
+///   gs  , quantization group size (elements per scale/bias pair, e.g. 32 or 64)
 pub fn mlxGemvRaw(
     x: [*]const f32,
     pw: [*]const u32,
@@ -781,7 +781,7 @@ test "mlxGemvRaw 2-bit basic" {
 test "mlxGemvRaw 2-bit with bias" {
     // Verify bias: all-zero weights + bias=1.0 → y = sum(x) * bias
     var pw: [4]u32 = .{0} ** 4;
-    const sc = [_]u16{0x4000}; // bf16(2.0) — scale doesn't matter, weights are 0
+    const sc = [_]u16{0x4000}; // bf16(2.0), scale doesn't matter, weights are 0
     const bi = [_]u16{0x3F80}; // bf16(1.0)
     const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
     var y = [_]f32{0};
@@ -815,7 +815,7 @@ test "mlxGemvRaw 2-bit two rows" {
 test "mlxGemvRaw 4-bit with bias" {
     // Verify bias is applied: all-zero weights + bias=1.0 → y = sum(x) * bias
     var pw = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
-    const sc = [_]u16{0x4000}; // bf16(2.0) — scale doesn't matter, weights are 0
+    const sc = [_]u16{0x4000}; // bf16(2.0), scale doesn't matter, weights are 0
     const bi = [_]u16{0x3F80}; // bf16(1.0)
     const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
     var y = [_]f32{0};

@@ -3,7 +3,7 @@
 //! Implements BigBird-style block sparsity:
 //!   - Global blocks: first N blocks attend/are-attended-by all positions
 //!   - Sliding window: each query block attends ±window blocks
-//!   - (Random blocks are omitted initially — global+sliding covers most long-context cases)
+//!   - (Random blocks are omitted initially, global+sliding covers most long-context cases)
 //!
 //! Used by PFlash for efficient drafter scoring and as a standalone SDPA variant
 //! for long-context models where dense O(n²) attention is prohibitive.
@@ -115,7 +115,7 @@ const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 const sparse_v_threshold: f32 = 1e-6;
 /// Maximum sequence length for stack-allocated score buffer.
-/// 65K positions × 4 bytes = 256KB — fits in default stack on most platforms.
+/// 65K positions × 4 bytes = 256KB, fits in default stack on most platforms.
 /// Sequences beyond this limit require the non-sparse SDPA path.
 const max_seq_len: usize = 65536;
 /// Maximum head dimension for stack-allocated query buffer.
@@ -151,7 +151,7 @@ pub fn sdpaHeadSparse(
     var q_cached: [max_hd]f32 = undefined;
     @memcpy(q_cached[0..hd], q[q_base..][0..hd]);
 
-    // QK dot products — skip entire key blocks where mask is 0
+    // QK dot products, skip entire key blocks where mask is 0
     for (0..sl) |t| {
         const ki = @as(u32, @intCast(t / bs));
         if (!mask.get(qi, ki)) {

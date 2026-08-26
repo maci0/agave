@@ -4,7 +4,7 @@
 
 > After this appendix you can use `--profile` to identify bottleneck ops, read dispatch counters, and diagnose regressions.
 
-Performance regressions are silent — the model still runs, but slower. **Profiling** makes performance visible. Agave has built-in instrumentation for dispatch counts, barriers, syncs, and per-operation timing.
+Performance regressions are silent, the model still runs, but slower. **Profiling** makes performance visible. Agave has built-in instrumentation for dispatch counts, barriers, syncs, and per-operation timing.
 
 ## --profile Flag
 
@@ -271,13 +271,13 @@ Note: counters come from the `.metal` tagged-union variant, not a `g_profile` gl
 
 - **High (>1000):** Serialized execution, GPU can't overlap work
 - **Optimal (300-700):** Batching used where possible
-- **Too low (<100):** Risky — may be missing necessary synchronization
+- **Too low (<100):** Risky, may be missing necessary synchronization
 
 **Sync count:**
 
 - **High (>10):** Excessive CPU/GPU round-trips, throughput loss
 - **Optimal (1-3):** Only at necessary points (argmax, embedding lookup)
-- **Zero:** Suspicious — CPU likely reading stale GPU data
+- **Zero:** Suspicious, CPU likely reading stale GPU data
 
 **Example:** Qwen3.5 optimization reduced syncs from 18 → 1 per token (+15% throughput).
 
@@ -549,7 +549,7 @@ Agave doesn't currently use Tracy, but here's how you'd integrate it:
 ### Build with Tracy
 
 ```text
-# build.zig (hypothetical — Agave has zero external dependencies today)
+# build.zig (hypothetical: Agave has zero external dependencies today)
 tracy = b.dependency("tracy")
 exe.linkLibrary(tracy.artifact("tracy"))
 exe.addCSourceFile(tracy.path("public/TracyClient.cpp"), flags = ["-DTRACY_ENABLE"])
@@ -746,28 +746,28 @@ When investigating slow performance:
 
 ## Glossary
 
-**--profile flag** — CLI flag enabling per-operation timing instrumentation; incurs ~50% throughput loss due to forced GPU syncs.
+**--profile flag**, CLI flag enabling per-operation timing instrumentation; incurs ~50% throughput loss due to forced GPU syncs.
 
-**barrier count** — Number of GPU memory barriers per token; high counts indicate serialized execution.
+**barrier count**, Number of GPU memory barriers per token; high counts indicate serialized execution.
 
-**batch_mode** — Metal flag suppressing per-dispatch memory barriers for better throughput.
+**batch_mode**, Metal flag suppressing per-dispatch memory barriers for better throughput.
 
-**cpuFallback()** — Metal method that flushes GPU work and returns a CPU backend reference for permitted fallback operations.
+**cpuFallback()**, Metal method that flushes GPU work and returns a CPU backend reference for permitted fallback operations.
 
-**dispatch count** — Number of GPU kernel invocations per token; optimal range 300–600.
+**dispatch count**, Number of GPU kernel invocations per token; optimal range 300–600.
 
-**megakernel** — A fused GPU kernel combining multiple operations into a single dispatch, reducing dispatch and barrier overhead.
+**megakernel**, A fused GPU kernel combining multiple operations into a single dispatch, reducing dispatch and barrier overhead.
 
-**missing kernel policy** — The rule that GPU backends must `@panic` on unimplemented kernels, never silently falling back to CPU.
+**missing kernel policy**, The rule that GPU backends must `@panic` on unimplemented kernels, never silently falling back to CPU.
 
-**Op enum** — Enumeration of profiled operation types (emb_lookup, rms_norm, gemv_qkv, sdpa, etc.) indexing into counter arrays.
+**Op enum**, Enumeration of profiled operation types (emb_lookup, rms_norm, gemv_qkv, sdpa, etc.) indexing into counter arrays.
 
-**PerfCounters** — The profiling struct accumulating per-operation call counts and microsecond durations.
+**PerfCounters**, The profiling struct accumulating per-operation call counts and microsecond durations.
 
-**performance regression** — A silent slowdown where the model still runs correctly but at lower throughput.
+**performance regression**, A silent slowdown where the model still runs correctly but at lower throughput.
 
-**resetCounters()** — Function zeroing all dispatch/barrier/sync counters at the start of each token's profiling window.
+**resetCounters()**, Function zeroing all dispatch/barrier/sync counters at the start of each token's profiling window.
 
-**softmax_cpu_threshold** — Minimum vector size (128) below which GPU softmax is slower than CPU SIMD, triggering a permitted fallback.
+**softmax_cpu_threshold**, Minimum vector size (128) below which GPU softmax is slower than CPU SIMD, triggering a permitted fallback.
 
-**sync count** — Number of CPU/GPU round-trip flushes per token; should be ≤3.
+**sync count**, Number of CPU/GPU round-trip flushes per token; should be ≤3.

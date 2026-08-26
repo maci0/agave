@@ -296,7 +296,7 @@ def moe_routing_topk(logits: torch.Tensor, k: int) -> tuple[torch.Tensor, torch.
     Top-k expert routing: softmax over logits, select top-k experts.
     logits: [n_experts] raw routing logits
     k: number of experts to select
-    Returns: (indices [k], weights [k]) — selected expert indices and normalized weights
+    Returns: (indices [k], weights [k]), selected expert indices and normalized weights
     """
     probs = F.softmax(logits, dim=0)
     topk_vals, topk_idx = torch.topk(probs, k)

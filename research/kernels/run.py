@@ -188,7 +188,7 @@ def main():
         print("  Autonomous:    run.py auto <kernel> ...")
         sys.exit(1)
     else:
-        # Maybe it's a kernel name — show info
+        # Maybe it's a kernel name, show info
         from registry import find_kernels
         if find_kernels(cmd):
             cmd_info([cmd] + rest)

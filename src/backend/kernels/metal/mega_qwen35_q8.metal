@@ -10,14 +10,14 @@
 // For Qwen 3.5 0.8B: max(1536, 4096) = 4096 TGs.
 //
 // Buffer layout:
-//   0: weights_base [*]const u8 — all model weights (mmap'd GGUF)
-//   1: layer_offsets [n_layers × 20 × u64] — per-layer byte offsets
+//   0: weights_base [*]const u8, all model weights (mmap'd GGUF)
+//   1: layer_offsets [n_layers × 20 × u64], per-layer byte offsets
 //   2: kv_keys [n_attn_layers × max_seq × kv_dim × sizeof(f32)]
 //   3: kv_values [n_attn_layers × max_seq × kv_dim × sizeof(f32)]
-//   4: hidden [n_embd] f32 — input/output hidden state
-//   5: scratch [scratch_size] f32 — intermediate buffers
-//   6: sync_counters [n_sync_points] atomic_uint — grid sync barriers
-//   7: params — struct with model dimensions
+//   4: hidden [n_embd] f32, input/output hidden state
+//   5: scratch [scratch_size] f32, intermediate buffers
+//   6: sync_counters [n_sync_points] atomic_uint, grid sync barriers
+//   7: params, struct with model dimensions
 //
 // Scratch layout (for Qwen 3.5 0.8B, n_embd=1536, n_ff=4096):
 //   [0 .. n_embd)              = hidden2 (normalized)
@@ -188,7 +188,7 @@ kernel void megakernel_qwen35_q8(
             mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);
 
         } else {
-            // DeltaNet SSM layer — currently too complex for GPU megakernel
+            // DeltaNet SSM layer, currently too complex for GPU megakernel
             // (requires conv1d ring buffer, bilinear recurrence, group norm).
             // The DeltaNet recurrence has sequential data dependencies that
             // don't parallelize well across threadgroups.

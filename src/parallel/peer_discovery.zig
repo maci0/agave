@@ -104,7 +104,7 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "DiscoveredPeer — struct layout" {
+test "DiscoveredPeer, struct layout" {
     const peer = DiscoveredPeer{ .addr = .{ 192, 168, 1, 42 }, .rank = 1 };
     try @import("std").testing.expectEqual(@as(u8, 192), peer.addr[0]);
     try @import("std").testing.expectEqual(@as(u8, 168), peer.addr[1]);
@@ -113,7 +113,7 @@ test "DiscoveredPeer — struct layout" {
     try @import("std").testing.expectEqual(@as(u32, 1), peer.rank);
 }
 
-test "discovery — protocol constants" {
+test "discovery, protocol constants" {
     try @import("std").testing.expectEqual(@as(u16, 49460), discovery_port);
     try @import("std").testing.expectEqual(@as(u32, 500), beacon_interval_ms);
     try @import("std").testing.expectEqual(@as(u32, 30000), discovery_timeout_ms);
@@ -122,33 +122,33 @@ test "discovery — protocol constants" {
     try @import("std").testing.expectEqual(@as(usize, 64), max_msg_len);
 }
 
-test "discovery — world_size < 2 returns null" {
+test "discovery, world_size < 2 returns null" {
     // Single-node (world_size=1) should return null immediately.
     const result = discoverPeer(0, 1, 8080);
     try @import("std").testing.expectEqual(@as(?[4]u8, null), result);
 }
 
-test "discovery — beacon message format" {
+test "discovery, beacon message format" {
     // Verify the beacon message format matches the protocol spec.
     var beacon: [max_msg_len]u8 = undefined;
     const msg = std.fmt.bufPrint(&beacon, "{s}{d}:{d}", .{ beacon_prefix, @as(u16, 8080), @as(u32, 2) }) catch "";
     try @import("std").testing.expectEqualStrings("AGAVE-DISCOVER:8080:2", msg);
 }
 
-test "discovery — join message format" {
+test "discovery, join message format" {
     var join_msg: [max_msg_len]u8 = undefined;
     const msg = std.fmt.bufPrint(&join_msg, "{s}{d}", .{ join_prefix, @as(u32, 1) }) catch "";
     try @import("std").testing.expectEqualStrings("AGAVE-JOIN:1", msg);
 }
 
-test "discovery — function signatures exist" {
+test "discovery, function signatures exist" {
     // world_size < 2 must short-circuit without opening sockets.
     try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(0, 0, 8080));
     try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(0, 1, 8080));
     try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 1, 8080));
 }
 
-test "discovery — beacon prefix detection" {
+test "discovery, beacon prefix detection" {
     // Verify that std.mem.startsWith correctly identifies beacon vs join messages.
     const valid_beacon = "AGAVE-DISCOVER:8080:2";
     const valid_join = "AGAVE-JOIN:1";
@@ -164,7 +164,7 @@ test "discovery — beacon prefix detection" {
     try std.testing.expect(!std.mem.startsWith(u8, garbage, join_prefix));
 }
 
-test "discovery — beacon parses port and world_size" {
+test "discovery, beacon parses port and world_size" {
     // After stripping the beacon prefix, the remaining payload is "<port>:<world_size>".
     var beacon: [max_msg_len]u8 = undefined;
     const msg = std.fmt.bufPrint(&beacon, "{s}{d}:{d}", .{ beacon_prefix, @as(u16, 12345), @as(u32, 4) }) catch unreachable;
@@ -182,7 +182,7 @@ test "discovery — beacon parses port and world_size" {
     try std.testing.expectEqual(@as(u32, 4), ws_val);
 }
 
-test "discovery — DiscoveredPeer edge addresses" {
+test "discovery, DiscoveredPeer edge addresses" {
     // Loopback
     const lo = DiscoveredPeer{ .addr = .{ 127, 0, 0, 1 }, .rank = 0 };
     try std.testing.expectEqual(@as(u8, 127), lo.addr[0]);
@@ -198,7 +198,7 @@ test "discovery — DiscoveredPeer edge addresses" {
     try std.testing.expectEqual(@as(u8, 0), zero.addr[0]);
 }
 
-test "discovery — private function signatures exist" {
+test "discovery, private function signatures exist" {
     // Join payload after prefix must parse as a rank integer.
     const join_msg = "AGAVE-JOIN:3";
     try std.testing.expect(std.mem.startsWith(u8, join_msg, join_prefix));

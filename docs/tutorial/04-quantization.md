@@ -10,7 +10,7 @@ Model weights are trained in float32 (32 bits per value) but stored compressed f
 
 ## Why Quantize?
 
-A 7B parameter model (7 billion weight values — the "B" in model names like "Qwen3.5-7B") in float32 needs 28 GB of memory (`7 × 10⁹ × 4 bytes = 28 GB`). In 4-bit quantization, it needs ~3.5 GB (`7 × 10⁹ × 0.5 bytes = 3.5 GB`) — small enough to fit in a laptop's GPU memory.
+A 7B parameter model (7 billion weight values, the "B" in model names like "Qwen3.5-7B") in float32 needs 28 GB of memory (`7 × 10⁹ × 4 bytes = 28 GB`). In 4-bit quantization, it needs ~3.5 GB (`7 × 10⁹ × 0.5 bytes = 3.5 GB`), small enough to fit in a laptop's GPU memory.
 
 Inference is almost always **memory-bandwidth bound** (the bottleneck is reading weights from RAM/VRAM, not arithmetic operations), so smaller weights = faster inference: half the bits means half the bytes to read from memory, which roughly doubles throughput.
 
@@ -65,7 +65,7 @@ flowchart LR
 float_value = integer_value * scale
 ```
 
-**Super-block formats** (Q4_K, Q5_K, Q6_K): Groups of 256 values with **hierarchical scales** (multiple levels of scale factors — a coarse scale for the whole block, then fine-grained adjustments per sub-block) — a block scale plus per-sub-block adjustments.
+**Super-block formats** (Q4_K, Q5_K, Q6_K): Groups of 256 values with **hierarchical scales** (multiple levels of scale factors, a coarse scale for the whole block, then fine-grained adjustments per sub-block), a block scale plus per-sub-block adjustments.
 
 ```mermaid
 flowchart TD
@@ -209,7 +209,7 @@ for j in 0..64:                 # each element in the group
 sum(x[j] * (scale * q[j] + bias)) = scale * sum(x[j] * q[j]) + bias * sum(x[j])
 ```
 
-This is the **distributive property** — pull the constant scale and bias outside the sum:
+This is the **distributive property**, pull the constant scale and bias outside the sum:
 
 ```text
 q_dot = 0   # dot(quantized, input)
@@ -288,7 +288,7 @@ x_sum = horizontal_sum(x_sum_acc)
 acc += scale * q_dot + bias * x_sum      # apply scale/bias once
 ```
 
-**Additional optimization:** `@mulAdd` maps to NEON `vfma` (fused multiply-add) — 1 instruction instead of separate multiply + add.
+**Additional optimization:** `@mulAdd` maps to NEON `vfma` (fused multiply-add), 1 instruction instead of separate multiply + add.
 
 **Implementation:** [`src/ops/mlx.zig`](../../src/ops/mlx.zig) (`mlxGemvQ4Rows`, `@Vector`/`@mulAdd`/`@reduce` SIMD path)
 
@@ -297,14 +297,14 @@ acc += scale * q_dot + bias * x_sum      # apply scale/bias once
 **Advantages:**
 
 - **Better quality** than integer quantization at the same bit width (affine transform vs simple scaling)
-- **Native Apple Silicon support** — MLX models load directly on Metal without conversion
-- **Flexible bit widths** — 4-bit, 6-bit, 8-bit (GGUF typically only 4-bit or 8-bit)
+- **Native Apple Silicon support**: MLX models load directly on Metal without conversion
+- **Flexible bit widths**: 4-bit, 6-bit, 8-bit (GGUF typically only 4-bit or 8-bit)
 
 **Disadvantages:**
 
-- **Format compatibility** — only MLX and Agave support it (not llama.cpp, vLLM, etc.)
-- **Larger metadata** — scales + biases = 2× overhead vs scale-only (4 bytes vs 2 bytes per group)
-- **6-bit GPU support** — Metal kernel exists but not in all backends
+- **Format compatibility**: only MLX and Agave support it (not llama.cpp, vLLM, etc.)
+- **Larger metadata**: scales + biases = 2× overhead vs scale-only (4 bytes vs 2 bytes per group)
+- **6-bit GPU support**: Metal kernel exists but not in all backends
 
 **Recommended for:**
 
@@ -318,7 +318,7 @@ acc += scale * q_dot + bias * x_sum      # apply scale/bias once
 
 ## Ternary Quantization (TQ1_0, TQ2_0)
 
-BitNet models use **ternary weights** — each weight is one of {-1, 0, +1}. Multiplying by {-1, 0, +1} is just negation, zero-out, or identity (no multiplication at all), which enables extremely fast matrix operations on CPUs without SIMD FMAs.
+BitNet models use **ternary weights**, each weight is one of {-1, 0, +1}. Multiplying by {-1, 0, +1} is just negation, zero-out, or identity (no multiplication at all), which enables extremely fast matrix operations on CPUs without SIMD FMAs.
 
 ```mermaid
 flowchart LR
@@ -357,9 +357,9 @@ flowchart LR
     end
 ```
 
-**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing — 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block size: 54 bytes total for 256 elements (`tq1_0_block_bytes = 54` in `backend.zig`).
+**TQ1_0** (1.58 bits/weight): Encodes 256 ternary values per block using base-3 packing, 5 trits per byte (3^5=243 combinations per byte, leaving 13 invalid codes unused). Block size: 54 bytes total for 256 elements (`tq1_0_block_bytes = 54` in `backend.zig`).
 
-**TQ2_0** (2 bits/weight): Simpler binary packing — 4 values per byte using 2 bits each (bit patterns: `00`=−1, `01`=0, `10`=+1, `11`=unused). Block layout: 2 bytes f16 scale + 64 bytes packed = 66 bytes total for 256 elements.
+**TQ2_0** (2 bits/weight): Simpler binary packing, 4 values per byte using 2 bits each (bit patterns: `00`=−1, `01`=0, `10`=+1, `11`=unused). Block layout: 2 bytes f16 scale + 64 bytes packed = 66 bytes total for 256 elements.
 
 Dequantization formula for both:
 
@@ -380,7 +380,7 @@ This maps {0, 1, 2} → {-1, 0, +1} × scale, where encoded values are the store
 
 Use **TQ1_0** when minimizing model size is the top priority. Use **TQ2_0** when decode speed matters more, since the bitshift extraction (`(byte >> (2*i)) & 0x3`) avoids a table lookup.
 
-## GPTQ and AWQ — Calibration-Based INT4
+## GPTQ and AWQ: Calibration-Based INT4
 
 Both GPTQ and AWQ store INT4 weights but differ from GGUF's Q4_K in two key ways: scales and zero-points are stored as **companion tensors** (separate SafeTensors entries rather than embedded in each weight block), and the nibble layout is tuned for GPU memory access patterns.
 
@@ -420,7 +420,7 @@ flowchart LR
     SC --> DQ
     ZR --> DQ
 
-    subgraph Layout["8 nibbles packed into 1 u32 — GPTQ row-major"]
+    subgraph Layout["8 nibbles packed into 1 u32, GPTQ row-major"]
         N0
         N1
         N2
@@ -431,7 +431,7 @@ flowchart LR
 
 **GPTQ** (row-major layout): The weight matrix is packed 8 nibbles per u32 word along each row. Zero-points (`qzeros`) are packed INT4 per group. Scales are f16. GPTQ applies a second-order calibration (Hessian-based weight updates) to minimize quantization error on a small calibration dataset.
 
-**AWQ** (column-major layout): Same nibble packing but organized by output channel — each u32 word holds 8 output channels at the same input position. AWQ interleaves nibbles in the order `[0, 2, 4, 6, 1, 3, 5, 7]` (not sequential) for efficient GPU GEMM memory access. AWQ searches for a per-channel activation scale that protects salient weights from quantization error.
+**AWQ** (column-major layout): Same nibble packing but organized by output channel, each u32 word holds 8 output channels at the same input position. AWQ interleaves nibbles in the order `[0, 2, 4, 6, 1, 3, 5, 7]` (not sequential) for efficient GPU GEMM memory access. AWQ searches for a per-channel activation scale that protects salient weights from quantization error.
 
 Dequantization for both:
 
@@ -455,15 +455,15 @@ AutoRound (Intel) is a GPTQ-format quantization method that uses a different cal
 
 Since the storage format is identical to GPTQ, Agave loads AutoRound models via the same `DType.gptq` path. The calibration algorithm difference is invisible at inference time.
 
-## HQQ — Half-Quadratic Quantization
+## HQQ: Half-Quadratic Quantization
 
-HQQ requires **no calibration data**. Weights are quantized using half-quadratic optimization, which finds the best INT4 approximation by iteratively reweighting an L1-like loss — no forward passes through the model, no sample dataset required. This makes HQQ practical for quantizing any model without a calibration corpus.
+HQQ requires **no calibration data**. Weights are quantized using half-quadratic optimization, which finds the best INT4 approximation by iteratively reweighting an L1-like loss, no forward passes through the model, no sample dataset required. This makes HQQ practical for quantizing any model without a calibration corpus.
 
 **Format (4-bit HQQ):**
 
-- `W_q`: uint8, shape `[n_out, k_in/2]` — 2 nibbles per byte, low nibble first (elem `k` at `byte[k/2] & 0xF`, elem `k+1` at `byte[k/2] >> 4`)
-- `meta.scale`: bf16, shape `[n_out, k_in/group_size]` — per-group scale
-- `meta.zero`: bf16, shape `[n_out, k_in/group_size]` — per-group zero (stored as full bf16 float, not packed INT4)
+- `W_q`: uint8, shape `[n_out, k_in/2]`, 2 nibbles per byte, low nibble first (elem `k` at `byte[k/2] & 0xF`, elem `k+1` at `byte[k/2] >> 4`)
+- `meta.scale`: bf16, shape `[n_out, k_in/group_size]`, per-group scale
+- `meta.zero`: bf16, shape `[n_out, k_in/group_size]`, per-group zero (stored as full bf16 float, not packed INT4)
 
 Dequantization:
 
@@ -471,7 +471,7 @@ Dequantization:
 w = (nibble - zero) * scale
 ```
 
-The zero being stored as a full float (rather than packed INT4 like GPTQ) simplifies the dequantization path — no zero unpacking step, just a subtract and multiply.
+The zero being stored as a full float (rather than packed INT4 like GPTQ) simplifies the dequantization path, no zero unpacking step, just a subtract and multiply.
 
 **Loading HQQ models:**
 
@@ -541,8 +541,8 @@ Value = (-1)^0 × 1.75 × 2^2 = 7.0
 
 **FP8 (E4M3 or E5M2)**: `[sign][exponent][mantissa]`
 
-- **Adaptive precision** (more bits near zero, fewer bits for large values — precision varies based on magnitude)
-- Natural for values spanning many **orders of magnitude** (factors of 10 — e.g., from 0.001 to 1000)
+- **Adaptive precision** (more bits near zero, fewer bits for large values, precision varies based on magnitude)
+- Natural for values spanning many **orders of magnitude** (factors of 10, e.g., from 0.001 to 1000)
 - **Hardware-accelerated** (dedicated silicon on the chip for fast execution) on modern GPUs (H100, A100, MI300)
 
 **When to use each**:
@@ -555,7 +555,7 @@ Value = (-1)^0 × 1.75 × 2^2 = 7.0
 
 **`nvfp4_ds_mla`** (DeepSeek MLA KV): `--kv-type nvfp4_ds_mla`. Each 512-d compressed latent is packed as NVFP4 on the 448 NoPE dims and f16 on the 64 RoPE dims (380 bytes/token). RoPE stays unquantized so position geometry is not rounded to E2M1. Decode uses CPU `kvDot`/`kvMulAccum` on every backend (no GPU SDPA kernel for this layout). Intended for DeepSeek V4 MLA (`kv_lora_rank=512`, `rope_dim=64`).
 
-## TurboQuant — KV Cache Quantization
+## TurboQuant: KV Cache Quantization
 
 TurboQuant ([Zandieh et al., 2025](https://arxiv.org/abs/2504.19874)) is a KV cache-specific quantization method that achieves 3.6-6.4x compression vs f16 with minimal quality loss. Unlike weight quantization formats (Q4_0, Q8_0), TurboQuant is applied at runtime to the KV cache during inference.
 
@@ -568,7 +568,7 @@ Quantize:  normalize → WHT → codebook lookup → pack
 Dequantize: unpack → codebook → inverse WHT → rescale
 ```
 
-The WHT is a deterministic rotation (like a Fourier transform but with only additions and subtractions) that makes each coordinate approximately N(0,1), regardless of the original distribution. This lets us use a single fixed codebook — no per-model calibration needed.
+The WHT is a deterministic rotation (like a Fourier transform but with only additions and subtractions) that makes each coordinate approximately N(0,1), regardless of the original distribution. This lets us use a single fixed codebook, no per-model calibration needed.
 
 ```mermaid
 flowchart LR
@@ -614,7 +614,7 @@ flowchart LR
 
 ### Asymmetric K/V
 
-A key insight, also explored in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/2402.02750): **V compression is nearly free** — all quality degradation comes from K compression. Agave supports independent K/V cache types:
+A key insight, also explored in [KIVI (Liu et al., 2024)](https://arxiv.org/abs/2402.02750): **V compression is nearly free**, all quality degradation comes from K compression. Agave supports independent K/V cache types:
 
 ```bash
 # Best quality: high-precision K + compressed V
@@ -650,7 +650,7 @@ turbo2: 2B norm + 8B packed 2-bit = 10B per 32 elements
 
 **Stacking with KV eviction:** TurboQuant compresses the *bits per KV entry*, while KV cache eviction (`--kv-eviction`) reduces the *number of entries*. Combined, they can achieve ~40x KV memory reduction vs f16 baseline. See [Chapter 5: Memory and Caching](05-memory-and-caching.md#kv-cache-eviction) for eviction details.
 
-## TurboQuant+ — The `turbo` Preset
+## TurboQuant+: The `turbo` Preset
 
 The `--kv-type turbo` preset is a curated configuration that combines three TurboQuant optimizations:
 
@@ -662,13 +662,13 @@ The `--kv-type turbo` preset is a curated configuration that combines three Turb
 
 ### Why K Precision Matters More Than V
 
-Keys (K) control **attention routing** — they determine which positions receive weight via the softmax. Small errors in K shift the softmax distribution, causing the model to attend to the wrong tokens. Values (V) are just the payload — they're weighted-summed after softmax, so small errors average out.
+Keys (K) control **attention routing**, they determine which positions receive weight via the softmax. Small errors in K shift the softmax distribution, causing the model to attend to the wrong tokens. Values (V) are just the payload, they're weighted-summed after softmax, so small errors average out.
 
 Empirically, compressing K below q8_0 causes measurable perplexity degradation, while V can be compressed to turbo4 (4.5 bits) with no measurable quality loss. The `turbo` preset exploits this asymmetry: high-precision K (q8_0, 8.5 bits) + aggressive V compression (turbo4, 4.5 bits).
 
 ### Boundary V Protection
 
-The first and last 2 transformer layers keep V at f16 even when the middle layers use turbo4. These boundary layers are disproportionately important — early layers establish token representations, and final layers directly influence the output distribution. The `turbo` preset enables this automatically:
+The first and last 2 transformer layers keep V at f16 even when the middle layers use turbo4. These boundary layers are disproportionately important, early layers establish token representations, and final layers directly influence the output distribution. The `turbo` preset enables this automatically:
 
 ```text
 layerVType(layer_index):
@@ -684,7 +684,7 @@ For a 42-layer model with `--kv-type turbo`: layers 0-1 and 40-41 use f16 V, lay
 
 ### Sparse V Dequantization
 
-During attention, most softmax weights are near zero — only a handful of positions actually contribute to the output. Sparse V skips the V dequantization and multiply-accumulate for any position where the softmax weight is below 1e-6 (contributing less than 0.0001% to the output):
+During attention, most softmax weights are near zero, only a handful of positions actually contribute to the output. Sparse V skips the V dequantization and multiply-accumulate for any position where the softmax weight is below 1e-6 (contributing less than 0.0001% to the output):
 
 ```text
 sparse_v_threshold = 1e-6
@@ -701,7 +701,7 @@ At 32K context length, the majority of positions have negligible softmax weights
 
 ## Geometric KV Cache Quantization
 
-The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but operates on 32-element blocks — each block requires a 5-stage butterfly (O(n log n)), costing ~160 butterfly operations (add/subtract pairs, no multiplications). For a 128-dim head (4 blocks), that's ~640 add/sub operations total. The **geometric** methods achieve comparable or better quality with fewer FMAs by exploiting low-dimensional rotations.
+The TurboQuant family uses a Walsh-Hadamard Transform (WHT) to decorrelate KV vectors before quantization. WHT works well but operates on 32-element blocks, each block requires a 5-stage butterfly (O(n log n)), costing ~160 butterfly operations (add/subtract pairs, no multiplications). For a 128-dim head (4 blocks), that's ~640 add/sub operations total. The **geometric** methods achieve comparable or better quality with fewer FMAs by exploiting low-dimensional rotations.
 
 All three geometric methods share TurboQuant's storage format (f16 norm + Lloyd-Max packed indices) and support the same 2/3/4-bit variants. The key difference is how they decorrelate the input before quantization.
 
@@ -714,7 +714,7 @@ All three geometric methods share TurboQuant's storage format (f16 norm + Lloyd-
 [x'_1] = [sin(theta)   cos(theta)] [x_1]
 ```
 
-For a 128-dim head, 64 coordinate pairs are rotated independently. Total cost: **256 FMAs** (4 per pair x 64 pairs) — 2.5x fewer than WHT.
+For a 128-dim head, 64 coordinate pairs are rotated independently. Total cost: **256 FMAs** (4 per pair x 64 pairs), 2.5x fewer than WHT.
 
 PlanarQuant achieves the **best 3-bit perplexity** among all geometric methods because the per-pair rotation angles are optimized offline to minimize quantization error for typical KV distributions.
 
@@ -734,7 +734,7 @@ PlanarQuant achieves the **best 3-bit perplexity** among all geometric methods b
 x' = q x q*    (quaternion sandwich product on 3D vector)
 ```
 
-For a 128-dim head, 32 groups of 4 elements are rotated. Total cost: **512 FMAs** (16 per group x 32 groups). The 4D rotation provides deeper decorrelation than PlanarQuant's 2D pairs — it can remove correlations between all 4 coordinates simultaneously, not just pairwise.
+For a 128-dim head, 32 groups of 4 elements are rotated. Total cost: **512 FMAs** (16 per group x 32 groups). The 4D rotation provides deeper decorrelation than PlanarQuant's 2D pairs, it can remove correlations between all 4 coordinates simultaneously, not just pairwise.
 
 ```bash
 # IsoQuant 3-bit KV cache
@@ -750,7 +750,7 @@ R = cos(theta/2) + sin(theta/2)(e12 B12 + e23 B23 + e31 B31)
 x' = R x R~    (rotor sandwich product)
 ```
 
-Coordinates are grouped into triples (with padding for the 128 -> 129 case). Total cost: **~2400 FMAs** — more expensive than WHT and the other geometric methods, but the Clifford rotor preserves geometric structure (lengths, angles) exactly, which can matter for models that encode positional information in KV vector geometry.
+Coordinates are grouped into triples (with padding for the 128 -> 129 case). Total cost: **~2400 FMAs**, more expensive than WHT and the other geometric methods, but the Clifford rotor preserves geometric structure (lengths, angles) exactly, which can matter for models that encode positional information in KV vector geometry.
 
 ```bash
 # RotorQuant 3-bit KV cache
@@ -869,9 +869,9 @@ for each row i:
 
 ## GEMV (General Matrix-Vector Multiply)
 
-GEMV is the dominant operation — ~95% of inference compute time. Every linear projection is a GEMV: `y[i] = sum_j(W[i][j] * x[j])`.
+GEMV is the dominant operation, ~95% of inference compute time. Every linear projection is a GEMV: `y[i] = sum_j(W[i][j] * x[j])`.
 
-For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numbers and add the result to a running sum — the core operation in matrix math) per call, and a typical model does ~210 GEMVs per token. Agave has separate kernels per **dtype** (data type — f32, bf16, q4_0, etc.) because each quantization format has completely different bit layouts.
+For a 2560×2560 matrix, that's 6.5M **multiply-accumulates** (multiply two numbers and add the result to a running sum, the core operation in matrix math) per call, and a typical model does ~210 GEMVs per token. Agave has separate kernels per **dtype** (data type, f32, bf16, q4_0, etc.) because each quantization format has completely different bit layouts.
 
 (For the full mathematical definition with examples, see [Math Reference: GEMV](appendix-math.md#matrix-vector-multiply-gemv))
 
@@ -965,13 +965,13 @@ flowchart TD
 
 **SafeTensors U32 ambiguity**: Both MLX and NVFP4 formats use U32 dtype. Distinguish them by checking for `.biases` companion tensor (MLX has biases, NVFP4 doesn't).
 
-**HQQ companion tensor naming**: HQQ zero-points and scales live under `meta.zero` and `meta.scale`, not `.biases` and `.scales`. Loading HQQ tensors with the MLX naming convention produces silently wrong output — check `quant_method` in `config.json` before dispatching to a dequant path.
+**HQQ companion tensor naming**: HQQ zero-points and scales live under `meta.zero` and `meta.scale`, not `.biases` and `.scales`. Loading HQQ tensors with the MLX naming convention produces silently wrong output, check `quant_method` in `config.json` before dispatching to a dequant path.
 
 **TQ2_0 byte ordering**: Each byte holds **4** ternary values (2 bits each). Slot `s` within a byte is extracted as `(byte >> (s * 2)) & 0x3`, where `s = k % 4`. Element `k` lives in byte `k / 4`. Confusing this with nibble-based (4-bit) extraction silently misreads all weight values.
 
 **V cache inverse rotation**: For rotation-based KV quantization (TurboQuant, PlanarQuant, IsoQuant, RotorQuant), the V cache dequantization **must** apply the inverse rotation. K cache can rotate the query instead (orthogonality trick). Omitting the V inverse rotation produces garbage output.
 
-**MLX expert scale format ambiguity (DS4 case study):** MLX-community MoE models use two different scale formats in the *same file*. Attention weights use standard MLX affine (bf16 scales + biases, group_size=64). Expert weights use MXFP4-style E2M1 values with uint8 scales and **no biases** — but the uint8 scales are E8M0 (`2^(val-127)`), not FP8 E4M3. Confusing E8M0 for E4M3 produces 32,000× scale error (e.g., uint8 120 → E4M3: 256.0 vs E8M0: 0.0078). The group_size also differs: experts use 32 (not the standard 16). Finally, SafeTensors parses `U8` as `.nvfp4` dtype, so checking `st.dtype == .unknown` misses them entirely. All three bugs must be fixed together — fixing only one still produces garbled output. See `Mxfp4ScaleFormat` enum in `mlx.zig` and `mlxExpertIsMxfp4()` / `doGemvExpert()` in `deepseek4.zig`.
+**MLX expert scale format ambiguity (DS4 case study):** MLX-community MoE models use two different scale formats in the *same file*. Attention weights use standard MLX affine (bf16 scales + biases, group_size=64). Expert weights use MXFP4-style E2M1 values with uint8 scales and **no biases**, but the uint8 scales are E8M0 (`2^(val-127)`), not FP8 E4M3. Confusing E8M0 for E4M3 produces 32,000× scale error (e.g., uint8 120 → E4M3: 256.0 vs E8M0: 0.0078). The group_size also differs: experts use 32 (not the standard 16). Finally, SafeTensors parses `U8` as `.nvfp4` dtype, so checking `st.dtype == .unknown` misses them entirely. All three bugs must be fixed together, fixing only one still produces garbled output. See `Mxfp4ScaleFormat` enum in `mlx.zig` and `mlxExpertIsMxfp4()` / `doGemvExpert()` in `deepseek4.zig`.
 
 **In the code:** [src/ops/quant.zig](../../src/ops/quant.zig) (dequantization helpers), [src/ops/mlx.zig](../../src/ops/mlx.zig) (MLX format, `Mxfp4ScaleFormat`), [src/ops/kv_quant.zig](../../src/ops/kv_quant.zig) (KV cache quantization: TurboQuant/PlanarQuant/IsoQuant/RotorQuant), [src/backend/kernels/cpu/](../../src/backend/kernels/cpu/) (per-format GEMV kernels)
 
@@ -991,60 +991,60 @@ for each output row:
 
 ## Glossary
 
-**affine quantization** — A dequantization formula using both scale and bias: float = scale × int + bias.
+**affine quantization**, A dequantization formula using both scale and bias: float = scale × int + bias.
 
-**AWQ (Activation-aware Weight Quantization)** — A calibration-based INT4 method that finds per-channel activation scales to protect important weights.
+**AWQ (Activation-aware Weight Quantization)**, A calibration-based INT4 method that finds per-channel activation scales to protect important weights.
 
-**block quantization** — Grouping values (typically 32) that share a single scale factor for dequantization.
+**block quantization**, Grouping values (typically 32) that share a single scale factor for dequantization.
 
-**companion tensors** — Separate tensors (e.g., `.scales`, `.biases`) storing per-group quantization parameters alongside packed weight tensors.
+**companion tensors**, Separate tensors (e.g., `.scales`, `.biases`) storing per-group quantization parameters alongside packed weight tensors.
 
-**exponent** — The bits in a floating-point number that determine its magnitude range.
+**exponent**, The bits in a floating-point number that determine its magnitude range.
 
-**FMA (Fused Multiply-Add)** — A single hardware instruction computing a×b+c in one step, more accurate and faster than separate operations.
+**FMA (Fused Multiply-Add)**, A single hardware instruction computing a×b+c in one step, more accurate and faster than separate operations.
 
-**FP8 E4M3** — An 8-bit floating-point format with 4 exponent bits and 3 mantissa bits; used for weights.
+**FP8 E4M3**, An 8-bit floating-point format with 4 exponent bits and 3 mantissa bits; used for weights.
 
-**FP8 E5M2** — An 8-bit floating-point format with 5 exponent bits and 2 mantissa bits; wider range, used for activations.
+**FP8 E5M2**, An 8-bit floating-point format with 5 exponent bits and 2 mantissa bits; wider range, used for activations.
 
-**GGUF** — A single-file binary model format (from the llama.cpp ecosystem) that embeds quantization metadata in weight blocks and supports memory-mapped loading.
+**GGUF**, A single-file binary model format (from the llama.cpp ecosystem) that embeds quantization metadata in weight blocks and supports memory-mapped loading.
 
-**Givens rotation** — An orthogonal rotation applied to a pair of coordinates in a 2D plane; used in PlanarQuant KV cache quantization.
+**Givens rotation**, An orthogonal rotation applied to a pair of coordinates in a 2D plane; used in PlanarQuant KV cache quantization.
 
-**GPTQ (GPT Quantization)** — A calibration-based INT4 method using Hessian-based weight updates to minimize quantization error.
+**GPTQ (GPT Quantization)**, A calibration-based INT4 method using Hessian-based weight updates to minimize quantization error.
 
-**Hessian** — A matrix of second-order derivatives used by GPTQ for optimal weight rounding decisions.
+**Hessian**, A matrix of second-order derivatives used by GPTQ for optimal weight rounding decisions.
 
-**HQQ (Half-Quadratic Quantization)** — A calibration-free INT4 quantization method using iterative optimization with full-precision zero points.
+**HQQ (Half-Quadratic Quantization)**, A calibration-free INT4 quantization method using iterative optimization with full-precision zero points.
 
-**Lloyd-Max codebook** — A set of optimal quantization bins and centroid values for scalar quantization of Gaussian-distributed data.
+**Lloyd-Max codebook**, A set of optimal quantization bins and centroid values for scalar quantization of Gaussian-distributed data.
 
-**mantissa** — The fractional precision bits of a floating-point number; more bits = finer precision.
+**mantissa**, The fractional precision bits of a floating-point number; more bits = finer precision.
 
-**memory-bandwidth bound** — When performance is limited by the rate of reading data from memory, not by compute speed.
+**memory-bandwidth bound**, When performance is limited by the rate of reading data from memory, not by compute speed.
 
-**MXFP4** — A 4-bit microscaled floating-point format with 32-element blocks and E8M0 (pure power-of-2) scales.
+**MXFP4**, A 4-bit microscaled floating-point format with 32-element blocks and E8M0 (pure power-of-2) scales.
 
-**nibble** — A 4-bit value; half a byte. Two nibbles pack into one byte.
+**nibble**, A 4-bit value; half a byte. Two nibbles pack into one byte.
 
-**NVFP4** — NVIDIA's 4-bit microscaled floating-point format with 16-element blocks and FP8 E4M3 scales.
+**NVFP4**, NVIDIA's 4-bit microscaled floating-point format with 16-element blocks and FP8 E4M3 scales.
 
-**perplexity (PPL)** — A measure of how well a model predicts text; lower = better quality.
+**perplexity (PPL)**, A measure of how well a model predicts text; lower = better quality.
 
-**QAT (Quantization-Aware Training)** — Training a model with quantization effects simulated, producing weights optimized for low-bit inference.
+**QAT (Quantization-Aware Training)**, Training a model with quantization effects simulated, producing weights optimized for low-bit inference.
 
-**quaternion** — A 4-component number system used to represent 3D rotations without gimbal lock.
+**quaternion**, A 4-component number system used to represent 3D rotations without gimbal lock.
 
-**SafeTensors** — A multi-file model format from HuggingFace for storing weights safely (no pickle), using JSON metadata headers.
+**SafeTensors**, A multi-file model format from HuggingFace for storing weights safely (no pickle), using JSON metadata headers.
 
-**scale factor** — A per-block multiplier that converts stored small integers back to approximate float values.
+**scale factor**, A per-block multiplier that converts stored small integers back to approximate float values.
 
-**subnormal** — A very small floating-point number below the normal representable range, using reduced precision.
+**subnormal**, A very small floating-point number below the normal representable range, using reduced precision.
 
-**super-block** — A larger quantization group (typically 256 values) with hierarchical two-level scales for finer-grained accuracy.
+**super-block**, A larger quantization group (typically 256 values) with hierarchical two-level scales for finer-grained accuracy.
 
-**ternary quantization** — Encoding weights as {−1, 0, +1}, enabling multiplication-free inference.
+**ternary quantization**, Encoding weights as {−1, 0, +1}, enabling multiplication-free inference.
 
-**W4A16** — Shorthand for 4-bit weights with 16-bit activations.
+**W4A16**, Shorthand for 4-bit weights with 16-bit activations.
 
-**Walsh-Hadamard Transform (WHT)** — A deterministic orthogonal rotation using only additions and subtractions that decorrelates distributions before quantization.
+**Walsh-Hadamard Transform (WHT)**, A deterministic orthogonal rotation using only additions and subtractions that decorrelates distributions before quantization.

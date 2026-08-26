@@ -3,7 +3,7 @@
 //! Given a model and a set of official continuations (prompt + expected tokens),
 //! measures how much probability the model assigns to each ground-truth token.
 //! This provides a quantitative quality metric without requiring a full benchmark
-//! suite — the score directly reflects how closely a local GGUF matches the
+//! suite, the score directly reflects how closely a local GGUF matches the
 //! reference model that generated the continuations.
 //!
 //! Metric: mean negative log probability across all continuation tokens.
@@ -100,14 +100,14 @@ pub fn scoreCase(
     for (continuation_ids, 0..) |gt_token, ci| {
         if (ci > 0 or prompt_ids.len == 0) {
             // Forward the previous token to get logits for this position.
-            // Skip for ci==0 when prompt was prefilled — logits are already set.
+            // Skip for ci==0 when prompt was prefilled, logits are already set.
             const prev = if (ci > 0) continuation_ids[ci - 1] else 0;
             _ = model.forward(prev) catch return null;
         }
 
         const logits = model.getLogits();
         if (gt_token >= logits.len) {
-            // OOV token — skip without counting toward scored total,
+            // OOV token, skip without counting toward scored total,
             // to avoid diluting the mean NLL.
             continue;
         }
@@ -217,7 +217,7 @@ test "scoreCase scores continuation tokens correctly" {
     };
     var model = Model{};
 
-    // Continuation is [2] — model's argmax matches, so n_correct_argmax = 1.
+    // Continuation is [2], model's argmax matches, so n_correct_argmax = 1.
     const r = scoreCase(&model, &.{10}, &.{2});
     try std.testing.expect(r != null);
     try std.testing.expectEqual(@as(u32, 1), r.?.n_tokens);

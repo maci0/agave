@@ -1,4 +1,4 @@
-// GEMV — Matrix-Vector Multiply with dequantization
+// GEMV, Matrix-Vector Multiply with dequantization
 //
 // Dispatch model: one threadgroup per output row (dispatchThreadgroups(n,1,1)),
 // 256 threads per threadgroup. Each thread strides over the k-dimension, then
@@ -127,7 +127,7 @@ kernel void gemv_q8_0(
 
 // ── Q4_0 GEMV ────────────────────────────────────────────────
 // 32 values per block, 18 bytes (f16 scale + 16 nibble-packed bytes).
-// Block layout: each byte packs 2 values — low nibble for elements 0-15, high nibble for elements 16-31.
+// Block layout: each byte packs 2 values, low nibble for elements 0-15, high nibble for elements 16-31.
 
 struct block_q4_0 {
     half d;
@@ -524,7 +524,7 @@ inline void getScaleMinK4(uint j, device const uchar* q, thread uint& sc, thread
     }
 }
 
-// Standalone block dot function — used by GEMM, megakernel, and tiled GEMV.
+// Standalone block dot function, used by GEMM, megakernel, and tiled GEMV.
 inline float q4_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
     float d    = float(as_type<half>(ushort(bp[0] | (uint(bp[1]) << 8))));
     float dmin = float(as_type<half>(ushort(bp[2] | (uint(bp[3]) << 8))));
@@ -610,7 +610,7 @@ kernel void gemv_q4_k(
             uint ql_off = g * 32;
 
             if (gi_lo + 63 < k) {
-                // Preload x into registers — shared between both rows
+                // Preload x into registers, shared between both rows
                 float4 xv_lo[8], xv_hi[8];
                 float x_sum_lo = 0.0f, x_sum_hi = 0.0f;
                 float x_amax = 0.0f;
@@ -711,7 +711,7 @@ constant uint q2_k_nr = 2;
 
 // Inline: compute one Q2_K superblock's dot product for a single row.
 // Vectorized: processes 4 Q2_K values per iteration using float4 dot product.
-// Each byte holds 4 packed 2-bit values — extract all 4 with masks, do float4 dot.
+// Each byte holds 4 packed 2-bit values, extract all 4 with masks, do float4 dot.
 inline float q2_k_block_dot(device const uchar* bp, device const float* x, uint k, uint bk) {
     device const uchar* scales = bp;
     device const uchar* qs = bp + 16;
@@ -727,7 +727,7 @@ inline float q2_k_block_dot(device const uchar* bp, device const float* x, uint 
         uint gi_base = bk + sb * 16;
 
         if (gi_base + 16 <= k) {
-            // Fast path: all 16 elements valid — process 4 at a time with float4 dot
+            // Fast path: all 16 elements valid, process 4 at a time with float4 dot
             float4 dm_v = float4(-dm_m);
             float4 ds_v = float4(d_sc);
             for (uint l = 0; l < 16; l += 4) {
@@ -1257,7 +1257,7 @@ kernel void gemv_mlx_q4(
     float sum = 0.0f;
 
     for (uint g = tid; g < gpr; g += tg_size) {
-        // BF16 scale and bias — packed_uchar2 load, reconstruct ushort
+        // BF16 scale and bias, packed_uchar2 load, reconstruct ushort
         uint sb_idx = tgid * gpr + g;
         packed_uchar2 sb = scales[sb_idx];
         float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
@@ -1389,7 +1389,7 @@ kernel void gemv_mlx_q2(
     float sum = 0.0f;
 
     for (uint g = tid; g < gpr; g += tg_size) {
-        // BF16 scale and bias — packed_uchar2 load, reconstruct ushort
+        // BF16 scale and bias, packed_uchar2 load, reconstruct ushort
         uint sb_idx = tgid * gpr + g;
         packed_uchar2 sb = scales[sb_idx];
         float scale = as_type<float>(uint(ushort(sb[0]) | (ushort(sb[1]) << 8)) << 16);
@@ -2037,7 +2037,7 @@ kernel void gemv_tq2_0(
 // AWQ format: column-major packed, 8 INT4 nibbles per u32.
 // qweight[k, n/8] column-major, scales[k/group_size, n] f16 (natural order),
 // qzeros[k/group_size, n/8] u32 (GEMM interleaved order).
-// GEMM nibble order: {0,2,4,6,1,3,5,7} — even cols in lower 16 bits,
+// GEMM nibble order: {0,2,4,6,1,3,5,7}, even cols in lower 16 bits,
 // odd cols in upper 16 bits. Both qweight and qzeros use this packing.
 // Scales use natural sequential order.
 // Dispatch: one threadgroup per output column.
@@ -2095,7 +2095,7 @@ kernel void gemv_awq(
 }
 
 /// HQQ INT4 GEMV.
-/// w_q layout: [n_out, k_in/2] packed nibbles — low nibble = even k, high nibble = odd k.
+/// w_q layout: [n_out, k_in/2] packed nibbles, low nibble = even k, high nibble = odd k.
 /// scale/zero layout: [n_out, k_in/group_size] bf16 (float zero, not packed int).
 /// Dequant: w = (nibble - zero) * scale
 kernel void gemv_hqq(
@@ -2437,7 +2437,7 @@ kernel void gemv_mlx_q4_exact(
 // ── Vec8-exact MXFP4 GEMV (matches CPU NEON @mulAdd + @reduce) ──
 // Uses float4 pairs. CPU does: acc = @mulAdd(V8, sv*v, xv, acc)
 // where sv = scale splat, v = mxfp4_lut lookups.
-// Then: y = @reduce(.Add, acc) — pairwise.
+// Then: y = @reduce(.Add, acc), pairwise.
 kernel void gemv_mxfp4_st_exact(
     device const float* x             [[buffer(0)]],
     device const packed_uchar4* W     [[buffer(1)]],

@@ -144,7 +144,7 @@ inline fn signs8(sb: u8) @Vector(8, bool) {
 }
 
 /// Dot product of 4 x-elements against a u32 grid entry with per-element signs.
-/// @select compiles to a single NEON BSL instruction — avoids float conversion + arithmetic.
+/// @select compiles to a single NEON BSL instruction, avoids float conversion + arithmetic.
 inline fn simdGroup4(x_ptr: [*]const f32, g: u32, sb_nibble: u8, dl: f32) f32 {
     const V4f32 = @Vector(4, f32);
     const w_f32: V4f32 = @floatFromInt(@as(@Vector(4, i8), @bitCast(@as(@Vector(4, u8), @bitCast(g)))));
@@ -154,7 +154,7 @@ inline fn simdGroup4(x_ptr: [*]const f32, g: u32, sb_nibble: u8, dl: f32) f32 {
 }
 
 /// Dot product of 8 x-elements against a u64 grid entry with per-element signs.
-/// @select compiles to a single NEON BSL instruction — avoids float conversion + arithmetic.
+/// @select compiles to a single NEON BSL instruction, avoids float conversion + arithmetic.
 /// sb: 8-bit sign mask from ksigns_iq2xs (bit j → -1 if set).
 inline fn simdGroup8(x_ptr: [*]const f32, g: u64, sb: u8, dl: f32) f32 {
     const V8f32 = @Vector(8, f32);
@@ -200,7 +200,7 @@ pub fn gemvIQ2_XXS(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usiz
                 const g3 = iq2xxs_grid[qs[gi + 3]];
                 const base = base0 + yi;
                 if (full) {
-                    // SIMD: 4 vector dot products, each covering 8 elements — no branches.
+                    // SIMD: 4 vector dot products, each covering 8 elements, no branches.
                     sum += simdGroup8(x + base, g0, sb0, dl);
                     sum += simdGroup8(x + base + 8, g1, sb1, dl);
                     sum += simdGroup8(x + base + 16, g2, sb2, dl);

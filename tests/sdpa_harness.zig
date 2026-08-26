@@ -101,7 +101,7 @@ pub fn runDualDeltaTest(
     var max_cpu_err: f32 = 0.0;
     var max_gpu_err: f32 = 0.0;
     for (0..nh * hd) |i| {
-        // Reject NaN/Inf in outputs — these indicate kernel bugs, not rounding error
+        // Reject NaN/Inf in outputs, these indicate kernel bugs, not rounding error
         if (std.math.isNan(cpu_output[i]) or std.math.isInf(cpu_output[i])) {
             std.debug.print("CPU output[{d}] is NaN or Inf\n", .{i});
             return error.TestFailed;
@@ -126,7 +126,7 @@ pub fn runDualDeltaTest(
     }
 
     // FP32 SDPA accumulates rounding error across seq_len dot products + softmax.
-    // 1e-3 absolute tolerance is ~10 bits of precision (2^-10 ~ 1e-3) — well within
+    // 1e-3 absolute tolerance is ~10 bits of precision (2^-10 ~ 1e-3), well within
     // FP32's 23-bit mantissa, accounting for sequential accumulation.
     try std.testing.expect(max_cpu_err < 1e-3);
     try std.testing.expect(max_gpu_err < 1e-3);

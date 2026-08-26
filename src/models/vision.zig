@@ -1,4 +1,4 @@
-//! Vision encoder for multimodal inference — supports multiple mmproj architectures.
+//! Vision encoder for multimodal inference, supports multiple mmproj architectures.
 //!
 //! Loads weights from an mmproj GGUF file and runs the vision transformer
 //! forward pass: image -> patch embedding -> ViT blocks -> LLM projection.
@@ -117,7 +117,7 @@ const VisionVariant = enum {
 /// Cached pointer-keyed entry for converted norm weights (defined in model.zig).
 const NormCacheEntry = model_mod.NormCacheEntry;
 
-/// Vision encoder — loads from mmproj GGUF and produces visual token embeddings.
+/// Vision encoder, loads from mmproj GGUF and produces visual token embeddings.
 /// Supports Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL architectures.
 pub const VisionEncoder = struct {
     // ── Configuration ────────────────────────────────────────────
@@ -151,21 +151,21 @@ pub const VisionEncoder = struct {
 
     // ── Architecture variant and feature flags ───────────────────
     variant: VisionVariant,
-    /// Gemma3/Qwen: true — all projections and norms carry additive bias.
+    /// Gemma3/Qwen: true, all projections and norms carry additive bias.
     has_bias: bool,
-    /// Gemma4: true — per-head RMSNorm on Q and K after projection.
+    /// Gemma4: true, per-head RMSNorm on Q and K after projection.
     has_qk_norm: bool,
-    /// Gemma4: true — RMSNorm after attention output and after FFN.
+    /// Gemma4: true, RMSNorm after attention output and after FFN.
     has_post_norms: bool,
-    /// Qwen: true — single fused QKV weight matrix instead of separate Q/K/V.
+    /// Qwen: true, single fused QKV weight matrix instead of separate Q/K/V.
     fused_qkv: bool,
     /// Gemma4: true (SwiGLU: gate+up+down). Others: false (GELU: up+down, no gate).
     ffn_has_gate: bool,
-    /// Gemma3/Qwen: true — LayerNorm applied after all ViT blocks, before projection.
+    /// Gemma3/Qwen: true, LayerNorm applied after all ViT blocks, before projection.
     has_post_ln: bool,
-    /// Gemma4: true — 2D position embedding [embd_dim, max_pos, 2]. Others: 1D.
+    /// Gemma4: true, 2D position embedding [embd_dim, max_pos, 2]. Others: 1D.
     pos_embd_is_2d: bool,
-    /// Gemma4 26B: true — input standardization via v.std_scale + v.std_bias.
+    /// Gemma4 26B: true, input standardization via v.std_scale + v.std_bias.
     has_standardization: bool,
     /// Pixel normalization scale: (pixel/255) * pixel_norm_scale + pixel_norm_bias.
     /// 26B SigLIP-2 (mean=0.5, std=0.5): scale=2.0, bias=-1.0 → [-1,1].
@@ -233,7 +233,7 @@ pub const VisionEncoder = struct {
         // ── Spatial merge and effective resolution ───────────────
         // Gemma 4 SigLIP-2 (26B): 3×3 avg pool after ViT → 9× reduction
         //   768×768 → 48×48=2304 patches → 3×3 pool → 16×16=256 output tokens
-        // Gemma 4 SigLIP-2 (E2B/E4B): NO spatial merge — 224×224 → 14×14=196 tokens.
+        // Gemma 4 SigLIP-2 (E2B/E4B): NO spatial merge, 224×224 → 14×14=196 tokens.
         //   Detected by absence of v.std_scale (standardization tensors).
         // Qwen VL: 4× merge in MLP projector → n_patches/4 output tokens
         //   Process at native resolution (not upscaled). metadata image_size is the MAX.
@@ -242,7 +242,7 @@ pub const VisionEncoder = struct {
         const meta_image_size = fmt.getArchU32(arch, "image_size") orelse default_image_size;
         const has_std_tensors = fmt.getTensor("v.std_scale") != null;
         // Only apply 3×3 merge when standardization tensors are present (26B-A4B variant).
-        // E2B/E4B SigLIP-2 uses 224×224 without merge — patches_per_side=14 is not divisible by 3.
+        // E2B/E4B SigLIP-2 uses 224×224 without merge, patches_per_side=14 is not divisible by 3.
         const n_merge: u32 = if (variant == .gemma4_siglip2 and has_std_tensors) gemma4_merge_kernel else 0;
         const image_size: u32 = if (n_merge > 0) gemma4_effective_image_size else meta_image_size;
 
@@ -263,7 +263,7 @@ pub const VisionEncoder = struct {
         const has_post_ln = fmt.getTensor("v.post_ln.weight") != null;
         const pos_embd_is_2d = variant == .gemma4_siglip2;
         // Standardization only when v.std_scale/v.std_bias tensors exist (26B-A4B).
-        // E2B/E4B SigLIP-2 omits these — image_mean=[0,0,0], image_std=[1,1,1].
+        // E2B/E4B SigLIP-2 omits these, image_mean=[0,0,0], image_std=[1,1,1].
         const has_standardization = has_std_tensors;
 
         // Pixel normalization parameters derived from image_mean/image_std metadata.
@@ -441,7 +441,7 @@ pub const VisionEncoder = struct {
     /// Detect the vision encoder variant from available tensors in the mmproj file.
     fn detectVariant(fmt: Format) VisionVariant {
         // Gemma 4 SigLIP-2: has per-head QK RMSNorm weights.
-        // Check this FIRST — E2B/E4B mmproj files contain both v.blk.* (SigLIP-2 ViT)
+        // Check this FIRST, E2B/E4B mmproj files contain both v.blk.* (SigLIP-2 ViT)
         // and a.blk.* (audio encoder) tensors. The vision path uses the standard ViT.
         if (fmt.getTensor("v.blk.0.attn_q_norm.weight") != null) return .gemma4_siglip2;
         // Qwen VL: has fused QKV projection
@@ -690,8 +690,8 @@ pub const VisionEncoder = struct {
     }
 
     /// Add position embedding to patch embeddings.
-    /// Gemma4: 2D embedding [embd_dim, max_positions, 2] — row + col channels.
-    /// Gemma3/Qwen: 1D embedding [embd_dim, n_patches] — one vector per patch index.
+    /// Gemma4: 2D embedding [embd_dim, max_positions, 2], row + col channels.
+    /// Gemma3/Qwen: 1D embedding [embd_dim, n_patches], one vector per patch index.
     fn addPositionEmbedding(self: *VisionEncoder) !void {
         const ed: usize = self.embd_dim;
         const ps: usize = self.patch_size;
@@ -837,7 +837,7 @@ pub const VisionEncoder = struct {
 
         // ── 2. Q/K/V projections ────────────────────────────────
         if (self.fused_qkv) {
-            // Qwen: fused QKV — single batched GEMV producing [np, 3*embd_dim],
+            // Qwen: fused QKV, single batched GEMV producing [np, 3*embd_dim],
             // then scatter into separate Q/K/V buffers.
             // ffn_up is [np * ffn_dim] which is >= [np * 3*ed] (ffn_dim > 3*embd_dim).
             std.debug.assert(self.ffn_dim >= 3 * self.embd_dim);
@@ -864,7 +864,7 @@ pub const VisionEncoder = struct {
                 @memcpy(self.v_buf[base..][0..ed], self.ffn_up[qkv_base + 2 * ed ..][0..ed]);
             }
         } else {
-            // Separate Q/K/V projections — batched across all patches.
+            // Separate Q/K/V projections, batched across all patches.
             // Each weight matrix is loaded once (row-by-row), multiplied against
             // all patch inputs, giving np× cache reuse vs per-patch calls.
             const qw = self.blockTensor(bi, "attn_q.weight") orelse return error.MissingTensor;
@@ -931,7 +931,7 @@ pub const VisionEncoder = struct {
         {
             const pps = self.image_size / self.patch_size;
             if (self.variant == .gemma4_siglip2) {
-                // Gemma 4: 2D RoPE — first half x-pos, second half y-pos (theta=100)
+                // Gemma 4: 2D RoPE, first half x-pos, second half y-pos (theta=100)
                 applyRope2d(self.q_buf, np, nh, hd, pps, vit_rope_theta);
                 applyRope2d(self.k_buf, np, nh, hd, pps, vit_rope_theta);
             } else if (self.variant == .qwen_vl) {
@@ -1013,7 +1013,7 @@ pub const VisionEncoder = struct {
             self.batchGemm(self.norm_buf.ptr, gw, self.ffn_gate.ptr, np, fd, ed);
             self.batchGemm(self.norm_buf.ptr, uw, self.ffn_up.ptr, np, fd, ed);
 
-            // SiLU(gate) * up — fused across all patches
+            // SiLU(gate) * up, fused across all patches
             for (0..np * fd) |i| {
                 self.ffn_gate[i] = silu(self.ffn_gate[i]) * self.ffn_up[i];
             }
@@ -1379,7 +1379,7 @@ pub const VisionEncoder = struct {
         if (t.dtype == .f32 and !bake_one) return @ptrCast(@alignCast(t.data_ptr));
 
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
         if (bake_one) {
@@ -1471,7 +1471,7 @@ fn gemvCpu(x: [*]const f32, t: TensorInfo, y: [*]f32, n: usize, k: usize) void {
             }
         },
         else => {
-            // Unsupported dtype for vision encoder — zero output
+            // Unsupported dtype for vision encoder, zero output
             @memset(y[0..n], 0);
         },
     }
@@ -2112,7 +2112,7 @@ test "applyQwenVisionRope height rotates pair (0, half)" {
 test "patchFlatIndex PyTorch CTHW vs MLX THWC" {
     const ps: usize = 16;
     const temporal: usize = 2;
-    // Channel 0, first row, x=1 — CTHW vs THWC disagree here.
+    // Channel 0, first row, x=1, CTHW vs THWC disagree here.
     const c: usize = 0;
     const t: usize = 0;
     const dy: usize = 0;

@@ -1,4 +1,4 @@
-# DeepSeek V4 Metal — Full GPU Path & Output Divergence Fix
+# DeepSeek V4 Metal: Full GPU Path & Output Divergence Fix
 
 ## Result
 
@@ -9,7 +9,7 @@
 | Metal + suffix | **10.7 tok/s** | **21.2 tok/s** | 14.8 | ✅ Identical to CPU |
 | CPU + suffix | 10.0 tok/s | 21.5 tok/s | 14.8 | ✅ Baseline |
 
-Quality verified: "The capital of France is Paris." — correct, coherent, bit-identical on both backends.
+Quality verified: "The capital of France is Paris.", correct, coherent, bit-identical on both backends.
 
 ## The Problem
 
@@ -71,23 +71,23 @@ This ensures:
 
 ### Metal Backend Infrastructure
 
-- `gemvMlxQGpu` / `gemvMxfp4StGpu` — GPU-native GEMV with `getWeightBufRef` (makeBuffer copy)
-- `getWeightBufRef` — copies weight data to Metal-managed memory for mmap safety
-- `ds4FusedAttnProj` — dispatch function for fused attention megakernel
-- `ds4TopkRouting` / `ds4MoeGateUpMxfp4` / `ds4MoeDownMxfp4` — batched MoE dispatch
+- `gemvMlxQGpu` / `gemvMxfp4StGpu`, GPU-native GEMV with `getWeightBufRef` (makeBuffer copy)
+- `getWeightBufRef`: copies weight data to Metal-managed memory for mmap safety
+- `ds4FusedAttnProj`: dispatch function for fused attention megakernel
+- `ds4TopkRouting` / `ds4MoeGateUpMxfp4` / `ds4MoeDownMxfp4`, batched MoE dispatch
 - Zero-cost `sync()` fast path (skip when no GPU work pending)
 - Conditional sync in `gemvMlxQ`/`gemvMxfp4St` CPU fallback
 - CPU thresholds for rmsNorm (≤8192), clampedSiluMul (≤16384), SDPA (≤8192)
-- `poolExpert` / `poolCompanion` — heap staging for SSD-streamed expert data
-- CPU `max_head_dim=512` — enables CPU SDPA for DS4's kv_lora_rank=512
+- `poolExpert` / `poolCompanion`, heap staging for SSD-streamed expert data
+- CPU `max_head_dim=512`, enables CPU SDPA for DS4's kv_lora_rank=512
 
 ### Key Bug Fixes
 
-1. **Metal MSL `half` keyword conflict** — renamed WHT variable in turbo SDPA kernel
-2. **GPU sinkhorn matching CPU** — corrected initial softmax + eps + alternating col/row normalize
-3. **Mmap page eviction** — `newBufferWithBytesNoCopy` can't page-fault; pool-based staging restores 96% expert cache hit rate
-4. **CPU SDPA max_head_dim** — increased from 256 to 512 for DS4
-5. **Output divergence** — dedicated CpuBackend bypass eliminates Metal struct cache pollution
+1. **Metal MSL `half` keyword conflict**, renamed WHT variable in turbo SDPA kernel
+2. **GPU sinkhorn matching CPU**, corrected initial softmax + eps + alternating col/row normalize
+3. **Mmap page eviction**, `newBufferWithBytesNoCopy` can't page-fault; pool-based staging restores 96% expert cache hit rate
+4. **CPU SDPA max_head_dim**, increased from 256 to 512 for DS4
+5. **Output divergence**, dedicated CpuBackend bypass eliminates Metal struct cache pollution
 
 ## Performance History
 

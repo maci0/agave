@@ -24,16 +24,16 @@ Token 15496     → embed → [2304 floats]  → 35 layers → [2304 floats]  �
 The **hidden state** (the internal vector representation flowing through each layer) is a fixed-size vector (2304 floats = 9 KB) that flows through every layer. Each layer reads its weight matrices (~180 MB total for this model) to transform it.
 
 Each **transformer layer** has two sublayers:
-1. **Attention** — lets the model look at previous tokens
-2. **FFN** (Feed-Forward Network) — processes each position independently
+1. **Attention**, lets the model look at previous tokens
+2. **FFN** (Feed-Forward Network), processes each position independently
 
-A model has N layers stacked in sequence (e.g., 35 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices** — layer 0's attention weights are completely different from layer 15's.
+A model has N layers stacked in sequence (e.g., 35 for Gemma4 E2B, 64 for Qwen3.5 0.8B). Each layer has its own **independent weight matrices**, layer 0's attention weights are completely different from layer 15's.
 
 The hidden state vector passes through all N layers, getting progressively refined:
 - **Early layers** tend to learn basic features (syntax, word relationships)
 - **Later layers** learn more abstract ones (reasoning, facts)
 
-Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged. This prevents the **vanishing gradient problem** — where gradients get exponentially smaller in deep networks during training, making learning impossible.
+Both sublayers use **residual connections** (`output = input + sublayer(input)`) so information flows through unchanged. This prevents the **vanishing gradient problem**, where gradients get exponentially smaller in deep networks during training, making learning impossible.
 
 ```mermaid
 flowchart TD
@@ -193,9 +193,9 @@ output = softmax(Q @ K^T / sqrt(d)) @ V
              sqrt(d) = scale factor = 1/sqrt(head_dim, the number of floats per attention head)
 ```
 
-This is **O(n²)** in sequence length — every token attends to every previous token. At 1K tokens that's 1M score computations per head; at 32K tokens it's 1 billion. This is why long-context models are expensive.
+This is **O(n²)** in sequence length, every token attends to every previous token. At 1K tokens that's 1M score computations per head; at 32K tokens it's 1 billion. This is why long-context models are expensive.
 
-**Worked example** — 3 tokens, head_dim=4, 1 head:
+**Worked example**, 3 tokens, head_dim=4, 1 head:
 
 ```
 Tokens: "The cat sat"
@@ -226,7 +226,7 @@ With 20 heads, 20 independent versions of this run in parallel, each
 learning different relationships (syntax, semantics, position, etc.)
 ```
 
-**Causal masking:** During generation, token at position `i` must only attend to positions `≤ i` — it cannot look at future tokens that haven't been generated yet. This is enforced by setting attention scores for future positions to `-∞` before softmax, which zeroes them out. The resulting lower-triangular attention matrix is called a **causal mask**. (Some models like GPT-OSS use a sliding window variant where even-numbered layers only attend to the most recent 128 tokens.)
+**Causal masking:** During generation, token at position `i` must only attend to positions `≤ i`, it cannot look at future tokens that haven't been generated yet. This is enforced by setting attention scores for future positions to `-∞` before softmax, which zeroes them out. The resulting lower-triangular attention matrix is called a **causal mask**. (Some models like GPT-OSS use a sliding window variant where even-numbered layers only attend to the most recent 128 tokens.)
 
 **Output projection:** Every head's weighted-sum output is concatenated back into one `[n_embd]`-wide vector, then passed through one more learned matrix, `W_o` (`attn_output.weight` in the GGUF layout), before the result is added to the residual stream. This final projection mixes information across heads: without it, each head's contribution would stay in its own isolated slice of the output vector.
 
@@ -271,7 +271,7 @@ flowchart LR
         Q12 & Q13 & Q14 & Q15
     end
 
-    subgraph KVHeads["4 KV Heads (shared — stored in KV cache)"]
+    subgraph KVHeads["4 KV Heads (shared, stored in KV cache)"]
         KV0
         KV1
         KV2
@@ -306,13 +306,13 @@ Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
 
 ### MLA (Multi-head Latent Attention)
 
-[MLA (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434) goes further than GQA — instead of sharing K/V heads, it compresses K and V into a **low-rank latent vector** before generating per-head keys and values. Used by GLM-4 and DeepSeek V2/V3 (`src/models/glm4.zig`).
+[MLA (DeepSeek-AI, 2024)](https://arxiv.org/abs/2405.04434) goes further than GQA, instead of sharing K/V heads, it compresses K and V into a **low-rank latent vector** before generating per-head keys and values. Used by GLM-4 and DeepSeek V2/V3 (`src/models/glm4.zig`).
 
 **The problem MLA solves:** GQA reduces KV cache by sharing heads (4× with 16Q/4KV). But the cache still stores one full K vector and one full V vector per head per position. MLA compresses further by factoring the K/V computation through a narrow bottleneck.
 
 **How it works:**
 
-1. **Compress** — Project the hidden state into a small **KV latent** vector of dimension `kv_lora_rank` (512 in GLM-4), plus a separate rotary-position component `k_pe` of dimension `qk_rope_head_dim` (64):
+1. **Compress**, Project the hidden state into a small **KV latent** vector of dimension `kv_lora_rank` (512 in GLM-4), plus a separate rotary-position component `k_pe` of dimension `qk_rope_head_dim` (64):
 
    ```text
    kv_proj = hidden @ W_kv_a          # [n_embd] → [kv_lora_rank + rope_dim]
@@ -320,7 +320,7 @@ Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
    k_pe      = kv_proj[kv_lora_rank..]    # position info (shared across heads)
    ```
 
-2. **Expand** — For each of the `n_head` attention heads, project the latent into per-head K_nope and V vectors using small per-head matrices:
+2. **Expand**, For each of the `n_head` attention heads, project the latent into per-head K_nope and V vectors using small per-head matrices:
 
    ```text
    K_nope[h] = kv_latent @ W_embed_q[h]      # [kv_lora_rank] → [nope_dim] per head
@@ -328,9 +328,9 @@ Memory: 4× smaller KV cache vs full Multi-Head Attention (MHA)
    K[h]      = concat(K_nope[h], k_pe)         # [nope_dim + rope_dim] per head
    ```
 
-3. **Q also uses low-rank factorization** — Q goes through its own compress/expand path (`q_a_proj` → layernorm → `q_b_proj`), reducing the Q projection parameter count.
+3. **Q also uses low-rank factorization**, Q goes through its own compress/expand path (`q_a_proj` → layernorm → `q_b_proj`), reducing the Q projection parameter count.
 
-4. **RoPE on the rope portion only** — Rotary position encoding is applied only to the `rope_dim` slice of each head's K and Q (`qk_rope_head_dim = 64`), not the full head dimension. The `nope_dim` portion (192) carries position-independent features.
+4. **RoPE on the rope portion only**, Rotary position encoding is applied only to the `rope_dim` slice of each head's K and Q (`qk_rope_head_dim = 64`), not the full head dimension. The `nope_dim` portion (192) carries position-independent features.
 
 ```mermaid
 flowchart TD
@@ -380,7 +380,7 @@ flowchart TD
     SDPA_MLA --> Out
 ```
 
-**KV cache trade-off:** A fully absorbed MLA implementation would cache only the latent vector (`kv_lora_rank + rope_dim = 576` floats per position, shared across all heads). Agave's current implementation reconstructs the full per-head K and V from the latent and caches the expanded result (`n_head × (nope_dim + rope_dim) + n_head × v_head_dim = 20×256 + 20×256 = 10,240` floats per position). This trades higher cache memory for simpler attention dispatch — the SDPA kernel sees standard per-head K/V arrays identical to GQA, so no attention-kernel changes are needed. A future absorbed-KV path would cut cache memory by ~18× at the cost of re-expanding the latent for every cached position during every attention computation.
+**KV cache trade-off:** A fully absorbed MLA implementation would cache only the latent vector (`kv_lora_rank + rope_dim = 576` floats per position, shared across all heads). Agave's current implementation reconstructs the full per-head K and V from the latent and caches the expanded result (`n_head × (nope_dim + rope_dim) + n_head × v_head_dim = 20×256 + 20×256 = 10,240` floats per position). This trades higher cache memory for simpler attention dispatch, the SDPA kernel sees standard per-head K/V arrays identical to GQA, so no attention-kernel changes are needed. A future absorbed-KV path would cut cache memory by ~18× at the cost of re-expanding the latent for every cached position during every attention computation.
 
 **Implementation:** [`src/models/glm4.zig`](../../src/models/glm4.zig) (`mlaAttention`, `multiLinearGemv`). Architecture string `deepseek2` maps to `glm4` in [`src/arch.zig`](../../src/arch.zig).
 
@@ -392,9 +392,9 @@ SDPA is the core attention computation, extracted into a shared **kernel** (a si
 SDPA(Q, K, V, scale) = softmax(Q @ K^T * scale) @ V
 ```
 
-The implementation handles KV cache append, GQA head mapping, sliding window, attention sinks, and KV cache quantization — all dispatched to the active backend.
+The implementation handles KV cache append, GQA head mapping, sliding window, attention sinks, and KV cache quantization, all dispatched to the active backend.
 
-**[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data — processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
+**[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135)** is an optimization that computes attention in **tiles** (small rectangular blocks of the attention matrix processed one at a time) using **online softmax** (incrementally updating the softmax result as new tiles arrive, avoiding the need to store all scores at once), never **materializing** (allocating memory for and storing) the full scores matrix. Metal and CUDA backends implement [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691); the CPU backend uses a **SIMD-vectorized** (using Single Instruction Multiple Data, processing multiple values at once with one CPU instruction) **fallback** (alternative implementation used when the primary method isn't available).
 
 ```mermaid
 flowchart TD
@@ -408,17 +408,17 @@ flowchart TD
     NQ["Q\n[n × d]"]:::setup
     NK["K\n[n × d]"]:::setup
     NV["V\n[n × d]"]:::setup
-    NS["S = Q @ Kᵀ\n[n × n] — full matrix\nwritten to HBM"]:::danger
-    NP["P = softmax(S)\n[n × n] — full matrix\nwritten to HBM"]:::danger
+    NS["S = Q @ Kᵀ\n[n × n], full matrix\nwritten to HBM"]:::danger
+    NP["P = softmax(S)\n[n × n], full matrix\nwritten to HBM"]:::danger
     NO["O = P @ V\n[n × d]"]:::migration
     NMem["HBM reads/writes:\nn² scores + n² softmax\n→ 2n² elements to/from DRAM"]:::danger
     FQ["Q tile\n[Br × d]\n(fits in SRAM)"]:::setup
     FK["K/V tiles\n[Bc × d]\nstreamed block by block"]:::setup
     FTile["Tile loop:\nload K/V block → Br×Bc scores\nonline softmax update → accum O"]:::sync
     FO["O\n[n × d]\nwritten once to HBM"]:::success
-    FMem["HBM reads/writes:\nO(n) — scores never\nleave on-chip SRAM\n→ 5-20× less DRAM traffic"]:::success
+    FMem["HBM reads/writes:\nO(n), scores never\nleave on-chip SRAM\n→ 5-20× less DRAM traffic"]:::success
 
-    subgraph Naive["Naive attention — O(n²) HBM traffic"]
+    subgraph Naive["Naive attention, O(n²) HBM traffic"]
         direction LR
         NQ --> NS
         NK --> NS
@@ -428,7 +428,7 @@ flowchart TD
         NMem
     end
 
-    subgraph Flash["FlashAttention — tiled, O(n) HBM traffic"]
+    subgraph Flash["FlashAttention, tiled, O(n) HBM traffic"]
         direction LR
         FQ --> FTile
         FK --> FTile
@@ -451,9 +451,9 @@ flowchart TD
 | iRoPE | Llama 4 | Q/K rotation | Interleaved RoPE (local) and NoPE (global) layers |
 | Chunked Attention | Llama 4 | SDPA | Local layers attend within fixed-size chunks |
 
-**iRoPE (interleaved RoPE)** (Llama 4): Alternates between local layers with standard RoPE and global NoPE layers that skip rotation entirely. A layer is NoPE when `(layer_id + 1) % nope_interval == 0` (default interval 4, so layers 3, 7, 11, … are global). Local layers use **chunked attention** — each token only attends within a fixed-size chunk, reducing cost to O(chunk²) instead of O(n²). NoPE global layers attend to the full sequence and apply learned **temperature scaling** to Q vectors, giving the model position-independent global context at periodic checkpoints. See [`src/models/llama4.zig`](../../src/models/llama4.zig). Llama 4 also uses Mixture-of-Experts routing (top-1 with an optional shared expert; some layers fall back to dense FFN when no router tensor is present — see [Chapter 3](03-feed-forward-networks.md)).
+**iRoPE (interleaved RoPE)** (Llama 4): Alternates between local layers with standard RoPE and global NoPE layers that skip rotation entirely. A layer is NoPE when `(layer_id + 1) % nope_interval == 0` (default interval 4, so layers 3, 7, 11, … are global). Local layers use **chunked attention**, each token only attends within a fixed-size chunk, reducing cost to O(chunk²) instead of O(n²). NoPE global layers attend to the full sequence and apply learned **temperature scaling** to Q vectors, giving the model position-independent global context at periodic checkpoints. See [`src/models/llama4.zig`](../../src/models/llama4.zig). Llama 4 also uses Mixture-of-Experts routing (top-1 with an optional shared expert; some layers fall back to dense FFN when no router tensor is present, see [Chapter 3](03-feed-forward-networks.md)).
 
-**Per-Head QK Normalization** (Gemma3, Qwen3.5): RMS-normalizes Q and K per head before computing scores, stabilizing attention regardless of embedding **magnitude** (the size/scale of the values — how large the numbers are).
+**Per-Head QK Normalization** (Gemma3, Qwen3.5): RMS-normalizes Q and K per head before computing scores, stabilizing attention regardless of embedding **magnitude** (the size/scale of the values, how large the numbers are).
 
 **Sliding Window** (GPT-OSS): Even layers attend only to the most recent 128 tokens. Odd layers attend to the full sequence. This halves KV cache cost while maintaining global context through **alternation** (switching back and forth between limited and full attention across layers).
 
@@ -461,11 +461,11 @@ flowchart TD
 
 **Sigmoid Gate** (Qwen3.5): After SDPA, output is gated **element-wise** (applied independently to each element, not as a matrix operation) by `sigmoid(gate)`, giving learned per-element control over how much attention output reaches the **residual stream** (the main path through the model where outputs accumulate via residual connections `output = input + sublayer(input)`).
 
-**Logit Softcapping** (Gemma3): `tanh(logits / cap) * cap` — **soft-clamps** (gently constrains via a smooth curve, unlike hard clamping which abruptly cuts off) final logits to `[-cap, +cap]`, preventing extreme values while **preserving relative ordering** (keeping the same rank order — if A > B before, then A > B after).
+**Logit Softcapping** (Gemma3): `tanh(logits / cap) * cap`, **soft-clamps** (gently constrains via a smooth curve, unlike hard clamping which abruptly cuts off) final logits to `[-cap, +cap]`, preventing extreme values while **preserving relative ordering** (keeping the same rank order, if A > B before, then A > B after).
 
 ## RoPE (Rotary Position Encoding)
 
-Transformers are **position-agnostic** by default (they don't know the order of tokens) — without position information, "the cat sat" and "sat the cat" look identical. Earlier models added absolute position embeddings (e.g., "this is position 5"), but [RoPE (Su et al., 2021)](https://arxiv.org/abs/2104.09864) encodes position through **rotation** because it has a key geometric property: **the angle difference between two rotated vectors depends only on their relative distance, not their absolute positions**.
+Transformers are **position-agnostic** by default (they don't know the order of tokens), without position information, "the cat sat" and "sat the cat" look identical. Earlier models added absolute position embeddings (e.g., "this is position 5"), but [RoPE (Su et al., 2021)](https://arxiv.org/abs/2104.09864) encodes position through **rotation** because it has a key geometric property: **the angle difference between two rotated vectors depends only on their relative distance, not their absolute positions**.
 
 ```mermaid
 flowchart LR
@@ -522,7 +522,7 @@ flowchart LR
     R0 & R1 & R2 & R3 --> Out
 ```
 
-When we rotate Q at position `i` by angle `θ_i` and K at position `j` by angle `θ_j`, their dot product includes a term `cos(θ_i - θ_j)`. Since angles are proportional to position (`θ = pos × freq`), the difference `θ_i - θ_j = (i - j) × freq` captures the *relative* distance `(i - j)` between tokens. This means attention naturally focuses on how far apart tokens are, not where they appear absolutely — which is what matters for language ("the cat" should attend the same way whether it's at the start or middle of a sentence).
+When we rotate Q at position `i` by angle `θ_i` and K at position `j` by angle `θ_j`, their dot product includes a term `cos(θ_i - θ_j)`. Since angles are proportional to position (`θ = pos × freq`), the difference `θ_i - θ_j = (i - j) × freq` captures the *relative* distance `(i - j)` between tokens. This means attention naturally focuses on how far apart tokens are, not where they appear absolutely, which is what matters for language ("the cat" should attend the same way whether it's at the start or middle of a sentence).
 
 **How it works:** RoPE rotates Q and K vectors in 2D planes using standard **rotation matrices** (mathematical transformations that rotate vectors by an angle without changing their length):
 
@@ -534,7 +534,7 @@ x'[i]        = x[i] * cos(angle) - x[i + half] * sin(angle)
 x'[i + half] = x[i] * sin(angle) + x[i + half] * cos(angle)
 ```
 
-Each pair of dimensions `[i, i+rope_dim/2]` forms a 2D plane rotated by `angle`. Different planes use different frequencies (lower dimensions rotate faster, higher dimensions rotate slower), giving the model a range of **"wavelengths"** (cycles per distance — like how light has different wavelengths for different colors) to detect patterns at different distances.
+Each pair of dimensions `[i, i+rope_dim/2]` forms a 2D plane rotated by `angle`. Different planes use different frequencies (lower dimensions rotate faster, higher dimensions rotate slower), giving the model a range of **"wavelengths"** (cycles per distance, like how light has different wavelengths for different colors) to detect patterns at different distances.
 
 **RoPE Rotation Visualization:**
 
@@ -571,14 +571,14 @@ Higher theta values produce lower-frequency rotations for better long-range disc
 
 ## RMS Normalization
 
-RMSNorm stabilizes the forward pass by normalizing each vector to **unit RMS** (Root Mean Square — scaling so the average squared value equals 1):
+RMSNorm stabilizes the forward pass by normalizing each vector to **unit RMS** (Root Mean Square, scaling so the average squared value equals 1):
 
 ```
 rmsNorm(x, weight, eps) = x / sqrt(mean(x²) + eps) * weight
        where eps = epsilon, a tiny constant (e.g., 1e-6) to prevent division by zero
 ```
 
-Unlike **LayerNorm** (an older normalization method that also subtracts the mean), RMSNorm has no mean subtraction — simpler and empirically just as effective. Every layer applies RMSNorm **before** attention and before FFN (**pre-norm** — normalizing the input to each sublayer). Some models add **post-norms** (normalizing the output after the sublayer, as in Gemma3) or per-head QK norms (Gemma3, Qwen3.5).
+Unlike **LayerNorm** (an older normalization method that also subtracts the mean), RMSNorm has no mean subtraction, simpler and empirically just as effective. Every layer applies RMSNorm **before** attention and before FFN (**pre-norm**, normalizing the input to each sublayer). Some models add **post-norms** (normalizing the output after the sublayer, as in Gemma3) or per-head QK norms (Gemma3, Qwen3.5).
 
 ```mermaid
 flowchart TD
@@ -616,7 +616,7 @@ flowchart TD
         Scale --> Out
     end
 
-    subgraph PreNorm["Pre-norm placement (default — all models)"]
+    subgraph PreNorm["Pre-norm placement (default, all models)"]
         direction TB
         PNResid --> PNNorm
         PNNorm --> PNSub
@@ -624,7 +624,7 @@ flowchart TD
         PNAdd --> PNOut
     end
 
-    subgraph PostNorm["Post-norm placement (Gemma3 — norm before residual add)"]
+    subgraph PostNorm["Post-norm placement (Gemma3, norm before residual add)"]
         direction TB
         PoResid --> PoSub
         PoSub --> PoNorm
@@ -633,15 +633,15 @@ flowchart TD
     end
 ```
 
-**L2 Normalization** is unit-norm without **learnable weights** (parameters that the model adjusts during training — L2 norm just scales to unit length, doesn't multiply by learned values): `x[i] /= sqrt(sum(x²) + eps)`. Used by **DeltaNet** (a linear-complexity alternative to attention covered in [Chapter 6](06-state-space-models.md#deltanet-qwen35)) to normalize Q and K before the recurrence.
+**L2 Normalization** is unit-norm without **learnable weights** (parameters that the model adjusts during training, L2 norm just scales to unit length, doesn't multiply by learned values): `x[i] /= sqrt(sum(x²) + eps)`. Used by **DeltaNet** (a linear-complexity alternative to attention covered in [Chapter 6](06-state-space-models.md#deltanet-qwen35)) to normalize Q and K before the recurrence.
 
 ---
 
 ## GEMV vs GEMM (Decode vs Prefill)
 
-During **decode** (one token at a time), each weight matrix computes one output vector: `y = W @ x`. This is a **GEMV** (General Matrix-Vector multiply) — bandwidth-bound because each weight element is loaded from memory, multiplied once, and discarded. For a 2560×2560 matrix in Q4_0 (4-bit), that's ~3.3 MB of weights read for a single GEMV, producing just 2560 output floats. On a system with 400 GB/s memory bandwidth, this takes ~8 µs — during which the CPU/GPU does only 6.5M multiply-adds. The hardware could do 100× more math in the same time, but it's starved for data.
+During **decode** (one token at a time), each weight matrix computes one output vector: `y = W @ x`. This is a **GEMV** (General Matrix-Vector multiply), bandwidth-bound because each weight element is loaded from memory, multiplied once, and discarded. For a 2560×2560 matrix in Q4_0 (4-bit), that's ~3.3 MB of weights read for a single GEMV, producing just 2560 output floats. On a system with 400 GB/s memory bandwidth, this takes ~8 µs, during which the CPU/GPU does only 6.5M multiply-adds. The hardware could do 100× more math in the same time, but it's starved for data.
 
-During **prefill** (processing the entire prompt), all N prompt tokens can be processed through each layer together. The GEMV becomes a **GEMM** (General Matrix-Matrix multiply): `Y[N×out] = X[N×in] @ W[out×in]^T`. The key difference: each weight row is loaded once and multiplied against N input vectors. This gives **N× bandwidth savings** — the same weight data does N× more useful work.
+During **prefill** (processing the entire prompt), all N prompt tokens can be processed through each layer together. The GEMV becomes a **GEMM** (General Matrix-Matrix multiply): `Y[N×out] = X[N×in] @ W[out×in]^T`. The key difference: each weight row is loaded once and multiplied against N input vectors. This gives **N× bandwidth savings**, the same weight data does N× more useful work.
 
 ```
 GEMV (decode, 1 token):   load weight row → 1 dot product  → discard
@@ -669,14 +669,14 @@ flowchart LR
     YB["Output Y\n[N × out floats]"]:::success
     NoteB["Compute-bound:\neach weight byte used N times\nArithmetic intensity ≈ N ops/byte"]:::success
 
-    subgraph GEMV["GEMV — Decode (1 token at a time)"]
+    subgraph GEMV["GEMV, Decode (1 token at a time)"]
         direction TB
         WA -->|"1 dot product\nper row"| XA
         XA --> YA
         NoteA
     end
 
-    subgraph GEMM["GEMM — Prefill (N tokens batched)"]
+    subgraph GEMM["GEMM, Prefill (N tokens batched)"]
         direction TB
         WB -->|"N dot products\nper row"| XB
         XB --> YB
@@ -690,7 +690,7 @@ flowchart LR
 
 ## Gotchas
 
-- **GPU sync before argmax**: After the final GEMV (vocab projection), logits are written by the GPU. CPU argmax must call `be.sync()` first — without it, you read stale data on UMA platforms.
+- **GPU sync before argmax**: After the final GEMV (vocab projection), logits are written by the GPU. CPU argmax must call `be.sync()` first, without it, you read stale data on UMA platforms.
 - **KV cache overflow**: The cache has a fixed context size. Models must call `ensureKvBlock()` before each forward to allocate new blocks. If the cache is full, return `error.KVCacheFull` (or evict via `--kv-eviction`).
 - **RoPE dim mismatch**: Some models rotate only a fraction of head_dim (`rope_dim` in `src/backend/kernels/cpu/rope.zig`, e.g. Gemma4 global layers: 25%). The non-rotated dimensions carry non-positional features, don't zero them, and don't assume `rope_dim == head_dim` when wiring a new architecture.
 - **GQA kv head mismatch**: GQA head grouping is a plain integer division, `hpg = n_head / n_head_kv` (`src/ops/attention.zig`). `src/models/qwen35.zig` asserts `n_head % n_head_kv == 0` at model construction, but `std.debug.assert` compiles out in `ReleaseFast`. A GGUF with a wrong `attention.head_count_kv` value that isn't an exact divisor of `head_count` won't crash in production, it'll quietly compute the wrong Q-to-KV head grouping and produce degraded output with no error.
@@ -713,66 +713,66 @@ out     = Wo @ concat(attn heads)
 
 ## Glossary
 
-**attention** — A mechanism that lets each token decide which previous tokens to focus on by computing similarity scores.
+**attention**, A mechanism that lets each token decide which previous tokens to focus on by computing similarity scores.
 
-**attention head** — One independent attention computation; multiple heads run in parallel, each learning different relationships.
+**attention head**, One independent attention computation; multiple heads run in parallel, each learning different relationships.
 
-**attention sinks** — Learned per-head scalar values that absorb excess attention probability, preventing over-concentration on early positions.
+**attention sinks**, Learned per-head scalar values that absorb excess attention probability, preventing over-concentration on early positions.
 
-**causal mask** — A constraint that prevents tokens from attending to future positions, enforced by setting future scores to −∞.
+**causal mask**, A constraint that prevents tokens from attending to future positions, enforced by setting future scores to −∞.
 
-**chunked attention** — An attention variant where each token only attends within a fixed-size chunk, reducing cost from O(n²) to O(chunk²); used by Llama 4 local layers.
+**chunked attention**, An attention variant where each token only attends within a fixed-size chunk, reducing cost from O(n²) to O(chunk²); used by Llama 4 local layers.
 
-**decode** — Generating tokens one at a time in the autoregressive loop (GEMV, sequential).
+**decode**, Generating tokens one at a time in the autoregressive loop (GEMV, sequential).
 
-**FlashAttention** — An optimization that computes attention in tiles using online softmax, avoiding materializing the full score matrix.
+**FlashAttention**, An optimization that computes attention in tiles using online softmax, avoiding materializing the full score matrix.
 
-**GEMM (General Matrix-Matrix multiply)** — Multiplying a weight matrix by multiple vectors at once; more compute-efficient per byte loaded.
+**GEMM (General Matrix-Matrix multiply)**, Multiplying a weight matrix by multiple vectors at once; more compute-efficient per byte loaded.
 
-**GQA (Grouped Query Attention)** — An optimization that shares K/V heads across multiple Q heads to reduce KV cache memory.
+**GQA (Grouped Query Attention)**, An optimization that shares K/V heads across multiple Q heads to reduce KV cache memory.
 
-**HBM (High Bandwidth Memory)** — Off-chip DRAM on GPUs; fast but slower than on-chip SRAM.
+**HBM (High Bandwidth Memory)**, Off-chip DRAM on GPUs; fast but slower than on-chip SRAM.
 
-**hidden state** — The fixed-size internal vector representation that flows through each transformer layer, being progressively refined.
+**hidden state**, The fixed-size internal vector representation that flows through each transformer layer, being progressively refined.
 
-**iRoPE (interleaved RoPE)** — Llama 4's attention pattern that alternates between local layers with standard RoPE and global NoPE layers that skip rotation.
+**iRoPE (interleaved RoPE)**, Llama 4's attention pattern that alternates between local layers with standard RoPE and global NoPE layers that skip rotation.
 
-**kernel (compute)** — A single computational function dispatched to run on CPU or GPU hardware.
+**kernel (compute)**, A single computational function dispatched to run on CPU or GPU hardware.
 
-**L2 normalization** — Scaling a vector to unit length (norm = 1) without learned weights.
+**L2 normalization**, Scaling a vector to unit length (norm = 1) without learned weights.
 
-**linear projection** — A matrix-vector multiply that transforms a vector into a different representation.
+**linear projection**, A matrix-vector multiply that transforms a vector into a different representation.
 
-**MHA (Multi-Head Attention)** — Standard attention where each Q head has its own dedicated K and V heads.
+**MHA (Multi-Head Attention)**, Standard attention where each Q head has its own dedicated K and V heads.
 
-**MLA (Multi-head Latent Attention)** — An attention variant that projects the hidden state into a small shared latent vector, then expands it into per-head K and V via small per-head matrices. Reduces the KV projection parameter count and, in an absorbed implementation, the KV cache size. Used by GLM-4 and DeepSeek V2/V3.
+**MLA (Multi-head Latent Attention)**, An attention variant that projects the hidden state into a small shared latent vector, then expands it into per-head K and V via small per-head matrices. Reduces the KV projection parameter count and, in an absorbed implementation, the KV cache size. Used by GLM-4 and DeepSeek V2/V3.
 
-**NoPE (No Position Encoding)** — An attention layer that skips rotary position encoding entirely, attending to the full sequence with position-independent Q/K vectors and learned temperature scaling.
+**NoPE (No Position Encoding)**, An attention layer that skips rotary position encoding entirely, attending to the full sequence with position-independent Q/K vectors and learned temperature scaling.
 
-**online softmax** — Incrementally computing softmax as tiles arrive, without storing all scores in memory at once.
+**online softmax**, Incrementally computing softmax as tiles arrive, without storing all scores in memory at once.
 
-**prefill** — Processing all prompt tokens at once through the model (GEMM, batched).
+**prefill**, Processing all prompt tokens at once through the model (GEMM, batched).
 
-**Q (Query) / K (Key) / V (Value)** — Linear projections of the hidden state used in attention: Q = what this token looks for, K = what it contains, V = information it carries.
+**Q (Query) / K (Key) / V (Value)**, Linear projections of the hidden state used in attention: Q = what this token looks for, K = what it contains, V = information it carries.
 
-**residual connection** — Adding the input directly to the sublayer output (`output = input + sublayer(input)`), preserving information flow.
+**residual connection**, Adding the input directly to the sublayer output (`output = input + sublayer(input)`), preserving information flow.
 
-**RMSNorm (Root Mean Square Normalization)** — Scales a vector so its average squared value equals 1, then applies learned weights.
+**RMSNorm (Root Mean Square Normalization)**, Scales a vector so its average squared value equals 1, then applies learned weights.
 
-**RoPE (Rotary Position Encoding)** — A position encoding method that rotates Q and K vectors by position-dependent angles, encoding relative distance.
+**RoPE (Rotary Position Encoding)**, A position encoding method that rotates Q and K vectors by position-dependent angles, encoding relative distance.
 
-**SDPA (Scaled Dot-Product Attention)** — The core attention formula: softmax(Q·Kᵀ/√d)·V, extracted as a reusable kernel.
+**SDPA (Scaled Dot-Product Attention)**, The core attention formula: softmax(Q·Kᵀ/√d)·V, extracted as a reusable kernel.
 
-**SIMD (Single Instruction Multiple Data)** — Processing multiple values simultaneously with one CPU instruction.
+**SIMD (Single Instruction Multiple Data)**, Processing multiple values simultaneously with one CPU instruction.
 
-**sliding window attention** — An attention variant where each layer only attends to the most recent N tokens instead of the full sequence.
+**sliding window attention**, An attention variant where each layer only attends to the most recent N tokens instead of the full sequence.
 
-**softmax** — A function that converts a vector of raw scores into probabilities summing to 1.0.
+**softmax**, A function that converts a vector of raw scores into probabilities summing to 1.0.
 
-**SRAM (Static RAM)** — Fast on-chip memory used for caches and registers on GPUs.
+**SRAM (Static RAM)**, Fast on-chip memory used for caches and registers on GPUs.
 
-**transformer layer** — A processing unit consisting of an attention sublayer and a feed-forward network sublayer, stacked N times.
+**transformer layer**, A processing unit consisting of an attention sublayer and a feed-forward network sublayer, stacked N times.
 
-**UMA (Unified Memory Architecture)** — A system where CPU and GPU share the same physical memory (e.g., Apple Silicon).
+**UMA (Unified Memory Architecture)**, A system where CPU and GPU share the same physical memory (e.g., Apple Silicon).
 
-**VRAM (Video RAM)** — GPU-attached memory for model weights and intermediate data.
+**VRAM (Video RAM)**, GPU-attached memory for model weights and intermediate data.

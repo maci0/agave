@@ -86,7 +86,7 @@ pub fn siluMul(a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
 /// Applies GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))).
 /// If input != output, copies input to output first (underlying impl is in-place).
 pub fn gelu(input: [*]const f32, output: [*]f32, n: usize) void {
-    // applyGelu is in-place — copy first if input and output differ
+    // applyGelu is in-place, copy first if input and output differ
     if (input != output) @memcpy(output[0..n], input[0..n]);
     math_ops.applyGelu(output[0..n]);
 }

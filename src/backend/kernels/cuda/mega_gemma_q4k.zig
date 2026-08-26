@@ -1,6 +1,6 @@
-//! True megakernel: Gemma 3/4 Q4_K — single dispatch for all layers (CUDA).
+//! True megakernel: Gemma 3/4 Q4_K, single dispatch for all layers (CUDA).
 //!
-//! Gemma 3/4 dense models have uniform layer structure — every layer is identical:
+//! Gemma 3/4 dense models have uniform layer structure, every layer is identical:
 //!   pre-norm → Q/K/V → RoPE → SDPA → output → post-attn-norm → residual
 //!   pre-norm → gate/up → GELU(gate)*up → down → post-FFN-norm → residual
 //!

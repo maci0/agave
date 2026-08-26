@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# check-shader-artifacts.sh — verify committed GPU kernel artifacts are fresh.
+# check-shader-artifacts.sh, verify committed GPU kernel artifacts are fresh.
 #
 # The CUDA PTX (src/backend/kernels/cuda/*.ptx) and Vulkan SPIR-V
 # (src/backend/kernels/vulkan/*.spv) binaries are generated artifacts checked

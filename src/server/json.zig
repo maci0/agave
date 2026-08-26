@@ -19,7 +19,7 @@ fn quoteFieldKey(buf: *[extract_field_buf_size]u8, field: []const u8) ?[]const u
 const max_api_messages: usize = 128;
 /// Maximum valid sampling temperature (prevents numerical instability in softmax).
 const max_temperature: f32 = 100.0;
-/// Maximum valid top_k value — must match math_ops stack buffer size.
+/// Maximum valid top_k value, must match math_ops stack buffer size.
 const max_top_k: u32 = math_ops.max_top_k;
 
 // ── Types ───────────────────────────────────────────────────────
@@ -319,7 +319,7 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
     var json_mode = false;
     var schema_from_rf: ?[]const u8 = null;
     if (extractObjectField(body, "response_format")) |rf_obj| {
-        // Search within the extracted object only — not the full body.
+        // Search within the extracted object only, not the full body.
         if (std.mem.indexOf(u8, rf_obj, "json_object") != null) {
             json_mode = true;
         } else if (std.mem.indexOf(u8, rf_obj, "json_schema") != null) {
@@ -366,7 +366,7 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
         .logprobs = extractBoolField(body, "logprobs"),
         .top_logprobs = @intCast(@min(extractIntField(body, "top_logprobs") orelse 0, 20)),
         .stream_include_usage = blk: {
-            // stream_options.include_usage — default true when the key is omitted
+            // stream_options.include_usage, default true when the key is omitted
             // (docs/API.md). extractBoolField returns false for a missing key, so
             // only override when the field is actually present.
             if (extractObjectField(body, "stream_options")) |so| {
@@ -481,7 +481,7 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
         result.thinking_budget_tokens = @intCast(@max(0, b));
     } else if (extractObjectField(body, "thinking")) |thinking_obj| {
         // Search for budget_tokens within the thinking object only,
-        // not the full body — avoids false matches from unrelated fields.
+        // not the full body, avoids false matches from unrelated fields.
         if (extractIntField(thinking_obj, "budget_tokens")) |b| {
             result.thinking_budget_tokens = @intCast(@max(0, b));
         }
@@ -498,7 +498,7 @@ pub fn parseTools(body: []const u8) ToolParams {
     // Find the tools array in the body
     const tools_arr = extractObjectField(body, "tools") orelse return result;
 
-    // Parse tool_choice — can be string ("auto"/"none"/"required") or object
+    // Parse tool_choice, can be string ("auto"/"none"/"required") or object
     result.tool_choice = extractField(body, "tool_choice") orelse "auto";
 
     // Extract each function definition from the tools array.
@@ -540,7 +540,7 @@ pub fn parseTools(body: []const u8) ToolParams {
 }
 
 /// Parse tools from an Anthropic Messages API body into a ToolParams.
-/// Anthropic format is flat — `tools: [{"name", "description", "input_schema"}]` —
+/// Anthropic format is flat, `tools: [{"name", "description", "input_schema"}]`,
 /// without the OpenAI `"function"` wrapper, so this is a separate scanner.
 /// `tool_choice` accepts "auto"/"any"/"tool"/"none"; callers normalize "any"/"tool"
 /// to "required" semantics.
@@ -603,7 +603,7 @@ fn findObjectStart(json: []const u8, pos: *usize) ?usize {
 
 /// Extract all messages from an OpenAI-format `"messages"` JSON array.
 /// Returns conversation messages (user/assistant) and an optional system message.
-/// Message content slices point into the original JSON body — valid for the request lifetime.
+/// Message content slices point into the original JSON body, valid for the request lifetime.
 pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessages {
     const msgs_key = "\"messages\"";
     const msgs_pos = std.mem.indexOf(u8, json, msgs_key) orelse return null;
@@ -656,7 +656,7 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
             (if (is_assistant) "" else continue);
         const owned_content = jsonUnescapeOwned(allocator, content) catch continue;
 
-        // OpenAI o1/o3 SDK sends "developer" role instead of "system" — normalize.
+        // OpenAI o1/o3 SDK sends "developer" role instead of "system", normalize.
         if (std.mem.eql(u8, role_str, "system") or std.mem.eql(u8, role_str, "developer")) {
             if (system_msg) |prev_sys| wipeFree(allocator, @constCast(prev_sys));
             system_msg = owned_content;
@@ -667,7 +667,7 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
             messages_buf[count] = .{ .role = .assistant, .content = owned_content };
             count += 1;
         } else if (std.mem.eql(u8, role_str, "tool")) {
-            // Tool result message — extract tool_call_id and include content
+            // Tool result message, extract tool_call_id and include content
             const tcid = extractField(obj_slice, "tool_call_id");
             messages_buf[count] = .{ .role = .tool, .content = owned_content, .tool_call_id = tcid };
             count += 1;
@@ -753,7 +753,7 @@ pub fn parseFormSampling(out: *SamplingParams, body: []const u8) void {
 /// Looks for field "image" with a data URI value (e.g., "data:image/png;base64,...").
 /// Returns the raw base64 string (after the "base64," prefix), or null if
 /// no image field is present or the data URI format is unrecognized.
-/// The returned slice points into the original body — valid for the request lifetime.
+/// The returned slice points into the original body, valid for the request lifetime.
 pub fn extractFormImage(body: []const u8) ?[]const u8 {
     const field_val = extractFormField(body, "image") orelse return null;
     // URL-encoded form values encode ',' as '%2C', so check both variants.
@@ -784,7 +784,7 @@ fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
         const val_end = findJsonStringEnd(arr, val_start);
         const type_val = arr[val_start..val_end];
         if (std.mem.eql(u8, type_val, "text")) {
-            // Found text type — extract its "text" field
+            // Found text type, extract its "text" field
             const remaining = arr[val_end..];
             return extractField(remaining, "text");
         }
@@ -1042,10 +1042,10 @@ pub fn jsonUnescapeInto(dst: []u8, src: []const u8) ?[]const u8 {
                         // pairs into a valid codepoint; emit U+FFFD for lone surrogates.
                         if (cp >= 0xD800 and cp <= 0xDFFF) {
                             if (cp <= 0xDBFF and i + 11 <= src.len and src[i + 5] == '\\' and src[i + 6] == 'u') {
-                                // High surrogate — try to read low surrogate
+                                // High surrogate, try to read low surrogate
                                 const lo = std.fmt.parseInt(u21, src[i + 7 .. i + 11], 16) catch 0;
                                 if (lo >= 0xDC00 and lo <= 0xDFFF) {
-                                    // Valid surrogate pair — decode to codepoint (U+10000..U+10FFFF)
+                                    // Valid surrogate pair, decode to codepoint (U+10000..U+10FFFF)
                                     const full: u21 = 0x10000 + (@as(u21, cp - 0xD800) << 10) + (lo - 0xDC00);
                                     if (out + 4 > dst.len) return null;
                                     dst[out] = @intCast(0xF0 | (full >> 18));
@@ -1057,7 +1057,7 @@ pub fn jsonUnescapeInto(dst: []u8, src: []const u8) ?[]const u8 {
                                     continue;
                                 }
                             }
-                            // Lone surrogate — emit U+FFFD replacement character
+                            // Lone surrogate, emit U+FFFD replacement character
                             if (out + 3 > dst.len) return null;
                             dst[out] = 0xEF;
                             dst[out + 1] = 0xBF;
@@ -1221,7 +1221,7 @@ test "extractBoolField with spaces around colon" {
 test "jsonUnescape basic escapes" {
     const allocator = std.testing.allocator;
 
-    // No escapes — returns input unchanged
+    // No escapes, returns input unchanged
     const plain = try jsonUnescape(allocator, "hello world");
     try std.testing.expectEqualStrings("hello world", plain);
     // ptr should be the same (no allocation)
@@ -1422,7 +1422,7 @@ test "extractFloatField handles edge values" {
 }
 
 test "extractJsonImage handles truncated base64 marker" {
-    // Has "base64," but no data after it — closing quote immediately follows,
+    // Has "base64," but no data after it, closing quote immediately follows,
     // so end == 0 and extractJsonImage returns null.
     const body =
         \\{"content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,"}}]}
@@ -1735,7 +1735,7 @@ test "htmlEscape no-op for plain text" {
     const allocator = std.testing.allocator;
     const input = "hello world";
     const escaped = try htmlEscape(allocator, input);
-    // No escaping needed — returns input pointer, no allocation
+    // No escaping needed, returns input pointer, no allocation
     try std.testing.expect(escaped.ptr == input.ptr);
     try std.testing.expectEqualStrings("hello world", escaped);
 }
@@ -1746,7 +1746,7 @@ test "jsonEscapeInto escapes without allocating" {
     const out = jsonEscapeInto(&buf, "a\"b\\c\nd\x01").?;
     try std.testing.expectEqualStrings("a\\\"b\\\\c\\nd\\u0001", out);
 
-    // No escaping needed — byte-identical copy.
+    // No escaping needed, byte-identical copy.
     const plain = jsonEscapeInto(&buf, "hello").?;
     try std.testing.expectEqualStrings("hello", plain);
 
@@ -1842,7 +1842,7 @@ test "extractField grammar from API request body" {
         ;
         const result = extractField(body, "grammar");
         try std.testing.expect(result != null);
-        // extractField returns raw JSON content — escapes intact
+        // extractField returns raw JSON content, escapes intact
         try std.testing.expectEqualStrings(
             \\root ::= \"hello\" | \"world\"
         , result.?);
@@ -1858,7 +1858,7 @@ test "extractField grammar from API request body" {
         try std.testing.expectEqualStrings("root ::= [a-z]+", result.?);
     }
 
-    // 4. No grammar field — should return null
+    // 4. No grammar field, should return null
     {
         const body =
             \\{"messages":[{"role":"user","content":"hi"}],"max_tokens":5}
@@ -1925,33 +1925,33 @@ test "fuzz: all json functions" {
             for (field_buf[0..field_len]) |*b| b.* = smith.valueWithHash(u8, 3);
             const field = field_buf[0..field_len];
 
-            // 1. extractBoolField — always returns bool
+            // 1. extractBoolField, always returns bool
             _ = extractBoolField(input, field);
 
-            // 2. extractIntField — returns optional usize
+            // 2. extractIntField, returns optional usize
             _ = extractIntField(input, field);
 
-            // 3. extractFloatField — returns optional f32; must be finite when present
+            // 3. extractFloatField, returns optional f32; must be finite when present
             if (extractFloatField(input, field)) |v| {
                 try std.testing.expect(std.math.isFinite(v));
             }
 
-            // 4. extractField — returns optional slice into input
+            // 4. extractField, returns optional slice into input
             if (extractField(input, field)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
 
-            // 5. extractObjectField — returns optional slice into input
+            // 5. extractObjectField, returns optional slice into input
             if (extractObjectField(input, field)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
 
-            // 6. extractLastMessage — returns optional slice into input
+            // 6. extractLastMessage, returns optional slice into input
             if (extractLastMessage(input)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
 
-            // 7. parseSampling — always returns valid SamplingParams
+            // 7. parseSampling, always returns valid SamplingParams
             var sp = SamplingParams{};
             parseSampling(&sp, input);
             std.debug.assert(sp.temperature >= 0 and sp.temperature <= max_temperature);
@@ -1966,70 +1966,70 @@ test "fuzz: all json functions" {
             _ = sp.hasStop();
             _ = sp.matchesStop(input);
 
-            // 9. parseTools — always returns valid ToolParams
+            // 9. parseTools, always returns valid ToolParams
             const tp = parseTools(input);
             std.debug.assert(tp.tool_count <= max_tools);
 
-            // 10. extractMessages — may allocate, must clean up
+            // 10. extractMessages, may allocate, must clean up
             if (extractMessages(input, allocator)) |em| {
                 std.debug.assert(em.messages.len > 0);
                 em.deinit(allocator);
             }
 
-            // 11. extractFormField — returns optional slice into input
+            // 11. extractFormField, returns optional slice into input
             if (extractFormField(input, field)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
 
-            // 12. extractFormBool — always returns bool
+            // 12. extractFormBool, always returns bool
             _ = extractFormBool(input, field);
 
-            // 13. extractFormFloat — returns optional f32; must be finite when present
+            // 13. extractFormFloat, returns optional f32; must be finite when present
             if (extractFormFloat(input, field)) |v| {
                 try std.testing.expect(std.math.isFinite(v));
             }
 
-            // 14. extractFormInt — returns optional usize
+            // 14. extractFormInt, returns optional usize
             _ = extractFormInt(input, field);
 
-            // 15. parseFormSampling — always returns valid SamplingParams
+            // 15. parseFormSampling, always returns valid SamplingParams
             var fs = SamplingParams{};
             parseFormSampling(&fs, input);
             std.debug.assert(fs.temperature >= 0 and fs.temperature <= max_temperature);
             std.debug.assert(fs.top_p >= 0 and fs.top_p <= 1.0);
 
-            // 16. extractFormImage — returns optional slice into input
+            // 16. extractFormImage, returns optional slice into input
             if (extractFormImage(input)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
 
-            // 17. extractJsonImage — returns optional slice into input
+            // 17. extractJsonImage, returns optional slice into input
             if (extractJsonImage(input)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
 
-            // 18. urlDecode — allocates, must free
+            // 18. urlDecode, allocates, must free
             const decoded = urlDecode(allocator, input) catch return;
             defer allocator.free(decoded);
             std.debug.assert(decoded.len <= input.len);
 
-            // 19. jsonEscape — may allocate
+            // 19. jsonEscape, may allocate
             const escaped = jsonEscape(allocator, input) catch return;
             if (escaped.ptr != input.ptr) allocator.free(escaped);
 
-            // 20. jsonUnescape — may allocate
+            // 20. jsonUnescape, may allocate
             const unescaped = jsonUnescape(allocator, input) catch return;
             if (unescaped.ptr != input.ptr) allocator.free(unescaped);
 
-            // 21. jsonUnescapeOwned — always allocates
+            // 21. jsonUnescapeOwned, always allocates
             const owned = jsonUnescapeOwned(allocator, input) catch return;
             allocator.free(owned);
 
-            // 22. htmlEscape — may allocate
+            // 22. htmlEscape, may allocate
             const html = htmlEscape(allocator, input) catch return;
             if (html.ptr != input.ptr) allocator.free(html);
 
-            // 23. ExtractedMessages.deinit — tested via extractMessages above
+            // 23. ExtractedMessages.deinit, tested via extractMessages above
 
             // 24. extractField finds grammar field
             {

@@ -134,7 +134,7 @@ pub const Grammar = struct {
         if (state.completed) return;
         if (state.stack.items.len == 0) return;
 
-        // Pre-allocate a reusable test state — avoids per-token heap allocation.
+        // Pre-allocate a reusable test state, avoids per-token heap allocation.
         // acceptCharInner recursion allows depth 0..max_accept_depth, each pushes at most 1 entry.
         const required_cap = state.stack.items.len + max_stack_growth_per_token;
         var test_state = GrammarState{
@@ -264,7 +264,7 @@ pub const Grammar = struct {
         if (text.len >= 2 and text[0] == bpe_latin1_prefix) {
             return text[2..];
         }
-        // Strip a leading ASCII space (0x20) — the decoded form of the BPE Ġ prefix.
+        // Strip a leading ASCII space (0x20), the decoded form of the BPE Ġ prefix.
         // Some tokenizers store decoded text in id_to_token, so space-prefixed tokens
         // appear as " word" rather than "Ġword".
         if (text.len >= 2 and text[0] == ' ') {
@@ -347,9 +347,9 @@ pub const GrammarState = struct {
             },
             .char_range_star => {
                 if (@as(u32, c) >= elem.lo and @as(u32, c) <= elem.hi) {
-                    return true; // match — stay at this element
+                    return true; // match, stay at this element
                 }
-                // no match — advance past (zero matches ok)
+                // no match, advance past (zero matches ok)
                 top.elem_idx += 1;
                 self.advancePastEnd();
                 return self.acceptCharInner(c, depth + 1);
@@ -362,14 +362,14 @@ pub const GrammarState = struct {
                     self.advancePastEnd();
                     return true;
                 }
-                // No match — skip (zero matches ok)
+                // No match, skip (zero matches ok)
                 top.elem_idx += 1;
                 return self.acceptCharInner(c, depth + 1);
             },
             .char_not_star => {
                 const run_len: u32 = @intCast(self.countCharNotRun(top.rule_id, top.elem_idx));
                 if (self.charNotRunAccepts(c, top.rule_id, top.elem_idx, @intCast(run_len))) {
-                    return true; // match — stay at this run
+                    return true; // match, stay at this run
                 }
                 top.elem_idx += run_len;
                 self.advancePastEnd();
@@ -397,7 +397,7 @@ pub const GrammarState = struct {
                 const saved_completed = self.completed;
                 self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
                 if (self.acceptCharInner(c, depth + 1)) return true;
-                // Subrule didn't match — restore and advance past
+                // Subrule didn't match, restore and advance past
                 self.stack.shrinkRetainingCapacity(saved_len);
                 self.completed = saved_completed;
                 top.elem_idx += 1;
@@ -411,7 +411,7 @@ pub const GrammarState = struct {
                 top.elem_idx += 1; // advance past regardless
                 self.stack.append(self.grammar.allocator, .{ .rule_id = elem.lo, .elem_idx = 0 }) catch return false;
                 if (self.acceptCharInner(c, depth + 1)) return true;
-                // Didn't match — restore and try without
+                // Didn't match, restore and try without
                 self.stack.shrinkRetainingCapacity(saved_len);
                 self.completed = saved_completed;
                 self.advancePastEnd();
@@ -573,7 +573,7 @@ const Parser = struct {
                 // Skip to ::=
                 while (scan_pos < self.input.len and (self.input[scan_pos] == ' ' or self.input[scan_pos] == '\t')) : (scan_pos += 1) {}
                 if (scan_pos + 3 <= self.input.len and std.mem.eql(u8, self.input[scan_pos..][0..3], "::=")) {
-                    // Pre-register with placeholder — actual ID assigned in pass 2
+                    // Pre-register with placeholder, actual ID assigned in pass 2
                     if (!self.rule_names.contains(name)) {
                         try self.rule_names.put(name, unresolved_rule_id);
                     }
@@ -1228,7 +1228,7 @@ test "char repetition star" {
     var state = try grammar.initState();
     defer state.deinit();
 
-    // Zero matches — should complete immediately (empty string valid)
+    // Zero matches, should complete immediately (empty string valid)
     try std.testing.expect(state.acceptChar('1') == false);
 }
 
@@ -1252,7 +1252,7 @@ test "char repetition plus rejects zero matches" {
     var state = try grammar.initState();
     defer state.deinit();
 
-    // Cannot start with 'x' — need at least one digit first
+    // Cannot start with 'x', need at least one digit first
     try std.testing.expect(state.acceptChar('x') == false);
     try std.testing.expect(!state.isComplete());
 
@@ -1551,7 +1551,7 @@ test "fuzz: all grammar functions" {
             const effective = Grammar.getEffectiveText(&text_buf);
             std.debug.assert(effective.len <= text_buf.len);
 
-            // --- pub fn Grammar.parse (random bytes — exercise error paths) ---
+            // --- pub fn Grammar.parse (random bytes, exercise error paths) ---
             var input_buf: [32]u8 = undefined;
             for (&input_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @as(u32, @intCast(i)) +% 100);
             if (Grammar.parse(allocator, &input_buf)) |*g| {
@@ -1559,7 +1559,7 @@ test "fuzz: all grammar functions" {
                 gm.deinit();
             } else |_| {}
 
-            // --- pub fn Grammar.fromJsonSchema (random bytes — exercise error paths) ---
+            // --- pub fn Grammar.fromJsonSchema (random bytes, exercise error paths) ---
             var schema_buf: [48]u8 = undefined;
             for (&schema_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @as(u32, @intCast(i)) +% 200);
             if (Grammar.fromJsonSchema(allocator, &schema_buf)) |*gs| {

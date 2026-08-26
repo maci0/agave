@@ -121,7 +121,7 @@ qwen35 = ChatTemplate{
 }
 ```
 
-**Note:** `user_suffix` is empty because `assistant_prefix` already includes `<|im_end|>\n` — the end-of-user marker is baked into the transition.
+**Note:** `user_suffix` is empty because `assistant_prefix` already includes `<|im_end|>\n`, the end-of-user marker is baked into the transition.
 
 ## Template Usage
 
@@ -264,7 +264,7 @@ gemma = ChatTemplate{
 
 **Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.gemma`)
 
-**Note:** Gemma doesn't have a separate system role — system messages use the user prefix. The `assistant_prefix` includes `<end_of_turn>\n` to close the prior turn before opening the model turn.
+**Note:** Gemma doesn't have a separate system role, system messages use the user prefix. The `assistant_prefix` includes `<end_of_turn>\n` to close the prior turn before opening the model turn.
 
 ### Gemma 4
 
@@ -309,7 +309,7 @@ gpt_oss = ChatTemplate{
 
 **Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.gpt_oss`)
 
-**Note:** GPT-OSS uses `<|start|>`/`<|end|>` markers (not Llama-style headers). It has both a `default_system` message and a `system_role_override` — user-provided system messages are formatted as "developer" instructions.
+**Note:** GPT-OSS uses `<|start|>`/`<|end|>` markers (not Llama-style headers). It has both a `default_system` message and a `system_role_override`, user-provided system messages are formatted as "developer" instructions.
 
 ### GLM-4
 
@@ -333,7 +333,7 @@ glm4 = ChatTemplate{
 
 **Implementation:** [`src/chat_template.zig`](../../src/chat_template.zig) (`ChatTemplate.glm4`)
 
-**Note:** GLM-4 uses `[gMASK]<sop>` as the initial BOS marker. The `system_role_override` maps user-provided system messages to the `<|system|>` role. Reasoning is disabled by default — GLM-4 has no generation prefix.
+**Note:** GLM-4 uses `[gMASK]<sop>` as the initial BOS marker. The `system_role_override` maps user-provided system messages to the `<|system|>` role. Reasoning is disabled by default, GLM-4 has no generation prefix.
 
 ### Nemotron-H / Nemotron-Nano (ChatML)
 
@@ -447,7 +447,7 @@ prompt = if args.system_msg:
 
 **Implementation:** [`src/main.zig`](../../src/main.zig) (`chatTemplateForLayers` call sites)
 
-**No model-specific code needed** — the architecture enum handles it.
+**No model-specific code needed**, the architecture enum handles it.
 
 ## End-of-Generation Token Detection
 
@@ -579,7 +579,7 @@ Previous response<|im_end|>
 <-- generation starts here
 ```
 
-**Why?** Past assistant messages are complete — they don't need reasoning suppression. Only the **new generation** needs the empty think block.
+**Why?** Past assistant messages are complete, they don't need reasoning suppression. Only the **new generation** needs the empty think block.
 
 ## Implementation Details
 
@@ -850,7 +850,7 @@ Different model architectures use different special tokens for image placeholder
 | Gemma 3 | `<img>` (219) | `<img>` (219) | `<img>` (219) | Single token for all three roles |
 | Qwen 3.5 | `<\|vision_start\|>` (248053) | `<\|vision_end\|>` (248054) | `<\|image_pad\|>` (248056) | Three distinct tokens |
 
-When start equals pad (Gemma 4), `injectImageTokens()` omits the start wrapper to avoid the model consuming the start token as a visual embedding — it just injects `pad × N` (no separate start or end):
+When start equals pad (Gemma 4), `injectImageTokens()` omits the start wrapper to avoid the model consuming the start token as a visual embedding, it just injects `pad × N` (no separate start or end):
 
 ```text
 # architecture-aware wrapping
@@ -864,7 +864,7 @@ suffix_len = 1 if has_distinct_end else 0
 
 ### Embedding Replacement During Forward
 
-The image tokens are not just markers — they trigger embedding replacement in the model's forward pass. When `forward()` encounters a pad token ID, it copies the next visual embedding vector from the vision encoder output instead of performing the normal embedding table lookup:
+The image tokens are not just markers, they trigger embedding replacement in the model's forward pass. When `forward()` encounters a pad token ID, it copies the next visual embedding vector from the vision encoder output instead of performing the normal embedding table lookup:
 
 ```text
 # forward() embedding replacement
@@ -906,7 +906,7 @@ call_123_0
 {"temp": 18, "condition": "cloudy"}<|im_end|>
 ```
 
-See [API.md — Tool Calling](../API.md#tool-calling) for request/response format and usage examples.
+See [API.md, Tool Calling](../API.md#tool-calling) for request/response format and usage examples.
 
 ## Gotchas
 
@@ -935,28 +935,28 @@ See [API.md — Tool Calling](../API.md#tool-calling) for request/response forma
 
 ## Glossary
 
-**chat template** — A data-driven configuration mapping conversation roles to special-token-delimited prefix/suffix strings, replacing hardcoded prompt formatting.
+**chat template**, A data-driven configuration mapping conversation roles to special-token-delimited prefix/suffix strings, replacing hardcoded prompt formatting.
 
-**ChatML** — A chat formatting convention using `<|im_start|>` / `<|im_end|>` markers, adopted by Qwen, Nemotron, and other models.
+**ChatML**, A chat formatting convention using `<|im_start|>` / `<|im_end|>` markers, adopted by Qwen, Nemotron, and other models.
 
-**default_system** — A fixed system message baked into the template, used when the user supplies none.
+**default_system**, A fixed system message baked into the template, used when the user supplies none.
 
-**EOG token (end-of-generation)** — A special token whose presence in output signals that generation should stop.
+**EOG token (end-of-generation)**, A special token whose presence in output signals that generation should stop.
 
-**findImageInsertPos()** — A function that scans a token array for the last user-prefix token sequence and returns the position after it.
+**findImageInsertPos()**, A function that scans a token array for the last user-prefix token sequence and returns the position after it.
 
-**formatConversation()** — The main template function rendering a multi-turn conversation into a flat prompt string.
+**formatConversation()**, The main template function rendering a multi-turn conversation into a flat prompt string.
 
-**generation_prefix** — A string appended after the final assistant prefix before generation begins; used to control model reasoning behavior.
+**generation_prefix**, A string appended after the final assistant prefix before generation begins; used to control model reasoning behavior.
 
-**image token injection** — Splicing visual placeholder tokens into a tokenized prompt so the model can replace them with vision-encoder embeddings.
+**image token injection**, Splicing visual placeholder tokens into a tokenized prompt so the model can replace them with vision-encoder embeddings.
 
-**injectImageTokens()** — A function that splices image placeholder tokens (start + N×pad + end) at a computed insertion point.
+**injectImageTokens()**, A function that splices image placeholder tokens (start + N×pad + end) at a computed insertion point.
 
-**pad token (image)** — A placeholder token repeated once per visual patch, whose embedding is replaced at runtime by vision-encoder output.
+**pad token (image)**, A placeholder token repeated once per visual patch, whose embedding is replaced at runtime by vision-encoder output.
 
-**role marker** — A special token or string identifying who is speaking in a multi-turn conversation (system, user, assistant, tool).
+**role marker**, A special token or string identifying who is speaking in a multi-turn conversation (system, user, assistant, tool).
 
-**system_role_override** — A template field re-routing system messages through a different role prefix (e.g., "developer" in GPT-OSS).
+**system_role_override**, A template field re-routing system messages through a different role prefix (e.g., "developer" in GPT-OSS).
 
-**tight coupling** — Embedding format details directly in model code, making changes fragile and non-portable.
+**tight coupling**, Embedding format details directly in model code, making changes fragile and non-portable.

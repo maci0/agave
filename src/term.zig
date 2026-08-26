@@ -1,5 +1,5 @@
 //! Self-contained terminal input/output primitives.
-//! Replaces the vaxis dependency with pure Zig — no libc calls,
+//! Replaces the vaxis dependency with pure Zig, no libc calls,
 //! no external deps. Uses only Zig builtins and posix syscalls.
 
 const std = @import("std");
@@ -37,7 +37,7 @@ pub const Key = struct {
         }
     };
 
-    // Named key constants — use the same values as vaxis (Kitty private-use area)
+    // Named key constants, use the same values as vaxis (Kitty private-use area)
     // so that CSI-encoded sequences decode correctly.
     pub const enter: u21 = 0x0D;
     pub const backspace: u21 = 0x7F;
@@ -50,7 +50,7 @@ pub const Key = struct {
     pub const home: u21 = 57356;
     pub const end: u21 = 57357;
 
-    /// Loose key matching — checks codepoint and the ctrl/alt/shift modifiers.
+    /// Loose key matching, checks codepoint and the ctrl/alt/shift modifiers.
     pub fn matches(self: Key, cp: u21, mods: Modifiers) bool {
         // Exact codepoint + modifier match (ignoring padding bits)
         var self_m = self.mods;
@@ -171,7 +171,7 @@ pub const Parser = struct {
             } } };
         }
 
-        // Other control characters — consume and ignore
+        // Other control characters, consume and ignore
         return .{ .n = 1 };
     }
 
@@ -199,10 +199,10 @@ pub const Parser = struct {
                         const num_slice = if (semi) |s| param_slice[0..s] else param_slice;
                         const num = std.fmt.parseUnsigned(u16, num_slice, 10) catch break :blk @as(u21, 0);
                         break :blk switch (num) {
-                            2 => 0, // Insert key — ignore (not used)
+                            2 => 0, // Insert key, ignore (not used)
                             3 => Key.delete,
-                            5 => 0, // Page Up — not used
-                            6 => 0, // Page Down — not used
+                            5 => 0, // Page Up, not used
+                            6 => 0, // Page Down, not used
                             7 => Key.home,
                             8 => Key.end,
                             else => 0,
@@ -222,7 +222,7 @@ pub const Parser = struct {
 
 /// Compute the display width of a UTF-8 string.
 /// Handles ASCII (width 1), CJK fullwidth (width 2), zero-width combining marks.
-/// Pure Zig — no libc wcwidth.
+/// Pure Zig, no libc wcwidth.
 pub fn displayWidth(s: []const u8) usize {
     var w: usize = 0;
     var i: usize = 0;
@@ -397,7 +397,7 @@ pub const TextInput = struct {
         self.buf.growGapRight(@min(len, sh.len));
     }
 
-    /// The underlying gap buffer — exposed for readline.zig which accesses
+    /// The underlying gap buffer, exposed for readline.zig which accesses
     /// `input.buf.firstHalf()`, `input.buf.secondHalf()`, `input.buf.realLength()`.
     pub const Buffer = struct {
         allocator: std.mem.Allocator,
@@ -520,7 +520,7 @@ test "displayWidth ascii" {
 }
 
 test "displayWidth middot" {
-    // "a · b" — the middot (U+00B7) is 2 bytes in UTF-8 but occupies 1 terminal column
+    // "a · b", the middot (U+00B7) is 2 bytes in UTF-8 but occupies 1 terminal column
     try std.testing.expectEqual(@as(usize, 5), displayWidth("a \xc2\xb7 b"));
 }
 
@@ -803,19 +803,19 @@ test "fuzz: all term functions" {
             const sh = buf.secondHalf();
             try std.testing.expectEqual(fh.len + sh.len, buf.realLength());
 
-            // moveGapLeft — clamp to firstHalf length
+            // moveGapLeft, clamp to firstHalf length
             const ml = smith.valueWithHash(u3, 91);
             buf.moveGapLeft(@min(ml, buf.firstHalf().len));
 
-            // moveGapRight — clamp to secondHalf length
+            // moveGapRight, clamp to secondHalf length
             const mr = smith.valueWithHash(u3, 92);
             buf.moveGapRight(@min(mr, buf.secondHalf().len));
 
-            // growGapLeft — clamp to cursor
+            // growGapLeft, clamp to cursor
             const gl = smith.valueWithHash(u3, 93);
             buf.growGapLeft(@min(gl, buf.cursor));
 
-            // growGapRight — clamp to secondHalf length
+            // growGapRight, clamp to secondHalf length
             const gr = smith.valueWithHash(u3, 94);
             buf.growGapRight(@min(gr, buf.secondHalf().len));
 

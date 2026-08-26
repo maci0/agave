@@ -52,7 +52,7 @@ const threadgroup_size: usize = 256;
 /// Softmax inputs smaller than this threshold run on CPU (GPU dispatch overhead dominates).
 const softmax_cpu_threshold: usize = 128;
 /// Maximum sequence length for the fused SDPA kernel.
-/// The kernel tiles over sl via sdpa_block_size=16 blocks — no per-element threadgroup allocation,
+/// The kernel tiles over sl via sdpa_block_size=16 blocks, no per-element threadgroup allocation,
 /// so the true limit is the buffer size passed in (kv_cache allocation), not a kernel constraint.
 /// 65536 = 64K tokens; real limit is --ctx-size / KV cache allocation.
 const sdpa_max_seq_len: usize = 65536;
@@ -103,7 +103,7 @@ const metal4_gpu_family: u32 = 5002;
 
 /// Reference to a cached Metal buffer with a byte offset.
 /// Allows sub-region access (e.g. per-head slices) without creating separate
-/// Metal buffer objects — the parent buffer is reused with an offset.
+/// Metal buffer objects, the parent buffer is reused with an offset.
 const BufRef = struct {
     buf: objc.id,
     offset: usize,
@@ -269,14 +269,14 @@ pub const MetalBackend = struct {
     /// by endBatch() which inserts a single barrier.
     batch_mode: bool = false,
     /// Optional thread pool for parallelizing CPU fallback work (e.g. unsupported dtypes).
-    /// Set by the caller after init — Metal doesn't own the pool.
+    /// Set by the caller after init, Metal doesn't own the pool.
     pool: ?*ThreadPool = null,
 
     /// Cached staging buffers for paged SDPA (avoid hot-path allocation).
     sdpa_flat_keys: ?[]f32 = null,
     sdpa_flat_vals: ?[]f32 = null,
 
-    /// Dispatch/barrier/sync counters — active only when profiling is enabled.
+    /// Dispatch/barrier/sync counters, active only when profiling is enabled.
     dispatch_count: u32 = 0,
     barrier_count: u32 = 0,
     sync_count: u32 = 0,
@@ -320,7 +320,7 @@ pub const MetalBackend = struct {
         };
         errdefer release(library);
 
-        // Scratch buffer — 8 bytes, MTLResourceStorageModeShared (0)
+        // Scratch buffer, 8 bytes, MTLResourceStorageModeShared (0)
         const scratch_buf = objc.msgSend(
             objc.id,
             device,
@@ -658,7 +658,7 @@ pub const MetalBackend = struct {
     }
 
     /// Wrap existing memory as a Metal buffer with zero copy (Apple Silicon unified memory).
-    /// The caller retains ownership of the memory — Metal will not free it.
+    /// The caller retains ownership of the memory, Metal will not free it.
     /// `ptr` MUST be page-aligned; returns null if Metal rejects the pointer.
     fn wrapBuffer(self: *MetalBackend, ptr: *const anyopaque, len: usize) ?objc.id {
         return objc.msgSend(
@@ -720,7 +720,7 @@ pub const MetalBackend = struct {
         // for weight-sized buffers. The copy reads from mmap (triggering CPU page
         // faults for evicted pages), then stores in Metal-managed memory immune to
         // OS page eviction. Uses stable_cache (not flushed on sync) so copies
-        // persist across tokens — only re-copied when buffer is too small.
+        // persist across tokens, only re-copied when buffer is too small.
         if (self.volatile_weights and needed >= volatile_weight_threshold) {
             if (self.stable_cache.get(aligned_base)) |cached| {
                 if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
@@ -737,7 +737,7 @@ pub const MetalBackend = struct {
         // Check cache for this page-aligned base
         if (self.buf_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-            // Buffer too small (e.g. KV cache grew) — release old, recreate below
+            // Buffer too small (e.g. KV cache grew), release old, recreate below
             self.pending_release.append(self.allocator, cached.metal_buf) catch {};
             _ = self.buf_cache.remove(aligned_base);
         }
@@ -746,7 +746,7 @@ pub const MetalBackend = struct {
         const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
         if (self.wrapBuffer(aligned_ptr, aligned_len)) |buf| {
             self.buf_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch |err| {
-                // Cache full — release wrap buffer to avoid leak, fall through to copy path
+                // Cache full, release wrap buffer to avoid leak, fall through to copy path
                 std.log.warn("Metal buf_cache put failed: {}", .{err});
                 release(buf);
                 return .{ .buf = self.makeBuffer(ptr, len), .offset = 0 };
@@ -815,7 +815,7 @@ pub const MetalBackend = struct {
 
     /// Get or reuse the active compute command encoder.
     /// Creates command buffer and encoder lazily. Reuses the same encoder
-    /// across dispatches — pipeline state is swapped via setComputePipelineState.
+    /// across dispatches, pipeline state is swapped via setComputePipelineState.
     /// Memory barriers between dispatches ensure write visibility.
     fn getEncoder(self: *MetalBackend, pipeline: objc.id) objc.id {
         if (self.active_cmd == null) {
@@ -856,7 +856,7 @@ pub const MetalBackend = struct {
         });
     }
 
-    /// MTLBarrierScope.Buffers — ensures buffer writes from one dispatch
+    /// MTLBarrierScope.Buffers, ensures buffer writes from one dispatch
     /// are visible to subsequent dispatches within the same encoder.
     const barrier_scope_buffers: objc.NSUInteger = 1;
 
@@ -942,7 +942,7 @@ pub const MetalBackend = struct {
         const raw = std.heap.page_allocator.alloc(u8, aligned_bytes) catch return error.OutOfMemory;
         errdefer std.heap.page_allocator.free(raw);
         @memset(raw, 0);
-        // Pre-register in buf_cache — wraps as Metal buffer for zero-copy GPU access.
+        // Pre-register in buf_cache, wraps as Metal buffer for zero-copy GPU access.
         const addr = @intFromPtr(raw.ptr);
         const metal_buf = objc.msgSend(
             ?objc.id,
@@ -952,7 +952,7 @@ pub const MetalBackend = struct {
                 @as(*anyopaque, @ptrCast(raw.ptr)),
                 @as(objc.NSUInteger, aligned_bytes),
                 @as(objc.NSUInteger, 0), // MTLResourceStorageModeShared
-                @as(?objc.id, null), // no deallocator — we manage lifetime
+                @as(?objc.id, null), // no deallocator, we manage lifetime
             },
         ) orelse return error.OutOfMemory;
         self.buf_cache.put(addr, .{ .metal_buf = metal_buf, .len = aligned_bytes }) catch {
@@ -1006,7 +1006,7 @@ pub const MetalBackend = struct {
             .tq1_0 => "gemv_tq1_0",
             .tq2_0 => "gemv_tq2_0",
             .iq2_xxs => "gemv_iq2_xxs",
-            .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
+            .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented, add a GPU kernel"),
             else => "gemv",
         };
         const pipeline: objc.id = switch (w.dtype) {
@@ -1030,8 +1030,8 @@ pub const MetalBackend = struct {
             .tq1_0 => self.pipe_gemv_tq1_0,
             .tq2_0 => self.pipe_gemv_tq2_0,
             .iq2_xxs => self.pipe_gemv_iq2_xxs,
-            .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
-            else => std.debug.panic("Metal GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
+            .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("Metal GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented, add a GPU kernel"),
+            else => std.debug.panic("Metal GEMV: unsupported dtype {s}, add a GPU kernel", .{@tagName(w.dtype)}),
         };
 
         const w_bytes = weightBytes(w.dtype, n, k);
@@ -1067,7 +1067,7 @@ pub const MetalBackend = struct {
             .q4_k, .q5_k, .q6_k, .q2_k, .q3_k, .iq4_xs, .iq2_xxs => (k + quant_super_block_elems - 1) / quant_super_block_elems,
             // MLX 4-bit: 64-element groups, each thread processes one group
             .mlx_q => (k + mlx_group_size - 1) / mlx_group_size,
-            // Element-level formats — always fully utilized at 256 threads
+            // Element-level formats, always fully utilized at 256 threads
             else => threadgroup_size,
         };
         // Round up to SIMD group boundary, clamp to [simd_width, threadgroup_size]
@@ -1143,7 +1143,7 @@ pub const MetalBackend = struct {
     }
 
     /// Fused rmsNorm + accumulate: b[i] += norm(a, weight, eps)[i].
-    /// Replaces rmsNorm(a, weight, a) + add(b, a, b) — saves one dispatch per post-FFN norm boundary.
+    /// Replaces rmsNorm(a, weight, a) + add(b, a, b), saves one dispatch per post-FFN norm boundary.
     pub fn rmsNormAdd(self: *MetalBackend, a: [*]const f32, weight: [*]const f32, b: [*]f32, n: usize, eps: f32) void {
         const a_ref = self.getBufRef(@ptrCast(a), n * @sizeOf(f32));
         const w_ref = self.getBufRef(@ptrCast(weight), n * @sizeOf(f32));
@@ -1206,7 +1206,7 @@ pub const MetalBackend = struct {
 
     // ── SiLU Mul (fused) ──────────────────────────────────────
 
-    /// out[i] = silu(a[i]) * b[i] — fused SwiGLU activation.
+    /// out[i] = silu(a[i]) * b[i], fused SwiGLU activation.
     /// Replaces separate silu + mul dispatches (2 dispatches → 1).
     pub fn siluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         self.dispatchBinaryOp(self.pipe_silu_mul, a, b, out, n);
@@ -1223,7 +1223,7 @@ pub const MetalBackend = struct {
         self.dispatchBinaryOp(self.pipe_clamped_silu_mul, gate, up, out, n);
     }
 
-    /// out[i] = gelu(a[i]) * b[i] — fused GeGLU activation.
+    /// out[i] = gelu(a[i]) * b[i], fused GeGLU activation.
     pub fn geluMul(self: *MetalBackend, a: [*]const f32, b: [*]const f32, out: [*]f32, n: usize) void {
         self.dispatchBinaryOp(self.pipe_gelu_mul, a, b, out, n);
     }
@@ -1907,7 +1907,7 @@ pub const MetalBackend = struct {
         params_size: usize,
         n_tgs: u32,
     ) void {
-        const pipe = self.pipe_mega_auto orelse @panic("composed megakernel not compiled — call compileComposedMegakernel first");
+        const pipe = self.pipe_mega_auto orelse @panic("composed megakernel not compiled, call compileComposedMegakernel first");
         const w_ref = self.getBufRef(weights, weights_size);
         const lo_ref = self.getBufRef(layer_offsets, layer_offsets_size);
         const kk_ref = self.getBufRef(@ptrCast(kv_keys), kv_keys_size);
@@ -1954,7 +1954,7 @@ pub const MetalBackend = struct {
 
     // ── Sigmoid Mul ──────────────────────────────────────────
 
-    /// data[i] *= sigmoid(gate[i]) — in-place sigmoid-gated multiply.
+    /// data[i] *= sigmoid(gate[i]), in-place sigmoid-gated multiply.
     pub fn sigmoidMul(self: *MetalBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         self.dispatchBinaryOp(self.pipe_sigmoid_mul, @ptrCast(data), gate, data, n);
     }
@@ -2057,7 +2057,7 @@ pub const MetalBackend = struct {
 
     /// In-place softmax.
     /// Three passes: (1) find max, (2) exp(x - max) and sum, (3) divide by sum.
-    /// All three passes share one command buffer — single commit instead of three.
+    /// All three passes share one command buffer, single commit instead of three.
     /// Uses scratch_buf as two adjacent f32 slots: [0..4]=max, [4..8]=sum.
     pub fn softmax(self: *MetalBackend, data: [*]f32, n: usize) void {
         // For very small n the GPU dispatch overhead isn't worth it.
@@ -2079,7 +2079,7 @@ pub const MetalBackend = struct {
         self.endEncodeOneThreadgroup(enc1, threadgroup_size);
 
         // Pass 2: exp(x - max) in-place, sum → scratch_buf offset 4
-        // (same command buffer — no commit between passes)
+        // (same command buffer, no commit between passes)
         const enc2 = self.getEncoder(self.pipe_softmax_exp_sum);
         setBuf(enc2, d_ref, 0);
         setBufferOffset(enc2, self.scratch_buf, 0, 1); // max_buf  (read)
@@ -2088,7 +2088,7 @@ pub const MetalBackend = struct {
         self.endEncodeOneThreadgroup(enc2, threadgroup_size);
 
         // Pass 3: divide by sum
-        // (same command buffer — no commit between passes)
+        // (same command buffer, no commit between passes)
         const enc3 = self.getEncoder(self.pipe_softmax_div);
         setBuf(enc3, d_ref, 0);
         setBufferOffset(enc3, self.scratch_buf, 4, 1); // sum_buf
@@ -2133,7 +2133,7 @@ pub const MetalBackend = struct {
         cpu.ropeMrope(x, t_pos, h_pos, w_pos, n_heads, head_dim, rope_dim, theta);
     }
 
-    // ── Embedding lookup — CPU fallback ───────────────────────
+    // ── Embedding lookup, CPU fallback ───────────────────────
 
     /// Embedding lookup is a single-row read; CPU is faster than GPU dispatch overhead.
     pub fn embLookup(self: *MetalBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
@@ -2146,7 +2146,7 @@ pub const MetalBackend = struct {
 
     /// L2 normalize in-place.
     /// Two-pass: (1) sum-of-squares via rms_norm_ss kernel, (2) l2_norm_apply.
-    /// Both passes share one command buffer — single commit instead of two.
+    /// Both passes share one command buffer, single commit instead of two.
     pub fn l2Norm(self: *MetalBackend, x: [*]f32, n: usize, eps: f32) void {
         const x_ref = self.getBufRef(@ptrCast(x), n * @sizeOf(f32));
 
@@ -2161,7 +2161,7 @@ pub const MetalBackend = struct {
         self.endEncodeOneThreadgroup(enc1, threadgroup_size);
 
         // Pass 2: normalize in-place
-        // (same command buffer — no commit between passes)
+        // (same command buffer, no commit between passes)
         const enc2 = self.getEncoder(self.pipe_l2_apply);
         setBuf(enc2, x_ref, 0);
         setBuffer(enc2, self.scratch_buf, 1);
@@ -2207,7 +2207,7 @@ pub const MetalBackend = struct {
 
     /// GPU-native MLX-Q GEMV for heap-resident weight data.
     /// The caller guarantees that weight/scales/biases pointers are heap-allocated
-    /// (not mmap'd) — e.g. via heapTensorData. This ensures Metal GPU can safely
+    /// (not mmap'd), e.g. via heapTensorData. This ensures Metal GPU can safely
     /// access the data without page-fault risk from OS eviction.
     /// Verified: produces L0 norms identical to CPU (hidden2=1.92, q_comp=1.21).
     pub fn gemvMlxQGpu(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
@@ -2372,7 +2372,7 @@ pub const MetalBackend = struct {
         for (ops, 0..) |op, idx| {
             const is_last = (idx == ops.len - 1);
 
-            // MLX quantized weights — dispatch MLX-Q kernel with companion buffers
+            // MLX quantized weights, dispatch MLX-Q kernel with companion buffers
             if (op.mlx_scales != null) {
                 const bits = op.mlx_bits;
                 const gs: u32 = if (op.mlx_group_size > 0) op.mlx_group_size else @intCast(mlx_group_size);
@@ -2487,7 +2487,7 @@ pub const MetalBackend = struct {
     /// Commit all pending GPU commands and wait for completion.
     /// Call before CPU code reads from buffers written by GPU ops.
     /// On Apple Silicon's unified memory, this is the only synchronization
-    /// needed — zero-copy buffers mean no data transfer, just a fence.
+    /// needed, zero-copy buffers mean no data transfer, just a fence.
     /// Minimum buffer size considered a "weight" buffer for volatile flush.
     /// Activation buffers (hidden, q_full, norms) are heap-allocated and stable.
     /// Weight buffers from mmap'd GGUF files can go stale when pages are evicted.
@@ -2503,7 +2503,7 @@ pub const MetalBackend = struct {
         for (self.pending_release.items) |buf| release(buf);
         self.pending_release.clearRetainingCapacity();
         // DO NOT flush buf_cache on sync. Wrapped buffers use
-        // newBufferWithBytesNoCopy (shared UMA memory) — they always
+        // newBufferWithBytesNoCopy (shared UMA memory), they always
         // point to the same physical memory as CPU. Flushing forces
         // expensive re-wrapping and breaks mixed CPU/Metal dispatch.
         // Only pread-based expert loading needs explicit invalidation
@@ -2523,12 +2523,12 @@ pub const MetalBackend = struct {
     /// Scaled dot-product attention with KV cache append.
     /// Appends k_new/v_new to KV cache, then runs FlashAttention-2 on GPU.
     /// Supports f32 KV cache (existing fast path) and TurboQuant 2/3/4-bit
-    /// KV cache (native GPU dequant — no CPU fallback for SDPA compute).
+    /// KV cache (native GPU dequant, no CPU fallback for SDPA compute).
     /// KV append for non-f32 types uses CPU quantization (once per token per layer,
     /// not the SDPA hot path). Supports f32, turbo2/3/4, and q8_0 KV types.
     /// SDPA CPU-path threshold: for short decode sequences, CPU SDPA is faster
     /// than GPU dispatch + sync overhead (~50µs). At sl=1-2, SDPA is just
-    /// nh dot products of hd dims + nh×hd V copy — ~10µs on CPU NEON.
+    /// nh dot products of hd dims + nh×hd V copy, ~10µs on CPU NEON.
     /// GPU only wins when parallelism across many positions amortizes dispatch.
     /// SDPA GPU threshold: CPU SDPA is used for very short sequences (sl≤4)
     /// where GPU dispatch overhead exceeds benefit. For longer sequences,
@@ -2555,7 +2555,7 @@ pub const MetalBackend = struct {
 
         // Non-turbo, non-f32, non-q8_0 quantized KV: not supported
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
-            @panic("Metal SDPA: unsupported KV type — use --kv-type f32, q8_0, or turbo");
+            @panic("Metal SDPA: unsupported KV type, use --kv-type f32, q8_0, or turbo");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
@@ -2569,7 +2569,7 @@ pub const MetalBackend = struct {
             return;
         }
 
-        if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ ") — reduce --ctx-size");
+        if (sl > sdpa_max_seq_len) @panic("Metal SDPA: sequence length exceeds GPU limit (" ++ std.fmt.comptimePrint("{d}", .{sdpa_max_seq_len}) ++ "), reduce --ctx-size");
 
         // Route hd>256 turbo/q8_0 to the DS4 hd512 kernel instead of panicking.
         if (hd > sdpa_max_head_dim and (is_turbo_k or is_turbo_v) and !is_f32_k and !is_f32_v) {
@@ -2599,7 +2599,7 @@ pub const MetalBackend = struct {
             self.endEncode1D(enc, self.pipe_kv_append, kvd);
         } else {
             // Turbo/mixed path: CPU quantization for KV append (once per token,
-            // not the SDPA hot path — acceptable per AGENTS.md).
+            // not the SDPA hot path, acceptable per AGENTS.md).
             self.sync();
             const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
             const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
@@ -2748,7 +2748,7 @@ pub const MetalBackend = struct {
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// Fills identity stats (max=0, sum=1) — GPU SDPA already produces
+    /// Fills identity stats (max=0, sum=1), GPU SDPA already produces
     /// normalized output, so the merge formula treats it as-is.
     pub fn sdpaWithStats(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
@@ -2776,7 +2776,7 @@ pub const MetalBackend = struct {
         rms_eps: f32,
     ) void {
         const flat_size = 4 * n_embd;
-        // HC fn/base/scale are heap-copied by heapTensorData — no prefault needed.
+        // HC fn/base/scale are heap-copied by heapTensorData, no prefault needed.
         const hs_ref = self.getBufRef(@ptrCast(hc_state), flat_size * @sizeOf(f32));
         const fn_ref = self.getBufRef(@ptrCast(hc_fn), 24 * flat_size * @sizeOf(f32));
         const base_ref = self.getBufRef(@ptrCast(hc_base), 24 * @sizeOf(f32));
@@ -2965,7 +2965,7 @@ pub const MetalBackend = struct {
         rms_eps: f32,
     ) void {
         const flat_size = 4 * n_embd;
-        // HC fn/base/scale are heap-copied — no prefault needed.
+        // HC fn/base/scale are heap-copied, no prefault needed.
         const hs_ref = self.getBufRef(@ptrCast(hc_state), flat_size * @sizeOf(f32));
         const fn_ref = self.getBufRef(@ptrCast(hc_fn), 4 * flat_size * @sizeOf(f32));
         const base_ref = self.getBufRef(@ptrCast(hc_base), 4 * @sizeOf(f32));
@@ -3094,7 +3094,7 @@ pub const MetalBackend = struct {
         const kvd = nkv * hd;
         const sl = seq_len + 1;
 
-        // CPU KV append (quantized, once per token — not hot path)
+        // CPU KV append (quantized, once per token, not hot path)
         self.sync();
         const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
         const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
@@ -3145,7 +3145,7 @@ pub const MetalBackend = struct {
         }
         // Split-K small-batch: for very small n_tok (spec decode tree verification, 2-3 tokens),
         // issue parallel GEMV calls (one per token) rather than the tiled GEMM. The GEMM kernel
-        // uses TILE_T=8 — with < 4 tokens, the tiles are mostly empty and GEMV is ~25% faster
+        // uses TILE_T=8, with < 4 tokens, the tiles are mostly empty and GEMV is ~25% faster
         // per-token on M-series (MLX v0.31.2 benchmark). Batch the dispatches to reuse the
         // same command buffer; Metal schedules them concurrently on the GPU.
         if (n_tok <= 3) {
@@ -3165,7 +3165,7 @@ pub const MetalBackend = struct {
             .q4_k => self.pipe_gemm_q4_k,
             .q6_k => self.pipe_gemm_q6_k,
             .q5_k => self.pipe_gemm_q5_k,
-            else => @panic("Metal GEMM: unsupported dtype — add GPU kernel"),
+            else => @panic("Metal GEMM: unsupported dtype, add GPU kernel"),
         };
 
         const w_bytes = weightBytes(w.dtype, n_out, n_in);
@@ -3393,7 +3393,7 @@ pub const MetalBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: not supported
         if (kv_type_k != .f32 or kv_type_v != .f32)
-            @panic("Metal SDPA prefill: unsupported KV type — use --kv-type f32 or turbo2/3/4");
+            @panic("Metal SDPA prefill: unsupported KV type, use --kv-type f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
         const f32_keys: [*]f32 = @ptrCast(@alignCast(kv_keys.ptr));
@@ -3450,7 +3450,7 @@ pub const MetalBackend = struct {
         }
     }
 
-    /// DeltaNet SSM — all 4 kernels on GPU, no CPU sync per layer.
+    /// DeltaNet SSM, all 4 kernels on GPU, no CPU sync per layer.
     /// GPU handles gate/beta, conv1d, L2 norm, recurrence+gated output.
     pub fn deltaNet(self: *MetalBackend, conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: backend_mod.DeltaNetParams) void {
         // GPU DeltaNet: all 4 kernels run on GPU without CPU sync.
@@ -3520,7 +3520,7 @@ pub const MetalBackend = struct {
         }
 
         // ── GPU Kernel 4: recurrence + gated output ──
-        // Q/K/V are sub-regions of conv_out — reuse co_ref.buf with byte offsets
+        // Q/K/V are sub-regions of conv_out, reuse co_ref.buf with byte offsets
         // so GPU writes from conv1d + L2 norm are visible (same Metal buffer).
         {
             const qk_dim = num_k_heads * head_k_dim * @sizeOf(f32);
@@ -3695,7 +3695,7 @@ test "Metal backend gemvMlxQ4 basic" {
     defer metal.deinit();
 
     // 1x64 GEMV: one output row, 64 input elements (one group).
-    // x = [1.0, 1.0, 0, 0, ...] — first two elements set
+    // x = [1.0, 1.0, 0, 0, ...], first two elements set
     var x: [64]f32 = [_]f32{0} ** 64;
     x[0] = 1.0;
     x[1] = 1.0;
@@ -3784,7 +3784,7 @@ test "Metal backend gemvMlxQ4 large matrix" {
     const bi16 = try al.alloc(u16, n * gpr);
     defer al.free(bi16);
 
-    // Fill with deterministic pattern — scales near 1.0, biases near 0 to avoid non-finite outputs
+    // Fill with deterministic pattern, scales near 1.0, biases near 0 to avoid non-finite outputs
     for (0..k) |i| x[i] = @as(f32, @floatFromInt(i % 13)) * 0.2 - 1.2;
     for (0..weight.len) |i| weight[i] = @truncate((i *% 0xDEAD) ^ 0x1234ABCD);
     for (0..sc16.len) |i| sc16[i] = @bitCast(@as(f16, @floatCast(0.5 + @as(f32, @floatFromInt(i % 7)) * 0.2)));
@@ -4685,7 +4685,7 @@ test "MetalBackend.profile counters track dispatches" {
 }
 
 test "fuzz: all metal functions" {
-    // Metal is a GPU backend — comptime verification that all pub functions
+    // Metal is a GPU backend, comptime verification that all pub functions
     // exist in MetalBackend. Uses @hasDecl to avoid forcing function body
     // resolution (some functions like compileComposedMegakernel use runtime
     // concatenation that cannot be evaluated at comptime).
@@ -4763,7 +4763,7 @@ test "fuzz: all metal functions" {
         }
     }
 
-    // Runtime fuzz body — exercises GPU ops if Metal device is available
+    // Runtime fuzz body, exercises GPU ops if Metal device is available
     try std.testing.fuzz(.{}, struct {
         fn f(_: @TypeOf(.{}), smith: *std.testing.Smith) !void {
             const allocator = std.testing.allocator;

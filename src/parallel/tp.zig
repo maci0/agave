@@ -1,7 +1,7 @@
 //! Tensor Parallelism coordinator for CPU multi-rank execution.
 //!
 //! Creates N model instances (one per TP rank), each with sharded weights,
-//! but only executes rank 0 — all-reduce is not yet implemented.
+//! but only executes rank 0, all-reduce is not yet implemented.
 //!
 //! CPU-only. GPU TP would use NCCL/RCCL all-reduce instead.
 
@@ -74,7 +74,7 @@ pub const TpGroup = struct {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "TpGroup — struct layout and field types" {
+test "TpGroup, struct layout and field types" {
     // Compile-time verification that TpGroup has the expected fields.
     comptime {
         _ = @TypeOf(TpGroup.init);
@@ -86,7 +86,7 @@ test "TpGroup — struct layout and field types" {
     try std.testing.expect(@sizeOf(TpGroup) <= 64);
 }
 
-test "TpGroup — degree field" {
+test "TpGroup, degree field" {
     // Verify the degree field exists and is settable.
     const allocator = std.testing.allocator;
     _ = allocator;
@@ -97,7 +97,7 @@ test "TpGroup — degree field" {
     try std.testing.expectEqual(@as(u32, 4), group.degree);
 }
 
-test "tensor partition size — even division" {
+test "tensor partition size, even division" {
     // TP sharding divides tensor dimensions evenly across ranks.
     // This is the core arithmetic used by shardColumnWeight / shardRowWeight
     // in model implementations (e.g. n_head / tp_degree, n_ff / tp_degree).
@@ -116,7 +116,7 @@ test "tensor partition size — even division" {
     }
 }
 
-test "tensor partition size — rank offsets are contiguous and non-overlapping" {
+test "tensor partition size, rank offsets are contiguous and non-overlapping" {
     // For column-sharding: each rank r gets rows [r*local_n .. (r+1)*local_n).
     // Verify the slices cover the full dimension without gaps or overlaps.
     const n_total: u32 = 4096;
@@ -135,7 +135,7 @@ test "tensor partition size — rank offsets are contiguous and non-overlapping"
     try std.testing.expectEqual(n_total, covered);
 }
 
-test "tensor partition size — head and ff sharding" {
+test "tensor partition size, head and ff sharding" {
     // Realistic model dimensions: verify that n_head, n_head_kv, and n_ff
     // all divide evenly for common TP degrees.
     const TestCase = struct { n_head: u32, n_head_kv: u32, n_ff: u32 };
@@ -158,7 +158,7 @@ test "tensor partition size — head and ff sharding" {
     }
 }
 
-test "tensor partition size — row shard byte offset calculation" {
+test "tensor partition size, row shard byte offset calculation" {
     // Row-sharding extracts columns: each rank gets k_total/degree columns.
     // For quantized types, row_bytes = k * quant_block_bytes / quant_block_size.
     // Here we test the simpler f32 case: row_bytes = k * 4.

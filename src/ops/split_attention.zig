@@ -87,7 +87,7 @@ pub fn partitionBlocks(
             }
             result.total_gpu_positions += block_len;
         } else {
-            // .ram and .ssd both go to CPU path — coalesce if contiguous
+            // .ram and .ssd both go to CPU path, coalesce if contiguous
             if (result.cpu_count > 0 and result.cpu[result.cpu_count - 1].start + result.cpu[result.cpu_count - 1].len == pos) {
                 result.cpu[result.cpu_count - 1].len += block_len;
             } else if (result.cpu_count < max_ranges) {
@@ -207,13 +207,13 @@ pub fn splitAttention(
     partition: Partition,
     pool: ?*ThreadPool,
 ) void {
-    // Fast path: all GPU — delegate directly, zero overhead
+    // Fast path: all GPU, delegate directly, zero overhead
     if (partition.cpu_count == 0) {
         be.sdpa(q, kv_keys, kv_values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
         return;
     }
 
-    // Fast path: all CPU — sync pending GPU ops, run CPU SDPA (parallel if pool available)
+    // Fast path: all CPU, sync pending GPU ops, run CPU SDPA (parallel if pool available)
     if (partition.gpu_count == 0) {
         be.sync();
         const kvd = nkv * hd;
@@ -281,7 +281,7 @@ pub fn splitAttention(
 /// Each split produced its own local softmax (out, max_per_head, sum_per_head).
 /// This function combines them into the exact result of full SDPA over all positions.
 ///
-/// The merge is exact — no approximation. Given two splits A and B with
+/// The merge is exact, no approximation. Given two splits A and B with
 /// independently normalized outputs and their softmax statistics (max, sum),
 /// the combined output equals what a single SDPA over all positions would produce.
 ///

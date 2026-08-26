@@ -310,7 +310,7 @@ test "free and re-allocate produces valid blocks" {
     const b1 = BlockAllocator.getPhysicalBlock(&seq1, 0, 1);
     block_alloc.freeSeqTable(&seq1);
 
-    // Re-allocate — should reuse freed blocks
+    // Re-allocate, should reuse freed blocks
     var seq2 = try block_alloc.allocateSeqTable(1);
     defer block_alloc.freeSeqTable(&seq2);
     try block_alloc.appendBlock(&seq2);
@@ -414,7 +414,7 @@ test "fuzz: all block_allocator functions" {
                 }
                 try std.testing.expectEqual(appended * 8, seq.seq_len);
 
-                // BlockAllocator.getPhysicalBlock — verify each allocated block ID
+                // BlockAllocator.getPhysicalBlock, verify each allocated block ID
                 for (0..n_layers) |layer| {
                     for (0..appended) |idx| {
                         const bid = BlockAllocator.getPhysicalBlock(&seq, layer, idx);

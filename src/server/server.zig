@@ -125,7 +125,7 @@ const sse_event_buf_size: usize = 1024;
 const stream_decode_buf_size: usize = 512;
 const logprob_buf_size: usize = 4096;
 const clear_response_buf_size: usize = 128;
-/// Must not exceed http_buf_size — headers and body share the same read buffer.
+/// Must not exceed http_buf_size, headers and body share the same read buffer.
 const max_request_body_size: usize = http_buf_size;
 /// Cap on `/v1/kv_cache` GET export buffer. Prevents unbounded alloc on huge `n_tokens`.
 const kv_export_max_bytes: usize = 64 * 1024 * 1024;
@@ -147,7 +147,7 @@ const rate_limit_unlimited_rpm: u32 = 1_000_000;
 const rate_limit_unlimited_tpm: u32 = 100_000_000;
 const scheduler_max_batch_size: usize = 8;
 const scheduler_timeout_sec: u32 = 120;
-const scheduler_poll_interval_ns: u64 = 1_000_000; // 1ms — matches scheduler_poll_ns in scheduler.zig
+const scheduler_poll_interval_ns: u64 = 1_000_000; // 1ms, matches scheduler_poll_ns in scheduler.zig
 /// Allows Ctrl+C to interrupt the accept loop.
 const accept_timeout_sec: i64 = 1;
 const ms_per_second: f32 = 1000.0;
@@ -158,7 +158,7 @@ const stdout_file = Io.File.stdout();
 const sim_clock = @import("../sim_clock.zig");
 
 /// Monotonic millisecond clock for all interval math (request latency,
-/// prefill/generation durations, idle detection) — injectable via sim_clock
+/// prefill/generation durations, idle detection), injectable via sim_clock
 /// for deterministic tests. Immune to NTP steps that would skew or negate
 /// durations measured against REALTIME.
 fn milliTimestamp() i64 {
@@ -175,7 +175,7 @@ fn prngSeedFromSampling(sampling: SamplingParams) u64 {
     return sampling.seed orelse @as(u64, @truncate(@as(u96, @bitCast(nanoTimestamp()))));
 }
 
-/// 2^64 / φ — mixes request id into a clock-derived seed so concurrent
+/// 2^64 / φ, mixes request id into a clock-derived seed so concurrent
 /// scheduler admits at the same virtual millisecond do not share one PRNG stream.
 const prng_seed_mix_golden: u64 = 0x9E3779B97F4A7C15;
 
@@ -365,7 +365,7 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/favicon.ico", .allow = "GET, OPTIONS", .msg = "Use GET." },
 };
-/// Per-connection read timeout (seconds) — prevents slow loris DoS attacks
+/// Per-connection read timeout (seconds), prevents slow loris DoS attacks
 /// where an attacker holds connections open by sending data one byte at a time.
 const connection_read_timeout_sec: i64 = 30;
 /// Poll interval (milliseconds) while draining active connections during shutdown.
@@ -376,11 +376,11 @@ const kv_cache_degradation_pct: u32 = 90;
 const error_rate_min_requests: u64 = 10;
 /// Error rate percentage (failed / (completed + failed)) above which `/health` reports "degraded".
 const error_rate_degradation_pct: u64 = 50;
-/// Seconds per minute — used for UTC time decomposition in request logs.
+/// Seconds per minute, used for UTC time decomposition in request logs.
 const seconds_per_minute: u64 = 60;
-/// Seconds per hour — used for UTC time decomposition in request logs.
+/// Seconds per hour, used for UTC time decomposition in request logs.
 const seconds_per_hour: u64 = 3600;
-/// Hours per day — used for UTC time decomposition in request logs.
+/// Hours per day, used for UTC time decomposition in request logs.
 const hours_per_day: u64 = 24;
 /// CORS preflight cache duration in seconds (24 hours).
 const cors_max_age_seconds = "86400";
@@ -406,20 +406,20 @@ const Conversation = struct {
         // Walk backwards to avoid truncating in the middle of a multi-byte UTF-8 sequence.
         while (len > 0) {
             const byte = text[len - 1];
-            if (byte & 0x80 == 0) break; // ASCII — clean boundary
+            if (byte & 0x80 == 0) break; // ASCII, clean boundary
             if (byte & 0xC0 == 0xC0) {
-                // Start byte of a multi-byte sequence — check if the full sequence fits.
+                // Start byte of a multi-byte sequence, check if the full sequence fits.
                 const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch 1;
                 if (len - 1 + seq_len > @min(text.len, conv_title_max_len)) {
                     // Sequence would be incomplete; drop it.
                     len -= 1;
                 } else {
-                    len = len - 1 + seq_len; // Full sequence fits — extend to include it.
+                    len = len - 1 + seq_len; // Full sequence fits, extend to include it.
                     break;
                 }
                 break;
             }
-            // Continuation byte (10xxxxxx) — keep walking back.
+            // Continuation byte (10xxxxxx), keep walking back.
             len -= 1;
         }
         const safe_len: u8 = @intCast(len);
@@ -451,7 +451,7 @@ const Conversation = struct {
     }
 };
 
-/// Server state — bundles all mutable state into a single struct
+/// Server state, bundles all mutable state into a single struct
 /// instead of scattered globals. Only g_server is a global (required
 /// because the accept loop callback doesn't carry a context pointer).
 const Server = struct {
@@ -576,7 +576,7 @@ const Server = struct {
         self.active_id = id;
         self.kv_valid = false;
         self.clearCachedPromptIds();
-        // Opaque title only — never store user message text (may contain PII).
+        // Opaque title only, never store user message text (may contain PII).
         const conv = &self.conversations.items[self.conversations.items.len - 1];
         var title_buf: [24]u8 = undefined;
         const title = std.fmt.bufPrint(&title_buf, "Chat {d}", .{id}) catch "Chat";
@@ -658,7 +658,7 @@ fn unlockModelWithScheduler() void {
 /// Tool call exact-replay map: maps tool_call_id (u64, XxHash64 of ID string)
 /// → raw generated output bytes containing the original <tool_call>…</tool_call> text.
 /// Lets the server reconstruct the exact token stream when a client resends
-/// tool call history — same approach as ds4's DSML replay map.
+/// tool call history, same approach as ds4's DSML replay map.
 /// Capped at tool_replay_max entries (LRU eviction via insertion-order counter).
 const tool_replay_max: usize = 10_000;
 const ToolReplayEntry = struct {
@@ -680,7 +680,7 @@ fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
     const key = std.hash.XxHash64.hash(0, id_str);
     const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
 
-    // Acquire spinlock — protects g_tool_replay and g_tool_replay_seq.
+    // Acquire spinlock, protects g_tool_replay and g_tool_replay_seq.
     while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
         std.atomic.spinLoopHint();
     defer g_tool_replay_lock.store(0, .release);
@@ -882,7 +882,7 @@ fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
     }
 }
 
-/// Web UI HTML page — assembled at comptime from src/web/ files.
+/// Web UI HTML page, assembled at comptime from src/web/ files.
 const html_page = @embedFile("../web/head.html") ++
     @embedFile("../web/style.css") ++
     @embedFile("../web/body.html") ++
@@ -964,7 +964,7 @@ fn extractQueryParam(query: []const u8, key: []const u8) ?[]const u8 {
     return null;
 }
 
-/// Result of reading an HTTP request — distinguishes malformed requests from
+/// Result of reading an HTTP request, distinguishes malformed requests from
 /// oversized bodies so the caller can return the correct status code.
 /// Connection failures (`connection_closed`, `read_error`) are kept separate
 /// from `malformed` so logs and client-error metrics do not blame the request
@@ -1001,7 +1001,7 @@ fn parseContentLength(headers: []const u8) ?usize {
         const colon = std.mem.indexOf(u8, line, ":") orelse continue;
         if (colon == header_name.len and std.ascii.eqlIgnoreCase(line[0..header_name.len], header_name)) {
             const val = std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch return null;
-            if (found != null) return null; // Duplicate Content-Length — reject
+            if (found != null) return null; // Duplicate Content-Length, reject
             found = val;
         }
     }
@@ -1040,7 +1040,7 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     // Parse Content-Length (null = duplicate headers, reject per RFC 7230)
     const headers = buf[req_line_end + 2 .. hdr_end];
 
-    // Reject Transfer-Encoding — this server only supports identity encoding.
+    // Reject Transfer-Encoding, this server only supports identity encoding.
     // Accepting chunked requests without parsing them enables HTTP request
     // smuggling (CWE-444) when behind a reverse proxy.
     if (hasHeader(headers, "transfer-encoding")) return .malformed;
@@ -1107,7 +1107,7 @@ fn validateAuth(server: *const Server, headers: []const u8) bool {
 
 /// Constant-time byte comparison to prevent timing side-channel attacks on secrets.
 /// Always iterates over the secret length (b) to avoid leaking key length.
-/// Accumulates XOR differences into a single byte — the compiler cannot
+/// Accumulates XOR differences into a single byte, the compiler cannot
 /// short-circuit because the final result depends on every iteration.
 fn constantTimeEql(a: []const u8, b: []const u8) bool {
     var diff: u8 = if (a.len == b.len) 0 else 1;
@@ -1220,7 +1220,7 @@ fn hasToolCalls(text: []const u8) bool {
 
 /// Split generated text into (reasoning, content) parts.
 /// Detects <think>...</think> (DeepSeek R1, QwQ) and similar markers.
-/// Returns reasoning slice and content slice — both reference the original text (no alloc).
+/// Returns reasoning slice and content slice, both reference the original text (no alloc).
 const ThinkingSplit = struct { reasoning: []const u8, content: []const u8 };
 fn splitThinkingContent(text: []const u8) ThinkingSplit {
     // Pattern: <think>REASONING</think>CONTENT
@@ -1258,7 +1258,7 @@ fn splitThinkingContent(text: []const u8) ThinkingSplit {
 /// stop_reason "tool_use". `input` must be a JSON object per the Anthropic
 /// spec: object arguments are embedded verbatim (structurally validated by the
 /// extractor); string arguments are unwrapped when they decode to an object,
-/// otherwise replaced with `{}` and logged — an invalid `input` would break
+/// otherwise replaced with `{}` and logged, an invalid `input` would break
 /// spec-compliant clients. Returns "" when no <tool_call> payload parses;
 /// callers fall back to a plain text response.
 fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
@@ -1284,7 +1284,7 @@ fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
         defer if (resolved.owned) |p| g_server.allocator.free(p);
         const args_obj = resolved.obj;
 
-        // Escape name only — args are embedded as raw JSON (validated above).
+        // Escape name only, args are embedded as raw JSON (validated above).
         const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
             std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
             continue;
@@ -1333,7 +1333,7 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
         const args = json.extractObjectField(tc_json, "arguments") orelse
             (json.extractField(tc_json, "arguments") orelse "{}");
 
-        // Escape name and args — model output is untrusted (CWE-116).
+        // Escape name and args, model output is untrusted (CWE-116).
         const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
             std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
             continue;
@@ -1350,7 +1350,7 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
             \\{{"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}
         , .{ prefix, req_id, call_idx, escaped_name, escaped_args }) catch {
             // Buffer full: remaining <tool_call> tags are dropped. Log loudly so
-            // lost calls are diagnosable — the client still sees finish_reason
+            // lost calls are diagnosable, the client still sees finish_reason
             // "tool_calls" for the calls that fit.
             std.log.warn("req={d} tool call response exceeded {d} byte buffer: dropped calls from index {d}", .{ log_request_id, tc_buf.len, call_idx });
             break;
@@ -1385,7 +1385,7 @@ fn isSafeErrorToken(s: []const u8) bool {
 /// Like `sendJsonError`, with optional `param` (field/query name) and `code` (machine-readable).
 /// `param` and `code` must be static ASCII identifiers (not client-controlled).
 fn sendJsonErrorEx(stream: TcpStream, status: []const u8, err_type: []const u8, message: []const u8, param: ?[]const u8, code: ?[]const u8) void {
-    // Never fall back to unescaped input on OOM — that reintroduces injection.
+    // Never fall back to unescaped input on OOM, that reintroduces injection.
     const escaped_msg = json.jsonEscape(g_server.allocator, message) catch {
         sendResponse(stream, status, "application/json", openai_error_fallback);
         return;
@@ -1411,7 +1411,7 @@ fn sendJsonErrorEx(stream: TcpStream, status: []const u8, err_type: []const u8, 
         \\{{"error":{{"message":"{s}","type":"{s}","param":{s},"code":{s}}}}}
     , .{ escaped_msg, escaped_type, param_json, code_json }) catch {
         std.log.warn("req={d} error body overflow type={s}", .{ log_request_id, err_type });
-        // Always respond — a hung client is worse than a generic body.
+        // Always respond, a hung client is worse than a generic body.
         sendResponse(stream, status, "application/json", openai_error_fallback);
         return;
     };
@@ -1450,7 +1450,7 @@ fn send429(stream: TcpStream, retry_after: u32) void {
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}}}", .{retry_after}) catch rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
-        // Always respond — a hung client is worse than a response without Retry-After.
+        // Always respond, a hung client is worse than a response without Retry-After.
         std.log.warn("req={d} 429 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "429 Too Many Requests", "application/json", body);
         return;
@@ -1522,7 +1522,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
-    // CORS preflight — return path-specific allowed methods
+    // CORS preflight, return path-specific allowed methods
     if (std.mem.eql(u8, method, "OPTIONS")) {
         var allow_methods: []const u8 = "GET, POST, OPTIONS";
         for (known_endpoints) |ep| {
@@ -1545,7 +1545,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
-    // Health check endpoint — lightweight, no mutex, no inference
+    // Health check endpoint, lightweight, no mutex, no inference
     if (is_get and std.mem.eql(u8, path, "/health")) {
         var buf: [health_buf_size]u8 = undefined;
         // Clamp: both reads are wall clock, so an NTP step backward must not
@@ -1565,7 +1565,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const reason: []const u8 = if (is_shutting_down) "shutting_down" else if (kv_pressure and high_error_rate) "kv_pressure,high_error_rate" else if (kv_pressure) "kv_pressure" else if (high_error_rate) "high_error_rate" else "none";
         const http_status: []const u8 = if (is_shutting_down) "503 Service Unavailable" else "200 OK";
         // When API key is configured and auth is not provided, return only
-        // liveness status — omit model/version/backend to prevent fingerprinting.
+        // liveness status, omit model/version/backend to prevent fingerprinting.
         if (g_server.api_key != null and !validateAuth(g_server, req.headers)) {
             const minimal = std.fmt.bufPrint(&buf,
                 \\{{"status":"{s}","reason":"{s}"}}
@@ -1585,7 +1585,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
-    // Readiness check endpoint — returns 503 if shutting down, under KV cache pressure, or high error rate
+    // Readiness check endpoint, returns 503 if shutting down, under KV cache pressure, or high error rate
     if (is_get and std.mem.eql(u8, path, "/ready")) {
         const kv_used_r = g_server.metrics.kv_blocks_used.load(.monotonic);
         const kv_total_r = g_server.metrics.kv_blocks_total.load(.monotonic);
@@ -1651,7 +1651,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
-        // Build info metric — standard Prometheus pattern for version tracking
+        // Build info metric, standard Prometheus pattern for version tracking
         writer.print("# HELP agave_build_info Agave server version and configuration\n# TYPE agave_build_info gauge\nagave_build_info{{version=\"{s}\",backend=\"{s}\",language=\"zig\"}} 1\n", .{ engine_version, g_server.backend_name }) catch {
             std.log.warn("req={d} metrics buffer overflow: build_info metric truncated ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
         };
@@ -1732,7 +1732,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var sampling = json.SamplingParams{};
         json.parseSampling(&sampling, body);
 
-        // Do not log sampling.user — OpenAI "user" field often holds email/username (PII).
+        // Do not log sampling.user, OpenAI "user" field often holds email/username (PII).
 
         // 2. Parse tools and extract messages
         const tool_params = json.parseTools(body);
@@ -2005,7 +2005,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         g_server.metrics.recordRequest();
         // Accept: {"text":"..."} or {"content":"..."} (raw text)
-        // Also accept: {"messages":[...]} (chat-completion format — apply template then tokenize)
+        // Also accept: {"messages":[...]} (chat-completion format, apply template then tokenize)
         const body = req.body;
         const input_text: []const u8 = blk: {
             if (json.extractField(body, "text")) |t| break :blk t;
@@ -2143,7 +2143,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
         const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
-        // Snapshot seq_len + prefix under mutex — concurrent generateN may free/replace
+        // Snapshot seq_len + prefix under mutex, concurrent generateN may free/replace
         // cached_prompt_ids (UAF) or reset KV between unlocked reads (inconsistent pair).
         var hash: u64 = fnv1a_offset_basis;
         var cached_prefix_len: usize = 0;
@@ -2176,8 +2176,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     }
 
     // ── /v1/kv_cache: cross-instance KV prefix sharing (LMCache-style) ──────────
-    // GET  /v1/kv_cache?n_tokens=<N>  — export N-token prefix as binary blob
-    // POST /v1/kv_cache?n_tokens=<N>  — import N-token prefix from binary body
+    // GET  /v1/kv_cache?n_tokens=<N> , export N-token prefix as binary blob
+    // POST /v1/kv_cache?n_tokens=<N> , import N-token prefix from binary body
     if ((is_get or is_post) and std.mem.eql(u8, path, "/v1/kv_cache")) {
         logRequest(method, path);
         if (!validateAuth(g_server, req.headers)) {
@@ -2823,7 +2823,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordTokens(regen_result.stats.tokens_generated);
         if (std.mem.eql(u8, regen_result.finish_reason, "error")) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
 
-        // Never fall back to unescaped model output — OOM must not enable XSS (CWE-79).
+        // Never fall back to unescaped model output, OOM must not enable XSS (CWE-79).
         const regen_escaped = json.htmlEscape(g_server.allocator, regen_result.data) catch {
             sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
             logRequestDone(method, path, 200, elapsedMs(request_start));
@@ -2894,7 +2894,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     return;
                 }
             } else {
-                slog("  Image attached (no vision encoder — ignored)\n", .{});
+                slog("  Image attached (no vision encoder, ignored)\n", .{});
             }
         }
         // Ensure image embeddings are cleared after generation
@@ -2928,7 +2928,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         } else null;
 
         // Get or create active conversation, add user message, format prompt
-        // — all under mutex. Returns (need_reset, formatted) or null on failure.
+        //, all under mutex. Returns (need_reset, formatted) or null on failure.
         const ChatPrepResult = struct { need_reset: bool, formatted: []const u8 };
         const prep_result: ?ChatPrepResult = blk: {
             g_server.mutex.lockUncancelable(g_server.io);
@@ -3024,7 +3024,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordTokens(result.stats.tokens_generated);
         if (std.mem.eql(u8, result.finish_reason, "error")) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
 
-        // Never fall back to unescaped input — send a safe error page on OOM (CWE-79).
+        // Never fall back to unescaped input, send a safe error page on OOM (CWE-79).
         const escaped_user = json.htmlEscape(g_server.allocator, decoded) catch {
             sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
             logRequestDone(method, path, 200, elapsedMs(request_start));
@@ -3101,7 +3101,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             defer unlockModelWithScheduler();
             g_server.model.resetCache();
             g_server.kv_valid = false;
-            // KV wiped — drop prefix IDs or the next generate would setKvSeqLen
+            // KV wiped, drop prefix IDs or the next generate would setKvSeqLen
             // onto empty slots and skip re-prefilling (garbled output).
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
@@ -3222,7 +3222,7 @@ fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
             return true;
         },
         .jpeg => {
-            slog("  vision: JPEG images not supported — convert to PNG\n", .{});
+            slog("  vision: JPEG images not supported, convert to PNG\n", .{});
             return false;
         },
         else => {
@@ -3405,7 +3405,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 
     // Scheduler path: enqueue and block until complete.
     // Grammar-constrained decoding and json_mode bypass the scheduler (grammar
-    // state is per-request and the scheduler loop has no grammar/JSON support —
+    // state is per-request and the scheduler loop has no grammar/JSON support,
     // no first-token '{' forcing, no brace depth tracking).
     const use_grammar_pre = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
     if (g_server.request_manager != null and !use_grammar_pre and !sampling.json_mode) {
@@ -3485,7 +3485,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             });
             break :blk "length";
         } else blk: {
-            // Cancelled for forward failure, capacity, or client abort —
+            // Cancelled for forward failure, capacity, or client abort,
             // scheduler already logged the cause; surface as error for handlers.
             std.log.warn("req={d} scheduler generation incomplete (tokens={d}, cancelled={})", .{
                 log_request_id,
@@ -3516,7 +3516,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     defer unlockModelWithScheduler();
     const model = g_server.model;
 
-    // Re-check kv_valid under mutex — the caller's `reset` flag may be stale
+    // Re-check kv_valid under mutex, the caller's `reset` flag may be stale
     // if another thread invalidated the cache (e.g. /clear) between the caller's
     // unlock and this lock acquisition.
     const actual_reset = reset or !g_server.kv_valid;
@@ -3532,7 +3532,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             prefix_len += 1;
         }
         if (prefix_len > 0 and prefix_len < token_ids.len) {
-            // Shared prefix found — rollback KV cache to prefix boundary
+            // Shared prefix found, rollback KV cache to prefix boundary
             const bos_offset: usize = if (g_server.bos_token_id > 0) 1 else 0;
             model.setKvSeqLen(prefix_len + bos_offset);
             slog("  Prefix cache hit: {d}/{d} tokens reused\n", .{ prefix_len, token_ids.len });
@@ -3548,7 +3548,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         g_server.clearCachedPromptIds();
     }
 
-    // BOS token — required by models like Gemma to initialize state correctly
+    // BOS token, required by models like Gemma to initialize state correctly
     if (prefix_len == 0 and actual_reset and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
@@ -3557,7 +3557,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         };
     }
 
-    // Prefill phase — timed separately for TTFT stats.
+    // Prefill phase, timed separately for TTFT stats.
     // Skip tokens already in KV cache (prefix_len > 0 = cache hit).
     const prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
@@ -3660,7 +3660,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         }
         // Accept first token in grammar state
         if (use_grammar and grammar_state_storage != null) {
-            // Use raw vocab text — NOT decoded text — so getEffectiveText strips
+            // Use raw vocab text, NOT decoded text, so getEffectiveText strips
             // BPE prefixes consistently with maskLogits.
             const vt = g_server.tokenizer.getVocabTexts();
             const raw = if (first_gen_token < vt.len) vt[first_gen_token] else "";
@@ -3683,7 +3683,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         }
     }
 
-    // Generation phase (timed) — collect token IDs, batch-decode once at the end
+    // Generation phase (timed), collect token IDs, batch-decode once at the end
     // to avoid per-token alloc/free overhead.
     const gen_start = milliTimestamp();
     var gen_tokens: [gen_ids_buf_size]u32 = undefined;
@@ -3694,7 +3694,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     var g_in_think_block: bool = false;
     var g_n_think_tokens: u32 = 0;
 
-    // Pre-tokenize </think> once — encoding inside the decode loop allocates every step.
+    // Pre-tokenize </think> once, encoding inside the decode loop allocates every step.
     var close_think_owned: ?[]u32 = null;
     defer if (close_think_owned) |ids| g_server.allocator.free(ids);
     if (sampling.thinking_budget_tokens > 0) {
@@ -3714,7 +3714,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     var forward_failed = false;
     const effective_max = @min(max_tokens, gen_ids_buf_size);
 
-    // Rolling text buffer for stop sequence matching — avoids re-decoding
+    // Rolling text buffer for stop sequence matching, avoids re-decoding
     // a window of tokens each iteration. 128 bytes covers stop sequences
     // that span up to ~32 tokens.
     const stop_buf_size: usize = 128;
@@ -3883,7 +3883,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                 break;
             }
             const tok_text: []const u8 = tok_text_alloc orelse "";
-            // Accept token in grammar state — use raw vocab text for consistent BPE handling.
+            // Accept token in grammar state, use raw vocab text for consistent BPE handling.
             if (use_grammar and grammar_state_storage != null) {
                 const raw_tok = if (next < vocab_texts.len) vocab_texts[next] else "";
                 grammar_state_storage.?.acceptToken(raw_tok);
@@ -3948,7 +3948,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 
     // Terminal metrics (recordFailure/recordCompletion) recorded by caller based on finish_reason.
 
-    // Single batch decode — one alloc instead of N per-token allocs
+    // Single batch decode, one alloc instead of N per-token allocs
     const decoded = tok.decode(gen_tokens[0..token_count]) catch |err| d: {
         std.log.warn("req={d} batch decode failed ({d} tokens): {}", .{ log_request_id, token_count, err });
         break :d g_server.allocator.dupe(u8, "[decode error]") catch @as([]u8, &.{});
@@ -4121,7 +4121,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         }
 
         const sched_prefill_tps: f32 = tokensPerSec(prompt_token_count, sched_prefill_ms);
-        // Bound by visible_len only — items.len is not synchronized with the
+        // Bound by visible_len only, items.len is not synchronized with the
         // scheduler writer; visible_len's acquire load is the publication fence.
         const safe_cs_tokens = req.tokens.items[0..token_count];
         const decoded = tok.decode(safe_cs_tokens) catch |err| d: {
@@ -4140,7 +4140,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
-    // Re-check kv_valid under mutex — caller's `reset` may be stale if another
+    // Re-check kv_valid under mutex, caller's `reset` may be stale if another
     // thread invalidated the cache between the caller's unlock and this lock.
     const actual_reset = reset or !g_server.kv_valid;
     if (actual_reset) {
@@ -4298,7 +4298,7 @@ fn incompleteUtf8TailLen(text: []const u8) usize {
         const idx = text.len - 1 - k;
         const b = text[idx];
         if (b < 0x80) return 0; // ASCII terminates any sequence
-        if (b & 0xC0 == 0x80) continue; // continuation byte — keep walking back
+        if (b & 0xC0 == 0x80) continue; // continuation byte, keep walking back
         // Lead byte at idx.
         const seq_len = std.unicode.utf8ByteSequenceLength(b) catch return 0;
         const have = text.len - idx;
@@ -4495,7 +4495,7 @@ fn anthropicStatusLine(status_code: []const u8) []const u8 {
 /// Message and type are JSON-escaped to prevent injection (CWE-116).
 fn sendAnthropicError(stream: TcpStream, status_code: []const u8, err_type: []const u8, message: []const u8) void {
     const status = anthropicStatusLine(status_code);
-    // Never fall back to unescaped input on OOM — that reintroduces injection.
+    // Never fall back to unescaped input on OOM, that reintroduces injection.
     const escaped_msg = json.jsonEscape(g_server.allocator, message) catch {
         sendResponse(stream, status, "application/json", anthropic_error_fallback);
         return;
@@ -4527,7 +4527,7 @@ fn sendAnthropic429(stream: TcpStream, retry_after: u32) void {
     const body = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"error\":{{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded. Retry after {d} seconds.\"}}}}", .{retry_after}) catch anthropic_rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
-        // Always respond — a hung client is worse than a response without Retry-After.
+        // Always respond, a hung client is worse than a response without Retry-After.
         std.log.warn("req={d} anthropic 429 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "429 Too Many Requests", "application/json", body);
         return;
@@ -4564,7 +4564,7 @@ fn startAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens: us
 const anthropic_delta_piece_len: usize = 256;
 
 /// Anthropic SSE streaming with tools. Tool calls cannot be detected mid-stream
-/// without holding back `<tool_call>` tokens, so — like the OpenAI tools path —
+/// without holding back `<tool_call>` tokens, so, like the OpenAI tools path,
 /// generation runs to completion first and the parsed result is emitted as
 /// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
 /// the raw text as a `text` block when nothing parses (small-model fallback).
@@ -4691,7 +4691,7 @@ const ResolvedToolInput = struct {
 /// Resolve the `input` object text for a <tool_call> payload: object arguments
 /// are embedded verbatim; string arguments are unwrapped when they decode to an
 /// object, otherwise `{}` is substituted (with a warning). Anthropic requires
-/// `input` to be a JSON object — an invalid value would break spec-compliant
+/// `input` to be a JSON object, an invalid value would break spec-compliant
 /// clients, so unparseable arguments never reach the wire verbatim.
 fn resolveAnthropicToolInput(allocator: Allocator, tc_json: []const u8, call_idx: usize) ResolvedToolInput {
     if (json.extractObjectField(tc_json, "arguments")) |o| return .{ .obj = o };
@@ -5266,7 +5266,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         }
         if (hit_stop) token_count = @intCast(checked_len);
 
-        // Send final events — skip if client already disconnected
+        // Send final events, skip if client already disconnected
         if (resp_client_connected) {
             _ = flushStreamHoldback(stream, &resp_hb, emitResponsesDeltaPiece);
             const safe_resp_count: usize = token_count;
@@ -5467,7 +5467,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
         }
     }
 
-    // Send final events — skip if client already disconnected
+    // Send final events, skip if client already disconnected
     if (!resp_disconnected) {
         _ = flushStreamHoldback(stream, &resp_hb, emitResponsesDeltaPiece);
         const decoded = tok.decode(gen_tokens[0..@min(token_count, gen_ids_buf_size)]) catch |err| d: {
@@ -5505,7 +5505,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
 /// Send an SSE data event. Returns false if the write failed (client disconnected).
 /// Generic over the stream type so tests can collect output without sockets;
-/// monomorphized at comptime — no dispatch cost.
+/// monomorphized at comptime, no dispatch cost.
 fn sseWriteData(stream: anytype, data: []const u8) bool {
     var event_buf: [response_buf_size + 16]u8 = undefined;
     const event = std.fmt.bufPrint(&event_buf, "data: {s}\n\n", .{data}) catch return false;
@@ -5604,7 +5604,7 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             const name = json.extractField(tc_json, "name") orelse continue;
             const args = json.extractObjectField(tc_json, "arguments") orelse
                 (json.extractField(tc_json, "arguments") orelse "{}");
-            // Escape name and args — model output is untrusted (CWE-116).
+            // Escape name and args, model output is untrusted (CWE-116).
             const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
                 std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
                 continue;
@@ -5639,7 +5639,7 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
     } else {
         // No parseable tool call. `<tool_call>` tags whose payload fails to
         // parse (a common small-model failure) must degrade to the raw text as
-        // content — mirroring the non-streaming path — instead of emitting an
+        // content, mirroring the non-streaming path, instead of emitting an
         // empty assistant turn that claims finish_reason "tool_calls".
         writeStreamedContent(stream, &chunk_buf, g_server.model_name, req_id, created, gen.escaped, gen.finish_reason);
     }
@@ -5936,7 +5936,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         }
         if (hit_stop) token_count = @intCast(checked_len);
 
-        // Send final chunk, usage chunk, and [DONE] — skip if client already disconnected
+        // Send final chunk, usage chunk, and [DONE], skip if client already disconnected
         if (chunk_client_connected) {
             const held = chunk_hb.flush();
             _ = writeOpenAiChunk(stream, &chunk_buf, tok, held, req_id, created, is_chat, null);
@@ -6001,7 +6001,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         g_server.clearCachedPromptIds();
     }
 
-    // BOS token — required by models like Gemma to initialize state correctly
+    // BOS token, required by models like Gemma to initialize state correctly
     if (s_prefix_len == 0 and g_server.bos_token_id > 0) {
         _ = model.forward(g_server.bos_token_id) catch |err| {
             std.log.err("req={d} BOS forward failed: {}", .{ log_request_id, err });
@@ -6052,7 +6052,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         return;
     }
 
-    // Prefill — capture the last forward's return value (first generated token)
+    // Prefill, capture the last forward's return value (first generated token)
     const use_sampling_s = sampling.temperature > 0;
     const prng_seed_s = prngSeedFromSampling(sampling);
     var prng_s = std.Random.Xoshiro256.init(prng_seed_s);
@@ -6102,7 +6102,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             first_gen_token = math_ops.sampleToken(s_first_logits, sampling.temperature, sampling.top_k, sampling.top_p, prng_s.random());
         }
     }
-    // Accept first token in grammar — use raw vocab text for consistent BPE handling.
+    // Accept first token in grammar, use raw vocab text for consistent BPE handling.
     if (use_grammar_s and s_grammar_state != null and token_ids.len > 0) {
         const ft_raw = if (first_gen_token < s_vocab_texts.len) s_vocab_texts[first_gen_token] else "";
         s_grammar_state.?.acceptToken(ft_raw);
@@ -6187,7 +6187,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             if (g_server.isEog(res.next_token)) break;
         }
     } else {
-        // Standard streaming — token history for penalty tracking
+        // Standard streaming, token history for penalty tracking
         const use_penalties_s = sampling.frequency_penalty != 0 or sampling.presence_penalty != 0 or sampling.repetition_penalty != 1.0 or sampling.dry_multiplier > 0;
         var s_gen_tokens: [gen_ids_buf_size]u32 = undefined;
         defer @memset(std.mem.sliceAsBytes(&s_gen_tokens), 0);
@@ -6356,7 +6356,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         }
     }
 
-    // Send final chunk, usage chunk, and [DONE] — skip if client already disconnected
+    // Send final chunk, usage chunk, and [DONE], skip if client already disconnected
     if (!stream_disconnected) {
         const held = chunk_hb.flush();
         _ = writeOpenAiChunk(stream, &chunk_buf, tok, held, req_id, created, is_chat, null);
@@ -6392,7 +6392,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 // ── Connection handler & server entry point ─────────────────────
 
 fn handleConnection(stream: TcpStream) void {
-    // Set read/write timeouts to prevent slow loris attacks — without this,
+    // Set read/write timeouts to prevent slow loris attacks, without this,
     // stream.read()/writeAll() block indefinitely and an attacker can exhaust
     // all max_concurrent_connections slots with incomplete requests or stalled reads.
     const timeout = std.posix.timeval{ .sec = connection_read_timeout_sec, .usec = 0 };
@@ -6402,7 +6402,7 @@ fn handleConnection(stream: TcpStream) void {
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch |err| {
         std.log.warn("Failed to set connection write timeout: {}", .{err});
     };
-    // Disable Nagle's algorithm — SSE streaming writes small token chunks (~20-100 bytes)
+    // Disable Nagle's algorithm, SSE streaming writes small token chunks (~20-100 bytes)
     // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
     const nodelay_val: c_int = 1;
     std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&nodelay_val)) catch |err| {
@@ -6448,7 +6448,7 @@ fn handleConnection(stream: TcpStream) void {
         // Connection-level failures below are not client protocol errors: no
         // 4xx is produced (the peer is gone or unresponsive), so they are kept
         // out of requests_client_error to preserve that signal's meaning.
-        // Probes/port scans make plain closes common — log once, move on.
+        // Probes/port scans make plain closes common, log once, move on.
         .connection_closed => {
             g_server.metrics.recordRequest();
             const t = getTimeComponents();
@@ -6623,7 +6623,7 @@ pub fn run(config: ServerConfig) !void {
     var tcp = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
         var buf: [error_body_buf_size]u8 = undefined;
         // Port-in-use is by far the most common listen failure; give it an
-        // actionable hint instead of a raw error name (matches pull/main error style).
+        // hint naming the fix instead of a raw error name (matches pull/main error style).
         const msg = if (err == error.AddressInUse)
             std.fmt.bufPrint(&buf, "Error: port {d} is already in use (another server may be running).\n  Start on a different port with --port <PORT>.\n", .{port}) catch ""
         else
@@ -6651,12 +6651,12 @@ pub fn run(config: ServerConfig) !void {
     const handler = struct {
         fn handle(_: std.posix.SIG) callconv(.c) void {
             if (g_server.shutdown_requested.load(.acquire)) {
-                // Second signal — force immediate exit
+                // Second signal, force immediate exit
                 const force_msg = "\nForced shutdown.\n";
                 _ = std.posix.system.write(stderr_file.handle, force_msg.ptr, force_msg.len);
                 std.process.exit(1);
             }
-            // First signal — write immediately (async-signal-safe)
+            // First signal, write immediately (async-signal-safe)
             const shutdown_msg = "\nShutting down (Ctrl+C again to force)...\n";
             _ = std.posix.system.write(stderr_file.handle, shutdown_msg.ptr, shutdown_msg.len);
             g_server.shutdown_requested.store(true, .release);
@@ -6672,13 +6672,13 @@ pub fn run(config: ServerConfig) !void {
     std.posix.sigaction(std.posix.SIG.TERM, &act, null);
     std.posix.sigaction(std.posix.SIG.INT, &act, null);
 
-    // Accept loop — each connection handled on its own thread.
+    // Accept loop, each connection handled on its own thread.
     // Reject new connections when at the concurrency limit to prevent resource exhaustion.
     // Exit loop when graceful shutdown is requested.
     while (!g_server.shutdown_requested.load(.acquire)) {
         const net_stream = tcp.accept(io) catch |err| {
             if (g_server.shutdown_requested.load(.acquire)) break;
-            // Timeout is expected — allows periodic shutdown check
+            // Timeout is expected, allows periodic shutdown check
             if (err == error.WouldBlock or err == error.Unexpected) continue;
             std.log.err("Accept failed: {}", .{err});
             continue;
@@ -6711,7 +6711,7 @@ pub fn run(config: ServerConfig) !void {
         thread.detach();
     }
 
-    // Log shutdown (signal handler cannot safely log — do it here)
+    // Log shutdown (signal handler cannot safely log, do it here)
     {
         const tc = getTimeComponents();
         slog("\n[{d:0>2}:{d:0>2}:{d:0>2}] Server shutting down...\n", .{ tc.hours, tc.minutes, tc.seconds });
@@ -6740,7 +6740,7 @@ pub fn run(config: ServerConfig) !void {
         sleepNs(drain_poll_interval_ms * std.time.ns_per_ms);
     }
 
-    // Free conversation storage under mutex — handler threads may still
+    // Free conversation storage under mutex, handler threads may still
     // be running (drain timeout exceeded) and accessing conversations.
     {
         server.mutex.lockUncancelable(server.io);
@@ -6832,7 +6832,7 @@ test "writeStreamedContent splits oversized output across deltas" {
     try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"finish_reason\":null") != null);
     try std.testing.expect(std.mem.indexOf(u8, frames.items[1], "\"finish_reason\":null") != null);
     try std.testing.expect(std.mem.indexOf(u8, frames.items[2], "\"finish_reason\":\"length\"") != null);
-    // Reassembled pieces must equal the input exactly — no dropped bytes.
+    // Reassembled pieces must equal the input exactly, no dropped bytes.
     var reassembled = std.ArrayList(u8).empty;
     defer reassembled.deinit(allocator);
     const fr_key = ",\"finish_reason\"";
@@ -7061,7 +7061,7 @@ test "Utf8Holdback releases invalid continuation raw like batch decode" {
 
 test "Conversation.setTitle keeps trailing multi-byte characters" {
     var conv = Conversation{ .id = 1 };
-    conv.setTitle("caf\xc3\xa9"); // café — trailing é is fully present
+    conv.setTitle("caf\xc3\xa9"); // café, trailing é is fully present
     try std.testing.expectEqualStrings("caf\xc3\xa9", conv.titleSlice());
 
     // Truncation that lands inside a multi-byte sequence drops the fragment.
@@ -7178,7 +7178,7 @@ test "fuzz: all server functions" {
                 }
             }
 
-            // hasHeader — fixed well-formed cases plus random header blobs
+            // hasHeader, fixed well-formed cases plus random header blobs
             {
                 const has_ct = hasHeader("Content-Type: text/html\r\nHost: x", "Content-Type");
                 std.debug.assert(has_ct);
@@ -7196,7 +7196,7 @@ test "fuzz: all server functions" {
                 _ = hasHeader(hdr_fuzz[0..hdr_len], "x-api-key");
             }
 
-            // parseContentLength — well-formed + adversarial header blobs
+            // parseContentLength, well-formed + adversarial header blobs
             {
                 const val = smith.valueWithHash(u16, 0x10);
                 var hdr_buf: [64]u8 = undefined;
@@ -7215,7 +7215,7 @@ test "fuzz: all server functions" {
                 _ = parseContentLength("Content-Length: \r\n");
             }
 
-            // validateAuth — random Authorization / x-api-key header lines
+            // validateAuth, random Authorization / x-api-key header lines
             {
                 var server: Server = undefined;
                 server.api_key = "fuzz-secret-key";
@@ -7284,7 +7284,7 @@ test "fuzz: all server functions" {
                 _ = HttpReadResult.body_too_large;
             }
 
-            // splitPathQuery + extractQueryParam — untrusted request-target / query string
+            // splitPathQuery + extractQueryParam, untrusted request-target / query string
             {
                 var path_buf: [256]u8 = undefined;
                 smith.bytesWithHash(&path_buf, 0x50);
@@ -7310,12 +7310,12 @@ test "fuzz: all server functions" {
                     key_buf[0..@min(key_len, 8)],
                     smith.valueWithHash(u16, 0x55),
                 }) catch unreachable;
-                // First match wins — must not crash on duplicate keys
+                // First match wins, must not crash on duplicate keys
                 const ntok = extractQueryParam(qn, "n_tokens");
                 std.debug.assert(ntok != null);
             }
 
-            // parseRequestLine — untrusted HTTP request-line bytes
+            // parseRequestLine, untrusted HTTP request-line bytes
             {
                 var line_buf: [256]u8 = undefined;
                 smith.bytesWithHash(&line_buf, 0x60);
@@ -7337,7 +7337,7 @@ test "fuzz: all server functions" {
                 std.debug.assert(parseRequestLine("NOSPACES") == null);
             }
 
-            // parseDetokenizeTokens — untrusted /v1/detokenize JSON bodies
+            // parseDetokenizeTokens, untrusted /v1/detokenize JSON bodies
             {
                 var body_buf: [256]u8 = undefined;
                 smith.bytesWithHash(&body_buf, 0x70);
@@ -7421,7 +7421,7 @@ test "fuzz: readHttpRequest over socket" {
                     // Content-Length must equal the delivered body byte count.
                     try std.testing.expectEqual(parseContentLength(req.headers).?, req.body.len);
                     // Every parsed slice must live inside the read buffer.
-                    // Empty slices may be static literals — only check real ones.
+                    // Empty slices may be static literals, only check real ones.
                     const slices = [_][]const u8{ req.method, req.path, req.query, req.headers, req.body };
                     for (slices) |s| {
                         if (s.len == 0) continue;

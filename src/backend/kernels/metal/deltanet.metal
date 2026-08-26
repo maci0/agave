@@ -137,7 +137,7 @@ kernel void deltanet_recurrence(
     uint s_off = h * hvd * hkd;
     uint k_base = kh * hkd;
 
-    // Cache K and Q vectors in threadgroup memory — read once from device,
+    // Cache K and Q vectors in threadgroup memory, read once from device,
     // reused for every vi row (up to 128 reuses). Max head_k_dim = 256.
     threadgroup float k_local[256];
     threadgroup float q_local[256];
@@ -165,7 +165,7 @@ kernel void deltanet_recurrence(
     for (uint vi = tid; vi < hvd; vi += tg_size) {
         uint row_off = s_off + vi * hkd;
 
-        // Pass 1: decay + dot(S_dec, K) + dot(S_dec, Q) — float4 vectorized
+        // Pass 1: decay + dot(S_dec, K) + dot(S_dec, Q), float4 vectorized
         float sk = 0.0f;
         float sq_dec = 0.0f;
         uint hkd4 = hkd & ~3u;
@@ -189,7 +189,7 @@ kernel void deltanet_recurrence(
         float delta = beta_h * (v[h * hvd + vi] - sk);
         output[h * hvd + vi] = (sq_dec + delta * kq) * q_scale;
 
-        // Pass 2: state update — float4 vectorized
+        // Pass 2: state update, float4 vectorized
         float4 delta_v4 = float4(delta);
         for (uint ki = 0; ki < hkd4; ki += 4) {
             float4 s = *(device float4*)(state + row_off + ki);

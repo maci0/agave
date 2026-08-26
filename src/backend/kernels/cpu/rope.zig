@@ -112,7 +112,7 @@ test "rope pos=0 is identity" {
 }
 
 test "rope preserves magnitude" {
-    // RoPE is a rotation — magnitude should be preserved per pair.
+    // RoPE is a rotation, magnitude should be preserved per pair.
     var x = [_]f32{ 3.0, 0.0, 4.0, 0.0 };
     rope(&x, 5, 1, 4, 4, 10000.0);
     // Pair 0: (x[0], x[2]) should have magnitude 5.0 (sqrt(3^2+4^2))
@@ -156,7 +156,7 @@ test "rope partial rope_dim leaves remainder untouched" {
     try std.testing.expectEqual(@as(f32, 6.0), x[5]);
     try std.testing.expectEqual(@as(f32, 7.0), x[6]);
     try std.testing.expectEqual(@as(f32, 8.0), x[7]);
-    // Dims 0..4 (inside rope_dim) should be rotated — verify with known cos/sin
+    // Dims 0..4 (inside rope_dim) should be rotated, verify with known cos/sin
     // freq[0]=1.0, angle=5.0: x[0]=1*cos(5)-3*sin(5), x[2]=1*sin(5)+3*cos(5)
     // freq[1]=0.01, angle=0.05: x[1]=2*cos(0.05)-4*sin(0.05), x[3]=2*sin(0.05)+4*cos(0.05)
     try std.testing.expectApproxEqAbs(@cos(@as(f32, 5.0)) - 3.0 * @sin(@as(f32, 5.0)), x[0], 1e-4);

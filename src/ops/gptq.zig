@@ -56,7 +56,7 @@ pub fn gptqGemvRows(
             const scale = f16ToF32(s_row[g]);
 
             // Extract zero-point for this group+row from packed qzeros
-            // qzeros layout: [n_groups, ceil(n/8)] packed INT4 — stride uses full n, not the chunk.
+            // qzeros layout: [n_groups, ceil(n/8)] packed INT4, stride uses full n, not the chunk.
             const z_word_idx = g * zeros_row_words + row / gptq_nibbles_per_u32;
             const z_nibble = row % gptq_nibbles_per_u32;
             const z_word = qzeros[z_word_idx];
@@ -153,7 +153,7 @@ test "fuzz: all gptq functions" {
 
             // Random packed INT4 weights (8 nibbles in one u32)
             var qweight = [_]u32{smith.valueWithHash(u32, 0)};
-            // Random scale as f16 bits — clamp to finite f16 range
+            // Random scale as f16 bits, clamp to finite f16 range
             var scale_bits = smith.valueWithHash(u16, 1);
             // Mask exponent to avoid inf/nan: exponent field [14:10], max 0x7C00 = inf
             // Keep exponent <= 0x1E (30) to stay finite
