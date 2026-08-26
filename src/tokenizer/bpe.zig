@@ -161,7 +161,7 @@ pub const BpeTokenizer = struct {
     }
 
     /// Build the GPT-2 byte↔unicode lookup tables (`byte_to_unicode` / `unicode_to_byte`).
-    /// Idempotent — subsequent calls are no-ops. On error, partially-allocated
+    /// Idempotent, subsequent calls are no-ops. On error, partially-allocated
     /// entries are freed and `byte_mappings_init` is reset so the caller can retry.
     fn initByteMappings(self: *BpeTokenizer) !void {
         if (self.byte_mappings_init) return;
@@ -391,7 +391,7 @@ pub const BpeTokenizer = struct {
                     try result.append(self.allocator, id);
                 }
             } else {
-                // Byte-level BPE — check word cache first.
+                // Byte-level BPE, check word cache first.
                 self.lockWordCache();
                 const cached_opt = self.word_cache.get(seg);
                 if (cached_opt) |cached_ids| {
@@ -406,7 +406,7 @@ pub const BpeTokenizer = struct {
                         self.unlockWordCache();
                         try result.appendSlice(self.allocator, tmp_ids[0..n_ids]);
                     } else {
-                        // Allocate and copy under lock — the slice must not be
+                        // Allocate and copy under lock, the slice must not be
                         // read after unlock (concurrent deinit could free it).
                         const owned = self.allocator.dupe(u32, cached_ids) catch {
                             self.unlockWordCache();
@@ -479,7 +479,7 @@ pub const BpeTokenizer = struct {
     /// Byte-for-byte equivalent to decoding a one-element slice via `decode`
     /// (BPE mode: reverse byte↔unicode mapping; SPM modes: `<0xNN>` hex-byte
     /// tokens and ▁→space). Returns a slice of `buf`, or null when the token
-    /// is out of range or its text does not fit — callers then fall back to
+    /// is out of range or its text does not fit, callers then fall back to
     /// the allocating `decode`.
     pub fn decodeOne(self: *const BpeTokenizer, token_id: u32, buf: []u8) ?[]const u8 {
         if (token_id >= self.id_to_token.items.len) return null;
@@ -525,7 +525,7 @@ pub const BpeTokenizer = struct {
     /// Allocation-free single-token SPM decode: mirrors the per-token branch
     /// of `decodeSpm` (`<0xNN>` hex-byte tokens, ▁ → space, raw copy).
     fn decodeOneSpm(text: []const u8, out: []u8) ?[]const u8 {
-        // Handle <0xNN> hex-byte tokens — emit raw byte.
+        // Handle <0xNN> hex-byte tokens, emit raw byte.
         if (text.len == 6 and text[0] == '<' and text[1] == '0' and text[2] == 'x' and text[5] == '>') {
             if (std.fmt.parseUnsigned(u8, text[3..5], 16)) |byte| {
                 if (out.len < 1) return null;
@@ -628,8 +628,8 @@ pub const BpeTokenizer = struct {
         }
         self.vocab_size = vocab_len;
         std.log.info("[bpe] Loaded {} special tokens from GGUF vocab (SPM mode)", .{special_count});
-        // No merges for SPM — encode uses greedy longest match
-        // No byte mappings needed — SPM tokens are raw UTF-8
+        // No merges for SPM, encode uses greedy longest match
+        // No byte mappings needed, SPM tokens are raw UTF-8
     }
 
     /// Greedy longest-match encoding for SPM tokenizers (no BPE merges).
@@ -640,7 +640,7 @@ pub const BpeTokenizer = struct {
         return self.encodeSpmInner(text, true);
     }
 
-    /// Like encodeSpm but without add_dummy_prefix — used by tokenizers
+    /// Like encodeSpm but without add_dummy_prefix, used by tokenizers
     /// (like Gemma) where ▁ prefix only appears for actual spaces.
     pub fn encodeSpmNoDummy(self: *const BpeTokenizer, text: []const u8) ![]u32 {
         return self.encodeSpmInner(text, false);
@@ -659,7 +659,7 @@ pub const BpeTokenizer = struct {
         var start: usize = 0;
         while (start < text.len) {
             // Try to match special tokens first (longest match wins).
-            // All special tokens start with '<' — skip scan otherwise.
+            // All special tokens start with '<', skip scan otherwise.
             var best_sp_len: usize = 0;
             var best_sp_id: u32 = 0;
             if (text[start] == '<') {
@@ -682,7 +682,7 @@ pub const BpeTokenizer = struct {
                 continue;
             }
 
-            // Consume spaces — they become ▁ prefix on the next token
+            // Consume spaces, they become ▁ prefix on the next token
             if (text[start] == ' ') {
                 word_start = true;
                 start += 1;
@@ -738,7 +738,7 @@ pub const BpeTokenizer = struct {
                         try result.append(self.allocator, sp_id);
                     }
                     word_start = false;
-                    // Don't advance start — re-process current char without ▁
+                    // Don't advance start, re-process current char without ▁
                     continue;
                 }
             }
@@ -782,13 +782,13 @@ pub const BpeTokenizer = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
-    /// Decode for SPM tokenizer — tokens are raw UTF-8, ▁ maps to space
+    /// Decode for SPM tokenizer, tokens are raw UTF-8, ▁ maps to space
     pub fn decodeSpm(self: *const BpeTokenizer, tokens: []const u32) ![]u8 {
         var result = std.ArrayList(u8).empty;
         for (tokens) |id| {
             if (id >= self.id_to_token.items.len) continue;
             const tok = self.id_to_token.items[id];
-            // Handle <0xNN> hex-byte tokens — emit raw byte
+            // Handle <0xNN> hex-byte tokens, emit raw byte
             if (tok.len == 6 and tok[0] == '<' and tok[1] == '0' and tok[2] == 'x' and tok[5] == '>') {
                 const byte = std.fmt.parseUnsigned(u8, tok[3..5], 16) catch {
                     try result.appendSlice(self.allocator, tok);
@@ -909,7 +909,7 @@ test "BpeTokenizer decode out of range token" {
     vocab_slice[0] = vocab[0];
     try tok.loadFromGGUFSpm(&vocab_slice, 0);
 
-    // Token id 999 is out of range — should be skipped
+    // Token id 999 is out of range, should be skipped
     const decoded = try tok.decodeSpm(&.{999});
     defer allocator.free(decoded);
     try std.testing.expectEqual(@as(usize, 0), decoded.len);
@@ -1175,7 +1175,7 @@ test "fuzz: all bpe functions" {
             const bpe_len = (smith.valueWithHash(u3, 4) | 1); // 1..7
             for (bpe_text[0..bpe_len]) |*b| {
                 switch (smith.valueWithHash(u8, 5) % 4) {
-                    0 => b.* = 'a' + (smith.valueWithHash(u8, 6) % 3), // a, b, or c — merge logic
+                    0 => b.* = 'a' + (smith.valueWithHash(u8, 6) % 3), // a, b, or c, merge logic
                     1 => b.* = '<', // triggers special-token scanning
                     else => b.* = smith.valueWithHash(u8, 7), // arbitrary bytes incl. invalid UTF-8
                 }

@@ -1,5 +1,5 @@
 """
-Kernel registry — maps kernel names to source files, golden data, and benchmark config.
+Kernel registry, maps kernel names to source files, golden data, and benchmark config.
 
 This is the central piece connecting the split kernel files in src/backend/kernels/
 to the research tooling. Each entry knows:

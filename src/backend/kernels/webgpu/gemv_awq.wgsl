@@ -48,7 +48,7 @@ fn main(
         let z_word = qzeros[g * n_words + word_idx];
         let zero = f32((z_word >> shift) & 0xFu);
 
-        // Scales in natural order — read f16 from packed u32
+        // Scales in natural order, read f16 from packed u32
         let scale_idx = g * params.n + col;
         let scale_word = scales[scale_idx / 2u];
         let scale_bits = select(scale_word >> 16u, scale_word & 0xFFFFu, scale_idx % 2u == 0u);

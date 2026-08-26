@@ -6,7 +6,7 @@
 
 > After this chapter you can explain BPE and SentencePiece tokenization, embedding lookup, and vocabulary projection.
 
-Language models don't see text — they see **tokens**, which are integer IDs representing subword pieces (fragments like "Hello" → "He" + "llo" that are smaller than words but larger than individual characters). Before anything else happens, we need to convert text to numbers and back.
+Language models don't see text, they see **tokens**, which are integer IDs representing subword pieces (fragments like "Hello" → "He" + "llo" that are smaller than words but larger than individual characters). Before anything else happens, we need to convert text to numbers and back.
 
 ## Code Flow
 
@@ -33,7 +33,7 @@ This chapter covers the first and last legs of that path (tokenize, embed, proje
 
 ## What is Inference?
 
-**Training** teaches a model by adjusting billions of **weights** (learned parameters — the numbers in matrices and vectors that encode the model's knowledge) over trillions of tokens. **Inference** uses those **frozen** (fixed, no longer changing) weights to generate new text. Agave only does inference — it loads **pre-trained** (already trained by someone else, ready to use) weights and runs the model forward (a single pass through the network layers to produce output).
+**Training** teaches a model by adjusting billions of **weights** (learned parameters, the numbers in matrices and vectors that encode the model's knowledge) over trillions of tokens. **Inference** uses those **frozen** (fixed, no longer changing) weights to generate new text. Agave only does inference, it loads **pre-trained** (already trained by someone else, ready to use) weights and runs the model forward (a single pass through the network layers to produce output).
 
 ## Tokenization
 
@@ -102,10 +102,10 @@ flowchart TD
 3. Next most frequent is `H e` → merge to `He`: `He ll o`
 4. Continue until vocabulary is built: `Hello`
 
-The merge rules are learned during training and stored alongside the model. This process creates the **vocabulary** — the complete set of all possible tokens the model knows about. Each token gets a unique ID (0 to vocab_size-1). For example:
+The merge rules are learned during training and stored alongside the model. This process creates the **vocabulary**, the complete set of all possible tokens the model knows about. Each token gets a unique ID (0 to vocab_size-1). For example:
 
 ```
-Token ID 0:    "<pad>" (padding — fills empty space when batching multiple sequences of different lengths)
+Token ID 0:    "<pad>" (padding, fills empty space when batching multiple sequences of different lengths)
 Token ID 1:    "<s>" (start of sequence)
 Token ID 15496: "Hello"
 Token ID 11:    ","
@@ -118,8 +118,8 @@ The **vocabulary size** (vocab_size) is the total number of distinct tokens. Mod
 
 | Strategy | Algorithm | Models | Merge Table |
 |----------|-----------|--------|-------------|
-| **BPE** | Iterative pair merging | Qwen, GPT | Required — learned merge priority list |
-| **SPM** | Greedy longest-match | Gemma | Not needed — matches vocabulary entries directly |
+| **BPE** | Iterative pair merging | Qwen, GPT | Required, learned merge priority list |
+| **SPM** | Greedy longest-match | Gemma | Not needed, matches vocabulary entries directly |
 
 ```mermaid
 flowchart TB
@@ -133,7 +133,7 @@ flowchart TB
     Input["Input text\n\"unhappiness\""]:::setup
     Out["Token ID sequence"]:::success
 
-    subgraph BPE["BPE — Byte Pair Encoding (Qwen, GPT)"]
+    subgraph BPE["BPE, Byte Pair Encoding (Qwen, GPT)"]
         direction TB
         B1["Start: u·n·h·a·p·p·i·n·e·s·s\n(individual bytes)"]:::setup
         B2["Apply merge table\n(learned during training)"]:::sync
@@ -142,7 +142,7 @@ flowchart TB
         B1 --> B2 --> B3 --> B4
     end
 
-    subgraph SPM["SPM — SentencePiece (Gemma)"]
+    subgraph SPM["SPM, SentencePiece (Gemma)"]
         direction TB
         S1["Start: full string\n\"unhappiness\""]:::setup
         S2["Greedy longest match\nagainst vocabulary"]:::sync
@@ -159,8 +159,8 @@ flowchart TB
 ```
 
 Agave's tokenizer (`src/tokenizer/bpe.zig`) supports both:
-- **BPE mode** — uses merge rules to decide which byte pairs to combine first
-- **SPM mode** — greedy longest-match without merges, including a "no dummy" variant for Gemma
+- **BPE mode**: uses merge rules to decide which byte pairs to combine first
+- **SPM mode**: greedy longest-match without merges, including a "no dummy" variant for Gemma
 
 ### Token Statistics
 
@@ -171,7 +171,7 @@ Agave's tokenizer (`src/tokenizer/bpe.zig`) supports both:
 | GPT-OSS | 201,088 | ~1.3 | BPE |
 | GLM-4 | 154,880 | ~1.3 | BPE |
 
-Larger vocabularies encode text more efficiently (fewer tokens per sentence) but increase the embedding table size — a 256K vocabulary with 4096-dim embeddings takes 4 GB in FP32.
+Larger vocabularies encode text more efficiently (fewer tokens per sentence) but increase the embedding table size, a 256K vocabulary with 4096-dim embeddings takes 4 GB in FP32.
 
 ### Special Tokens
 
@@ -179,13 +179,13 @@ Every vocabulary includes reserved tokens with structural meaning:
 
 | Token | Purpose | Typical ID |
 |-------|---------|:----------:|
-| `<bos>` | Beginning of sequence — signals the model to start generating | 1 |
-| `<eos>` | End of sequence — signals generation should stop | 2 |
-| `<pad>` | Padding — fills unused positions in batched inputs | 0 |
-| `<|im_start|>` | Chat role marker (Qwen) — marks the beginning of a message | varies |
+| `<bos>` | Beginning of sequence, signals the model to start generating | 1 |
+| `<eos>` | End of sequence, signals generation should stop | 2 |
+| `<pad>` | Padding, fills unused positions in batched inputs | 0 |
+| `<|im_start|>` | Chat role marker (Qwen), marks the beginning of a message | varies |
 | `<start_of_turn>` | Chat role marker (Gemma) | varies |
 
-The tokenizer tracks these IDs for chat template formatting and end-of-generation detection. Some models define additional **end-of-generation (EOG)** tokens beyond `<eos>` — for example, Qwen uses `<|endoftext|>` and `<|im_end|>`.
+The tokenizer tracks these IDs for chat template formatting and end-of-generation detection. Some models define additional **end-of-generation (EOG)** tokens beyond `<eos>`, for example, Qwen uses `<|endoftext|>` and `<|im_end|>`.
 
 ### Byte-Level BPE Encoding
 
@@ -227,10 +227,10 @@ flowchart LR
 
 The first operation in the forward pass converts a token ID into a **vector** (a 1D array of numbers).
 
-The model has an **embedding table** — a **matrix** (2D array) of shape `[vocab_size × n_embd]`:
+The model has an **embedding table**, a **matrix** (2D array) of shape `[vocab_size × n_embd]`:
 
 - **vocab_size**: the total number of tokens in the vocabulary (e.g., 128K)
-- **n_embd**: the **embedding dimension** — how many floats each vector contains (typically 1024–8192)
+- **n_embd**: the **embedding dimension**, how many floats each vector contains (typically 1024–8192)
 
 Each row is the learned representation of one token. An **embedding** is just this fixed-size array of floats that encodes a token's meaning.
 
@@ -261,23 +261,23 @@ flowchart LR
     Logits -->|"argmax"| NextTok
 ```
 
-**Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays — a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
+**Note on terminology:** Machine learning uses the term **tensor** for multi-dimensional arrays, a **scalar** (single number, 0D), vector (1D), matrix (2D), or higher-dimensional array (3D, 4D, etc.) are all tensors. Throughout this tutorial we use the more specific terms (scalar/vector/matrix) since nearly all operations are 0D, 1D, or 2D, but you'll see "tensor" in the code and documentation referring to these same arrays.
 
 Embedding lookup is just a table read: take row `token_id` from the matrix.
 
-**Why vectors, not just integer IDs?** Because vectors let the model represent *relationships*. During training, words that appear in similar contexts end up with similar vectors — "cat" and "dog" are close together, while "cat" and "database" are far apart. The distance and direction between vectors encode meaning. Integer IDs can't do this — ID 4517 and ID 4518 have no meaningful relationship. Vectors give the model a continuous space where it can generalize: if it knows about "cat" and "dog", it can infer things about "kitten" because its vector is nearby.
+**Why vectors, not just integer IDs?** Because vectors let the model represent *relationships*. During training, words that appear in similar contexts end up with similar vectors, "cat" and "dog" are close together, while "cat" and "database" are far apart. The distance and direction between vectors encode meaning. Integer IDs can't do this, ID 4517 and ID 4518 have no meaningful relationship. Vectors give the model a continuous space where it can generalize: if it knows about "cat" and "dog", it can infer things about "kitten" because its vector is nearby.
 
 Embedding lookup is so simple that CPU memcpy is faster than GPU **dispatch** overhead (the cost of sending work to the GPU and synchronizing), which is why all backends run this on the CPU.
 
-The table may be **quantized** (compressed to lower **precision** — fewer bits per number, less accurate — formats like Q4_0 or BF16 to save memory). The implementation **dequantizes** (converts back to full precision) on the fly during the lookup.
+The table may be **quantized** (compressed to lower **precision**, fewer bits per number, less accurate, formats like Q4_0 or BF16 to save memory). The implementation **dequantizes** (converts back to full precision) on the fly during the lookup.
 
 Gemma3 scales embeddings by `sqrt(n_embd)` after lookup, **amplifying the signal** (making the values larger to increase their influence) for its architecture.
 
 ## Vocabulary Projection
 
-At the end of the forward pass, we need to go back from a vector to token probabilities. This is a matrix multiply: `logits = W_output @ hidden`, where **hidden** is the output vector from the final layer and **logits** are the raw scores (unnormalized probabilities) — one score per vocabulary token.
+At the end of the forward pass, we need to go back from a vector to token probabilities. This is a matrix multiply: `logits = W_output @ hidden`, where **hidden** is the output vector from the final layer and **logits** are the raw scores (unnormalized probabilities), one score per vocabulary token.
 
-This is the **largest single GEMV** (matrix-vector multiply — multiplying a weight matrix by a single hidden state vector) in the model — for a 128K-token vocabulary, it's 128K output rows.
+This is the **largest single GEMV** (matrix-vector multiply, multiplying a weight matrix by a single hidden state vector) in the model, for a 128K-token vocabulary, it's 128K output rows.
 
 For models with **tied embeddings** (Gemma3), the output weight matrix is the same as the embedding table (reusing the same parameters for both input and output), saving memory.
 
@@ -297,7 +297,7 @@ flowchart LR
     Best["Predicted token ID\n(highest score wins)"]:::success
     Decode["Decode to text\n\"Paris\""]:::success
 
-    Hidden -->|"GEMV — largest op\nin the entire model"| Proj
+    Hidden -->|"GEMV, largest op\nin the entire model"| Proj
 
     subgraph Proj["Output Projection  W_output @ hidden"]
         direction TB
@@ -318,7 +318,7 @@ flowchart LR
 
 ## The Generation Loop
 
-Text generation is **autoregressive** — each generated token becomes the input for the next step:
+Text generation is **autoregressive**, each generated token becomes the input for the next step:
 
 ```
 tokens = tokenize("The capital of France is")
@@ -344,7 +344,7 @@ flowchart TB
     Prompt["Prompt tokens\nThe capital of France is\n(464, 3361, 286, 4881, 318)"]:::setup
     Done["Generation complete"]:::success
 
-    subgraph Prefill["Prefill phase — process prompt"]
+    subgraph Prefill["Prefill phase, process prompt"]
         direction LR
         P1["token 464\n'The'"]:::setup
         Fwd1["forward()"]:::sync
@@ -359,7 +359,7 @@ flowchart TB
         Fwd2 -->|"KV cache\nbuilt up"| FwdN
     end
 
-    subgraph Decode["Decode phase — autoregressive loop"]
+    subgraph Decode["Decode phase, autoregressive loop"]
         direction TB
         ArgMax["argmax(logits)\npick best token"]:::sync
         Print["Output token\nto terminal"]:::success
@@ -367,23 +367,23 @@ flowchart TB
         ForwardNew["forward()\none more pass\nthrough the model"]:::sync
         ArgMax -->|"e.g. token 6342\n' Paris'"| Print
         Print --> Check{{"next == EOS?\nor max_tokens?"}}
-        Check -->|"no — keep going"| EmbNew
+        Check -->|"no, keep going"| EmbNew
         EmbNew --> ForwardNew
         ForwardNew --> ArgMax
-        Check -->|"yes — stop"| Done
+        Check -->|"yes, stop"| Done
     end
 
     Prompt --> Prefill
     Prefill -->|"final logits"| Decode
 ```
 
-This is why inference speed matters — generating 100 tokens requires 100 sequential forward passes through the entire model. Each pass is dominated by GEMV (matrix-vector multiply), which is memory-bandwidth bound. The rest of this tutorial series explains every component of that forward pass and how Agave optimizes it.
+This is why inference speed matters, generating 100 tokens requires 100 sequential forward passes through the entire model. Each pass is dominated by GEMV (matrix-vector multiply), which is memory-bandwidth bound. The rest of this tutorial series explains every component of that forward pass and how Agave optimizes it.
 
 ---
 
 ## Tokenizer Performance: Word-Level BPE Cache
 
-The `applyBpe` function runs a merge loop that can iterate many times per pretoken — for a word like `" transformer"`, it starts with individual bytes and merges pairs until no merge rule applies. This is expensive.
+The `applyBpe` function runs a merge loop that can iterate many times per pretoken, for a word like `" transformer"`, it starts with individual bytes and merges pairs until no merge rule applies. This is expensive.
 
 The key insight: the same pretokens appear repeatedly. In any English prompt, words like `" the"`, `" is"`, `" model"`, and code keywords appear constantly. After the first encode, the merge result for each word is already known.
 
@@ -422,54 +422,54 @@ logits = emb_out @ W_vocab   # or tied embeddings
 
 ## Glossary
 
-**argmax** — The operation that finds the index of the highest value in an array; used for greedy decoding.
+**argmax**, The operation that finds the index of the highest value in an array; used for greedy decoding.
 
-**autoregressive** — A generation mode where each output token is fed back as input to produce the next token.
+**autoregressive**, A generation mode where each output token is fed back as input to produce the next token.
 
-**BOS (Beginning of Sequence)** — A special token signaling the start of a sequence.
+**BOS (Beginning of Sequence)**, A special token signaling the start of a sequence.
 
-**BPE (Byte Pair Encoding)** — A tokenization algorithm that iteratively merges the most frequent adjacent byte/character pairs to build a vocabulary.
+**BPE (Byte Pair Encoding)**, A tokenization algorithm that iteratively merges the most frequent adjacent byte/character pairs to build a vocabulary.
 
-**byte-level BPE** — A BPE variant where every possible byte (0x00–0xFF) maps to a printable character, ensuring any input can be tokenized.
+**byte-level BPE**, A BPE variant where every possible byte (0x00–0xFF) maps to a printable character, ensuring any input can be tokenized.
 
-**dequantize** — Convert quantized (compressed) values back to full-precision floats.
+**dequantize**, Convert quantized (compressed) values back to full-precision floats.
 
-**dispatch overhead** — The cost of sending work to an accelerator (GPU) and synchronizing, which can exceed compute cost for small operations.
+**dispatch overhead**, The cost of sending work to an accelerator (GPU) and synchronizing, which can exceed compute cost for small operations.
 
-**embedding** — A learned fixed-size float vector that encodes a token's meaning; looked up from a table by token ID.
+**embedding**, A learned fixed-size float vector that encodes a token's meaning; looked up from a table by token ID.
 
-**embedding dimension (n_embd)** — The number of floats in each embedding vector (typically 1024–8192).
+**embedding dimension (n_embd)**, The number of floats in each embedding vector (typically 1024–8192).
 
-**EOS (End of Sequence)** — A special token signaling that generation should stop.
+**EOS (End of Sequence)**, A special token signaling that generation should stop.
 
-**FP32** — 32-bit floating-point format; 4 bytes per value, full precision.
+**FP32**, 32-bit floating-point format; 4 bytes per value, full precision.
 
-**BF16 (bfloat16)** — 16-bit brain floating-point format; same exponent range as FP32 but fewer mantissa bits.
+**BF16 (bfloat16)**, 16-bit brain floating-point format; same exponent range as FP32 but fewer mantissa bits.
 
-**forward pass** — A single pass of input data through all model layers to produce output.
+**forward pass**, A single pass of input data through all model layers to produce output.
 
-**frozen weights** — Model parameters that are fixed and no longer updated (inference-only).
+**frozen weights**, Model parameters that are fixed and no longer updated (inference-only).
 
-**GEMV (General Matrix-Vector multiply)** — Multiplying a weight matrix by a single input vector to produce one output vector.
+**GEMV (General Matrix-Vector multiply)**, Multiplying a weight matrix by a single input vector to produce one output vector.
 
-**inference** — Using a trained model's frozen weights to generate new output, as opposed to training.
+**inference**, Using a trained model's frozen weights to generate new output, as opposed to training.
 
-**logits** — Raw, unnormalized scores output by the model — one per vocabulary token — before conversion to probabilities.
+**logits**, Raw, unnormalized scores output by the model, one per vocabulary token, before conversion to probabilities.
 
-**pre-trained** — A model whose weights have already been learned through training.
+**pre-trained**, A model whose weights have already been learned through training.
 
-**quantized** — Compressed to a lower-precision numerical format to save memory.
+**quantized**, Compressed to a lower-precision numerical format to save memory.
 
-**SPM (SentencePiece)** — A tokenization algorithm that uses greedy longest-match against a vocabulary, without requiring a merge table.
+**SPM (SentencePiece)**, A tokenization algorithm that uses greedy longest-match against a vocabulary, without requiring a merge table.
 
-**tensor** — A general multi-dimensional array (scalar = 0D, vector = 1D, matrix = 2D, etc.).
+**tensor**, A general multi-dimensional array (scalar = 0D, vector = 1D, matrix = 2D, etc.).
 
-**tied embeddings** — When input embedding and output projection share the same weight matrix, saving memory.
+**tied embeddings**, When input embedding and output projection share the same weight matrix, saving memory.
 
-**token** — An integer ID representing a subword piece of text — the basic unit language models operate on.
+**token**, An integer ID representing a subword piece of text, the basic unit language models operate on.
 
-**tokenizer** — A component that converts between text strings and sequences of token IDs.
+**tokenizer**, A component that converts between text strings and sequences of token IDs.
 
-**vocabulary** — The complete set of all tokens a model can recognize, each mapped to a unique integer ID.
+**vocabulary**, The complete set of all tokens a model can recognize, each mapped to a unique integer ID.
 
-**weights** — The learned numerical parameters (matrix/vector values) that encode a model's knowledge.
+**weights**, The learned numerical parameters (matrix/vector values) that encode a model's knowledge.

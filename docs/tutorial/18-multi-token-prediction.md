@@ -6,9 +6,9 @@
 
 > After this chapter you can explain MTP heads, the +1 offset norm trick, and how MTP tokens feed speculative decoding.
 
-Standard LLM inference is **autoregressive** — each forward pass through the model produces exactly one token. The model processes all its layers (attention, feed-forward networks, normalization) to produce a probability distribution over the vocabulary, picks the best token, feeds it back in, and repeats. This is slow for large models because each token requires a full pass through billions of parameters.
+Standard LLM inference is **autoregressive**, each forward pass through the model produces exactly one token. The model processes all its layers (attention, feed-forward networks, normalization) to produce a probability distribution over the vocabulary, picks the best token, feeds it back in, and repeats. This is slow for large models because each token requires a full pass through billions of parameters.
 
-**Multi-Token Prediction (MTP)** adds lightweight draft heads to the model that predict future tokens from the model's internal state. These heads are trained jointly with the main model — they live in the same checkpoint, share representations, and understand the model's output distribution natively. This makes them far more accurate than external draft models.
+**Multi-Token Prediction (MTP)** adds lightweight draft heads to the model that predict future tokens from the model's internal state. These heads are trained jointly with the main model, they live in the same checkpoint, share representations, and understand the model's output distribution natively. This makes them far more accurate than external draft models.
 
 ## How Standard Inference Works (Recap)
 
@@ -16,35 +16,35 @@ Before understanding MTP, let's trace what happens when a model generates one to
 
 ### 1. Embedding Lookup
 
-The input token ID (e.g., 42) indexes into an **embedding table** — a matrix of shape `[vocab_size, n_embd]`. This produces a dense vector of `n_embd` floats called the **hidden state**. This vector is the model's internal representation of the token.
+The input token ID (e.g., 42) indexes into an **embedding table**, a matrix of shape `[vocab_size, n_embd]`. This produces a dense vector of `n_embd` floats called the **hidden state**. This vector is the model's internal representation of the token.
 
 ### 2. Transformer Layers (The Layer Loop)
 
 The hidden state passes through N **transformer layers** (e.g., 64 layers for a 0.8B model, or 32 layers for a 3B model). Each layer has two sub-blocks:
 
-**Attention block** — lets the model look at previous tokens:
+**Attention block**, lets the model look at previous tokens:
 - **Q/K/V projections**: Three matrix multiplications (**GEMV** = General Matrix-Vector multiply) project the hidden state into **Query**, **Key**, and **Value** vectors. Q asks "what am I looking for?", K says "what do I contain?", V says "what information do I provide?"
 - **Heads**: Q/K/V are split into multiple independent **attention heads** (e.g., 32 heads). Each head operates on a portion of the vector (`head_dim` elements). Multiple heads let the model attend to different aspects simultaneously (syntax, semantics, position, etc.)
 - **RoPE** (Rotary Position Embedding): Rotates Q and K vectors by position-dependent angles so the model knows where each token is in the sequence. Without RoPE, the model couldn't distinguish "the cat sat on the mat" from "mat the on sat cat the"
-- **SDPA** (Scaled Dot-Product Attention): `softmax(Q·K^T / √d) · V` — computes attention scores between the current token and all previous tokens in the **KV cache**, then produces a weighted sum of their values. The "scaled" part (`/ √d`) prevents the dot products from becoming too large
-- **Gate** (Qwen3.5): Some models multiply the attention output by `sigmoid(gate)` — a learned signal that controls how much attention output flows through. Sigmoid squashes values to [0,1]
+- **SDPA** (Scaled Dot-Product Attention): `softmax(Q·K^T / √d) · V`, computes attention scores between the current token and all previous tokens in the **KV cache**, then produces a weighted sum of their values. The "scaled" part (`/ √d`) prevents the dot products from becoming too large
+- **Gate** (Qwen3.5): Some models multiply the attention output by `sigmoid(gate)`, a learned signal that controls how much attention output flows through. Sigmoid squashes values to [0,1]
 - **Output projection**: Another GEMV maps the attention output back to `n_embd` dimensions
 
-**Feed-forward network (FFN)** — processes each token independently:
+**Feed-forward network (FFN)**, processes each token independently:
 - **SwiGLU**: The standard FFN in modern LLMs. Two parallel GEMV projections (**gate** and **up**) expand the hidden state to a larger dimension (`n_ff`, typically 4× `n_embd`). The gate path applies **SiLU** activation (`x * sigmoid(x)`) and multiplies element-wise with the up path. A third GEMV (**down**) projects back to `n_embd`
-- This is where the model "thinks" — attention gathers context, FFN transforms it
+- This is where the model "thinks", attention gathers context, FFN transforms it
 
-**Residual connections** — after each sub-block, the output is **added** to the input: `hidden = hidden + block_output`. This prevents the **vanishing gradient** problem and lets information flow unchanged through layers
+**Residual connections**, after each sub-block, the output is **added** to the input: `hidden = hidden + block_output`. This prevents the **vanishing gradient** problem and lets information flow unchanged through layers
 
-**RMSNorm** (Root Mean Square Normalization) — applied before each sub-block. Normalizes the hidden state to unit variance: `output = weight * x / rms(x)` where `rms(x) = sqrt(mean(x²) + ε)`. Keeps values from exploding or collapsing across layers
+**RMSNorm** (Root Mean Square Normalization), applied before each sub-block. Normalizes the hidden state to unit variance: `output = weight * x / rms(x)` where `rms(x) = sqrt(mean(x²) + ε)`. Keeps values from exploding or collapsing across layers
 
 ### 3. Output Projection
 
-After all layers, one final RMSNorm + GEMV maps the hidden state from `n_embd` dimensions to `vocab_size` dimensions, producing **logits** — one score per vocabulary token. The highest-scoring token is selected (**argmax** for greedy decoding, or sampling with temperature)
+After all layers, one final RMSNorm + GEMV maps the hidden state from `n_embd` dimensions to `vocab_size` dimensions, producing **logits**, one score per vocabulary token. The highest-scoring token is selected (**argmax** for greedy decoding, or sampling with temperature)
 
 ## What MTP Changes
 
-MTP adds a shortcut. After the main model finishes its forward pass (all N layers), we save the **pre-norm hidden state** — the residual stream after the last attention block, before the final FFN residual and output norm are applied. This vector contains the model's complete understanding of the sequence context.
+MTP adds a shortcut. After the main model finishes its forward pass (all N layers), we save the **pre-norm hidden state**, the residual stream after the last attention block, before the final FFN residual and output norm are applied. This vector contains the model's complete understanding of the sequence context.
 
 ```mermaid
 flowchart LR
@@ -81,9 +81,9 @@ flowchart LR
     MTPHead --> TokenT2["Token t+2\n(draft prediction)"]:::success
 ```
 
-An MTP head takes this hidden state and produces an additional token prediction with just **one transformer layer** instead of N. This is ~5-10% the cost of a full forward pass. If the main model predicted token `t`, the MTP head predicts what token `t+1` will be — before the main model has even seen token `t`.
+An MTP head takes this hidden state and produces an additional token prediction with just **one transformer layer** instead of N. This is ~5-10% the cost of a full forward pass. If the main model predicted token `t`, the MTP head predicts what token `t+1` will be, before the main model has even seen token `t`.
 
-These draft tokens are then **verified** against the main model. If the main model agrees with the MTP prediction (which happens 70-85% of the time), the token is accepted for free. If not, the main model's prediction replaces it. This is **speculative decoding** — lossless, identical output to standard decoding.
+These draft tokens are then **verified** against the main model. If the main model agrees with the MTP prediction (which happens 70-85% of the time), the token is accepted for free. If not, the main model's prediction replaces it. This is **speculative decoding**, lossless, identical output to standard decoding.
 
 ## MTP Head Architecture
 
@@ -126,15 +126,15 @@ flowchart TD
 
 ### Step by Step
 
-**1. Input preparation** — Two vectors are combined:
+**1. Input preparation**, Two vectors are combined:
 - The **pre-norm hidden state** from the main model (what the model "knows" after processing all layers)
 - The **embedding** of the current token (the token the main model just predicted)
 
-**2. +1 Offset RMSNorm** — Both vectors are normalized, but with a twist: `output = (1 + w) * x / rms(x)` instead of the standard `output = w * x / rms(x)`. The GGUF weights store `w`, and the `+1` offset is applied at runtime. This is a training technique from DeepSeek V3 that improves stability. The two weight tensors are called **enorm** (embedding norm) and **hnorm** (hidden state norm)
+**2. +1 Offset RMSNorm**, Both vectors are normalized, but with a twist: `output = (1 + w) * x / rms(x)` instead of the standard `output = w * x / rms(x)`. The GGUF weights store `w`, and the `+1` offset is applied at runtime. This is a training technique from DeepSeek V3 that improves stability. The two weight tensors are called **enorm** (embedding norm) and **hnorm** (hidden state norm)
 
-**3. Concatenation + Projection** — The two normalized vectors (each `n_embd` elements) are concatenated into a `2×n_embd` vector, then projected back to `n_embd` via **eh_proj** (a GEMV with weight matrix `[n_embd, 2×n_embd]`). Order matters: embedding first, then hidden state — matching the reference implementation
+**3. Concatenation + Projection**, The two normalized vectors (each `n_embd` elements) are concatenated into a `2×n_embd` vector, then projected back to `n_embd` via **eh_proj** (a GEMV with weight matrix `[n_embd, 2×n_embd]`). Order matters: embedding first, then hidden state, matching the reference implementation
 
-**4. Transformer block** — A single standard transformer layer processes the projected vector:
+**4. Transformer block**, A single standard transformer layer processes the projected vector:
 - Pre-attention RMSNorm
 - Q/K/V projections + RoPE + SDPA (with its own separate KV cache)
 - Gate multiplication (if the model uses gated attention)
@@ -142,7 +142,7 @@ flowchart TD
 - Pre-FFN RMSNorm
 - SwiGLU FFN (gate + up + SiLU×mul + down) + residual
 
-**5. Output head** — RMSNorm + GEMV → logits → argmax. **shared_head_norm** is specific to the MTP head; **shared_head_head** falls back to the main model's output projection if a per-depth tensor is not present in the GGUF
+**5. Output head**, RMSNorm + GEMV → logits → argmax. **shared_head_norm** is specific to the MTP head; **shared_head_head** falls back to the main model's output projection if a per-depth tensor is not present in the GGUF
 
 ### Offset RMSNorm: +1 vs Standard
 
@@ -187,7 +187,7 @@ flowchart TD
 
 The `+1` ensures that even if the learned weight `w` decays toward zero during training, the normalized input still passes through unchanged. This acts like a residual connection inside the normalization, making the two-branch fusion (hidden state + embedding) more stable to train.
 
-**In code:** `rmsNormPlusOne` in `src/models/qwen35.zig` — identical to `rmsNorm` but multiplies by `(1.0 + w[i])` instead of `w[i]`.
+**In code:** `rmsNormPlusOne` in `src/models/qwen35.zig`, identical to `rmsNorm` but multiplies by `(1.0 + w[i])` instead of `w[i]`.
 
 ### GGUF Tensor Names
 
@@ -231,12 +231,12 @@ flowchart TD
 
         subgraph MTP["MTP Head Tensors  blk.64.*"]
             direction TB
-            EHProj["blk.64.nextn.eh_proj\n[n_embd, 2×n_embd]  — fusion projection"]:::migration
-            Embed["blk.64.nextn.embed_tokens\n[vocab, n_embd]  — MTP embedding table"]:::migration
-            ENorm["blk.64.nextn.enorm\n[n_embd]  — embedding branch +1 norm"]:::migration
-            HNorm["blk.64.nextn.hnorm\n[n_embd]  — hidden state branch +1 norm"]:::migration
-            SHH["blk.64.nextn.shared_head_head\n[vocab, n_embd]  — output projection"]:::migration
-            SHN["blk.64.nextn.shared_head_norm\n[n_embd]  — pre-output norm"]:::migration
+            EHProj["blk.64.nextn.eh_proj\n[n_embd, 2×n_embd] , fusion projection"]:::migration
+            Embed["blk.64.nextn.embed_tokens\n[vocab, n_embd] , MTP embedding table"]:::migration
+            ENorm["blk.64.nextn.enorm\n[n_embd] , embedding branch +1 norm"]:::migration
+            HNorm["blk.64.nextn.hnorm\n[n_embd] , hidden state branch +1 norm"]:::migration
+            SHH["blk.64.nextn.shared_head_head\n[vocab, n_embd] , output projection"]:::migration
+            SHN["blk.64.nextn.shared_head_norm\n[n_embd] , pre-output norm"]:::migration
             AttnW["blk.64.attn_q/k/v/o.weight\nblk.64.ffn_gate/up/down.weight\n(standard transformer weights)"]:::setup
         end
 
@@ -259,17 +259,17 @@ sequenceDiagram
     participant MTP as MTP Head (1 layer)
     participant KV as KV Cache
 
-    Note over Main,KV: Forward pass — generate token t+1
+    Note over Main,KV: Forward pass, generate token t+1
     Main->>KV: Write K/V for token t
     Main->>Main: Save pre-norm hidden state
     Main-->>Main: Predict token t+1
 
-    Note over MTP,KV: Draft pass — predict token t+2 cheaply
+    Note over MTP,KV: Draft pass, predict token t+2 cheaply
     MTP->>KV: Write K/V for token t+1 (MTP cache)
     MTP->>MTP: Fuse hidden(t) + embed(t+1)
     MTP-->>MTP: Draft token t+2
 
-    Note over Main,KV: Verify pass — main model checks the draft
+    Note over Main,KV: Verify pass, main model checks the draft
     Main->>KV: Write K/V for token t+1
     Main-->>Main: Predict token t+2 (independently)
 
@@ -281,7 +281,7 @@ sequenceDiagram
     end
 ```
 
-For greedy decoding (temperature=0), speculative decoding is **lossless** — output is byte-identical to standard decoding. For sampling (temperature>0), rejection sampling preserves the target distribution.
+For greedy decoding (temperature=0), speculative decoding is **lossless**, output is byte-identical to standard decoding. For sampling (temperature>0), rejection sampling preserves the target distribution.
 
 ## SSM State Checkpoint/Restore (Qwen 3.5)
 
@@ -324,7 +324,7 @@ flowchart TD
     Checkpoint -.->|"overhead"| Cost
 ```
 
-Pure attention models (Qwen 3.6, Gemma 4) do not maintain recurrent state, so rejection only rolls back KV cache write pointers — essentially free. For Qwen 3.5, the 50 MiB SSM state copy on every token makes MTP a net negative unless the acceptance rate is extremely high.
+Pure attention models (Qwen 3.6, Gemma 4) do not maintain recurrent state, so rejection only rolls back KV cache write pointers, essentially free. For Qwen 3.5, the 50 MiB SSM state copy on every token makes MTP a net negative unless the acceptance rate is extremely high.
 
 > **Note:** SSM checkpoint/restore (`saveSsmState`/`restoreSsmState`) is a theoretical concern for multi-depth MTP (depth > 1), where multiple draft steps would mutate recurrent state multiple times. For depth=1 (the only depth currently used in practice), no rollback of SSM state is needed because the single draft step's state is either accepted or discarded entirely. The checkpoint/restore path is not currently exercised in the codebase.
 
@@ -436,24 +436,24 @@ MTP GGUFs must include the nextn tensors. Look for "-MTP" in the filename (e.g.,
 
 ## Glossary
 
-**eh_proj** — The GEMV projection mapping the concatenated `[embed; hidden]` vector from 2×n_embd back to n_embd dimensions.
+**eh_proj**, The GEMV projection mapping the concatenated `[embed; hidden]` vector from 2×n_embd back to n_embd dimensions.
 
-**enorm** — The offset RMSNorm weight tensor applied to the token embedding branch in an MTP head.
+**enorm**, The offset RMSNorm weight tensor applied to the token embedding branch in an MTP head.
 
-**hnorm** — The offset RMSNorm weight tensor applied to the hidden state branch in an MTP head.
+**hnorm**, The offset RMSNorm weight tensor applied to the hidden state branch in an MTP head.
 
-**MTP head** — A single transformer layer with fusion plumbing that takes the model's pre-norm hidden state and current token embedding to produce a draft token at ~5% of a full forward cost.
+**MTP head**, A single transformer layer with fusion plumbing that takes the model's pre-norm hidden state and current token embedding to produce a draft token at ~5% of a full forward cost.
 
-**nextn tensors** — GGUF tensor names prefixed with `blk.N.nextn.*` that store MTP head weights.
+**nextn tensors**, GGUF tensor names prefixed with `blk.N.nextn.*` that store MTP head weights.
 
-**nextn_predict_layers** — A GGUF metadata field indicating how many MTP depths are present in the checkpoint.
+**nextn_predict_layers**, A GGUF metadata field indicating how many MTP depths are present in the checkpoint.
 
-**offset RMSNorm (+1 norm)** — A variant where weight is applied as `(1 + w) * x_norm` instead of `w * x_norm`, ensuring the normalized input passes through even if w decays to zero.
+**offset RMSNorm (+1 norm)**, A variant where weight is applied as `(1 + w) * x_norm` instead of `w * x_norm`, ensuring the normalized input passes through even if w decays to zero.
 
-**pre-norm hidden state** — The residual stream after the last attention block but before the final FFN residual and output norm.
+**pre-norm hidden state**, The residual stream after the last attention block but before the final FFN residual and output norm.
 
-**shared_head_head** — The output GEMV weight matrix in an MTP head mapping n_embd → vocab_size.
+**shared_head_head**, The output GEMV weight matrix in an MTP head mapping n_embd → vocab_size.
 
-**shared_head_norm** — The RMSNorm weight applied before the MTP head's output projection.
+**shared_head_norm**, The RMSNorm weight applied before the MTP head's output projection.
 
-**SSM state checkpoint/restore** — Copying recurrent state before speculation and restoring it on rejection, required for hybrid models that mutate state in-place.
+**SSM state checkpoint/restore**, Copying recurrent state before speculation and restoring it on rejection, required for hybrid models that mutate state in-place.

@@ -85,5 +85,5 @@ In Zig's `src/codegen/llvm.zig` (AMDGPU target handling):
 
 ## Related
 
-- CUDA nvptx64 aliasee bug: LLVM PR #81170 (same class — Zig codegen → LLVM IR incompatibility)
+- CUDA nvptx64 aliasee bug: LLVM PR #81170 (same class, Zig codegen → LLVM IR incompatibility)
 - WASM Invalid cast: similar pattern (Zig LLVM codegen produces invalid IR for specific targets)

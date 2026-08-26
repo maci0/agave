@@ -15,7 +15,7 @@
 //!   the error when the function has callconv(.kernel).
 //!
 //! Workaround applied in agave:
-//!   1. Use callconv(.c) instead of callconv(.kernel) — compiles to .func
+//!   1. Use callconv(.c) instead of callconv(.kernel), compiles to .func
 //!   2. Post-process PTX: rename .func definitions to .entry for kernel functions
 //!   3. Remove .alias directives for kernel names
 //!   4. Ensure forward declarations also use .entry (must match definitions)
@@ -28,14 +28,14 @@
 //!       tests/cuda_ptx_repro.zig -fno-emit-bin -femit-asm=repro.ptx
 //!
 //! Test 1 (uncomment): crashes with callconv(.kernel)
-//! Test 2: compiles with callconv(.c) — generates .func, needs post-processing
+//! Test 2: compiles with callconv(.c), generates .func, needs post-processing
 
-// Test 1: CRASHES — uncomment to reproduce
+// Test 1: CRASHES, uncomment to reproduce
 // export fn crash_kernel(x: [*]f32, n: u32) callconv(.kernel) void {
 //     _ = x; _ = n;
 // }
 
-// Test 2: WORKS with callconv(.c) — generates .func instead of .entry
+// Test 2: WORKS with callconv(.c), generates .func instead of .entry
 fn threadIdx() u32 {
     return asm ("mov.u32 %[ret], %tid.x;"
         : [ret] "=r" (-> u32),

@@ -121,7 +121,7 @@ export fn sdpa_prefill_kernel(
         cu.syncthreads();
 
         // ── Online softmax: inline block-reduce max ─────────
-        // (Cannot use cu.blockReduceMax — it clobbers smem[0..7] = q_local)
+        // (Cannot use cu.blockReduceMax, it clobbers smem[0..7] = q_local)
         var local_max: f32 = cu.neg_f32_max;
         t = tid;
         while (t < block_len) : (t += bdim) {

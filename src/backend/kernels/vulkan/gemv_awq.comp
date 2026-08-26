@@ -37,7 +37,7 @@ void main() {
         uint z_word = qzeros[g * n_words + word_idx];
         float zero = float((z_word >> shift) & 0xFu);
 
-        // Scales in natural order — read f16 from packed u32
+        // Scales in natural order, read f16 from packed u32
         uint scale_idx = g * n + col;
         uint scale_word = scales_raw[scale_idx / 2];
         uint scale_bits = (scale_idx % 2 == 0) ? (scale_word & 0xFFFF) : (scale_word >> 16);

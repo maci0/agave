@@ -59,7 +59,7 @@ const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal) 
 /// Computes the byte stride of one GEMV row for a given dtype and column count.
 pub const gemvRowBytes = backend_mod.gemvRowBytes;
 
-/// Sequential GEMV — dispatches to the appropriate quantized kernel.
+/// Sequential GEMV, dispatches to the appropriate quantized kernel.
 /// F32 on macOS uses Accelerate.framework (AMX-accelerated) for ~4× speedup.
 pub fn gemvSeq(x: [*]const f32, w_data: [*]const u8, dtype: DType, y: [*]f32, n: usize, k: usize) void {
     switch (dtype) {
@@ -142,7 +142,7 @@ test "fuzz: all gemv functions" {
                 if (!std.math.isFinite(v.*)) v.* = 0.0;
             }
 
-            // Weight buffer — 4096 bytes covers any single-row format at K=256.
+            // Weight buffer, 4096 bytes covers any single-row format at K=256.
             var w_buf: [4096]u8 align(16) = undefined;
             for (&w_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(i + K));
 

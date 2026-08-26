@@ -820,7 +820,7 @@ def run_smoke(
                 else:
                     result.status = "pass"
             except json.JSONDecodeError:
-                # Non-JSON output — still a failure for smoke tests that expect JSON
+                # Non-JSON output, still a failure for smoke tests that expect JSON
                 result.status = "fail"
                 result.error_message = "Smoke test produced non-JSON output"
         else:

@@ -34,9 +34,9 @@ const cpu_model_buf_size: usize = 128;
 const cpuinfo_read_buf_size: usize = 4096;
 const meminfo_read_buf_size: usize = 1024;
 const memavail_read_buf_size: usize = 2048;
-/// Bytes per kilobyte — used for /proc/meminfo and sysfs cache size parsing.
+/// Bytes per kilobyte, used for /proc/meminfo and sysfs cache size parsing.
 const kb_to_bytes: usize = 1024;
-/// Bytes per megabyte — used for sysfs cache size parsing.
+/// Bytes per megabyte, used for sysfs cache size parsing.
 const mb_to_bytes: usize = 1024 * 1024;
 
 // ── CPU model detection ─────────────────────────────────────────
@@ -177,7 +177,7 @@ pub fn detectSystemMem() usize {
 /// Detect available (free) system memory in bytes.
 pub fn detectAvailMem() usize {
     if (comptime builtin.os.tag == .macos) {
-        // vm.page_free_count × hw.pagesize — conservative (free pages only)
+        // vm.page_free_count × hw.pagesize, conservative (free pages only)
         const free_pages = sysctlU64("vm.page_free_count");
         const page_size = sysctlU64("hw.pagesize");
         if (free_pages > 0 and page_size > 0) return std.math.mul(usize, free_pages, page_size) catch 0;
@@ -292,7 +292,7 @@ pub const CpuBackend = struct {
     /// Optional thread pool for parallel GEMV. Null = single-threaded.
     pool: ?*ThreadPool = null,
 
-    /// Allocate a KV cache slice — plain allocator on CPU. `n` is byte count.
+    /// Allocate a KV cache slice, plain allocator on CPU. `n` is byte count.
     pub fn allocKvSlice(_: *CpuBackend, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}![]u8 {
         return allocator.alloc(u8, n);
     }
@@ -347,7 +347,7 @@ pub const CpuBackend = struct {
     /// Returns 0 for unsupported formats (fallback to sequential).
     const gemvRowBytes = gemv_kernel.gemvRowBytes;
 
-    /// Sequential GEMV — delegates to gemv_kernel for dtype-specific dequantization.
+    /// Sequential GEMV, delegates to gemv_kernel for dtype-specific dequantization.
     fn gemvSeq(x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         gemv_kernel.gemvSeq(x, w.data, w.dtype, y, n, k);
     }
@@ -521,7 +521,7 @@ pub const CpuBackend = struct {
         }
     }
 
-    /// No-op on CPU — operations are immediately visible.
+    /// No-op on CPU, operations are immediately visible.
     pub fn sync(_: *CpuBackend) void {}
 
     /// No-op on CPU.
@@ -696,7 +696,7 @@ pub const CpuBackend = struct {
         hqq_ops.hqqGemv(x, w_q, @ptrCast(@alignCast(scale)), @ptrCast(@alignCast(zero)), y, n, k, group_size);
     }
 
-    /// Batched GEMV — fuses all ops into a single parallelFor to minimize
+    /// Batched GEMV, fuses all ops into a single parallelFor to minimize
     /// thread wake/sleep overhead (~250 GEMV dispatches per token).
     pub fn gemvMulti(self: *CpuBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         if (ops.len == 0) return;
@@ -990,7 +990,7 @@ pub const CpuBackend = struct {
         // Thread-parallel dispatch across query heads
         if (self.pool) |pool| {
             if (nh >= sdpa_parallel_min_heads) {
-                // Append KV first (single-threaded — one position)
+                // Append KV first (single-threaded, one position)
                 const kvd = nkv * hd;
                 const k_dst = kv_view.keyPtrMut(kv_view.seq_len);
                 const v_dst = kv_view.valuePtrMut(kv_view.seq_len);
@@ -1128,7 +1128,7 @@ pub const CpuBackend = struct {
             }
         }
 
-        // 4. Recurrence + gated output — parallelized across v-heads
+        // 4. Recurrence + gated output, parallelized across v-heads
         const q_ptr = conv_out + q_off;
         const k_ptr = conv_out + k_off;
         const v_off: usize = 2 * num_k_heads * head_k_dim;
@@ -1182,7 +1182,7 @@ pub const CpuBackend = struct {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "CpuBackend — allocKvSlice and freeKvSlice" {
+test "CpuBackend, allocKvSlice and freeKvSlice" {
     const allocator = std.testing.allocator;
     var be = CpuBackend{};
     const slice = try be.allocKvSlice(allocator, 1024);
@@ -1194,7 +1194,7 @@ test "CpuBackend — allocKvSlice and freeKvSlice" {
     be.freeKvSlice(allocator, slice);
 }
 
-test "CpuBackend — addScaled" {
+test "CpuBackend, addScaled" {
     var be = CpuBackend{};
     var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 };
     const src = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0 };
@@ -1205,7 +1205,7 @@ test "CpuBackend — addScaled" {
     try std.testing.expectApproxEqAbs(@as(f32, 60.0), dst[9], 1e-6); // 10 + 100*0.5
 }
 
-test "CpuBackend — allReduceAdd" {
+test "CpuBackend, allReduceAdd" {
     var be = CpuBackend{};
     var dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 };
     const src = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0 };
@@ -1215,7 +1215,7 @@ test "CpuBackend — allReduceAdd" {
     try std.testing.expectApproxEqAbs(@as(f32, 110.0), dst[9], 1e-6);
 }
 
-test "CpuBackend — splitQGate" {
+test "CpuBackend, splitQGate" {
     var be = CpuBackend{};
     // 2 heads, head_dim=3 → input is [Q0,Q1,Q2,G0,G1,G2, Q3,Q4,Q5,G3,G4,G5]
     const qg = [_]f32{ 1, 2, 3, 10, 20, 30, 4, 5, 6, 40, 50, 60 };
@@ -1232,7 +1232,7 @@ test "CpuBackend — splitQGate" {
     try std.testing.expectApproxEqAbs(@as(f32, 40.0), g_out[3], 1e-6);
 }
 
-test "CpuBackend — sync and batch are no-ops" {
+test "CpuBackend, sync and batch are no-ops" {
     var be = CpuBackend{};
     // These must not panic.
     be.sync();
@@ -1240,7 +1240,7 @@ test "CpuBackend — sync and batch are no-ops" {
     be.endBatch();
 }
 
-test "CpuBackend — backendInfo returns CPU" {
+test "CpuBackend, backendInfo returns CPU" {
     var be = CpuBackend{};
     const info = be.backendInfo();
     try std.testing.expectEqualStrings("CPU", info.name);
@@ -1248,12 +1248,12 @@ test "CpuBackend — backendInfo returns CPU" {
     try std.testing.expect(info.system_mem > 0 or info.total_mem > 0);
 }
 
-test "CpuBackend — default pool is null" {
+test "CpuBackend, default pool is null" {
     const be = CpuBackend{};
     try std.testing.expectEqual(@as(?*ThreadPool, null), be.pool);
 }
 
-test "CpuBackend — gemvSeq with F32 identity" {
+test "CpuBackend, gemvSeq with F32 identity" {
     // Simple F32 GEMV: y[2] = W[2,4] @ x[4]
     const x = [_]f32{ 1, 0, 0, 0 };
     const w = [_]f32{
@@ -1269,13 +1269,13 @@ test "CpuBackend — gemvSeq with F32 identity" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), y[1], 1e-5);
 }
 
-test "detectSystemMem — returns non-zero" {
+test "detectSystemMem, returns non-zero" {
     const mem = detectSystemMem();
     // On any real machine, total memory should be at least 256MB.
     try std.testing.expect(mem > 256 * 1024 * 1024);
 }
 
-test "detectCacheSizes — returns reasonable values" {
+test "detectCacheSizes, returns reasonable values" {
     const caches = detectCacheSizes();
     // Values are either zero (unavailable) or within plausible CPU cache bounds.
     const max_l1: usize = 1 * mb_to_bytes;
@@ -1289,7 +1289,7 @@ test "detectCacheSizes — returns reasonable values" {
     }
 }
 
-test "detectOsVersion — returns non-empty string" {
+test "detectOsVersion, returns non-empty string" {
     const version = detectOsVersion();
     if (comptime builtin.os.tag == .macos) {
         try std.testing.expect(version.len > 0);
@@ -1300,7 +1300,7 @@ test "detectOsVersion — returns non-empty string" {
     }
 }
 
-test "detectAvailMem — returns something" {
+test "detectAvailMem, returns something" {
     const avail = detectAvailMem();
     if (comptime builtin.os.tag == .macos or builtin.os.tag == .linux) {
         // Running hosts expose a positive available-memory estimate.
@@ -1310,7 +1310,7 @@ test "detectAvailMem — returns something" {
     }
 }
 
-test "parallel constants — values are reasonable" {
+test "parallel constants, values are reasonable" {
     try std.testing.expectEqual(@as(usize, 32), parallel_min_rows);
     try std.testing.expectEqual(@as(usize, 16), parallel_grain);
     try std.testing.expect(parallel_grain <= parallel_min_rows);
@@ -1318,7 +1318,7 @@ test "parallel constants — values are reasonable" {
 
 // ── Autotune tests ───────────────────────────────────────────────
 
-test "parseSysfsCacheSize — returns 0 on non-linux or valid size" {
+test "parseSysfsCacheSize, returns 0 on non-linux or valid size" {
     if (comptime builtin.os.tag == .linux) {
         // On Linux, index0 is typically L1 data cache (32K-128K).
         const l1 = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size");
@@ -1333,7 +1333,7 @@ test "parseSysfsCacheSize — returns 0 on non-linux or valid size" {
     }
 }
 
-test "detectCpuModel — returns non-empty on supported platforms" {
+test "detectCpuModel, returns non-empty on supported platforms" {
     // Reset detection state for a clean test.
     cpu_model_detected.store(false, .release);
     cpu_model_len = 0;
@@ -1346,7 +1346,7 @@ test "detectCpuModel — returns non-empty on supported platforms" {
     try std.testing.expectEqualStrings(model, model2);
 }
 
-test "sysctlU64 — returns 0 on non-macos" {
+test "sysctlU64, returns 0 on non-macos" {
     if (comptime builtin.os.tag != .macos) {
         const val = sysctlU64("hw.memsize");
         try std.testing.expectEqual(@as(usize, 0), val);
@@ -1357,7 +1357,7 @@ test "sysctlU64 — returns 0 on non-macos" {
     }
 }
 
-test "detectCacheSizes — L1 is non-zero on real hardware" {
+test "detectCacheSizes, L1 is non-zero on real hardware" {
     const caches = detectCacheSizes();
     if (comptime builtin.os.tag == .macos or builtin.os.tag == .linux) {
         // On real hardware L1 data cache is always present (typically 32K-128K).
@@ -1376,7 +1376,7 @@ test "unit conversion constants" {
     try std.testing.expectEqual(@as(usize, 1024 * 1024), mb_to_bytes);
 }
 
-test "CpuBackend — silu activation" {
+test "CpuBackend, silu activation" {
     var be = CpuBackend{};
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0 };
     var output: [8]f32 = undefined;
@@ -1389,7 +1389,7 @@ test "CpuBackend — silu activation" {
     try std.testing.expectApproxEqAbs(@as(f32, -0.2689), output[2], 1e-3);
 }
 
-test "CpuBackend — gelu activation" {
+test "CpuBackend, gelu activation" {
     var be = CpuBackend{};
     var input = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.5 };
     var output: [8]f32 = undefined;
@@ -1402,7 +1402,7 @@ test "CpuBackend — gelu activation" {
     try std.testing.expectApproxEqAbs(@as(f32, -0.1588), output[2], 1e-3);
 }
 
-test "CpuBackend — add element-wise" {
+test "CpuBackend, add element-wise" {
     var be = CpuBackend{};
     var a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     var b_arr = [_]f32{ 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0 };
@@ -1412,7 +1412,7 @@ test "CpuBackend — add element-wise" {
     try std.testing.expectApproxEqAbs(@as(f32, 88.0), out[7], 1e-5);
 }
 
-test "CpuBackend — mul element-wise" {
+test "CpuBackend, mul element-wise" {
     var be = CpuBackend{};
     var a = [_]f32{ 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0 };
     var b_arr = [_]f32{ 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 };
@@ -1422,7 +1422,7 @@ test "CpuBackend — mul element-wise" {
     try std.testing.expectApproxEqAbs(@as(f32, 4.5), out[7], 1e-5);
 }
 
-test "CpuBackend — rmsNorm" {
+test "CpuBackend, rmsNorm" {
     var be = CpuBackend{};
     var input = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     var weight = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
@@ -1433,7 +1433,7 @@ test "CpuBackend — rmsNorm" {
     try std.testing.expectApproxEqAbs(8.0 / rms, output[7], 1e-4);
 }
 
-test "CpuBackend — addRmsNorm" {
+test "CpuBackend, addRmsNorm" {
     var be = CpuBackend{};
     var a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     var b_arr = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
@@ -1447,7 +1447,7 @@ test "CpuBackend — addRmsNorm" {
     try std.testing.expectApproxEqAbs(9.0 / rms, output[7], 1e-4);
 }
 
-test "CpuBackend — rope at pos=0 is identity" {
+test "CpuBackend, rope at pos=0 is identity" {
     var be = CpuBackend{};
     var x = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     be.rope(&x, 0, 1, 8, 8, 10000.0);
@@ -1456,7 +1456,7 @@ test "CpuBackend — rope at pos=0 is identity" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), x[4], 1e-5);
 }
 
-test "CpuBackend — rope at pos=1 rotates" {
+test "CpuBackend, rope at pos=1 rotates" {
     var be = CpuBackend{};
     var x = [_]f32{ 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     be.rope(&x, 1, 1, 8, 8, 10000.0);
@@ -1464,7 +1464,7 @@ test "CpuBackend — rope at pos=1 rotates" {
     try std.testing.expectApproxEqAbs(@sin(@as(f32, 1.0)), x[4], 1e-4);
 }
 
-test "CpuBackend — softmax normalizes to sum=1" {
+test "CpuBackend, softmax normalizes to sum=1" {
     var be = CpuBackend{};
     var data = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     be.softmax(&data, 8);
@@ -1475,7 +1475,7 @@ test "CpuBackend — softmax normalizes to sum=1" {
     for (1..8) |i| try std.testing.expect(data[i] >= data[i - 1]);
 }
 
-test "CpuBackend — embLookup f32" {
+test "CpuBackend, embLookup f32" {
     var be = CpuBackend{};
     const table = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     var output: [4]f32 = undefined;
@@ -1484,7 +1484,7 @@ test "CpuBackend — embLookup f32" {
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), output[3], 1e-5);
 }
 
-test "CpuBackend — embLookup f16" {
+test "CpuBackend, embLookup f16" {
     var be = CpuBackend{};
     const table = [_]f16{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
     var output: [4]f32 = undefined;
@@ -1493,7 +1493,7 @@ test "CpuBackend — embLookup f16" {
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), output[3], 1e-3);
 }
 
-test "CpuBackend — siluMul" {
+test "CpuBackend, siluMul" {
     var be = CpuBackend{};
     var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0 };
     var b_arr = [_]f32{ 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0 };
@@ -1505,7 +1505,7 @@ test "CpuBackend — siluMul" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.4622), out[1], 1e-3);
 }
 
-test "CpuBackend — geluMul" {
+test "CpuBackend, geluMul" {
     var be = CpuBackend{};
     var a = [_]f32{ 0.0, 1.0, -1.0, 2.0, -2.0, 3.0, -3.0, 0.5 };
     var b_arr = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
@@ -1517,7 +1517,7 @@ test "CpuBackend — geluMul" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.8412), out[1], 1e-3);
 }
 
-test "CpuBackend — deinterleave" {
+test "CpuBackend, deinterleave" {
     var be = CpuBackend{};
     // 2 pairs, stride=2
     var input = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
@@ -1531,7 +1531,7 @@ test "CpuBackend — deinterleave" {
     try std.testing.expectApproxEqAbs(@as(f32, 7.0), out_b[2], 1e-6);
 }
 
-test "CpuBackend — l2Norm" {
+test "CpuBackend, l2Norm" {
     var be = CpuBackend{};
     var x = [_]f32{ 3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
     be.l2Norm(&x, 8, 1e-12);
@@ -1541,7 +1541,7 @@ test "CpuBackend — l2Norm" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), x[2], 1e-4);
 }
 
-test "CpuBackend — sigmoidMul" {
+test "CpuBackend, sigmoidMul" {
     var be = CpuBackend{};
     var data = [_]f32{ 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0 };
     var gate = [_]f32{ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
@@ -1551,7 +1551,7 @@ test "CpuBackend — sigmoidMul" {
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), data[7], 1e-5);
 }
 
-test "CpuBackend — rmsNormMulti" {
+test "CpuBackend, rmsNormMulti" {
     var be = CpuBackend{};
     var data = [_]f32{
         1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
@@ -1565,7 +1565,7 @@ test "CpuBackend — rmsNormMulti" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), data[8], 1e-4);
 }
 
-test "CpuBackend — rmsNormBatched" {
+test "CpuBackend, rmsNormBatched" {
     var be = CpuBackend{};
     var input = [_]f32{
         2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0,
@@ -1579,7 +1579,7 @@ test "CpuBackend — rmsNormBatched" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), output[8], 1e-4);
 }
 
-test "CpuBackend — ropeBatched" {
+test "CpuBackend, ropeBatched" {
     var be = CpuBackend{};
     var x = [_]f32{
         1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -1593,7 +1593,7 @@ test "CpuBackend — ropeBatched" {
     try std.testing.expectApproxEqAbs(@cos(@as(f32, 1.0)), x[8], 1e-4);
 }
 
-test "CpuBackend — gemvT with Q8_0" {
+test "CpuBackend, gemvT with Q8_0" {
     var be = CpuBackend{};
     // 1 input, 32 outputs, 1 Q8_0 block
     var w_block: [34]u8 align(2) = undefined;
@@ -1610,7 +1610,7 @@ test "CpuBackend — gemvT with Q8_0" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), y_out[1], 1e-3);
 }
 
-test "CpuBackend — gemm f32" {
+test "CpuBackend, gemm f32" {
     var be = CpuBackend{};
     // Y = X @ W^T
     // X = [[1,2],[3,4]], W = [[1,0],[0,1]] (identity) → Y = X
@@ -1624,7 +1624,7 @@ test "CpuBackend — gemm f32" {
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), y[3], 1e-5);
 }
 
-test "CpuBackend — gemvMulti single op" {
+test "CpuBackend, gemvMulti single op" {
     var be = CpuBackend{};
     var x = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
     var w = [_]f32{ 1.0, 2.0, 3.0, 4.0 };
@@ -1640,14 +1640,14 @@ test "CpuBackend — gemvMulti single op" {
     try std.testing.expectApproxEqAbs(@as(f32, 10.0), y[0], 1e-5);
 }
 
-test "CpuBackend — gemvMulti empty ops" {
+test "CpuBackend, gemvMulti empty ops" {
     var be = CpuBackend{};
     var x = [_]f32{1.0};
     const ops = [_]backend_mod.GemvOp{};
     be.gemvMulti(&x, &ops, 1); // Must not panic
 }
 
-test "CpuBackend — sdpa f32 single token" {
+test "CpuBackend, sdpa f32 single token" {
     var be = CpuBackend{};
     const nh: usize = 1;
     const nkv: usize = 1;
@@ -1666,7 +1666,7 @@ test "CpuBackend — sdpa f32 single token" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
 }
 
-test "CpuBackend — sdpaPrefill f32 single token" {
+test "CpuBackend, sdpaPrefill f32 single token" {
     var be = CpuBackend{};
     const nh: usize = 1;
     const nkv: usize = 1;
@@ -1686,7 +1686,7 @@ test "CpuBackend — sdpaPrefill f32 single token" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.5), output[3], 1e-3);
 }
 
-test "CpuBackend — sdpaWithStats f32 single token" {
+test "CpuBackend, sdpaWithStats f32 single token" {
     var be = CpuBackend{};
     const nh: usize = 1;
     const nkv: usize = 1;
@@ -1710,7 +1710,7 @@ test "CpuBackend — sdpaWithStats f32 single token" {
     try std.testing.expect(head_sum[0] > 0);
 }
 
-test "CpuBackend — sdpa nvfp4_ds_mla 512-d decode" {
+test "CpuBackend, sdpa nvfp4_ds_mla 512-d decode" {
     // Uncompressed DS4 decode (nkv=1, hd=512) and GPU backends' cpuSdpaOnly path.
     var be = CpuBackend{};
     const kv_quant = @import("../ops/kv_quant.zig");
@@ -1752,7 +1752,7 @@ test "CpuBackend — sdpa nvfp4_ds_mla 512-d decode" {
     for (output1) |v| try std.testing.expect(std.math.isFinite(v));
 }
 
-test "CpuBackend — sdpaTree nvfp4_ds_mla" {
+test "CpuBackend, sdpaTree nvfp4_ds_mla" {
     var be = CpuBackend{};
     const kv_quant = @import("../ops/kv_quant.zig");
     const hd: usize = kv_quant.ds_mla_latent_dim;
@@ -1911,7 +1911,7 @@ test "fuzz: all cpu functions" {
             // sdpaPrefill
             be.sdpaPrefill(&sq, &sk, &sv, &keys, &values, &s_out, nh, nkv, hd, 0, 1, 1.0, .f32, .f32);
 
-            // sdpaTree (zero nodes — no-op)
+            // sdpaTree (zero nodes, no-op)
             be.sdpaTree(&sq, @as([*]const u8, @ptrCast(&keys)), @as([*]const u8, @ptrCast(&values)), &sq, &sq, &s_out, @as([*]const [8]u64, &.{.{0} ** 8}), 1, 1, 4, 0, 0, 1.0, .f32, .f32);
 
             // sdpaPaged (CPU fallback)
@@ -1929,7 +1929,7 @@ test "fuzz: all cpu functions" {
     }.f, .{});
 }
 
-test "softmax autotune — compare SIMD widths" {
+test "softmax autotune, compare SIMD widths" {
     // Generates all 3 variants at comptime, benchmarks each at test time.
     // Run with: zig build test --release=fast
     const n = 1024;

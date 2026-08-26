@@ -62,13 +62,13 @@ next_token = sample(probabilities)
 
 | Value | Effect | Use case |
 |-------|--------|----------|
-| `0` | **Greedy** — always pick highest (argmax) | Factual Q&A, code, math |
+| `0` | **Greedy**, always pick highest (argmax) | Factual Q&A, code, math |
 | `0.1-0.5` | Low randomness | Reliable but slightly varied |
 | `0.7-0.9` | Balanced | General conversation, writing |
 | `1.0` | Raw model probabilities | Default behavior |
 | `1.5-2.0` | High randomness | Creative writing, brainstorming |
 
-Dividing by a small temperature makes the softmax "peakier" (top token dominates). Dividing by a large temperature makes it "flatter" (more candidates get a chance). At temperature=0, Agave uses argmax — deterministic, same input always produces same output.
+Dividing by a small temperature makes the softmax "peakier" (top token dominates). Dividing by a large temperature makes it "flatter" (more candidates get a chance). At temperature=0, Agave uses argmax, deterministic, same input always produces same output.
 
 ## Top-K
 
@@ -76,7 +76,7 @@ Restricts sampling to only the K highest-scoring tokens:
 
 ```
 --top-k 40    Only consider the top 40 tokens
---top-k 0     Disabled (consider all tokens) — default
+--top-k 0     Disabled (consider all tokens), default
 ```
 
 Sort tokens by score, keep the top K, **renormalize** probabilities (rescale so they sum to 1.0 again), sample. Prevents picking extremely unlikely tokens at high temperatures.
@@ -87,7 +87,7 @@ Introduced in [The Curious Case of Neural Text Degeneration (Holtzman et al., 20
 
 ```
 --top-p 0.9    Keep tokens until cumulative probability reaches 90%
---top-p 1.0    Disabled — default
+--top-p 1.0    Disabled, default
 ```
 
 More adaptive than top-k: when the model is confident (top token = 95%), top-p=0.9 keeps 1-2 candidates. When uncertain (many similar scores), it keeps dozens.
@@ -154,10 +154,10 @@ keep tokens where logit >= log_threshold (set others to -inf)
 
 ```
 --min-p 0.05    Keep tokens with prob >= 5% of best token's prob
---min-p 0       Disabled — default
+--min-p 0       Disabled, default
 ```
 
-More intuitive than top-p: directly controls the "quality floor" relative to the best candidate. When the model is very confident, fewer tokens pass the filter; when uncertain, more pass — similar to top-p but without needing to think about cumulative probabilities.
+More intuitive than top-p: directly controls the "quality floor" relative to the best candidate. When the model is very confident, fewer tokens pass the filter; when uncertain, more pass, similar to top-p but without needing to think about cumulative probabilities.
 
 ## Frequency and Presence Penalties
 
@@ -170,8 +170,8 @@ logits[token] -= presence_penalty * (1 if token appeared, 0 otherwise)
 
 | Parameter | Range | Effect |
 |-----------|-------|--------|
-| `frequency_penalty` | `[-2, 2]` | Per-occurrence penalty — penalizes repeated tokens proportionally |
-| `presence_penalty` | `[-2, 2]` | One-time penalty — discourages any reuse of generated tokens |
+| `frequency_penalty` | `[-2, 2]` | Per-occurrence penalty, penalizes repeated tokens proportionally |
+| `presence_penalty` | `[-2, 2]` | One-time penalty, discourages any reuse of generated tokens |
 
 Positive values reduce repetition. Negative values encourage it (useful for rhyming, alliteration). Available in HTTP API; CLI uses `--repeat-penalty` (multiplicative style) instead.
 
@@ -193,7 +193,7 @@ DRY penalizes tokens that would continue a repeated n-gram sequence. If the mode
 {"dry_multiplier": 1.5, "dry_allowed_length": 3}
 ```
 
-`dry_multiplier` scales the penalty (0 = disabled). `dry_allowed_length` sets the minimum n-gram length to trigger (default 2 — penalize repeated bigrams and longer). More effective than `repeat_penalty` because it detects repeated **sequences**, not just individual tokens. A token might be fine to repeat (e.g., "the") unless it's part of a repeated phrase.
+`dry_multiplier` scales the penalty (0 = disabled). `dry_allowed_length` sets the minimum n-gram length to trigger (default 2, penalize repeated bigrams and longer). More effective than `repeat_penalty` because it detects repeated **sequences**, not just individual tokens. A token might be fine to repeat (e.g., "the") unless it's part of a repeated phrase.
 
 ```mermaid
 flowchart TD
@@ -248,8 +248,8 @@ Mirostat maintains consistent **perplexity** (unpredictability) during generatio
 | Parameter | Default | Effect |
 |-----------|---------|--------|
 | `mirostat` | 0 | Mode: 0=disabled, 2=Mirostat 2.0 |
-| `mirostat_tau` | 5.0 | Target entropy — lower = more focused, higher = more creative |
-| `mirostat_eta` | 0.1 | Learning rate — how fast to adapt |
+| `mirostat_tau` | 5.0 | Target entropy, lower = more focused, higher = more creative |
+| `mirostat_eta` | 0.1 | Learning rate, how fast to adapt |
 
 ```mermaid
 flowchart TD
@@ -296,7 +296,7 @@ flowchart TD
     Eta -.->|scales| Update
 ```
 
-When Mirostat is active, top-k and top-p are bypassed — Mirostat controls its own truncation. It works by tracking a running "surprise" estimate and adjusting which tokens are eligible for sampling. Produces more consistently readable output than fixed temperature across varying prompt types.
+When Mirostat is active, top-k and top-p are bypassed, Mirostat controls its own truncation. It works by tracking a running "surprise" estimate and adjusting which tokens are eligible for sampling. Produces more consistently readable output than fixed temperature across varying prompt types.
 
 ## Logit Bias
 
@@ -306,7 +306,7 @@ Direct per-token adjustments to logits via the API. Specify token IDs and additi
 {"logit_bias": {"123": 5.0, "456": -100.0}}
 ```
 
-Positive values increase the token's chance of being selected; large negative values effectively ban it. Applied before any other sampling — useful for steering output without changing the model. Max 16 entries per request.
+Positive values increase the token's chance of being selected; large negative values effectively ban it. Applied before any other sampling, useful for steering output without changing the model. Max 16 entries per request.
 
 ## Grammar-Constrained Decoding
 
@@ -323,7 +323,7 @@ agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"s
 agave model.gguf --json-output "Generate a user profile"
 ```
 
-The grammar state machine masks logits before sampling — tokens that would violate the grammar get set to -infinity. This guarantees syntactically valid output regardless of sampling parameters.
+The grammar state machine masks logits before sampling, tokens that would violate the grammar get set to -infinity. This guarantees syntactically valid output regardless of sampling parameters.
 
 **Jump decoding**: When the grammar allows exactly one valid next token (e.g., a colon after a JSON key, a closing brace at the end), the forward pass is skipped entirely and that token is emitted directly. This eliminates unnecessary GPU compute for deterministic structural tokens, significantly speeding up JSON schema output where many tokens are fixed by the schema.
 
@@ -528,38 +528,38 @@ When multiple grammar options are given, priority is: `--json-output` > `--json-
 
 ## Glossary
 
-**DRY (Don't Repeat Yourself)** — A penalty method that detects repeated n-gram sequences and penalizes tokens that would continue them.
+**DRY (Don't Repeat Yourself)**, A penalty method that detects repeated n-gram sequences and penalizes tokens that would continue them.
 
-**entropy** — A measure of uncertainty in a probability distribution; higher entropy = more uniform/unpredictable.
+**entropy**, A measure of uncertainty in a probability distribution; higher entropy = more uniform/unpredictable.
 
-**frequency penalty** — An additive per-occurrence penalty proportional to how many times a token has appeared.
+**frequency penalty**, An additive per-occurrence penalty proportional to how many times a token has appeared.
 
-**GBNF (Generative BNF)** — A grammar format used to specify valid output patterns for constrained decoding.
+**GBNF (Generative BNF)**, A grammar format used to specify valid output patterns for constrained decoding.
 
-**grammar-constrained decoding** — Masking logits so only tokens consistent with a formal grammar can be selected.
+**grammar-constrained decoding**, Masking logits so only tokens consistent with a formal grammar can be selected.
 
-**greedy decoding** — Always selecting the highest-probability token (argmax); deterministic but often repetitive.
+**greedy decoding**, Always selecting the highest-probability token (argmax); deterministic but often repetitive.
 
-**jump decoding** — Skipping the forward pass when the grammar allows exactly one valid next token, emitting it directly.
+**jump decoding**, Skipping the forward pass when the grammar allows exactly one valid next token, emitting it directly.
 
-**logit bias** — Direct additive adjustments to specific token logits before sampling, used for API-level steering.
+**logit bias**, Direct additive adjustments to specific token logits before sampling, used for API-level steering.
 
-**min-P** — An adaptive threshold keeping only tokens whose probability is at least min_p × the top token's probability.
+**min-P**, An adaptive threshold keeping only tokens whose probability is at least min_p × the top token's probability.
 
-**Mirostat** — An adaptive sampling method that dynamically adjusts the candidate set to maintain a target entropy level.
+**Mirostat**, An adaptive sampling method that dynamically adjusts the candidate set to maintain a target entropy level.
 
-**mode collapse** — When sampling repeatedly produces the same high-probability sequences due to insufficient diversity.
+**mode collapse**, When sampling repeatedly produces the same high-probability sequences due to insufficient diversity.
 
-**n-gram** — A contiguous sequence of n tokens (bigram = 2, trigram = 3, etc.).
+**n-gram**, A contiguous sequence of n tokens (bigram = 2, trigram = 3, etc.).
 
-**presence penalty** — A one-time additive penalty applied to any token that has appeared at least once.
+**presence penalty**, A one-time additive penalty applied to any token that has appeared at least once.
 
-**repeat penalty** — A multiplicative penalty applied to logits of previously generated tokens to discourage repetition.
+**repeat penalty**, A multiplicative penalty applied to logits of previously generated tokens to discourage repetition.
 
-**temperature** — A scaling factor applied to logits before softmax; lower = peakier distribution, higher = flatter.
+**temperature**, A scaling factor applied to logits before softmax; lower = peakier distribution, higher = flatter.
 
-**top-K sampling** — Restricting the candidate set to only the K highest-scoring tokens before sampling.
+**top-K sampling**, Restricting the candidate set to only the K highest-scoring tokens before sampling.
 
-**top-P / nucleus sampling** — Keeping the smallest set of tokens whose cumulative probability exceeds P, then renormalizing.
+**top-P / nucleus sampling**, Keeping the smallest set of tokens whose cumulative probability exceeds P, then renormalizing.
 
-**XTC (eXclude Top Choices)** — A sampling method that randomly removes high-probability tokens to increase diversity.
+**XTC (eXclude Top Choices)**, A sampling method that randomly removes high-probability tokens to increase diversity.

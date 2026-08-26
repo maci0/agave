@@ -10,7 +10,7 @@
 //! ## Deferred Execution Model
 //!
 //! Kernel launches are non-blocking. Activation buffers stay on the GPU
-//! between operations — no per-op sync or download. The model calls
+//! between operations, no per-op sync or download. The model calls
 //! `sync()` only when CPU code needs to read GPU-produced data.
 //!
 //! Weight buffers are uploaded once and cached permanently (`buf_cache`).
@@ -53,7 +53,7 @@ const hipMemcpyDeviceToDevice: c_int = 3;
 
 // ── Tuning constants ─────────────────────────────────────────────
 
-/// Workgroup size — must match common.zig block_dim.
+/// Workgroup size, must match common.zig block_dim.
 const block_size: u32 = 256;
 
 /// LDS bytes for block reductions (8 waves x 4 bytes).
@@ -106,7 +106,7 @@ const FnLaunchKernel = *const fn (
 
 // ── Backend struct ───────────────────────────────────────────────
 
-/// ROCm GPU backend — HIP/HSA runtime with dynamic library loading.
+/// ROCm GPU backend, HIP/HSA runtime with dynamic library loading.
 pub const RocmBackend = struct {
     // HIP handles
     module: HipModule = null,
@@ -217,7 +217,7 @@ pub const RocmBackend = struct {
         capacity: usize,
     };
 
-    /// Activation buffer state — tracks data freshness between host and device.
+    /// Activation buffer state, tracks data freshness between host and device.
     const BufState = enum { clean, dirty, stale };
 
     const ActBuf = struct {
@@ -329,7 +329,7 @@ pub const RocmBackend = struct {
         self.fn_gemv_mxfp4_st = self.getFunction(hipModuleGetFunction, "gemv_mxfp4_st_kernel") catch null;
         self.fn_gemv_tq1_0 = self.getFunction(hipModuleGetFunction, "gemv_tq1_0_kernel") catch null;
         self.fn_gemv_tq2_0 = self.getFunction(hipModuleGetFunction, "gemv_tq2_0_kernel") catch null;
-        self.fn_rms_norm_multi = self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel") catch null; // loaded but rmsNormMulti() panics — GPU kernel not yet validated
+        self.fn_rms_norm_multi = self.getFunction(hipModuleGetFunction, "rms_norm_multi_kernel") catch null; // loaded but rmsNormMulti() panics, GPU kernel not yet validated
         self.fn_sdpa = self.getFunction(hipModuleGetFunction, "sdpa_kernel") catch null;
         self.fn_sdpa_turbo = self.getFunction(hipModuleGetFunction, "sdpa_turbo_kernel") catch null;
         self.fn_sdpa_tree = self.getFunction(hipModuleGetFunction, "sdpa_tree_kernel") catch null;
@@ -392,7 +392,7 @@ pub const RocmBackend = struct {
         const rc = self.hipMalloc(&ptr, @max(size, 4));
         if (rc != HIP_SUCCESS or ptr == null) {
             std.log.err("hipMalloc failed: size={d} ({d} MB) rc={d}", .{ size, size / (1024 * 1024), rc });
-            @panic("hipMalloc failed — out of device memory");
+            @panic("hipMalloc failed, out of device memory");
         }
         return @intFromPtr(ptr.?);
     }
@@ -400,7 +400,7 @@ pub const RocmBackend = struct {
     fn uploadToDevice(self: *RocmBackend, host_ptr: *const anyopaque, size: usize) DevicePtr {
         const dptr = self.deviceAlloc(size);
         if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice), "hipMemcpy(HtoD)"))
-            @panic("hipMemcpy(HtoD) failed — device memory left uninitialized");
+            @panic("hipMemcpy(HtoD) failed, device memory left uninitialized");
         return dptr;
     }
 
@@ -410,7 +410,7 @@ pub const RocmBackend = struct {
 
     fn memcpyDtoD(self: *RocmBackend, dst: DevicePtr, src: DevicePtr, size: usize) void {
         if (!hipCheck(self.hipMemcpy(@ptrFromInt(dst), @ptrFromInt(src), size, hipMemcpyDeviceToDevice), "hipMemcpy(DtoD)"))
-            @panic("hipMemcpy(DtoD) failed — device data corrupted");
+            @panic("hipMemcpy(DtoD) failed, device data corrupted");
     }
 
     // ── Weight cache (permanent, read-only) ─────────────────────
@@ -587,8 +587,8 @@ pub const RocmBackend = struct {
             .fp8_e5m2 => self.fn_gemv_fp8_e5m2,
             .tq1_0 => self.fn_gemv_tq1_0,
             .tq2_0 => self.fn_gemv_tq2_0,
-            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("ROCm GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented — add a GPU kernel"),
-            else => std.debug.panic("ROCm GEMV: unsupported dtype {s} — add a GPU kernel", .{@tagName(w.dtype)}),
+            .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => @panic("ROCm GEMV: IQ2/IQ3/IQ1 codebook types not yet implemented, add a GPU kernel"),
+            else => std.debug.panic("ROCm GEMV: unsupported dtype {s}, add a GPU kernel", .{@tagName(w.dtype)}),
         };
         if (func == null) @panic("ROCm GEMV: required kernel missing for dtype");
 
@@ -607,7 +607,7 @@ pub const RocmBackend = struct {
         };
         // Multi-row kernels: Q5_K/Q6_K use NR=2, Q4_0/Q8_0 use NR=4.
         // Q4_K and BF16 are TileLang-derived single-row designs (lane/copy
-        // decomposition + block reduce) — grid = n.
+        // decomposition + block reduce), grid = n.
         const grid_size: u32 = switch (w.dtype) {
             .q4_k => @intCast(n),
             .q5_k, .q6_k => @intCast((n + 1) / 2),
@@ -807,7 +807,7 @@ pub const RocmBackend = struct {
     }
 
     /// Scaled accumulate: dst[i] += src[i] * scale.
-    /// CPU fallback — n_embd-sized, negligible vs GEMV dispatch overhead.
+    /// CPU fallback, n_embd-sized, negligible vs GEMV dispatch overhead.
     pub fn addScaled(self: *RocmBackend, src: [*]const f32, dst: [*]f32, scale: f32, n: usize) void {
         self.flushActivations();
         const V8 = @Vector(8, f32);
@@ -869,7 +869,7 @@ pub const RocmBackend = struct {
         @panic("ropeMrope: 3D multimodal RoPE is implemented for CPU and Metal only");
     }
 
-    /// Embedding lookup — CPU is faster than GPU dispatch for single-row read.
+    /// Embedding lookup, CPU is faster than GPU dispatch for single-row read.
     pub fn embLookup(self: *RocmBackend, table: TensorData, token_id: u32, output: [*]f32, dim: usize) void {
         self.flushActivations();
         self.cpu.embLookup(table, token_id, output, dim);
@@ -901,7 +901,7 @@ pub const RocmBackend = struct {
         self.launch(self.fn_gemv_nvfp4_st, @intCast(n), block_size, reduction_smem, &params);
     }
 
-    /// MLX affine quantized GEMV — uses existing ROCm MLX Q4 kernel.
+    /// MLX affine quantized GEMV, uses existing ROCm MLX Q4 kernel.
     pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
         _ = bits;
         const gpr = (k + 63) / 64;
@@ -946,7 +946,7 @@ pub const RocmBackend = struct {
     /// In-place sigmoid-gated multiply: data[i] *= sigmoid(gate[i])
     pub fn sigmoidMul(self: *RocmBackend, data: [*]f32, gate: [*]const f32, n: usize) void {
         if (self.fn_sigmoid_mul == null)
-            @panic("ROCm sigmoidMul: kernel not loaded — rebuild HSACO");
+            @panic("ROCm sigmoidMul: kernel not loaded, rebuild HSACO");
         const sz = n * @sizeOf(f32);
         var d_data = self.getInPlaceBuf(data, sz);
         var d_gate = self.getInputBuf(gate, sz);
@@ -1071,7 +1071,7 @@ pub const RocmBackend = struct {
         self.launch(self.fn_split_qgate, grid, block_size, 0, &params);
     }
 
-    /// Batched GEMV — sequential dispatch.
+    /// Batched GEMV, sequential dispatch.
     pub fn gemvMulti(self: *RocmBackend, x: [*]const f32, ops: []const backend_mod.GemvOp, k: usize) void {
         for (ops) |op| {
             if (op.mlx_scales) |s| {
@@ -1085,7 +1085,7 @@ pub const RocmBackend = struct {
     // ── True megakernels ─────────────────────────────────────────
 
     /// Dispatch the Qwen 3.5 Q8_0 true megakernel: single launch for all layers.
-    /// Uses cooperative grid sync — all workgroups must be co-resident.
+    /// Uses cooperative grid sync, all workgroups must be co-resident.
     pub fn dispatchMegakernelQwen35Q8(
         self: *RocmBackend,
         weights: [*]const u8,
@@ -1165,7 +1165,7 @@ pub const RocmBackend = struct {
     }
 
     /// Dispatch the Gemma Q4_K true megakernel.
-    /// Placeholder — kernel not yet compiled for ROCm.
+    /// Placeholder, kernel not yet compiled for ROCm.
     pub fn dispatchMegakernelGemmaQ4K(
         self: *RocmBackend,
         weights: [*]const u8,
@@ -1212,7 +1212,7 @@ pub const RocmBackend = struct {
         _ = max_seq_len;
         _ = seq_pos;
         _ = n_blocks;
-        @panic("ROCm megakernel_gemma_q4k: not yet implemented — add a ROCm kernel");
+        @panic("ROCm megakernel_gemma_q4k: not yet implemented, add a ROCm kernel");
     }
 
     /// Commit pending GPU work and download results to host.
@@ -1220,9 +1220,9 @@ pub const RocmBackend = struct {
         self.flushActivations();
     }
 
-    /// No-op — ROCm dispatches are not batched.
+    /// No-op, ROCm dispatches are not batched.
     pub fn beginBatch(_: *RocmBackend) void {}
-    /// No-op — ROCm dispatches are not batched.
+    /// No-op, ROCm dispatches are not batched.
     pub fn endBatch(_: *RocmBackend) void {}
 
     /// Returns backend startup information for display.
@@ -1298,7 +1298,7 @@ pub const RocmBackend = struct {
 
         // Non-turbo, non-f32 quantized KV: not supported on GPU
         if ((!is_f32_k and !is_turbo_k) or (!is_f32_v and !is_turbo_v))
-            @panic("ROCm SDPA: unsupported KV type — use --kv-type f32 or turbo2/3/4");
+            @panic("ROCm SDPA: unsupported KV type, use --kv-type f32 or turbo2/3/4");
 
         const kvd = nkv * hd;
         const sl = seq_len + 1;
@@ -1356,7 +1356,7 @@ pub const RocmBackend = struct {
             const max_lds_bytes: u32 = 65536;
             if (smem > max_lds_bytes) {
                 std.log.err("ROCm SDPA: seq_len={d} requires {d} bytes LDS (max {d}). Use paged attention or reduce context.", .{ sl, smem, max_lds_bytes });
-                @panic("ROCm SDPA LDS exceeded — context too long for non-paged kernel");
+                @panic("ROCm SDPA LDS exceeded, context too long for non-paged kernel");
             }
             self.launch(self.fn_sdpa, @intCast(nh), block_size, smem, &params);
         } else {
@@ -1417,14 +1417,14 @@ pub const RocmBackend = struct {
             const max_lds_bytes: u32 = 65536;
             if (smem > max_lds_bytes) {
                 std.log.err("ROCm SDPA turbo: seq_len={d} requires {d} bytes LDS (max {d}).", .{ sl, smem, max_lds_bytes });
-                @panic("ROCm SDPA LDS exceeded — context too long for non-paged kernel");
+                @panic("ROCm SDPA LDS exceeded, context too long for non-paged kernel");
             }
             self.launch(self.fn_sdpa_turbo, @intCast(nh), block_size, smem, &params);
         }
     }
 
     /// SDPA with per-head softmax stats for split-attention merge.
-    /// GPU stats export not yet implemented — syncs GPU, then runs CPU-side
+    /// GPU stats export not yet implemented, syncs GPU, then runs CPU-side
     /// sdpaQuantHeadsWithStats as fallback. Native GPU stats is future work.
     pub fn sdpaWithStats(self: *RocmBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, head_max: [*]f32, head_sum: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         self.sdpa(q, keys, values, k_new, v_new, output, nh, nkv, hd, seq_len, scale, kv_type_k, kv_type_v);
@@ -1440,7 +1440,7 @@ pub const RocmBackend = struct {
         var sl: u32 = @intCast(kv_view.seq_len + 1);
 
         if (self.fn_sdpa_paged == null) {
-            @panic("ROCm sdpaPaged: kernel not loaded — rebuild HSACO or use --backend cpu");
+            @panic("ROCm sdpaPaged: kernel not loaded, rebuild HSACO or use --backend cpu");
         }
 
         self.flushActivations();
@@ -1505,7 +1505,7 @@ pub const RocmBackend = struct {
         const max_lds_bytes: u32 = 65536;
         if (smem > max_lds_bytes) {
             std.log.err("ROCm SDPA paged: seq_len={d} requires {d} bytes LDS (max {d}).", .{ sl, smem, max_lds_bytes });
-            @panic("ROCm SDPA LDS exceeded — context too long for paged kernel");
+            @panic("ROCm SDPA LDS exceeded, context too long for paged kernel");
         }
         self.launch(self.fn_sdpa_paged.?, @intCast(nh), block_size, smem, &params);
 
@@ -1517,17 +1517,17 @@ pub const RocmBackend = struct {
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
-    /// Sequential loop-of-GEMV fallback — no native ROCm GEMM kernel yet.
+    /// Sequential loop-of-GEMV fallback, no native ROCm GEMM kernel yet.
     pub fn gemm(self: *RocmBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
-    /// Batched RMS normalization — each of n_tok rows normalized independently.
+    /// Batched RMS normalization, each of n_tok rows normalized independently.
     pub fn rmsNormBatched(self: *RocmBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
         for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
     }
 
-    /// Batched RoPE — each of n_tok vectors at positions[0..n_tok].
+    /// Batched RoPE, each of n_tok vectors at positions[0..n_tok].
     pub fn ropeBatched(self: *RocmBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const stride = n_heads * head_dim;
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
@@ -1569,7 +1569,7 @@ pub const RocmBackend = struct {
         @panic("ROCm sdpaTree: unsupported KV type (need f32); use --kv-type f32 or --backend cpu");
     }
 
-    /// Prefill SDPA — sequential loop over tokens, calling single-token sdpa.
+    /// Prefill SDPA, sequential loop over tokens, calling single-token sdpa.
     pub fn sdpaPrefill(self: *RocmBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
         for (0..n_tok) |t| {

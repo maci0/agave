@@ -1,4 +1,4 @@
-// Tree-Masked SDPA — FlashAttention-2 with ancestor bitmask masking
+// Tree-Masked SDPA, FlashAttention-2 with ancestor bitmask masking
 //
 // One threadgroup per (node, head) pair. Each tree node attends to:
 //   1. All prefix KV entries (unconditional)
@@ -14,7 +14,7 @@ constant uint tree_max_head_dim = 256;
 
 kernel void sdpa_tree_fa2(
     device const float* Q_all,          // [n_nodes * nh * hd]
-    device const float* prefix_K,       // [prefix_len * kvd] — f32 from paged cache
+    device const float* prefix_K,       // [prefix_len * kvd], f32 from paged cache
     device const float* prefix_V,       // [prefix_len * kvd]
     device const float* tree_K,         // [n_nodes * kvd]
     device const float* tree_V,         // [n_nodes * kvd]
@@ -187,7 +187,7 @@ kernel void sdpa_tree_fa2(
     }
 }
 
-// TurboQuant variant — prefix K/V are quantized (turbo2/3/4), tree K/V remain f32.
+// TurboQuant variant, prefix K/V are quantized (turbo2/3/4), tree K/V remain f32.
 kernel void sdpa_tree_fa2_turbo(
     device const float* Q_all,
     device const uchar* prefix_K,       // turbo-quantized

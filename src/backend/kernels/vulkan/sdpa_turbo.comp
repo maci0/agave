@@ -1,4 +1,4 @@
-// TurboQuant SDPA — FlashAttention-2 with native TurboQuant KV dequantization.
+// TurboQuant SDPA, FlashAttention-2 with native TurboQuant KV dequantization.
 //
 // Same algorithm as sdpa.comp but reads K/V from packed TurboQuant blocks
 // instead of f32 arrays. Dequantization happens in-register per 32-element block.

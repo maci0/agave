@@ -6,11 +6,11 @@
 
 > After this chapter you can explain SwiGLU, activation functions, Mixture-of-Experts routing, and megakernel fusion.
 
-The **FFN (Feed-Forward Network)** is the second **sublayer** (component within a transformer layer) in each transformer layer. "Feed-forward" means data flows in one direction through the network — input → hidden layer → output, with no loops or **recurrence** (unlike **RNNs** — Recurrent Neural Networks — which cycle back on themselves, feeding outputs back as inputs).
+The **FFN (Feed-Forward Network)** is the second **sublayer** (component within a transformer layer) in each transformer layer. "Feed-forward" means data flows in one direction through the network, input → hidden layer → output, with no loops or **recurrence** (unlike **RNNs**, Recurrent Neural Networks, which cycle back on themselves, feeding outputs back as inputs).
 
-While attention lets tokens communicate with each other, the FFN processes each position **independently** — it's a separate computation per token that doesn't look at neighboring tokens.
+While attention lets tokens communicate with each other, the FFN processes each position **independently**, it's a separate computation per token that doesn't look at neighboring tokens.
 
-**Why does the FFN store "knowledge"?** The FFN expands the hidden state to a much larger intermediate dimension (e.g., 2304 → 9,216 in Gemma4 E2B), applies a nonlinear activation, then compresses back. Research ([Geva et al., 2021](https://arxiv.org/abs/2012.14913)) showed that rows of the up-projection act as **pattern detectors** — each row activates strongly for specific input patterns (e.g., "capital of [country]", "past tense verb", "python function definition"). The corresponding down-projection row then adds the associated output (e.g., the embedding direction for the country's capital). The gate controls which patterns fire. With 9,216 intermediate neurons, the FFN has 9,216 independent "if pattern X, then add Y" slots — this is where factual associations live. Attention routes information between positions; the FFN transforms it at each position.
+**Why does the FFN store "knowledge"?** The FFN expands the hidden state to a much larger intermediate dimension (e.g., 2304 → 9,216 in Gemma4 E2B), applies a nonlinear activation, then compresses back. Research ([Geva et al., 2021](https://arxiv.org/abs/2012.14913)) showed that rows of the up-projection act as **pattern detectors**, each row activates strongly for specific input patterns (e.g., "capital of [country]", "past tense verb", "python function definition"). The corresponding down-projection row then adds the associated output (e.g., the embedding direction for the country's capital). The gate controls which patterns fire. With 9,216 intermediate neurons, the FFN has 9,216 independent "if pattern X, then add Y" slots, this is where factual associations live. Attention routes information between positions; the FFN transforms it at each position.
 
 ## SwiGLU
 
@@ -57,9 +57,9 @@ silu(xW_g) ⊙ (xW_u) → W_d
 FFN(x) = down_proj(activation(gate_proj(x)) * up_proj(x))
 ```
 
-Three matrix multiplies per FFN call, expanding to a larger **intermediate dimension** (the expanded size between projections, typically 4-8× the hidden size) and projecting back. The **activation function** is a **nonlinear** transformation (output is not proportional to input — e.g., sigmoid curves, not straight lines) applied element-wise (e.g., SiLU, GELU).
+Three matrix multiplies per FFN call, expanding to a larger **intermediate dimension** (the expanded size between projections, typically 4-8× the hidden size) and projecting back. The **activation function** is a **nonlinear** transformation (output is not proportional to input, e.g., sigmoid curves, not straight lines) applied element-wise (e.g., SiLU, GELU).
 
-Notice the structure: `activation(gate_proj(x)) * up_proj(x)`. The `gate_proj` output is passed through an activation function and then multiplied element-wise with `up_proj`, **gating** (controlling) how much of the up-projection passes through. This gating pattern is called a **GLU** (Gated Linear Unit). **SwiGLU**, introduced in [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202), uses **SiLU** (Sigmoid Linear Unit, also called Swish) as the activation — hence the name: **Swi**sh + **GLU** = SwiGLU.
+Notice the structure: `activation(gate_proj(x)) * up_proj(x)`. The `gate_proj` output is passed through an activation function and then multiplied element-wise with `up_proj`, **gating** (controlling) how much of the up-projection passes through. This gating pattern is called a **GLU** (Gated Linear Unit). **SwiGLU**, introduced in [GLU Variants Improve Transformer (Shazeer, 2020)](https://arxiv.org/abs/2002.05202), uses **SiLU** (Sigmoid Linear Unit, also called Swish) as the activation, hence the name: **Swi**sh + **GLU** = SwiGLU.
 
 ## Activation Functions
 
@@ -100,7 +100,7 @@ flowchart LR
 | **Sigmoid** | `1 / (1 + exp(-x))` | DeltaNet beta, attention gate, MoE routing |
 | **ReLU²** | `max(0, x)²` | Nemotron-Nano MoE FFN |
 
-**Clamped SwiGLU** (GPT-OSS MoE): Adds **hard clamping** (forcing values to stay within fixed bounds) `[-7.0, +7.0]` to prevent **overflow** (values becoming too large to represent, causing errors or infinity) during **mixed-precision** (using different bit widths for different operations — e.g., 16-bit for some, 32-bit for others) expert computation.
+**Clamped SwiGLU** (GPT-OSS MoE): Adds **hard clamping** (forcing values to stay within fixed bounds) `[-7.0, +7.0]` to prevent **overflow** (values becoming too large to represent, causing errors or infinity) during **mixed-precision** (using different bit widths for different operations, e.g., 16-bit for some, 32-bit for others) expert computation.
 
 ## Mixture of Experts (MoE)
 
@@ -153,7 +153,7 @@ flowchart TD
 
 This gives the **capacity** (total model size/knowledge) of a large model (30B total parameters) with the compute cost of a small one (3B active per token).
 
-**Worked example** — Nemotron-Nano with 128 experts, top-6 routing, and 1 shared expert:
+**Worked example**, Nemotron-Nano with 128 experts, top-6 routing, and 1 shared expert:
 
 ```
 Input: hidden state for the word "Python" (after attention)
@@ -179,7 +179,7 @@ Result: 7 FFN evaluations (6 routed + 1 shared) instead of 128.
         Expert 3 might specialize in "programming", expert 87 in "nouns".
 ```
 
-Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call stack, automatically freed when the function returns) — zero **heap allocation** (dynamic memory from the system allocator, requires explicit free) in the hot path.
+Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call stack, automatically freed when the function returns), zero **heap allocation** (dynamic memory from the system allocator, requires explicit free) in the hot path.
 
 | Model | Routed Experts | Top-K | Shared Expert | Routing |
 | :--- | :--- | :--- | :--- | :--- |
@@ -189,13 +189,13 @@ Expert selection uses **stack-allocated** arrays (fixed-size buffers on the call
 | Nemotron-Nano | 128 | 6 | Yes (1, 2x routed FFN dim) | Sigmoid |
 | Gemma 4 26B-A4B | 128 | 8 | No (dual path: dense + MoE per layer) | Softmax |
 
-**Sigmoid routing** (GLM-4): Each expert gate is **independent** (evaluated separately, not competing with each other for probability mass like softmax does) — multiple experts can have high activation simultaneously without competing.
+**Sigmoid routing** (GLM-4): Each expert gate is **independent** (evaluated separately, not competing with each other for probability mass like softmax does), multiple experts can have high activation simultaneously without competing.
 
 **Shared expert** (Nemotron-Nano): One expert is always active regardless of router output, providing a stable **baseline** (consistent minimum contribution that all tokens receive, ensuring basic functionality).
 
 ### MoE Sparse Activation: Dense vs. MoE Compute
 
-MoE's key advantage is **sparse activation** — only K of N experts run per token. The diagram below compares how much compute each model actually performs versus how many weights it stores:
+MoE's key advantage is **sparse activation**, only K of N experts run per token. The diagram below compares how much compute each model actually performs versus how many weights it stores:
 
 ```mermaid
 flowchart LR
@@ -206,7 +206,7 @@ flowchart LR
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    subgraph Dense["Dense 30B — every weight active"]
+    subgraph Dense["Dense 30B, every weight active"]
         D_in["Token\nhidden state"]:::setup
         D_FFN["Single FFN\n30B parameters\nALL active"]:::sync
         D_out["Output\n30B multiplies\nper token"]:::success
@@ -215,7 +215,7 @@ flowchart LR
         D_FFN --> D_out
     end
 
-    subgraph MoE["MoE 30B — sparse activation"]
+    subgraph MoE["MoE 30B, sparse activation"]
         M_in["Token\nhidden state"]:::setup
         M_Router["Router\n(tiny: ~0.01B)"]:::sync
         M_E1["Expert A\n~0.23B active"]:::sync
@@ -238,7 +238,7 @@ flowchart LR
 Dense 30B model:       30B multiplies per token   (all weights active)
 MoE 30B (top-2/128):  ~0.5B multiplies per token  (2 experts active)
                         ↑ 60x fewer operations, similar quality
-Tradeoff: 30B weights still occupy memory — only the compute is sparse.
+Tradeoff: 30B weights still occupy memory, only the compute is sparse.
 ```
 
 | | Weights resident in memory | Compute active per token |
@@ -257,7 +257,7 @@ expert_stride = dims[1] * dims[2]    (for 3D [n_experts, rows, cols]: per-expert
 expert_data = base_ptr + expert_id * stride
 ```
 
-> **Note:** This formula gives the element count per expert and applies directly to float/packed formats. For quantized formats (Q4_K, Q8_0, etc.) the actual byte stride accounts for block headers and is computed by a format-aware function — the raw `dims[0] * dims[1]` product is not the byte stride in those cases.
+> **Note:** This formula gives the element count per expert and applies directly to float/packed formats. For quantized formats (Q4_K, Q8_0, etc.) the actual byte stride accounts for block headers and is computed by a format-aware function, the raw `dims[0] * dims[1]` product is not the byte stride in those cases.
 
 Some models store fused `gate_up_exps` (gate and up projections concatenated per expert) to reduce tensor count. The GEMV dispatch slices the fused tensor into gate and up halves.
 
@@ -274,7 +274,7 @@ flowchart TD
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    subgraph Sequential["Sequential dispatch — 2 thread pool calls"]
+    subgraph Sequential["Sequential dispatch, 2 thread pool calls"]
         S_in["Input vector x\n(shared by all experts)"]:::setup
         S_D1["Dispatch 1\ngate_proj expert A\nthread pool: serialize"]:::migration
         S_W1["Wait for completion"]:::danger
@@ -289,7 +289,7 @@ flowchart TD
         S_W2 --> S_D3
     end
 
-    subgraph Batched["gemvMulti — 1 thread pool call"]
+    subgraph Batched["gemvMulti, 1 thread pool call"]
         B_in["Input vector x\n(shared by all experts)"]:::setup
         B_ops["Build GemvOp array\nop[0]: gate expert A\nop[1]: up expert A\nop[2]: gate expert B\nop[3]: up expert B\n..."]:::migration
         B_dispatch["gemvMulti dispatch\nall output rows\nin parallel"]:::sync
@@ -392,34 +392,34 @@ y    = h @ W_down
 
 ## Glossary
 
-**activation function** — A nonlinear transformation applied element-wise to introduce non-linearity into the network.
+**activation function**, A nonlinear transformation applied element-wise to introduce non-linearity into the network.
 
-**FFN (Feed-Forward Network)** — The second sublayer in each transformer layer; processes each position independently through expansion, activation, and compression.
+**FFN (Feed-Forward Network)**, The second sublayer in each transformer layer; processes each position independently through expansion, activation, and compression.
 
-**gate projection** — A linear projection whose output is passed through an activation and used to gate another projection.
+**gate projection**, A linear projection whose output is passed through an activation and used to gate another projection.
 
-**GELU (Gaussian Error Linear Unit)** — An activation function similar to SiLU but using a Gaussian-weighted smoothing.
+**GELU (Gaussian Error Linear Unit)**, An activation function similar to SiLU but using a Gaussian-weighted smoothing.
 
-**GLU (Gated Linear Unit)** — A structure where one projection's output gates (controls) another via element-wise multiplication.
+**GLU (Gated Linear Unit)**, A structure where one projection's output gates (controls) another via element-wise multiplication.
 
-**megakernel fusion** — Combining multiple GPU dispatches (e.g., gate + up + down projections) into a single kernel to eliminate memory round-trips.
+**megakernel fusion**, Combining multiple GPU dispatches (e.g., gate + up + down projections) into a single kernel to eliminate memory round-trips.
 
-**MoE (Mixture of Experts)** — An architecture with multiple FFN "experts" where a router selects a subset to process each token, enabling large capacity with sparse activation.
+**MoE (Mixture of Experts)**, An architecture with multiple FFN "experts" where a router selects a subset to process each token, enabling large capacity with sparse activation.
 
-**ReLU (Rectified Linear Unit)** — Activation function: max(0, x); sets negatives to zero. ReLU² squares the result.
+**ReLU (Rectified Linear Unit)**, Activation function: max(0, x); sets negatives to zero. ReLU² squares the result.
 
-**router** — A small learned network that scores and selects which experts should process each token.
+**router**, A small learned network that scores and selects which experts should process each token.
 
-**shared expert** — An expert that is always active regardless of router output, providing a baseline contribution.
+**shared expert**, An expert that is always active regardless of router output, providing a baseline contribution.
 
-**sigmoid** — The function 1/(1 + e^(−x)) mapping any value to (0, 1), used for gates and routing.
+**sigmoid**, The function 1/(1 + e^(−x)) mapping any value to (0, 1), used for gates and routing.
 
-**SiLU / Swish** — Activation function: x × sigmoid(x); smooth, passes positive values, dampens negatives.
+**SiLU / Swish**, Activation function: x × sigmoid(x); smooth, passes positive values, dampens negatives.
 
-**Softplus** — Activation function: log(1 + exp(x)); a smooth approximation ensuring positive output, used for SSM timestep computation.
+**Softplus**, Activation function: log(1 + exp(x)); a smooth approximation ensuring positive output, used for SSM timestep computation.
 
-**sparse activation** — Only a small subset of total parameters is used per token; the rest remain idle, reducing compute cost.
+**sparse activation**, Only a small subset of total parameters is used per token; the rest remain idle, reducing compute cost.
 
-**SwiGLU (Swish-Gated Linear Unit)** — A gated FFN architecture using SiLU activation on a gate projection multiplied element-wise with an up-projection.
+**SwiGLU (Swish-Gated Linear Unit)**, A gated FFN architecture using SiLU activation on a gate projection multiplied element-wise with an up-projection.
 
-**top-K routing** — Selecting the K highest-scoring experts for each token in a MoE layer.
+**top-K routing**, Selecting the K highest-scoring experts for each token in a MoE layer.

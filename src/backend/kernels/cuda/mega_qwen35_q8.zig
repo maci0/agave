@@ -1,4 +1,4 @@
-//! True megakernel: Qwen 3.5 Q8_0 — single dispatch for all layers.
+//! True megakernel: Qwen 3.5 Q8_0, single dispatch for all layers.
 //!
 //! Eliminates ~330 kernel dispatches per token down to 1 dispatch.
 //! Uses atomic grid sync between stages (all blocks must be co-resident).
@@ -486,7 +486,7 @@ export fn megakernel_qwen35_q8_kernel(
             gridSyncReset(&sync_ctrs[sync_idx % n_sync_slots]);
             sync_idx += 1;
         } else {
-            // DeltaNet SSM layer — too complex for GPU megakernel (Phase 2).
+            // DeltaNet SSM layer, too complex for GPU megakernel (Phase 2).
             // Sequential recurrence has data dependencies that don't parallelize.
         }
 

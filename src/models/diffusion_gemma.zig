@@ -1,4 +1,4 @@
-//! DiffusionGemma — Google's discrete text diffusion model.
+//! DiffusionGemma, Google's discrete text diffusion model.
 //!
 //! Architecture overview
 //! ---------------------
@@ -9,7 +9,7 @@
 //! * Per-layer `layer_scalar` applied to attention output
 //! * Canvas = 256 tokens; denoising uses bidirectional attention within canvas
 //! * Tensor prefix: `model.decoder.layers.N.` (SafeTensors BF16 only)
-//! * Self-conditioning block (`model.self_cond_block.*`) — optional, skipped in v1
+//! * Self-conditioning block (`model.self_cond_block.*`), optional, skipped in v1
 //!
 //! Inference flow:
 //!   1. Encoder prefill: causal forward pass over prompt → KV cache
@@ -413,7 +413,7 @@ pub const DiffusionGemmaModel = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
-    /// Sequential token prefill — runs forward() for each token.
+    /// Sequential token prefill, runs forward() for each token.
     pub fn prefill(self: *DiffusionGemmaModel, token_ids: []const u32) !u32 {
         var last: u32 = 0;
         for (token_ids) |tid| last = try self.forward(tid);
@@ -514,7 +514,7 @@ pub const DiffusionGemmaModel = struct {
         }
 
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         quant.dequantToF32(buf, t.data_ptr, t.dtype, n);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };
@@ -633,7 +633,7 @@ pub const DiffusionGemmaModel = struct {
             );
         } else {
             const sliding: usize = if (!is_global) self.sliding_window else 0;
-            // Full attention (no sliding window) — simpler for v1 DiffusionGemma.
+            // Full attention (no sliding window), simpler for v1 DiffusionGemma.
             // DiffusionGemma uses sliding window 1024 for sliding layers, but we use full
             // attention here since the encoder is short (prompt only).
             attn_ops.scaledDotProductAttention(
@@ -664,7 +664,7 @@ pub const DiffusionGemmaModel = struct {
             const scalar_f32: f32 = if (ls.dtype == .f32)
                 @as(*const f32, @ptrCast(@alignCast(ls.data_ptr))).*
             else blk: {
-                // BF16 scalar — convert.
+                // BF16 scalar, convert.
                 const bits = @as(*const u16, @ptrCast(@alignCast(ls.data_ptr))).*;
                 break :blk @bitCast(@as(u32, bits) << 16);
             };
@@ -833,7 +833,7 @@ pub const DiffusionGemmaModel = struct {
             self.be.rmsNormBatched(canvas_k.ptr, self.normAsF32(knw, hd), canvas_k.ptr, cl * nkv, hd, self.rms_eps);
         }
 
-        // 3. RoPE — canvas tokens start at kv_seq_len in position space.
+        // 3. RoPE, canvas tokens start at kv_seq_len in position space.
         for (0..cl) |i| {
             const pos = self.kv_seq_len + i;
             self.be.rope(self.q_buf.ptr + i * qd, pos, nh, hd, rope_dim, rope_theta);

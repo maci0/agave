@@ -1,4 +1,4 @@
-// Paged SDPA — block-table-indexed FlashAttention-2
+// Paged SDPA, block-table-indexed FlashAttention-2
 // Same algorithm as sdpa.wgsl but K/V access uses block-table indirection.
 
 struct Params {

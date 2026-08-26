@@ -1,6 +1,6 @@
 # LLM Inference From Scratch
 
-A tutorial series that builds understanding of LLM inference from the ground up. Written for **systems programmers** who want to understand how LLMs work under the hood — no AI/ML background required.
+A tutorial series that builds understanding of LLM inference from the ground up. Written for **systems programmers** who want to understand how LLMs work under the hood, no AI/ML background required.
 
 Each chapter introduces one major concept at a time, explaining both the **why** (the problem being solved) and the **how** (the algorithm and implementation). All AI/ML terminology is explained inline when first mentioned.
 
@@ -32,7 +32,7 @@ By the end of this tutorial, you'll understand:
 ## Prerequisites
 
 - **Systems programming knowledge**: Comfortable reading code that manages memory, writes tight loops, and thinks about cache locality
-- **Basic linear algebra**: If you've forgotten (or never learned) matrix-vector multiply, dot products, etc., see the [Math Reference](appendix-math.md) — we explain everything you need
+- **Basic linear algebra**: If you've forgotten (or never learned) matrix-vector multiply, dot products, etc., see the [Math Reference](appendix-math.md), we explain everything you need
 - **No ML background needed**: We explain transformers, attention, embeddings, etc. from first principles
 
 If you can read Zig, C, or Rust code and understand concepts like "cache line" and "SIMD", you're ready.
@@ -53,41 +53,41 @@ Start from the beginning and read sequentially. Chapters 0–8 build understandi
 - [**Chapter 9: SIMD**](09-cpu-simd-optimization.md) → [**Chapter 10: Memory Safety**](10-memory-safety.md) → [**Chapter 11: Metal**](11-metal-backend-internals.md) → onward
 
 ### 🔧 **Implementation-Focused (Experienced ML Engineers)**
-You already know transformers and attention — jump straight to implementation:
-- [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md) — @Vector patterns, multi-row batching
-- [**Chapter 11: Metal Backend**](11-metal-backend-internals.md) — GPU optimization on Apple Silicon
-- [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md) — Kernel fusion, dispatch reduction
-- [**Appendix: Profiling**](appendix-profiling.md) — Performance debugging techniques
+You already know transformers and attention, jump straight to implementation:
+- [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md), @Vector patterns, multi-row batching
+- [**Chapter 11: Metal Backend**](11-metal-backend-internals.md), GPU optimization on Apple Silicon
+- [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md), Kernel fusion, dispatch reduction
+- [**Appendix: Profiling**](appendix-profiling.md), Performance debugging techniques
 
 ### ⚡ **Performance Optimization**
 Focus on chapters that explain speedup techniques:
-- [**Chapter 4: Quantization**](04-quantization.md#mlx-affine-quantization) — MLX factored dequantization (fewer arithmetic ops per block)
-- [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md) — Multi-row GEMV batching (2-4× speedup)
-- [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md) — Qwen3.5 optimization journey (15% speedup)
-- [**Appendix: Compile-Time**](appendix-compile-time.md) — Lookup tables (20-30× for FP8 dequant)
+- [**Chapter 4: Quantization**](04-quantization.md#mlx-affine-quantization), MLX factored dequantization (fewer arithmetic ops per block)
+- [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md), Multi-row GEMV batching (2-4× speedup)
+- [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md), Qwen3.5 optimization journey (15% speedup)
+- [**Appendix: Compile-Time**](appendix-compile-time.md), Lookup tables (20-30× for FP8 dequant)
 
 ### 🦀 **Zig-Specific Patterns (Rust/C Programmers)**
 Learn Zig idioms used throughout the codebase:
-- [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md) — @Vector, @reduce, @mulAdd, @splat
-- [**Chapter 10: Memory Safety**](10-memory-safety.md) — defer, errdefer, leak detection
-- [**Chapter 12: CPU Parallelism**](12-cpu-parallelism.md) — Futex-based thread pool, atomic operations
-- [**Appendix: Compile-Time**](appendix-compile-time.md) — comptime, @embedFile, inline else dispatch
-- [**Appendix: Atomic Operations**](appendix-atomics.md) — Memory ordering, lock-free patterns
+- [**Chapter 9: CPU SIMD**](09-cpu-simd-optimization.md), @Vector, @reduce, @mulAdd, @splat
+- [**Chapter 10: Memory Safety**](10-memory-safety.md), defer, errdefer, leak detection
+- [**Chapter 12: CPU Parallelism**](12-cpu-parallelism.md), Futex-based thread pool, atomic operations
+- [**Appendix: Compile-Time**](appendix-compile-time.md), comptime, @embedFile, inline else dispatch
+- [**Appendix: Atomic Operations**](appendix-atomics.md), Memory ordering, lock-free patterns
 
 ### 📐 **Architecture & Design Patterns**
 Understand how the codebase is structured:
-- [**Chapter 8: Backends**](08-backends.md) — Tagged union dispatch pattern
-- [**Chapter 14: Format Conventions**](14-format-conventions.md) — GGUF vs SafeTensors differences
-- [**Chapter 15: Chat Templates**](15-chat-templates.md) — Data-driven configuration
-- [**Chapter 16: Recipe System**](16-recipe-system.md) — Per-model/hardware defaults
+- [**Chapter 8: Backends**](08-backends.md), Tagged union dispatch pattern
+- [**Chapter 14: Format Conventions**](14-format-conventions.md), GGUF vs SafeTensors differences
+- [**Chapter 15: Chat Templates**](15-chat-templates.md), Data-driven configuration
+- [**Chapter 16: Recipe System**](16-recipe-system.md), Per-model/hardware defaults
 
 ### 🛠️ **Adding a New Model**
 Everything you need to add a new architecture to Agave:
-- [**Chapter 14: Format Conventions**](14-format-conventions.md) — Tensor naming, dimension order, format detection
-- [**Chapter 15: Chat Templates**](15-chat-templates.md) — Prompt formatting and EOG tokens
-- [**Chapter 16: Recipe System**](16-recipe-system.md) — Per-model defaults
-- [**Chapter 8: Backends**](08-backends.md) — Dispatcher pattern and kernel interface
-- [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md#megakernel-system-three-tier-architecture) — Tier 3 composed megakernels (auto-generated from ModelDesc)
+- [**Chapter 14: Format Conventions**](14-format-conventions.md), Tensor naming, dimension order, format detection
+- [**Chapter 15: Chat Templates**](15-chat-templates.md), Prompt formatting and EOG tokens
+- [**Chapter 16: Recipe System**](16-recipe-system.md), Per-model defaults
+- [**Chapter 8: Backends**](08-backends.md), Dispatcher pattern and kernel interface
+- [**Chapter 13: Batched Dispatch**](13-batched-dispatch-and-fusion.md#megakernel-system-three-tier-architecture), Tier 3 composed megakernels (auto-generated from ModelDesc)
 
 ## Reading Order
 
@@ -101,7 +101,7 @@ Everything you need to add a new architecture to Agave:
 | 5 | [Memory and Caching](05-memory-and-caching.md) | KV cache, PagedAttention, paged SDPA, RadixAttention | 20 min |
 | 6 | [State Space Models](06-state-space-models.md) | Linear-time alternatives to attention: DeltaNet and Mamba-2 | 20 min |
 | 7 | [Sampling](07-sampling.md) | Temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, grammar | 12 min |
-| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU — dispatchers and paged SDPA | 20 min |
+| 8 | [Backends](08-backends.md) | CPU, CUDA, Metal, Vulkan, ROCm, WebGPU, dispatchers and paged SDPA | 20 min |
 | 9 | [CPU SIMD Optimization](09-cpu-simd-optimization.md) | @Vector, @reduce, @mulAdd, multi-row batching, quantized GEMV | 19 min |
 | 10 | [Memory Safety](10-memory-safety.md) | defer, errdefer, guaranteed cleanup, leak detection | 11 min |
 | 11 | [Metal Backend Internals](11-metal-backend-internals.md) | UMA, buffer caching, command buffers, batch mode, threadgroup limits | 19 min |
@@ -141,39 +141,39 @@ Looking for one specific topic instead of a full reading path? Jump straight to 
 
 **Appendices:**
 - [Troubleshooting](appendix-troubleshooting.md): Symptom → cause → fix for common inference failures
-- [Mathematical Operations Reference](appendix-math.md) — Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)
-- [Compile-Time Optimization](appendix-compile-time.md) — comptime keyword, @embedFile, lookup tables, feature detection, type specialization
-- [Profiling and Debugging](appendix-profiling.md) — --profile flag, dispatch counters, missing kernel policy, regression detection
-- [Atomic Operations and Memory Ordering](appendix-atomics.md) — std.atomic.Value, memory ordering semantics, lock-free patterns
+- [Mathematical Operations Reference](appendix-math.md), Quick reference for all math operations (dot product, softmax, GEMV, convolution, etc.)
+- [Compile-Time Optimization](appendix-compile-time.md), comptime keyword, @embedFile, lookup tables, feature detection, type specialization
+- [Profiling and Debugging](appendix-profiling.md), --profile flag, dispatch counters, missing kernel policy, regression detection
+- [Atomic Operations and Memory Ordering](appendix-atomics.md), std.atomic.Value, memory ordering semantics, lock-free patterns
 
 ## Code References and Glossaries
 
-Each chapter references the Agave source files that implement the concepts discussed. The code follows the same layered structure as these tutorials — understanding the concepts makes the code straightforward to read.
+Each chapter references the Agave source files that implement the concepts discussed. The code follows the same layered structure as these tutorials, understanding the concepts makes the code straightforward to read.
 
 Every chapter ends with a **Glossary** section defining all new terms introduced in that chapter. Terms are explained inline on first use and collected at the end for quick reference.
 
 For product documentation (project structure, module reference, supported models), see:
 
-- [Architecture](../ARCHITECTURE.md) — project structure and module reference
-- [Models](../MODELS.md) — supported models and performance benchmarks
-- [Kernel Status](../KERNELS.md) — per-backend kernel implementation status
+- [Architecture](../ARCHITECTURE.md), project structure and module reference
+- [Models](../MODELS.md), supported models and performance benchmarks
+- [Kernel Status](../KERNELS.md), per-backend kernel implementation status
 
 ## Further Reading
 
 If these tutorials leave you wanting to go deeper, these are worth your time:
 
 **Foundations**
-- *The Little Book of Deep Learning* — François Fleuret. Dense, precise, free. Best mathematical treatment of transformers that fits in 200 pages.
-- *Understanding Deep Learning* — Simon Prince. Broader coverage, available free online. Good on the math behind training and loss landscapes.
+- *The Little Book of Deep Learning*, François Fleuret. Dense, precise, free. Best mathematical treatment of transformers that fits in 200 pages.
+- *Understanding Deep Learning*, Simon Prince. Broader coverage, available free online. Good on the math behind training and loss landscapes.
 
 **Architecture & Systems**
-- *Dive into Deep Learning* — d2l.ai. Extremely practical, chapter on attention is excellent. Every concept has working code.
-- *GPU Puzzles* — Sasha Rush. Interactive CUDA puzzles. If you want to understand why memory layout matters, work through these.
+- *Dive into Deep Learning*, d2l.ai. Extremely practical, chapter on attention is excellent. Every concept has working code.
+- *GPU Puzzles*, Sasha Rush. Interactive CUDA puzzles. If you want to understand why memory layout matters, work through these.
 
 **Inference & Deployment**
-- *LLM Inference Optimization* — NVIDIA TensorRT-LLM docs/blog posts. Dense but accurate on batching, KV cache management, and throughput vs. latency tradeoffs.
-- FlashAttention papers (Dao et al. 2022, 2023) — The original papers are readable and explain exactly why the tiled SDPA algorithm works. Chapter 5 of this tutorial is a summary.
+- *LLM Inference Optimization*, NVIDIA TensorRT-LLM docs/blog posts. Dense but accurate on batching, KV cache management, and throughput vs. latency tradeoffs.
+- FlashAttention papers (Dao et al. 2022, 2023), The original papers are readable and explain exactly why the tiled SDPA algorithm works. Chapter 5 of this tutorial is a summary.
 
 **Quantization**
-- *A White Paper on Neural Network Quantization* — Nagel et al. (Qualcomm). The most complete treatment of quantization theory: PTQ, QAT, GPTQ, and calibration.
-- GGUF/llama.cpp source — `ggml-quants.c` is the reference implementation for every quantization format this engine supports.
+- *A White Paper on Neural Network Quantization*, Nagel et al. (Qualcomm). The most complete treatment of quantization theory: PTQ, QAT, GPTQ, and calibration.
+- GGUF/llama.cpp source, `ggml-quants.c` is the reference implementation for every quantization format this engine supports.

@@ -26,9 +26,9 @@ fn milliTimestamp() i64 {
 const cursor_buf_size = 32;
 const simple_read_buf_size = 4096;
 /// ASCII control character boundaries for ANSI escape sequence parsing.
-const ascii_printable_start: u8 = 0x20; // Space — first printable character
-const ascii_intermediate_end: u8 = 0x40; // '@' — start of ANSI final byte range
-const ascii_escape: u8 = 0x1b; // ESC — start of ANSI escape sequences
+const ascii_printable_start: u8 = 0x20; // Space, first printable character
+const ascii_intermediate_end: u8 = 0x40; // '@', start of ANSI final byte range
+const ascii_escape: u8 = 0x1b; // ESC, start of ANSI escape sequences
 
 /// Interactive line editor with history and reverse-search (Ctrl-R).
 pub const LineEditor = struct {
@@ -207,7 +207,7 @@ pub const LineEditor = struct {
                             continue;
                         }
 
-                        // All other keys — delegate to TextInput (handles cursor movement,
+                        // All other keys, delegate to TextInput (handles cursor movement,
                         // word-wise ops, kill-line, backspace, delete, text insertion, etc.)
                         input.update(.{ .key_press = key }) catch {}; // best-effort: OOM drops this keystroke
                         self.refreshLine(prompt, prompt_w, &input);
@@ -479,11 +479,11 @@ test "searchBack finds match" {
     editor.addHistory("baz qux");
     editor.addHistory("foo baz");
 
-    // Search for "foo" — should find last match (index 2)
+    // Search for "foo", should find last match (index 2)
     const result = editor.searchBack("foo", null);
     try std.testing.expectEqual(@as(?usize, 2), result);
 
-    // Search for "qux" — should find index 1
+    // Search for "qux", should find index 1
     const result2 = editor.searchBack("qux", null);
     try std.testing.expectEqual(@as(?usize, 1), result2);
 }
@@ -496,11 +496,11 @@ test "searchBack reverse iteration" {
     editor.addHistory("beta");
     editor.addHistory("alpha again");
 
-    // Start from last, find "alpha" — should match index 2
+    // Start from last, find "alpha", should match index 2
     const first = editor.searchBack("alpha", null);
     try std.testing.expectEqual(@as(?usize, 2), first);
 
-    // Continue searching from before that match — should find index 0
+    // Continue searching from before that match, should find index 0
     const second = editor.searchBack("alpha", 1);
     try std.testing.expectEqual(@as(?usize, 0), second);
 }
@@ -537,9 +537,9 @@ test "displayWidth plain ascii" {
 }
 
 test "displayWidth strips ANSI escape sequences" {
-    // Bold "hi" — ESC[1m + hi + ESC[m should be 2 columns
+    // Bold "hi", ESC[1m + hi + ESC[m should be 2 columns
     try std.testing.expectEqual(@as(usize, 2), LineEditor.displayWidth("\x1b[1mhi\x1b[m"));
-    // Color sequence — ESC[31m + abc + ESC[0m should be 3 columns
+    // Color sequence, ESC[31m + abc + ESC[0m should be 3 columns
     try std.testing.expectEqual(@as(usize, 3), LineEditor.displayWidth("\x1b[31mabc\x1b[0m"));
 }
 
@@ -550,7 +550,7 @@ test "displayWidth skips control characters" {
 }
 
 test "displayWidth multibyte UTF-8" {
-    // "café" — e + combining acute = 4 visible columns
+    // "café", e + combining acute = 4 visible columns
     // Actually: c(1) + a(1) + f(1) + e(1) + combining(0) = 4
     try std.testing.expectEqual(@as(usize, 4), LineEditor.displayWidth("caf\xc3\xa9"));
 }

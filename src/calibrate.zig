@@ -1,4 +1,4 @@
-//! TriAttention calibration — generates per-head, per-frequency-band Q statistics
+//! TriAttention calibration, generates per-head, per-frequency-band Q statistics
 //! for the trigonometric KV eviction policy.
 //!
 //! Usage: agave calibrate <model.gguf> [--tokens N] [--output path.cal]
@@ -445,7 +445,7 @@ fn fillRandomGaussian(prng: *std.Random.Xoshiro256, buf: []f32) void {
     }
 }
 
-/// Result from calibration — flat arrays ready for writing.
+/// Result from calibration, flat arrays ready for writing.
 const CalibrationResult = struct {
     n_layers: u32,
     n_q_heads: u32,
@@ -479,10 +479,10 @@ const CalibrationResult = struct {
 ///   head_dim:   u32
 ///   n_bands:    u32 (= head_dim / 2)
 ///   rope_theta: f32
-///   data:       [n_layers * n_q_heads * n_bands] f32 — q_center_norm
-///               [n_layers * n_q_heads * n_bands] f32 — q_center_phase
-///               [n_layers * n_q_heads * n_bands] f32 — q_expected_norm
-///               [n_layers * n_q_heads * n_bands] f32 — concentration
+///   data:       [n_layers * n_q_heads * n_bands] f32, q_center_norm
+///               [n_layers * n_q_heads * n_bands] f32, q_center_phase
+///               [n_layers * n_q_heads * n_bands] f32, q_expected_norm
+///               [n_layers * n_q_heads * n_bands] f32, concentration
 fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
     const io = mod_io;
     const file = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
@@ -689,7 +689,7 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
         n_layers, n_embd, n_q_heads, head_dim, rope_theta,
     });
 
-    // Initialize backend (CPU only — calibration doesn't need GPU)
+    // Initialize backend (CPU only, calibration doesn't need GPU)
     var bs = BackendState{};
     bs.init(allocator, .cpu, io, 0);
     defer if (bs.pool) |*p| p.deinit();

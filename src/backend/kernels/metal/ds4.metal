@@ -1,4 +1,4 @@
-// DeepSeek V4 Flash — GPU-only kernels for hyper-connection mixing,
+// DeepSeek V4 Flash, GPU-only kernels for hyper-connection mixing,
 // table-based RoPE, weighted expert accumulation, and turbo SDPA hd=512.
 // Eliminates all CPU reads of Metal-written activation buffers between layers,
 // fixing L2 cache coherency issues with newBufferWithBytesNoCopy shared-memory wraps.
@@ -60,7 +60,7 @@ kernel void ds4_hc_weights(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float rms_inv = rsqrt(shared_rms[0] / float(flat_size) + rms_eps);
 
-    // Step 2: GEMV — mixes[r] = dot(hc_fn[r,:], hc_state) * rms_inv
+    // Step 2: GEMV, mixes[r] = dot(hc_fn[r,:], hc_state) * rms_inv
     // 24 output rows, each dot product over flat_size elements.
     // Each thread handles a subset of output rows.
     threadgroup float mixes[ds4_hc_mix_dim];
@@ -152,11 +152,11 @@ kernel void ds4_hc_pre_mix(
 // new_hc[dst * n_embd + i] = post_w[dst] * hidden[i]
 //                           + Σ_src comb[dst + src * n_hc] * hc_state[src * n_embd + i]
 kernel void ds4_hc_post(
-    device const float* hidden   [[buffer(0)]],  // [n_embd] — sublayer output
-    device const float* hc_state [[buffer(1)]],  // [n_hc * n_embd] — current state
+    device const float* hidden   [[buffer(0)]],  // [n_embd], sublayer output
+    device const float* hc_state [[buffer(1)]],  // [n_hc * n_embd], current state
     device const float* post_w   [[buffer(2)]],  // [n_hc]
     device const float* comb     [[buffer(3)]],  // [n_hc * n_hc], col-major: comb[dst + src*n_hc]
-    device float* new_hc         [[buffer(4)]],  // [n_hc * n_embd] — output
+    device float* new_hc         [[buffer(4)]],  // [n_hc * n_embd], output
     constant uint& n_embd        [[buffer(5)]],
     uint tid [[thread_position_in_grid]])
 {
@@ -207,7 +207,7 @@ kernel void ds4_hc_head_weights(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     float rms_inv = rsqrt(shared_rms[0] / float(flat_size) + rms_eps);
 
-    // Step 2: GEMV — pre_w[r] = dot(hc_fn[r,:], hc_state) * rms_inv
+    // Step 2: GEMV, pre_w[r] = dot(hc_fn[r,:], hc_state) * rms_inv
     // Only 4 output rows (not 24).
     threadgroup float mixes[4];
     for (uint r = tid; r < ds4_n_hc; r += tg_sz) {

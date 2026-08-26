@@ -1,4 +1,4 @@
-//! Nemotron Nano 30B-A3B — NVFP4-quantized hybrid Mamba-2 + MoE + Attention decoder.
+//! Nemotron Nano 30B-A3B, NVFP4-quantized hybrid Mamba-2 + MoE + Attention decoder.
 //!
 //! Loads from SafeTensors format with `backbone.layers.*` tensor naming.
 //! Architecture: 52 layers following `hybrid_override_pattern` from config.json:
@@ -296,7 +296,7 @@ pub const NemotronNanoModel = struct {
             const block_size = paged_block_size;
             self.paged_cache = try PagedKvCache.init(allocator, nl, kvd, num_blocks, block_size);
             errdefer self.paged_cache.deinit();
-            // BlockAllocator stores a pointer — must point to self.paged_cache (not a local copy).
+            // BlockAllocator stores a pointer, must point to self.paged_cache (not a local copy).
             self.block_allocator = BlockAllocator.init(&self.paged_cache, allocator);
             self.seq_table = try self.block_allocator.allocateSeqTable(nl);
             errdefer self.block_allocator.freeSeqTable(&self.seq_table);
@@ -429,7 +429,7 @@ pub const NemotronNanoModel = struct {
         };
         inline for (bufs) |buf| self.allocator.free(buf.*);
 
-        // Prefill buffers (page_allocator — must match init allocation).
+        // Prefill buffers (page_allocator, must match init allocation).
         {
             const pa = std.heap.page_allocator;
             const pf_bufs = .{
@@ -451,9 +451,9 @@ pub const NemotronNanoModel = struct {
     /// Run one decode step. Returns the argmax next-token ID.
     ///
     /// Error conditions:
-    /// - `error.KVCacheFull`   — sequence length has reached `max_seq_len`.
-    /// - `error.MissingTensor` — a required weight tensor was not found in the model file.
-    /// - `error.Cancelled`     — the inference was cancelled via the `cancelled` flag.
+    /// - `error.KVCacheFull`  , sequence length has reached `max_seq_len`.
+    /// - `error.MissingTensor`, a required weight tensor was not found in the model file.
+    /// - `error.Cancelled`    , the inference was cancelled via the `cancelled` flag.
     pub fn forward(self: *NemotronNanoModel, token_id: u32) !u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
@@ -749,7 +749,7 @@ pub const NemotronNanoModel = struct {
         self.be.sync();
 
         const bias_t = self.stLayerTensor(li, "mixer.gate.e_score_correction_bias") orelse return error.MissingTensor;
-        // Bias is F32 (not BF16 like other tensors) — read directly
+        // Bias is F32 (not BF16 like other tensors), read directly
         const bias_ptr: [*]const f32 = @ptrCast(@alignCast(bias_t.data_ptr));
 
         // Apply sigmoid to all router logits and save raw scores for weighting.
@@ -861,7 +861,7 @@ pub const NemotronNanoModel = struct {
         try self.doGemv(self.hidden2.ptr, vw, self.v_buf.ptr, nkv * hd, e, li, "mixer.v_proj");
         self.be.endBatch();
 
-        // 3. RoPE — Q and K write to independent buffers, batch without barriers
+        // 3. RoPE, Q and K write to independent buffers, batch without barriers
         self.be.beginBatch();
         self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, self.rope_dim, self.rope_theta);
         self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, self.rope_dim, self.rope_theta);
@@ -921,7 +921,7 @@ pub const NemotronNanoModel = struct {
     /// to per-token GEMV via doGemv.
     fn doGemm(self: *NemotronNanoModel, x: [*]const f32, t: TensorInfo, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize, li: u32, comptime prefix: []const u8) !void {
         if (t.dtype == .mlx_q or self.findScaleTensor(li, prefix) != null) {
-            // No batched MLX/NVFP4 kernel — fall back to per-token GEMV
+            // No batched MLX/NVFP4 kernel, fall back to per-token GEMV
             // which handles MLX dequant, NVFP4 dequant, and global scaling.
             for (0..n_tok) |tok| {
                 try self.doGemv(x + tok * n_in, t, y + tok * n_out, n_out, n_in, li, prefix);
@@ -985,7 +985,7 @@ pub const NemotronNanoModel = struct {
                     try self.prefillAttention(l, n_tok);
                 },
                 .ssm => {
-                    // SSM recurrence is inherently sequential — fall back to per-token.
+                    // SSM recurrence is inherently sequential, fall back to per-token.
                     self.be.sync();
                     for (0..n_tok) |t| {
                         @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
@@ -1001,7 +1001,7 @@ pub const NemotronNanoModel = struct {
                     }
                 },
                 .moe => {
-                    // MoE routing is per-token — fall back to per-token.
+                    // MoE routing is per-token, fall back to per-token.
                     self.be.sync();
                     for (0..n_tok) |t| {
                         @memcpy(self.hidden, self.pf_hidden[t * e ..][0..e]);
@@ -1018,7 +1018,7 @@ pub const NemotronNanoModel = struct {
 
     /// Batched attention for one layer: norm → QKV GEMM → partial RoPE →
     /// sdpaPrefill → output GEMM → residual add.
-    /// NOTE: Does NOT run per-token MoE FFN — caller handles that after sync.
+    /// NOTE: Does NOT run per-token MoE FFN, caller handles that after sync.
     fn prefillAttention(self: *NemotronNanoModel, li: u32, n_tok: usize) !void {
         const e: usize = self.n_embd;
         const nh: usize = self.n_head;
@@ -1074,7 +1074,7 @@ pub const NemotronNanoModel = struct {
         // Cache miss: allocate, convert, store permanently.
         // Never reuse bf16_buf_small: GPU backends cache buffer bindings by pointer.
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         bf16ToF32Buf(t.data_ptr, buf);
         self.norm_cache[self.norm_cache_len] = .{ .key = key, .data = buf };

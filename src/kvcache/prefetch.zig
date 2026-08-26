@@ -149,20 +149,20 @@ pub const Prefetcher = struct {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "PrefetchJob — struct layout" {
+test "PrefetchJob, struct layout" {
     const job = PrefetchJob{ .block_id = 42 };
     try std.testing.expectEqual(@as(u32, 42), job.block_id);
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(PrefetchJob));
 }
 
-test "Prefetcher — constants" {
+test "Prefetcher, constants" {
     try std.testing.expectEqual(@as(usize, 2), Prefetcher.prefetch_count);
     try std.testing.expectEqual(@as(usize, 32), Prefetcher.max_queue_size);
     // Prefetch count should be less than max queue size.
     try std.testing.expect(Prefetcher.prefetch_count < Prefetcher.max_queue_size);
 }
 
-test "Prefetcher — initial state" {
+test "Prefetcher, initial state" {
     const allocator = std.testing.allocator;
     var cache = try TieredKvCache.init(allocator, 1, 2, 1, 1, 0, 16, null);
     defer cache.deinit();
@@ -176,20 +176,20 @@ test "Prefetcher — initial state" {
     try std.testing.expect(pref.cache == &cache);
 }
 
-test "Prefetcher — ring buffer size matches max_queue_size" {
+test "Prefetcher, ring buffer size matches max_queue_size" {
     // Verify the ring buffer is sized to hold max_queue_size jobs.
     const ring_field_size = @sizeOf([Prefetcher.max_queue_size]PrefetchJob);
     try std.testing.expectEqual(Prefetcher.max_queue_size * @sizeOf(PrefetchJob), ring_field_size);
 }
 
-test "Prefetcher — struct size is reasonable" {
+test "Prefetcher, struct size is reasonable" {
     // Prefetcher contains a ring buffer of 32 jobs + sync primitives.
     // Should be in the hundreds of bytes, not kilobytes.
     try std.testing.expect(@sizeOf(Prefetcher) > 0);
     try std.testing.expect(@sizeOf(Prefetcher) < 4096);
 }
 
-test "Prefetcher — default field values" {
+test "Prefetcher, default field values" {
     // Construct via init and assert defaults on a live instance (not tautological 0==0).
     const allocator = std.testing.allocator;
     var cache = try TieredKvCache.init(allocator, 1, 2, 1, 1, 0, 16, null);
@@ -216,18 +216,18 @@ test "Prefetcher — default field values" {
 test "fuzz: all prefetch functions" {
     // All pub functions (init, start, deinit, prefetchNext) require a live
     // TieredKvCache + Io context with futex/thread support. Cannot safely
-    // call them with random inputs — use comptime verification instead.
+    // call them with random inputs, use comptime verification instead.
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
             _ = smith;
             comptime {
-                // Prefetcher.init — requires *TieredKvCache, returns Prefetcher
+                // Prefetcher.init, requires *TieredKvCache, returns Prefetcher
                 _ = &Prefetcher.init;
-                // Prefetcher.start — requires *Prefetcher + Io, spawns thread
+                // Prefetcher.start, requires *Prefetcher + Io, spawns thread
                 _ = &Prefetcher.start;
-                // Prefetcher.deinit — requires *Prefetcher, joins thread
+                // Prefetcher.deinit, requires *Prefetcher, joins thread
                 _ = &Prefetcher.deinit;
-                // Prefetcher.prefetchNext — requires *Prefetcher + block_ids + idx
+                // Prefetcher.prefetchNext, requires *Prefetcher + block_ids + idx
                 _ = &Prefetcher.prefetchNext;
             }
         }

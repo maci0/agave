@@ -61,7 +61,7 @@ python3 tools/dir-steering/build_direction.py \
 
 ---
 
-## 2. Quality Testing (NLL Scoring) — library + tooling
+## 2. Quality Testing (NLL Scoring): library + tooling
 
 **Token-by-token NLL** (negative log-likelihood) measures how much probability a local model assigns to each ground-truth token from a reference model. Lower NLL = the local model more closely matches the reference.
 
@@ -94,7 +94,7 @@ The metric also reports **argmax accuracy**: the fraction of positions where the
 
 ---
 
-## 3. Expert Hotlist Profiling — CLI
+## 3. Expert Hotlist Profiling: CLI
 
 For MoE models, **expert profiling** tracks which routed experts are activated during inference. The resulting frequency data tells you:
 
@@ -118,7 +118,7 @@ The profile records per-layer, per-expert activation counts. `topExperts()` extr
 
 ---
 
-## 4. KV Cache Disk Checkpointing — header only
+## 4. KV Cache Disk Checkpointing: header only
 
 **KV checkpointing** is intended to serialize KV cache state to disk so long system prompts need not be re-prefilled after a restart.
 
@@ -141,7 +141,7 @@ The `payload_abi` field is separate from the file version: the outer envelope st
 
 ---
 
-## 5. Mixed-Quant Expert Splicing — tooling
+## 5. Mixed-Quant Expert Splicing: tooling
 
 **Mixed-quant splicing** creates a GGUF where most routed experts use an aggressive quantization (e.g. IQ2_XXS) but selected layers' experts are replaced with a higher-quality quantization (e.g. Q4_K) from a donor file.
 
@@ -160,7 +160,7 @@ The result is nearly as small as the aggressive quant but with higher quality in
 
 ---
 
-## 6. SSD Expert Streaming — CLI
+## 6. SSD Expert Streaming: CLI
 
 **SSD streaming** keeps a cache of hot MoE experts resident and streams cold experts from the mmap'd model file on demand.
 
@@ -192,7 +192,7 @@ The expert cache is initialized automatically for MoE models when `--ssd-streami
 
 ---
 
-## 7. Power Throttling — CLI
+## 7. Power Throttling: CLI
 
 **Power throttling** reduces GPU utilization to control heat and fan noise without changing outputs. At `--power P`, agave inserts a sleep between decode calls such that the GPU is active P% of the token period and idle (100-P)% of it.
 
@@ -204,13 +204,13 @@ agave model.gguf --power 60 "Your long generation here"
 agave model.gguf --power 30 --max-tokens 2000 "Prompt"
 ```
 
-The sleep duration is adaptive: it measures each forward pass and applies `idle_ns = forward_ns × (100 - P) / P`. The first token is never throttled (no measurement yet). Outputs are identical to unthrottled — only the wall-clock rate changes.
+The sleep duration is adaptive: it measures each forward pass and applies `idle_ns = forward_ns × (100 - P) / P`. The first token is never throttled (no measurement yet). Outputs are identical to unthrottled, only the wall-clock rate changes.
 
 **Implementation:** `generateAndPrintInner` in [`src/main.zig`](../../src/main.zig) (per-token sleep based on measured forward time).
 
 ---
 
-## 8. Frontier Benchmarking — CLI
+## 8. Frontier Benchmarking: CLI
 
 **Frontier benchmarking** (from [ds4](https://github.com/antirez/ds4)) measures prefill and generation throughput at multiple context lengths by snapshotting KV state at each frontier and running a short greedy probe before continuing. This gives a realistic picture of how throughput changes with context length.
 
@@ -239,7 +239,7 @@ Each frontier prefills incrementally from where the last one stopped. KV state i
 
 ---
 
-## 9. Distributed Prefix Hash — library
+## 9. Distributed Prefix Hash: library
 
 **Rolling prefix hash** (from [ds4](https://github.com/antirez/ds4)) detects transcript divergence in pipeline-parallel inference. When the coordinator restarts at position 0 while a worker is at position N, the hashes immediately diverge, allowing the coordinator to trigger a transcript replay instead of silently producing corrupt activations.
 
@@ -258,7 +258,7 @@ if (!transport.verifyTokenHash(received_hash)) {
 transport.resetTokenHash();
 ```
 
-The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is an O(1) update per token. The wire protocol does not yet carry the hash field automatically — integration with `sendBuf`/`recvBuf` is planned once the side-channel format is finalized.
+The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is an O(1) update per token. The wire protocol does not yet carry the hash field automatically, integration with `sendBuf`/`recvBuf` is planned once the side-channel format is finalized.
 
 **Implementation:** `Transport.advanceTokenHash`, `verifyTokenHash`, `resetTokenHash` in [`src/parallel/transport.zig`](../../src/parallel/transport.zig).
 
@@ -282,20 +282,20 @@ The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is
 
 ## Glossary
 
-**argmax accuracy** — The fraction of positions where the local model's greedy prediction matches the reference model's ground-truth token.
+**argmax accuracy**, The fraction of positions where the local model's greedy prediction matches the reference model's ground-truth token.
 
-**directional steering** — Runtime activation editing that projects a learned direction vector out of (or into) layer activations to control model behavior without fine-tuning.
+**directional steering**, Runtime activation editing that projects a learned direction vector out of (or into) layer activations to control model behavior without fine-tuning.
 
-**expert cache** — A fixed-size LRU cache of MoE routed-expert weight slabs, enabling SSD streaming for models that don't fit in RAM.
+**expert cache**, A fixed-size LRU cache of MoE routed-expert weight slabs, enabling SSD streaming for models that don't fit in RAM.
 
-**expert hotlist** — The set of most-frequently-routed experts per layer, identified by profiling and optionally pinned in the expert cache to guarantee fast-path access.
+**expert hotlist**, The set of most-frequently-routed experts per layer, identified by profiling and optionally pinned in the expert cache to guarantee fast-path access.
 
-**KV checkpoint** — A versioned binary envelope for serialized KV cache state; header encode/validate ships today, full save/load is not wired yet.
+**KV checkpoint**, A versioned binary envelope for serialized KV cache state; header encode/validate ships today, full save/load is not wired yet.
 
-**mixed-quant splicing** — Creating a GGUF where selected layers' routed experts use a higher quantization from a donor file while other layers keep the base file's aggressive quantization.
+**mixed-quant splicing**, Creating a GGUF where selected layers' routed experts use a higher quantization from a donor file while other layers keep the base file's aggressive quantization.
 
-**NLL (negative log-likelihood)** — The mean negative log probability assigned by a model to ground-truth continuation tokens; lower = better quality match.
+**NLL (negative log-likelihood)**, The mean negative log probability assigned by a model to ground-truth continuation tokens; lower = better quality match.
 
-**SSD streaming** — Demand-paged expert weight loading where cold experts are faulted in from a memory-mapped model file via `madvise(WILLNEED)`, backed by SSD.
+**SSD streaming**, Demand-paged expert weight loading where cold experts are faulted in from a memory-mapped model file via `madvise(WILLNEED)`, backed by SSD.
 
-**steering scale** — The coefficient controlling how strongly a directional steering vector is projected out of (positive) or into (negative) the activation.
+**steering scale**, The coefficient controlling how strongly a directional steering vector is projected out of (positive) or into (negative) the activation.

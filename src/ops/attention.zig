@@ -15,7 +15,7 @@ const simd_width: usize = 8;
 
 /// Sparse V threshold: skip V dequantization for positions where softmax weight
 /// is below this value. At 1e-6, skipped positions contribute < 0.0001% to
-/// the output — zero measured PPL impact across tested models.
+/// the output, zero measured PPL impact across tested models.
 const sparse_v_threshold: f32 = 1e-6;
 
 /// CPU-only softmax for the windowed attention fallback path.
@@ -82,7 +82,7 @@ pub fn scaledDotProductAttention(
         return;
     }
 
-    // Windowed / offset fallback — explicit KV append + CPU-side SDPA loop.
+    // Windowed / offset fallback, explicit KV append + CPU-side SDPA loop.
     // Sync first to flush any pending GPU ops (no-op on CPU backend).
     be.sync();
 
@@ -99,7 +99,7 @@ pub fn scaledDotProductAttention(
     std.debug.assert(win_start + win_len <= sl);
     const hpg = nh / nkv;
 
-    // f32 fast path for windowed attention — use existing SIMD code
+    // f32 fast path for windowed attention, use existing SIMD code
     if (kv_type_k == .f32 and kv_type_v == .f32) {
         const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
         const f32_values: [*]const f32 = @ptrCast(@alignCast(kv_values.ptr));
@@ -149,7 +149,7 @@ pub fn scaledDotProductAttention(
         return;
     }
 
-    // Quantized windowed fallback — use kvDot (kv_type_k) / kvMulAccum (kv_type_v)
+    // Quantized windowed fallback, use kvDot (kv_type_k) / kvMulAccum (kv_type_v)
     @memset(attn_out[0..qkv_dim], 0);
 
     for (0..nh) |h| {
@@ -206,7 +206,7 @@ pub const TieredSdpaInfo = struct {
 /// `scaledDotProductAttention()` and all its existing call sites.
 ///
 /// Parameters: Subset of scaledDotProductAttention (no scores, window, or
-/// score_offset — these are handled internally by split-attention), plus tiered_info.
+/// score_offset, these are handled internally by split-attention), plus tiered_info.
 pub fn scaledDotProductAttentionTiered(
     q: [*]const f32,
     kv_keys: []u8,
@@ -263,7 +263,7 @@ const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
 ///   - nh, nkv, hd: Head configuration.
 ///   - seq_len: Current sequence position (before appending).
 ///   - scale: Attention scale factor.
-///   - be: Backend — reserved for future GPU paged attention, currently unused.
+///   - be: Backend, reserved for future GPU paged attention, currently unused.
 ///   - block_size: Positions per cache block.
 pub fn pagedAttention(
     q: [*]const f32,
@@ -315,7 +315,7 @@ pub fn pagedAttention(
         const kvh = h / hpg;
         const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
 
-        // QK dot products — look up K from block table
+        // QK dot products, look up K from block table
         for (0..sl) |t| {
             const lb = if (blk_mask != 0) t >> blk_shift else t / block_size;
             const bo = if (blk_mask != 0) t & blk_mask else t % block_size;
@@ -338,7 +338,7 @@ pub fn pagedAttention(
 
         cpuSoftmax(scores, sl);
 
-        // Value accumulation from block table — t-outer loop to compute
+        // Value accumulation from block table, t-outer loop to compute
         // block lookups (div/mod) once per position instead of per dimension.
         {
             for (0..sl) |t| {
@@ -451,7 +451,7 @@ test "sdpa multi-token with GQA" {
     // Head 0: output = w0*v0 + w1*v1
     try std.testing.expectApproxEqAbs(w0, attn_out[0], 1e-4);
     try std.testing.expectApproxEqAbs(w1, attn_out[1], 1e-4);
-    // Head 1 shares same KV (GQA) — should produce same result
+    // Head 1 shares same KV (GQA), should produce same result
     try std.testing.expectApproxEqAbs(w0, attn_out[4], 1e-4);
     try std.testing.expectApproxEqAbs(w1, attn_out[5], 1e-4);
 }
@@ -464,7 +464,7 @@ test "paged attention single head single token" {
     var paged = try manager.PagedKvCache.init(allocator, 1, 4, 2, 16);
     defer paged.deinit();
 
-    // Allocate one block (must succeed — we configured 1 layer × block capacity)
+    // Allocate one block (must succeed, we configured 1 layer × block capacity)
     const blk_id = paged.allocBlock() orelse return error.TestUnexpectedResult;
     var block_table = [_]u32{blk_id};
 
@@ -726,7 +726,7 @@ test "sdpa windowed attention excludes tokens outside window" {
 ///   - n_cached: Number of prompt tokens in KV cache.
 ///   - cl: Canvas length (number of canvas tokens to attend to).
 ///   - scale: Attention scale (1/sqrt(hd)).
-///   - be: Backend — reserved, currently uses CPU softmax directly.
+///   - be: Backend, reserved, currently uses CPU softmax directly.
 ///   - kv_type_k, kv_type_v: KV cache quantization types.
 pub fn scaledDotProductAttentionCanvas(
     q: [*]const f32,

@@ -1,4 +1,4 @@
-//! True megakernel: Gemma 3/4 Q8_0 — single dispatch for all layers (CUDA).
+//! True megakernel: Gemma 3/4 Q8_0, single dispatch for all layers (CUDA).
 //!
 //! Same structure as mega_gemma_q4k.zig but with Q8_0 dequantization.
 //! Gemma uses GELU activation and uniform layer structure.

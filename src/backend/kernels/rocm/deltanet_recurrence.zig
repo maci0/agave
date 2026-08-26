@@ -1,5 +1,5 @@
 //! DeltaNet SSM recurrence kernel for ROCm.
-//! One workgroup per v-head (single-threaded — recurrence is sequential).
+//! One workgroup per v-head (single-threaded, recurrence is sequential).
 
 const cu = @import("common.zig");
 const math = @import("std").math;

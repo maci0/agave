@@ -309,7 +309,7 @@ fn parseBackendName(name: []const u8) ?BackendChoice {
 
 fn printUsage() void {
     const usage =
-        \\agave-bench — per-kernel and end-to-end micro-benchmark
+        \\agave-bench, per-kernel and end-to-end micro-benchmark
         \\
         \\USAGE:
         \\  agave-bench <kernel> [OPTIONS]
@@ -429,7 +429,7 @@ const BenchCtx = struct {
 
 // ── Kernel runner functions ──────────────────────────────────────
 
-/// Reference Q4_K row dot on host — structure mirrors the validated TileLang
+/// Reference Q4_K row dot on host, structure mirrors the validated TileLang
 /// reference implementation (research/kernels/tilelang), checked bit-exact
 /// against `gguf.dequantize` on real checkpoint tensors.
 fn dequantQ4KRowDotHost(row: []const u8, x: []const f32, out_y: *f32) void {

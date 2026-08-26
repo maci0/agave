@@ -55,7 +55,7 @@ export fn sdpa_kernel(
     const end = @min(start + chunk, sl);
 
     // Phase 2a: Warp-parallel max reduction
-    // warpReduceMax returns final result only in lane 0 — broadcast via shared memory.
+    // warpReduceMax returns final result only in lane 0, broadcast via shared memory.
     var local_max: f32 = cu.neg_f32_max;
     var i = start;
     while (i < end) : (i += 1) {
@@ -67,7 +67,7 @@ export fn sdpa_kernel(
     max_val = cu.sharedLoad(sl);
 
     // Phase 2b: Warp-parallel exp and sum
-    // warpReduceAdd returns final result only in lane 0 — broadcast via shared memory.
+    // warpReduceAdd returns final result only in lane 0, broadcast via shared memory.
     var local_sum: f32 = 0.0;
     i = start;
     while (i < end) : (i += 1) {

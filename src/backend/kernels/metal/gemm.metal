@@ -1,10 +1,10 @@
-// GEMM — Matrix-Matrix Multiply with dequantization for batched prefill
+// GEMM, Matrix-Matrix Multiply with dequantization for batched prefill
 //
 // Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T
 //
 // Dispatch: one threadgroup per output row (dispatchThreadgroups(n_out,1,1)),
 // 256 threads per threadgroup. Each threadgroup computes one output row
-// for ALL n_tok tokens — weight row loaded once, reused across tokens.
+// for ALL n_tok tokens, weight row loaded once, reused across tokens.
 // This gives n_tok× bandwidth savings vs loop-of-GEMV.
 
 // ── F32 GEMM ─────────────────────────────────────────────────

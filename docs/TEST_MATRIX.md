@@ -1,4 +1,4 @@
-# Agave Test Matrix — Model × Backend × Quant
+# Agave Test Matrix: Model × Backend × Quant
 
 **Date**: 2026-05-19 (last full re-run). **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for DeepSeek V4, Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested). Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
 
@@ -14,21 +14,21 @@
 
 | # | Model | Quant | Size | Metal | CPU | CUDA (CPU fb) | Notes |
 |---|-------|-------|------|:-----:|:---:|:----:|-------|
-| 1 | Gemma 4 26B-A4B | Q4_K_M | 15.6 GB | PASS "4" | PASS "4" | — | MoE, 30 layers |
-| 2 | Gemma 4 E2B | Q4_K_S | 2.8 GB | PASS | PASS | — | Dense, 35 layers |
-| 3 | Gemma 4 E4B | Q4_K_S | 4.5 GB | PASS "4" | PASS (slow) | — | Dense, 42 layers, ~60s CPU prefill |
-| 4 | Gemma 3 27B QAT | Q4_0 | 14.5 GB | PASS "Four." | PASS "Four." | — | |
+| 1 | Gemma 4 26B-A4B | Q4_K_M | 15.6 GB | PASS "4" | PASS "4" | n/a | MoE, 30 layers |
+| 2 | Gemma 4 E2B | Q4_K_S | 2.8 GB | PASS | PASS | n/a | Dense, 35 layers |
+| 3 | Gemma 4 E4B | Q4_K_S | 4.5 GB | PASS "4" | PASS (slow) | n/a | Dense, 42 layers, ~60s CPU prefill |
+| 4 | Gemma 3 27B QAT | Q4_0 | 14.5 GB | PASS "Four." | PASS "Four." | n/a | |
 | 5 | Qwen 3.5 0.8B | Q8_0 | 774 MB | PASS "Four" | PASS "Four" | PASS "4" (71 tok/s) | |
-| 6 | Qwen 3.5 9B | Q4_K_M | 5.2 GB | PASS "Four" | PASS "Four" | — | |
-| 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | — | |
-| 7b | Qwen 3.8 27B | MLX-4bit ST | 15.0 GB | PASS "Hi" | PASS "Hi" | — | Dense hybrid. Greedy "Say hi in one word." EOS after Hi. WebGPU PASS "Hi" (vocab GEMV chunked at 65535; DeltaNet cache must not bump generation on SSM download). Vulkan: no ICD here (CPU fallback PASS). BF16/GGUF not on disk. Skip extra RMSNorm +1 on MLX-sanitized ST. |
-| 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | — | GGUF issue — also fails in llama.cpp |
-| 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | — | Prompt-sensitive; answers correctly with clear prompts |
-| 10 | DeepSeek V4 | MLX-Q4 ST | 141 GB | PASS greedy France / 2+2 / sky (CpuBackend) | PASS (same) | PASS 2+2 on GB10 (official FP4/FP8 checkpoint, sm_121) | WebGPU PASS France + 2+2 (native MLX-Q / MXFP4 GEMV). Vulkan (KosmicKrisp) PASS France + 2+2 (same shaders). CUDA: native MLX/MXFP4 GEMV on GB10 (sync copy-back per call) + bf16 attention on GPU; q8_0 SDPA stays CPU. Flash 0731 `--kv-type nvfp4_ds_mla`. TP=2 expert-parallel over NCCL/RoCE (2× DGX Spark) verified end-to-end: `--tp 2 --peers <ip> --transport nccl` — coherent output, identical logits across ranks, 2+2 → "4". Official `deepseek-ai/DeepSeek-V4-Flash-0731` (FP4 experts gs=32 E8M0, F8_E4M3 attention) loads via the loader fusion in `format/safetensors.zig`. Metal/ROCm still use dedicated CpuBackend for GEMV. |
-| 11 | Llama 4 | — | — | Not tested | Not tested | — | iRoPE, chunked attention, MoE |
-| 12 | DiffusionGemma | — | — | Not tested | Not tested | — | Block diffusion |
-| 13 | GPT-OSS Harmony | — | — | Not tested | Not tested | — | |
-| 14 | Nemotron-H | — | — | Not tested | Not tested | — | |
+| 6 | Qwen 3.5 9B | Q4_K_M | 5.2 GB | PASS "Four" | PASS "Four" | n/a | |
+| 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | n/a | |
+| 7b | Qwen 3.8 27B | MLX-4bit ST | 15.0 GB | PASS "Hi" | PASS "Hi" | n/a | Dense hybrid. Greedy "Say hi in one word." EOS after Hi. WebGPU PASS "Hi" (vocab GEMV chunked at 65535; DeltaNet cache must not bump generation on SSM download). Vulkan: no ICD here (CPU fallback PASS). BF16/GGUF not on disk. Skip extra RMSNorm +1 on MLX-sanitized ST. |
+| 8 | GLM-4.7 Flash | Q8_0 | 30 GB | FAIL | FAIL | n/a | GGUF issue, also fails in llama.cpp |
+| 9 | Nemotron-Nano 4B | Q8_0 | 3.9 GB | PASS | PASS | n/a | Prompt-sensitive; answers correctly with clear prompts |
+| 10 | DeepSeek V4 | MLX-Q4 ST | 141 GB | PASS greedy France / 2+2 / sky (CpuBackend) | PASS (same) | PASS 2+2 on GB10 (official FP4/FP8 checkpoint, sm_121) | WebGPU PASS France + 2+2 (native MLX-Q / MXFP4 GEMV). Vulkan (KosmicKrisp) PASS France + 2+2 (same shaders). CUDA: native MLX/MXFP4 GEMV on GB10 (sync copy-back per call) + bf16 attention on GPU; q8_0 SDPA stays CPU. Flash 0731 `--kv-type nvfp4_ds_mla`. TP=2 expert-parallel over NCCL/RoCE (2× DGX Spark) verified end-to-end: `--tp 2 --peers <ip> --transport nccl`, coherent output, identical logits across ranks, 2+2 → "4". Official `deepseek-ai/DeepSeek-V4-Flash-0731` (FP4 experts gs=32 E8M0, F8_E4M3 attention) loads via the loader fusion in `format/safetensors.zig`. Metal/ROCm still use dedicated CpuBackend for GEMV. |
+| 11 | Llama 4 | n/a | n/a | Not tested | Not tested | n/a | iRoPE, chunked attention, MoE |
+| 12 | DiffusionGemma | n/a | n/a | Not tested | Not tested | n/a | Block diffusion |
+| 13 | GPT-OSS Harmony | n/a | n/a | Not tested | Not tested | n/a | |
+| 14 | Nemotron-H | n/a | n/a | Not tested | Not tested | n/a | |
 
 **Result: 8/14 architectures pass on Metal+CPU. 1 failure (GLM-4) also broken in llama.cpp. 5 architectures not yet tested.**
 
@@ -84,7 +84,7 @@
 | Feature | Status | Notes |
 |---------|:------:|-------|
 | Q8_0 native GPU | PASS | 95.2 tok/s (0.5B), 12.4 tok/s (8B) |
-| Q4_K/Q5_K/Q6_K | CPU fb | PTX register spilling on sm_121 JIT — CPU thread pool fallback |
+| Q4_K/Q5_K/Q6_K | CPU fb | PTX register spilling on sm_121 JIT, CPU thread pool fallback |
 | Q4_0 native GPU | PASS | GPU kernels unaffected by K-quant spill |
 | UMA zero-copy | PASS | cuMemHostRegister for mmap'd weights |
 | Cross-compiled binary | PASS | Statically linked, runs on aarch64 Linux |
@@ -139,7 +139,7 @@
 | Gemma 4 E2B (bartowski) | Q4_K_M | PASS | PASS | Different converter, also works |
 | Gemma 4 E4B (bartowski) | Q4_K_M | PASS | PASS | |
 | Gemma 3 12B | Q8_0 | PASS | PASS | |
-| Qwen 3.5 35B-A3B | Q4_K_M | PASS | PASS | MoE+SSM hybrid — fixed: addRmsNorm residual in moeLayer |
+| Qwen 3.5 35B-A3B | Q4_K_M | PASS | PASS | MoE+SSM hybrid, fixed: addRmsNorm residual in moeLayer |
 
 ## Performance Regression Analysis (2026-04-16, Metal, M4 Pro)
 
@@ -155,7 +155,7 @@
 
 | Operation | % Runtime | Notes |
 |-----------|:---------:|-------|
-| gemv_ffn | 51.2% | Primary bottleneck — Q4_K dequant + matmul |
+| gemv_ffn | 51.2% | Primary bottleneck, Q4_K dequant + matmul |
 | gemv_qkv | 19.9% | Q/K/V projections |
 | rms_norm | 9.0% | |
 | gemv_out | 7.9% | Output projection |
@@ -196,6 +196,6 @@
 
 ## Known Issues
 
-1. **GLM-4.7 Flash** — degenerate output on both agave and llama.cpp. Likely broken GGUF conversion. The older ChatGLM-4 9B (`chatglm` arch) is a different architecture not currently supported.
-2. **Qwen 3.5 35B-A3B** — FIXED. Was missing addRmsNorm residual in moeLayer. Now producing coherent output.
-3. **Gemma 4 E4B CPU** — works but extremely slow (~60s prefill for 4.5GB model with 42 layers).
+1. **GLM-4.7 Flash**, degenerate output on both agave and llama.cpp. Likely broken GGUF conversion. The older ChatGLM-4 9B (`chatglm` arch) is a different architecture not currently supported.
+2. **Qwen 3.5 35B-A3B**, FIXED. Was missing addRmsNorm residual in moeLayer. Now producing coherent output.
+3. **Gemma 4 E4B CPU**, works but extremely slow (~60s prefill for 4.5GB model with 42 layers).

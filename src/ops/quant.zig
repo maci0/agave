@@ -1,6 +1,6 @@
 //! Quantization operations and format conversions.
 //! Shared dequantization building blocks used by CPU and GPU backends.
-//! Dequantization is performed in-kernel via these helpers — CPU backends
+//! Dequantization is performed in-kernel via these helpers, CPU backends
 //! dequantize during GEMV; GPU backends use native shader/PTX equivalents.
 
 const std = @import("std");
@@ -117,7 +117,7 @@ const fp8e4m3_lut = blk: {
 };
 
 /// Convert an FP8 E4M3 value to f32 via comptime lookup table.
-/// Single array index — no branches, no arithmetic at runtime.
+/// Single array index, no branches, no arithmetic at runtime.
 pub inline fn fp8e4m3ToF32(val: u8) f32 {
     return fp8e4m3_lut[val];
 }
@@ -155,7 +155,7 @@ const fp8e5m2_lut = blk: {
 };
 
 /// Convert an FP8 E5M2 value to f32 via comptime lookup table.
-/// Single array index — no branches, no arithmetic at runtime.
+/// Single array index, no branches, no arithmetic at runtime.
 pub inline fn fp8e5m2ToF32(val: u8) f32 {
     return fp8e5m2_lut[val];
 }
@@ -292,13 +292,13 @@ pub fn dequantToF32(output: []f32, data: [*]const u8, dtype: DType, n: usize) vo
                 }
             }
         },
-        // IQ2/IQ3/IQ1: complex codebook formats — approximate as zero (LoRA rarely applied to these)
+        // IQ2/IQ3/IQ1: complex codebook formats, approximate as zero (LoRA rarely applied to these)
         .iq2_xxs, .iq2_xs, .iq2_s, .iq3_xxs, .iq3_s, .iq1_s, .iq1_m => {
             @memset(output[0..n], 0);
         },
         else => {
             // Unsupported dtype in dequantToF32 (used for LoRA merge path).
-            // Zero the output rather than panic — the LoRA merge will be skipped
+            // Zero the output rather than panic, the LoRA merge will be skipped
             // for this tensor, which is safer than crashing.
             std.log.warn("dequantToF32: unsupported dtype {s}, zeroing output", .{@tagName(dtype)});
             @memset(output[0..n], 0);
@@ -621,7 +621,7 @@ test "fuzz: all quant functions" {
             // bf16ToF32: any u16 input is valid.
             const bf16_val: u16 = @bitCast(buf[0..2].*);
             const bf16_result = bf16ToF32(bf16_val);
-            // Result must be a valid f32 (including inf/nan — bf16 encodes those).
+            // Result must be a valid f32 (including inf/nan, bf16 encodes those).
             _ = bf16_result;
 
             // mxfp4Lookup: nibble 0..15, always returns finite.

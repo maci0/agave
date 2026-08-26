@@ -1,5 +1,5 @@
 //! GEMV HQQ 4-bit kernel: y[row] = dot(dequant(w_q[row,:]), x)
-//! HQQ format: w_q uint8 [n_out, k_in/2] — low nibble = even k, high nibble = odd k.
+//! HQQ format: w_q uint8 [n_out, k_in/2], low nibble = even k, high nibble = odd k.
 //! scale and zero: bf16, shape [n_out, k_in/group_size].
 //! Dequant: w = (nibble - zero) * scale.
 //! NR=4: Launch with ceil(n/4) blocks, each block processes 4 output rows.

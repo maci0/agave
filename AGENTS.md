@@ -1,6 +1,6 @@
 # Agave Engineering Standards
 
-High-performance LLM inference engine in Zig. Zero external ML libraries — all kernels, quantization, and model logic from scratch.
+High-performance LLM inference engine in Zig. Zero external ML libraries, all kernels, quantization, and model logic from scratch.
 
 ---
 
@@ -87,7 +87,7 @@ agave model.gguf --ssd-streaming "prompt"                        # Stream expert
 ```
 
 ```bash
-# Vulkan on macOS (KosmicKrisp — install via android-commandlinetools)
+# Vulkan on macOS (KosmicKrisp: install via android-commandlinetools)
 VK_ICD_FILENAMES=$(brew --prefix)/share/android-commandlinetools/emulator/lib64/vulkan/libkosmickrisp_icd.json \
 DYLD_LIBRARY_PATH=$(brew --prefix)/lib \
 agave model.gguf --backend vulkan "prompt"                         # First run ~5min (LLVM JIT)
@@ -118,12 +118,12 @@ These rules are non-negotiable. Every change must respect all of them.
 ### Hot Path (token generation loop)
 - **Zero allocations, zero syscalls, zero locks.** No exceptions.
 - `inline` for small math helpers in tight loops (`silu`, `bf16ToF32`, `sigmoid`). Avoid on large or init-only functions.
-- All parallel CPU work goes through the centralized `ThreadPool` — never spawn threads manually.
+- All parallel CPU work goes through the centralized `ThreadPool`, never spawn threads manually.
 - Prefer atomics (`std.atomic.Value(T)`) over mutexes for cross-thread communication.
 
 ### Comptime & Zero-Cost Abstraction
 - If a type or hardware feature is known at compile time, it **must** be a `comptime` parameter.
-- Backend dispatch uses tagged union with `inline else` — zero VTable overhead.
+- Backend dispatch uses tagged union with `inline else`, zero VTable overhead.
 - Use `@import("builtin")` for CPU/GPU feature detection at comptime.
 - Prefer Zig `@` builtins: `@Vector`/`@reduce`/`@splat` (SIMD), `@exp`/`@sqrt`/`@mulAdd` (math), `@memcpy`/`@memset` (bulk), `@bitCast`/`@intCast` (conversions).
 
@@ -131,7 +131,7 @@ These rules are non-negotiable. Every change must respect all of them.
 - Functions requiring memory **must** accept `std.mem.Allocator` as parameter. No global allocators.
 - `defer obj.deinit()` immediately after acquisition. `errdefer` for error-path-only cleanup.
 - `std.heap.page_allocator` only in one-time initialization, forbidden in hot path.
-- Use `std.testing.allocator` in tests — it detects leaks automatically.
+- Use `std.testing.allocator` in tests, it detects leaks automatically.
 
 ### Dispatcher Pattern
 - High-level code (`main.zig`, models) imports the dispatcher (`backend/backend.zig`), **never** the implementation (`cuda.zig`, `metal.zig`).
@@ -139,11 +139,11 @@ These rules are non-negotiable. Every change must respect all of them.
 - Same pattern for models (`model.zig`), tokenizer (`tokenizer.zig`), format (`format.zig`).
 
 ### No CPU Fallbacks in GPU Backends
-- GPU backends must `@panic` on missing kernels — never silently delegate to CPU.
+- GPU backends must `@panic` on missing kernels, never silently delegate to CPU.
 - **Only exceptions**: `embLookup` (single-row read, CPU faster) and `softmax` below threshold (Metal only). Must have performance-justification comment.
 
 ### Quantization
-- All dequantization happens **inside the kernel** via comptime-unrolled paths — never full f32 conversion in the hot path.
+- All dequantization happens **inside the kernel** via comptime-unrolled paths, never full f32 conversion in the hot path.
 - Use explicit precision types everywhere: `f32`, `f16`, `bf16`, `i8`.
 - Use tagged unions or `comptime` type parameters for mixed-precision dispatch.
 
@@ -177,7 +177,7 @@ These rules are non-negotiable. Every change must respect all of them.
 ### Benchmarking
 - Changes to `src/backend/`, `src/models/`, `src/kvcache/` must include benchmarks (throughput, TTFT, VRAM, bandwidth).
 - **>5% regression requires explanation and approval.**
-- `zig build test` does NOT compile `agave-bench` — always run `zig build` (full build) after changing backend/model interfaces.
+- `zig build test` does NOT compile `agave-bench`, always run `zig build` (full build) after changing backend/model interfaces.
 
 ### External Prototypes
 - Triton/CUTLASS/TVM/etc. are **research-only** (keep in `research/kernels/`). Every prototype must be ported to native Zig + target IR before merging into `src/`.
@@ -190,19 +190,19 @@ These rules are non-negotiable. Every change must respect all of them.
 
 **Metal threadgroup memory limit:** Must stay ≤ 32KB. Calculate total: `q_local + kv_block + out_acc + scores + shared`. Pipeline creation fails silently without the error logging in `makePipeline`.
 
-**Zig 0.16.0 — idiomatic patterns:**
-- **`main()` accepts `std.process.Init`** — provides `init.io` (Io context), `init.gpa` (allocator), `init.minimal.args` (CLI args). Thread `io` to all I/O code.
-- **File I/O via `Io`** — `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
-- **Stdout/stderr via `Io.File`** — `Io.File.stdout()`, `Io.File.stderr()`. Write via `posix.system.write(file.handle, ...)`.
-- **Timestamps** — interval/perf timing uses `CLOCK_MONOTONIC` (`sim_clock.monoMilli`, or direct `clock_gettime(.MONOTONIC)` in `perf.zig`/`pull.zig`); REALTIME/wall (`sim_clock.milliNow`) only for log timestamps, seeds, and epoch fields. Never measure durations with REALTIME.
-- **Futex** — `io.futexWaitUncancelable(u32, &atomic.raw, expected)` and `io.futexWake(u32, &atomic.raw, count)`. No raw `__ulock_wait`/`linux.futex_wait`.
-- **Mutex** — `Io.Mutex` with `lockUncancelable(io)`/`unlock(io)`. No custom spinlocks.
-- **Allocators** — `init.gpa` from Init, or `std.heap.DebugAllocator` for standalone tools.
-- **Build system** — `mod.link_libc = true`, `mod.linkFramework("Metal", .{})`. Methods on Module, not Step.Compile.
-- **Type creation** — `@Type()` removed → `@Int()`, `@Enum()`, `@Struct()`, `@Union()`.
-- **ArrayList** — `.empty` initializer, pass allocator to every method: `list.append(allocator, val)`.
-- **Terminal I/O** — `src/term.zig` provides key parsing, display width, ANSI sequences. Pure Zig, no libc, no external deps.
-- **No external deps** — vaxis/uucode/zigimg/clap removed. Zero external dependencies.
+**Zig 0.16.0, idiomatic patterns:**
+- **`main()` accepts `std.process.Init`**: provides `init.io` (Io context), `init.gpa` (allocator), `init.minimal.args` (CLI args). Thread `io` to all I/O code.
+- **File I/O via `Io`**: `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
+- **Stdout/stderr via `Io.File`**: `Io.File.stdout()`, `Io.File.stderr()`. Write via `posix.system.write(file.handle, ...)`.
+- **Timestamps**: interval/perf timing uses `CLOCK_MONOTONIC` (`sim_clock.monoMilli`, or direct `clock_gettime(.MONOTONIC)` in `perf.zig`/`pull.zig`); REALTIME/wall (`sim_clock.milliNow`) only for log timestamps, seeds, and epoch fields. Never measure durations with REALTIME.
+- **Futex**: `io.futexWaitUncancelable(u32, &atomic.raw, expected)` and `io.futexWake(u32, &atomic.raw, count)`. No raw `__ulock_wait`/`linux.futex_wait`.
+- **Mutex**: `Io.Mutex` with `lockUncancelable(io)`/`unlock(io)`. No custom spinlocks.
+- **Allocators**: `init.gpa` from Init, or `std.heap.DebugAllocator` for standalone tools.
+- **Build system**: `mod.link_libc = true`, `mod.linkFramework("Metal", .{})`. Methods on Module, not Step.Compile.
+- **Type creation**: `@Type()` removed → `@Int()`, `@Enum()`, `@Struct()`, `@Union()`.
+- **ArrayList**: `.empty` initializer, pass allocator to every method: `list.append(allocator, val)`.
+- **Terminal I/O**: `src/term.zig` provides key parsing, display width, ANSI sequences. Pure Zig, no libc, no external deps.
+- **No external deps**: vaxis/uucode/zigimg/clap removed. Zero external dependencies.
 
 **Megakernel composability:** When adding a new model, define a `ModelDesc` in `mega_compose.zig` to auto-generate the megakernel MSL. No hand-written .metal files needed. See [MEGAKERNEL.md](docs/MEGAKERNEL.md) Tier 3.
 
@@ -214,16 +214,16 @@ These rules are non-negotiable. Every change must respect all of them.
 
 ## Anti-Patterns (one-line reminders)
 
-- **No `page_allocator` in hot paths** — pass allocator as parameter, use page_allocator only in init
-- **No direct backend imports** — `@import("backend/backend.zig")`, never `@import("backend/cuda.zig")`
-- **No manual thread spawn** — use `thread_pool.parallelFor()`
-- **No pre-dequantization** — pass quantized tensors to `be.gemv()`, dequant happens in-kernel
-- **No silent error swallowing** — `try` to propagate, `catch` with logging, never `catch undefined`
-- **No inline magic numbers** — extract to named `const` at module level
-- **No manual error-path cleanup** — use `defer`/`errdefer`, never manual cleanup in catch blocks
-- **No compat wrappers** — use native Zig 0.16 `std.Io` APIs. Thread `io` from `main(Init)`
-- **No external deps for terminal** — use `term.zig`, not vaxis or other terminal frameworks
-- **No libc for terminal I/O** — `term.zig` uses `posix.read`/`posix.system.write` and `std.unicode`, no `wcwidth`/libc
+- **No `page_allocator` in hot paths**: pass allocator as parameter, use page_allocator only in init
+- **No direct backend imports**: `@import("backend/backend.zig")`, never `@import("backend/cuda.zig")`
+- **No manual thread spawn**: use `thread_pool.parallelFor()`
+- **No pre-dequantization**: pass quantized tensors to `be.gemv()`, dequant happens in-kernel
+- **No silent error swallowing**: `try` to propagate, `catch` with logging, never `catch undefined`
+- **No inline magic numbers**: extract to named `const` at module level
+- **No manual error-path cleanup**: use `defer`/`errdefer`, never manual cleanup in catch blocks
+- **No compat wrappers**: use native Zig 0.16 `std.Io` APIs. Thread `io` from `main(Init)`
+- **No external deps for terminal**: use `term.zig`, not vaxis or other terminal frameworks
+- **No libc for terminal I/O**: `term.zig` uses `posix.read`/`posix.system.write` and `std.unicode`, no `wcwidth`/libc
 
 ---
 
@@ -231,7 +231,7 @@ These rules are non-negotiable. Every change must respect all of them.
 
 1. **Analyze the Hot Path:** Before suggesting code for the inference loop, verify zero syscalls, zero locks, zero allocations.
 2. **Strict Target Adherence:** Check target `cpu` and `os` before writing code. No Metal for Linux, no CUDA when working on ROCm.
-3. **Comptime First:** Backend dispatchers use `comptime` to switch implementations — no runtime vtable overhead.
+3. **Comptime First:** Backend dispatchers use `comptime` to switch implementations, no runtime vtable overhead.
 4. **No Leaks:** Backend-specific types (CUDA stream handles, Metal command buffers) must not appear in `main.zig`.
 
 ---
@@ -245,7 +245,7 @@ Before approving any PR, verify:
 - [ ] Comptime used aggressively for dispatch and type specialization
 - [ ] Zig `@` builtins used where applicable
 - [ ] Backend code only accessed through dispatcher
-- [ ] No magic numbers — all thresholds are named module-level constants
+- [ ] No magic numbers, all thresholds are named module-level constants
 - [ ] Chat templates used for prompt formatting (no hardcoded role markers)
 - [ ] Benchmarks included, >5% regression explained
 - [ ] Cross-compilation still works
@@ -260,7 +260,7 @@ Before approving any PR, verify:
 
 ## Project
 
-**Agave — Production-Ready LLM Inference Engine**
+**Agave, Production-Ready LLM Inference Engine**
 
 Supports 6 backends (Metal, CUDA, Vulkan, ROCm, WebGPU, CPU), 10 model architectures (Gemma3/4, DiffusionGemma, Qwen3.5/Nex-N2-Pro, GPT-OSS, Nemotron-H/Nano, GLM-4, DeepSeek V4, Llama 4), and extensive quantization (Q2-Q8, FP8, bf16, NVFP4, MXFP4, MLX, TurboQuant KV). Megakernel system with composable building blocks for fused GPU dispatch. CLI and HTTP server interfaces. Built with Zig 0.16.0. Zero external dependencies.
 

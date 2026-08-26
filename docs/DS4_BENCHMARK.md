@@ -1,4 +1,4 @@
-# DeepSeek V4 Flash — Cross-Engine Benchmark
+# DeepSeek V4 Flash: Cross-Engine Benchmark
 
 ## Hardware
 - **Apple M4 Pro**, 48GB unified memory
@@ -21,10 +21,10 @@
 | **Agave** | ds4 Q2 imatrix | 81GB | **1.7** | ⚠️ Marginal | LRU + IQ2_XXS Metal kernel | Intermittent Metal NaN on long prompts |
 | **Agave** | MXFP4 (ggml-org) | 155GB | **1.1** | ✅ Yes | LRU + auto-sized cache | Baseline, NVMe-bound |
 | **Agave** | 2-bit DQ (MLX) | 90GB | **3-6** | ❌ Garbled | LRU + MLX-Q Metal kernel | Fast but incoherent |
-| **Agave CPU + suffix** | MLX-Q 4-bit | 141GB | **10.5-43.2** | ✅ Yes | LRU + budget=3 fallback | **1.78-7.32× ds4! CPU-only** |
+| **Agave CPU + suffix** | MLX-Q 4-bit | 141GB | **10.5-43.2** | ✅ Yes | LRU + budget=3 fallback | **1.78-7.32x vs ds4, CPU-only** |
 | **Agave Metal + suffix** | MLX-Q 4-bit | 141GB | **2.3** | ✅ Yes | GPU rmsNorm+SDPA, CPU GEMV | Per-GEMV sync overhead |
-| **llama.cpp** | — | — | ❌ crash | — | mmap only | No DS V4 support (b10360) |
-| **MLX (mlx-lm)** | — | — | ❌ no arch | — | mmap only | No DS V4 module (0.31.1) |
+| **llama.cpp** | n/a | n/a | ❌ crash | n/a | mmap only | No DS V4 support (b10360) |
+| **MLX (mlx-lm)** | n/a | n/a | ❌ no arch | n/a | mmap only | No DS V4 module (0.31.1) |
 
 ### Key Findings
 
@@ -40,7 +40,7 @@
 
 ## Detailed Results
 
-### Agave — Measured (MXFP4, `--ssd-streaming`)
+### Agave: Measured (MXFP4, `--ssd-streaming`)
 
 ```
 Run 1: "What is the capital of France?" → 32 tokens
@@ -54,12 +54,12 @@ Expert cache: 256 slots, 0 hits, 0 misses (cold cache, no reuse across runs)
 
 Output quality: marginal. MXFP4 produces text but with drift (temperature=0.0, greedy decode). The model generates related-but-not-on-topic responses, suggesting quantization-induced confusion in the routing/attention pipeline. Higher-precision quantizations may improve this.
 
-### Agave — After Expert Cache Integration
+### Agave: After Expert Cache Integration
 
 **Changes applied:**
 1. ExpertCache wired into Ds4Model (was disconnected in main.zig)
-2. Cache-aware prefetch in ffnLayer() — skip madvise on cache hits
-3. Lookahead prefetch — prefetch next layer's popular experts after sync (2-layer lookahead was tested but proved slower due to scan overhead)
+2. Cache-aware prefetch in ffnLayer(), skip madvise on cache hits
+3. Lookahead prefetch, prefetch next layer's popular experts after sync (2-layer lookahead was tested but proved slower due to scan overhead)
 4. Auto-sized cache from total physical RAM (3212 slots on 48GB machine)
 
 **Results (MXFP4, `--ssd-streaming`, 3212 cache slots):**
@@ -81,10 +81,10 @@ Run 2: "Explain quicksort in three sentences." → 64 tokens
 | Run 1 total time | 51.0s | 49.7s | -3% |
 | Run 2 total time | 85.2s | 77.4s | -9% |
 | Run 2 prefill | 17.8s | 14.7s | -17% |
-| Cache hit rate | 0% | 70% | — |
+| Cache hit rate | 0% | 70% | n/a |
 | Decode tok/s | 1.0 | 1.0 | 0% (NVMe-bound) |
 
-### Agave — MLX 2-bit DQ SafeTensors (New)
+### Agave: MLX 2-bit DQ SafeTensors (New)
 
 **Model:** `mlx-community/DeepSeek-V4-Flash-2bit-DQ` (90GB, MLX safetensors)
 **Quantization:** Mixed 2-bit/4-bit affine (routed experts at 2-bit gs=32/64, attention/shared at 4-bit gs=64)
@@ -117,9 +117,9 @@ Run 2: "Explain quicksort in three sentences." → 64 tokens
 - 4-bit attention/shared weights preserve quality-critical paths
 - No preload step (instant start with SSD streaming)
 
-**Output quality:** Poor — garbled special tokens. The 2-bit DQ from mlx-community appears to be too aggressive for this model architecture. The ds4 project achieves coherent 2-bit output through imatrix-calibrated asymmetric quantization (IQ2_XXS for experts only), which is a higher-quality approach than uniform affine 2-bit.
+**Output quality:** Poor, garbled special tokens. The 2-bit DQ from mlx-community appears to be too aggressive for this model architecture. The ds4 project achieves coherent 2-bit output through imatrix-calibrated asymmetric quantization (IQ2_XXS for experts only), which is a higher-quality approach than uniform affine 2-bit.
 
-### ds4 (DwarfStar) — Published Reference Numbers
+### ds4 (DwarfStar): Published Reference Numbers
 
 ds4 uses its own GGUF format (incompatible with ggml-org GGUFs) with asymmetric quantization. Published benchmarks are for **model-resident** scenarios:
 
@@ -140,16 +140,16 @@ No published SSD streaming numbers exist for DS V4 Flash on 48GB machines. Based
 - ds4 Q2 imatrix (81GB) on 48GB: expect **~2-4 tok/s** (59% in RAM vs Agave's 31%)
 - ds4 MXFP4 (145GB) on 48GB: expect **~1-2 tok/s** (33% in RAM, similar to Agave)
 
-### llama.cpp — Not Supported
+### llama.cpp: Not Supported
 
 ```
 $ llama-cli -m DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf -n 1 -p "hi"
-libc++abi: terminating   # crashes — deepseek4 arch not recognized
+libc++abi: terminating   # crashes, deepseek4 arch not recognized
 ```
 
 llama.cpp b10360 does not support the `deepseek4` GGUF architecture. It supports DeepSeek V2/V3 (`deepseek2`) but not V4. An RFC for MoE expert caching exists but is still in design.
 
-### MLX (mlx-lm) — Not Supported
+### MLX (mlx-lm): Not Supported
 
 ```python
 >>> from mlx_lm.models import deepseek_v4
@@ -177,11 +177,11 @@ mlx-lm 0.31.1 has `deepseek_v3` and `deepseek_v32` but not `deepseek_v4`. The `t
 ### Why ds4's Q2 works but ggml-org's Q2_K doesn't
 
 ds4's asymmetric quantization only compresses the **routed MoE experts** (which are the majority of model size) while keeping everything else at high precision. This preserves:
-- Attention projections (Q8) — critical for MLA's compressed KV
-- Shared experts (Q8) — always active, quality-sensitive
-- Output head (Q8) — directly affects token selection
-- Hyper connection weights (F16) — DS V4's novel 4-stream mixing
-- Compressor/Indexer weights (F16) — CSA/HCA attention compression
+- Attention projections (Q8), critical for MLA's compressed KV
+- Shared experts (Q8), always active, quality-sensitive
+- Output head (Q8), directly affects token selection
+- Hyper connection weights (F16), DS V4's novel 4-stream mixing
+- Compressor/Indexer weights (F16), CSA/HCA attention compression
 
 ggml-org's uniform Q2_K quantizes everything equally, destroying the precision of these quality-critical components.
 
@@ -211,15 +211,15 @@ ggml-org's uniform Q2_K quantizes everything equally, destroying the precision o
 
 ### What was implemented
 
-1. **Metal IQ2_XXS GEMV kernel** (~190 lines MSL) — native GPU codebook-based dequant for ds4's asymmetric Q2 imatrix model. No CPU fallback (per project rules).
+1. **Metal IQ2_XXS GEMV kernel** (~190 lines MSL), native GPU codebook-based dequant for ds4's asymmetric Q2 imatrix model. No CPU fallback (per project rules).
 
-2. **Expert cache integration** — wired ExpertCache into Ds4Model's ffnLayer(), cache-aware madvise (skip on hits), lookahead prefetch for next layer, auto-sized from total physical RAM (3212-4096 slots on 48GB).
+2. **Expert cache integration**, wired ExpertCache into Ds4Model's ffnLayer(), cache-aware madvise (skip on hits), lookahead prefetch for next layer, auto-sized from total physical RAM (3212-4096 slots on 48GB).
 
-3. **MLX 2-bit affine support** — CPU + Metal kernels for 2-bit quantization, variable group_size (32/64), DS V4 safetensors architecture detection and tensor name mapping.
+3. **MLX 2-bit affine support**, CPU + Metal kernels for 2-bit quantization, variable group_size (32/64), DS V4 safetensors architecture detection and tensor name mapping.
 
-4. **Expert mlock pinning** — implemented but found counterproductive on 48GB (reduces page cache space, hurting overall throughput).
+4. **Expert mlock pinning**, implemented but found counterproductive on 48GB (reduces page cache space, hurting overall throughput).
 
-5. **SSD streaming preload skip** — skip model preload when --ssd-streaming is active (avoids thrashing 90-155GB through 48GB page cache).
+5. **SSD streaming preload skip**, skip model preload when --ssd-streaming is active (avoids thrashing 90-155GB through 48GB page cache).
 
 ### Key performance findings
 
@@ -234,21 +234,21 @@ ggml-org's uniform Q2_K quantizes everything equally, destroying the precision o
 
 ### Why ds4 is 5× faster than Agave (5.69 vs 1.1 tok/s)
 
-1. **GPU-resident expert dispatch** — ds4 uses Metal graph capture with expert dispatch tables, avoiding CPU-GPU synchronization per expert. Agave dispatches expert GEMVs individually from CPU.
+1. **GPU-resident expert dispatch**, ds4 uses Metal graph capture with expert dispatch tables, avoiding CPU-GPU synchronization per expert. Agave dispatches expert GEMVs individually from CPU.
 
-2. **Overlapped streaming prefill** — ds4 reserves 2 full routed layers in the expert cache for overlap. Agave's prefill is sequential.
+2. **Overlapped streaming prefill**, ds4 reserves 2 full routed layers in the expert cache for overlap. Agave's prefill is sequential.
 
-3. **Smaller coherent model** — ds4's Q2 imatrix (81GB) uses asymmetric quantization (IQ2_XXS experts, Q8 everything else). Agave's MXFP4 (155GB) is ~2× larger, meaning ~2× more SSD reads per token.
+3. **Smaller coherent model**, ds4's Q2 imatrix (81GB) uses asymmetric quantization (IQ2_XXS experts, Q8 everything else). Agave's MXFP4 (155GB) is ~2× larger, meaning ~2× more SSD reads per token.
 
-4. **Compiled Metal graph** — ds4 compiles the full layer dispatch into a Metal graph that runs with minimal CPU overhead. Agave dispatches each GEMV as a separate Metal command.
+4. **Compiled Metal graph**, ds4 compiles the full layer dispatch into a Metal graph that runs with minimal CPU overhead. Agave dispatches each GEMV as a separate Metal command.
 
 ### Known issues
 
-1. **IQ2_XXS coherence** — Agave's Metal IQ2_XXS kernel produces correct L2 norms but garbled text output. The codebook tables match ds4/llama.cpp. The issue is likely subtle — possibly a sign handling or block boundary edge case.
+1. **IQ2_XXS coherence**, Agave's Metal IQ2_XXS kernel produces correct L2 norms but garbled text output. The codebook tables match ds4/llama.cpp. The issue is likely subtle, possibly a sign handling or block boundary edge case.
 
-2. ~~**Intermittent Metal NaN**~~ — **Fixed.** Root cause was GPU L2 cache coherency with `newBufferWithBytesNoCopy` shared-memory wraps: CPU code (HC mixing, RoPE, weighted accumulation) read stale data from Metal-written activation buffers between layers. Fix: 9 new Metal compute kernels (`ds4.metal`) move all inter-layer operations to GPU. HC fn/base/scale weights use `heapTensorData` (heap copy) instead of raw mmap pointers for Metal GPU safety. Zero CPU reads of GPU-written activation buffers in the decode loop.
+2. ~~**Intermittent Metal NaN**~~, **Fixed.** Root cause was GPU L2 cache coherency with `newBufferWithBytesNoCopy` shared-memory wraps: CPU code (HC mixing, RoPE, weighted accumulation) read stale data from Metal-written activation buffers between layers. Fix: 9 new Metal compute kernels (`ds4.metal`) move all inter-layer operations to GPU. HC fn/base/scale weights use `heapTensorData` (heap copy) instead of raw mmap pointers for Metal GPU safety. Zero CPU reads of GPU-written activation buffers in the decode loop.
 
-3. **Page cache contention** — Running multiple large models back-to-back causes page cache thrashing. Only one model should be active at a time on 48GB.
+3. **Page cache contention**, Running multiple large models back-to-back causes page cache thrashing. Only one model should be active at a time on 48GB.
 
 ### Metal GPU-Only Path (2026-08-19)
 
@@ -264,7 +264,7 @@ All DS4 inter-layer operations now run on Metal GPU compute kernels:
 | Inverse RoPE | CPU table | `ds4_inv_rope_table` | 1D grid |
 | Weighted expert accumulation | CPU SIMD | `ds4_weighted_accum` | 1D grid |
 | SDPA hd=512 turbo/Q8_0 | CPU fallback | `sdpa_fa2_turbo_hd512` | 1 TG/head |
-| Embedding broadcast | CPU memcpy | CPU memcpy (kept — 12KB, no coherency issue) | N/A |
+| Embedding broadcast | CPU memcpy | CPU memcpy (kept, 12KB, no coherency issue) | N/A |
 
 **Verified**: L0 hidden L2 norms match CPU exactly (43.822 on MLX-Q4 model). Output is bit-identical between `--backend metal` and `--backend cpu` via dedicated CpuBackend bypass.
 
@@ -283,21 +283,21 @@ The dedicated CpuBackend bypass (`self.cpu.*()` instead of `self.be.*()`) elimin
 
 ### To run DS V4 Flash on 48GB today
 
-1. **Agave with MXFP4** — works now, ~1 tok/s, marginal quality
-2. **ds4 with Q2 imatrix** — works now, likely ~2-4 tok/s, coherent output, requires downloading ds4's custom 81GB GGUF from `antirez/deepseek-v4-gguf`
+1. **Agave with MXFP4**, works now, ~1 tok/s, marginal quality
+2. **ds4 with Q2 imatrix**, works now, likely ~2-4 tok/s, coherent output, requires downloading ds4's custom 81GB GGUF from `antirez/deepseek-v4-gguf`
 
 ### To improve Agave's DS V4 performance
 
-1. ~~**Adopt asymmetric quantization**~~ — only quantize routed experts, keep attention/shared/output at Q8. This is the single biggest improvement ds4 has over ggml-org GGUFs. *(not yet implemented)*
-2. **Auto-size expert cache from available memory** — were implemented: cache auto-sizes from total physical RAM (3212 slots on 48GB). Resulted in 70% hit rate and -9% total time on Run 2.
-3. **Overlap SSD reads with GPU compute** — were implemented: cache-aware prefetch skips madvise on cache hits, lookahead prefetch pre-stages next 2 layers' popular experts after sync. Resulted in -17% prefill time on Run 2.
-4. **Integrate expert cache into forward()** — were implemented: ExpertCache wired into Ds4Model and integrated into ffnLayer() dispatch decisions.
+1. ~~**Adopt asymmetric quantization**~~, only quantize routed experts, keep attention/shared/output at Q8. This is the single biggest improvement ds4 has over ggml-org GGUFs. *(not yet implemented)*
+2. **Auto-size expert cache from available memory**, were implemented: cache auto-sizes from total physical RAM (3212 slots on 48GB). Resulted in 70% hit rate and -9% total time on Run 2.
+3. **Overlap SSD reads with GPU compute**, were implemented: cache-aware prefetch skips madvise on cache hits, lookahead prefetch pre-stages next 2 layers' popular experts after sync. Resulted in -17% prefill time on Run 2.
+4. **Integrate expert cache into forward()**, were implemented: ExpertCache wired into Ds4Model and integrated into ffnLayer() dispatch decisions.
 
 > **Note:** Decode tok/s remains fundamentally NVMe-bound at this model size (155GB on 48GB RAM). Steps 2–4 improved prefill and total time via cache hits, but per-token decode speed is limited by SSD bandwidth for the ~69% of experts not in RAM. The main improvement path forward is smaller coherent quantizations (e.g., ds4-style asymmetric Q2 imatrix at 81GB, which would fit ~59% in RAM).
 
 ### When more RAM is available (≥128GB)
 
-All engines benefit dramatically. ds4 on M5 Max 128GB achieves **39 tok/s** with the Q2 model fully resident — roughly **40× faster** than SSD streaming on 48GB.
+All engines benefit dramatically. ds4 on M5 Max 128GB achieves **39 tok/s** with the Q2 model fully resident, roughly **40× faster** than SSD streaming on 48GB.
 
 ---
 
@@ -369,7 +369,7 @@ Eight bugs were fixed in Agave's DS4 implementation:
 | **Factual (-n 64)** | **9.5-10.6** | **1.61-1.80× WIN** | 14.8 | Says "Paris" correctly |
 | **Code (-n 128)** | **7.1-7.3** | **1.20-1.24× WIN** | 23.8 | Coherent |
 | **Prose (-n 128)** | **7.2-7.6** | **1.22-1.29× WIN** | 16.9 | Coherent |
-| Baseline (no suffix) | 1.3-1.4 | 0.24× | — | SSD I/O-bound |
+| Baseline (no suffix) | 1.3-1.4 | 0.24× | n/a | SSD I/O-bound |
 
 **Scaling with sequence length (factual prompt):**
 
@@ -390,11 +390,11 @@ Eight bugs were fixed in Agave's DS4 implementation:
 
 ### Key Optimizations
 
-1. **MLX 4-bit expert dequant fix** (iter 14): Three bugs — E8M0 scale decoding (was FP8 E4M3, 240× wrong magnitude), group_size=32 (was hardcoded 16), nvfp4 dtype detection (U8 scales parsed as wrong type). Without this fix, output was garbled (inf at L0 FFN).
+1. **MLX 4-bit expert dequant fix** (iter 14): Three bugs, E8M0 scale decoding (was FP8 E4M3, 240× wrong magnitude), group_size=32 (was hardcoded 16), nvfp4 dtype detection (U8 scales parsed as wrong type). Without this fix, output was garbled (inf at L0 FFN).
 
 2. **Expert budget=3 for fallback forward** (iter 57): ~75% of decode rounds are zero-draft fallbacks (no suffix match, unique tokens). Each fallback runs a full model forward with all experts. Reducing from 6→3 experts saves 50% SSD reads per fallback. Gave +32-89% speedup.
 
-3. **Thread pool grain 16→128** (iter 48): Each GEMV dispatches tasks to the thread pool. With grain=16 and 32K output rows, that’s 2048 tasks per GEMV — dispatch overhead dominates. grain=128 reduces to 256 tasks, giving 6-10% improvement across all workloads.
+3. **Thread pool grain 16→128** (iter 48): Each GEMV dispatches tasks to the thread pool. With grain=16 and 32K output rows, that’s 2048 tasks per GEMV, dispatch overhead dominates. grain=128 reduces to 256 tasks, giving 6-10% improvement across all workloads.
 
 4. **Suffix max_k 48→96** (iter 20): Longer suffix draft sequences allow more tokens per round when the model generates repetitive patterns (code, structured text).
 

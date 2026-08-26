@@ -380,7 +380,7 @@ def compare_with_baseline(results):
                       f"{base_tps:>9.1f} {curr_tps:>9.1f} {marker}{change:>8.1f}%{flag}")
 
     if not matched:
-        print("  (no matching baseline entries — was baseline saved in the same mode?)",
+        print("  (no matching baseline entries, was baseline saved in the same mode?)",
               file=sys.stderr)
 
 
@@ -459,7 +459,7 @@ def cmd_grid(args):
     parser = argparse.ArgumentParser(prog="run.py grid")
     parser.add_argument("kernel", nargs="?")
     parser.add_argument("--backend", "-b", default="cpu",
-                        help="Single backend — grid modifies source files (default: cpu)")
+                        help="Single backend, grid modifies source files (default: cpu)")
     parser.add_argument("--param", required=True)
     parser.add_argument("--values", required=True, help="Comma-separated values")
     parser.add_argument("--pattern", required=True)
@@ -575,7 +575,7 @@ def cmd_auto(args):
     parser = argparse.ArgumentParser(prog="run.py auto")
     parser.add_argument("kernel", nargs="?")
     parser.add_argument("--backend", "-b", default="cpu",
-                        help="Single backend — auto modifies source files (default: cpu)")
+                        help="Single backend, auto modifies source files (default: cpu)")
     parser.add_argument("--metric", default="ns_median",
                         help="Metric to optimize: ns_median (lower=better) or tok_per_sec (higher=better)")
     parser.add_argument("--patience", type=int, default=5)
@@ -845,7 +845,7 @@ def run_bayesian(kernel, parsed, params, dimensions, full_path,
         return result
 
     try:
-        # n_jobs=1: objective mutates full_path on disk — parallel trials would corrupt
+        # n_jobs=1: objective mutates full_path on disk, parallel trials would corrupt
         study.optimize(objective, n_trials=parsed.max_iters, n_jobs=1)
     finally:
         full_path.write_text(original_source)
@@ -958,7 +958,7 @@ def cmd_staged(args):
             print(f"Removed {count} staged entries.")
 
     else:
-        # apply, diff, drop — all require a valid staged entry
+        # apply, diff, drop, all require a valid staged entry
         entry, meta, staged_files = _load_staged_entry(parsed.action, parsed.name)
 
         if parsed.action == "apply":
@@ -995,7 +995,7 @@ def cmd_staged(args):
             print(f"Removed {parsed.name}")
 
 
-# Entry point — called from run.py
+# Entry point, called from run.py
 def main(command: str, args: list[str]):
     if command == "bench":
         cmd_bench(args)

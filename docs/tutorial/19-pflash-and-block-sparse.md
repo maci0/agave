@@ -599,26 +599,26 @@ Block sparse attention reduces scoring cost from O(n²) to O(n) by skipping dot 
 
 ## Glossary
 
-**adaptive threshold (alpha)** — The selection criterion `alpha × mean(block_scores)` determining which blocks survive PFlash compression.
+**adaptive threshold (alpha)**, The selection criterion `alpha × mean(block_scores)` determining which blocks survive PFlash compression.
 
-**block importance score** — A per-block value indicating how relevant that block is to the model's output.
+**block importance score**, A per-block value indicating how relevant that block is to the model's output.
 
-**block sparse attention** — An approximation of full attention restricting which block pairs interact, reducing complexity from O(n²) to O(n).
+**block sparse attention**, An approximation of full attention restricting which block pairs interact, reducing complexity from O(n²) to O(n).
 
-**compressed prefill** — Running the target model's standard prefill over only PFlash-selected tokens instead of the full prompt.
+**compressed prefill**, Running the target model's standard prefill over only PFlash-selected tokens instead of the full prompt.
 
-**global block** — One of the first G token blocks that every query block attends to, typically covering the system prompt.
+**global block**, One of the first G token blocks that every query block attends to, typically covering the system prompt.
 
-**max_kept_ratio** — A cap (default 0.20) on the fraction of blocks PFlash can retain, preventing over-selection.
+**max_kept_ratio**, A cap (default 0.20) on the fraction of blocks PFlash can retain, preventing over-selection.
 
-**pflash-alpha** — The tunable parameter controlling PFlash compression aggressiveness (default 0.85); lower = more aggressive.
+**pflash-alpha**, The tunable parameter controlling PFlash compression aggressiveness (default 0.85); lower = more aggressive.
 
-**pflash-block-size** — The granularity of block selection in PFlash (default 64 tokens).
+**pflash-block-size**, The granularity of block selection in PFlash (default 64 tokens).
 
-**PFlash** — A speculative prefill technique using a cheap scorer to identify which KV blocks matter, then prefilling only those.
+**PFlash**, A speculative prefill technique using a cheap scorer to identify which KV blocks matter, then prefilling only those.
 
-**scorer model** — A small model that runs block sparse attention over the full prompt to produce per-block importance scores.
+**scorer model**, A small model that runs block sparse attention over the full prompt to produce per-block importance scores.
 
-**sliding window (block sparse)** — A pattern where each query block attends to ±W neighboring blocks, preserving local context.
+**sliding window (block sparse)**, A pattern where each query block attends to ±W neighboring blocks, preserving local context.
 
-**sparsity pattern** — The combination of global blocks and sliding window determining which block pairs compute attention scores.
+**sparsity pattern**, The combination of global blocks and sliding window determining which block pairs compute attention scores.

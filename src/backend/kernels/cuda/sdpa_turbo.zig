@@ -1,4 +1,4 @@
-//! TurboQuant SDPA kernel for CUDA — FlashAttention-2 with native KV dequantization.
+//! TurboQuant SDPA kernel for CUDA, FlashAttention-2 with native KV dequantization.
 //!
 //! Same algorithm as sdpa.zig but reads K/V from TurboQuant-packed byte buffers
 //! instead of f32 arrays. Dequantization (codebook lookup + inverse WHT) happens

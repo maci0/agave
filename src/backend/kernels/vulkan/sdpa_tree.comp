@@ -99,7 +99,7 @@ void main() {
             float wt = 0.0;
             if (t < 16u) {
                 // Only thread t computed this weight
-                // Need shared memory broadcast — simplified: recompute
+                // Need shared memory broadcast, simplified: recompute
                 uint t_global = block_start + t;
                 uint k_base = t_global * kvd + kvh * hd;
                 float dot_val = 0.0;

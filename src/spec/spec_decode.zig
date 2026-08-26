@@ -56,7 +56,7 @@ pub const SpecState = struct {
     /// are set to -inf before argmax, restricting proposals to frequent tokens only.
     /// Improves acceptance rate by biasing draft toward tokens the target model prefers.
     /// Built from --spec-token-map <file> (one token ID per line) via buildTokenMask().
-    /// Caller-owned — must be freed separately (not freed by deinit).
+    /// Caller-owned, must be freed separately (not freed by deinit).
     token_mask: ?[]bool = null,
 
     /// Allocate draft log-prob and sampling buffers for speculative decoding.
@@ -277,7 +277,7 @@ pub fn draftDFlash2(
 /// Proposes an n-gram continuation from history (with shared-pool fallback)
 /// and splices it into the drafted block: positions where the n-gram agrees
 /// with the drafter confirm its picks, and any exact-match tail extends the
-/// block up to the budget. Pure disagreement leaves the drafter untouched —
+/// block up to the budget. Pure disagreement leaves the drafter untouched,
 /// learned proposals are never clobbered by a blind history guess.
 pub fn dflash2HybridNgram(
     state: *SpecState,
@@ -316,7 +316,7 @@ pub fn dflash2HybridNgram(
 ///   4. Repeat: draft_model.eagleForward(draft_tok, draft_hidden) for subsequent steps
 ///
 /// If the draft model doesn't implement eagleForward (standard model), it falls back
-/// to standard forward() — still benefits from the target model's logit reuse.
+/// to standard forward(), still benefits from the target model's logit reuse.
 ///
 /// For EAGLE-2: this function extends naturally; the tree-verification path in DDTree
 /// handles multi-candidate speculation. Pass use_tree=true to enable.
@@ -374,7 +374,7 @@ pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model:
 /// information that normalization discards, providing richer conditioning signal
 /// for draft model prediction accuracy.
 ///
-/// The target model must save hidden_pre_norm in its forward() — currently Gemma4.
+/// The target model must save hidden_pre_norm in its forward(), currently Gemma4.
 /// Falls back to post-norm getHiddenState() for models that don't implement it.
 pub fn draftEagle3(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
     // Use pre-output-norm hidden state for EAGLE-3 conditioning.
@@ -425,12 +425,12 @@ pub fn draftEagle3WithLogits(state: *SpecState, target_model: Model, draft_model
 /// This makes it cheaper than EAGLE (no draft model KV cache growth) but slightly less
 /// accurate (doesn't adapt to its own prior draft outputs).
 ///
-/// Suitable for any draft model with a simple MLP head — does not require the full
+/// Suitable for any draft model with a simple MLP head, does not require the full
 /// autoregressive chain. Effectively EAGLE-0 (single conditioning, no self-conditioning).
 ///
 /// Usage: agave target.gguf --draft-model mlp-speculator.gguf --spec-mode mlp
 pub fn draftMlpSpeculator(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
-    // Freeze the target's hidden state once — all draft steps use the same context.
+    // Freeze the target's hidden state once, all draft steps use the same context.
     const target_hidden = target_model.getHiddenState();
     var tok = last_token;
     var n: u32 = 0;
@@ -525,7 +525,7 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
     errdefer allocator.free(mask);
     @memset(mask, false);
 
-    // Read file in 64KB chunks (no fstat — avoids platform ABI differences).
+    // Read file in 64KB chunks (no fstat, avoids platform ABI differences).
     const fd = try posix.openat(posix.AT.FDCWD, token_map_path, .{}, 0);
     defer _ = std.posix.system.close(fd);
     var content_list = std.ArrayList(u8).empty;
@@ -608,7 +608,7 @@ pub fn verifySequential(
         }
     }
 
-    // All accepted — bonus token from target
+    // All accepted, bonus token from target
     const last_draft = state.draft_tokens[state.n_draft - 1];
     const bonus = target_model.forward(last_draft) catch |err| {
         std.log.warn("spec verify: bonus forward failed: {s}", .{@errorName(err)});
@@ -658,7 +658,7 @@ pub fn verifySampling(
         }
     }
 
-    // All accepted — sample bonus from target distribution
+    // All accepted, sample bonus from target distribution
     const last_draft = state.draft_tokens[state.n_draft - 1];
     _ = target_model.forward(last_draft) catch |err| {
         std.log.warn("spec sampling: bonus forward failed: {s}", .{@errorName(err)});
@@ -880,7 +880,7 @@ fn sampleResidual(target_probs: []const f32, draft_log_probs: []const f32, vs: u
 }
 
 /// Log-softmax: v_i = v_i - max - log(sum(exp(v - max))).
-/// SIMD-optimized (8-wide) — called per draft token on vocab-sized arrays.
+/// SIMD-optimized (8-wide), called per draft token on vocab-sized arrays.
 fn logSoftmax(logits: []f32) void {
     if (logits.len == 0) return;
     const V8 = @Vector(8, f32);
@@ -1300,7 +1300,7 @@ test "dsparkTrimDraft with no history uses default prior" {
     defer s.deinit(std.testing.allocator);
 
     s.n_draft = 8;
-    // No k_accept_counts/k_total_counts set — all zeros → uses 0.75 prior.
+    // No k_accept_counts/k_total_counts set, all zeros → uses 0.75 prior.
     // survival = 0.75^k: at k=1 → 0.75, k=2 → 0.5625, k=3 → 0.4219, k=4 → 0.3164,
     //                     k=5 → 0.2373, k=6 → 0.1780, k=7 → 0.1335 < 0.15 → trims at k=7
     dsparkTrimDraft(&s);
@@ -1458,7 +1458,7 @@ pub fn verifyBatched(
         }
     }
 
-    // All accepted — bonus token (last position's prediction)
+    // All accepted, bonus token (last position's prediction)
     const bonus = target_model.treeLogits(@intCast(n));
     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
 }

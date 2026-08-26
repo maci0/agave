@@ -147,7 +147,7 @@ pub const GGMLType = enum(u32) {
         const n_blocks = (std.math.add(usize, n_elements, bs - 1) catch
             std.math.maxInt(usize)) / bs;
         return std.math.mul(usize, n_blocks, self.bytesPerBlock()) catch
-            std.math.maxInt(usize); // Saturate on overflow — caller validates against file size
+            std.math.maxInt(usize); // Saturate on overflow, caller validates against file size
     }
 };
 
@@ -307,7 +307,7 @@ pub const GGUFFile = struct {
 
         const mapped = try posix.mmap(null, file_size, .{ .READ = true }, .{ .TYPE = .SHARED }, fd, 0);
         errdefer posix.munmap(mapped);
-        // Hint sequential access for weight loading — enables OS readahead and reduces page faults.
+        // Hint sequential access for weight loading, enables OS readahead and reduces page faults.
         posix.madvise(mapped.ptr, mapped.len, posix.MADV.SEQUENTIAL) catch {};
 
         var self = GGUFFile{
@@ -442,7 +442,7 @@ pub const GGUFFile = struct {
             // Transfer heap-allocated owned resources into self so deinit() frees them.
             // Tensor names and metadata strings are heap copies (via allocator.dupe in own()),
             // not mmap pointers, so they must be tracked for cleanup.
-            // These must propagate OOM — silently dropping would leak the individual
+            // These must propagate OOM, silently dropping would leak the individual
             // heap-allocated strings/arrays that are already referenced by self.tensors.
             try self.owned_strings.appendSlice(self.allocator, shard_gguf.owned_strings.items);
             shard_gguf.owned_strings.deinit(self.allocator);
@@ -457,7 +457,7 @@ pub const GGUFFile = struct {
         }
     }
 
-    /// Open from a raw byte buffer (no file I/O — for WASM or embedded use).
+    /// Open from a raw byte buffer (no file I/O, for WASM or embedded use).
     pub fn fromBuffer(allocator: Allocator, buf: []const u8) !GGUFFile {
         if (buf.len < gguf_min_header_size) return error.FileTooSmall;
         var self = GGUFFile{
@@ -530,7 +530,7 @@ pub const GGUFFile = struct {
     }
 
     fn fmtGetTensor(self: *GGUFFile, name: []const u8) ?FormatTensorInfo {
-        // LoRA override takes priority — merged F32 weight replaces original.
+        // LoRA override takes priority, merged F32 weight replaces original.
         if (self.lora_overrides.get(name)) |ov| {
             return .{ .name = name, .n_dims = ov.n_dims, .dims = ov.dims, .dtype = .f32, .data_ptr = @ptrCast(ov.data.ptr) };
         }
@@ -853,7 +853,7 @@ pub const GGUFFile = struct {
             const abs_offset = std.math.add(usize, self.data_offset, info_offset) catch
                 return error.OffsetOutOfBounds;
             const data_bytes = info.dataBytes();
-            // Detect overflow saturation from tensorBytes() — crafted dimensions.
+            // Detect overflow saturation from tensorBytes(), crafted dimensions.
             if (data_bytes == std.math.maxInt(usize)) return error.OffsetOutOfBounds;
             const tensor_end = std.math.add(usize, abs_offset, data_bytes) catch
                 return error.OffsetOutOfBounds;
@@ -943,7 +943,7 @@ pub const GGUFFile = struct {
 
 /// HF layer component → GGUF layer component (longest-prefix match order).
 const hf_gguf_layer_map = [_]struct { []const u8, []const u8 }{
-    // MLA attention (DeepSeek2/GLM-4) — longer prefixes first
+    // MLA attention (DeepSeek2/GLM-4), longer prefixes first
     .{ "self_attn.q_a_layernorm", "attn_q_a_norm" },
     .{ "self_attn.kv_a_layernorm", "attn_kv_a_norm" },
     .{ "self_attn.q_a_proj", "attn_q_a" },
@@ -966,7 +966,7 @@ const hf_gguf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "mlp.gate_proj", "ffn_gate" },
     .{ "mlp.up_proj", "ffn_up" },
     .{ "mlp.down_proj", "ffn_down" },
-    // MoE routing — longer prefixes first
+    // MoE routing, longer prefixes first
     .{ "mlp.gate.e_score_correction_bias", "exp_probs_b.bias" },
     .{ "mlp.gate", "ffn_gate_inp" },
     .{ "mlp.router", "ffn_gate_inp" },
@@ -1692,13 +1692,13 @@ test "fuzz: all gguf functions" {
                 // getTokenizerVocab, getTokenizerMerges
                 _ = gguf.getTokenizerVocab();
                 _ = gguf.getTokenizerMerges();
-                // tensorData — only safe if tensors exist
+                // tensorData, only safe if tensors exist
                 var it = gguf.tensors.valueIterator();
                 if (it.next()) |info| _ = gguf.tensorData(info);
                 gguf.deinit();
             } else |_| {}
 
-            // --- GGUFFile.open — errors on non-existent path ---
+            // --- GGUFFile.open, errors on non-existent path ---
             _ = GGUFFile.open(allocator, "/__nonexistent_fuzz_path__") catch {};
 
             // --- dequantQ4_0 ---

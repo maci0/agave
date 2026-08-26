@@ -65,7 +65,7 @@ pub const PngImage = struct {
     width: u32,
     /// Image height in pixels.
     height: u32,
-    /// Allocator used for the pixel buffer — needed by `deinit()`.
+    /// Allocator used for the pixel buffer, needed by `deinit()`.
     allocator: Allocator,
 
     /// Free pixel buffer (zeroed first to avoid lingering image data in freelist).
@@ -216,7 +216,7 @@ pub fn decodePng(allocator: Allocator, data: []const u8) ImageError!PngImage {
     };
 }
 
-/// Decoded PPM P6 image — pixels are a borrowed slice into the input buffer.
+/// Decoded PPM P6 image, pixels are a borrowed slice into the input buffer.
 pub const PpmImage = struct {
     /// Raw RGB pixel data (slice of the input buffer, not separately allocated).
     pixels: []const u8,
@@ -370,7 +370,7 @@ pub fn resize(allocator: Allocator, src: []const u8, src_w: u32, src_h: u32, dst
     const out = try allocator.alloc(u8, out_size);
     errdefer allocator.free(out);
 
-    // Bilinear interpolation — scale factors hoisted out of pixel loops
+    // Bilinear interpolation, scale factors hoisted out of pixel loops
     const scale_y: f64 = @as(f64, @floatFromInt(sh)) / @as(f64, @floatFromInt(dh));
     const scale_x: f64 = @as(f64, @floatFromInt(sw)) / @as(f64, @floatFromInt(dw));
     for (0..dh) |dy| {
@@ -479,7 +479,7 @@ fn unfilterScanlines(data: []u8, width: usize, height: usize, bpp: usize) !void 
         const row = data[row_start + 1 ..][0 .. width * bpp];
 
         switch (filter_type) {
-            0 => {}, // None — no reconstruction needed
+            0 => {}, // None, no reconstruction needed
             1 => {
                 // Sub: recon[i] = raw[i] + recon[i - bpp]
                 for (bpp..row.len) |i| {

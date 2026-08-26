@@ -1,4 +1,4 @@
-//! KV cache quantization — store/load operations for compressed KV cache.
+//! KV cache quantization, store/load operations for compressed KV cache.
 //! Separate from src/ops/quant.zig which handles weight dequantization.
 //! KV cache formats are optimized for inference access patterns (loads during SDPA).
 //!
@@ -9,16 +9,16 @@
 //!   - int8:      Block-quantized INT8 with f32 scale per 32 elements (1.125 B/elem)
 //!   - fp8_e4m3:  FP8 E4M3 format (1 byte/element, hardware-native on Hopper+)
 //!   - nvfp4:     NVFP4 E2M1 with FP8 scale per 16 elements (0.5625 B/elem)
-//!   - nvfp4_ds_mla: DeepSeek MLA KV — NVFP4 on NoPE (448), f16 on RoPE (64)
-//!   - turbo2-4:  TurboQuant — WHT + Lloyd-Max codebook (2.5/3.5/4.5 bits/elem)
-//!   - planar2-4: PlanarQuant — Givens 2D rotation + Lloyd-Max (same sizes as turbo)
-//!   - iso2-4:    IsoQuant — Quaternion 4D rotation + Lloyd-Max (same sizes as turbo)
-//!   - rotor2-4:  RotorQuant — Clifford Cl(3,0) rotor rotation + Lloyd-Max (same sizes as turbo)
+//!   - nvfp4_ds_mla: DeepSeek MLA KV, NVFP4 on NoPE (448), f16 on RoPE (64)
+//!   - turbo2-4:  TurboQuant, WHT + Lloyd-Max codebook (2.5/3.5/4.5 bits/elem)
+//!   - planar2-4: PlanarQuant, Givens 2D rotation + Lloyd-Max (same sizes as turbo)
+//!   - iso2-4:    IsoQuant, Quaternion 4D rotation + Lloyd-Max (same sizes as turbo)
+//!   - rotor2-4:  RotorQuant, Clifford Cl(3,0) rotor rotation + Lloyd-Max (same sizes as turbo)
 
 const std = @import("std");
 const quant = @import("quant.zig");
 
-/// 8-wide SIMD vector type for f32 — used across all SIMD helpers in this module.
+/// 8-wide SIMD vector type for f32, used across all SIMD helpers in this module.
 const V8 = @Vector(8, f32);
 
 /// Floor for near-zero absmax; below this, treat as unit scale to avoid /0.
@@ -139,7 +139,7 @@ inline fn wht32(buf: *[32]f32) void {
 // ── PlanarQuant: Givens 2D rotation ─────────────────────────────
 
 /// Fixed Givens rotation angles for 16 pairs in a 32-element block.
-/// Deterministic (not random) — same angles for all blocks.
+/// Deterministic (not random), same angles for all blocks.
 /// Chosen to decorrelate adjacent coordinate pairs.
 const planar_angles: [16]f32 = blk: {
     var a: [16]f32 = undefined;
@@ -288,7 +288,7 @@ inline fn rotorForward(buf: *[32]f32) void {
         // For rotor in e12 plane only (b13=0, b23=0):
         //   x' = (s²-b12²)*x + 2*s*b12*y
         //   y' = -2*s*b12*x + (s²-b12²)*y
-        //   z' = z (unchanged — rotation is in xy plane)
+        //   z' = z (unchanged, rotation is in xy plane)
         const ss = s * s;
         const bb12 = b12 * b12;
         const sb2 = 2.0 * s * b12;
@@ -638,7 +638,7 @@ pub fn kvSliceBytes(kv_type: KvQuantType, n: usize) usize {
 /// For element-wise formats (f32, f16, fp8), this is the exact byte offset.
 /// For block formats, this is the start of the containing block.
 /// Compute byte offset for the i-th logical f32 element in a KV cache buffer.
-/// Not forced inline — the 10-arm switch is large; let the compiler decide.
+/// Not forced inline, the 10-arm switch is large; let the compiler decide.
 pub fn kvByteOffset(kv_type: KvQuantType, i: usize) usize {
     return switch (kv_type) {
         .f32 => std.math.mul(usize, i, 4) catch std.math.maxInt(usize),
@@ -873,7 +873,7 @@ fn storeInt8(dst: [*]u8, src: [*]const f32, n: usize) void {
 }
 
 fn storeFp8(dst: [*]u8, src: [*]const f32, n: usize) void {
-    // Unroll 8-wide for instruction-level parallelism — each f32ToFp8E4M3 is
+    // Unroll 8-wide for instruction-level parallelism, each f32ToFp8E4M3 is
     // independent, so the CPU can pipeline 8 conversions simultaneously.
     var i: usize = 0;
     while (i + 8 <= n) : (i += 8) {
@@ -1349,7 +1349,7 @@ fn turboStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
             continue;
         }
 
-        // Walsh-Hadamard Transform (on un-normalized data — WHT linearity
+        // Walsh-Hadamard Transform (on un-normalized data, WHT linearity
         // lets us fold normalization into the post-WHT scale below).
         wht32(&buf);
 
@@ -1462,7 +1462,7 @@ fn isoStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
 inline fn nearestCentroid(comptime bits: u3, val: f32) u8 {
     const codebook = lloydMaxCodebook(bits);
     const n_centroids = @as(usize, 1) << bits;
-    // Precompute boundaries at comptime — avoids runtime midpoint arithmetic.
+    // Precompute boundaries at comptime, avoids runtime midpoint arithmetic.
     const bounds = comptime blk: {
         var b: [n_centroids - 1]f32 = undefined;
         for (0..n_centroids - 1) |i| {
@@ -1817,7 +1817,7 @@ fn f32ToFp8E4M3(val: f32) u8 {
     if (!std.math.isFinite(abs_val)) {
         if (std.math.isNan(val) and !fp8_nan_warned.load(.monotonic)) {
             fp8_nan_warned.store(true, .monotonic);
-            std.log.warn("f32ToFp8E4M3: NaN input clamped to max finite — possible KV cache corruption", .{});
+            std.log.warn("f32ToFp8E4M3: NaN input clamped to max finite, possible KV cache corruption", .{});
         }
         return (sign << 7) | fp8_e4m3_max_finite;
     }
@@ -1998,7 +1998,7 @@ test "fp8_e4m3 roundtrip" {
 }
 
 test "nvfp4 roundtrip" {
-    // NVFP4 E2M1 has limited precision — test with non-representable values
+    // NVFP4 E2M1 has limited precision, test with non-representable values
     // to exercise actual quantization error, not just identity roundtrip.
     // E2M1 codebook: {0, 0.5, 1, 1.5, 2, 3, 4, 6} (positive side)
     const src = [_]f32{ 0.8, -1.3, 0.7, 2.5, 0.0, -0.2, 3.5, -4.5 };
@@ -2190,7 +2190,7 @@ test "f32ToFp8E4M3 denormal and boundary values" {
     try std.testing.expect(rt_small > 0.0);
     try std.testing.expect(rt_small < 0.02);
 
-    // Very small value near zero — should roundtrip to something near zero
+    // Very small value near zero, should roundtrip to something near zero
     const tiny = f32ToFp8E4M3(1e-4);
     const rt_tiny = quant.fp8e4m3ToF32(tiny);
     try std.testing.expect(rt_tiny >= 0.0);
@@ -2445,7 +2445,7 @@ test "pack/unpack indices roundtrip" {
 }
 
 test "pack/unpack indices all-max values" {
-    // All indices set to maximum value for each bit width — catches
+    // All indices set to maximum value for each bit width, catches
     // overflow in nibble packing and byte boundary crossing.
     var indices: [32]u8 = undefined;
 
@@ -2457,7 +2457,7 @@ test "pack/unpack indices all-max values" {
     unpackIndices(2, &buf2, &out2);
     for (0..32) |i| try std.testing.expectEqual(@as(u8, 3), out2[i]);
 
-    // 3-bit: all 7s (0b111) — 3-bit packing crosses byte boundaries
+    // 3-bit: all 7s (0b111), 3-bit packing crosses byte boundaries
     for (&indices) |*v| v.* = 7;
     var buf3: [12]u8 = undefined;
     packIndices(3, &buf3, &indices);
@@ -2493,15 +2493,15 @@ test "fuzz: all kv_quant functions" {
             };
             const kv_type = all_types[type_idx];
 
-            // name — must return non-empty string
+            // name, must return non-empty string
             const nm = kv_type.name();
             std.debug.assert(nm.len > 0);
 
-            // bitsPerElement — must be positive
+            // bitsPerElement, must be positive
             const bpe = kv_type.bitsPerElement();
             std.debug.assert(bpe > 0);
 
-            // Boolean classifiers — at least one group must match for rotation quants
+            // Boolean classifiers, at least one group must match for rotation quants
             const it = kv_type.isTurbo();
             const ip = kv_type.isPlanar();
             const ii = kv_type.isIso();
@@ -2509,7 +2509,7 @@ test "fuzz: all kv_quant functions" {
             const irq = kv_type.isRotationQuant();
             std.debug.assert(irq == (it or ip or ii or ir));
 
-            // turboBits — 2/3/4 for rotation, 8 for Q8_0, 0 otherwise
+            // turboBits, 2/3/4 for rotation, 8 for Q8_0, 0 otherwise
             const tb = kv_type.turboBits();
             if (irq) {
                 std.debug.assert(tb >= 2 and tb <= 4);
@@ -2519,14 +2519,14 @@ test "fuzz: all kv_quant functions" {
                 std.debug.assert(tb == 0);
             }
 
-            // turboBlockByteSize — only nonzero for turbo{2,3,4}
+            // turboBlockByteSize, only nonzero for turbo{2,3,4}
             _ = kv_type.turboBlockByteSize();
 
-            // fromString — roundtrip: name -> fromString should find *something*
+            // fromString, roundtrip: name -> fromString should find *something*
             // (name() returns short names like "F32", "TQ2", etc.)
             _ = KvQuantType.fromString(nm);
 
-            // fromString with random bytes — must not crash
+            // fromString with random bytes, must not crash
             var rnd_str: [4]u8 = undefined;
             for (&rnd_str) |*c| c.* = smith.valueWithHash(u8, 1);
             _ = KvQuantType.fromString(&rnd_str);
@@ -2559,7 +2559,7 @@ test "fuzz: all kv_quant functions" {
             var kv_buf: [64]u8 align(4) = @splat(0);
             kvStore(&kv_buf, &src, n, kv_type);
 
-            // kvDot — result must be finite
+            // kvDot, result must be finite
             var q_vec: [32]f32 = undefined;
             for (&q_vec, 0..) |*v, qi| {
                 const raw_bits = smith.valueWithHash(u32, @as(u32, @intCast(qi)) +% 200);
@@ -2571,7 +2571,7 @@ test "fuzz: all kv_quant functions" {
             const dot = kvDot(&q_vec, &kv_buf, n, kv_type);
             std.debug.assert(std.math.isFinite(dot));
 
-            // kvMulAccum — result elements must be finite
+            // kvMulAccum, result elements must be finite
             var acc = [_]f32{0} ** 32;
             const weight_bits = smith.valueWithHash(u32, 300);
             var weight: f32 = @bitCast(weight_bits);

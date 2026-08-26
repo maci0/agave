@@ -42,7 +42,7 @@ let abortCtrl = null;
 let isStreaming = false;
 let autoScroll = true;
 let renderTimer = null;
-/** Latest stream paint target — updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
+/** Latest stream paint target, updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
 let pendingStreamRender = null;
 let msgRoleIdSeq = 0;
 sendBtn.disabled = true;
@@ -747,7 +747,7 @@ function renderFinal(el, content) {
         }
     }
     const parsed = markdownToHtml(dc);
-    // DOMPurify guarantees safe HTML — render as rich content.
+    // DOMPurify guarantees safe HTML, render as rich content.
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- optional CDN dependency feature detection
     if (DOMPurify) {
         const sanitized = DOMPurify.sanitize(parsed, { ADD_TAGS: ['details', 'summary'] });
@@ -1033,7 +1033,7 @@ function showEmpty() {
     chat.replaceChildren();
     const empty = document.createElement('div');
     empty.id = 'empty';
-    // Hardcoded HTML constant — no user input, safe without sanitization
+    // Hardcoded HTML constant, no user input, safe without sanitization
     const icon = document.createElement('div');
     icon.className = 'icon';
     icon.setAttribute('aria-hidden', 'true');

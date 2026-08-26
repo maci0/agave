@@ -19,9 +19,9 @@ zig build                                          # Build (ReleaseFast + Debug)
 ```
 
 `zig build` produces three binaries:
-- `zig-out/bin/agave` — ReleaseFast (optimized; size varies with enabled models/backends)
-- `zig-out/bin/agave-debug` — ReleaseSafe (safety checks, leak detection)
-- `zig-out/bin/agave-bench` — ReleaseFast micro-benchmark tool (`src/micro_bench.zig`)
+- `zig-out/bin/agave`: ReleaseFast (optimized; size varies with enabled models/backends)
+- `zig-out/bin/agave-debug`: ReleaseSafe (safety checks, leak detection)
+- `zig-out/bin/agave-bench`: ReleaseFast micro-benchmark tool (`src/micro_bench.zig`)
 
 ## Project Structure
 
@@ -463,7 +463,7 @@ DDTree speculative decode -> output tokens
 |--------|-------------|
 | `transport.zig` | Transport layer: TCP (cross-node), POSIX shm (same-node zero-copy), NCCL (GPU-optimized RoCE RDMA) |
 
-**Modes**: Tensor Parallelism (`--tp N`), Pipeline Parallelism (`--pp N`), Hybrid TP+PP, Disaggregated Prefill/Decode (`--disagg`). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")` — no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device. See [PARALLELISM.md](PARALLELISM.md).
+**Modes**: Tensor Parallelism (`--tp N`), Pipeline Parallelism (`--pp N`), Hybrid TP+PP, Disaggregated Prefill/Decode (`--disagg`). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")`, no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device. See [PARALLELISM.md](PARALLELISM.md).
 
 ### Quantization Types
 
@@ -487,12 +487,12 @@ DDTree speculative decode -> output tokens
 | `fp8_e5m2` | 8 | 1 | Weights only |
 | `nvfp4` | 4.25 | 16 | Blackwell+ (GGUF) |
 | `mxfp4` | 4.25 | 32 | Microscaled FP4 |
-| `tq1_0` | 1.7 | 256 | Ternary {-1,0,+1} — base-3 packed (5 trits/byte), all 6 backends |
-| `tq2_0` | 2.0 | 256 | Ternary {-1,0,+1} — 2-bit packed (4 values/byte), all 6 backends |
+| `tq1_0` | 1.7 | 256 | Ternary {-1,0,+1}, base-3 packed (5 trits/byte), all 6 backends |
+| `tq2_0` | 2.0 | 256 | Ternary {-1,0,+1}, 2-bit packed (4 values/byte), all 6 backends |
 | `mlx_q` | 4-8 | 64 | MLX models (affine: scale × uint + bias) |
 | `gptq` | 4.25 | 32-128 | GPTQ INT4 (row-major packed u32, per-group scales/qzeros) |
 | `awq` | 4.25 | 32-128 | AWQ INT4 (column-major packed u32, GEMM-order interleave [0,2,4,6,1,3,5,7]) |
-| `hqq` | 4.0 | 64 | HQQ INT4 (uint8 2-nibble packed, float meta.scale/meta.zero — CPU only) |
+| `hqq` | 4.0 | 64 | HQQ INT4 (uint8 2-nibble packed, float meta.scale/meta.zero, CPU only) |
 
 **KV Cache Quantization Types** (see `src/ops/kv_quant.zig`):
 
