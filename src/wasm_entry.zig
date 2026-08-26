@@ -61,7 +61,7 @@ const InferenceContext = struct {
 export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     const ctx = gpa.create(InferenceContext) catch return 0;
     // Initialize with safe defaults BEFORE attempting fallible parse.
-    // gpa.create returns uninitialized memory — if fromBuffer fails and we
+    // gpa.create returns uninitialized memory, if fromBuffer fails and we
     // return early, agave_free would deinit garbage fields.
     ctx.* = .{
         .gguf = undefined,

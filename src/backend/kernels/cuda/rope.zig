@@ -22,7 +22,7 @@ export fn rope_kernel(x: [*]f32, pos: u32, n_heads: u32, head_dim: u32, rope_dim
 
     // freq = 1 / theta^(2i / rope_dim)
     // Computed as exp(-ln(theta) * 2i / rope_dim) where ln(x) = log2(x) * ln(2),
-    // because CUDA has no native ln instruction — only lg2.approx.
+    // because CUDA has no native ln instruction, only lg2.approx.
     const neg_log_theta = -cu.log2f(theta) * ln2;
     const freq = cu.expf(neg_log_theta * @as(f32, @floatFromInt(i * 2)) / @as(f32, @floatFromInt(rope_dim)));
     const angle = @as(f32, @floatFromInt(pos)) * freq;

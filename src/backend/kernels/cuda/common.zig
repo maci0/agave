@@ -4,7 +4,7 @@
 //! Imported by individual kernel files (silu.zig, rms_norm.zig, etc.)
 //! and compiled together to PTX via nvptx64-cuda target.
 
-/// Memory fence — prevents LLVM from optimizing away global memory stores.
+/// Memory fence, prevents LLVM from optimizing away global memory stores.
 /// Required when using callconv(.nvptx_device) instead of .kernel (Zig 0.16 LLVM workaround).
 pub fn memoryFence() void {
     asm volatile ("" ::: "memory");
@@ -188,12 +188,12 @@ pub fn blockReduceAdd(val: f32) f32 {
     const lane = tid % 32;
     const warp_id = tid / 32;
 
-    // Phase 1: intra-warp reduction — ALL lanes must participate
+    // Phase 1: intra-warp reduction, ALL lanes must participate
     const warp_sum = warpReduceAdd(val);
     if (lane == 0) sharedStore(warp_id, warp_sum);
     syncthreads();
 
-    // Phase 2: inter-warp reduction — only warp 0
+    // Phase 2: inter-warp reduction, only warp 0
     const n_warps = (blockDim() + 31) / 32;
     var result: f32 = if (tid < n_warps) sharedLoad(tid) else 0.0;
     if (warp_id == 0) result = warpReduceAdd(result);

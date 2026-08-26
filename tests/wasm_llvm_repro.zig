@@ -102,7 +102,7 @@ const SimpleModel = struct {
     }
 };
 
-// This compiles fine on wasm32 — the bug only triggers with the full
+// This compiles fine on wasm32, the bug only triggers with the full
 // agave model code across multiple compilation units.
 export fn test_vtable() u32 {
     var model = SimpleModel{};

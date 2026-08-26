@@ -97,7 +97,7 @@ pub const SchedulerResult = struct {
 ///
 /// blocks:  slice of R ConfidenceBlock (each pre-populated with c[] and a[]).
 /// profile: pre-profiled SPS table for the target model.
-/// result:  output — per-request verification lengths.
+/// result:  output, per-request verification lengths.
 pub fn scheduleVerification(
     blocks: []ConfidenceBlock,
     profile: SpsProfile,
@@ -106,7 +106,7 @@ pub fn scheduleVerification(
 ) void {
     const R = blocks.len;
     if (R == 0) return;
-    // result.lengths / cur_len are [256]u32 — clamp to prevent OOB.
+    // result.lengths / cur_len are [256]u32, clamp to prevent OOB.
     const R_clamped = @min(R, 256);
     // Caller must supply scratch with capacity ≥ R_clamped × γ.
     std.debug.assert(scratch.len >= R_clamped * max_block);
@@ -159,7 +159,7 @@ pub fn scheduleVerification(
         const j = cand.pos;
 
         // Enforce prefix constraint: can only extend by 1 at a time.
-        if (cur_len[r] != j) continue; // gaps not allowed — skip out-of-order
+        if (cur_len[r] != j) continue; // gaps not allowed, skip out-of-order
 
         // Tentatively extend request r by one position.
         cur_len[r] = j + 1;
@@ -174,7 +174,7 @@ pub fn scheduleVerification(
             result.batch_size = batch_size;
             result.expected_accepts = tau;
         } else {
-            // Throughput dropped — stop (early-exit ensures non-anticipating property).
+            // Throughput dropped, stop (early-exit ensures non-anticipating property).
             break;
         }
     }
@@ -190,9 +190,9 @@ pub fn scheduleVerification(
 /// W1 ∈ R^{V × r}: embedding lookup  (vocab_size × rank)
 /// W2 ∈ R^{r × V}: logit projection  (rank × vocab_size)
 pub const MarkovHead = struct {
-    /// W1 row-major [vocab_size, rank] — embedding of previous token.
+    /// W1 row-major [vocab_size, rank], embedding of previous token.
     w1: []const f32,
-    /// W2 row-major [rank, vocab_size] — bias projection.
+    /// W2 row-major [rank, vocab_size], bias projection.
     w2: []const f32,
     vocab_size: u32,
     rank: u32,
@@ -253,7 +253,7 @@ pub const RnnHead = struct {
     w1: []const f32,
     /// W2 row-major [rank, vocab_size].
     w2: []const f32,
-    /// W_g, W_c, W_o jointly packed row-major as [3*r, 2r+d] — split gate/candidate/output.
+    /// W_g, W_c, W_o jointly packed row-major as [3*r, 2r+d], split gate/candidate/output.
     /// w_gco[ri*(2r+d)..(ri+1)*(2r+d)] = row ri of W_g;
     /// w_gco[(r+ri)*(2r+d)..] = row ri of W_c; w_gco[(2r+ri)*(2r+d)..] = row ri of W_o.
     w_gco: []const f32,

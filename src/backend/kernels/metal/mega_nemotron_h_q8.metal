@@ -6,7 +6,7 @@
 //   2 = FFN-only: squared-ReLU MLP (no gate tensor, single up+down)
 //
 // The megakernel processes attention and FFN-only layers inline.
-// SSM layers break out — the host dispatches standard SSM kernels for those.
+// SSM layers break out, the host dispatches standard SSM kernels for those.
 //
 // All layer types share a pre-norm (attn_norm) and post-norm (post_attn_norm).
 // FFN uses SiLU*mul for attention layers, ReLU² for FFN-only layers.
@@ -14,14 +14,14 @@
 // Dispatch: max(n_embd, n_ff, n_ff_ffn_only) threadgroups × 256 threads.
 //
 // Buffer layout:
-//   0: weights_base [*]const u8 — all model weights (mmap'd GGUF)
-//   1: layer_offsets [n_layers × 20 × u64] — per-layer byte offsets
+//   0: weights_base [*]const u8, all model weights (mmap'd GGUF)
+//   1: layer_offsets [n_layers × 20 × u64], per-layer byte offsets
 //   2: kv_keys [n_attn_layers × max_seq × kv_dim × sizeof(f32)]
 //   3: kv_values [n_attn_layers × max_seq × kv_dim × sizeof(f32)]
-//   4: hidden [n_embd] f32 — input/output hidden state
-//   5: scratch [scratch_size] f32 — intermediate buffers
-//   6: sync_counters [32] atomic_uint — grid sync barriers
-//   7: params — struct with model dimensions
+//   4: hidden [n_embd] f32, input/output hidden state
+//   5: scratch [scratch_size] f32, intermediate buffers
+//   6: sync_counters [32] atomic_uint, grid sync barriers
+//   7: params, struct with model dimensions
 
 struct MegaNemotronHParams {
     uint n_layers;
@@ -92,7 +92,7 @@ kernel void megakernel_nemotron_h_q8(
             // The host will read hidden2 and dispatch standard SSM kernels.
             // We write hidden2 to device memory (already done by rmsNorm above).
             // On resume, the host writes SSM output back into hidden2.
-            // For now, skip SSM processing — Phase 2 will handle break/resume.
+            // For now, skip SSM processing, Phase 2 will handle break/resume.
 
         } else if (layer_type == LAYER_TYPE_ATTENTION) {
             // ── 2a. Attention: Q/K/V → RoPE → SDPA → output ─────────

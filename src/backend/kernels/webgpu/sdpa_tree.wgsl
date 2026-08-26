@@ -1,4 +1,4 @@
-// Tree-Masked SDPA — FlashAttention-2 with ancestor bitmask
+// Tree-Masked SDPA, FlashAttention-2 with ancestor bitmask
 // One workgroup per (node, head) pair.
 
 struct Params {

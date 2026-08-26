@@ -53,7 +53,7 @@ fn getenv(name: []const u8) ?[]const u8 {
     return std.mem.sliceTo(ptr, 0);
 }
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC — interval timing only).
+/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
 fn perfMonoMs() u64 {
     var ts: std.posix.timespec = undefined;
     _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
@@ -364,7 +364,7 @@ pub const Transport = struct {
         const major = @as(u32, @intCast(nccl_ver)) / 10000;
         const minor = (@as(u32, @intCast(nccl_ver)) % 10000) / 100;
         const patch = @as(u32, @intCast(nccl_ver)) % 100;
-        std.log.info("NCCL: rank {d}/{d} ready — v{d}.{d}.{d}, deferred init, ID exchanged over TCP fd={d}", .{
+        std.log.info("NCCL: rank {d}/{d} ready, v{d}.{d}.{d}, deferred init, ID exchanged over TCP fd={d}", .{
             self.rank, self.world_size, major, minor, patch, self.tcp_fds[0],
         });
 
@@ -385,7 +385,7 @@ pub const Transport = struct {
     }
 
     /// Lazily initialize NCCL communicator. Called on first NCCL operation.
-    /// Not thread-safe — callers must ensure single-threaded access per rank.
+    /// Not thread-safe, callers must ensure single-threaded access per rank.
     pub fn ensureNcclComm(self: *Transport) void {
         if (self.nccl_comm != null) return;
         if (self.kind != .nccl) return;
@@ -437,11 +437,11 @@ pub const Transport = struct {
         if (self.kind == .nccl) {
             self.ensureNcclComm();
             if (self.nccl_comm == null) {
-                // ensureNcclComm sets kind=.tcp on failure — fall through to TCP path
+                // ensureNcclComm sets kind=.tcp on failure, fall through to TCP path
                 if (self.tcp_connected > 0) try self.tcpAllReduce(buf, n);
                 return;
             }
-            // Get CUDA device pointer — if buf is dirty on device, use it directly.
+            // Get CUDA device pointer, if buf is dirty on device, use it directly.
             // If stale (CPU fallback wrote to host), fall back to TCP for this call.
             const dptr: u64 = if (self.cuda_get_dev_ptr) |getPtr|
                 if (self.cuda_backend) |be| getPtr(be, buf) else 0
@@ -456,7 +456,7 @@ pub const Transport = struct {
                     return error.NcclAllReduceFailed;
                 }
             } else {
-                // CPU fallback wrote to host — upload to device staging, NCCL allReduce, download
+                // CPU fallback wrote to host, upload to device staging, NCCL allReduce, download
                 if (self.cuda_sync) |sync| _ = sync();
                 const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
                 try self.ensureStagingBuf(byte_len);
@@ -497,7 +497,7 @@ pub const Transport = struct {
         const recv_u8: [*]u8 = @ptrCast(recv.ptr);
 
         // Rank-based ordering prevents deadlock: rank 0 sends first, rank 1
-        // recvs first. This ensures that for any payload size, one side is
+        // recvs first. For any payload size, one side is
         // always draining data while the other is producing it.
         if (self.rank == 0) {
             try tcpSendAll(fd, buf_u8, byte_len);
@@ -818,7 +818,7 @@ test "fuzz: all transport functions" {
             var t = Transport.init(allocator, kind, rank, world_size) catch return;
             defer t.deinit(); // exercises deinit on every path
 
-            // ── connectPeer (will fail — no listener, exercises error path) ──
+            // ── connectPeer (will fail, no listener, exercises error path) ──
             const host = [4]u8{
                 smith.valueWithHash(u8, 3),
                 smith.valueWithHash(u8, 4),
@@ -832,10 +832,10 @@ test "fuzz: all transport functions" {
             const bad_fd = smith.valueWithHash(c_int, 8);
             t.acceptPeer(bad_fd) catch {};
 
-            // ── setupShm (will fail in test env — no peer) ──
+            // ── setupShm (will fail in test env, no peer) ──
             t.setupShm() catch {};
 
-            // ── setupNccl (will fail — no libnccl) ──
+            // ── setupNccl (will fail, no libnccl) ──
             t.setupNccl() catch {};
 
             // ── ensureNcclComm (no-op without nccl_comm_init_rank) ──

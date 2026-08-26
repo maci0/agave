@@ -45,7 +45,7 @@ def compare_outputs(agave_output: str, reference_output: str) -> bool:
         return False
 
     if not reference_output or len(reference_output) < 10:
-        print("FAIL: Reference output is empty or too short — regenerate golden references", file=sys.stderr)
+        print("FAIL: Reference output is empty or too short, regenerate golden references", file=sys.stderr)
         return False
 
     # Length ratio check: output should be 80-120% of reference length.

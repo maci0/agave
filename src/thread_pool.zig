@@ -31,7 +31,7 @@ pub const ThreadPool = struct {
     task_counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     // Pad task_counter onto its own cache line. task_counter is the hottest
-    // field — every worker does fetchAdd per grain chunk. Without padding,
+    // field, every worker does fetchAdd per grain chunk. Without padding,
     // generation/active share the same cache line, causing cross-core
     // invalidation traffic when workers finish and decrement active while
     // remaining workers are still pulling from task_counter.
@@ -50,7 +50,7 @@ pub const ThreadPool = struct {
     };
 
     /// Create a thread pool descriptor with `n` worker threads.
-    /// Does NOT spawn threads — call `spawn()` after the pool is at its
+    /// Does NOT spawn threads, call `spawn()` after the pool is at its
     /// final memory location (e.g. embedded in a struct, not a stack local
     /// that will be returned by value).
     pub fn init(n: usize) ThreadPool {
@@ -231,7 +231,7 @@ test "parallelFor zero elements" {
     var ctx = SumContext{ .result = std.atomic.Value(usize).init(42) };
     pool.parallelFor(0, 1, @ptrCast(&ctx), SumContext.callback);
 
-    // No work done — result should remain at initial value
+    // No work done, result should remain at initial value
     try std.testing.expectEqual(@as(usize, 42), ctx.result.load(.acquire));
 }
 

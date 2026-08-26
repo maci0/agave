@@ -20,7 +20,7 @@ import os
 from pathlib import Path
 import sys
 
-# Test prompts — must match tests/models/test_*.zig prompts exactly
+# Test prompts, must match tests/models/test_*.zig prompts exactly
 PROMPTS = {
     "gemma3": "What is the capital of France?",
     "gemma4": "Explain the theory of relativity.",
@@ -32,7 +32,7 @@ PROMPTS = {
     "gpt_oss": "Once upon a time in a distant galaxy,",
 }
 
-# Model paths — must match tests/models/test_*.zig paths exactly
+# Model paths, must match tests/models/test_*.zig paths exactly
 MODEL_PATHS = {
     "gemma3": "models/lmstudio-community/gemma-3-4b-it-GGUF/gemma-3-4b-it-Q4_0.gguf",
     "gemma4": "models/lmstudio-community/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-Q4_K_M.gguf",

@@ -28,7 +28,7 @@ const PagedKvCache = kvcache.PagedKvCache;
 const SeqBlockTable = kvcache.SeqBlockTable;
 
 /// Default prefill chunk size (tokens per batch).
-/// Must not exceed paged_block_size (256) — sdpaPrefill writes KV into a
+/// Must not exceed paged_block_size (256), sdpaPrefill writes KV into a
 /// single-block view returned by getLayerKvView, so a larger chunk would
 /// overflow the block boundary.
 const default_chunk_size: u32 = 256;
@@ -484,7 +484,7 @@ pub const Gemma3Model = struct {
         self.doGemm(self.pf_hidden2.ptr, kw, self.pf_k.ptr, n_tok, nkv * hd, e);
         self.doGemm(self.pf_hidden2.ptr, vw, self.pf_v.ptr, n_tok, nkv * hd, e);
 
-        // Per-head QK norms — treat n_tok*n_heads as total heads
+        // Per-head QK norms, treat n_tok*n_heads as total heads
         const qn = self.fmt.layerTensor(li, "attn_q_norm.weight") orelse return error.MissingTensor;
         self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
         const kn = self.fmt.layerTensor(li, "attn_k_norm.weight") orelse return error.MissingTensor;
@@ -497,7 +497,7 @@ pub const Gemma3Model = struct {
             self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, rd, self.rope_local_theta);
             self.be.ropeBatched(self.pf_k.ptr, self.pf_positions.ptr, n_tok, nkv, hd, rd, self.rope_local_theta);
         } else if (self.rope_freq_scale != 1.0) {
-            // CPU RoPE with frequency scaling — must sync before reading GPU-written pf_q/pf_k.
+            // CPU RoPE with frequency scaling, must sync before reading GPU-written pf_q/pf_k.
             self.be.sync();
             for (0..n_tok) |t| {
                 applyRopeScaled(self.pf_q.ptr + t * nh * hd, self.pf_positions[t], nh, hd, rd, self.rope_theta, self.rope_freq_scale);
@@ -513,7 +513,7 @@ pub const Gemma3Model = struct {
         const kv_keys_bytes: []u8 = std.mem.sliceAsBytes(kv_view.keys);
         const kv_values_bytes: []u8 = std.mem.sliceAsBytes(kv_view.values);
         const prev_len: usize = self.pf_positions[0];
-        // Use .f32 — PagedKvCache blocks store f32. Must match decode path.
+        // Use .f32, PagedKvCache blocks store f32. Must match decode path.
         self.be.sdpaPrefill(self.pf_q.ptr, self.pf_k.ptr, self.pf_v.ptr, kv_keys_bytes, kv_values_bytes, self.pf_attn_out.ptr, nh, nkv, hd, prev_len, n_tok, self.attn_scale, .f32, .f32);
 
         // Output projection
@@ -549,7 +549,7 @@ pub const Gemma3Model = struct {
     }
 
     /// Batch tree forward: process B tree nodes through all layers using batched
-    /// GEMM and tree-masked SDPA. Does NOT modify the main KV cache — tree KV
+    /// GEMM and tree-masked SDPA. Does NOT modify the main KV cache, tree KV
     /// entries are temporary. After this call, `pf_hidden[i*e..(i+1)*e]` contains
     /// the final hidden state for tree node i. Use `treeLogits(node_i)` to compute
     /// logits for a specific node.
@@ -745,7 +745,7 @@ pub const Gemma3Model = struct {
         const nh: usize = self.n_head;
         const nkv: usize = self.n_head_kv;
         const hd: usize = self.head_dim;
-        // Pre-norm — fuse with deferred FFN residual if pending.
+        // Pre-norm, fuse with deferred FFN residual if pending.
         var t = self.perf.start();
         const norm_w = self.fmt.layerTensor(li, "attn_norm.weight") orelse return error.MissingTensor;
         if (self.pending_ffn_residual) {
@@ -780,7 +780,7 @@ pub const Gemma3Model = struct {
         self.be.endBatch();
         self.perf.end(.rms_norm, t);
 
-        // RoPE — partial rotation (rope_dim may be < head_dim)
+        // RoPE, partial rotation (rope_dim may be < head_dim)
         // Local layers: theta=10K unscaled; global layers: theta=1M with freq_scale
         t = self.perf.start();
         const rd: usize = self.rope_dim;
@@ -791,7 +791,7 @@ pub const Gemma3Model = struct {
             self.be.rope(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_local_theta);
             self.be.endBatch();
         } else if (self.rope_freq_scale != 1.0) {
-            // CPU RoPE with frequency scaling — must sync before reading GPU-written q_buf/k_buf.
+            // CPU RoPE with frequency scaling, must sync before reading GPU-written q_buf/k_buf.
             self.be.sync();
             applyRopeScaled(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd, self.rope_theta, self.rope_freq_scale);
             applyRopeScaled(self.k_buf.ptr, self.kv_seq_len, nkv, hd, rd, self.rope_theta, self.rope_freq_scale);
@@ -1001,7 +1001,7 @@ pub const Gemma3Model = struct {
         const needs_convert = t.dtype == .bf16 or self.norm_add_one;
         if (!needs_convert) return @ptrCast(@alignCast(t.data_ptr));
 
-        // Check cache (linear scan — at most ~170 entries, first-token only on miss)
+        // Check cache (linear scan, at most ~170 entries, first-token only on miss)
         const key = @intFromPtr(t.data_ptr);
         for (self.norm_cache[0..self.norm_cache_len]) |entry| {
             if (entry.key == key) return entry.data.ptr;
@@ -1010,7 +1010,7 @@ pub const Gemma3Model = struct {
         // Cache miss: allocate, convert, and store permanently.
         // Guard capacity before allocating to avoid leaking uncached buffers.
         if (self.norm_cache_len >= max_norm_entries)
-            @panic("normAsF32: norm cache overflow — increase max_norm_entries");
+            @panic("normAsF32: norm cache overflow, increase max_norm_entries");
         const buf = self.allocator.alloc(f32, n) catch @panic("normAsF32: out of memory converting norm weights");
         const offset: f32 = if (self.norm_add_one) 1.0 else 0.0;
         if (t.dtype == .bf16) {
@@ -1046,7 +1046,7 @@ pub const Gemma3Model = struct {
         if (self.mlx_cc_keys[slot] == key) {
             companion = self.mlx_cc_vals[slot];
         } else {
-            // Cache miss — resolve via name lookup (once per unique tensor)
+            // Cache miss, resolve via name lookup (once per unique tensor)
             const base_name = t.name;
             const prefix_len = if (std.mem.endsWith(u8, base_name, ".weight"))
                 base_name.len - ".weight".len
@@ -1148,7 +1148,7 @@ test "Gemma3 layerVType boundary protection" {
     m.n_layers = 26;
     m.kv_type_v = .turbo4;
 
-    // No boundary — all layers use configured type
+    // No boundary, all layers use configured type
     m.kv_boundary_v = 0;
     try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(0));
     try std.testing.expectEqual(kv_quant.KvQuantType.turbo4, m.layerVType(25));

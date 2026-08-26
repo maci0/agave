@@ -11,7 +11,7 @@ pub const SEL = *anyopaque;
 /// Objective-C unsigned integer type (64-bit on all Apple Silicon targets).
 pub const NSUInteger = u64;
 
-/// MTLSize struct — { width, height, depth }
+/// MTLSize struct, { width, height, depth }
 pub const MTLSize = extern struct {
     width: NSUInteger,
     height: NSUInteger,
@@ -65,7 +65,7 @@ pub fn msgSend(comptime R: type, target: anytype, s: SEL, args: anytype) R {
 
 // ── Tests ───────────────────────────────────────────────────────────
 
-test "objc — MTLSize layout" {
+test "objc, MTLSize layout" {
     // Verify MTLSize has correct extern struct layout (3 × u64 = 24 bytes).
     try @import("std").testing.expectEqual(@as(usize, 24), @sizeOf(MTLSize));
     try @import("std").testing.expectEqual(@as(usize, 8), @alignOf(MTLSize));
@@ -76,7 +76,7 @@ test "objc — MTLSize layout" {
     try @import("std").testing.expectEqual(@as(NSUInteger, 1), size.depth);
 }
 
-test "objc — MsgSendFn comptime type generation" {
+test "objc, MsgSendFn comptime type generation" {
     // Verify MsgSendFn generates correct function pointer types for 0-8 args.
     const Fn0 = MsgSendFn(void, id, struct {});
     const fn0_info = @typeInfo(Fn0).pointer;
@@ -91,7 +91,7 @@ test "objc — MsgSendFn comptime type generation" {
     try @import("std").testing.expect(fn2_info.child == fn (id, SEL, u64, id) callconv(.c) id);
 }
 
-test "objc — type sizes" {
+test "objc, type sizes" {
     // Verify pointer-sized ObjC types.
     try @import("std").testing.expectEqual(@sizeOf(*anyopaque), @sizeOf(id));
     try @import("std").testing.expectEqual(@sizeOf(*anyopaque), @sizeOf(Class));
@@ -99,7 +99,7 @@ test "objc — type sizes" {
     try @import("std").testing.expectEqual(@as(usize, 8), @sizeOf(NSUInteger));
 }
 
-test "objc — sel and getClass function signatures exist" {
+test "objc, sel and getClass function signatures exist" {
     comptime {
         _ = @TypeOf(sel);
         _ = @TypeOf(getClass);
@@ -108,7 +108,7 @@ test "objc — sel and getClass function signatures exist" {
     }
 }
 
-test "objc — public function signature contracts" {
+test "objc, public function signature contracts" {
     // Verify sel() accepts [*:0]const u8 and returns SEL.
     comptime {
         const SelFn = @TypeOf(sel);
@@ -141,7 +141,7 @@ test "fuzz: all objc functions" {
     }.f, .{});
 }
 
-test "objc — MsgSendFn covers all arities 0-8" {
+test "objc, MsgSendFn covers all arities 0-8" {
     comptime {
         // Arity 0
         _ = MsgSendFn(void, id, struct {});

@@ -2,7 +2,7 @@
 
 Python tools for testing, benchmarking, and tuning Agave's compute kernels.
 
-This directory is **not part of the main build** — nothing here ships in the
+This directory is **not part of the main build**, nothing here ships in the
 final binary (per CLAUDE.md section 13). For background on kernels, backends,
 quantization, and other concepts, see [DOCUMENTATION.md](../../docs/DOCUMENTATION.md).
 
@@ -47,9 +47,9 @@ The registry (`registry.py`) maps kernel names to their source files across
 backends. Each entry tracks:
 
 - **Source files** per backend (which `.zig`, `.metal`, `.comp` files implement it)
-- **Golden prefix** — filename prefix for known-correct test data in `golden/`
-- **Bench quants** — which weight formats to use when benchmarking
-- **Reference function** — the PyTorch equivalent in `reference.py`
+- **Golden prefix**: filename prefix for known-correct test data in `golden/`
+- **Bench quants**: which weight formats to use when benchmarking
+- **Reference function**: the PyTorch equivalent in `reference.py`
 
 ```bash
 uv run run.py list          # See all kernels
@@ -86,7 +86,7 @@ Write a Python reference, generate test data, port to Zig, benchmark.
 uv run run.py golden sdpa          # Generate test data for one kernel
 uv run run.py golden               # Generate all
 
-# 3. Port to Zig — your Zig tests load the golden data to verify correctness:
+# 3. Port to Zig: your Zig tests load the golden data to verify correctness:
 #    const expected = @embedFile("../../research/kernels/golden/rms_norm_n1152_out.bin");
 
 # 4. Benchmark your implementation
@@ -108,7 +108,7 @@ uv run run.py tune gemv_q4_0 -b metal -d "vectorized inner loop"
 uv run run.py diff                    # Which kernels have changed files?
 uv run run.py bench --changed         # Benchmark just those
 
-# Grid search — try every value and pick the fastest
+# Grid search: try every value and pick the fastest
 #   --pattern: the exact line in the source file to replace
 #   --template: what to replace it with ({value} gets substituted)
 uv run run.py grid gemv_q4_0 \
@@ -117,7 +117,7 @@ uv run run.py grid gemv_q4_0 \
     --pattern "const block_size: usize = 64;" \
     --template "const block_size: usize = {value};"
 
-# Automated search — cycles through parameters from search_spaces.toml
+# Automated search: cycles through parameters from search_spaces.toml
 uv run run.py auto softmax --backend cpu --patience 3 --max-iters 10
 ```
 
@@ -141,9 +141,9 @@ For use by Claude Code or similar AI coding agents:
 
 Two modes:
 
-- **Micro-benchmark** (default) — runs one kernel in isolation, measures raw
+- **Micro-benchmark** (default), runs one kernel in isolation, measures raw
   speed in nanoseconds. No model files needed.
-- **End-to-end** (`--e2e`) — runs full model inference, measures tokens per
+- **End-to-end** (`--e2e`), runs full model inference, measures tokens per
   second. Requires `.gguf` model files in `models/`.
 
 ```bash
@@ -168,14 +168,14 @@ uv run run.py bench softmax --compare            # Show delta vs baseline
 
 ### Optimization Commands
 
-**`tune`** — Build, benchmark, and log the result. Use after manual edits.
+**`tune`**, Build, benchmark, and log the result. Use after manual edits.
 
 ```bash
 uv run run.py tune gemv_q4_0 -b metal -d "description of change"
 uv run run.py tune gemv_q4_0 -b cpu -d "V8 SIMD" --auto-revert  # revert on failure
 ```
 
-**`grid`** — Try every value for a parameter, pick the best. The source file is
+**`grid`**, Try every value for a parameter, pick the best. The source file is
 temporarily modified for each value, then restored.
 
 ```bash
@@ -185,11 +185,11 @@ uv run run.py grid sdpa -b metal \
     --template "const sdpa_block: usize = {value};"
 ```
 
-**`auto`** — Automated search over parameters defined in `search_spaces.toml`.
+**`auto`**, Automated search over parameters defined in `search_spaces.toml`.
 Two strategies:
-- **hill-climb** (default) — try each value, keep improvements, stop after
+- **hill-climb** (default), try each value, keep improvements, stop after
   `--patience` consecutive non-improvements
-- **bayesian** — uses Optuna to intelligently sample the search space
+- **bayesian**: uses Optuna to intelligently sample the search space
   (install with `uv sync --extra bayesian`)
 
 ```bash
@@ -197,7 +197,7 @@ uv run run.py auto softmax --backend cpu --patience 3
 uv run run.py auto softmax --strategy bayesian --max-iters 20
 ```
 
-**`status`** — View the log of all tune/grid/auto runs.
+**`status`**, View the log of all tune/grid/auto runs.
 
 ```bash
 uv run run.py status
@@ -300,7 +300,7 @@ research/kernels/
 ├── README.md                 This file
 ├── pyproject.toml            Python dependencies (uv)
 ├── uv.lock                   Locked dependency versions
-├── run.py                    CLI entry point — routes to other modules
+├── run.py                    CLI entry point, routes to other modules
 ├── registry.py               Kernel → source files, golden data, bench config
 ├── reference.py              PyTorch reference implementations (ground truth)
 ├── generate_golden.py        Generates golden .bin test data per kernel
@@ -316,10 +316,10 @@ research/kernels/
 ## Permitted Prototyping Tools
 
 The following may be used **only in this directory** for rapid prototyping:
-- **PyTorch** — reference implementations, golden test generation
-- **Triton** — GPU kernel prototyping (Linux + NVIDIA only)
-- **CUDA C++** / **HIP** — GPU kernel development
-- **CUTLASS / TVM / MLIR / TileLang** — advanced kernel frameworks
+- **PyTorch**: reference implementations, golden test generation
+- **Triton**: GPU kernel prototyping (Linux + NVIDIA only)
+- **CUDA C++** / **HIP**, GPU kernel development
+- **CUTLASS / TVM / MLIR / TileLang**: advanced kernel frameworks
 
 ### Mandatory Porting Rule (CLAUDE.md section 13)
 

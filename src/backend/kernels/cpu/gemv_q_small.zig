@@ -1,5 +1,5 @@
 //! CPU GEMV kernels for less common quantization formats.
-//! Q4_1, Q5_0, Q2_K, Q3_K — scalar implementations with 2-row batching.
+//! Q4_1, Q5_0, Q2_K, Q3_K, scalar implementations with 2-row batching.
 
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");

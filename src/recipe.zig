@@ -1,4 +1,4 @@
-//! Recipes — optional proven-default configurations for model + hardware combos.
+//! Recipes, optional proven-default configurations for model + hardware combos.
 //!
 //! A recipe bundles sampling parameters, context size, and generation limits
 //! that are known to work well together. Users can override
@@ -11,7 +11,7 @@
 const std = @import("std");
 
 /// A recipe is a set of proven-default parameters for a specific scenario.
-/// All fields are optional — `null` means "use the CLI default / model default".
+/// All fields are optional, `null` means "use the CLI default / model default".
 pub const Recipe = struct {
     /// Human-readable name for this recipe.
     name: []const u8 = "default",
@@ -28,7 +28,7 @@ pub const Recipe = struct {
     /// Context window size (0 or null = model default).
     ctx_size: ?u32 = null,
 
-    /// The universal fallback — all nulls, changes nothing.
+    /// The universal fallback, all nulls, changes nothing.
     pub const default = Recipe{};
 
     /// Apply recipe defaults under user-provided CLI values.
@@ -112,7 +112,7 @@ pub const Recipe = struct {
     /// Ordered list of preset recipes. First match wins, so place more-specific
     /// entries (exact arch + backend + quant) before broader wildcards.
     const presets = [_]Preset{
-        // ── Small models on Metal — responsive chat defaults ──
+        // ── Small models on Metal, responsive chat defaults ──
         .{
             .arch_prefix = "qwen3",
             .backend = "Metal",
@@ -125,7 +125,7 @@ pub const Recipe = struct {
                 .max_tokens = 1024,
             },
         },
-        // ── Qwen 2 on Metal Q4 — older Qwen variant, similar tuning ──
+        // ── Qwen 2 on Metal Q4, older Qwen variant, similar tuning ──
         .{
             .arch_prefix = "qwen2",
             .backend = "Metal",
@@ -150,7 +150,7 @@ pub const Recipe = struct {
                 .max_tokens = 1024,
             },
         },
-        // ── Large MoE on Metal — conservative to avoid OOM ──
+        // ── Large MoE on Metal, conservative to avoid OOM ──
         .{
             .arch_prefix = "gpt",
             .backend = "Metal",
@@ -163,7 +163,7 @@ pub const Recipe = struct {
                 .ctx_size = 2048,
             },
         },
-        // ── GLM-4 — needs repeat penalty to avoid greedy loops ──
+        // ── GLM-4, needs repeat penalty to avoid greedy loops ──
         .{
             .arch_prefix = "glm4",
             .backend = "",
@@ -175,7 +175,7 @@ pub const Recipe = struct {
                 .max_tokens = 1024,
             },
         },
-        // ── DeepSeek V4 Flash — no V2 repeat penalty (greedy / official sampling) ──
+        // ── DeepSeek V4 Flash, no V2 repeat penalty (greedy / official sampling) ──
         .{
             .arch_prefix = "deepseek4",
             .backend = "",
@@ -203,7 +203,7 @@ pub const Recipe = struct {
                 .repeat_penalty = 1.0,
             },
         },
-        // ── DeepSeek V2 — shares inference path with GLM-4, same repeat penalty ──
+        // ── DeepSeek V2, shares inference path with GLM-4, same repeat penalty ──
         .{
             .arch_prefix = "deepseek",
             .backend = "",
@@ -213,7 +213,7 @@ pub const Recipe = struct {
                 .repeat_penalty = 1.1,
             },
         },
-        // ── Llama 4 — iRoPE + chunked attention, standard chat penalty ──
+        // ── Llama 4, iRoPE + chunked attention, standard chat penalty ──
         .{
             .arch_prefix = "llama4",
             .backend = "",
@@ -223,7 +223,7 @@ pub const Recipe = struct {
                 .repeat_penalty = 1.1,
             },
         },
-        // ── CPU-only — larger batches, lower context ──
+        // ── CPU-only, larger batches, lower context ──
         .{
             .arch_prefix = "",
             .backend = "CPU",

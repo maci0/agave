@@ -109,7 +109,7 @@ kernel void clamped_silu_mul_f32(
     out[tid] = (g / (1.0f + exp(-g))) * u;
 }
 
-// Fused GELU + multiply: out = gelu(a) * b — used by GeGLU FFN in Gemma3.
+// Fused GELU + multiply: out = gelu(a) * b, used by GeGLU FFN in Gemma3.
 kernel void gelu_mul_f32(
     device const float* a [[buffer(0)]],
     device const float* b [[buffer(1)]],
@@ -137,7 +137,7 @@ kernel void gelu_f32(
     const float sqrt_2_over_pi = 0.7978845608028654f;
     const float coeff = 0.044715f;
     float inner = sqrt_2_over_pi * fma(coeff * x * x, x, x);
-    // Use native tanh intrinsic — faster than manual exp(2x) formulation.
+    // Use native tanh intrinsic, faster than manual exp(2x) formulation.
     output[tid] = 0.5f * x * (1.0f + tanh(inner));
 }
 
@@ -156,7 +156,7 @@ kernel void add_scaled_f32(
 
 // ── KV cache append (compute-based) ─────────────────────────
 // Copies k_new and v_new into KV cache at the given offset.
-// Runs on the compute encoder — avoids blit encoder switching overhead.
+// Runs on the compute encoder, avoids blit encoder switching overhead.
 
 kernel void kv_append(
     device const float* k_new  [[buffer(0)]],

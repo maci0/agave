@@ -1,4 +1,4 @@
-// DeltaNet SSM recurrence kernel — one workgroup per v-head.
+// DeltaNet SSM recurrence kernel, one workgroup per v-head.
 // State update: S = decay * S + beta * delta * outer(k, k); out = S @ q * q_scale
 // Where delta = beta * (v - S @ k)
 // Sequential across v_dim (inherent data dependency).

@@ -40,14 +40,14 @@ flowchart LR
 
 ## The Dispatch Overhead Problem
 
-Each GPU kernel dispatch burns ~5-10 µs on CPU-side setup before any compute happens. When three projections each need their own dispatch, the overhead stacks up — and the same input vector gets loaded from memory three times.
+Each GPU kernel dispatch burns ~5-10 µs on CPU-side setup before any compute happens. When three projections each need their own dispatch, the overhead stacks up, and the same input vector gets loaded from memory three times.
 
 ```mermaid
 sequenceDiagram
     participant CPU
     participant GPU
 
-    note over CPU,GPU: Sequential (unfused) — 3 dispatches, 3 barriers
+    note over CPU,GPU: Sequential (unfused), 3 dispatches, 3 barriers
 
     CPU->>GPU: dispatch Q projection
     GPU->>GPU: load x from VRAM, compute Q
@@ -61,7 +61,7 @@ sequenceDiagram
     GPU->>GPU: load x from VRAM again, compute V
     GPU-->>CPU: barrier (V done)
 
-    note over CPU,GPU: Batched (gemvMulti) — 1 dispatch, 1 barrier
+    note over CPU,GPU: Batched (gemvMulti), 1 dispatch, 1 barrier
 
     CPU->>GPU: dispatch Q + K + V together
     GPU->>GPU: load x once, compute Q then K then V
@@ -90,7 +90,7 @@ CPU:   [dispatch Q] [wait] [dispatch K] [wait] [dispatch V] [wait]
 GPU:        [Q GEMV]   │   [K GEMV]       │   [V GEMV]       │
                        │                  │                  │
             load x ────┘   load x ────────┘   load x ────────┘
-            (3× redundant memory loads — x loaded from VRAM 3 times)
+            (3× redundant memory loads, x loaded from VRAM 3 times)
 
 Timeline (batched via gemvMulti):
 
@@ -116,7 +116,7 @@ For a large model with ~210 GEMVs per token, that's **1-2 ms of pure overhead** 
 
 ## Batched GEMV: gemvMulti
 
-**Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**. Each GEMV still loads x from VRAM, but the N-1 intermediate CPU barriers are eliminated — reducing CPU-side overhead and command buffer size.
+**Idea:** Dispatch all GEMVs that share the same input vector in a **single kernel launch**. Each GEMV still loads x from VRAM, but the N-1 intermediate CPU barriers are eliminated, reducing CPU-side overhead and command buffer size.
 
 ```mermaid
 flowchart LR
@@ -541,7 +541,7 @@ graph TD
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
     Meta["Model metadata\n(GGUF / SafeTensors)"]:::setup
-    T3["Tier 3: Composed megakernel\nmega_compose.zig generates MSL at runtime\nfrom ModelDesc — no hand-written shaders"]:::optional
+    T3["Tier 3: Composed megakernel\nmega_compose.zig generates MSL at runtime\nfrom ModelDesc, no hand-written shaders"]:::optional
     T2["Tier 2: True megakernel\nEntire transformer layer in ONE dispatch\n(norm + QKV + RoPE + KV cache + SDPA + FFN)"]:::sync
     T1["Tier 1: Fused FFN\n3 FFN dispatches → 1 dispatch\n(gate GEMV + up GEMV + activation)"]:::migration
     Base["Baseline: gemvMulti + addRmsNorm\nBatched projections, fused residual+norm"]:::success
@@ -782,7 +782,7 @@ agave model.gguf "prompt"                  # Standard (default)
 ❌ **Compute-bound:** The bottleneck is arithmetic, not memory
 ❌ **Different thread counts:** A needs 256 threads/block, B needs 1024
 
-**Example:** Don't fuse GEMV + RoPE — RoPE only operates on a subset of GEMV output, and they have different grid sizes.
+**Example:** Don't fuse GEMV + RoPE, RoPE only operates on a subset of GEMV output, and they have different grid sizes.
 
 ## Batched Independent Operations
 
@@ -823,7 +823,7 @@ sequenceDiagram
     participant Enc as Metal Command Encoder
     participant GPU as GPU
 
-    note over CPU,GPU: Without batch mode — N barriers for N independent ops
+    note over CPU,GPU: Without batch mode, N barriers for N independent ops
 
     CPU->>Enc: encode rmsNormMulti(q_buf)
     Enc->>GPU: dispatch kernel
@@ -832,16 +832,16 @@ sequenceDiagram
     Enc->>GPU: dispatch kernel
     Enc->>GPU: memoryBarrier
 
-    note over CPU,GPU: With beginBatch / endBatch — 1 barrier for N ops
+    note over CPU,GPU: With beginBatch / endBatch, 1 barrier for N ops
 
-    CPU->>CPU: beginBatch() — set batch_mode = true
+    CPU->>CPU: beginBatch(), set batch_mode = true
     CPU->>Enc: encode rmsNormMulti(q_buf)
     Enc->>GPU: dispatch kernel
     note right of Enc: barrier suppressed (batch_mode)
     CPU->>Enc: encode rmsNormMulti(k_buf)
     Enc->>GPU: dispatch kernel
     note right of Enc: barrier suppressed (batch_mode)
-    CPU->>CPU: endBatch() — set batch_mode = false
+    CPU->>CPU: endBatch(), set batch_mode = false
     CPU->>Enc: memoryBarrier (single, covers all batched ops)
     Enc->>GPU: barrier
     GPU-->>CPU: all ops visible
@@ -945,26 +945,26 @@ flowchart TD
 
 ## Glossary
 
-**addRmsNorm** — A fused operation performing residual addition and RMS normalization in a single kernel dispatch.
+**addRmsNorm**, A fused operation performing residual addition and RMS normalization in a single kernel dispatch.
 
-**addScaled** — A fused operation computing `dst += src * scale` on GPU, used for MoE expert accumulation.
+**addScaled**, A fused operation computing `dst += src * scale` on GPU, used for MoE expert accumulation.
 
-**dispatch overhead** — The CPU-side cost (~5–10 µs) of setting up pipeline state, binding buffers, and launching a GPU kernel.
+**dispatch overhead**, The CPU-side cost (~5–10 µs) of setting up pipeline state, binding buffers, and launching a GPU kernel.
 
-**fusion** — Combining sequential GPU operations into a single kernel so intermediate results stay in registers.
+**fusion**, Combining sequential GPU operations into a single kernel so intermediate results stay in registers.
 
-**gemvMulti** — A batched GEMV interface dispatching multiple matrix-vector multiplies sharing the same input vector in a single command.
+**gemvMulti**, A batched GEMV interface dispatching multiple matrix-vector multiplies sharing the same input vector in a single command.
 
-**GemvOp** — A struct describing one GEMV operation within a gemvMulti batch: weight data, output buffer, and row count.
+**GemvOp**, A struct describing one GEMV operation within a gemvMulti batch: weight data, output buffer, and row count.
 
-**mega_grid_sync** — An atomic-counter-based grid-level barrier synchronizing all threadgroups within a megakernel dispatch.
+**mega_grid_sync**, An atomic-counter-based grid-level barrier synchronizing all threadgroups within a megakernel dispatch.
 
-**siluMul** — A fused operation computing `silu(a) * b` in one kernel, eliminating the intermediate activation buffer.
+**siluMul**, A fused operation computing `silu(a) * b` in one kernel, eliminating the intermediate activation buffer.
 
-**splitQGate** — A GPU kernel deinterleaving Q and gate values from an interleaved buffer into separate contiguous buffers.
+**splitQGate**, A GPU kernel deinterleaving Q and gate values from an interleaved buffer into separate contiguous buffers.
 
-**Tier 1 (Fused FFN)** — Megakernel level combining gate + up + activation into a single dispatch (3→1 per FFN).
+**Tier 1 (Fused FFN)**, Megakernel level combining gate + up + activation into a single dispatch (3→1 per FFN).
 
-**Tier 2 (True Megakernel)** — Megakernel level executing an entire transformer layer in one dispatch using composable building blocks.
+**Tier 2 (True Megakernel)**, Megakernel level executing an entire transformer layer in one dispatch using composable building blocks.
 
-**Tier 3 (Composed Megakernel)** — Auto-generated model-specific MSL from a ModelDesc struct; no hand-written shader code needed.
+**Tier 3 (Composed Megakernel)**, Auto-generated model-specific MSL from a ModelDesc struct; no hand-written shader code needed.

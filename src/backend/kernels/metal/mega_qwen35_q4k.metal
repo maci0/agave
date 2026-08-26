@@ -124,7 +124,7 @@ kernel void megakernel_qwen35_q4k(
             mega_sync_reset(&sync_ctrs[(sync_idx-1) % 32], tgid, tid);
 
         } else {
-            // DeltaNet SSM layer — currently too complex for GPU megakernel.
+            // DeltaNet SSM layer, currently too complex for GPU megakernel.
         }
 
         // ── 3. Post-attention norm (FFN pre-norm) ────────────────────────

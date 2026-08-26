@@ -45,7 +45,7 @@ fn wht32(buf: *[32]f32) void {
 
 /// Dequantize one 32-element TurboQuant block into dst[0..32].
 /// block_ptr layout: [f16 norm (2 bytes)] [packed centroid indices].
-/// bits: 2, 3, or 4 — selects codebook and unpacking strategy.
+/// bits: 2, 3, or 4, selects codebook and unpacking strategy.
 ///
 /// Algorithm: unpack indices -> codebook lookup -> inverse WHT -> rescale.
 /// Output = norm/32 * WHT(codebook[indices]).

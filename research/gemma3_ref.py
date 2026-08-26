@@ -359,7 +359,7 @@ def main():
 
         # SDPA: at BOS forward, kv_seq_len = 0 for first call. But for subsequent layers
         # in the SAME forward pass, kv_seq_len is still 0 (incremented after all layers).
-        # So each layer appends at pos=0. WAIT — that means ALL layers write to the same
+        # So each layer appends at pos=0. WAIT, that means ALL layers write to the same
         # KV cache position (0). For the BOS token, kv_seq_len=0 for ALL layers.
         # Each layer gets its OWN KV cache (per-layer blocks), so they don't conflict.
         # SDPA with seq_len=0 → output = V (expanded for GQA)

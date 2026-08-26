@@ -32,7 +32,7 @@ const cu = @import("common.zig");
 
 const e2m1_lut = cu.e2m1_lut;
 
-/// Software FP4 GEMV fallback — used when tensor cores are not available
+/// Software FP4 GEMV fallback, used when tensor cores are not available
 /// or for validation against the tensor core path.
 ///
 /// This is a standard GEMV with inline FP4 E2M1 dequant using the

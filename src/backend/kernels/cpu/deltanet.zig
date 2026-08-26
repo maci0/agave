@@ -19,7 +19,7 @@ pub fn groupedKHead(h: usize, num_k_heads: usize, num_v_heads: usize) usize {
 
 /// DeltaNet SSM recurrence: gate/beta → conv1d+SiLU → L2 norm Q&K → recurrence → gated output.
 /// Operates on a single token: conv_state and ssm_state are updated in-place.
-/// CPU implementation — runs inline with SIMD. No GPU sync needed.
+/// CPU implementation, runs inline with SIMD. No GPU sync needed.
 pub fn deltaNet(conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, alpha_buf: [*]const f32, beta_buf: [*]const f32, output: [*]f32, conv_state: [*]f32, ssm_state: []f32, ssm_a: [*]const f32, dt_bias: [*]const f32, conv_w: [*]const f32, ssm_norm_w: [*]const f32, p: DeltaNetParams) void {
     const num_v_heads: usize = p.num_v_heads;
     const num_k_heads: usize = p.num_k_heads;
@@ -65,7 +65,7 @@ pub fn deltaNet(conv_in: [*]const f32, conv_out: [*]f32, z_buf: [*]const f32, al
         }
     }
 
-    // 4. Recurrence + gated output — sequential across v-heads
+    // 4. Recurrence + gated output, sequential across v-heads
     const q_ptr = conv_out + q_off;
     const k_ptr = conv_out + k_off;
     const v_off: usize = 2 * num_k_heads * head_k_dim;

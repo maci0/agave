@@ -6,7 +6,7 @@
 
 > After this chapter you can explain `@Vector` SIMD, multi-row GEMV batching, and quantized kernel structure.
 
-When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have **SIMD** (Single Instruction Multiple Data) units that can process 4-8 values in parallel with a single instruction. Zig provides portable SIMD via `@Vector` — the same code generates **NEON** on ARM (Apple Silicon, Raspberry Pi) and **AVX2/AVX-512** on x86_64 (Intel, AMD).
+When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have **SIMD** (Single Instruction Multiple Data) units that can process 4-8 values in parallel with a single instruction. Zig provides portable SIMD via `@Vector`, the same code generates **NEON** on ARM (Apple Silicon, Raspberry Pi) and **AVX2/AVX-512** on x86_64 (Intel, AMD).
 
 ## Code Flow
 
@@ -95,11 +95,11 @@ while i + 8 <= n:
 
 **Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`)
 
-**Memory alignment matters:** SIMD loads are fastest when the address is aligned to 32 bytes (AVX2) or 16 bytes (NEON). Agave relies on the allocator providing sufficient alignment — `std.heap.page_allocator` guarantees this for large allocations.
+**Memory alignment matters:** SIMD loads are fastest when the address is aligned to 32 bytes (AVX2) or 16 bytes (NEON). Agave relies on the allocator providing sufficient alignment, `std.heap.page_allocator` guarantees this for large allocations.
 
 ## Core SIMD Operations
 
-### @splat — Broadcast a Scalar
+### @splat: Broadcast a Scalar
 
 ```text
 v = splat(2.5)   # v = {2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5}, all 8 lanes
@@ -114,7 +114,7 @@ acc = v8zero
 
 **Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`v8zero`)
 
-### @reduce — Horizontal Sum
+### @reduce: Horizontal Sum
 
 ```text
 v = {1, 2, 3, 4, 5, 6, 7, 8}
@@ -164,7 +164,7 @@ flowchart TD
 
 On NEON: `vaddvq_f32` (horizontal add). On AVX2: `vhaddps` + scalar extract.
 
-### @mulAdd — Fused Multiply-Add (FMA)
+### @mulAdd: Fused Multiply-Add (FMA)
 
 FMA collapses a multiply and an add into one instruction, firing through a dedicated hardware unit. The CPU dispatches it alongside other work in the same cycle.
 
@@ -194,7 +194,7 @@ flowchart LR
         add --> u_out
     end
 
-    subgraph Fused["With FMA — @mulAdd (1 instruction, 1 cycle)"]
+    subgraph Fused["With FMA, @mulAdd (1 instruction, 1 cycle)"]
         direction TB
         f_a["a (weight)"]:::setup
         f_b["b (input)"]:::setup
@@ -240,7 +240,7 @@ dot = reduce(Add, acc)
 
 **Implementation:** [`src/backend/kernels/cpu/gemv_f32.zig`](../../src/backend/kernels/cpu/gemv_f32.zig) (`gemvF32`)
 
-**Performance:** On Apple M4, this achieves **~70% of peak memory bandwidth** — the bottleneck is loading `x` and `w`, not arithmetic.
+**Performance:** On Apple M4, this achieves **~70% of peak memory bandwidth**, the bottleneck is loading `x` and `w`, not arithmetic.
 
 ## Multi-Row GEMV Batching
 
@@ -343,10 +343,10 @@ gemvF32(x, w, y, n, k):
 
 **Key insights:**
 
-1. **`xv` loaded once, used 4 times** — amortizes memory latency
-2. **4 independent accumulators** — allows CPU to **pipeline** FMAs (execute multiple in parallel)
-3. **Tail loop** — handles `k` not divisible by 8 (common with quantized blocks)
-4. **Remainder loop** — handles `n` not divisible by 4
+1. **`xv` loaded once, used 4 times**, amortizes memory latency
+2. **4 independent accumulators**, allows CPU to **pipeline** FMAs (execute multiple in parallel)
+3. **Tail loop**, handles `k` not divisible by 8 (common with quantized blocks)
+4. **Remainder loop**, handles `n` not divisible by 4
 
 **Performance gain:** 2-3× faster than 1-row-at-a-time on bandwidth-bound workloads (most GEMV cases).
 
@@ -381,7 +381,7 @@ flowchart LR
     classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
     classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
 
-    subgraph Block["Q4_0 block — 18 bytes total\nencode 32 elements"]
+    subgraph Block["Q4_0 block, 18 bytes total\nencode 32 elements"]
         direction LR
         scale["bytes 0-1\nf16 scale\napplied to all 32 elements"]:::setup
         nibbles["bytes 2-17\n16 packed bytes\n= 32 nibbles (4 bits each)"]:::setup
@@ -522,7 +522,7 @@ softplusVec(x, n):                  # vectorized
 
 **Implementation:** [`src/ops/math.zig`](../../src/ops/math.zig) (`softplus`)
 
-**Note:** On CUDA/Metal, avoid `@exp` in GPU kernels — it compiles to a slow `libcall`. Use native GPU intrinsics instead (e.g., MSL `exp()`, CUDA `__expf()`).
+**Note:** On CUDA/Metal, avoid `@exp` in GPU kernels, it compiles to a slow `libcall`. Use native GPU intrinsics instead (e.g., MSL `exp()`, CUDA `__expf()`).
 
 ## Performance Considerations
 
@@ -587,7 +587,7 @@ data = allocator.alignedAlloc(f32, 32, n)  # force 32-byte alignment
 
 For large sequential scans, hint the CPU to prefetch: `@prefetch(ptr, .{ .rw = .read, .locality = 3, .cache = .data })`.
 
-Agave doesn't use explicit prefetching — the CPU's hardware prefetcher does well enough for sequential GEMV access.
+Agave doesn't use explicit prefetching, the CPU's hardware prefetcher does well enough for sequential GEMV access.
 
 ### Avoid Branching in Inner Loops
 
@@ -625,7 +625,7 @@ flowchart TD
     input["input[0..n]\n(n f32 values)"]:::setup
     weight["weight[0..n]\n(learned gain per element)"]:::setup
 
-    subgraph Pass1["Pass 1 — sum of squares"]
+    subgraph Pass1["Pass 1, sum of squares"]
         direction LR
         p1a["@mulAdd(V8, xv, xv, acc)\nfor each 8-element chunk"]:::sync --> p1b["@reduce(.Add, acc)\nhorizontal sum"]:::sync --> p1c["sum_sq\n= Σ input[i]²"]:::migration
     end
@@ -635,7 +635,7 @@ flowchart TD
         s1["rms = sqrt(sum_sq / n + eps)"]:::migration --> s2["scale = 1.0 / rms"]:::migration
     end
 
-    subgraph Pass2["Pass 2 — normalize + weight"]
+    subgraph Pass2["Pass 2, normalize + weight"]
         direction LR
         p2a["@splat(scale)\nbroadcast scalar"]:::sync --> p2b["xv * scale_v\nnormalize chunk"]:::sync --> p2c["normalized * wv\napply weight"]:::sync --> p2d["output[i..i+8]"]:::success
     end
@@ -692,7 +692,7 @@ rmsNorm(input, weight, output, n, eps):
 
 ## Activation Sparsity (Sparse GEMV)
 
-After SiLU activation in FFN layers, ~40% of output values are near-zero (magnitude < 0.005). The down-projection GEMV multiplies these near-zero values by weight blocks — wasting ~40% of compute. Sparse GEMV skips these blocks entirely:
+After SiLU activation in FFN layers, ~40% of output values are near-zero (magnitude < 0.005). The down-projection GEMV multiplies these near-zero values by weight blocks, wasting ~40% of compute. Sparse GEMV skips these blocks entirely:
 
 ```mermaid
 flowchart TD
@@ -751,7 +751,7 @@ This is inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [Tu
 - **The tail loop isn't optional cleanup.** When `k` (or `n`) isn't a multiple of the vector width, skipping the scalar tail loop after the `@Vector(8, f32)` main loop doesn't crash, it just silently drops the last few elements from the dot product. This is easy to miss on test inputs sized as round numbers (256, 4096) and only shows up once someone runs a GEMV against an odd hidden dimension or a quantized block boundary that doesn't divide evenly by 8.
 - **`@reduce(.Add)`'s pairwise tree changes rounding, not just speed.** Reducing a SIMD accumulator with `@reduce` sums pairs in a tree order (see the reduction-tree diagram above), which accumulates floating-point rounding error differently than a naive sequential `for` loop summing the same values one at a time. A golden test that compares a new SIMD kernel against a scalar reference bit-for-bit will fail on rounding alone even when the SIMD kernel is correct; compare with a tolerance instead.
 
-- **Thread pool grain matters more than kernel speed (DS4 case study).** With `parallel_grain=16`, a 32768-row GEMV creates 2048 tasks. For SSD-streamed MoE inference doing hundreds of GEMVs per forward pass, this generates hundreds of thousands of task dispatches per token. On the M4 Pro (14 threads), increasing `parallel_grain` from 16 to 128 gave 6–10% improvement across all workloads — without touching any kernel code. The sweet spot depends on thread count: too low = dispatch overhead dominates, too high = threads sit idle. Sweep `{16, 64, 128, 256, 512}` for your core count. See `parallel_grain` in `cpu.zig`.
+- **Thread pool grain matters more than kernel speed (DS4 case study).** With `parallel_grain=16`, a 32768-row GEMV creates 2048 tasks. For SSD-streamed MoE inference doing hundreds of GEMVs per forward pass, this generates hundreds of thousands of task dispatches per token. On the M4 Pro (14 threads), increasing `parallel_grain` from 16 to 128 gave 6–10% improvement across all workloads, without touching any kernel code. The sweet spot depends on thread count: too low = dispatch overhead dominates, too high = threads sit idle. Sweep `{16, 64, 128, 256, 512}` for your core count. See `parallel_grain` in `cpu.zig`.
 
 ---
 
@@ -763,28 +763,28 @@ This is inspired by [PowerInfer](https://github.com/Tiiny-AI/PowerInfer) and [Tu
 
 ## Glossary
 
-**@mulAdd (FMA)** — Fused Multiply-Add; a single instruction computing a×b+c with no intermediate rounding, mapped to hardware FMA units.
+**@mulAdd (FMA)**, Fused Multiply-Add; a single instruction computing a×b+c with no intermediate rounding, mapped to hardware FMA units.
 
-**@reduce** — Zig builtin that collapses a SIMD vector to a scalar via a specified operation (e.g., `.Add` for horizontal sum).
+**@reduce**, Zig builtin that collapses a SIMD vector to a scalar via a specified operation (e.g., `.Add` for horizontal sum).
 
-**@splat** — Zig builtin that broadcasts a scalar value to all lanes of a SIMD vector.
+**@splat**, Zig builtin that broadcasts a scalar value to all lanes of a SIMD vector.
 
-**@Vector** — Zig's portable SIMD type mapping to hardware vector registers; e.g., `@Vector(8, f32)` is 8 packed f32 values.
+**@Vector**, Zig's portable SIMD type mapping to hardware vector registers; e.g., `@Vector(8, f32)` is 8 packed f32 values.
 
-**activation sparsity** — The phenomenon where ~40% of activation values are near-zero after SiLU, allowing those GEMV blocks to be skipped.
+**activation sparsity**, The phenomenon where ~40% of activation values are near-zero after SiLU, allowing those GEMV blocks to be skipped.
 
-**AVX2 (Advanced Vector Extensions 2)** — Intel/AMD 256-bit SIMD instruction set providing 8-wide f32 operations.
+**AVX2 (Advanced Vector Extensions 2)**, Intel/AMD 256-bit SIMD instruction set providing 8-wide f32 operations.
 
-**cache locality** — Accessing memory sequentially to maximize CPU cache hits and minimize cache misses.
+**cache locality**, Accessing memory sequentially to maximize CPU cache hits and minimize cache misses.
 
-**isBlockSparse** — A SIMD max-abs check that determines whether all input values in a block are below a threshold, enabling the block to be skipped.
+**isBlockSparse**, A SIMD max-abs check that determines whether all input values in a block are below a threshold, enabling the block to be skipped.
 
-**multi-row GEMV batching** — Processing multiple output rows simultaneously (NR=2 or NR=4) to amortize the cost of loading the input vector.
+**multi-row GEMV batching**, Processing multiple output rows simultaneously (NR=2 or NR=4) to amortize the cost of loading the input vector.
 
-**NEON** — ARM's SIMD instruction set providing 128-bit vector operations on aarch64 processors.
+**NEON**, ARM's SIMD instruction set providing 128-bit vector operations on aarch64 processors.
 
-**NR (Number of Rows)** — The number of output rows computed per batch in a multi-row GEMV kernel (e.g., NR=4 for Q8_0 on CPU).
+**NR (Number of Rows)**, The number of output rows computed per batch in a multi-row GEMV kernel (e.g., NR=4 for Q8_0 on CPU).
 
-**register pressure** — The constraint from having finite hardware SIMD registers; exceeding capacity causes spills to slower stack memory.
+**register pressure**, The constraint from having finite hardware SIMD registers; exceeding capacity causes spills to slower stack memory.
 
-**tail loop** — A scalar cleanup loop handling remaining elements when data length is not a multiple of the SIMD vector width.
+**tail loop**, A scalar cleanup loop handling remaining elements when data length is not a multiple of the SIMD vector width.

@@ -118,17 +118,17 @@ fn applyLoraGgufFile(
         const n: usize = @intCast(lora_b_info.dims[0]);
         const rank_b: usize = @intCast(lora_b_info.dims[1]);
         if (rank == 0 or k == 0 or n == 0) {
-            std.log.warn("LoRA: skipping '{s}' — zero dimension (rank={d}, k={d}, n={d})", .{ base_suffix, rank, k, n });
+            std.log.warn("LoRA: skipping '{s}', zero dimension (rank={d}, k={d}, n={d})", .{ base_suffix, rank, k, n });
             continue;
         }
         if (rank_b != rank) {
-            std.log.warn("LoRA: skipping '{s}' — rank mismatch between lora_a ({d}) and lora_b ({d})", .{ base_suffix, rank, rank_b });
+            std.log.warn("LoRA: skipping '{s}', rank mismatch between lora_a ({d}) and lora_b ({d})", .{ base_suffix, rank, rank_b });
             continue;
         }
 
         const scale = alpha / @as(f32, @floatFromInt(rank));
 
-        // Find base tensor — try bare name, then with ".weight" suffix
+        // Find base tensor, try bare name, then with ".weight" suffix
         const base_ti: *gguf.TensorInfo = blk: {
             if (base_gguf.tensors.getPtr(base_suffix)) |p| break :blk p;
             var w_buf: [512]u8 = undefined;
@@ -142,7 +142,7 @@ fn applyLoraGgufFile(
         const base_n: usize = @intCast(base_ti.dims[0]);
         const base_k: usize = @intCast(base_ti.dims[1]);
         if (base_n != n or base_k != k) {
-            std.log.warn("LoRA: skipping '{s}' — dimension mismatch: base [{d}, {d}] vs LoRA [{d}, {d}]", .{ base_suffix, base_n, base_k, n, k });
+            std.log.warn("LoRA: skipping '{s}', dimension mismatch: base [{d}, {d}] vs LoRA [{d}, {d}]", .{ base_suffix, base_n, base_k, n, k });
             continue;
         }
 
@@ -169,7 +169,7 @@ fn applyLoraGgufFile(
         // Use Accelerate on macOS for ~4× speedup via AMX; fall back to scalar.
         addLoraMatrix(merged, lb, la, n, rank, k, scale);
 
-        // Insert override keyed by the GGUF canonical name (dupe'd — mmap pointer will be freed).
+        // Insert override keyed by the GGUF canonical name (dupe'd, mmap pointer will be freed).
         const key = try allocator.dupe(u8, base_ti.name);
         errdefer allocator.free(key);
         const gop = try base_gguf.lora_overrides.getOrPut(allocator, key);
@@ -221,7 +221,7 @@ fn addLoraMatrix(
     scale: f32,
 ) void {
     // macOS: use Accelerate SGEMM (AMX-accelerated, ~4× faster than NEON scalar).
-    // merged[n,k] += scale * b[n,rank] @ a[rank,k] — beta=1 accumulates in place.
+    // merged[n,k] += scale * b[n,rank] @ a[rank,k], beta=1 accumulates in place.
     if (comptime builtin.os.tag == .macos) {
         const build_options = @import("build_options");
         if (comptime build_options.enable_metal) {

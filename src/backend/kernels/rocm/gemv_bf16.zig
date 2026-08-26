@@ -4,7 +4,7 @@
 //! consuming one u32 word = two bf16 weights per iteration (constant-shift
 //! unpack, no byte loads, no per-chunk activation rescans). The previous
 //! version re-scanned 32 x values for a sparse check on EVERY element and
-//! loaded weights as scalar u16 — it ran at ~46 GB/s; this variant streams.
+//! loaded weights as scalar u16, it ran at ~46 GB/s; this variant streams.
 //!
 //! Launch contract: grid = n, block = 256.
 

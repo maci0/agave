@@ -26,16 +26,16 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 
 | Model | DDTree | Self-Spec | EAGLE/EAGLE-3 | MTP | N-gram | Suffix | Lookahead | PFlash | DSpark | Notes |
 |-------|--------|-----------|---------------|-----|--------|--------|-----------|--------|--------|-------|
-| Gemma 3 | ✅ `forwardTree` | ✅ | ✅/⚠️² | — | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
-| Gemma 4 | — | ✅ | —/✅ | — | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
-| Qwen 3.5 | — | ✅ | ✅/— | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
-| DeepSeek V4 | — | ✅ `setLayerSkip` | —/— | ✅ `--mtp-model` | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative; dedicated MTP weights (`ds4_mtp.zig`) |
-| GLM-4 | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| GPT-OSS | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Nemotron-H | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Nemotron Nano | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| Llama 4 | — | ✅ | ✅/— | — | ✅ | ✅ | ✅ | ✅ | ✅ | — |
-| DiffusionGemma | — | — | — | — | — | — | — | — | — | Block diffusion (not autoregressive) |
+| Gemma 3 | ✅ `forwardTree` | ✅ | ✅/⚠️² | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
+| Gemma 4 | ❌ | ✅ | ❌/✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
+| Qwen 3.5 | ❌ | ✅ | ✅/❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
+| DeepSeek V4 | ❌ | ✅ `setLayerSkip` | ❌/❌ | ✅ `--mtp-model` | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative; dedicated MTP weights (`ds4_mtp.zig`) |
+| GLM-4 | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
+| GPT-OSS | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
+| Nemotron-H | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
+| Nemotron Nano | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
+| Llama 4 | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
+| DiffusionGemma | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Block diffusion (not autoregressive) |
 
 All autoregressive models support standard draft-verify, n-gram, suffix, lookahead, PFlash, and DSpark modes. DDTree tree verification requires `forwardTree`/`treeLogits` (currently Gemma 3 only). EAGLE-3 requires `hidden_pre_norm` (Gemma 4, DiffusionGemma). MTP requires dedicated MTP heads in the model weights.
 
@@ -73,13 +73,13 @@ All autoregressive models support standard draft-verify, n-gram, suffix, lookahe
 
 **Nemotron-H** (GGUF): Mamba-2 SSM with per-group RMS normalization. Layer types (SSM/attention/FFN-only) detected from tensor presence. Squared ReLU for FFN-only layers. Supports `--megakernel` (true megakernel Q8 on Metal).
 
-**Nemotron Nano** (SafeTensors NVFP4): 52-layer hybrid with `hybrid_override_pattern` (M=SSM, E=MoE, *=attention). Mixed quant — most layers NVFP4, 6 SSM layers use BF16. 128 routed experts, top-6 + shared expert.
+**Nemotron Nano** (SafeTensors NVFP4): 52-layer hybrid with `hybrid_override_pattern` (M=SSM, E=MoE, *=attention). Mixed quant, most layers NVFP4, 6 SSM layers use BF16. 128 routed experts, top-6 + shared expert.
 
-**Gemma 4**: Four variants — E2B and E4B are dense (no MoE), 12B is dense, 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA). 26B MoE now produces correct output after fixing the expert stride calculation (was computing `dims[0] * dims[1]` instead of `dims[1] * dims[2]` for 3D expert tensors).
+**Gemma 4**: Four variants, E2B and E4B are dense (no MoE), 12B is dense, 26B-A4B uses MoE (128 experts, top-8 softmax) + dense FFN path. All variants use dual attention (sliding-window + global layers) and PLE (Per-Layer Embeddings). Shared KV cache for trailing layers. Channel-based chat template. Vision supported via SigLIP-2 encoder. Supports `--megakernel` (fused FFN GELU for dense+MoE, true megakernel Q4K/Q8 on Metal+CUDA). 26B MoE now produces correct output after fixing the expert stride calculation (was computing `dims[0] * dims[1]` instead of `dims[1] * dims[2]` for 3D expert tensors).
 
-The 12B variant has 48 layers with a global attention layer every 6 layers (layers 5, 11, 17, ...). Unlike the 26B which stores a scalar `attention.head_count_kv`, the 12B GGUF stores a per-layer `head_count_kv` array: SWA layers use nkv=8 with head_dim=256, global layers use nkv=1 with head_dim=512. Global layers also omit the V projection (tied K=V: copy K to V after `k_norm`, not before). When loading, read `attention.key_length_global` before `attention.key_length` to detect the global head dimension — if the key is absent, fall back to `attention.key_length`. Sliding window size: 4096 tokens. Maximum context: 128K.
+The 12B variant has 48 layers with a global attention layer every 6 layers (layers 5, 11, 17, ...). Unlike the 26B which stores a scalar `attention.head_count_kv`, the 12B GGUF stores a per-layer `head_count_kv` array: SWA layers use nkv=8 with head_dim=256, global layers use nkv=1 with head_dim=512. Global layers also omit the V projection (tied K=V: copy K to V after `k_norm`, not before). When loading, read `attention.key_length_global` before `attention.key_length` to detect the global head dimension, if the key is absent, fall back to `attention.key_length`. Sliding window size: 4096 tokens. Maximum context: 128K.
 
-**GLM-4 / DeepSeek V2/V3** (MLX + GGUF): MLA (Multi-head Latent Attention) compresses K/V into a low-rank latent space via `kv_a_proj_with_mqa` → latent → per-head `kv_b_proj`. Q also uses low-rank factorization (`q_a_proj` + `q_b_proj`). Sigmoid routing for MoE (independent expert gates, not competing). GLM-4 uses MLX 4/6/8-bit affine quantization. DeepSeek V3 uses GGUF format (`arch=deepseek2`), with tensor names `blk.N.attn_q_a.weight`, `blk.N.attn_kv_a_mqa.weight` etc — both GGUF and SafeTensors now supported. MLA params (q_lora_rank, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim) auto-detected from GGUF metadata. Supports `--megakernel` (fused FFN SiLU on Metal).
+**GLM-4 / DeepSeek V2/V3** (MLX + GGUF): MLA (Multi-head Latent Attention) compresses K/V into a low-rank latent space via `kv_a_proj_with_mqa` → latent → per-head `kv_b_proj`. Q also uses low-rank factorization (`q_a_proj` + `q_b_proj`). Sigmoid routing for MoE (independent expert gates, not competing). GLM-4 uses MLX 4/6/8-bit affine quantization. DeepSeek V3 uses GGUF format (`arch=deepseek2`), with tensor names `blk.N.attn_q_a.weight`, `blk.N.attn_kv_a_mqa.weight` etc, both GGUF and SafeTensors now supported. MLA params (q_lora_rank, kv_lora_rank, qk_nope_head_dim, qk_rope_head_dim, v_head_dim) auto-detected from GGUF metadata. Supports `--megakernel` (fused FFN SiLU on Metal).
 
 **DeepSeek V4 Flash 0731** (GGUF): Modified MLA where K=V share a single compressed head (no separate V projection). 4-stream hyper connections (HC) with Sinkhorn-normalized combination matrices mix information across streams at each layer boundary. Routing: layers 0–2 use hash routing (deterministic expert assignment), layers 3+ use sqrt_softplus scoring with learned bias. Output uses grouped LoRA (8 groups × 1024 rank) instead of a single dense output projection. Every layer attends a 128-token raw sliding window. Compressed (CSA/HCA) layers also attend completed compressed groups and learned per-head attention sinks. KV compressors: CSA (ratio=4, 21 layers) and HCA (ratio=128, 20 layers) compress KV cache with per-ratio APE and group compression. Lightning Indexer (LID) scores compressed blocks via multi-head ReLU dot-product and selects top-k for sparse attention when block count exceeds `index_topk`. KV cache defaults to Q8_0; `--kv-type nvfp4_ds_mla` packs NoPE as NVFP4 and keeps the 64-d RoPE tail in f16. GGUF tensor prefix: `blk.N.*`. **Metal path**: 14 MSL kernels (`ds4.metal` + `ds4_fused.metal`) for HC mixing, RoPE, SDPA hd=512 turbo, batched MoE, GPU routing, fused attention megakernel. **CUDA path**: GEMV/MLX-Q/MXFP4 and clamped SiLU run on the CUDA backend (Metal still uses the dedicated `CpuBackend` bypass). Multi-node: `--pp 2` ships the 4-stream HC state between stages; `--tp 2` is expert-parallel (routed expert `eid % 2`) with NCCL `allReduceAdd`. Combine with `--transport nccl --spec-mode dspark`. For MLX-Q SafeTensors on Metal: dedicated `CpuBackend` bypass produces bit-identical output to `--backend cpu` at 10.7-21.2 tok/s with suffix speculation. GPU kernels activate for GGUF models with native GPU GEMV types.
 

@@ -39,7 +39,7 @@ const TensorData = backend_mod.TensorData;
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 const n_hc: usize = 4;
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC — interval timing only).
+/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
 fn perfMonoMs() u64 {
     var ts: std.posix.timespec = undefined;
     _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
@@ -55,7 +55,7 @@ const NormCacheEntry = struct { key: usize, data: []f32 };
 
 /// Sparse V threshold: skip V dequant+accumulation for positions where softmax
 /// weight is below this value. At 1e-6, skipped positions contribute < 0.0001%
-/// to the output — zero measured PPL impact. Matches attention.zig threshold.
+/// to the output, zero measured PPL impact. Matches attention.zig threshold.
 const sparse_v_threshold: f32 = 1e-6;
 
 /// Raw sliding-window length (`sliding_window` in Flash 0731 config). Every
@@ -269,7 +269,7 @@ pub const Ds4Model = struct {
     cancelled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     megakernel_enabled: bool = false,
     /// True after prefaultLocalExperts device-copied the EP-local experts.
-    /// When set, the FFN skips its per-token madvise(WILLNEED) prefetch —
+    /// When set, the FFN skips its per-token madvise(WILLNEED) prefetch,
     /// the host pages were DONTNEED'd after the copy, so prefetching them
     /// again would re-read the whole expert working set from disk per token.
     experts_resident: bool = false,
@@ -325,7 +325,7 @@ pub const Ds4Model = struct {
     amx_dequant_buf: []f32 = &.{},
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
-    mtp_hidden_buf: []f32 = &.{}, // [n_embd] — saved MTP hidden state between depths
+    mtp_hidden_buf: []f32 = &.{}, // [n_embd], saved MTP hidden state between depths
     /// MTP KV cache: stores kv_proj (kv_lora_rank=512 dims) per position.
     /// Shared across MTP depths. Positions 0..mtp_kv_len-1 are populated.
     mtp_kv_cache: []f32 = &.{}, // [max_seq_len * kv_lora_rank]
@@ -376,7 +376,7 @@ pub const Ds4Model = struct {
     gpu_top_weights: []f32 = &.{}, // [max_total_experts]
 
     // KV cache as quantized bytes: [n_layers * ctx * kv_lora_rank].
-    // K=V in DS4 MLA (single compressed head) — one buffer serves both K and V.
+    // K=V in DS4 MLA (single compressed head), one buffer serves both K and V.
     kv_k_bytes: []u8 = &.{},
 
     // Compressor state for CSA (ratio=4) and HCA (ratio=128) layers.
@@ -400,7 +400,7 @@ pub const Ds4Model = struct {
     lid_topk_ids: []u32 = &.{},
     lid_enabled: bool = false,
 
-    // Prefill buffers (page_allocator for GPU zero-copy — Metal's
+    // Prefill buffers (page_allocator for GPU zero-copy, Metal's
     // newBufferWithBytesNoCopy requires page-aligned pointers).
     // Allocated at init but not yet used: batched prefill is deferred
     // for this model due to hyper connection complexity (see prefill()).
@@ -636,7 +636,7 @@ pub const Ds4Model = struct {
 
         // Compressor buffers: per-token projections for the current compression group only.
         // CSA groups have ratio=4, HCA groups have ratio=128. We use max_ratio=128 as a
-        // circular buffer per layer — completed groups are compressed into csa_k and the
+        // circular buffer per layer, completed groups are compressed into csa_k and the
         // per-token slots are reused. This is O(layers × max_ratio) instead of O(layers × ctx),
         // reducing memory from ~92GB to ~44MB at 256K context.
         const max_comp_dim: usize = 2 * kd;
@@ -672,7 +672,7 @@ pub const Ds4Model = struct {
         errdefer if (self.lid_scores.len > 0) allocator.free(self.lid_scores);
         errdefer if (self.lid_topk_ids.len > 0) allocator.free(self.lid_topk_ids);
 
-        // Prefill buffers: deferred — DS4 prefill is sequential (see prefill() doc comment).
+        // Prefill buffers: deferred, DS4 prefill is sequential (see prefill() doc comment).
         // Fields stay as empty slices; allocate on first batched-prefill use (future).
         // Saves ~64 MB page_allocator memory that was allocated but never touched.
 
@@ -725,7 +725,7 @@ pub const Ds4Model = struct {
             &self.gpu_top_weights,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
-        // Prefill buffers (page_allocator) — currently empty slices (allocation deferred).
+        // Prefill buffers (page_allocator), currently empty slices (allocation deferred).
         // Guards remain for forward compatibility when batched prefill is implemented.
         {
             const pa = std.heap.page_allocator;
@@ -803,7 +803,7 @@ pub const Ds4Model = struct {
         return self.kv_k_bytes[li * layer_bytes ..][0..layer_bytes];
     }
 
-    /// K=V in DS4 MLA — V cache is the same buffer as K cache.
+    /// K=V in DS4 MLA, V cache is the same buffer as K cache.
     fn kvVLayer(self: *Ds4Model, li: usize) []u8 {
         return self.kvKLayer(li);
     }
@@ -1023,7 +1023,7 @@ pub const Ds4Model = struct {
         self.cpu.rmsNorm(self.kv_proj.ptr, self.normAsF32(kv_an, kd), self.kv_proj.ptr, kd, self.rms_eps);
 
         // Compressor projections for all compressed layers (CSA ratio=4, HCA ratio=128).
-        // Both batched with Q+KV in same GPU command buffer — single sync covers all.
+        // Both batched with Q+KV in same GPU command buffer, single sync covers all.
         // Circular buffer: per-token projections indexed by pos % comp_buf_ratio (128).
         const comp_buf_ratio: usize = 128; // circular buffer stride per layer
         const comp_layer_stride = comp_buf_ratio * max_comp_dim;
@@ -1043,7 +1043,7 @@ pub const Ds4Model = struct {
             }
         }
 
-        // Pre-dispatch LID GEMVs into same GPU command buffer — eliminates 1 sync per CSA layer.
+        // Pre-dispatch LID GEMVs into same GPU command buffer, eliminates 1 sync per CSA layer.
         // Inputs (q_compressed, hidden) are already in the pipeline; GPU ordering guarantees correctness.
         const lid_pre_dispatched: bool = blk: {
             if (!self.lid_enabled or ratio != @as(u32, csa_compress_ratio)) break :blk false;
@@ -1065,7 +1065,7 @@ pub const Ds4Model = struct {
         self.be.sync();
         for (0..nh) |h| plainRmsNorm(self.q_full[h * kd ..][0..kd], self.rms_eps);
 
-        // RoPE cos/sin from pre-computed freq bases — SIMD vectorized.
+        // RoPE cos/sin from pre-computed freq bases, SIMD vectorized.
         const nd = rd / 2;
         // Compressed layers (ratio != 0) use compress_rope_freq (160000) for main attention
         // Q and KV RoPE. Non-compressed layers use the standard rope_freq (10000).
@@ -1531,7 +1531,7 @@ pub const Ds4Model = struct {
     /// Uses the shared q_compressed (from main attention's W^DQ) projected through
     /// the indexer's W^IUQ, then multi-head ReLU dot-product scoring with W^w weights.
     /// When `skip_gpu` is true, the caller has already dispatched the LID GEMVs and
-    /// synced — this function only does CPU scoring + top-k selection.
+    /// synced, this function only does CPU scoring + top-k selection.
     fn lidScoreAndSelect(
         self: *Ds4Model,
         li: usize,
@@ -1605,7 +1605,7 @@ pub const Ds4Model = struct {
         const nk: usize = if (self.expert_budget > 0) self.expert_budget else self.n_expert_used;
         const ne: usize = self.n_experts;
 
-        // Pre-norm: GPU only (no sync — expert GEMVs and routing GEMV also GPU)
+        // Pre-norm: GPU only (no sync, expert GEMVs and routing GEMV also GPU)
         const nw = try self.layerTensorReq(li, "ffn_norm.weight");
         self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
         t_norm += perfMonoMs() - t_prev;
@@ -1619,10 +1619,10 @@ pub const Ds4Model = struct {
 
         if (li < self.hash_layer_count) {
             // Hash routing: expert selection is by hash lookup (CPU, no GPU sync needed).
-            // Gate GEMV deferred — batched with expert GEMVs, read after final sync.
+            // Gate GEMV deferred, batched with expert GEMVs, read after final sync.
             const gi = try self.layerTensorReq(li, "ffn_gate_inp.weight");
             self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
-            // NO sync here — gate_inp GEMV batched with expert GEMVs below
+            // NO sync here, gate_inp GEMV batched with expert GEMVs below
 
             // Hash lookup: determines which experts are selected (CPU-only, no GPU data needed)
             // GGUF raw dims [n_expert_used, n_vocab]; after reversal: [n_vocab, n_expert_used].
@@ -1642,7 +1642,7 @@ pub const Ds4Model = struct {
             self.doGemv(self.hidden2.ptr, gi, self.router_logits.ptr, ne, e);
             self.be.sync(); // CPU reads router_logits
 
-            // Compute probs = sqrt_softplus(logits) — SIMD vectorized (3 transcendentals × 256)
+            // Compute probs = sqrt_softplus(logits), SIMD vectorized (3 transcendentals × 256)
             var probs: [256]f32 = undefined;
             {
                 const V8f = @Vector(8, f32);
@@ -1689,7 +1689,7 @@ pub const Ds4Model = struct {
         var n_scratch: usize = 0;
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
-        // Detect fused-capable backend at comptime — avoids runtime dispatch overhead.
+        // Detect fused-capable backend at comptime, avoids runtime dispatch overhead.
         // Fused gate+up+clampedSiluMul: disabled for MXFP4 (Metal compiler issue).
         // Q2_K fused works but Q2_K quantization is too aggressive for coherent output.
         const use_fused = false and blk: {
@@ -1745,7 +1745,7 @@ pub const Ds4Model = struct {
             // With expert cache: track residency via LRU, only madvise on misses.
             // Without cache: unconditional madvise (original behavior).
             // Skipped entirely when the experts are already device-resident
-            // (prefaultLocalExperts) — the host pages were DONTNEED'd, so a
+            // (prefaultLocalExperts), the host pages were DONTNEED'd, so a
             // WILLNEED here would re-read the working set from disk per token.
             if (!self.experts_resident and (comptime @import("builtin").os.tag == .macos or @import("builtin").os.tag == .linux)) {
                 if (self.expert_cache) |ec| {
@@ -1759,7 +1759,7 @@ pub const Ds4Model = struct {
                         const eid = top_ids[j];
                         if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
                         if (!ec.touch(@intCast(li), @intCast(eid))) {
-                            // Cache miss — admit and prefetch
+                            // Cache miss, admit and prefetch
                             _ = ec.admit(@intCast(li), @intCast(eid));
                             prefetchRange(ge.data_ptr + eid * gs, gs);
                             prefetchRange(ue.data_ptr + eid * us, us);
@@ -1834,14 +1834,14 @@ pub const Ds4Model = struct {
         t_phase1 += perfMonoMs() - t_prev;
         t_prev = perfMonoMs();
 
-        // Phase 2: clampedSiluMul — skip when fused path already applied activation.
+        // Phase 2: clampedSiluMul, skip when fused path already applied activation.
         if (!fused_experts and n_scratch > 0) {
             self.computeBackend().clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
         t_silu += perfMonoMs() - t_prev;
         t_prev = perfMonoMs();
 
-        // Phase 3: all down GEMVs into expert_scratch — batch for no barriers.
+        // Phase 3: all down GEMVs into expert_scratch, batch for no barriers.
         self.gemvBackend().beginBatch();
         if (shexp_slots > 0) {
             if (self.layerTensor(li, "ffn_down_shexp.weight")) |dt| {
@@ -2069,7 +2069,7 @@ pub const Ds4Model = struct {
         const hh_scale = try self.getTensorReq("output_hc_scale.weight");
         self.hcHead(hh_fn, hh_base, hh_scale);
 
-        // Final norm + LM head — single GPU command buffer, single sync
+        // Final norm + LM head, single GPU command buffer, single sync
         const norm_w = try self.getTensorReq("output_norm.weight");
         self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(norm_w, e), self.hidden.ptr, e, self.rms_eps);
         const lm = try self.getTensorReq("output.weight");
@@ -2211,7 +2211,7 @@ pub const Ds4Model = struct {
             self.mtpAttentionLayer(mtp, layer, e, kd);
             // HC post (attn) → update MTP HC state
             self.mtpHcPost(e);
-            // HC pre (ffn) — use ffn HC weights
+            // HC pre (ffn), use ffn HC weights
             self.mtpHcPreFfn(mtp, layer, e);
             // FFN (shared expert only)
             self.mtpFfnLayer(mtp, layer, e);
@@ -2293,7 +2293,7 @@ pub const Ds4Model = struct {
             applyRopeTable(self.kv_proj[nope..][0..rd], rope_cos[0..nd], rope_sin[0..nd]);
         }
 
-        // Append to MTP KV cache (only on layer 0 — shared cache)
+        // Append to MTP KV cache (only on layer 0, shared cache)
         if (layer == 0 and self.mtp_kv_len < self.max_seq_len) {
             const pos = self.mtp_kv_len;
             @memcpy(self.mtp_kv_cache[pos * kd ..][0..kd], self.kv_proj[0..kd]);
@@ -2425,7 +2425,7 @@ pub const Ds4Model = struct {
                 woa_scale_row,
             );
         }
-        // wo_b: [4096, 8192] is NOT grouped — full GEMV
+        // wo_b: [4096, 8192] is NOT grouped, full GEMV
         gemv_mxfp8_fn(self.lora_out.ptr, wob_w.?.data_ptr, wob_s.?.data_ptr, self.expert_scratch.ptr, e, og * olr, @intCast(wob_s.?.shape[1]));
         for (0..e) |i| self.hidden2[i] += self.expert_scratch[i];
     }
@@ -2479,7 +2479,7 @@ pub const Ds4Model = struct {
     ///    per-token sequential HC updates (the streams carry state across tokens).
     ///
     /// 2. **MoE routing is per-token:** 256-expert top-6 routing (with hash routing
-    ///    on layers 0-2) produces different expert sets per token — same as GLM-4
+    ///    on layers 0-2) produces different expert sets per token, same as GLM-4
     ///    and GPT-OSS, but combined with HC makes the bookkeeping much harder.
     ///
     /// 3. **CSA/HCA compressors have per-position state:** Compressed KV blocks
@@ -2489,7 +2489,7 @@ pub const Ds4Model = struct {
     /// 4. **Grouped output LoRA:** 8-group × 1024-rank attention output projection
     ///    is non-standard and would need its own batched path.
     ///
-    /// The pf_* buffers are allocated for forward compatibility — a future
+    /// The pf_* buffers are allocated for forward compatibility, a future
     /// implementation can batch the MLA attention within each layer (as GLM-4 does)
     /// while keeping HC, MoE, and compressor passes per-token.
     pub fn prefill(self: *Ds4Model, token_ids: []const u32) !u32 {
@@ -2544,7 +2544,7 @@ pub const Ds4Model = struct {
     /// EP-local working set (~half the model) is the only resident footprint
     /// (measured: the demand-paged mmap thrashed at 8-30s/token of FFN
     /// page-fault stalls). Both the FP4 packed weights AND their E8M0 scale
-    /// tensors are made resident — the scales are read on every expert gemv
+    /// tensors are made resident, the scales are read on every expert gemv
     /// and would otherwise demand-page during decode.
     ///
     /// Ranges are processed in address order (file order within each shard)
@@ -2627,7 +2627,7 @@ pub const Ds4Model = struct {
         }
         // The copy set SEQUENTIAL readahead on the shard mmaps; decode must
         // go back to RANDOM so scattered reads don't over-read whole shards.
-        // The non-expert shard pages are also DONTNEED'd — everything the GPU
+        // The non-expert shard pages are also DONTNEED'd, everything the GPU
         // needs is device-resident or heap-repacked, so keeping ~50GB of dead
         // mmap pages resident only fuels the allocation-pressure stalls.
         self.be.restoreMmapHints();
@@ -2685,7 +2685,7 @@ pub const Ds4Model = struct {
     /// Dispatch a GEMV for a single expert slice from a packed expert tensor.
     /// Handles MLX-Q companion tensor slicing for per-expert scale/bias offsets.
     /// Expert tensors fused by the official DeepSeek-V4-Flash-0731 loader are
-    /// POINTER TABLES ([n_experts, 1] u64 mmap addresses — the checkpoint's
+    /// POINTER TABLES ([n_experts, 1] u64 mmap addresses, the checkpoint's
     /// experts are at non-uniform file offsets, so direct stride math is
     /// impossible) and are dereferenced per expert here.
     fn doGemvExpert(self: *Ds4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
@@ -3017,10 +3017,10 @@ pub const Ds4Model = struct {
                                 // Accelerate sgemm writes y = x @ W^T (row-major)
                                 // y[n_tok, tile_n] written contiguously, then copy to strided output
                                 if (tile_n == n_out) {
-                                    // Full matrix — write directly to y
+                                    // Full matrix, write directly to y
                                     accel.sgemm(n_tok, n_out, n_in, x, self.pf_q.ptr, y);
                                 } else {
-                                    // Tile — need to write to correct columns in y
+                                    // Tile, need to write to correct columns in y
                                     // Use a temp output buffer (reuse pf_kv_proj if big enough)
                                     if (self.pf_kv_proj.len >= n_tok * tile_n) {
                                         accel.sgemm(n_tok, tile_n, n_in, x, self.pf_q.ptr, self.pf_kv_proj.ptr);
@@ -3029,7 +3029,7 @@ pub const Ds4Model = struct {
                                             @memcpy(y[tok * n_out + row_start ..][0..tile_n], self.pf_kv_proj[tok * tile_n ..][0..tile_n]);
                                         }
                                     } else {
-                                        // Buffer too small — fall back to per-tile GEMV
+                                        // Buffer too small, fall back to per-tile GEMV
                                         for (0..n_tok) |tok| {
                                             for (0..tile_n) |r| {
                                                 var sum: f32 = 0;
@@ -3242,7 +3242,7 @@ pub const Ds4Model = struct {
         self: *Ds4Model,
         token_ids: []const u32,
         position_ids: []const u32,
-        _: [*]const [8]u64, // ancestor_masks (unused — we use standard causal attention)
+        _: [*]const [8]u64, // ancestor_masks (unused, we use standard causal attention)
         n_nodes: u32,
     ) !void {
         if (n_nodes == 0) return;
@@ -3279,7 +3279,7 @@ pub const Ds4Model = struct {
         }
         @memcpy(self.pf_positions[0..n], position_ids[0..n]);
 
-        // Process layers — optionally skip early layers for faster verification.
+        // Process layers, optionally skip early layers for faster verification.
         // forwardTree has no HC, so skipping early layers loses representation depth
         // but doesn't corrupt state propagation.
         const ft_skip: usize = if (self.layer_skip_end > 0) @min(self.layer_skip_end, self.n_layers / 2) else 0;
@@ -3288,7 +3288,7 @@ pub const Ds4Model = struct {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
             if (self.pp_degree > 1 and (li < pp_range.start or li >= pp_range.end)) continue;
 
-            // Attention norm (batched) — always needed for KV projection
+            // Attention norm (batched), always needed for KV projection
             const nw = try self.layerTensorReq(li, "attn_norm.weight");
             self.computeBackend().rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(nw, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
 
@@ -3316,7 +3316,7 @@ pub const Ds4Model = struct {
                 }
             }
 
-            // Skip layers below ft_skip — KV cache already populated above.
+            // Skip layers below ft_skip, KV cache already populated above.
             if (li < ft_skip) continue;
 
             // Q projection: [n, e] → [n, ql] → norm → [n, nh*kd]
@@ -3452,7 +3452,7 @@ pub const Ds4Model = struct {
             self.be.sync();
 
             // FFN: shared expert only (simplified for batched verification).
-            // Skip FFN for early active layers to reduce compute — attention-only is
+            // Skip FFN for early active layers to reduce compute, attention-only is
             // approximate but sufficient for suffix argmax verification.
             const ft_ffn_skip: usize = 0; // skip FFN for first 15 active layers
             if (li < ft_skip + ft_ffn_skip) {
@@ -3545,7 +3545,7 @@ pub const Ds4Model = struct {
         // then compute logits position-by-position into logits_buf (overwritten each time,
         // but treeLogits reads them one at a time anyway).
         self.computeBackend().rmsNormBatched(self.pf_hidden.ptr, self.normAsF32(norm_w, e), self.pf_hidden2.ptr, n, e, self.rms_eps);
-        // Save the normed hidden states — treeLogits will compute logits on demand
+        // Save the normed hidden states, treeLogits will compute logits on demand
         // (pf_hidden2[t*e..] holds the normed hidden for position t)
     }
 
@@ -3623,7 +3623,7 @@ pub const Ds4Model = struct {
     }
 
     /// Copy expert data to heap pool for GPU safety. Uses pread for GGUF,
-    /// memcpy for SafeTensors. The heap pool is always resident — Metal GPU
+    /// memcpy for SafeTensors. The heap pool is always resident, Metal GPU
     /// can safely read via wrapBuffer without page cache interference.
     fn poolExpert(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
         if (self.expert_pool.len == 0) return data_ptr;
@@ -3702,7 +3702,7 @@ pub const Ds4Model = struct {
                         const heap = self.allocator.alloc(u8, size) catch continue;
                         @memcpy(heap, @as([*]const u8, t.data_ptr)[0..size]);
                         // Can't modify TensorInfo directly (it's from Format vtable).
-                        // Need a different approach — see note below.
+                        // Need a different approach, see note below.
                         self.allocator.free(heap);
                         total_copied += size;
                     }
@@ -3774,7 +3774,7 @@ fn topKIndices(scores: []const f32, out: []u32) void {
     // Initialize with first k indices (unsorted threshold)
     const init_k = @min(k, scores.len);
     for (0..init_k) |i| out[i] = @intCast(i);
-    // Sort initial k by score descending (insertion sort — k is small)
+    // Sort initial k by score descending (insertion sort, k is small)
     for (1..init_k) |i| {
         const val = out[i];
         const vs = scores[val];
@@ -4048,7 +4048,7 @@ fn cpuGemvQ8_0(w_ptr: [*]const u8, x: []const f32, y: []f32, n_in: usize) void {
 }
 
 /// Hint the OS to start paging in a memory range from the mmap'd model file.
-/// Non-blocking — the kernel reads pages in the background while we continue.
+/// Non-blocking, the kernel reads pages in the background while we continue.
 fn prefetchRange(ptr: [*]const u8, len: usize) void {
     const page_size: usize = std.heap.page_size_min;
     const addr = @intFromPtr(ptr);
@@ -4061,7 +4061,7 @@ fn prefetchRange(ptr: [*]const u8, len: usize) void {
 /// 3D tensors: GGUF raw [n_in, n_ff, n_experts] → reversed [n_experts, n_ff, n_in].
 ///   Stride = dims[1] × dims[2] = n_ff × n_in.
 /// 2D tensors (some converters flatten): raw [n_in, n_ff * n_experts] → reversed [n_ff * n_experts, n_in].
-///   Stride = dims[0] / n_experts × dims[1] — but we don't know n_experts here.
+///   Stride = dims[0] / n_experts × dims[1], but we don't know n_experts here.
 ///   Instead, use the total bytes / n_experts where n_experts comes from the model config.
 fn ds4ExpertStride(t: TensorInfo, n_experts: usize) usize {
     if (t.dtype == .mlx_q) {

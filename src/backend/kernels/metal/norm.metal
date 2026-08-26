@@ -80,7 +80,7 @@ kernel void rms_norm_fused_f32(
 // Two-pass within one threadgroup: sum-of-squares reduction, then normalize.
 // Re-reads a and b in pass 2 (L2-hot from pass 1) to avoid device memory
 // write-then-read of the intermediate sum.
-// Supports output == a (final logits case — raw sum is not needed).
+// Supports output == a (final logits case, raw sum is not needed).
 kernel void add_rms_norm_fused_f32(
     device float* a             [[buffer(0)]],
     device const float* b       [[buffer(1)]],
@@ -142,7 +142,7 @@ kernel void rms_norm_add_f32(
 
 // ── Softmax (three-pass with threadgroup reduction) ───────────
 
-// Pass 1: Find max (reduction) — uses simd_max for fast SIMD-group reduction.
+// Pass 1: Find max (reduction), uses simd_max for fast SIMD-group reduction.
 kernel void softmax_max(
     device const float* data [[buffer(0)]],
     device float* max_out    [[buffer(1)]],
@@ -159,7 +159,7 @@ kernel void softmax_max(
     if (tgid == 0) max_out[0] = mx;
 }
 
-// Pass 2: exp(x - max) and sum (reduction) — uses simd_sum for fast reduction.
+// Pass 2: exp(x - max) and sum (reduction), uses simd_sum for fast reduction.
 kernel void softmax_exp_sum(
     device float* data          [[buffer(0)]],
     device const float* max_buf [[buffer(1)]],
@@ -194,7 +194,7 @@ kernel void softmax_div(
 
 // ── L2 Norm (in-place) ───────────────────────────────────────
 
-// Pass 1: sum of squares — reuse rms_norm_ss kernel above.
+// Pass 1: sum of squares, reuse rms_norm_ss kernel above.
 // Pass 2: normalize in-place.
 kernel void l2_norm_apply(
     device float* x            [[buffer(0)]],

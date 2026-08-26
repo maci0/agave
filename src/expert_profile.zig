@@ -54,7 +54,7 @@ pub const ExpertProfile = struct {
         }
     }
 
-    /// Record an expert activation. Hot path — no allocation.
+    /// Record an expert activation. Hot path, no allocation.
     pub inline fn record(self: *ExpertProfile, layer: u32, expert_id: u32) void {
         if (layer >= self.n_layers or expert_id >= self.n_experts) return;
         self.counts[@as(usize, layer) * self.n_experts + expert_id] += 1;

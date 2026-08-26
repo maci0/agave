@@ -216,7 +216,7 @@ pub fn groupRmsNormSiluGate(
         const z_g = z + off;
         const w_g = norm_w + w_off;
 
-        // 1. Apply SiLU gate in-place: y = y * silu(z) — SIMD vectorized
+        // 1. Apply SiLU gate in-place: y = y * silu(z), SIMD vectorized
         const ones: V8 = @splat(1.0);
         var j: usize = 0;
         while (j + 8 <= elem_per_group) : (j += 8) {
@@ -239,7 +239,7 @@ pub fn groupRmsNormSiluGate(
         var ss: f32 = @reduce(.Add, ss_acc);
         while (i < elem_per_group) : (i += 1) ss += y_g[i] * y_g[i];
 
-        // 3. RMS normalize and apply weight — SIMD vectorized
+        // 3. RMS normalize and apply weight, SIMD vectorized
         const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(elem_per_group)) + eps);
         const inv_rms_v: V8 = @splat(inv_rms);
         var k: usize = 0;

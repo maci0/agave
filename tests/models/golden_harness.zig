@@ -123,14 +123,14 @@ test "isDegenerate detects garbage output" {
     try std.testing.expect(!isDegenerate("The capital of France is Paris and it is beautiful"));
     // Short but valid
     try std.testing.expect(!isDegenerate("Hello world this is a test"));
-    // All digits, no letters — degenerate
+    // All digits, no letters, degenerate
     try std.testing.expect(isDegenerate("12345678901234567890"));
     // Mostly non-alphabetic but just enough letters to pass letter check,
     // yet single char still dominates
     try std.testing.expect(isDegenerate("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"));
-    // Two-word output where one word is >50% — degenerate
+    // Two-word output where one word is >50%, degenerate
     try std.testing.expect(isDegenerate("ok ok ok ok ok ok ok no"));
-    // Short 5-word output with 100% word dominance — should still be caught
+    // Short 5-word output with 100% word dominance, should still be caught
     // (exercises lowered min_words_for_check threshold)
     try std.testing.expect(isDegenerate("test test test test test"));
     // Exactly 3 words, one dominates (2/3 > 50%)

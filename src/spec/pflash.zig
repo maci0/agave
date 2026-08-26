@@ -1,11 +1,11 @@
 //! PFlash: Speculative prefill with block-sparse importance scoring.
 //!
 //! Algorithm (from Luce-Org/lucebox-hub):
-//!   1. Score — lightweight draft model runs forward pass; attention weights reveal
+//!   1. Score, lightweight draft model runs forward pass; attention weights reveal
 //!              which KV blocks are important for the final tail positions.
-//!   2. Select — keep blocks above alpha × mean_score (adaptive threshold).
-//!   3. Compress — build a reduced token list from selected block spans.
-//!   4. Prefill — target model prefills only the compressed prompt.
+//!   2. Select, keep blocks above alpha × mean_score (adaptive threshold).
+//!   3. Compress, build a reduced token list from selected block spans.
+//!   4. Prefill, target model prefills only the compressed prompt.
 //!
 //! Usage:
 //!   var cfg = PFlashConfig{};
@@ -18,7 +18,7 @@ const Allocator = std.mem.Allocator;
 const Model = @import("../models/model.zig").Model;
 const sparse_attn = @import("../ops/sparse_attn.zig");
 
-/// PFlash configuration — tunable at the CLI level.
+/// PFlash configuration, tunable at the CLI level.
 pub const PFlashConfig = struct {
     /// Alpha threshold: keep block if score > alpha × mean_score.
     /// 0.85 is the Luce PFlash default (keeps ~5% of blocks at 128K context).
@@ -278,7 +278,7 @@ test "selectBlocks alpha threshold" {
     defer state.deinit(std.testing.allocator);
     state.orig_len = 64;
 
-    // Scores: [1,2,3,4,5,6,7,8] — mean=4.5, threshold=0.5*4.5=2.25
+    // Scores: [1,2,3,4,5,6,7,8], mean=4.5, threshold=0.5*4.5=2.25
     // Selected: blocks with score > 2.25 → blocks 2..7 (indices 2-7)
     for (state.block_scores[0..8], 0..) |*s, i| s.* = @as(f32, @floatFromInt(i + 1));
     selectBlocks(&state);

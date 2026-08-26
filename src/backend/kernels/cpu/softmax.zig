@@ -200,7 +200,7 @@ test "softmax partial-negative-infinity keeps valid distribution" {
 test "fuzz: all softmax functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
-            // softmaxSimd — the only pub function
+            // softmaxSimd, the only pub function
             const len = smith.valueWithHash(u4, 0) | 1; // 1..15, never 0
             var buf: [16]f32 = undefined;
             for (0..len) |i| {

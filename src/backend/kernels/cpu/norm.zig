@@ -40,7 +40,7 @@ pub fn rmsNorm(input: [*]const f32, weight: [*]const f32, output: [*]f32, n: usi
 }
 
 /// Fused add + rms_norm: a[i] = a[i] + b[i], output = rms_norm(a+b, weight, eps).
-/// Two passes instead of three (no separate add pass) — avoids intermediate write.
+/// Two passes instead of three (no separate add pass), avoids intermediate write.
 pub fn addRmsNorm(a: [*]f32, b: [*]const f32, weight: [*]const f32, output: [*]f32, n: usize, eps: f32) void {
     // Pass 1: compute a = a + b, accumulate sum of squares (4x unrolled).
     var acc0: V8 = v8zero;

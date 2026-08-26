@@ -93,7 +93,7 @@ class AgaveEngine {
 
     // Initialize inference context
     this.ctx = exp.agave_init(ptr, data.byteLength);
-    // Model buffer is borrowed by GGUF — do NOT agave_dealloc until agave_free.
+    // Model buffer is borrowed by GGUF, do NOT agave_dealloc until agave_free.
     if (this.ctx === 0) { throw new Error('Failed to initialize model'); }
 
     // Read init status message
@@ -105,7 +105,7 @@ class AgaveEngine {
     exp.agave_dealloc(statusPtr, statusBufSize);
 
     // oxlint-disable-next-line no-console -- engine diagnostics for WASM debugging
-    console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB — ${this.initMessage}`);
+    console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB, ${this.initMessage}`);
   }
 
   /**
