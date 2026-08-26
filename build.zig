@@ -1,4 +1,4 @@
-//! Build configuration for Agave — LLM inference engine.
+//! Build configuration for Agave, LLM inference engine.
 //! Targets: ReleaseFast (agave), ReleaseSafe (agave-debug), WASM (agave.wasm),
 //! CUDA PTX kernels (zig build ptx), ROCm AMDGCN kernels (zig build amdgcn),
 //! micro-benchmarks (zig build bench).
@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
 
     // ── Helper: link frameworks for macOS ─────────────────────────
     // Note: Vulkan (libvulkan.so / libvulkan.1.dylib (via KosmicKrisp ICD)) is loaded at runtime
-    // via std.DynLib — no link-time dependency needed.
+    // via std.DynLib, no link-time dependency needed.
     const link_metal = enable_metal and target.result.os.tag == .macos;
     const link_platform = struct {
         fn apply(mod: *std.Build.Module, _: *std.Build.Step.Compile, _: std.Build.ResolvedTarget) void {
@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
         .sm_90 => &std.Target.nvptx.cpu.sm_90,
         .sm_100 => &std.Target.nvptx.cpu.sm_100,
         .sm_120 => &std.Target.nvptx.cpu.sm_120,
-        // GB10 (NVIDIA DGX Spark) — Blackwell Ultra. PTX for sm_121 is
+        // GB10 (NVIDIA DGX Spark), Blackwell Ultra. PTX for sm_121 is
         // forward-compatible with the sm_120 model; JITs at load time.
         .sm_121 => &std.Target.nvptx.cpu.sm_121,
     };
@@ -92,7 +92,7 @@ pub fn build(b: *std.Build) void {
             // Dense GEMV
                  "gemv_f32",
             "gemv_bf16",       "gemv_f16",      "gemv_t_q8_0",
-            // Quantized GEMV — standard GGUF formats
+            // Quantized GEMV, standard GGUF formats
                "gemv_q8_0",      "gemv_q4_0",
             "gemv_q4_0_batch", "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",
             "gemv_q6_k",       "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
@@ -171,14 +171,14 @@ pub fn build(b: *std.Build) void {
 
         // Workaround: two Zig 0.16 bugs for AMDGCN targets (upstream Zig AMDGCN issues):
         //
-        // Bug 1 — Wrong ISA string in metadata:
+        // Bug 1, Wrong ISA string in metadata:
         //   Zig emits amdhsa.target = "amdgcn-amd-amdhsa5.0.0-unknown-gfx1100"
         //   (OS semver from Target.zig appended to triple).
         //   HIP does exact-string matching; expects "amdgcn-amd-amdhsa--gfx1100".
         //   Workaround: patch the NT_AMDGPU_METADATA note section in the .o
         //   before linking (ET_REL has no VirtAddr constraints, safe to shrink).
         //
-        // Bug 2 — .kd symbols emitted as LOCAL:
+        // Bug 2, .kd symbols emitted as LOCAL:
         //   Kernel descriptor symbols (foo.kd) need GLOBAL binding so the linker
         //   exports them to .dynsym. Zig emits them as LOCAL → HIP can't find them.
         //   Workaround: llvm-objcopy --globalize-symbol for every .kd symbol.
@@ -292,7 +292,7 @@ pub fn build(b: *std.Build) void {
     // query_test_metadata after another artifact writes stderr. Simple mode
     // uses the same runner without the server protocol; failure is exit status.
     // Exception: the main suite runs in server mode so its fuzz tests register
-    // with the build runner — without the protocol, `zig build test --fuzz`
+    // with the build runner, without the protocol, `zig build test --fuzz`
     // aborts with "no fuzz tests found" and CI's fuzz-smoke never fuzzes.
     const zig_lib = b.graph.zig_lib_directory.path orelse ".";
     const simple_test_runner: std.Build.Step.Compile.TestRunner = .{
@@ -431,16 +431,25 @@ pub fn build(b: *std.Build) void {
         webgpu_mlx_step.dependOn(&b.addRunArtifact(t).step);
     }
 
-    // ROCm kernel tests (placeholder — skips until hardware available)
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/test_rocm_kernel.zig"),
+    // Cross-backend op parity against CPU (skips at runtime with no device).
+    // Compiled only when both GPU backends are real: NullBackend.init is a
+    // compileError, and this test instantiates each backend by union tag.
+    if (enable_vulkan and enable_rocm) {
+        const mod = b.createModule(.{
+            .root_source_file = b.path("tests/test_backend_parity.zig"),
             .target = target,
             .optimize = test_optimize,
-        }),
-        .test_runner = simple_test_runner,
-        .filters = test_filters,
-    })).step);
+        });
+        mod.addImport("backend", backend_test_mod);
+        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
+        link_platform(mod, t, target);
+        if (link_metal) {
+            mod.linkFramework("Metal", .{});
+            mod.linkFramework("Foundation", .{});
+            mod.linkFramework("Accelerate", .{});
+        }
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
 
     // micro_bench pure-function tests (parseKeyValue, parseKernelName, etc.)
     {

@@ -19,3 +19,5 @@ pub const VulkanBackend = backend.VulkanBackend;
 pub const RocmBackend = backend.RocmBackend;
 /// Re-exported WebGpuBackend for test access.
 pub const WebGpuBackend = backend.WebGpuBackend;
+/// Re-exported TensorData so parity tests can build quantized GEMV inputs.
+pub const TensorData = backend.TensorData;
