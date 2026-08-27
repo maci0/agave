@@ -2835,6 +2835,10 @@ pub const Ds4Model = struct {
                 (@as([*]const [*]const u8, @ptrCast(@alignCast(st.data_ptr))))[ei]
             else
                 st.data_ptr + ei * s_stride;
+            if (@intFromPtr(s_data) == 0) {
+                std.log.err("DS4 doGemvExpert: NULL scale pointer for {s} eid={d}", .{ exp_t.name, ei });
+                return;
+            }
             const mxfp4_gs = if (s_is_tbl) ds4_flash_fp4_group_size else model_mod.inferMxfp4GroupSize(st, k);
             const sf = mlx_ops.mxfp4ScaleFormat(self.fmt.is_safetensors, mxfp4_gs);
             const mlx = @import("../ops/mlx.zig");
