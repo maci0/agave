@@ -904,11 +904,9 @@ pub const CudaBackend = struct {
             const act = entry.value_ptr;
             if (addr >= base and addr + size <= base + act.size) {
                 if (refresh_stale and act.state == .stale) {
-                    // Re-upload entire parent buffer so all sub-regions are fresh.
-                    // Async: these are heap activation buffers (pinned-safe);
-                    // the consuming kernel is on the same stream.
+                    // Re-upload entire parent buffer so all sub-regions are fresh
                     const host_ptr: *const anyopaque = @ptrFromInt(base);
-                    _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, host_ptr, act.size, self.stream), "cuMemcpyHtoDAsync(act reupload)");
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, host_ptr, act.size), "cuMemcpyHtoD(act reupload)");
                     act.state = .clean;
                 }
                 if (mark_dirty) act.state = .dirty;
@@ -927,7 +925,9 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, @ptrCast(ptr), size, self.stream), "cuMemcpyHtoDAsync(act upload)");
+                    // Blocking: async H2D from unpinned host memory is
+                    // rejected by the fresh-boot driver (719/700) on GB10.
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
@@ -981,7 +981,7 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = cuCheck(self.cuMemcpyHtoDAsync(act.dptr, @ptrCast(ptr), size, self.stream), "cuMemcpyHtoDAsync(weight upload)");
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -1024,11 +1024,10 @@ pub const CudaBackend = struct {
         while (it.next()) |entry| {
             if (entry.value_ptr.state == .dirty) {
                 const host_ptr: *anyopaque = @ptrFromInt(entry.key_ptr.*);
-                _ = cuCheck(self.cuMemcpyDtoHAsync(host_ptr, entry.value_ptr.dptr, entry.value_ptr.size, self.stream), "cuMemcpyDtoHAsync");
+                self.downloadFromDevice(entry.value_ptr.dptr, host_ptr, entry.value_ptr.size);
             }
             entry.value_ptr.state = .stale;
         }
-        _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
     }
 
     /// Remove a specific activation buffer from the cache.
@@ -1886,8 +1885,7 @@ pub const CudaBackend = struct {
         // Exact match: download and mark stale (host is current).
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= byte_len) {
-                _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(y), act.dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
-                _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
+                self.downloadFromDevice(act.dptr, @ptrCast(y), byte_len);
                 act.state = .stale;
             }
             return;
@@ -1895,8 +1893,7 @@ pub const CudaBackend = struct {
         // Sub-region of a cached parent (e.g. compressor circular buffers):
         // download the slice; the parent stays dirty and flushes at sync.
         if (self.findContaining(addr, byte_len, false, false)) |dptr| {
-            _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(y), dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
-            _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
+            self.downloadFromDevice(dptr, @ptrCast(y), byte_len);
         }
     }
 
@@ -1905,27 +1902,9 @@ pub const CudaBackend = struct {
     /// them, the GPU pipelines the kernels and the copies back-to-back.
     fn drainBatchSyncs(self: *CudaBackend) void {
         if (self.batch_sync_count == 0) return;
-        const t_d = perfMonoMs();
-        for (self.batch_syncs[0..self.batch_sync_count]) |ps| {
-            const addr = @intFromPtr(ps.y);
-            const byte_len = ps.n * @sizeOf(f32);
-            if (self.act_cache.getPtr(addr)) |act| {
-                if (act.size >= byte_len) {
-                    _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(ps.y), act.dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
-                    act.state = .stale;
-                }
-                continue;
-            }
-            if (self.findContaining(addr, byte_len, false, false)) |dptr| {
-                _ = cuCheck(self.cuMemcpyDtoHAsync(@ptrCast(ps.y), dptr, byte_len, self.stream), "cuMemcpyDtoHAsync");
-            }
-        }
-        _ = cuCheck(self.cuStreamSynchronize(self.stream), "cuStreamSynchronize");
-        // TEMP PERF: drain latency + cache size sampling.
-        self.drain_count += 1;
-        if (self.drain_count % 20 == 0) {
-            std.log.info("CUDA drain: {d}ms for {d} copies, act_cache {d} entries", .{ perfMonoMs() - t_d, self.batch_sync_count, self.act_cache.count() });
-        }
+        // Blocking copies: the async D2H to unpinned host memory is rejected
+        // by the fresh-boot driver on GB10 (CUDA_ERROR_OUT_OF_MEMORY).
+        for (self.batch_syncs[0..self.batch_sync_count]) |ps| self.doSyncGemvOutput(ps.y, ps.n);
         self.batch_sync_count = 0;
     }
 
