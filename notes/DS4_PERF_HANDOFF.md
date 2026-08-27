@@ -47,3 +47,26 @@ NCCL_NET_GDR_LEVEL=3 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IB_RETRY_CNT=7 NCCL_IB_
 3. GPU SDPA/kvDot kernel for the attention scores (CPU now — grows with context).
 4. Remove the TEMP instrumentation (DS4PERF/FFNPERF/TPPERF/CUDA timers), then commit.
 5. Concurrency/numseq testing (`--numseq`, server mode) toward the 300-500 concurrent target.
+
+---
+
+## Session 3 update (post-reboot driver regression — committed `43d349d`)
+
+**Symptom:** after the node reboots, the agave fails with `CUDA_ERROR_OUT_OF_MEMORY` (700) at the FIRST drain's D2H, then cascades — on BOTH nodes, ALL code states (batched on/off, async/blocking copies), even the very first commit (`dda7bd3`). The tiny standin ran ONCE at 272 tok/s before the reboots; the same code never ran again.
+
+**Exhaustive C-harness validation (passes on the same fresh nodes):**
+- cuMemAlloc of every size in the agave's sequence (512B → 128KB, 36 allocs, 720KB total)
+- H2D/D2H blocking + async, from/to stack, malloc heap, 64MB anon mmap, and the mmap'd model shard
+- Small D2H sizes (4B → 1KB)
+- The agave's PTX module load + `silu_kernel` and `gemv_f32_kernel` (n=24, k=2048, smem 32, on a stream) launch + execution with correct results
+- With `CUDA_LAUNCH_BLOCKING=1`, the agave's own launch returns 700 — but the identical C launch passes.
+
+**Conclusion:** every individual CUDA operation works from a C process; the failure is specific to the agave process's state and cannot be isolated remotely. Likely suspects for the user: the driver version after the reboot, a UVA/address-space collision with the Zig allocator's buffers, or the process's context state.
+
+**On-node debugging needed (user):**
+1. Run the vLLM on a fresh node — if it serves, the driver is healthy for other CUDA apps.
+2. Run the agave locally with `CUDA_LAUNCH_BLOCKING=1` + `CUDA_VISIBLE_DEVICES=0` and read the console output.
+3. Check `journalctl -k` / `dmesg` (root) for the NVMe/UMA driver faults during the run.
+4. Consider a driver reinstall or update.
+
+**Commits:** `43d349d` (all-blocking copies — the fresh driver rejects async copies from unpinned host memory; the batched kernel stays) + the NULL-scale guard. The batched kernel's FFN win (26ms → 1ms/layer) is preserved in the code.
