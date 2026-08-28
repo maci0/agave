@@ -54,7 +54,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 
 ## Features
 
-- **10 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
+- **11 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5/4-Exp, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU, individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
@@ -177,6 +177,7 @@ Supports heterogeneous setups: different backends (CUDA + Vulkan + CPU), archite
 | Gemma 3 | 1B, 4B, 12B, 27B | Working | BF16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K, MLX 4-bit | SPM tokenizer, GELU activation, batched prefill |
 | Gemma 4 | E2B, E4B, 26B-A4B | Working | Q8_0, Q4_K, MLX 4-bit | MoE (top-8), channel-based chat template, multimodal vision (SigLIP-2) |
 | Qwen 3.5 | 0.8B, 9B, 27B, 35B | Working | Q4_0, Q4_K_M, Q8_0, BF16, MLX 4-bit | Hybrid DeltaNet SSM + attention |
+| Qwen4-Exp | Flash-Next | Working | NVFP4, BF16, MLX 4-bit | Gated DeltaNet 36× + QSA 12×, PLE 51B ngram (SSD), HC 4×320, 512 experts |
 | GPT-OSS | 20B | Partial | Q4_0 | MoE, sliding window, attention sinks (poor output quality) |
 | Nemotron-H | n/a | Partial | Q5_0 | Mamba-2 + attention hybrid, GGUF (poor output quality) |
 | Nemotron Nano | 30B | Partial | MLX 4-bit, NVFP4 | SSM + MoE + attention hybrid, SafeTensors (poor output quality) |

@@ -208,6 +208,10 @@ pub const CudaBackend = struct {
     /// (never the legacy null stream): blocking copies on the null stream
     /// cost ~2ms per call on GB10, so the deferred-sync drains batch the
     /// copy-backs asynchronously and sync once.
+    /// Persistent host staging for the batched GEMV pointer table. A stack
+    /// buffer is unsafe: GB10's blocking H2D can be deferred past the
+    /// function return and the reused stack frame then feeds garbage.
+    batched_host_tab: [4 * 16]u64 = undefined,
     stream: CUstream = null,
     cuMemHostRegister: ?FnMemHostRegister = null,
     cuMemHostGetDevicePointer: ?FnMemHostGetDevicePointer = null,
@@ -715,7 +719,10 @@ pub const CudaBackend = struct {
     }
 
     fn downloadFromDevice(self: *CudaBackend, dptr: CUdeviceptr, ptr: *anyopaque, size: usize) void {
-        _ = cuCheck(self.cuMemcpyDtoH(ptr, dptr, size), "cuMemcpyDtoH");
+        const rc = self.cuMemcpyDtoH(ptr, dptr, size);
+        if (rc != CUDA_SUCCESS) {
+            std.log.err("CUDA D2H: rc={d} dptr={x} host={x} size={d}", .{ rc, dptr, @intFromPtr(ptr), size });
+        }
     }
 
     /// Make CUDA context current on the calling thread.
@@ -801,6 +808,9 @@ pub const CudaBackend = struct {
     /// source of truth and keeping both resident doubles the footprint
     /// (66GB device + 66GB host) past the 121GB limit.
     pub fn residentWeight(self: *CudaBackend, ptr: [*]const u8, len: usize) void {
+        // Broken checkpoints (tiny-random) emit NULL entries in the fused
+        // pointer tables — never touch or copy through them.
+        if (len == 0 or @intFromPtr(ptr) == 0) return;
         const addr = @intFromPtr(ptr);
         if (self.resident_map.contains(addr)) return;
         if (self.is_uma and self.isInUmaRegion(addr)) {
@@ -2016,16 +2026,21 @@ pub const CudaBackend = struct {
             if (!cuCheck(self.cuMemAlloc(&dptr, 4 * 16 * @sizeOf(u64)), "cuMemAlloc(batched tab)")) return;
             self.batched_tab = dptr;
         }
-        // Pack [x, w, s, y] tables into one host buffer and upload (async,
-        // the kernel below is on the same stream, so ordering holds).
-        var host_tab: [4 * 16]u64 = undefined;
+        // Pack [x, w, s, y] tables into the persistent staging buffer and
+        // upload (blocking; the staging buffer is backend-owned so a driver-
+        // deferred DMA can never read a freed stack frame).
+        const host_tab = &self.batched_host_tab;
         for (0..n_slots) |i| {
             host_tab[i] = x_devs[i];
             host_tab[16 + i] = w_devs[i];
             host_tab[32 + i] = s_devs[i];
             host_tab[48 + i] = y_devs[i];
         }
-        _ = cuCheck(self.cuMemcpyHtoDAsync(self.batched_tab, &host_tab, 4 * n_slots * @sizeOf(u64), self.stream), "cuMemcpyHtoDAsync(tab)");
+        // Upload the x/w/s/y entries for all slots. The y entries live at
+        // [48..48+slots) — a 4*slots*8 upload only covered the x entries and
+        // left the y pointers null, so the kernel wrote to 0x0 and poisoned
+        // the context.
+        _ = cuCheck(self.cuMemcpyHtoD(self.batched_tab, host_tab, (48 + n_slots) * @sizeOf(u64)), "cuMemcpyHtoD(tab)");
 
         var n_u32: u32 = @intCast(n);
         var k_u32: u32 = @intCast(k);

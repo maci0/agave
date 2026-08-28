@@ -844,6 +844,7 @@ pub const ModelStorage = union(enum) {
     gemma4: Gemma4Model,
     diffusion_gemma: DiffusionGemmaModel,
     qwen35: Qwen35Model,
+    qwen4_exp: Qwen4ExpModel,
     gpt_oss: GptOssModel,
     nemotron_h: NemotronHModel,
     nemotron_nano: NemotronNanoModel,
@@ -860,7 +861,7 @@ pub const ModelStorage = union(enum) {
         if ((kv_type_k.cpuSdpaOnly() or kv_type_v.cpuSdpaOnly()) and arch != .deepseek4)
             @panic("nvfp4_ds_mla is DeepSeek MLA only, use --kv-type q8_0 or f16");
         switch (arch) {
-            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4, .dflash2 => |a| {
+            inline .gemma3, .gemma4, .diffusion_gemma, .qwen35, .qwen4_exp, .gpt_oss, .nemotron_h, .nemotron_nano, .glm4, .deepseek4, .llama4, .dflash2 => |a| {
                 if (comptime !a.isEnabled()) unreachable;
                 const M = comptime modelType(a);
                 var mdl = try M.init(allocator, fmt, be, ctx_size, kv_type_k, kv_type_v, tiered_cache);
@@ -889,6 +890,7 @@ pub const ModelStorage = union(enum) {
             .gemma4 => Gemma4Model,
             .diffusion_gemma => DiffusionGemmaModel,
             .qwen35 => Qwen35Model,
+            .qwen4_exp => Qwen4ExpModel,
             .gpt_oss => GptOssModel,
             .nemotron_h => NemotronHModel,
             .nemotron_nano => NemotronNanoModel,
@@ -1199,6 +1201,7 @@ const Gemma3Model = if (build_options.enable_gemma3) @import("gemma3.zig").Gemma
 const Gemma4Model = if (build_options.enable_gemma4) @import("gemma4.zig").Gemma4Model else void;
 const DiffusionGemmaModel = if (build_options.enable_diffusion_gemma) @import("diffusion_gemma.zig").DiffusionGemmaModel else void;
 const Qwen35Model = if (build_options.enable_qwen35) @import("qwen35.zig").Qwen35Model else void;
+const Qwen4ExpModel = if (build_options.enable_qwen4_exp) @import("qwen4_exp.zig").Qwen4ExpModel else void;
 const GptOssModel = if (build_options.enable_gpt_oss) @import("gpt_oss.zig").GptOssModel else void;
 const NemotronHModel = if (build_options.enable_nemotron_h) @import("nemotron_h.zig").NemotronHModel else void;
 const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model else void;
@@ -1411,6 +1414,12 @@ pub const MockFormat = struct {
         .get_meta_u32_array = @ptrCast(&nullU32ArrayFn),
         .get_vocab = @ptrCast(&nullVocabFn),
         .get_merges = @ptrCast(&nullMergesFn),
+        .release_repacked = @ptrCast(&struct {
+            fn f(_: *anyopaque) void {}
+        }.f),
+        .free_repacked_tensor = @ptrCast(&struct {
+            fn f(_: *anyopaque, _: [*]const u8) void {}
+        }.f),
     };
 
     pub fn format(self: *MockFormat) format_mod.Format {

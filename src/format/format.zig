@@ -629,6 +629,12 @@ test "fuzz: all format functions" {
                 .get_meta_u32_array = MockVTable.getMetaU32Array,
                 .get_vocab = MockVTable.getVocab,
                 .get_merges = MockVTable.getMerges,
+                .release_repacked = struct {
+                    fn f(_: *anyopaque) void {}
+                }.f,
+                .free_repacked_tensor = struct {
+                    fn f(_: *anyopaque, _: [*]const u8) void {}
+                }.f,
             };
             var mock_state: u8 = 0;
             const fmt = Format{
