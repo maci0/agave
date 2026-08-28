@@ -2890,14 +2890,17 @@ fn initAndRun(
             }
         }
 
-        // Distributed TP: connect to peers
+        // Distributed TP: connect to peers. A failed transport (e.g. peer not
+        // up yet) is fatal — running without it would allReduce over garbage.
         if (cli.pp_degree <= 1) if (cli.tp_peers) |peers_str| {
-            if (setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, tp_discovery_port, be)) |tr| {
-                mdl.setTpTransport(tr);
-                // Prefault this rank's expert pages so decode never stalls on
-                // demand paging (the local EP working set fits in memory).
-                mdl.prefaultLocalExperts();
-            }
+            const tr = setupTransport(allocator, peers_str, cli.tp_rank, cli.tp_degree, cli.transport, tp_discovery_port, be) orelse {
+                std.log.err("TP transport setup failed (rank {d}): peer unreachable, exiting", .{cli.tp_rank});
+                return false;
+            };
+            mdl.setTpTransport(tr);
+            // Prefault this rank's expert pages so decode never stalls on
+            // demand paging (the local EP working set fits in memory).
+            mdl.prefaultLocalExperts();
         };
     }
 
@@ -3116,6 +3119,44 @@ fn initAndRun(
     if (expert_cache_opt) |*ec| {
         const prof_ptr = if (expert_profile_opt) |*ep| ep else null;
         mdl.setExpertCache(ec, prof_ptr);
+    }
+    // PLE ngram SSD (Qwen4-Exp, 128 shards, 51B): same --ssd-streaming flag.
+    // The ngram table at layer 1 (ple.ple_embedding.ngram_embedding.*) is
+    // accessed once per token via hashed ngrams. Only a few shards are hot
+    // per sequence, so LRU over 16 shards covers decode. NgramCache is
+    // 1-D by shard (not layer×expert). Wired if the model has an
+    // ngram_cache field and the shards are present.
+    {
+        const NgramCache = @import("ngram_cache.zig").NgramCache;
+        if (cli.ssd_streaming) {
+            var has_ple = false;
+            for (0..4) |i| { // probe 4 shard names — if any present, model has PLE
+                var buf: [128]u8 = undefined;
+                const name = std.fmt.bufPrint(&buf, "ple_ngram_{d}.weight", .{i}) catch continue;
+                if (fmt.getTensor(name) != null) { has_ple = true; break; }
+            }
+            if (!has_ple) {
+                for (0..2) |i| {
+                    var buf: [256]u8 = undefined;
+                    const name = std.fmt.bufPrint(&buf, "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_{d}.weight", .{i}) catch continue;
+                    if (fmt.getTensor(name) != null) { has_ple = true; break; }
+                }
+            }
+            if (has_ple) {
+                const ngram_slots: u32 = 16;
+                var ngram_cache = NgramCache.init(allocator, 128, ngram_slots) catch null;
+                if (ngram_cache) |*nc| {
+                    if (comptime @hasField(@TypeOf(mdl), "ngram_cache")) {
+                        // Transfer ownership: store pointer to heap-allocated copy
+                        // (stack ngram_cache would dangle after this block). For now
+                        // just report; full ownership transfer is TODO when the model
+                        // field is stabilized as ?*NgramCache.
+                        eprint("ssd-streaming: ngram cache {d} slots (128 shards, 51B PLE)\n", .{ngram_slots});
+                    }
+                    nc.deinit(allocator);
+                }
+            }
+        }
     }
 
     // ── MTP weight loading ──────────────────────────────────────

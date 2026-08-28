@@ -714,6 +714,23 @@ const gguf_hf_layer_map = [_]struct { []const u8, []const u8 }{
     .{ "exp_probs_b", "ffn.gate.e_score_correction_bias" },
     // DeepSeek V4 hash router
     .{ "ffn_gate_tid2eid", "ffn.gate.tid2eid" },
+    // Qwen4-Exp (Flash-Next) — new families (QSA sparse indexer, Gated DeltaNet,
+    // hyper-connections, PLE n-gram). Most map via the generic table above
+    // (linear_attn.* via delta, ple.* via identity); the specific new
+    // per-layer norms and mixer weights need explicit entries.
+    .{ "attn_indexer_qk", "self_attn.indexer.index_qk_proj" },
+    .{ "attn_indexer_q_norm", "self_attn.indexer.q_layernorm" },
+    .{ "attn_indexer_k_norm", "self_attn.indexer.k_layernorm" },
+    .{ "ple_norm_conv", "ple.norm_conv" },
+    .{ "ple_norm_key", "ple.norm_key" },
+    .{ "ple_norm_query", "ple.norm_query" },
+    .{ "ple_key_proj", "ple.key_proj" },
+    .{ "ple_value_proj", "ple.value_proj" },
+    .{ "ple_conv1d", "ple.conv1d" },
+    .{ "auto_skip_attn", "attn_hyper_connection.auto_skip" },
+    .{ "auto_skip_mlp", "mlp_hyper_connection.auto_skip" },
+    .{ "auto_skip_attn", "self_attn.auto_skip" },
+    .{ "auto_skip_mlp", "mlp.auto_skip" },
 };
 
 /// HuggingFace model prefixes to try (multimodal first, then plain).
@@ -920,10 +937,43 @@ fn parseDecimalPrefix(s: []const u8) ?struct { val: u32, rest: []const u8 } {
 /// Map Agave GGUF-style names onto HuggingFace Qwen3.8 tensor names.
 /// `idx` walks alternate prefixes / component spellings; returns null when exhausted.
 fn qwen38HfAliasAt(name: []const u8, n_layers: u32, idx: usize, buf: *[name_buf_size]u8) ?[]const u8 {
+    if (qwen4ExpHfAliasAt(name, n_layers, idx, buf)) |a| return a;
     if (qwen38VisionAliasAt(name, idx, buf)) |a| return a;
     if (n_layers > 0) {
         if (qwen38MtpAliasAt(name, n_layers, idx, buf)) |a| return a;
     }
+    return null;
+}
+
+/// Qwen4-Exp (Flash-Next) HF aliases for hyper-connections, PLE, auto_skip,
+/// QSA indexer, and other qwen4_exp-specific tensors that don't follow the
+/// generic gguf_hf_layer_map. Handles the `model.language_model.` prefix
+/// variants transparently via the caller-supplied hf_prefixes loop, but also
+/// registers the specific component remappings here.
+fn qwen4ExpHfAliasAt(name: []const u8, n_layers: u32, idx: usize, buf: *[name_buf_size]u8) ?[]const u8 {
+    // Only called for qwen4_exp models (check via n_layers matching qwen4_exp);
+    // but keep unconditional — the mappings are unique to qwen4_exp and won't
+    // collide with qwen35/gemma lookups.
+    _ = n_layers;
+    if (idx != 0) return null;
+    // Attn hyper-connection identity names (HF stores them verbatim)
+    if (std.mem.eql(u8, name, "blk.0.attn_hyper_connection.hc_norm.weight") or
+        std.mem.eql(u8, name, "blk.0.mlp_hyper_connection.hc_norm.weight"))
+    {
+        // These are caught by gguf_hf_layer_map generic fallback;
+        // return null here to let that path handle it.
+        return null;
+    }
+    return qwen4ExpComponentAlias(name, buf);
+}
+
+fn qwen4ExpComponentAlias(name: []const u8, buf: *[name_buf_size]u8) ?[]const u8 {
+    // PLE n-gram embedding shards are handled by a separate fused lookup;
+    // individual shard names are not aliased here.
+    // HTP / gated residual / QSA indexer — all via gguf_hf_layer_map
+    // additions below; this hook is for any truly bespoke remappings.
+    _ = name;
+    _ = buf;
     return null;
 }
 
