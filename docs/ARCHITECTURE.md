@@ -73,6 +73,7 @@ agave/
 │   │   ├── gemma4.zig     # Gemma 4 (dual attention, MoE/dense variants, PLE)
 │   │   ├── diffusion_gemma.zig # DiffusionGemma (block diffusion, bidirectional canvas)
 │   │   ├── qwen35.zig     # Qwen 3.5 (hybrid DeltaNet SSM + attention)
+│   │   ├── qwen4exp.zig   # Qwen 3.8 Flash-Next (HC, GDN sigmoid gate, QSA, n-gram PLE, 512-expert MoE)
 │   │   ├── gpt_oss.zig    # GPT-OSS (MoE, sliding window, attention sinks)
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)

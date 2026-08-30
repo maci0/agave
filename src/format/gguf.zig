@@ -185,6 +185,7 @@ pub const MetaValue = union(enum) {
     float64: f64,
     array_str: []const []const u8,
     array_u32: []const u32,
+    array_u64: []const u64,
 
     /// Attempts to extract a u32 value, casting from compatible integer types.
     /// Returns null for negative or out-of-range values.
@@ -268,6 +269,7 @@ pub const GGUFFile = struct {
     owned_arrays: std.ArrayList([*]const u8) = .empty,
     owned_array_lens: std.ArrayList(usize) = .empty,
     owned_u32_arrays: std.ArrayList([]u32) = .empty,
+    owned_u64_arrays: std.ArrayList([]u64) = .empty,
     /// Extra mmap'd regions from additional shards of a split GGUF.
     /// Owned by this GGUFFile; freed in deinit().
     extra_shards: std.ArrayList([]align(std.heap.page_size_min) u8) = .empty,
@@ -323,6 +325,7 @@ pub const GGUFFile = struct {
         // Auto-load sibling shards for split GGUFs (e.g. *-00001-of-00002.gguf).
         // Each shard is a complete GGUF; we merge all their tensor tables into self.
         try self.loadSplitShards(path);
+        self.markLazyTensors();
 
         return self;
     }
@@ -423,6 +426,8 @@ pub const GGUFFile = struct {
                 shard_gguf.owned_array_lens.deinit(self.allocator);
                 for (shard_gguf.owned_u32_arrays.items) |s| self.allocator.free(s);
                 shard_gguf.owned_u32_arrays.deinit(self.allocator);
+                for (shard_gguf.owned_u64_arrays.items) |s| self.allocator.free(s);
+                shard_gguf.owned_u64_arrays.deinit(self.allocator);
                 continue;
             };
             // Merge tensors: move all entries into self, computing absolute pointers
@@ -452,7 +457,10 @@ pub const GGUFFile = struct {
             shard_gguf.owned_array_lens.deinit(self.allocator);
             try self.owned_u32_arrays.appendSlice(self.allocator, shard_gguf.owned_u32_arrays.items);
             shard_gguf.owned_u32_arrays.deinit(self.allocator);
+            try self.owned_u64_arrays.appendSlice(self.allocator, shard_gguf.owned_u64_arrays.items);
+            shard_gguf.owned_u64_arrays.deinit(self.allocator);
 
+            self.file_size += sfsize;
             std.log.info("split GGUF: loaded shard {d}/{d} ({d} tensors)", .{ si, total, shard_gguf.tensor_count });
         }
     }
@@ -499,6 +507,7 @@ pub const GGUFFile = struct {
         .get_meta_u32 = @ptrCast(&fmtGetMetaU32),
         .get_meta_f32 = @ptrCast(&fmtGetMetaF32),
         .get_meta_u32_array = @ptrCast(&fmtGetMetaU32Array),
+        .get_meta_u64_array = @ptrCast(&fmtGetMetaU64Array),
         .get_vocab = @ptrCast(&fmtGetVocab),
         .get_merges = @ptrCast(&fmtGetMerges),
     };
@@ -588,6 +597,9 @@ pub const GGUFFile = struct {
     fn fmtGetMetaU32Array(self: *GGUFFile, key: []const u8) ?[]const u32 {
         return self.getMetaU32Array(key);
     }
+    fn fmtGetMetaU64Array(self: *GGUFFile, key: []const u8) ?[]const u64 {
+        return self.getMetaU64Array(key);
+    }
     fn fmtGetVocab(self: *GGUFFile) ?[]const []const u8 {
         return self.getTokenizerVocab();
     }
@@ -624,6 +636,8 @@ pub const GGUFFile = struct {
         self.owned_array_lens.deinit(self.allocator);
         for (self.owned_u32_arrays.items) |s| self.allocator.free(s);
         self.owned_u32_arrays.deinit(self.allocator);
+        for (self.owned_u64_arrays.items) |s| self.allocator.free(s);
+        self.owned_u64_arrays.deinit(self.allocator);
         if (comptime @import("builtin").os.tag != .freestanding) {
             if (!self.is_buffer) posix.munmap(self.mapped_data);
             if (self.file_fd >= 0) {
@@ -736,6 +750,20 @@ pub const GGUFFile = struct {
                         pos = std.math.add(usize, pos, 4) catch return error.OffsetOutOfBounds;
                     }
                     return .{ .val = .{ .array_u32 = ids }, .len = pos - off };
+                }
+                // Parse u64/i64 arrays (qwen4exp PLE multipliers, head offsets, vocab sizes).
+                if (arr_type == .uint64 or arr_type == .int64) {
+                    const bytes_needed = std.math.mul(usize, arr_len, 8) catch return error.OffsetOutOfBounds;
+                    if (bytes_needed > self.file_size or pos > self.file_size - bytes_needed) return error.OffsetOutOfBounds;
+                    const ids = try self.allocator.alloc(u64, arr_len);
+                    errdefer self.allocator.free(ids);
+                    try self.owned_u64_arrays.append(self.allocator, ids);
+                    errdefer _ = self.owned_u64_arrays.pop();
+                    for (0..arr_len) |i| {
+                        ids[i] = try self.readU64(pos);
+                        pos = std.math.add(usize, pos, 8) catch return error.OffsetOutOfBounds;
+                    }
+                    return .{ .val = .{ .array_u64 = ids }, .len = pos - off };
                 }
                 // Parse bool arrays as u32 (used for sliding_window_pattern)
                 if (arr_type == .bool_type) {
@@ -873,6 +901,24 @@ pub const GGUFFile = struct {
         return self.data().ptr + self.data_offset + @as(usize, @intCast(info.offset));
     }
 
+    /// Disable sequential readahead on huge lazily-gathered tables (PLE).
+    /// SEQUENTIAL madvise on the shard would otherwise pull tens of GB on first nearby gemv.
+    fn markLazyTensors(self: *GGUFFile) void {
+        if (comptime @import("builtin").os.tag == .freestanding) return;
+        const info = self.tensors.getPtr("per_layer_token_embd.weight") orelse return;
+        const p = self.tensorData(info);
+        const n = info.dataBytes();
+        if (n == 0) return;
+        const page = std.heap.page_size_min;
+        const addr = @intFromPtr(p);
+        const aligned = addr & ~(page - 1);
+        const extra = addr - aligned;
+        const total = extra + n;
+        const rounded = std.mem.alignForward(usize, total, page);
+        const base: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(aligned);
+        posix.madvise(base, rounded, posix.MADV.RANDOM) catch {};
+    }
+
     /// Looks up a string metadata value by key.
     pub fn getMetaStr(self: *const GGUFFile, key: []const u8) ?[]const u8 {
         if (self.metadata.get(key)) |v| return v.asStr();
@@ -893,6 +939,16 @@ pub const GGUFFile = struct {
         if (self.metadata.get(key)) |v| {
             return switch (v) {
                 .array_u32 => |arr| arr,
+                else => null,
+            };
+        }
+        return null;
+    }
+    /// Looks up a uint64 array metadata value by key.
+    pub fn getMetaU64Array(self: *const GGUFFile, key: []const u8) ?[]const u64 {
+        if (self.metadata.get(key)) |v| {
+            return switch (v) {
+                .array_u64 => |arr| arr,
                 else => null,
             };
         }

@@ -1,5 +1,6 @@
 # Zig build artifacts
 .zig-cache/
+.zig-cache-global/
 zig-out/
 # Stray local WASM droppings at repo root (canonical output: zig build wasm → zig-out/web/)
 /root.wasm

@@ -13,6 +13,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 |-------|---------|-----------|-----|---------|
 | **Gemma 3** | `gemma3` | GQA + QK norm + post-norms | GELU + SwiGLU | Embedding scaling, logit softcap, vision (SigLIP) |
 | **Qwen 3.5/3.6/3.8** | `qwen35` | GQA (every 4th layer) | SiLU + SwiGLU | DeltaNet SSM hybrid, MoE (3.5-35B, 3.6-35B, Nex-N2-Pro 512-expert), dense 3.8-27B, MTP heads, attn_output_gate, 3.8 native vision |
+| **Qwen 3.8 Flash-Next** | `qwen4exp` | QSA GQA every 4th layer (indexer top-k) | SiLU SwiGLU MoE | 125B MoE (512 experts, top-10 + shared), 4-stream HC, GDN with sigmoid output gate, n-gram PLE (mmap, no GPU upload) |
 | **GPT-OSS** | `gpt_oss` | GQA + sliding window + sinks | SiLU + SwiGLU | MoE (top-4 of 32 experts) |
 | **Nemotron-H** | `nemotron_h` | GQA (sparse layers) | SiLU + SwiGLU | Mamba-2 SSM hybrid (GGUF) |
 | **Nemotron Nano** | `nemotron_nano` | GQA (sparse layers) | ReLU² MoE | SSM + MoE + attention hybrid (NVFP4) |
@@ -29,6 +30,7 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Gemma 3 | ✅ `forwardTree` | ✅ | ✅/⚠️² | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
 | Gemma 4 | ❌ | ✅ | ❌/✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
 | Qwen 3.5 | ❌ | ✅ | ✅/❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
+| Qwen 3.8 Flash-Next | ❌ | ❌ | ❌/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | v1: no MTP/megakernel; auto `--mmap`; IQ expert GEMV on CPU |
 | DeepSeek V4 | ❌ | ✅ `setLayerSkip` | ❌/❌ | ✅ `--mtp-model` | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative; dedicated MTP weights (`ds4_mtp.zig`) |
 | GLM-4 | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
 | GPT-OSS | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
@@ -52,6 +54,7 @@ All autoregressive models support standard draft-verify, n-gram, suffix, lookahe
 | Qwen3.5 0.8B | 1536 | 16 | 4 | 128 | 4096 | 64 | 10M | 64 |
 | Qwen3.8 27B | 5120 | 24 | 4 | 256 | 17408 | 64 | 10M | 64 |
 | Qwen3.6 35B-A3B | 2048 | 16 | 2 | 256 | 512 (MoE×256) | 40 | 10M | 64 |
+| Qwen3.8 Flash-Next | 2560 | 24 | 2 | 256 | 640 (MoE×512, top-10) | 48 | 10M | 64 |
 | GPT-OSS | 2880 | 64 | 8 | 64 | 2880 (MoE) | 24 | 150K | 64 |
 | Nemotron-H | 3136 | 40 | 8 | 128 | 12544 | 42 | 10K | 78 |
 | Nemotron-Nano | 2688 | 32 | 2 | 128 | 1856 (MoE) | 52 | 10K | 128 |
@@ -68,6 +71,8 @@ All autoregressive models support standard draft-verify, n-gram, suffix, lookahe
 **Gemma 3**: GGUF converter bakes +1.0 into RMS norm weights (don't add again). Embeddings scaled by `sqrt(n_embd)`. Uses SPM tokenizer (no merges). Tied output embeddings. Vision supported via SigLIP encoder. Supports `--megakernel` (fused FFN GELU, true megakernel Q4K/Q8 on Metal+CUDA).
 
 **Qwen 3.5/3.6/3.8**: Hybrid architecture alternating DeltaNet SSM and full attention layers (every 4th layer is full attention). DeltaNet uses causal conv1d → delta rule state recurrence with learned decay (alpha) and update strength (beta). Full attention Q-gate is `attn * sigmoid(gate)` (HuggingFace `Qwen3_5Attention`). Config `output_gate_type: "swish"` is the DeltaNet RMSNormGated z-activation (already SiLU), not the full-attention gate. HuggingFace RMSNorm is `(1+w)*rms(x)`; GGUF converters and MLX `sanitize()` bake the +1 (detected via conv1d `[C,K,1]`). Do not bake again on those checkpoints. Qwen 3.6-35B-A3B uses same arch with 40 layers, 256 experts (top-8 + shared), hidden_size 2048. **Qwen 3.8-27B** (`Qwen/Qwen3.8-27B`) is dense (no MoE): hidden 5120, 24 Q / 4 KV heads, head_dim 256 (not n_embd/n_head), rope_dim 64, FFN 17408, 48 V / 16 K DeltaNet heads (`ssm_d_inner=6144`, conv channels 10240). Chat EOS is top-level `eos_token_id[0]` (`<|im_end|>` = 248046); `text_config.eos_token_id` is pad/EOT and must not overwrite it. MTP lives in `mtp.*` on SafeTensors (`mtp.fc`, `mtp.layers.0`, `mtp.norm`) and `blk.{n_layers}.*` on GGUF. Native vision is in the same checkpoint (`model.visual.*` / `vision_tower.*`, ViT depth 27, hidden 1152, patch 16, spatial merge 2, Conv3d temporal_patch_size 2, image_size 768). K/Q grouping is HuggingFace/llama.cpp `repeat_interleave` (`kh = h * n_k / n_v`), not modulo. **nex-agi/Nex-N2-Pro**: same `qwen35moe` arch, 60 layers (3 DeltaNet + 1 full_attention × 15), 512 experts (top-10), hidden_size 4096, full-attention output gate (`attn_output_gate`), MTP head. Expert count is auto-detected from weight tensor dimensions. Formats: GGUF (Q4_K_M, Q8_0), SafeTensors (BF16, MLX-4bit). Supports `--megakernel` (fused FFN SiLU, true megakernel Q8/Q4K on Metal+CUDA+ROCm).
+
+**Qwen 3.8 Flash-Next** (`qwen4exp`): separate architecture from `qwen35`. 48 layers, hidden 2560, 4-stream hyper-connections (rank 320), GDN on non-QSA layers with a sigmoid output gate (not SiLU), QSA every 4th layer (24Q/2KV, head_dim 256, indexer 4Q/1K top-k 2048), n-gram PLE on layer 1 (3-gram, 8 heads/ngram, head_dim 160, dilated conv). MoE is 512 experts, top-10 plus a sigmoid-gated shared expert, ff=640. The PLE table `per_layer_token_embd.weight` is tens of GB: Agave auto-enables `--mmap`, marks that tensor `MADV_RANDOM`, and gathers rows on the CPU (iq4_nl). IQ2/IQ3 expert GEMV also stays on a dedicated CpuBackend because GPU kernels panic on those dtypes. No megakernel, vision, or MTP in v1. Chat template is Qwen 3.5.
 
 **GPT-OSS**: Even layers = 128-token sliding window, odd = full sequence. Learned attention sinks per head. Clamped SwiGLU `[-7.0, +7.0]` in MoE experts.
 

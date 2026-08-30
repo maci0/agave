@@ -154,13 +154,20 @@ pub fn deltaNetHead(h: usize, gate_vals: *const [max_deltanet_v_heads]f32, beta_
         const w: V8 = ssm_norm_w[vi..][0..8].*;
         const normed = o * inv_v_r * w;
         const z: V8 = z_buf[off + vi ..][0..8].*;
-        const silu_z = z / (one_v + @exp(neg_v * z));
-        output[off + vi ..][0..8].* = normed * silu_z;
+        const gz: V8 = if (p.out_gate_sigmoid)
+            one_v / (one_v + @exp(neg_v * z))
+        else
+            z / (one_v + @exp(neg_v * z));
+        output[off + vi ..][0..8].* = normed * gz;
     }
     while (vi < head_v_dim) : (vi += 1) {
         const normed = output[off + vi] * inv_rms * ssm_norm_w[vi];
         const z = z_buf[off + vi];
-        output[off + vi] = normed * (z / (1.0 + @exp(-z)));
+        const gz = if (p.out_gate_sigmoid)
+            1.0 / (1.0 + @exp(-z))
+        else
+            z / (1.0 + @exp(-z));
+        output[off + vi] = normed * gz;
     }
 }
 

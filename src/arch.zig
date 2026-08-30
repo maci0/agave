@@ -12,6 +12,7 @@ pub const ImageTokens = @import("image_tokens.zig").ImageTokens;
 /// Supported model architectures, used for dispatch, display, and build-time toggles.
 pub const Arch = enum {
     qwen35,
+    qwen4exp,
     gemma3,
     gemma4,
     diffusion_gemma,
@@ -31,6 +32,7 @@ pub const Arch = enum {
             .{ "gemma3", .gemma3 },
             .{ "gemma3_text", .gemma3 },
             .{ "gemma2", .gemma3 }, // Gemma 2 uses same architecture path as Gemma 3
+            .{ "qwen4exp", .qwen4exp },
             .{ "qwen3_5_text", .qwen35 },
             .{ "qwen35moe", .qwen35 },
             .{ "qwen3_5_moe", .qwen35 },
@@ -77,6 +79,7 @@ pub const Arch = enum {
             .gemma4 => "Gemma 4",
             .diffusion_gemma => "DiffusionGemma",
             .qwen35 => "Qwen 3.5/3.8",
+            .qwen4exp => "Qwen 3.8 Flash-Next",
             .gpt_oss => "GPT-OSS",
             .nemotron_h => "Nemotron-H",
             .nemotron_nano => "Nemotron-Nano",
@@ -93,7 +96,7 @@ pub const Arch = enum {
             .gemma3 => ChatTemplate.gemma,
             .gemma4, .diffusion_gemma => ChatTemplate.gemma4,
             .gpt_oss => ChatTemplate.gpt_oss,
-            .qwen35 => ChatTemplate.qwen35,
+            .qwen35, .qwen4exp => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
             .deepseek4 => ChatTemplate.deepseek4,
             .llama4 => ChatTemplate.llama4,
@@ -114,7 +117,7 @@ pub const Arch = enum {
             .gemma3 => "gemma",
             .gemma4, .diffusion_gemma => "gemma4",
             .gpt_oss => "gpt-oss",
-            .qwen35 => "qwen35",
+            .qwen35, .qwen4exp => "qwen35",
             .glm4 => "glm4",
             .deepseek4 => "deepseek4",
             .llama4 => "llama4",
@@ -129,6 +132,7 @@ pub const Arch = enum {
             .gemma4 => build_options.enable_gemma4,
             .diffusion_gemma => build_options.enable_diffusion_gemma,
             .qwen35 => build_options.enable_qwen35,
+            .qwen4exp => build_options.enable_qwen4exp,
             .gpt_oss => build_options.enable_gpt_oss,
             .nemotron_h => build_options.enable_nemotron_h,
             .nemotron_nano => build_options.enable_nemotron_nano,
@@ -144,7 +148,7 @@ pub const Arch = enum {
     pub fn defaultBos(self: Arch) ?u32 {
         return switch (self) {
             .glm4, .deepseek4 => glm4_fallback_bos,
-            .qwen35, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2 => null,
+            .qwen35, .qwen4exp, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2 => null,
             .llama4 => llama4_fallback_bos,
             .gemma3, .gemma4, .diffusion_gemma => default_bos_id,
         };
@@ -176,6 +180,7 @@ pub const Arch = enum {
             .gemma4 => "gemma4",
             .diffusion_gemma => "diffusion-gemma",
             .qwen35 => "qwen35",
+            .qwen4exp => "qwen4exp",
             .gpt_oss => "gpt-oss",
             .nemotron_h => "nemotron-h",
             .nemotron_nano => "nemotron-nano",
@@ -236,6 +241,7 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen2").?);
+    try std.testing.expectEqual(Arch.qwen4exp, Arch.detect("qwen4exp").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt-oss").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt_oss").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gptoss").?);
@@ -341,6 +347,7 @@ test "Arch.buildFlag returns valid flag names" {
     try std.testing.expectEqualStrings("gemma3", Arch.gemma3.buildFlag());
     try std.testing.expectEqualStrings("gemma4", Arch.gemma4.buildFlag());
     try std.testing.expectEqualStrings("qwen35", Arch.qwen35.buildFlag());
+    try std.testing.expectEqualStrings("qwen4exp", Arch.qwen4exp.buildFlag());
     try std.testing.expectEqualStrings("gpt-oss", Arch.gpt_oss.buildFlag());
     try std.testing.expectEqualStrings("nemotron-h", Arch.nemotron_h.buildFlag());
     try std.testing.expectEqualStrings("nemotron-nano", Arch.nemotron_nano.buildFlag());

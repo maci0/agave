@@ -72,6 +72,9 @@ pub const DeltaNetParams = struct {
     /// True when conv_out split order is K,Q,V (HuggingFace/SafeTensors).
     /// False (default) when split order is Q,K,V (GGUF/llama.cpp convention).
     kqv_order: bool = false,
+    /// True when the RMSNormGated output uses sigmoid(z) instead of SiLU(z).
+    /// Qwen3.8-Flash-Next (qwen4exp) GDN; Qwen3.5 keeps the default SiLU path.
+    out_gate_sigmoid: bool = false,
 };
 
 /// Backend and system startup information, partially filled by each backend
