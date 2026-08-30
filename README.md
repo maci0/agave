@@ -54,7 +54,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 
 ## Features
 
-- **10 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
+- **11 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, Qwen 3.8 Flash-Next, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU, individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
@@ -466,6 +466,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-gemma4` | bool | true | Gemma 4 model support |
 | `enable-diffusion-gemma` | bool | true | DiffusionGemma model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
+| `enable-qwen4exp` | bool | true | Qwen 3.8 Flash-Next (`qwen4exp`) model support |
 | `enable-gpt-oss` | bool | true | GPT-OSS model support |
 | `enable-nemotron-h` | bool | true | Nemotron-H model support |
 | `enable-nemotron-nano` | bool | true | Nemotron Nano model support |

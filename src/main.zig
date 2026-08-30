@@ -2359,7 +2359,7 @@ pub fn main(init: std.process.Init) !void {
 
     var arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
-        eprint("  Supported: gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4\n", .{});
+        eprint("  Supported: gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4\n", .{});
         std.process.exit(1);
     };
 
@@ -2374,6 +2374,12 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
+    // qwen4exp PLE table is tens of GB: never fault it in at load.
+    if (arch == .qwen4exp and !cli.use_mmap) {
+        cli.use_mmap = true;
+        if (!g_quiet) eprint("qwen4exp: enabling --mmap so the PLE table stays demand-paged\n", .{});
+    }
+
     // ── Backend selection ─────────────────────────────────────────
     var bs = BackendState{};
     bs.init(allocator, cli.backend_choice, g_io, cli.device_id);
@@ -2384,6 +2390,9 @@ pub fn main(init: std.process.Init) !void {
     // Register mmap'd weight regions for UMA zero-copy GPU access
     if (gguf_file) |g| {
         if (g.mapped_data.len > 0) be.registerHostRegion(g.mapped_data.ptr, g.mapped_data.len);
+        for (g.extra_shards.items) |shard| {
+            if (shard.len > 0) be.registerHostRegion(shard.ptr, shard.len);
+        }
     }
     if (st_dir) |s| {
         for (s.shard_data) |shard| {
@@ -5213,6 +5222,7 @@ test {
     _ = @import("models/gemma4.zig");
     _ = @import("models/diffusion_gemma.zig");
     _ = @import("models/qwen35.zig");
+    _ = @import("models/qwen4exp.zig");
     _ = @import("models/gpt_oss.zig");
     _ = @import("models/glm4.zig");
     _ = @import("models/deepseek4.zig");

@@ -10,6 +10,7 @@ const DType = backend_mod.DType;
 const quant_block_elems = backend_mod.quant_block_elems;
 const quant_super_block_elems = backend_mod.quant_super_block_elems;
 const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
+const iq4_nl_block_bytes = backend_mod.iq4_nl_block_bytes;
 const q5_0_block_bytes = backend_mod.q5_0_block_bytes;
 const q8_0_block_bytes = backend_mod.q8_0_block_bytes;
 const q6_k_block_bytes = backend_mod.q6_k_block_bytes;
@@ -76,6 +77,7 @@ pub fn embLookup(data: [*]const u8, dtype: DType, token_id: u32, output: [*]f32,
         },
         .q4_k => embQ4_K(data, token_id, output, dim),
         .q5_k => embQ5_K(data, token_id, output, dim),
+        .iq4_nl => embIQ4_NL(data, token_id, output, dim),
         else => @panic("embLookup: unsupported embedding dtype"),
     }
 }
@@ -95,6 +97,25 @@ pub fn embQ4_0(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
             const gi1 = b * quant_block_elems + j + quant_block_elems / 2;
             if (gi0 < dim) out[gi0] = @as(f32, @floatFromInt(x0)) * d;
             if (gi1 < dim) out[gi1] = @as(f32, @floatFromInt(x1)) * d;
+        }
+    }
+}
+
+/// Dequantizes an IQ4_NL embedding row to f32.
+/// Split packing: low nibbles are elements [0..15], high nibbles [16..31].
+pub fn embIQ4_NL(data: [*]const u8, tok: u32, out: [*]f32, dim: usize) void {
+    const nb = (dim + quant_block_elems - 1) / quant_block_elems;
+    const rp = data + tok * nb * iq4_nl_block_bytes;
+    for (0..nb) |b| {
+        const bp = rp + b * iq4_nl_block_bytes;
+        const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
+        const count = @min(quant_block_elems, dim - b * quant_block_elems);
+        for (0..@min(quant_block_elems / 2, count)) |j| {
+            const byte = bp[2 + j];
+            const gi0 = b * quant_block_elems + j;
+            const gi1 = b * quant_block_elems + j + quant_block_elems / 2;
+            if (gi0 < dim) out[gi0] = d * @as(f32, @floatFromInt(quant.iq4nl_table[@as(u4, @truncate(byte & 0xF))]));
+            if (gi1 < dim) out[gi1] = d * @as(f32, @floatFromInt(quant.iq4nl_table[@as(u4, @truncate(byte >> 4))]));
         }
     }
 }
@@ -360,7 +381,6 @@ test "embQ4_0 dequantizes single block" {
     block[1] = 0x40;
     // Set all nibbles to 8 → dequant value = (8-8)*2.0 = 0.0
     for (0..16) |i| block[2 + i] = 0x88;
-
     var out: [dim]f32 = undefined;
     embQ4_0(&block, 0, &out, dim);
 
@@ -376,6 +396,21 @@ test "embQ4_0 dequantizes single block" {
     try std.testing.expectApproxEqAbs(@as(f32, -16.0), out[0], 1e-4);
     // Element 16 (high nibble of byte 0): (15 - 8) * 2.0 = 14.0
     try std.testing.expectApproxEqAbs(@as(f32, 14.0), out[16], 1e-4);
+}
+
+test "embIQ4_NL dequantizes split-nibble block" {
+    // IQ4_NL: f16 scale + 16 nibble bytes. Low nibble = [0..15], high = [16..31].
+    const dim = 32;
+    var block: [iq4_nl_block_bytes]u8 = @splat(0);
+    block[0] = 0x00;
+    block[1] = 0x3C; // f16 1.0
+    // nibble 8 → table[8] = 1
+    for (0..16) |i| block[2 + i] = 0x88;
+    var out: [dim]f32 = undefined;
+    embIQ4_NL(&block, 0, &out, dim);
+    for (0..dim) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 1.0), out[i], 1e-4);
+    }
 }
 
 test "embLookup f16 converts correctly" {

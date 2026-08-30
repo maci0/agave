@@ -47,6 +47,10 @@ pub const DType = enum {
 pub const arch_key_buf_size: usize = 256;
 const layer_name_buf_size: usize = 128;
 
+fn formatNullMetaU64Array(_: *anyopaque, _: []const u8) ?[]const u64 {
+    return null;
+}
+
 /// Tensor metadata from a model file
 pub const TensorInfo = struct {
     name: []const u8,
@@ -134,6 +138,8 @@ pub const Format = struct {
         get_meta_u32: *const fn (self: *anyopaque, key: []const u8) ?u32,
         get_meta_f32: *const fn (self: *anyopaque, key: []const u8) ?f32,
         get_meta_u32_array: *const fn (self: *anyopaque, key: []const u8) ?[]const u32,
+        /// Optional: uint64 arrays (qwen4exp PLE multipliers/offsets). Default returns null.
+        get_meta_u64_array: *const fn (self: *anyopaque, key: []const u8) ?[]const u64 = formatNullMetaU64Array,
         get_vocab: *const fn (self: *anyopaque) ?[]const []const u8,
         get_merges: *const fn (self: *anyopaque) ?[]const []const u8,
         /// Free large repacked weight buffers after their device uploads
@@ -173,6 +179,10 @@ pub const Format = struct {
     pub fn getMetaU32Array(self: Format, key: []const u8) ?[]const u32 {
         return self.vtable.get_meta_u32_array(self.ptr, key);
     }
+    /// Get a u64 array metadata value by key (e.g., PLE n-gram multipliers).
+    pub fn getMetaU64Array(self: Format, key: []const u8) ?[]const u64 {
+        return self.vtable.get_meta_u64_array(self.ptr, key);
+    }
     /// Get the first element of a u32 array metadata value.
     pub fn getMetaArrayFirstU32(self: Format, key: []const u8) ?u32 {
         const arr = self.vtable.get_meta_u32_array(self.ptr, key) orelse return null;
@@ -205,6 +215,18 @@ pub const Format = struct {
         var buf: [arch_key_buf_size]u8 = undefined;
         const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch, suffix }) catch return null;
         return self.getMetaF32(key);
+    }
+    /// Get a u32 array with architecture-prefixed key (e.g. "qwen4exp.ple.layers").
+    pub fn getArchU32Array(self: Format, arch: []const u8, suffix: []const u8) ?[]const u32 {
+        var buf: [arch_key_buf_size]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch, suffix }) catch return null;
+        return self.getMetaU32Array(key);
+    }
+    /// Get a u64 array with architecture-prefixed key (e.g. "qwen4exp.ple.layer_multipliers").
+    pub fn getArchU64Array(self: Format, arch: []const u8, suffix: []const u8) ?[]const u64 {
+        var buf: [arch_key_buf_size]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}.{s}", .{ arch, suffix }) catch return null;
+        return self.getMetaU64Array(key);
     }
 
     /// Look up a layer-prefixed tensor by index and suffix.
