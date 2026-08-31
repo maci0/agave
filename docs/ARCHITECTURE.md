@@ -51,6 +51,7 @@ agave/
 │   ├── eval.zig           # Token NLL scoring library (scoreCase; no --eval CLI yet)
 │   ├── expert_profile.zig # MoE expert activation profiler (library; no CLI yet)
 │   ├── expert_cache.zig   # SSD expert LRU streaming cache (--ssd-streaming CLI)
+│   ├── ngram_cache.zig    # PLE ngram shard LRU for qwen4_exp (--ssd-streaming)
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool
@@ -73,7 +74,8 @@ agave/
 │   │   ├── gemma4.zig     # Gemma 4 (dual attention, MoE/dense variants, PLE)
 │   │   ├── diffusion_gemma.zig # DiffusionGemma (block diffusion, bidirectional canvas)
 │   │   ├── qwen35.zig     # Qwen 3.5 (hybrid DeltaNet SSM + attention)
-│   │   ├── qwen4exp.zig   # Qwen 3.8 Flash-Next (HC, GDN sigmoid gate, QSA, n-gram PLE, 512-expert MoE)
+│   │   ├── qwen4exp.zig   # Qwen 3.8 Flash-Next GGUF (HC, GDN sigmoid gate, QSA, n-gram PLE, 512-expert MoE)
+│   │   ├── qwen4_exp.zig  # Qwen4-Exp Flash-Next SafeTensors (36× DeltaNet + 12× QSA, NVFP4, ngram SSD)
 │   │   ├── gpt_oss.zig    # GPT-OSS (MoE, sliding window, attention sinks)
 │   │   ├── nemotron_h.zig # Nemotron-H (Mamba-2 + attention hybrid)
 │   │   ├── glm4.zig       # GLM-4 MoE Lite (MLA (DeepSeek-V2) + MoE, MLX 4/6/8-bit)

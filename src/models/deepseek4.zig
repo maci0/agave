@@ -1805,7 +1805,10 @@ pub const Ds4Model = struct {
                 // Batch expert gate+up GEMVs: all read hidden2, write independent slots.
                 // Suppresses per-dispatch barriers for ~2× dispatch throughput.
                 self.gemvBackend().beginBatch();
-                if (ge.dtype == .mlx_q and self.be == .cuda) {
+                // Batched path disabled (bug): the gemv_mxfp4_st_batched
+                // kernel poisons the context in TP mode (under investigation).
+                // Fall back to per-slot launches (proven correct).
+                if (false and ge.dtype == .mlx_q and self.be == .cuda) {
                     // Batched gate+up: ONE launch for all active experts — the
                     // sustained memory traffic keeps the GB10 memory clock
                     // ramped (per-expert 25µs bursts leave it idle and each
@@ -1897,7 +1900,7 @@ pub const Ds4Model = struct {
             }
         }
         if (de_exp_tensor) |de_t| {
-            if (de_t.dtype == .mlx_q and self.be == .cuda and n_scratch > shexp_slots) {
+            if (false and de_t.dtype == .mlx_q and self.be == .cuda and n_scratch > shexp_slots) {
                 // Batched down: one launch for all active experts' down
                 // projections (sustained memory traffic — see phase 1).
                 var bx: [16]u64 = undefined;
@@ -2658,6 +2661,12 @@ pub const Ds4Model = struct {
                 const s_size = w_size / (ds4_flash_fp4_group_size / 2); // E8M0 [out, in/32] for gs=32 FP4
                 for (0..ne) |eid| {
                     if (!isLocalExpert(eid, self.tp_rank, self.epDegree())) continue;
+                    // Broken checkpoints (tiny-random) emit NULL scale
+                    // entries — skip them like the gemv path.
+                    if (s_tbl) |stp| {
+                        if (@intFromPtr(stp[eid]) == 0) continue;
+                    }
+                    if (@intFromPtr(tbl[eid]) == 0) continue; // NULL weight row
                     ranges.append(self.allocator, .{ .ptr = tbl[eid], .len = w_size }) catch continue;
                     if (s_tbl) |stp| ranges.append(self.allocator, .{ .ptr = stp[eid], .len = s_size }) catch continue;
                 }
