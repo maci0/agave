@@ -14,6 +14,9 @@ const DType = @import("../../backend.zig").DType;
 pub const sparse_threshold = @import("activation_sparsity.zig").sparse_threshold;
 pub const isBlockSparse = @import("activation_sparsity.zig").isBlockSparse;
 
+/// Weight/activation prefetch hints shared by the quantized kernels.
+pub const prefetch = @import("prefetch.zig");
+
 // ── Per-format kernel imports ────────────────────────────────────
 const gemv_q4_0 = @import("gemv_q4_0.zig");
 const gemv_q8_0 = @import("gemv_q8_0.zig");

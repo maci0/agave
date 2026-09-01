@@ -5,6 +5,7 @@
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
 const sparsity = @import("activation_sparsity.zig");
+const prefetch = @import("prefetch.zig");
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 
@@ -43,6 +44,11 @@ pub fn gemvQ6_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp1 = w + (row + 1) * row_bytes;
 
         for (0..nb) |b| {
+            // See gemv_q4_0: non-temporal on the weight stream, temporal on the
+            // activations, issued ahead of the sparse skip.
+            prefetch.weightBlock(rp0, b, bpb);
+            prefetch.weightBlock(rp1, b, bpb);
+            prefetch.activation(x, (b + 1) * bs);
             if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
 
             const bp0 = rp0 + b * bpb;

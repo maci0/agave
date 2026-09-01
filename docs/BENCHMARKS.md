@@ -243,6 +243,37 @@ Machines without sysfs topology (`/sys/devices/system/cpu/cpuN/topology/thread_s
 fall back to the logical CPU count unpinned, as before. macOS sizes by `hw.physicalcpu` and
 does not pin: its affinity API is advisory and is a no-op on Apple Silicon.
 
+## CPU GEMV Software Prefetch (AMD Ryzen 9 9950X)
+
+**Date**: 2026-09-01. `agave-bench <kernel> --iters 200/60`, median of 5 runs per side,
+GB/s from the bench's own JSON. Generation output is bit-identical (a prefetch is a hint).
+
+L3-resident shape, n=8192 k=4096 (q4_k weights ~19 MB, L3 is 32 MB):
+
+| Kernel | Base | With prefetch | Delta |
+|--------|-----:|--------------:|------:|
+| gemv_q4_k | 51.3 | 51.4 | +0.2% |
+| gemv_q4_0 | 94.5 | 94.1 | -0.4% |
+| gemv_q8_0 | 161.2 | 161.3 | +0.1% |
+
+DRAM-bound shape, n=32768 k=8192 (~151 MB of weights):
+
+| Kernel | Base | With prefetch | Delta |
+|--------|-----:|--------------:|------:|
+| gemv_q4_k | 48.2 | 49.3 | **+2.3%** |
+| gemv_q4_0 | 48.0 | 50.6 | **+5.4%** |
+| gemv_q8_0 | 43.0 | 44.5 | **+3.5%** |
+
+The hint does nothing while the weights fit in L3 (Zen 5's hardware prefetcher already
+saturates a forward scan from cache) and pays only once the stream comes from DRAM. Both
+regimes matter, and neither regresses, so it stays.
+
+All three formats converge on ~48-50 GB/s in the DRAM-bound shape regardless of how much
+unpack work they do, which is the memory wall. In the L3-resident shape q4_k runs at 51 GB/s
+against q8_0's 161: that gap is q4_k's nibble/scale unpack, and it is compute-bound with
+roughly 3x of headroom. Widening those kernels from `@Vector(8, f32)` to the native AVX-512
+width is the open lead there; it changes summation order, so it needs golden re-baselining.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
