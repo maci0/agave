@@ -431,11 +431,28 @@ now correct at every chunk size on every model, and batched prefill is worth hav
 | `--prefill-batch-size 1` | 1154 ms |
 | batched (default) | **456 ms** |
 
-**Vulkan is still guarded to chunk size 1.** It binds a whole `VkBuffer` to a shader with no
-offset, and its activation cache has no containing-range lookup, so a sub-range can never share
-the parent allocation the way a device pointer can. Teaching that cache offsets is the fix and
-is not a small change. `--prefill-batch-size` overrides the guard and warns, which is how to
-reproduce it.
+**Vulkan needed two more things and is now correct too.** Its descriptors carry a buffer
+offset (`VkBuf.offset`, honoured in `dispatch`) and its activation cache gained a
+containing-range lookup, so a sub-range binds a slice of the parent instead of uploading its
+own copy. Sub-range offsets must be 256-aligned, which Vulkan's required limits guarantee is
+always legal; anything else falls back to a private buffer.
+
+Two cross-chunk holes closed with it, both backend-independent: the CPU writes the chunk's
+embeddings into `pf_hidden` with no way for a backend to notice, so it is invalidated
+explicitly; and chunk *n+1*'s attention reads the KV chunk *n* wrote, so the chunk boundary
+syncs once, which is nothing against a chunk of GEMMs.
+
+**Chunk size is now a speed choice, not a correctness one**, and it splits by backend:
+
+| Backend | `--prefill-batch-size 1` | batched (512) | Default |
+|---------|-------------------------:|--------------:|---------|
+| ROCm | 1150 ms | **456 ms** | batched |
+| Vulkan | **2516 ms** | 5366 ms | 1 |
+
+Vulkan loses because every per-token op inside the batched fallback pays a linear scan of the
+activation cache to resolve its slice of the reserved parent. Indexing that lookup instead of
+scanning it is the open item; until then one token at a time is Vulkan's faster path. Both
+paths produce identical output, and an explicit flag always wins.
 
 **Marginal: ROCm `sdpa_prefill`** at 0.0222 against a 0.02 tolerance, small absolute values.
 Not reached in practice while the chunk-size guard holds it at 1, where it reduces to `sdpa`.

@@ -572,7 +572,7 @@ const CliArgs = struct {
     profile: bool,
     use_mmap: bool,
     prefill_batch_size: u32,
-    /// True when the user passed --prefill-batch-size, so the backend guard defers to them.
+    /// True when the user passed --prefill-batch-size, so the per-backend default defers to them.
     prefill_batch_size_explicit: bool = false,
     /// Path to LoRA adapter GGUF. Applied at load time (merged into base weights as F32).
     lora_path: ?[]const u8 = null,
@@ -2758,38 +2758,23 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 }
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
-/// Prefill chunk size, forced to 1 on backends whose multi-token prefill is
-/// known to produce wrong output.
+/// Prefill chunk size for this backend.
 ///
-/// Vulkan binds a whole VkBuffer to a shader with no offset, and its activation
-/// cache is keyed by exact address with no containing-range lookup, so a batched
-/// op's per-token `ptr + t * stride` necessarily gets its own buffer uploaded
-/// from HOST. Any range the GPU wrote and has not flushed is therefore stale for
-/// the next token, and output is wrong from the first token at any chunk size
-/// above 1. Fixing it means teaching that cache offsets, not a one-line change.
-/// ROCm had the same class of bug and is fixed (see `reserveActivation`); it
-/// could resolve sub-ranges against a parent allocation, which Vulkan cannot.
+/// Multi-token prefill is correct everywhere now; this is purely a speed choice.
+/// Batched prefill is a large win on ROCm (1150ms -> 456ms on Qwen2.5 1.5B) and a
+/// loss on Vulkan (2516ms -> 5366ms), where each per-token op inside the batched
+/// fallback pays a linear scan of the activation cache to resolve its slice of
+/// the reserved parent. Until that lookup is indexed rather than scanned, one
+/// token at a time is Vulkan's faster path.
 ///
-/// `--prefill-batch-size` still overrides this, loudly: the flag is how the bug
-/// gets reproduced and eventually fixed.
+/// An explicit `--prefill-batch-size` always wins: both paths produce identical
+/// output, so this is only a default.
 fn chunkSizeFor(be: Backend, cli: *const CliArgs) u32 {
-    const broken = switch (be) {
-        .vulkan => true,
-        else => false,
+    if (cli.prefill_batch_size_explicit) return cli.prefill_batch_size;
+    return switch (be) {
+        .vulkan => 1,
+        else => cli.prefill_batch_size,
     };
-    if (!broken or cli.prefill_batch_size <= 1) return cli.prefill_batch_size;
-    if (cli.prefill_batch_size_explicit) {
-        eprint(
-            "Warning: --prefill-batch-size {d} on this backend produces WRONG OUTPUT " ++
-                "(Vulkan multi-token prefill is broken); pass 1 for correct results\n",
-            .{cli.prefill_batch_size},
-        );
-        return cli.prefill_batch_size;
-    }
-    if (!g_quiet) {
-        eprint("note: prefill chunk forced to 1 on this backend; multi-token prefill is incorrect here\n", .{});
-    }
-    return 1;
 }
 
 /// Fraction of reported device memory `--vram-budget auto` gives to weights.
