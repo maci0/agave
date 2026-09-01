@@ -158,6 +158,7 @@ const max_pinned_core_ids: usize = 64;
 
 /// Byte-budgeted LRU over the GPU backends' cached weight uploads.
 pub const WeightBudget = @import("weight_budget.zig").WeightBudget;
+pub const WeightPolicy = @import("weight_budget.zig").Policy;
 
 /// Free list of device buffers, recycled across weight-cache evictions.
 pub const BufferPool = @import("buffer_pool.zig").BufferPool;
@@ -734,11 +735,11 @@ pub const Backend = union(enum) {
     /// A budget is what lets a model larger than VRAM run at all, and it can be
     /// lowered at runtime to hand memory back without reloading weights. No-op on
     /// backends with no device-side weight cache (CPU, and Metal's unified memory).
-    pub inline fn setWeightBudget(self: Backend, bytes: usize) void {
+    pub inline fn setWeightBudget(self: Backend, bytes: usize, policy: WeightPolicy) void {
         switch (self) {
             inline else => |be| {
                 if (comptime @hasDecl(@TypeOf(be.*), "setWeightBudget")) {
-                    be.setWeightBudget(bytes);
+                    be.setWeightBudget(bytes, policy);
                 }
             },
         }

@@ -502,7 +502,7 @@ pub const RocmBackend = struct {
     /// See `Backend.setWeightBudget`. Allocating the tracker can fail; the
     /// warning matters because the caller asked for a cap and silently not
     /// having one turns an out-of-VRAM into a driver failure much later.
-    pub fn setWeightBudget(self: *RocmBackend, bytes: usize) void {
+    pub fn setWeightBudget(self: *RocmBackend, bytes: usize, policy: backend_mod.WeightPolicy) void {
         if (self.weight_budget) |*wb| {
             for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
                 if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.dptr);
@@ -524,6 +524,7 @@ pub const RocmBackend = struct {
             std.log.warn("ROCm weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
             return;
         };
+        self.weight_budget.?.policy = policy;
         // Only useful with a budget: without eviction no buffer is ever freed.
         self.buffer_pool = backend_mod.BufferPool(DevicePtr).init(
             self.budget_allocator,

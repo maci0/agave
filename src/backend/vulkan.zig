@@ -1748,7 +1748,7 @@ const storage_buffer_offset_align: usize = 256;
     }
 
     /// See `Backend.setWeightBudget`.
-    pub fn setWeightBudget(self: *VulkanBackend, bytes: usize) void {
+    pub fn setWeightBudget(self: *VulkanBackend, bytes: usize, policy: backend_mod.WeightPolicy) void {
         if (self.weight_budget) |*wb| {
             for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
                 if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.vk_buf);
@@ -1770,6 +1770,7 @@ const storage_buffer_offset_align: usize = 256;
             std.log.warn("Vulkan weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
             return;
         };
+        self.weight_budget.?.policy = policy;
         // Only useful with a budget: without eviction no buffer is ever freed.
         self.buffer_pool = backend_mod.BufferPool(VkBuf).init(
             self.budget_allocator,

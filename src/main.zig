@@ -502,6 +502,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
     // SSD expert streaming (MoE models)
     .{ .long = "ssd-streaming", .help = "Enable SSD expert streaming for large MoE models that don't fit in RAM/VRAM. Uses demand-paged LRU expert cache." },
+    .{ .long = "vram-budget-policy", .kind = .option, .help = "Eviction order when the weight budget is full: mru (default) or lru. A dense model scans its layers cyclically, where lru evicts exactly what the next layer needs; lru suits skewed reuse such as routed MoE experts." },
     .{ .long = "vram-budget", .kind = .option, .help = "Cap GPU memory held by cached weights: GiB (e.g. 20, or 0.5), or 'auto' to size it from free VRAM. Least-recently-used weights are evicted and re-uploaded on demand, which is what lets a model larger than VRAM run [default: unlimited]." },
     .{ .long = "ssd-cache-slots", .kind = .option, .help = "Number of expert slots to keep resident in the SSD expert cache [default: 256]. Higher = fewer SSD reads, more RAM." },
     .{ .long = "expert-profile-out", .kind = .option, .help = "Write expert activation profile JSON to this path after inference (for hotlist pre-pinning on future runs)." },
@@ -636,6 +637,8 @@ const CliArgs = struct {
     /// `vram_budget_auto` derives it from the device's reported memory instead.
     vram_budget_bytes: usize = 0,
     vram_budget_auto: bool = false,
+    /// Eviction order for the weight budget. See --vram-budget-policy.
+    vram_budget_policy: backend_mod.WeightPolicy = .mru,
     /// Write expert activation profile JSON after inference.
     expert_profile_out: ?[]const u8 = null,
     /// Load expert profile JSON and pre-pin top experts before inference.
@@ -1442,6 +1445,13 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         },
         .ssd_streaming = res.flag("ssd-streaming"),
         .vram_budget_auto = if (res.option("vram-budget")) |raw| std.mem.eql(u8, raw, "auto") else false,
+        .vram_budget_policy = blk: {
+            const raw = res.option("vram-budget-policy") orelse break :blk .mru;
+            if (std.mem.eql(u8, raw, "mru")) break :blk .mru;
+            if (std.mem.eql(u8, raw, "lru")) break :blk .lru;
+            eprint("Error: --vram-budget-policy must be 'mru' or 'lru', got '{s}'\n", .{raw});
+            std.process.exit(2);
+        },
         .vram_budget_bytes = blk: {
             const raw = res.option("vram-budget") orelse break :blk 0;
             if (std.mem.eql(u8, raw, "auto")) break :blk 0;
@@ -2180,7 +2190,8 @@ fn printUsage() void {
         \\      --power <N>                  Target GPU utilisation percent (1-100)
         \\
         \\EXPERT STREAMING:
-        \\      --vram-budget <GIB>          Cap GPU memory held by cached weights; LRU-evict beyond it
+        \\      --vram-budget <GIB>          Cap GPU memory held by cached weights; evict beyond it
+        \\      --vram-budget-policy <P>     Eviction order when full: mru (default) or lru
         \\      --ssd-streaming              Stream MoE experts from SSD
         \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
         \\      --expert-profile-out <FILE>  Save expert activation profile
@@ -2409,7 +2420,7 @@ pub fn main(init: std.process.Init) !void {
     // first prefill already streams instead of allocating past VRAM.
     const vram_budget = resolveVramBudget(&cli, be);
     if (vram_budget > 0) {
-        be.setWeightBudget(vram_budget);
+        be.setWeightBudget(vram_budget, cli.vram_budget_policy);
         if (!g_quiet) eprint("vram-budget: {d} MB for cached weights, LRU eviction beyond that\n", .{vram_budget / (1024 * 1024)});
     }
     // Function scope, not the block above: this must report after inference, not
@@ -2760,35 +2771,41 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
 /// Fraction of a checkpoint's bytes that end up as cached weight uploads. The
-/// rest is metadata, the tokenizer, and tensors the GPU never sees. Measured at
-/// 934 MB resident from a 1.06 GB file and 373 MB from a 469 MB file, so this
-/// under-estimates slightly, which is the safe direction for a warning.
-const weight_fraction_of_file: f64 = 0.85;
+/// rest is metadata, the tokenizer, and tensors the GPU never sees.
+///
+/// Measured resident-over-file across the checkpoints on hand: 0.776 (644 MB),
+/// 0.797 (468 MB), 0.877 (1065 MB). Set above all of them, because the two error
+/// directions are not symmetric here: over-estimating the requirement warns when
+/// the budget would in fact have held, which costs the reader a moment;
+/// under-estimating stays silent through a ~4x slowdown, which is the failure
+/// this check exists to prevent.
+const weight_fraction_of_file: f64 = 0.90;
 
-/// Warn when the weight budget cannot hold the model, because on this hardware
-/// that is not a graceful degradation.
+/// Warn when the weight budget cannot hold the model.
 ///
 /// Decode throughput against `--vram-budget` on a 7900 XTX, Qwen2.5 1.5B Q4_K
-/// (934 MB of cached weights), CPU at 38.4 tok/s for reference:
+/// (934 MB of cached weights), CPU at 38.4 tok/s and an unbudgeted GPU at 38.9:
 ///
-///     budget >= 1.0 GiB   39.1 tok/s      0 evictions
-///     budget 0.75 GiB     10.4 tok/s   7935 evictions
-///     budget 0.25 GiB     10.4 tok/s   8106 evictions
+///     budget      mru        lru
+///     0.85 GiB    32.3       10.3
+///     0.75 GiB    25.8       10.3
+///     0.50 GiB    16.9       10.3
+///     0.25 GiB    12.5       10.3
 ///
-/// It is a cliff, not a slope: the first eviction costs most of the throughput,
-/// and past it the GPU is ~4x SLOWER than simply decoding on the CPU. So the
-/// useful thing to say is not "this will be slower" but "the CPU is now the
-/// faster device", which is the placement question a bandwidth-adaptive engine
-/// exists to answer.
+/// Under MRU it degrades in proportion to how much of the working set fits, so
+/// the budget is usable rather than a cliff. It still never beats the CPU on this
+/// model once anything is evicted, which is the placement question worth
+/// surfacing: not "this will be slower" but "the CPU is the faster device now".
 fn warnIfBudgetForcesEviction(be: Backend, budget_bytes: usize, file_bytes: usize) void {
     if (budget_bytes == 0 or file_bytes == 0) return;
     if (!be.hasWeightBudget()) return;
     const need: usize = @intFromFloat(@as(f64, @floatFromInt(file_bytes)) * weight_fraction_of_file);
     if (need <= budget_bytes) return;
     eprint(
-        "Warning: --vram-budget {d} MB is below this model's ~{d} MB of weights, so every " ++
-            "decode step will evict and re-upload. Measured on this class of hardware that is " ++
-            "~4x slower than --backend cpu; raise the budget or decode on the CPU.\n",
+        "Warning: --vram-budget {d} MB is below this model's ~{d} MB of weights, so decode " ++
+            "will evict and re-upload. Throughput falls in proportion to how much does not " ++
+            "fit, and on this class of hardware stays below --backend cpu once it does; " ++
+            "raise the budget or decode on the CPU.\n",
         .{ budget_bytes / (1024 * 1024), need / (1024 * 1024) },
     );
 }

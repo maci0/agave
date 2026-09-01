@@ -519,6 +519,32 @@ The per-expert form of q* (split a layer's routed experts between a CPU executor
 fetch, sized by the bandwidth ratio) is **not implemented**: Agave has no CPU MoE executor, and
 there is no MoE checkpoint on this machine to validate one against.
 
+## Weight Budget Eviction Policy (RX 7900 XTX)
+
+**Date**: 2026-09-01. Qwen2.5 1.5B Q4_K, 934 MB of cached weights. CPU 38.4 tok/s, unbudgeted
+GPU 38.9 tok/s. Median of 3, eviction counts from an 8-token run.
+
+| Budget | LRU | MRU | LRU evictions | MRU evictions |
+|--------|----:|----:|--------------:|--------------:|
+| 0.85 GiB | 10.3 | **32.3** | 7899 | 755 |
+| 0.75 GiB | 10.3 | **25.8** | 7935 | 1854 |
+| 0.50 GiB | 10.3 | **16.9** | 8017 | 4546 |
+| 0.25 GiB | 10.3 | **12.5** | 8106 | 7322 |
+
+**LRU is the worst possible policy for a dense transformer.** Its layer loop is a cyclic scan,
+so by the time the loop returns to layer 0 those weights are the least-recently-used: a budget
+below the working set evicts precisely what the next layer needs, and the hit rate collapses to
+roughly zero however large the budget is. That is why LRU reads 10.3 tok/s at every budget,
+including one holding 91% of the weights.
+
+Evicting the most-recently-used entry keeps whatever filled the budget first, so the hit rate
+becomes budget over working set and throughput degrades in proportion. `--vram-budget-policy`
+defaults to `mru` for that reason; `lru` remains for skewed reuse, which is what routed MoE
+experts have and what LRU is actually good at.
+
+A unit test pins the distinction directly: over a 40-entry cyclic scan under a 30-entry budget,
+LRU scores exactly zero hits and MRU over 65%.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
