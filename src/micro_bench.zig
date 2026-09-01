@@ -139,6 +139,8 @@ const CliArgs = struct {
     n: usize,
     k: usize,
     iters: usize,
+    /// Evict the weight before each GEMV iteration so the transfer is timed too.
+    reupload: bool = false,
     backend: BackendChoice,
     model_path: ?[]const u8,
 };
@@ -228,6 +230,8 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
                 eprint("Warning: clamping iters to {d}\n", .{max_samples});
                 result.iters = max_samples;
             }
+        } else if (std.mem.eql(u8, args_slice[i], "--reupload")) {
+            result.reupload = true;
         } else if (getArgValue(args_slice, &i, "--backend")) |v| {
             result.backend = parseBackendName(v) orelse {
                 eprint("Error: unknown backend '{s}'\n", .{v});
@@ -331,6 +335,9 @@ fn printUsage() void {
         \\                   E2E: tokens to generate [default: 10]
         \\  -k, --k <K>      Input dimension for GEMV [default: 4096]
         \\  --iters <N>      Number of timed iterations [default: 100, max: 1000]
+        \\  --reupload       GEMV only: evict the weight before each iteration so the
+        \\                   host-to-device transfer is timed too; the difference
+        \\                   against a plain run is the upload cost
         \\  --backend <X>    Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: cpu]
         \\  --model <PATH>   Model file or directory (required for e2e mode)
         \\
@@ -478,6 +485,21 @@ fn dequantQ4KRowDotHost(row: []const u8, x: []const f32, out_y: *f32) void {
 // ── Kernel runner functions ──────────────────────────────────────
 
 fn runGemv(ctx: *const BenchCtx) void {
+    ctx.be.gemv(ctx.x.ptr, ctx.td, ctx.y.ptr, ctx.n, ctx.k);
+    ctx.be.sync();
+}
+
+/// Same GEMV, but the weight is evicted from the backend's device cache first,
+/// so every iteration re-uploads it. Subtracting `runGemv`'s time leaves the
+/// cost a `--vram-budget` eviction pays.
+///
+/// That cost is NOT the PCIe transfer alone: eviction also frees the device
+/// buffer and the re-upload allocates a new one, and on ROCm those driver round
+/// trips dominate the bytes moved. Read this as re-upload cost, not link
+/// bandwidth; a run with `--vram-budget` set recycles the buffer instead and is
+/// the figure that matches real decode.
+fn runGemvReupload(ctx: *const BenchCtx) void {
+    ctx.be.invalidateWeight(ctx.td.data);
     ctx.be.gemv(ctx.x.ptr, ctx.td, ctx.y.ptr, ctx.n, ctx.k);
     ctx.be.sync();
 }
@@ -634,7 +656,7 @@ fn emitJson(kernel_name: []const u8, be_name: []const u8, median_ns: u64, gb_s: 
 // ── Kernel dispatch ──────────────────────────────────────────────
 
 /// Runs the requested kernel benchmark and emits JSON output.
-fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: usize, iters: usize) void {
+fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: usize, iters: usize, reupload: bool) void {
     // page_allocator used intentionally: benchmark buffers need page alignment
     // for zero-copy GPU wrapping, and this is a one-time allocation, not hot path.
     const page = std.heap.page_allocator;
@@ -660,7 +682,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
             // GEMV: read w[n*k] + x[k], write y[n]. Flops: ~2*n*k (k muls + k-1 adds per row).
             const total_bytes = n * k * @sizeOf(f32) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
@@ -687,7 +709,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
             const total_bytes = n * k * @sizeOf(u16) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_bf16", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -713,7 +735,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
             const total_bytes = n * k * @sizeOf(f16) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_f16", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -743,7 +765,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -773,7 +795,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             // Validation: compare first rows against host reference.
@@ -834,7 +856,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .k = k,
                 .td = td,
             };
-            const median_ns = collectMedian(runGemv, &ctx, iters);
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_q4_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -1394,7 +1416,7 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const be_name = bs.name;
 
     // Dispatch to kernel benchmark
-    benchKernel(cli.kernel.?, be, be_name, cli.n, cli.k, cli.iters);
+    benchKernel(cli.kernel.?, be, be_name, cli.n, cli.k, cli.iters, cli.reupload);
     return 0;
 }
 
