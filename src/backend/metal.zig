@@ -975,6 +975,16 @@ pub const MetalBackend = struct {
         std.heap.page_allocator.free(@as([*]align(std.heap.pageSize()) u8, @ptrCast(@alignCast(slice.ptr)))[0..aligned_bytes]);
     }
 
+    /// Unified memory: the GPU reads host pages directly through
+    /// `newBufferWithBytesNoCopy`, so there is no host-to-device transfer to
+    /// accelerate and nothing to page-lock. Returning false is the correct
+    /// answer here, not a missing feature.
+    pub fn hostRegister(_: *MetalBackend, _: [*]const u8, _: usize) bool {
+        return false;
+    }
+
+    pub fn hostUnregister(_: *MetalBackend, _: [*]const u8, _: usize) void {}
+
     // ── Weight size helper ────────────────────────────────────
 
     const weightBytes = backend_mod.weightBytes;

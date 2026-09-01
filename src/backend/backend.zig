@@ -146,6 +146,44 @@ pub const detectCacheSizes = @import("cpu.zig").detectCacheSizes;
 /// Detect available (free) system memory in bytes. Re-exported from cpu.zig.
 pub const detectAvailMem = @import("cpu.zig").detectAvailMem;
 
+/// Physical (non-SMT) core count usable by this process. See `cpu.zig`.
+pub const detectPhysicalCores = @import("cpu.zig").detectPhysicalCores;
+
+/// One logical CPU id per physical core, for thread-pool affinity. See `cpu.zig`.
+pub const physicalCoreIds = @import("cpu.zig").physicalCoreIds;
+
+/// Core ids collected for pool affinity. The pool caps at 31 workers plus the
+/// main thread, so listing more cores than this cannot change the pool size.
+const max_pinned_core_ids: usize = 64;
+
+/// A page-aligned byte range covering an arbitrary host pointer and length.
+pub const PageRange = struct { base: usize, size: usize };
+
+/// Widen `ptr[0..len]` to whole pages. Every host-memory syscall that takes a
+/// range (mlock, madvise, cuMemHostRegister, hipHostRegister) requires this, and
+/// they must all round the SAME way or an unregister misses its base address.
+pub fn pageAlignRange(ptr: [*]const u8, len: usize) PageRange {
+    const page = std.heap.page_size_min;
+    const addr = @intFromPtr(ptr);
+    const base = addr & ~@as(usize, page - 1);
+    return .{ .base = base, .size = std.mem.alignForward(usize, addr + len, page) - base };
+}
+
+/// Fault a host range into physical memory, so a later `hostRegister` (or
+/// mlock) is pure page locking instead of a page-at-a-time synchronous read.
+///
+/// `MADV_WILLNEED` starts the read asynchronously with the kernel's readahead
+/// window, which is what makes this fast; the driver's own faulting is
+/// page-at-a-time and is not. Best effort: an unsupported platform or a range
+/// the kernel declines to prefault just means the register pays the fault cost.
+pub fn hostPrefault(ptr: [*]const u8, len: usize) void {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+    if (len == 0) return;
+    const r = pageAlignRange(ptr, len);
+    const aligned: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(r.base);
+    std.posix.madvise(aligned, r.size, std.posix.system.MADV.WILLNEED) catch {};
+}
+
 /// Detect OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Re-exported from cpu.zig.
 pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 
@@ -327,6 +365,14 @@ pub const NullBackend = struct {
     }
 
     pub fn freeKvSlice(_: *NullBackend, _: std.mem.Allocator, _: []u8) void {
+        unreachable;
+    }
+
+    pub fn hostRegister(_: *NullBackend, _: [*]const u8, _: usize) bool {
+        unreachable;
+    }
+
+    pub fn hostUnregister(_: *NullBackend, _: [*]const u8, _: usize) void {
         unreachable;
     }
 
@@ -602,6 +648,34 @@ pub const Backend = union(enum) {
     pub inline fn freeKvSlice(self: Backend, allocator: std.mem.Allocator, slice: []u8) void {
         switch (self) {
             inline else => |be| be.freeKvSlice(allocator, slice),
+        }
+    }
+
+    /// Page-lock a host byte range so the backend can DMA out of it directly,
+    /// without staging through a driver bounce buffer. Required for async H2D:
+    /// `cuMemcpyHtoDAsync` rejects pageable source memory.
+    ///
+    /// PRECONDITION: the range must already be RESIDENT. Registering a cold
+    /// file-backed mapping makes the driver fault every page in one at a time.
+    /// Measured on this codebase: registering the 155 GB DS4 checkpoint ran at
+    /// ~19 MB/s, 23 minutes for the first 8 shards. Fill or prefault the range
+    /// first (`hostPrefault`), then register, so registration is pure page
+    /// locking with no I/O behind it.
+    ///
+    /// Returns false when the backend needs no registration (unified memory) or
+    /// the driver refused. Never fatal: an unregistered range still works, it
+    /// just goes over the slower pageable copy path.
+    pub inline fn hostRegister(self: Backend, ptr: [*]const u8, len: usize) bool {
+        switch (self) {
+            inline else => |be| return be.hostRegister(ptr, len),
+        }
+    }
+
+    /// Release a range page-locked by `hostRegister`. Safe on a range that was
+    /// never registered (the backend ignores the driver's error).
+    pub inline fn hostUnregister(self: Backend, ptr: [*]const u8, len: usize) void {
+        switch (self) {
+            inline else => |be| be.hostUnregister(ptr, len),
         }
     }
 
@@ -1239,6 +1313,15 @@ pub const BackendState = struct {
     be: Backend = undefined,
     name: []const u8 = "CPU",
 
+    /// Threads that actually run parallel CPU work: the pool's workers plus the
+    /// main thread, which participates in every `parallelFor`. Reported in the
+    /// banner, so it must be the real width, not the logical CPU count (the pool
+    /// is sized by PHYSICAL cores; see `init`).
+    pub fn computeThreads(self: *const BackendState) u32 {
+        const workers = if (self.pool) |*p| p.n_workers else 0;
+        return @intCast(workers + 1);
+    }
+
     /// Initialize the requested compute backend, with automatic fallback.
     /// Must be called on a stack-allocated `BackendState`, the `be` field
     /// stores pointers into the struct's own backend fields.
@@ -1247,10 +1330,19 @@ pub const BackendState = struct {
     ///   - allocator: Used for backend-internal allocations (pipeline caches, etc.).
     ///   - backend_choice: Which backend to initialize (or .auto for auto-detection).
     pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice, io: std.Io, device_id: u32) void {
-        // n_workers = CPU count - 1 (main thread also participates).
-        const cpu_count = std.Thread.getCpuCount() catch 1;
+        // One thread per PHYSICAL core, minus one for the main thread (which
+        // also participates). SMT siblings add no memory bandwidth to a
+        // bandwidth-bound GEMV and make the spin-wait in parallelFor worse, so
+        // sizing by logical CPUs oversubscribes every core on an SMT machine.
+        //
+        // Workers are pinned to the core they were sized for. Core id 0 is left
+        // to the unpinned main thread, so a worker never shares a core with it.
+        var core_ids: [max_pinned_core_ids]u32 = undefined;
+        const n_cores_listed = physicalCoreIds(&core_ids);
+        const cpu_count = if (n_cores_listed > 0) n_cores_listed else detectPhysicalCores();
         const n_workers = if (cpu_count > 1) cpu_count - 1 else 0;
         self.pool = ThreadPool.init(n_workers);
+        if (n_cores_listed > 1) self.pool.?.setAffinity(core_ids[1..n_cores_listed]);
         self.pool.?.spawn(io);
         self.cpu_be.pool = &self.pool.?;
         self.be = blk: {
@@ -1451,6 +1543,43 @@ pub const BackendState = struct {
 };
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "pageAlignRange, covers the whole request and starts on a page" {
+    const page = std.heap.page_size_min;
+    var buf: [1]u8 align(std.heap.page_size_min) = undefined;
+    const base = @intFromPtr(&buf);
+
+    // Aligned start, exact page length: no widening.
+    const exact = pageAlignRange(@ptrCast(&buf), page);
+    try std.testing.expectEqual(base, exact.base);
+    try std.testing.expectEqual(page, exact.size);
+
+    // One byte past the page start still covers a full page.
+    const one = pageAlignRange(@ptrCast(&buf), 1);
+    try std.testing.expectEqual(base, one.base);
+    try std.testing.expectEqual(page, one.size);
+
+    // An unaligned pointer rounds the base DOWN, so the range still contains
+    // every byte the caller asked for; hostUnregister depends on this matching.
+    const off: [*]const u8 = @as([*]const u8, @ptrCast(&buf)) + 8;
+    const un = pageAlignRange(off, page);
+    try std.testing.expectEqual(base, un.base);
+    try std.testing.expectEqual(2 * page, un.size);
+    try std.testing.expect(un.base + un.size >= @intFromPtr(off) + page);
+}
+
+test "pageAlignRange, zero length collapses to the containing page start" {
+    var buf: [1]u8 align(std.heap.page_size_min) = undefined;
+    const r = pageAlignRange(@ptrCast(&buf), 0);
+    try std.testing.expectEqual(@intFromPtr(&buf), r.base);
+    try std.testing.expectEqual(@as(usize, 0), r.size);
+}
+
+test "hostPrefault, tolerates zero length and unmapped-tail ranges" {
+    var buf: [4096]u8 align(std.heap.page_size_min) = undefined;
+    hostPrefault(@ptrCast(&buf), 0);
+    hostPrefault(@ptrCast(&buf), buf.len);
+}
 
 test "DType, gemvRowBytes for F32" {
     // F32: 4 bytes per element, no quantization blocks.

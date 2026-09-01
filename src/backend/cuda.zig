@@ -159,6 +159,10 @@ const FnMemHostGetDevicePointer = *const fn (*CUdeviceptr, *const anyopaque, c_u
 const FnMemHostUnregister = *const fn (*const anyopaque) callconv(.c) CUresult;
 /// CU_MEMHOSTREGISTER_DEVICEMAP: maps host memory into device address space.
 const CU_MEMHOSTREGISTER_DEVICEMAP: c_uint = 0x02;
+/// CU_MEMHOSTREGISTER_PORTABLE: the page lock is visible to every CUDA context.
+/// hostRegister only needs a DMA-capable source, not a device mapping, so it
+/// registers PORTABLE and leaves DEVICEMAP to the UMA zero-copy path.
+const CU_MEMHOSTREGISTER_PORTABLE: c_uint = 0x01;
 const FnLaunchKernel = *const fn (
     CUfunction,
     c_uint,
@@ -747,10 +751,9 @@ pub const CudaBackend = struct {
     /// restoreMmapHints can reset the madvise advice after the resident copy.
     pub fn registerHostRegion(self: *CudaBackend, base: [*]const u8, size: usize) void {
         if (!self.is_uma) return;
-        const addr = @intFromPtr(base);
-        const page = std.heap.page_size_min;
-        const aligned_base = addr & ~@as(usize, page - 1);
-        const aligned_size = ((addr + size + page - 1) & ~@as(usize, page - 1)) - aligned_base;
+        const r = backend_mod.pageAlignRange(base, size);
+        const aligned_base = r.base;
+        const aligned_size = r.size;
         if (self.shard_range_count < max_shard_ranges) {
             self.shard_ranges[self.shard_range_count] = .{ .base = aligned_base, .size = aligned_size };
             self.shard_range_count += 1;
@@ -2192,6 +2195,26 @@ pub const CudaBackend = struct {
     pub fn freeKvSlice(_: *CudaBackend, allocator: std.mem.Allocator, slice: []u8) void {
         if (slice.len == 0) return;
         allocator.free(slice);
+    }
+
+    /// Page-lock a resident host range so `cuMemcpyHtoDAsync` can DMA from it.
+    /// See `Backend.hostRegister` for the residency precondition, which is not
+    /// advice here: this is the same driver call that ran at ~19 MB/s when
+    /// `registerHostRegion` pointed it at cold mmap pages.
+    pub fn hostRegister(self: *CudaBackend, ptr: [*]const u8, len: usize) bool {
+        if (len == 0) return false;
+        const reg = self.cuMemHostRegister orelse return false;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        return reg(@ptrFromInt(r.base), r.size, CU_MEMHOSTREGISTER_PORTABLE) == CUDA_SUCCESS;
+    }
+
+    /// Unregister a range page-locked by `hostRegister`. The driver keys on the
+    /// base address, so the length only matters for computing the same
+    /// page-aligned base `hostRegister` used.
+    pub fn hostUnregister(self: *CudaBackend, ptr: [*]const u8, len: usize) void {
+        const unreg = self.cuMemHostUnregister orelse return;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        _ = unreg(@ptrFromInt(r.base));
     }
 
     /// Register RAM-tier KV block in act_cache without upload.

@@ -81,6 +81,12 @@ const FnDeviceSynchronize = *const fn () callconv(.c) HipError;
 const FnMalloc = *const fn (*?*anyopaque, usize) callconv(.c) HipError;
 const FnFree = *const fn (?*anyopaque) callconv(.c) HipError;
 const FnMemcpy = *const fn (?*anyopaque, ?*const anyopaque, usize, c_int) callconv(.c) HipError;
+/// hipHostRegister / hipHostUnregister: page-lock host memory for DMA. Optional
+/// (older libamdhip64 builds omit them), so both are looked up as nullable.
+const FnHostRegister = *const fn (*const anyopaque, usize, c_uint) callconv(.c) HipError;
+const FnHostUnregister = *const fn (*const anyopaque) callconv(.c) HipError;
+/// hipHostRegisterPortable: the page lock is visible to every HIP context.
+const HIP_HOSTREGISTER_PORTABLE: c_uint = 0x01;
 const FnModuleLoadData = *const fn (*HipModule, [*]const u8) callconv(.c) HipError;
 const FnModuleUnload = *const fn (HipModule) callconv(.c) HipError;
 const FnModuleGetFunction = *const fn (*HipFunction, HipModule, [*:0]const u8) callconv(.c) HipError;
@@ -118,6 +124,8 @@ pub const RocmBackend = struct {
     hipMalloc: FnMalloc = undefined,
     hipFree: FnFree = undefined,
     hipMemcpy: FnMemcpy = undefined,
+    hipHostRegister: ?FnHostRegister = null,
+    hipHostUnregister: ?FnHostUnregister = null,
     hipLaunchKernel: FnLaunchKernel = undefined,
 
     // Kernel function handles
@@ -253,6 +261,8 @@ pub const RocmBackend = struct {
         const hipSetDevice = self.lookup(FnSetDevice, "hipSetDevice") orelse return error.RocmNotAvailable;
         const hipDeviceGetName = self.lookup(FnDeviceGetName, "hipDeviceGetName") orelse return error.RocmNotAvailable;
         self.hipDeviceSynchronize = self.lookup(FnDeviceSynchronize, "hipDeviceSynchronize") orelse return error.RocmNotAvailable;
+        self.hipHostRegister = self.lookup(FnHostRegister, "hipHostRegister");
+        self.hipHostUnregister = self.lookup(FnHostUnregister, "hipHostUnregister");
         const hipModuleLoadData = self.lookup(FnModuleLoadData, "hipModuleLoadData") orelse return error.RocmNotAvailable;
         self.hipModuleUnload = self.lookup(FnModuleUnload, "hipModuleUnload") orelse return error.RocmNotAvailable;
         const hipModuleGetFunction = self.lookup(FnModuleGetFunction, "hipModuleGetFunction") orelse return error.RocmNotAvailable;
@@ -1248,6 +1258,23 @@ pub const RocmBackend = struct {
     /// Free a KV cache slice allocated via allocKvSlice.
     pub fn freeKvSlice(_: *RocmBackend, allocator: std.mem.Allocator, slice: []u8) void {
         allocator.free(slice);
+    }
+
+    /// Page-lock a resident host range for DMA. See `Backend.hostRegister`:
+    /// the range must already be resident, or the driver faults it in one page
+    /// at a time. Returns false where libamdhip64 does not export the call.
+    pub fn hostRegister(self: *RocmBackend, ptr: [*]const u8, len: usize) bool {
+        if (len == 0) return false;
+        const reg = self.hipHostRegister orelse return false;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        return reg(@ptrFromInt(r.base), r.size, HIP_HOSTREGISTER_PORTABLE) == HIP_SUCCESS;
+    }
+
+    /// Unregister a range page-locked by `hostRegister`.
+    pub fn hostUnregister(self: *RocmBackend, ptr: [*]const u8, len: usize) void {
+        const unreg = self.hipHostUnregister orelse return;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        _ = unreg(@ptrFromInt(r.base));
     }
 
     /// Get or grow device KV cache buffer for the given required size.

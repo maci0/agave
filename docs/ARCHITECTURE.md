@@ -53,7 +53,7 @@ agave/
 │   ├── expert_cache.zig   # SSD expert LRU streaming cache (--ssd-streaming CLI)
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
-│   ├── thread_pool.zig    # Futex-based work-stealing thread pool
+│   ├── thread_pool.zig    # Futex-based work-stealing thread pool (one worker per physical core, pinned)
 │   ├── sim_clock.zig      # Injectable wall clock (deterministic tests / future sim harness)
 │   ├── perf.zig           # Performance timer utilities
 │   ├── readline.zig       # Line editor for interactive REPL

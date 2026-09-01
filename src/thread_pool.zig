@@ -3,6 +3,7 @@
 //! Atomic counter provides dynamic work distribution across threads.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 
 /// Maximum number of worker threads (excludes main thread which also participates).
@@ -21,6 +22,12 @@ pub const ThreadPool = struct {
 
     /// Io context for futex operations. Set during spawn().
     io: Io = undefined,
+
+    /// Logical CPU each worker pins itself to, indexed by worker id. Only the
+    /// first `n_core_ids` entries are set; a worker past that stays unpinned.
+    /// Set by `setAffinity` before `spawn`.
+    core_ids: [max_workers]u32 = undefined,
+    n_core_ids: usize = 0,
 
     // ── Shared task descriptor ──────────────────────────────────
     // Written by dispatch(), read by workers. Protected by generation counter.
@@ -57,13 +64,41 @@ pub const ThreadPool = struct {
         return .{ .n_workers = @min(n, max_workers) };
     }
 
+    /// Pin worker `i` to `core_ids[i]`. Must be called before `spawn`.
+    ///
+    /// `core_ids` should hold one logical CPU per physical core
+    /// (`backend.physicalCoreIds`): memory-bandwidth-bound kernels gain nothing
+    /// from SMT siblings, which only contend for a core's load ports, and the
+    /// spin-wait in `parallelFor` degrades badly when workers share a core.
+    /// Ids past `n_workers` are ignored; extra workers run unpinned.
+    ///
+    /// No-op off Linux. macOS exposes no thread-to-core binding (its affinity
+    /// API is an advisory hint and does nothing on Apple Silicon).
+    pub fn setAffinity(self: *ThreadPool, core_ids: []const u32) void {
+        if (comptime builtin.os.tag != .linux) return;
+        const n = @min(core_ids.len, max_workers);
+        @memcpy(self.core_ids[0..n], core_ids[0..n]);
+        self.n_core_ids = n;
+    }
+
+    /// Bind the calling thread to one logical CPU. Failure is ignored: an
+    /// unpinned worker is slower under SMT contention, never incorrect.
+    fn pinSelf(cpu: u32) void {
+        if (comptime builtin.os.tag != .linux) return;
+        const linux = std.os.linux;
+        if (cpu >= linux.CPU_SETSIZE * @bitSizeOf(usize)) return;
+        var set: linux.cpu_set_t = @splat(0);
+        set[cpu / @bitSizeOf(usize)] = @as(usize, 1) << @intCast(cpu % @bitSizeOf(usize));
+        linux.sched_setaffinity(0, &set) catch {};
+    }
+
     /// Spawn worker threads. Must be called exactly once, after the pool is
     /// at its final memory location. Workers capture `self` by pointer.
     pub fn spawn(self: *ThreadPool, io: Io) void {
         self.io = io;
         for (0..self.n_workers) |i| {
             self.workers[i] = .{
-                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| {
+                .thread = std.Thread.spawn(.{}, workerLoop, .{ self, i }) catch |err| {
                     std.log.warn("ThreadPool: failed to spawn worker {d}: {s}", .{ i, @errorName(err) });
                     self.n_workers = i;
                     return;
@@ -149,7 +184,9 @@ pub const ThreadPool = struct {
     }
 
     /// Worker thread main loop. Sleeps on generation futex, wakes to do work.
-    fn workerLoop(pool: *ThreadPool) void {
+    fn workerLoop(pool: *ThreadPool, worker_id: usize) void {
+        if (worker_id < pool.n_core_ids) pinSelf(pool.core_ids[worker_id]);
+
         // Start at 0 to ensure workers wake on the first generation bump (0→1).
         var local_gen: u32 = 0;
 
