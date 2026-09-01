@@ -2442,6 +2442,7 @@ pub fn main(init: std.process.Init) !void {
 
     // ── Compute file size (needed for banner and progress) ────────
     const file_size_bytes: usize = if (gguf_file) |g| g.file_size else if (st_dir) |s| s.totalBytes() else 0;
+    warnIfBudgetForcesEviction(be, vram_budget, file_size_bytes);
 
     // ── Banner (printed before loading so user sees info immediately) ─
     const meta_n_embed = fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0;
@@ -2758,6 +2759,40 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 }
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
+/// Fraction of a checkpoint's bytes that end up as cached weight uploads. The
+/// rest is metadata, the tokenizer, and tensors the GPU never sees. Measured at
+/// 934 MB resident from a 1.06 GB file and 373 MB from a 469 MB file, so this
+/// under-estimates slightly, which is the safe direction for a warning.
+const weight_fraction_of_file: f64 = 0.85;
+
+/// Warn when the weight budget cannot hold the model, because on this hardware
+/// that is not a graceful degradation.
+///
+/// Decode throughput against `--vram-budget` on a 7900 XTX, Qwen2.5 1.5B Q4_K
+/// (934 MB of cached weights), CPU at 38.4 tok/s for reference:
+///
+///     budget >= 1.0 GiB   39.1 tok/s      0 evictions
+///     budget 0.75 GiB     10.4 tok/s   7935 evictions
+///     budget 0.25 GiB     10.4 tok/s   8106 evictions
+///
+/// It is a cliff, not a slope: the first eviction costs most of the throughput,
+/// and past it the GPU is ~4x SLOWER than simply decoding on the CPU. So the
+/// useful thing to say is not "this will be slower" but "the CPU is now the
+/// faster device", which is the placement question a bandwidth-adaptive engine
+/// exists to answer.
+fn warnIfBudgetForcesEviction(be: Backend, budget_bytes: usize, file_bytes: usize) void {
+    if (budget_bytes == 0 or file_bytes == 0) return;
+    if (!be.hasWeightBudget()) return;
+    const need: usize = @intFromFloat(@as(f64, @floatFromInt(file_bytes)) * weight_fraction_of_file);
+    if (need <= budget_bytes) return;
+    eprint(
+        "Warning: --vram-budget {d} MB is below this model's ~{d} MB of weights, so every " ++
+            "decode step will evict and re-upload. Measured on this class of hardware that is " ++
+            "~4x slower than --backend cpu; raise the budget or decode on the CPU.\n",
+        .{ budget_bytes / (1024 * 1024), need / (1024 * 1024) },
+    );
+}
+
 /// Prefill chunk size for this backend.
 ///
 /// Multi-token prefill is correct everywhere now; this is purely a speed choice.

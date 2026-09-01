@@ -457,6 +457,33 @@ paths produce identical output, and an explicit flag always wins.
 **Marginal: ROCm `sdpa_prefill`** at 0.0222 against a 0.02 tolerance, small absolute values.
 Not reached in practice while the chunk-size guard holds it at 1, where it reduces to `sdpa`.
 
+## Placement Under Budget Pressure (RX 7900 XTX)
+
+**Date**: 2026-09-01. Qwen2.5 1.5B Q4_K, 934 MB of cached weights, `-n 32 -t 0`, median of 3.
+
+| Config | tok/s | Resident | Evictions |
+|--------|------:|---------:|----------:|
+| `--backend cpu` | 38.4 | n/a | n/a |
+| ROCm, budget 4 GiB | 38.6 | 934 MB | 0 |
+| ROCm, budget 1.0 GiB | 39.1 | 934 MB | 0 |
+| ROCm, budget 0.75 GiB | **10.4** | 762 MB | 7935 |
+| ROCm, budget 0.5 GiB | **10.3** | 508 MB | 8017 |
+| ROCm, budget 0.25 GiB | **10.4** | 251 MB | 8106 |
+
+**It is a cliff, not a slope.** The first eviction costs most of the throughput, and past it the
+GPU is ~4x slower than simply decoding on the CPU. Shrinking the budget further barely matters,
+because the re-upload rate is already saturated.
+
+That is the placement question FreeToken's q* policy exists to answer, in the form Agave can
+act on: its unit of placement is the backend, not the individual expert. So the startup check
+compares the model's weight bytes against the budget and says which device is faster, rather
+than letting a user discover a 4x regression by feel. A budget above the working set costs
+nothing and stays silent.
+
+The per-expert form of q* (split a layer's routed experts between a CPU executor and a PCIe
+fetch, sized by the bandwidth ratio) is **not implemented**: Agave has no CPU MoE executor, and
+there is no MoE checkpoint on this machine to validate one against.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
