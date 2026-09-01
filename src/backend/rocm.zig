@@ -207,6 +207,9 @@ pub const RocmBackend = struct {
     /// into. Null until `setWeightBudget`; the cache grows without limit until
     /// then, which is right whenever the model fits in VRAM.
     weight_budget: ?backend_mod.WeightBudget = null,
+    /// Freed weight buffers, kept for the next admit of the same size. Only
+    /// live alongside a budget: without eviction nothing is ever released.
+    buffer_pool: ?backend_mod.BufferPool(DevicePtr) = null,
     evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
     budget_allocator: std.mem.Allocator = undefined,
 
@@ -387,6 +390,11 @@ pub const RocmBackend = struct {
         while (wt_it.next()) |cached| _ = self.hipFree(@ptrFromInt(cached.dptr));
         self.buf_cache.deinit();
         if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
+        if (self.buffer_pool) |*bp| {
+            var drain_buf: [backend_mod.buffer_pool_capacity]DevicePtr = undefined;
+            for (bp.drain(&drain_buf)) |d| _ = self.hipFree(@ptrFromInt(d));
+            bp.deinit(self.budget_allocator);
+        }
 
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
@@ -419,7 +427,7 @@ pub const RocmBackend = struct {
     }
 
     fn uploadToDevice(self: *RocmBackend, host_ptr: *const anyopaque, size: usize) DevicePtr {
-        const dptr = self.deviceAlloc(size);
+        const dptr = self.acquireWeightBuffer(size);
         if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice), "hipMemcpy(HtoD)"))
             @panic("hipMemcpy(HtoD) failed, device memory left uninitialized");
         return dptr;
@@ -459,12 +467,36 @@ pub const RocmBackend = struct {
         return dptr;
     }
 
+    /// Take a weight buffer of `size`, reusing a recycled one when the pool has
+    /// it. hipMalloc/hipFree per eviction costs far more than the transfer it
+    /// brackets (see buffer_pool.zig), and a transformer frees a buffer of
+    /// exactly the size the next layer's same-role weight needs.
+    fn acquireWeightBuffer(self: *RocmBackend, size: usize) DevicePtr {
+        if (self.buffer_pool) |*bp| {
+            if (bp.acquire(size)) |dptr| return dptr;
+        }
+        return self.deviceAlloc(size);
+    }
+
     /// Free one cached weight's device buffer and drop every record of it.
-    /// The budget entry goes too, so a later re-upload is charged afresh.
+    /// The buffer goes to the pool when one is active. The budget entry goes
+    /// too, so a later re-upload is charged afresh.
     fn dropWeight(self: *RocmBackend, addr: usize, dptr: DevicePtr) void {
-        _ = self.hipFree(@ptrFromInt(dptr));
+        const size = if (self.buf_cache.get(addr)) |c| c.size else 0;
+        self.releaseWeightBuffer(dptr, size);
         _ = self.buf_cache.remove(addr);
         if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// Return a weight buffer to the pool, or free it when there is no pool or
+    /// the pool is full.
+    fn releaseWeightBuffer(self: *RocmBackend, dptr: DevicePtr, size: usize) void {
+        if (size > 0) {
+            if (self.buffer_pool) |*bp| {
+                if (bp.release(dptr, size) == null) return;
+            }
+        }
+        _ = self.hipFree(@ptrFromInt(dptr));
     }
 
     /// See `Backend.setWeightBudget`. Allocating the tracker can fail; the
@@ -473,10 +505,13 @@ pub const RocmBackend = struct {
     pub fn setWeightBudget(self: *RocmBackend, bytes: usize) void {
         if (self.weight_budget) |*wb| {
             for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
-                if (self.buf_cache.get(victim)) |c| {
-                    _ = self.hipFree(@ptrFromInt(c.dptr));
-                    _ = self.buf_cache.remove(victim);
-                }
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.dptr);
+            }
+            // Shrinking means giving memory back, so a pool holding idle buffers
+            // works against the request. Release them for real.
+            if (self.buffer_pool) |*bp| {
+                var drain_buf: [backend_mod.buffer_pool_capacity]DevicePtr = undefined;
+                for (bp.drain(&drain_buf)) |d| _ = self.hipFree(@ptrFromInt(d));
             }
             return;
         }
@@ -487,6 +522,14 @@ pub const RocmBackend = struct {
             bytes,
         ) catch |err| {
             std.log.warn("ROCm weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+        // Only useful with a budget: without eviction no buffer is ever freed.
+        self.buffer_pool = backend_mod.BufferPool(DevicePtr).init(
+            self.budget_allocator,
+            backend_mod.buffer_pool_capacity,
+        ) catch |err| {
+            std.log.warn("ROCm buffer pool disabled ({s}); every eviction re-allocates", .{@errorName(err)});
             return;
         };
     }

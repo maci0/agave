@@ -159,6 +159,10 @@ const max_pinned_core_ids: usize = 64;
 /// Byte-budgeted LRU over the GPU backends' cached weight uploads.
 pub const WeightBudget = @import("weight_budget.zig").WeightBudget;
 
+/// Free list of device buffers, recycled across weight-cache evictions.
+pub const BufferPool = @import("buffer_pool.zig").BufferPool;
+pub const buffer_pool_capacity = @import("buffer_pool.zig").default_capacity;
+
 /// What a backend's weight budget currently holds. `resident` is 0 on a backend
 /// with no device-side weight cache.
 pub const WeightResidency = struct { resident: usize = 0, evictions: u64 = 0 };

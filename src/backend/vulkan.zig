@@ -782,6 +782,9 @@ pub const VulkanBackend = struct {
     /// Byte cap on `buf_cache` plus the scratch its eviction list is written
     /// into. Null until `setWeightBudget`; unbounded until then.
     weight_budget: ?backend_mod.WeightBudget = null,
+    /// Freed weight buffers, kept for the next admit of the same size. Only
+    /// live alongside a budget: without eviction nothing is ever released.
+    buffer_pool: ?backend_mod.BufferPool(VkBuf) = null,
     evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
     budget_allocator: std.mem.Allocator = undefined,
 
@@ -1430,6 +1433,14 @@ pub const VulkanBackend = struct {
         self.deinitCachedBuffers();
         self.buf_cache.deinit();
         if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
+        if (self.buffer_pool) |*bp| {
+            var drain_buf: [backend_mod.buffer_pool_capacity]VkBuf = undefined;
+            for (bp.drain(&drain_buf)) |b| {
+                self.vkDestroyBuffer(self.device, b.buf, null);
+                self.vkFreeMemory(self.device, b.mem, null);
+            }
+            bp.deinit(self.budget_allocator);
+        }
 
         const pipelines = [_]*PipelineInfo{
             // Elementwise
@@ -1642,7 +1653,7 @@ pub const VulkanBackend = struct {
                 if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.vk_buf);
             }
         }
-        const buf = self.createBuffer(size);
+        const buf = self.acquireWeightBuffer(size);
         self.uploadBuffer(buf.mem, ptr, size);
         self.buf_cache.put(addr, .{ .vk_buf = buf, .size = size }) catch |err| {
             std.log.warn("cache put failed: {}", .{err});
@@ -1650,23 +1661,52 @@ pub const VulkanBackend = struct {
         return buf;
     }
 
-    /// Free one cached weight's buffer and drop every record of it.
-    /// `destroyBuffer` submits pending commands first, so this is safe to call
-    /// mid-recording.
+    /// Take a weight buffer of `size`, reusing a recycled one when the pool has
+    /// it. Creating and destroying a VkBuffer per eviction costs far more than
+    /// the transfer it brackets (see buffer_pool.zig), and a transformer frees a
+    /// buffer of exactly the size the next layer's same-role weight needs.
+    fn acquireWeightBuffer(self: *VulkanBackend, size: usize) VkBuf {
+        if (self.buffer_pool) |*bp| {
+            if (bp.acquire(size)) |buf| return buf;
+        }
+        return self.createBuffer(size);
+    }
+
+    /// Free one cached weight's buffer and drop every record of it. The buffer
+    /// goes to the pool when one is active; `destroyBuffer` submits pending
+    /// commands first, so the fallback is safe mid-recording.
     fn dropWeight(self: *VulkanBackend, addr: usize, buf: VkBuf) void {
-        self.destroyBuffer(buf);
+        self.releaseWeightBuffer(buf, if (self.buf_cache.get(addr)) |c| c.size else 0);
         _ = self.buf_cache.remove(addr);
         if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// Return a weight buffer to the pool, or destroy it when there is no pool
+    /// or the pool is full.
+    fn releaseWeightBuffer(self: *VulkanBackend, buf: VkBuf, size: usize) void {
+        if (size > 0) {
+            if (self.buffer_pool) |*bp| {
+                // A pooled buffer may still be referenced by commands recorded
+                // but not yet submitted, and a later acquire hands it straight
+                // back out. Flush first so the recycled buffer is genuinely idle.
+                if (self.cmd_recording) self.submitPending();
+                if (bp.release(buf, size) == null) return;
+            }
+        }
+        self.destroyBuffer(buf);
     }
 
     /// See `Backend.setWeightBudget`.
     pub fn setWeightBudget(self: *VulkanBackend, bytes: usize) void {
         if (self.weight_budget) |*wb| {
             for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
-                if (self.buf_cache.get(victim)) |c| {
-                    self.destroyBuffer(c.vk_buf);
-                    _ = self.buf_cache.remove(victim);
-                }
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.vk_buf);
+            }
+            // Shrinking means giving memory back, so a pool holding idle buffers
+            // works against the request. Destroy them for real.
+            if (self.buffer_pool) |*bp| {
+                var drain_buf: [backend_mod.buffer_pool_capacity]VkBuf = undefined;
+                for (bp.drain(&drain_buf)) |b| self.destroyBuffer(b);
             }
             return;
         }
@@ -1677,6 +1717,14 @@ pub const VulkanBackend = struct {
             bytes,
         ) catch |err| {
             std.log.warn("Vulkan weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+        // Only useful with a budget: without eviction no buffer is ever freed.
+        self.buffer_pool = backend_mod.BufferPool(VkBuf).init(
+            self.budget_allocator,
+            backend_mod.buffer_pool_capacity,
+        ) catch |err| {
+            std.log.warn("Vulkan buffer pool disabled ({s}); every eviction re-creates its buffer", .{@errorName(err)});
             return;
         };
     }

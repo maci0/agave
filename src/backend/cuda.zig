@@ -365,6 +365,11 @@ pub const CudaBackend = struct {
     /// into. Null until `setWeightBudget`; unbounded until then. Entries in
     /// `resident_map` are deliberately permanent and are never budgeted.
     weight_budget: ?backend_mod.WeightBudget = null,
+    /// Freed weight buffers, kept for the next admit of the same size. Only
+    /// live alongside a budget: without eviction nothing is ever released.
+    /// Holds device allocations only; UMA zero-copy entries own a host
+    /// registration instead and are never pooled.
+    buffer_pool: ?backend_mod.BufferPool(CUdeviceptr) = null,
     evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
     budget_allocator: std.mem.Allocator = undefined,
 
@@ -677,6 +682,11 @@ pub const CudaBackend = struct {
         }
         self.buf_cache.deinit();
         if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
+        if (self.buffer_pool) |*bp| {
+            var drain_buf: [backend_mod.buffer_pool_capacity]CUdeviceptr = undefined;
+            for (bp.drain(&drain_buf)) |d| _ = self.cuMemFree(d);
+            bp.deinit(self.budget_allocator);
+        }
 
         // Free the permanent resident weight chunks (DS4 EP-local experts).
         for (self.resident_chunks[0..self.resident_chunk_count]) |dptr| _ = self.cuMemFree(dptr);
@@ -909,7 +919,15 @@ pub const CudaBackend = struct {
             }
         }
 
-        const dptr = self.uploadToDevice(@ptrCast(ptr), size);
+        const dptr = if (self.acquireWeightBuffer(size)) |reused| blk: {
+            // Recycled allocation: copy into it rather than making a new one.
+            const rc = self.cuMemcpyHtoD(reused, @ptrCast(ptr), size);
+            if (rc != CUDA_SUCCESS) {
+                std.log.err("CUDA weight re-upload: size={d} rc={d}", .{ size, rc });
+                @panic("cuMemcpyHtoD failed, device memory left uninitialized");
+            }
+            break :blk reused;
+        } else self.uploadToDevice(@ptrCast(ptr), size);
         self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = false }) catch |err| {
             std.log.warn("weight cache put failed (upload, size={d}): {}", .{ size, err });
         };
@@ -923,10 +941,30 @@ pub const CudaBackend = struct {
         if (cached.is_registered) {
             if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
         } else {
-            _ = self.cuMemFree(cached.dptr);
+            self.releaseWeightBuffer(cached.dptr, cached.size);
         }
         _ = self.buf_cache.remove(addr);
         if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// Take a weight buffer of `size`, reusing a recycled one when the pool has
+    /// it. cuMemAlloc/cuMemFree per eviction costs far more than the transfer it
+    /// brackets (see buffer_pool.zig), and a transformer frees a buffer of
+    /// exactly the size the next layer's same-role weight needs.
+    fn acquireWeightBuffer(self: *CudaBackend, size: usize) ?CUdeviceptr {
+        if (self.buffer_pool) |*bp| return bp.acquire(size);
+        return null;
+    }
+
+    /// Return a weight buffer to the pool, or free it when there is no pool or
+    /// the pool is full.
+    fn releaseWeightBuffer(self: *CudaBackend, dptr: CUdeviceptr, size: usize) void {
+        if (size > 0) {
+            if (self.buffer_pool) |*bp| {
+                if (bp.release(dptr, size) == null) return;
+            }
+        }
+        _ = self.cuMemFree(dptr);
     }
 
     /// See `Backend.setWeightBudget`. Does not cover `resident_map`: those copies
@@ -937,6 +975,12 @@ pub const CudaBackend = struct {
             for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
                 if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c);
             }
+            // Shrinking means giving memory back, so a pool holding idle buffers
+            // works against the request. Free them for real.
+            if (self.buffer_pool) |*bp| {
+                var drain_buf: [backend_mod.buffer_pool_capacity]CUdeviceptr = undefined;
+                for (bp.drain(&drain_buf)) |d| _ = self.cuMemFree(d);
+            }
             return;
         }
         if (bytes == 0) return;
@@ -946,6 +990,14 @@ pub const CudaBackend = struct {
             bytes,
         ) catch |err| {
             std.log.warn("CUDA weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+        // Only useful with a budget: without eviction no buffer is ever freed.
+        self.buffer_pool = backend_mod.BufferPool(CUdeviceptr).init(
+            self.budget_allocator,
+            backend_mod.buffer_pool_capacity,
+        ) catch |err| {
+            std.log.warn("CUDA buffer pool disabled ({s}); every eviction re-allocates", .{@errorName(err)});
             return;
         };
     }

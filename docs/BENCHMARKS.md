@@ -341,6 +341,30 @@ to 13830 MB via ROCm's `hipMemGetInfo`; Vulkan reports no free-memory figure and
 75% of the 24560 MB total, saying so. It returns 0 on unified memory, where evicting a weight
 buys nothing back, and warns on a backend with no device-side weight cache.
 
+## Device Buffer Reuse Under a Budget (RX 7900 XTX)
+
+**Date**: 2026-09-01. Qwen2.5 0.5B Q4_K_M, `-n 16 -t 0`, 3 runs each. Output is identical
+with the pool, without it, and with no budget at all.
+
+| Backend | Budget | Without pool | With pool | Delta |
+|---------|--------|-------------:|----------:|------:|
+| ROCm | 0.25 GiB | 19.3 | 23.7 | **+22.8%** |
+| ROCm | 0.1 GiB | 23.8 | 30.6 | **+28.6%** |
+| Vulkan | 0.25 GiB | 12.7 | 13.6 | +7.1% |
+| Vulkan | 0.1 GiB | 16.0 | 17.2 | +7.5% |
+
+**Why this and not transfer overlap.** At a 0.25 GiB budget the model spends 51 ms per token
+more than it does unbudgeted, but only ~118 MB is re-uploaded, which is ~7 ms of PCIe time at
+16 GB/s. Roughly seven eighths of the penalty was the driver's allocate/free round trips, not
+moving the bytes, so overlapping the transfer with compute (FreeToken's prefill
+double-buffering) could recover at most the other eighth. Recycling the allocation is the
+larger and simpler win, and it is why FreeToken uses fixed slots rather than a keyed cache.
+
+Reuse is by exact size, which fits a transformer: layer N's q_proj is byte-identical in size
+to layer N+1's, so a freed buffer almost always fits the next weight of the same role. ROCm
+gains more than Vulkan because `hipMalloc`/`hipFree` are costlier than Vulkan's create/destroy
+plus the command-buffer flush the recycle still needs.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
