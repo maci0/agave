@@ -589,6 +589,33 @@ eviction pool, so a prefetch never displaces a live entry, plus budget accountin
 is a subsystem, not a hook, and MRU already recovered 3x in the same regime for a fraction of
 the complexity.
 
+## MoE Path Validation Without a MoE Checkpoint
+
+**Date**: 2026-09-01. The supported MoE checkpoints start around 17 GB, so the MoE forward path
+had never been compared across backends here. `tools/synth-moe/moeify_gguf.py` removes that
+blocker by deriving a MoE model from a dense one: each layer's `ffn_{gate,up,down}.weight`
+becomes an `_exps` tensor holding N identical copies, plus an f32 router and the
+`expert_count` / `expert_used_count` / `expert_feed_forward_length` metadata.
+
+Identical experts make it a test with a **known answer** rather than a smoke run. Softmax over
+equal router logits scores every expert the same, so top-k normalises to 1/k each and the
+mixture is `sum_i (1/k) * FFN(x) = FFN(x)`, the dense result exactly. The derived model must
+reproduce the original token for token, on every backend.
+
+It does, after one fix. Qwen2.5 0.5B Q4_K_M turned into 4 experts with 2 used:
+
+| Backend | MoE vs dense | Cross-backend |
+|---------|--------------|---------------|
+| CPU | byte-identical | |
+| ROCm | byte-identical | all three agree |
+| Vulkan | byte-identical | |
+
+**The fix: the shared expert was mandatory.** `moeLayer` looked up `ffn_gate_shexp.weight` with
+`orelse return error.MissingTensor`. Qwen3.5-A3B and Nex-N2-Pro do have a shared expert
+evaluated for every token, but Mixtral, Qwen3-30B-A3B and OLMoE route purely and carry no
+`shexp` tensors at all. Any of those would have failed to run with a bare `MissingTensor`. The
+block is now conditional, unchanged when the tensors are present.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.

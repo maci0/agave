@@ -3,7 +3,7 @@
 **Date**: 2026-05-19 (last full re-run). **GPU kernel correctness (2026-09-01):** there is now a
 harness for it, `agave-bench <kernel> --validate`, which re-runs the kernel on the CPU backend with
 byte-identical inputs and exits non-zero past a 2% relative tolerance. 41 kernels x ROCm/Vulkan, all 82 pairs pass at two values of k, covering all 18 GEMV dtypes;
-run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; see "GPU Kernel Validation" in BENCHMARKS.md for what it found. **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for DeepSeek V4, Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested). Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
+run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE forward path is checked with `tools/synth-moe/moeify_gguf.py`, which derives an identity-preserving MoE model from any dense checkpoint; see "GPU Kernel Validation" in BENCHMARKS.md for what it found. **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for DeepSeek V4, Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested). Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
 
 **Hardware**:
 - Metal/CPU: Apple M4 Pro (14-core CPU, 20-core GPU), 48 GB unified memory, macOS 26.4
