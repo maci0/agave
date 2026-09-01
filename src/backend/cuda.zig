@@ -970,7 +970,7 @@ pub const CudaBackend = struct {
     /// See `Backend.setWeightBudget`. Does not cover `resident_map`: those copies
     /// are permanent by construction (DS4 EP-local experts), and evicting one
     /// would re-fault the mmap pages the resident copy exists to avoid.
-    pub fn setWeightBudget(self: *CudaBackend, bytes: usize) void {
+    pub fn setWeightBudget(self: *CudaBackend, bytes: usize, policy: backend_mod.WeightPolicy) void {
         if (self.weight_budget) |*wb| {
             for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
                 if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c);
@@ -992,6 +992,7 @@ pub const CudaBackend = struct {
             std.log.warn("CUDA weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
             return;
         };
+        self.weight_budget.?.policy = policy;
         // Only useful with a budget: without eviction no buffer is ever freed.
         self.buffer_pool = backend_mod.BufferPool(CUdeviceptr).init(
             self.budget_allocator,

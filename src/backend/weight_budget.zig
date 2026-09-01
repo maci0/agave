@@ -23,6 +23,9 @@ const std = @import("std");
 /// Sentinel for "no node" in the intrusive list and the free chain.
 const nil: u32 = std.math.maxInt(u32);
 
+/// Eviction policy. See `WeightBudget.policy`.
+pub const Policy = enum { lru, mru };
+
 pub const WeightBudget = struct {
     const Node = struct {
         key: usize = 0,
@@ -44,6 +47,19 @@ pub const WeightBudget = struct {
     mru: u32,
     budget_bytes: usize,
     used_bytes: usize,
+    /// Which end of the recency list to evict from.
+    ///
+    /// LRU is right when reuse is skewed, as routed MoE experts are. It is the
+    /// WORST possible choice for a cyclic scan, which is what a dense
+    /// transformer's layer loop is: by the time the loop comes back to layer 0
+    /// its weights are the least-recently-used, so a budget below the working set
+    /// evicts exactly what is about to be needed and the hit rate collapses to
+    /// roughly zero however large the budget is.
+    ///
+    /// Evicting the most-recently-used entry instead keeps whatever filled the
+    /// budget first resident, so the hit rate becomes budget / working set rather
+    /// than ~0.
+    policy: Policy = .lru,
     /// Entries evicted since init, for reporting a thrashing configuration.
     evictions: u64,
 
@@ -169,7 +185,7 @@ pub const WeightBudget = struct {
 
         var n_evicted: usize = 0;
         while (self.used_bytes + bytes > self.budget_bytes or self.free_head == nil) {
-            const victim = self.lru;
+            const victim = if (self.policy == .lru) self.lru else self.mru;
             if (victim == nil) break; // nothing left to reclaim
             if (n_evicted == evict_buf.len) return .{ .evicted = evict_buf[0..n_evicted], .tracked = false };
             evict_buf[n_evicted] = self.nodes[victim].key;
@@ -199,7 +215,7 @@ pub const WeightBudget = struct {
         if (!self.enabled()) return evict_buf[0..0];
         var n: usize = 0;
         while (self.used_bytes > self.budget_bytes and n < evict_buf.len) {
-            const victim = self.lru;
+            const victim = if (self.policy == .lru) self.lru else self.mru;
             if (victim == nil) break;
             evict_buf[n] = self.nodes[victim].key;
             n += 1;
@@ -352,6 +368,39 @@ test "WeightBudget, setBudget to zero disables tracking without evicting" {
     const dropped = wb.setBudget(0, &buf);
     try testing.expectEqual(@as(usize, 0), dropped.len);
     try testing.expect(!wb.enabled());
+}
+
+test "WeightBudget, mru survives a cyclic scan where lru collapses" {
+    // A dense transformer's layer loop is a cyclic scan. Under LRU, a budget
+    // below the working set evicts exactly the entry the next cycle needs first,
+    // so the hit rate is ~0 no matter how large the budget is. MRU keeps whatever
+    // filled it, so the hit rate is budget / working set.
+    const working_set = 40;
+    const budget = 30 * 100; // room for 30 of the 40
+
+    inline for (.{ Policy.lru, Policy.mru }) |policy| {
+        var wb = try WeightBudget.init(testing.allocator, 64, budget);
+        defer wb.deinit(testing.allocator);
+        wb.policy = policy;
+        var buf: [64]usize = undefined;
+
+        var hits: usize = 0;
+        var refs: usize = 0;
+        var cycle: usize = 0;
+        while (cycle < 20) : (cycle += 1) {
+            for (0..working_set) |i| {
+                refs += 1;
+                if (wb.touch(i)) hits += 1 else _ = wb.admit(i, 100, &buf);
+            }
+        }
+        if (policy == .lru) {
+            // Every reference misses: the entry was evicted one cycle ago.
+            try testing.expectEqual(@as(usize, 0), hits);
+        } else {
+            // 30 of every 40 references hit, minus the first cycle's cold start.
+            try testing.expect(hits * 100 > refs * 65);
+        }
+    }
 }
 
 test "WeightBudget, keeps a hot set resident against a cold stream" {
