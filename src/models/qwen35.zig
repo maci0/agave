@@ -2095,6 +2095,12 @@ pub const Qwen35Model = struct {
             }
         }
 
+        // The embeddings above were written by the CPU. A GPU backend caches this
+        // buffer by host address and has no way to notice a host-side write, so a
+        // second chunk would otherwise run against the first chunk's device copy.
+        // Correct at one chunk, wrong from the second on.
+        self.be.invalidateActivation(self.pf_hidden.ptr);
+
         // Build position array
         for (0..n_tok) |t| {
             self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
@@ -2107,6 +2113,11 @@ pub const Qwen35Model = struct {
             try self.prefillFeedForward(@intCast(li), n_tok);
         }
 
+        // Chunk boundary. The next chunk's attention reads the KV this one wrote,
+        // and its embeddings are written by the CPU, so both sides have to agree
+        // on where the current data lives before it starts. Once per chunk is
+        // negligible against a chunk's worth of GEMMs.
+        self.be.sync();
         self.kv_seq_len = base_pos + n_tok;
     }
 
