@@ -405,9 +405,14 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             for (0..8) |j| {
                 const lo4_0: u8 = raw_scales0[j] & 0x0F;
                 const lo4_1: u8 = raw_scales1[j] & 0x0F;
-                const hi_shift: u3 = @intCast((j % 4) * 2);
-                const hi2_0: u8 = (raw_scales0[8 + j / 4] >> hi_shift) & 0x03;
-                const hi2_1: u8 = (raw_scales1[8 + j / 4] >> hi_shift) & 0x03;
+                // ggml packs the high 2 bits with the BYTE index from j % 4 and
+                // the SHIFT from j / 4 (see its aux[] shuffle in
+                // dequantize_row_q3_K). The two were swapped here, which permutes
+                // the 16 group scales and is invisible on any input whose scales
+                // happen to be uniform.
+                const hi_shift: u3 = @intCast((j / 4) * 2);
+                const hi2_0: u8 = (raw_scales0[8 + j % 4] >> hi_shift) & 0x03;
+                const hi2_1: u8 = (raw_scales1[8 + j % 4] >> hi_shift) & 0x03;
                 scales0[j] = @as(i8, @intCast(lo4_0 | (hi2_0 << 4))) + q3_k_scale_bias;
                 scales1[j] = @as(i8, @intCast(lo4_1 | (hi2_1 << 4))) + q3_k_scale_bias;
             }
@@ -415,9 +420,9 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
                 const lo4_0: u8 = raw_scales0[j] >> 4;
                 const lo4_1: u8 = raw_scales1[j] >> 4;
                 const g = 8 + j;
-                const hi_shift: u3 = @intCast((g % 4) * 2);
-                const hi2_0: u8 = (raw_scales0[8 + g / 4] >> hi_shift) & 0x03;
-                const hi2_1: u8 = (raw_scales1[8 + g / 4] >> hi_shift) & 0x03;
+                const hi_shift: u3 = @intCast((g / 4) * 2);
+                const hi2_0: u8 = (raw_scales0[8 + g % 4] >> hi_shift) & 0x03;
+                const hi2_1: u8 = (raw_scales1[8 + g % 4] >> hi_shift) & 0x03;
                 scales0[8 + j] = @as(i8, @intCast(lo4_0 | (hi2_0 << 4))) + q3_k_scale_bias;
                 scales1[8 + j] = @as(i8, @intCast(lo4_1 | (hi2_1 << 4))) + q3_k_scale_bias;
             }
@@ -496,15 +501,15 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
             var scales: [16]i8 = undefined;
             for (0..8) |j| {
                 const lo4: u8 = raw_scales[j] & 0x0F;
-                const hi_shift: u3 = @intCast((j % 4) * 2);
-                const hi2: u8 = (raw_scales[8 + j / 4] >> hi_shift) & 0x03;
+                const hi_shift: u3 = @intCast((j / 4) * 2);
+                const hi2: u8 = (raw_scales[8 + j % 4] >> hi_shift) & 0x03;
                 scales[j] = @as(i8, @intCast(lo4 | (hi2 << 4))) + q3_k_scale_bias;
             }
             for (0..8) |j| {
                 const lo4: u8 = raw_scales[j] >> 4;
                 const g = 8 + j;
-                const hi_shift: u3 = @intCast((g % 4) * 2);
-                const hi2: u8 = (raw_scales[8 + g / 4] >> hi_shift) & 0x03;
+                const hi_shift: u3 = @intCast((g / 4) * 2);
+                const hi2: u8 = (raw_scales[8 + g % 4] >> hi_shift) & 0x03;
                 scales[8 + j] = @as(i8, @intCast(lo4 | (hi2 << 4))) + q3_k_scale_bias;
             }
 
@@ -723,6 +728,42 @@ test "gemvQ3_K uniform positive" {
     var y: [1]f32 = undefined;
     gemvQ3_K(&x, &w, &y, 1, bs);
     try std.testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 2.0);
+}
+
+test "gemvQ3_K scale mapping matches ggml's aux shuffle" {
+    // ggml's dequantize_row_q3_K builds the 6-bit scales as
+    //     scales[j] = (raw[j<8 ? j : j-8] nibble) | (((raw[8 + (j % 4)] >> ((j / 4) * 2)) & 3) << 4) - 32
+    // Note the pair: the BYTE index uses j % 4 and the SHIFT uses j / 4. Swapping
+    // them still yields plausible-looking numbers, so this pins the mapping with a
+    // pattern where the two disagree.
+    //
+    // raw[9] = 3 with every other scale byte zero puts the only nonzero high-bit
+    // pair on group 1 under ggml (byte 9 means j % 4 == 1, shift 0 means j < 4),
+    // and on group 4 under the swapped reading (byte 9 means j / 4 == 1).
+    const bpb = backend_mod.q3_k_block_bytes;
+    const bs = backend_mod.quant_super_block_elems;
+    var w: [bpb]u8 = @splat(0);
+    for (0..32) |i| w[i] = 0xFF; // hmask all set -> q_hi = 1
+    for (32..96) |i| w[i] = 0x55; // qs: q_lo = 1 for every element
+    w[96 + 9] = 3; // the discriminating scale byte
+    w[108] = 0x00; // d = f16(1.0)
+    w[109] = 0x3C;
+
+    // q3 = (q_lo | q_hi << 2) - 4 = (1 | 4) - 4 = 1 for every element, so each
+    // group contributes scale[g] * (number of its elements set in x).
+    // Probe group 1 alone: elements 16..31.
+    var x: [bs]f32 = @splat(0.0);
+    for (16..32) |i| x[i] = 1.0;
+    var y: [1]f32 = undefined;
+    gemvQ3_K(&x, &w, &y, 1, bs);
+    // ggml: scale[1] = (0 | 3 << 4) - 32 = 16, so y = 16 * 16 elements = 256.
+    try std.testing.expectApproxEqAbs(@as(f32, 256.0), y[0], 1.0);
+
+    // Probe group 4 alone: elements 64..79. Under ggml its scale is 0 - 32 = -32.
+    var x4: [bs]f32 = @splat(0.0);
+    for (64..80) |i| x4[i] = 1.0;
+    gemvQ3_K(&x4, &w, &y, 1, bs);
+    try std.testing.expectApproxEqAbs(@as(f32, -512.0), y[0], 1.0);
 }
 
 test "fuzz: gemvQ4_1 gemvQ5_0 gemvQ2_K gemvQ3_K" {
