@@ -559,6 +559,36 @@ the silent skip would make a tensor-parallel reduction quietly wrong on a GPU ba
 A unit test pins the distinction directly: over a 40-entry cyclic scan under a 30-entry budget,
 LRU scores exactly zero hits and MRU over 65%.
 
+## Prefill Double-Buffering: Built, Measured, Not Shipped
+
+**Date**: 2026-09-01. FreeToken's technique 04 overlaps the next layer's weight transfer with
+the current layer's compute. It was implemented for ROCm and measured against a budgeted run
+of Qwen2.5 1.5B Q4_K, then reverted.
+
+| Budget | Without prefetch | With prefetch |
+|--------|-----------------:|--------------:|
+| 0.85 GiB | 31.5 | 27.5 |
+| 0.75 GiB | 25.6 | 18.5 |
+| 0.50 GiB | 16.8 | **10.2** |
+
+**It is a regression, and the reason is structural.** Prefetching layer N+1 has to `admit` its
+weights into the budget, and admitting evicts. Under MRU the victim is the most-recently-used
+entry, which is precisely layer N's weights, in use right now. The prefetch evicts the layer it
+is running inside, and the deeper the eviction pressure the worse it gets.
+
+What shipped alongside it did work and is kept nowhere, since it has no other caller: ROCm
+grew `hipStreamCreate` / `hipMemcpyAsync` and a copy stream, and prefetch targets were allocated
+fresh rather than from the recycle pool. That last point is the load-bearing safety argument and
+worth recording: the synchronous path is safe **because** a blocking `hipMemcpy` on the null
+stream is ordered after the kernels before it, so it cannot overwrite a buffer one of them is
+still reading. A copy on another stream has no such ordering, and under MRU the pool's newest
+entry is the one most likely to still be in flight.
+
+Doing this properly needs what FreeToken actually has: a dedicated buffer region outside the
+eviction pool, so a prefetch never displaces a live entry, plus budget accounting for it. That
+is a subsystem, not a hook, and MRU already recovered 3x in the same regime for a fraction of
+the complexity.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
