@@ -269,10 +269,15 @@ saturates a forward scan from cache) and pays only once the stream comes from DR
 regimes matter, and neither regresses, so it stays.
 
 All three formats converge on ~48-50 GB/s in the DRAM-bound shape regardless of how much
-unpack work they do, which is the memory wall. In the L3-resident shape q4_k runs at 51 GB/s
-against q8_0's 161: that gap is q4_k's nibble/scale unpack, and it is compute-bound with
-roughly 3x of headroom. Widening those kernels from `@Vector(8, f32)` to the native AVX-512
-width is the open lead there; it changes summation order, so it needs golden re-baselining.
+unpack work they do, which is the memory wall. In the L3-resident shape q4_k runs well below
+q8_0: that gap is q4_k's nibble/scale unpack, and it is compute-bound.
+
+**Closed lead, do not retry: 512-bit vectors for q4_k.** `std.simd.suggestVectorLength(f32)`
+returns **8**, not 16, on this Zen 5 part, so Zig's own heuristic already picks 256-bit here
+and rewriting the kernel against the suggested width changes nothing. Forcing the rewrite
+anyway measured 78.8 -> 59.9 GB/s (-24%) at n=8192 k=4096, purely from LLVM making different
+unrolling decisions on the restructured source. The remaining q4_k headroom is in the scalar
+per-super-block work (8 `getScaleMinK4` calls and 2 f16 conversions per row), not lane width.
 
 ## CPU GEMV Hoisted Sparsity Mask (AMD Ryzen 9 9950X)
 
@@ -298,6 +303,21 @@ decode spends most of its time elsewhere; the kernel number is what scales with 
 Applied to q4_0, q4_1, q5_0, q4_k, q5_k, q6_k, q8_0, q2_k, q3_k, iq4_nl, iq4_xs and tq2_0.
 The mask also clamps its final block to `k`, where the per-block call read past the
 activation buffer and let out-of-bounds bytes decide whether real elements were skipped.
+
+## Checkpoint Load Time (AMD Ryzen 9 9950X, NVMe)
+
+**Date**: 2026-09-01. `agave <model> --backend cpu -n 1`, the loader's own reported time.
+
+| Model | Size | First load | Warm (page cache) |
+|-------|-----:|-----------:|------------------:|
+| Qwen2.5 0.5B Q4_K_M | 468 MB | 101 ms | 20-22 ms |
+| Qwen3.5 Q4_K_M | 6.6 GB | 2590 ms | 326 ms |
+
+~2.5 GB/s on a first pass through mmap plus the page cache. This is the measurement that
+gates adopting an O_DIRECT-friendly aligned checkpoint layout (FreeToken's FTW solves a
+real problem at 137 GB of expert banks): at the sizes reachable here, load time is not the
+bottleneck, so the aligned layout stays unbuilt. Re-measure before revisiting, on a
+checkpoint large enough that the page cache cannot hold it.
 
 ## Known Issues
 
