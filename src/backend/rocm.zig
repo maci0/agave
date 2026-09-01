@@ -565,7 +565,12 @@ pub const RocmBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice), "hipMemcpy(act upload)");
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer, and
+                    // a caller asking for a prefix (a batched op's first token) would
+                    // otherwise refresh only that prefix and then mark everything
+                    // clean, leaving tokens 1..n-1 reading stale device bytes. Correct
+                    // at n_tok == 1, silently wrong above it.
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), act.size, hipMemcpyHostToDevice), "hipMemcpy(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;

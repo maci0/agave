@@ -390,6 +390,39 @@ after). Pinning speeds up a transfer that was never the bottleneck, and it wires
 that the OS could otherwise reclaim. The allocation churn is the real cost, and recycling
 the buffer already addresses it.
 
+## GPU Kernel Validation (RX 7900 XTX)
+
+**Date**: 2026-09-01. `agave-bench <kernel> --validate` re-runs the kernel on the CPU backend
+with byte-identical inputs (only `ctx.be` is swapped) and reports the largest relative
+difference. Exits non-zero past a 2% tolerance, so CI can gate on it.
+
+```bash
+agave-bench gemv_q6_k --n 1024 --k 896 --backend rocm --validate
+```
+
+21 kernels x {ROCm, Vulkan}: 39 of 40 pass. Covers every GEMV dtype the harness can build,
+the batched prefill paths (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`, `sdpa_prefill`,
+`rms_norm_multi`), and the elementwise and norm ops.
+
+**Two real bugs it found, both now fixed:**
+
+| Bug | Symptom | Cause |
+|-----|---------|-------|
+| ROCm `gemv_q6_k` | rel err 6-8 at every shape | Decoded Q6_K as a sequential nibble stream. GGML interleaves each 128-element half so `ql[l]` holds elements `l` and `l+64`, `ql[l+32]` holds `l+32` and `l+96`, with `qh[l]` supplying all four high-bit pairs. Rewritten against `kernels/cpu/gemv_q6_k.zig`. |
+| ROCm `gemv_q4_k` | rel err 0.1-1.1 when `k % 256 != 0` | `nblk = k / 256` truncated while the host row stride uses the rounded-up count, so the kernel both dropped the tail and read the wrong row. |
+
+Fixing them makes Qwen2.5 0.5B (Q8_0), 0.5B (Q4_K_M mix) and 1.5B (Q4_K) all produce output
+identical to the CPU on ROCm and Vulkan, where every one of them previously emitted garbage.
+
+**Still open: multi-token prefill.** At `--prefill-batch-size` above 1 both backends produce
+wrong output from the first token, on every model, while chunk size 1 matches the CPU exactly.
+Every op passes validation individually AND batched, so the fault is in how they compose and is
+not yet located. The chunk size is forced to 1 on ROCm and Vulkan until it is; passing the flag
+explicitly overrides that and warns, which is how to reproduce it.
+
+**Marginal: ROCm `sdpa_prefill`** at 0.0222 against a 0.02 tolerance, small absolute values.
+Not reached in practice while the chunk-size guard holds it at 1, where it reduces to `sdpa`.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.

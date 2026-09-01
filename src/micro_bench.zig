@@ -45,6 +45,9 @@ const synthetic_x_mod: usize = 17;
 const synthetic_w_mod: usize = 31;
 const default_n_heads: usize = 32;
 const default_head_dim: usize = 128;
+/// Tokens a batched-op benchmark uses. The failure mode these exist to catch
+/// (any token past the first reading stale data) appears at 2.
+const batched_n_tok: usize = 4;
 const default_rope_theta: f32 = 10000.0;
 const rms_norm_eps: f32 = 1e-6;
 const l2_norm_eps: f32 = 1e-6;
@@ -59,6 +62,8 @@ const output_buf_size: usize = 4096;
 const q8_0_block_bytes = backend_mod.q8_0_block_bytes;
 const q4_k_block_bytes = backend_mod.q4_k_block_bytes;
 const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
+const q5_0_block_bytes = backend_mod.q5_0_block_bytes;
+const q6_k_block_bytes = backend_mod.q6_k_block_bytes;
 const quant_group_size = backend_mod.quant_block_elems;
 /// Little-endian f16 ≈ 0.00875.
 const synthetic_scale_byte_0: u8 = 0x1E;
@@ -117,6 +122,13 @@ const Kernel = enum {
     gemv_q8_0,
     gemv_q4_k,
     gemv_q4_0,
+    gemv_q5_0,
+    gemv_q6_k,
+    gemm_q8_0,
+    rms_norm_batched,
+    rope_batched,
+    rms_norm_multi,
+    sdpa_prefill,
     rms_norm,
     silu,
     gelu,
@@ -141,6 +153,9 @@ const CliArgs = struct {
     iters: usize,
     /// Evict the weight before each GEMV iteration so the transfer is timed too.
     reupload: bool = false,
+    /// Re-run the kernel on the CPU backend and report the largest relative
+    /// difference, so a GPU kernel that is merely fast can still be caught.
+    validate: bool = false,
     backend: BackendChoice,
     model_path: ?[]const u8,
 };
@@ -232,6 +247,8 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
             }
         } else if (std.mem.eql(u8, args_slice[i], "--reupload")) {
             result.reupload = true;
+        } else if (std.mem.eql(u8, args_slice[i], "--validate")) {
+            result.validate = true;
         } else if (getArgValue(args_slice, &i, "--backend")) |v| {
             result.backend = parseBackendName(v) orelse {
                 eprint("Error: unknown backend '{s}'\n", .{v});
@@ -325,6 +342,8 @@ fn printUsage() void {
         \\
         \\KERNELS:
         \\  gemv_f32  gemv_bf16  gemv_f16  gemv_q8_0  gemv_q4_k  gemv_q4_0
+        \\  gemv_q5_0  gemv_q6_k
+        \\  gemm_q8_0  rms_norm_batched  rope_batched  sdpa_prefill  (prefill paths)
         \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
         \\
@@ -335,6 +354,9 @@ fn printUsage() void {
         \\                   E2E: tokens to generate [default: 10]
         \\  -k, --k <K>      Input dimension for GEMV [default: 4096]
         \\  --iters <N>      Number of timed iterations [default: 100, max: 1000]
+        \\  --validate       Re-run the kernel on the CPU backend with the same inputs
+        \\                   and report the largest relative difference. Exits non-zero
+        \\                   when it exceeds the tolerance, so CI can gate on it
         \\  --reupload       GEMV only: evict the weight before each iteration so the
         \\                   host-to-device transfer is timed too; the difference
         \\                   against a plain run is the upload cost
@@ -423,6 +445,10 @@ const BenchCtx = struct {
     // KV cache types for turbo SDPA benchmarks
     kv_type_k: KvQuantType = .f32,
     kv_type_v: KvQuantType = .f32,
+    // Batched prefill dimensions
+    n_tok: usize = 1,
+    n_kv_heads: usize = 0,
+    positions: ?[]u32 = null,
     // Dimensions
     n: usize,
     k: usize = 0,
@@ -484,6 +510,92 @@ fn dequantQ4KRowDotHost(row: []const u8, x: []const f32, out_y: *f32) void {
 
 // ── Kernel runner functions ──────────────────────────────────────
 
+
+
+/// Input refills for `validateVsCpu`. In-place kernels need their input restored
+/// between the two runs; out-of-place ones only need `x` to be the same, which it
+/// already is, so `refillNone` is correct for them and cheaper.
+fn refillNone(_: *BenchCtx) void {}
+
+fn refillX(ctx: *BenchCtx) void {
+    fillSyntheticF32(ctx.x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+}
+
+/// Largest relative difference tolerated between a backend's kernel and the CPU
+/// reference. Quantized GEMV accumulates in a different order on a GPU, so exact
+/// equality is not the bar; 2% separates reordering noise from a wrong kernel by
+/// a wide margin (a broken kernel is off by whole factors, not percent).
+const validate_tolerance: f32 = 0.02;
+
+/// Tracks whether any `--validate` comparison failed, so main can exit non-zero.
+var validation_failed: bool = false;
+
+/// Re-run the last kernel on the CPU backend with identical inputs and report the
+/// largest relative difference against what the benchmarked backend produced.
+///
+/// `out` is the slice the kernel writes; it still holds the benchmarked
+/// backend's result on entry and is overwritten with the CPU's. Swapping only
+/// `ctx.be` guarantees both runs see byte-identical inputs, which a separately
+/// constructed reference cannot promise.
+fn validateVsCpu(
+    comptime runFn: fn (*const BenchCtx) void,
+    comptime refillFn: fn (*BenchCtx) void,
+    ctx: *BenchCtx,
+    out: []f32,
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    kernel_name: []const u8,
+    be_name: []const u8,
+) void {
+    if (std.mem.eql(u8, be_name, "CPU")) return; // comparing CPU to itself proves nothing
+
+    // One clean run per backend from the same refilled inputs, not the state the
+    // timed loop left behind: an in-place kernel (softmax, rope, l2Norm) has been
+    // applied `iters` times by then, and re-running it once more on the CPU would
+    // compare different numbers of applications.
+    refillFn(ctx);
+    runFn(ctx);
+    const gpu = allocator.dupe(f32, out) catch {
+        eprint("{{\"validate\":\"{s}\",\"error\":\"out of memory\"}}\n", .{kernel_name});
+        return;
+    };
+    defer allocator.free(gpu);
+
+    var cpu_bs = BackendState{};
+    cpu_bs.init(allocator, .cpu, io, 0);
+    defer if (cpu_bs.pool) |*p| p.deinit();
+
+    const benched = ctx.be;
+    ctx.be = cpu_bs.be;
+    refillFn(ctx);
+    runFn(ctx);
+    ctx.be = benched;
+
+    var max_rel: f32 = 0;
+    var worst: usize = 0;
+    var n_nonfinite: usize = 0;
+    for (out, gpu, 0..) |ref, got, i| {
+        if (!std.math.isFinite(got)) {
+            n_nonfinite += 1;
+            continue;
+        }
+        const rel = @abs(got - ref) / @max(1.0, @abs(ref));
+        if (rel > max_rel) {
+            max_rel = rel;
+            worst = i;
+        }
+    }
+    const bad = n_nonfinite > 0 or max_rel > validate_tolerance;
+    if (bad) validation_failed = true;
+    eprint(
+        "{{\"validate\":\"{s}\",\"backend\":\"{s}\",\"max_rel_err\":{d:.6},\"worst_index\":{d},\"non_finite\":{d},\"tolerance\":{d:.3},\"pass\":{s}}}\n",
+        .{ kernel_name, be_name, max_rel, worst, n_nonfinite, validate_tolerance, if (bad) "false" else "true" },
+    );
+    if (bad and out.len > worst) {
+        eprint("  worst element {d}: backend {d:.6} vs cpu {d:.6}\n", .{ worst, gpu[worst], out[worst] });
+    }
+}
+
 fn runGemv(ctx: *const BenchCtx) void {
     ctx.be.gemv(ctx.x.ptr, ctx.td, ctx.y.ptr, ctx.n, ctx.k);
     ctx.be.sync();
@@ -501,6 +613,59 @@ fn runGemv(ctx: *const BenchCtx) void {
 fn runGemvReupload(ctx: *const BenchCtx) void {
     ctx.be.invalidateWeight(ctx.td.data);
     ctx.be.gemv(ctx.x.ptr, ctx.td, ctx.y.ptr, ctx.n, ctx.k);
+    ctx.be.sync();
+}
+
+/// Batched prefill ops. These are the paths a multi-token prefill takes and the
+/// ones no single-token benchmark reaches, so they get their own validation.
+fn runGemm(ctx: *const BenchCtx) void {
+    ctx.be.gemm(ctx.x.ptr, ctx.td, ctx.y.ptr, ctx.n_tok, ctx.n, ctx.k);
+    ctx.be.sync();
+}
+
+fn runRmsNormBatched(ctx: *const BenchCtx) void {
+    ctx.be.rmsNormBatched(ctx.x.ptr, ctx.norm_weight.?.ptr, ctx.norm_out.?.ptr, ctx.n_tok, ctx.n, rms_norm_eps);
+    ctx.be.sync();
+}
+
+fn runRopeBatched(ctx: *const BenchCtx) void {
+    ctx.be.ropeBatched(ctx.x.ptr, ctx.positions.?.ptr, ctx.n_tok, ctx.n_heads, ctx.head_dim, ctx.head_dim, default_rope_theta);
+    ctx.be.sync();
+}
+
+fn runSdpaPrefill(ctx: *const BenchCtx) void {
+    ctx.be.sdpaPrefill(
+        ctx.q.?.ptr,
+        ctx.k_new.?.ptr,
+        ctx.v_new.?.ptr,
+        ctx.keys.?,
+        ctx.values.?,
+        ctx.sdpa_out.?.ptr,
+        ctx.n_heads,
+        ctx.n_kv_heads,
+        ctx.head_dim,
+        ctx.seq_len,
+        ctx.n_tok,
+        ctx.scale,
+        ctx.kv_type_k,
+        ctx.kv_type_v,
+    );
+    ctx.be.sync();
+}
+
+/// sdpaPrefill appends into the KV cache, so a second run must start from the
+/// same cache contents or it attends over the first run's leftovers.
+fn refillKvCache(ctx: *BenchCtx) void {
+    const keys_f32: []f32 = @alignCast(std.mem.bytesAsSlice(f32, ctx.keys.?));
+    const values_f32: []f32 = @alignCast(std.mem.bytesAsSlice(f32, ctx.values.?));
+    fillSyntheticF32(keys_f32, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
+    fillSyntheticF32(values_f32, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
+}
+
+/// Per-head RMS norm over n_heads vectors. The prefill path calls this with
+/// n_tok * n_heads, so a stride or count bug shows only above one token.
+fn runRmsNormMulti(ctx: *const BenchCtx) void {
+    ctx.be.rmsNormMulti(ctx.x.ptr, ctx.norm_weight.?.ptr, ctx.n_tok * ctx.n_heads, ctx.head_dim, rms_norm_eps);
     ctx.be.sync();
 }
 
@@ -591,7 +756,10 @@ fn fillSyntheticF16(buf: []f16) void {
 fn fillSyntheticQ4_K(buf: []u8, n_rows: usize, k: usize) void {
     // Per 256-elem superblock: [f16 d][f16 dmin][12B 6-bit scales][128B nibbles].
     // Scales get small finite fp16 patterns; nibbles arbitrary nibble values.
-    const nb = k / 256;
+    // Round up, matching backend.gemvRowBytes: a k that is not a multiple of
+    // 256 still gets a whole final super-block on disk, and a kernel reading it
+    // must find allocated bytes there.
+    const nb = (k + 255) / 256;
     const row_bytes = nb * q4_k_block_bytes;
     var r: usize = 0;
     while (r < n_rows) : (r += 1) {
@@ -616,6 +784,30 @@ fn fillSyntheticQ8_0(buf: []u8, n_rows: usize, k: usize) void {
     for (0..n_rows * nb) |blk| {
         buf[blk * q8_0_block_bytes] = synthetic_scale_byte_0;
         buf[blk * q8_0_block_bytes + 1] = synthetic_scale_byte_1;
+    }
+}
+
+/// Constructs a Q5_0 weight buffer: [f16 d][4B high-bit plane][16B nibbles] per
+/// 32 elements. Only the scale is pinned to a finite fp16; the rest is arbitrary
+/// bit patterns, which is what a kernel must handle anyway.
+fn fillSyntheticQ5_0(buf: []u8, n_rows: usize, k: usize) void {
+    const nb = (k + quant_group_size - 1) / quant_group_size;
+    for (buf, 0..) |*v, i| v.* = @truncate(i % 256);
+    for (0..n_rows * nb) |blk| {
+        buf[blk * q5_0_block_bytes] = synthetic_scale_byte_0;
+        buf[blk * q5_0_block_bytes + 1] = synthetic_scale_byte_1;
+    }
+}
+
+/// Constructs a Q6_K weight buffer: 210 bytes per 256 elements, ending in the
+/// f16 super-block scale. Only that scale is pinned to a finite value.
+fn fillSyntheticQ6_K(buf: []u8, n_rows: usize, k: usize) void {
+    const nb = (k + 255) / 256;
+    for (buf, 0..) |*v, i| v.* = @truncate(i % 64); // keep 6-bit scales small
+    for (0..n_rows * nb) |blk| {
+        const d_off = blk * q6_k_block_bytes + q6_k_block_bytes - 2;
+        buf[d_off] = synthetic_scale_byte_0;
+        buf[d_off + 1] = synthetic_scale_byte_1;
     }
 }
 
@@ -656,7 +848,7 @@ fn emitJson(kernel_name: []const u8, be_name: []const u8, median_ns: u64, gb_s: 
 // ── Kernel dispatch ──────────────────────────────────────────────
 
 /// Runs the requested kernel benchmark and emits JSON output.
-fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: usize, iters: usize, reupload: bool) void {
+fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: usize, iters: usize, reupload: bool, validate: bool, allocator: std.mem.Allocator, io: std.Io) void {
     // page_allocator used intentionally: benchmark buffers need page alignment
     // for zero-copy GPU wrapping, and this is a one-time allocation, not hot path.
     const page = std.heap.page_allocator;
@@ -683,6 +875,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             // GEMV: read w[n*k] + x[k], write y[n]. Flops: ~2*n*k (k muls + k-1 adds per row).
             const total_bytes = n * k * @sizeOf(f32) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
@@ -710,6 +903,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = n * k * @sizeOf(u16) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_bf16", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -736,6 +930,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = n * k * @sizeOf(f16) + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_f16", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -766,6 +961,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -776,7 +972,10 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             defer page.free(x);
             const y = page.alloc(f32, n) catch return;
             defer page.free(y);
-            const nb = k / 256;
+            // Round up, matching backend.gemvRowBytes: a k that is not a multiple of
+    // 256 still gets a whole final super-block on disk, and a kernel reading it
+    // must find allocated bytes there.
+    const nb = (k + 255) / 256;
             const row_bytes = nb * q4_k_block_bytes;
             const total_w = n * row_bytes;
             const w = page.alloc(u8, total_w) catch return;
@@ -796,6 +995,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             // Validation: compare first rows against host reference.
@@ -857,9 +1057,219 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .td = td,
             };
             const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = total_w + k * @sizeOf(f32) + n * @sizeOf(f32);
             const total_flops = 2 * n * k;
             emitJson("gemv_q4_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
+        },
+
+        // ── Batched prefill ops ──────────────────────────────────
+        // n_tok is fixed at a small value: the bug class these catch (a batched
+        // op mishandling any token past the first) shows at 2 and does not need
+        // a realistic chunk to reproduce.
+        .gemv_q5_0 => {
+            const x = page.alloc(f32, k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const nb = (k + quant_group_size - 1) / quant_group_size;
+            const row_bytes = nb * q5_0_block_bytes;
+            const w = page.alloc(u8, n * row_bytes) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticQ5_0(w, n, k);
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k, .td = TensorData{ .data = w.ptr, .dtype = .q5_0 } };
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
+            emitJson("gemv_q5_0", be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
+        },
+
+        .gemv_q6_k => {
+            const x = page.alloc(f32, k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const nb = (k + 255) / 256;
+            const row_bytes = nb * q6_k_block_bytes;
+            const w = page.alloc(u8, n * row_bytes) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticQ6_K(w, n, k);
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k, .td = TensorData{ .data = w.ptr, .dtype = .q6_k } };
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
+            emitJson("gemv_q6_k", be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
+        },
+
+        .gemm_q8_0 => {
+            const n_tok = batched_n_tok;
+            const x = page.alloc(f32, n_tok * k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n_tok * n) catch return;
+            defer page.free(y);
+            const nb = (k + quant_group_size - 1) / quant_group_size;
+            const row_bytes = nb * q8_0_block_bytes;
+            const w = page.alloc(u8, n * row_bytes) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticQ8_0(w, n, k);
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .y = y,
+                .n_tok = n_tok,
+                .n = n,
+                .k = k,
+                .td = TensorData{ .data = w.ptr, .dtype = .q8_0 },
+            };
+            const median_ns = collectMedian(runGemm, &ctx, iters);
+            if (validate) validateVsCpu(runGemm, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
+            const total_bytes = n * row_bytes + n_tok * (k + n) * @sizeOf(f32);
+            emitJson("gemm_q8_0", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(2 * n_tok * n * k, median_ns), iters);
+        },
+
+        .rms_norm_batched => {
+            const n_tok = batched_n_tok;
+            const x = page.alloc(f32, n_tok * n) catch return;
+            defer page.free(x);
+            const w_norm = page.alloc(f32, n) catch return;
+            defer page.free(w_norm);
+            const out = page.alloc(f32, n_tok * n) catch return;
+            defer page.free(out);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            for (w_norm) |*v| v.* = 1.0;
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .norm_weight = w_norm,
+                .norm_out = out,
+                .n_tok = n_tok,
+                .n = n,
+                .k = k,
+            };
+            const median_ns = collectMedian(runRmsNormBatched, &ctx, iters);
+            if (validate) validateVsCpu(runRmsNormBatched, refillNone, &ctx, out, allocator, io, @tagName(kernel), be_name);
+            emitJson("rms_norm_batched", be_name, median_ns, computeGbps(2 * n_tok * n * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .rope_batched => {
+            const n_tok = batched_n_tok;
+            const n_heads = default_n_heads;
+            const head_dim = default_head_dim;
+            const stride = n_heads * head_dim;
+            const x = page.alloc(f32, n_tok * stride) catch return;
+            defer page.free(x);
+            const positions = page.alloc(u32, n_tok) catch return;
+            defer page.free(positions);
+            for (positions, 0..) |*pos, t| pos.* = @intCast(t);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .positions = positions,
+                .n_tok = n_tok,
+                .n_heads = n_heads,
+                .head_dim = head_dim,
+                .n = n,
+                .k = k,
+            };
+            const median_ns = collectMedian(runRopeBatched, &ctx, iters);
+            if (validate) validateVsCpu(runRopeBatched, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
+            emitJson("rope_batched", be_name, median_ns, computeGbps(2 * n_tok * stride * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .sdpa_prefill => {
+            // The only batched op that writes the KV cache, and the one a
+            // single-token benchmark can never reach.
+            const n_tok = batched_n_tok;
+            const n_heads = default_n_heads;
+            const n_kv_heads = default_n_heads;
+            const head_dim = default_head_dim;
+            const prev_len: usize = 8;
+            const kv_dim = n_kv_heads * head_dim;
+            const capacity = prev_len + n_tok;
+
+            const q = page.alloc(f32, n_tok * n_heads * head_dim) catch return;
+            defer page.free(q);
+            const k_new = page.alloc(f32, n_tok * kv_dim) catch return;
+            defer page.free(k_new);
+            const v_new = page.alloc(f32, n_tok * kv_dim) catch return;
+            defer page.free(v_new);
+            const out = page.alloc(f32, n_tok * n_heads * head_dim) catch return;
+            defer page.free(out);
+            const keys = page.alloc(u8, capacity * kv_dim * @sizeOf(f32)) catch return;
+            defer page.free(keys);
+            const values = page.alloc(u8, capacity * kv_dim * @sizeOf(f32)) catch return;
+            defer page.free(values);
+            const dummy = page.alloc(f32, 1) catch return;
+            defer page.free(dummy);
+
+            fillSyntheticF32(q, sdpa_q_mod, sdpa_q_scale, sdpa_q_offset);
+            fillSyntheticF32(k_new, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
+            fillSyntheticF32(v_new, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = dummy,
+                .q = q,
+                .keys = keys,
+                .values = values,
+                .k_new = k_new,
+                .v_new = v_new,
+                .sdpa_out = out,
+                .n_tok = n_tok,
+                .n_kv_heads = n_kv_heads,
+                .n = n,
+                .k = k,
+                .n_heads = n_heads,
+                .head_dim = head_dim,
+                .seq_len = prev_len,
+                .scale = 1.0 / @sqrt(@as(f32, @floatFromInt(head_dim))),
+                .kv_type_k = .f32,
+                .kv_type_v = .f32,
+            };
+            refillKvCache(&ctx);
+            const median_ns = collectMedian(runSdpaPrefill, &ctx, iters);
+            if (validate) validateVsCpu(runSdpaPrefill, refillKvCache, &ctx, out, allocator, io, @tagName(kernel), be_name);
+            emitJson("sdpa_prefill", be_name, median_ns, 0, 0, iters);
+        },
+
+        .rms_norm_multi => {
+            const n_tok = batched_n_tok;
+            const n_heads = 8;
+            const head_dim = 128;
+            const total = n_tok * n_heads * head_dim;
+            const x = page.alloc(f32, total) catch return;
+            defer page.free(x);
+            const w_norm = page.alloc(f32, head_dim) catch return;
+            defer page.free(w_norm);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            for (w_norm, 0..) |*v, i| v.* = 1.0 + @as(f32, @floatFromInt(i % 7)) * 0.1;
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .norm_weight = w_norm,
+                .n_tok = n_tok,
+                .n_heads = n_heads,
+                .head_dim = head_dim,
+                .n = n,
+                .k = k,
+            };
+            const median_ns = collectMedian(runRmsNormMulti, &ctx, iters);
+            if (validate) validateVsCpu(runRmsNormMulti, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
+            emitJson("rms_norm_multi", be_name, median_ns, computeGbps(2 * total * @sizeOf(f32), median_ns), 0, iters);
         },
 
         .rms_norm => {
@@ -881,6 +1291,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runRmsNorm, &ctx, iters);
+            if (validate) validateVsCpu(runRmsNorm, refillNone, &ctx, ctx.norm_out.?, allocator, io, @tagName(kernel), be_name);
             // Read input[n] + weight[n], write output[n]
             const total_bytes = 3 * n * @sizeOf(f32);
             // Flops: square(n) + sum(n) + rsqrt(1) + mul(n) + mul(n) ~ 4n
@@ -903,6 +1314,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runSilu, &ctx, iters);
+            if (validate) validateVsCpu(runSilu, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             // Read input[n], write output[n]
             const total_bytes = 2 * n * @sizeOf(f32);
             // Flops: exp(n) + add(n) + div(n) + mul(n) ~ 4n
@@ -925,6 +1337,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runGelu, &ctx, iters);
+            if (validate) validateVsCpu(runGelu, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
             const total_bytes = 2 * n * @sizeOf(f32);
             const total_flops = 8 * n; // tanh + cube + several multiplies
             emitJson("gelu", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -942,6 +1355,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runSoftmax, &ctx, iters);
+            if (validate) validateVsCpu(runSoftmax, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             // In-place: read + write n elements. 3 passes (max, exp-sum, div).
             const total_bytes = 2 * n * @sizeOf(f32);
             const total_flops = 5 * n; // max + exp + sum + sub + div
@@ -960,6 +1374,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runL2Norm, &ctx, iters);
+            if (validate) validateVsCpu(runL2Norm, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             // In-place: read + write n elements
             const total_bytes = 2 * n * @sizeOf(f32);
             const total_flops = 3 * n; // square + sum + div
@@ -985,6 +1400,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runAdd, &ctx, iters);
+            if (validate) validateVsCpu(runAdd, refillNone, &ctx, ctx.norm_out.?, allocator, io, @tagName(kernel), be_name);
             // Read a[n] + b[n], write out[n]
             const total_bytes = 3 * n * @sizeOf(f32);
             const total_flops = n;
@@ -1010,6 +1426,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .n = n,
             };
             const median_ns = collectMedian(runMul, &ctx, iters);
+            if (validate) validateVsCpu(runMul, refillNone, &ctx, ctx.norm_out.?, allocator, io, @tagName(kernel), be_name);
             const total_bytes = 3 * n * @sizeOf(f32);
             const total_flops = n;
             emitJson("mul", be_name, median_ns, computeGbps(total_bytes, median_ns), computeGflops(total_flops, median_ns), iters);
@@ -1034,6 +1451,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .head_dim = head_dim,
             };
             const median_ns = collectMedian(runRope, &ctx, iters);
+            if (validate) validateVsCpu(runRope, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             // In-place: read + write total elements
             const total_bytes = 2 * total * @sizeOf(f32);
             // Flops: ~4 ops per element (2 rotations × 2 muls); sin/cos precomputed
@@ -1129,6 +1547,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                 .kv_type_v = kv_type,
             };
             const median_ns = collectMedian(runSdpa, &ctx, iters);
+            if (validate) validateVsCpu(runSdpa, refillNone, &ctx, ctx.sdpa_out.?, allocator, io, @tagName(kernel), be_name);
 
             // Bandwidth: turbo reads fewer bytes from KV cache
             const kv_bytes_total = if (is_turbo)
@@ -1416,8 +1835,8 @@ pub fn main(init: std.process.Init.Minimal) u8 {
     const be_name = bs.name;
 
     // Dispatch to kernel benchmark
-    benchKernel(cli.kernel.?, be, be_name, cli.n, cli.k, cli.iters, cli.reupload);
-    return 0;
+    benchKernel(cli.kernel.?, be, be_name, cli.n, cli.k, cli.iters, cli.reupload, cli.validate, allocator, threaded.io());
+    return if (validation_failed) 1 else 0;
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
