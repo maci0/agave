@@ -502,7 +502,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
     // SSD expert streaming (MoE models)
     .{ .long = "ssd-streaming", .help = "Enable SSD expert streaming for large MoE models that don't fit in RAM/VRAM. Uses demand-paged LRU expert cache." },
-    .{ .long = "vram-budget", .kind = .option, .help = "Cap GPU memory held by cached weights, in GiB (e.g. 20, or 0.5). Least-recently-used weights are evicted and re-uploaded on demand, which is what lets a model larger than VRAM run [default: unlimited]." },
+    .{ .long = "vram-budget", .kind = .option, .help = "Cap GPU memory held by cached weights: GiB (e.g. 20, or 0.5), or 'auto' to size it from free VRAM. Least-recently-used weights are evicted and re-uploaded on demand, which is what lets a model larger than VRAM run [default: unlimited]." },
     .{ .long = "ssd-cache-slots", .kind = .option, .help = "Number of expert slots to keep resident in the SSD expert cache [default: 256]. Higher = fewer SSD reads, more RAM." },
     .{ .long = "expert-profile-out", .kind = .option, .help = "Write expert activation profile JSON to this path after inference (for hotlist pre-pinning on future runs)." },
     .{ .long = "expert-profile-in", .kind = .option, .help = "Load expert activation profile JSON and pre-pin top experts into the SSD cache before inference starts." },
@@ -631,7 +631,9 @@ const CliArgs = struct {
     ssd_cache_slots: u32 = 256,
     /// Bytes of GPU memory cached weights may hold. 0 = unlimited (every weight
     /// stays resident once uploaded), which is correct whenever the model fits.
+    /// `vram_budget_auto` derives it from the device's reported memory instead.
     vram_budget_bytes: usize = 0,
+    vram_budget_auto: bool = false,
     /// Write expert activation profile JSON after inference.
     expert_profile_out: ?[]const u8 = null,
     /// Load expert profile JSON and pre-pin top experts before inference.
@@ -1436,8 +1438,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             break :blk 0.5;
         },
         .ssd_streaming = res.flag("ssd-streaming"),
+        .vram_budget_auto = if (res.option("vram-budget")) |raw| std.mem.eql(u8, raw, "auto") else false,
         .vram_budget_bytes = blk: {
             const raw = res.option("vram-budget") orelse break :blk 0;
+            if (std.mem.eql(u8, raw, "auto")) break :blk 0;
             const gib = std.fmt.parseFloat(f64, raw) catch {
                 eprint("Error: --vram-budget must be a number of GiB, got '{s}'\n", .{raw});
                 std.process.exit(2);
@@ -2400,15 +2404,16 @@ pub fn main(init: std.process.Init) !void {
 
     // Bound cached weight uploads before any weight is touched, so the very
     // first prefill already streams instead of allocating past VRAM.
-    if (cli.vram_budget_bytes > 0) {
-        be.setWeightBudget(cli.vram_budget_bytes);
-        if (!g_quiet) eprint("vram-budget: {d} MB for cached weights, LRU eviction beyond that\n", .{cli.vram_budget_bytes / (1024 * 1024)});
+    const vram_budget = resolveVramBudget(&cli, be);
+    if (vram_budget > 0) {
+        be.setWeightBudget(vram_budget);
+        if (!g_quiet) eprint("vram-budget: {d} MB for cached weights, LRU eviction beyond that\n", .{vram_budget / (1024 * 1024)});
     }
     // Function scope, not the block above: this must report after inference, not
     // after the setup. Evictions are the cost side of the budget, one re-upload
     // each on the next touch, so a large count means the budget sits below the
     // working set and decode is paying per layer.
-    defer if (cli.vram_budget_bytes > 0 and !g_quiet) {
+    defer if (vram_budget > 0 and !g_quiet) {
         const r = be.weightResidency();
         eprint("vram-budget: {d} MB resident, {d} evictions\n", .{ r.resident / (1024 * 1024), r.evictions });
     };
@@ -2750,6 +2755,45 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 }
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
+/// Fraction of reported device memory `--vram-budget auto` gives to weights.
+/// The rest covers the KV cache, activations and the driver's own allocations,
+/// which are not tracked by the weight budget and would otherwise be squeezed
+/// out by it.
+const vram_budget_auto_fraction: f64 = 0.75;
+
+/// Resolve `--vram-budget` to bytes. 0 means unbounded.
+///
+/// `auto` sizes from the device's free memory when the backend reports it (only
+/// CUDA does today) and from total memory otherwise, which is the honest
+/// fallback: the alternative is guessing at what else is resident.
+///
+/// Returns 0 on a unified-memory device regardless of the request. There the
+/// "device" memory IS system RAM, so evicting a weight buys nothing back and
+/// costs a re-copy on the next touch.
+fn resolveVramBudget(cli: *const CliArgs, be: Backend) usize {
+    const requested = cli.vram_budget_auto or cli.vram_budget_bytes > 0;
+    if (requested and !be.hasWeightBudget()) {
+        eprint("Warning: --vram-budget has no effect on this backend (no device-side weight cache)\n", .{});
+        return 0;
+    }
+    if (!cli.vram_budget_auto) return cli.vram_budget_bytes;
+
+    const info = be.backendInfo();
+    if (info.is_uma) {
+        if (!g_quiet) eprint("vram-budget auto: unified memory, leaving weights resident\n", .{});
+        return 0;
+    }
+    const pool = if (info.avail_mem > 0) info.avail_mem else info.total_mem;
+    if (pool == 0) {
+        eprint("Warning: --vram-budget auto: backend reports no device memory; leaving weights unbounded\n", .{});
+        return 0;
+    }
+    if (!g_quiet and info.avail_mem == 0) {
+        eprint("vram-budget auto: backend reports no free-memory figure, sizing from {d} MB total\n", .{pool / (1024 * 1024)});
+    }
+    return @intFromFloat(@as(f64, @floatFromInt(pool)) * vram_budget_auto_fraction);
+}
+
 fn initAndRun(
     arch: Arch,
     allocator: std.mem.Allocator,

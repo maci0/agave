@@ -83,6 +83,7 @@ const FnFree = *const fn (?*anyopaque) callconv(.c) HipError;
 const FnMemcpy = *const fn (?*anyopaque, ?*const anyopaque, usize, c_int) callconv(.c) HipError;
 /// hipHostRegister / hipHostUnregister: page-lock host memory for DMA. Optional
 /// (older libamdhip64 builds omit them), so both are looked up as nullable.
+const FnMemGetInfo = *const fn (*usize, *usize) callconv(.c) HipError;
 const FnHostRegister = *const fn (*const anyopaque, usize, c_uint) callconv(.c) HipError;
 const FnHostUnregister = *const fn (*const anyopaque) callconv(.c) HipError;
 /// hipHostRegisterPortable: the page lock is visible to every HIP context.
@@ -124,6 +125,7 @@ pub const RocmBackend = struct {
     hipMalloc: FnMalloc = undefined,
     hipFree: FnFree = undefined,
     hipMemcpy: FnMemcpy = undefined,
+    hipMemGetInfo: ?FnMemGetInfo = null,
     hipHostRegister: ?FnHostRegister = null,
     hipHostUnregister: ?FnHostUnregister = null,
     hipLaunchKernel: FnLaunchKernel = undefined,
@@ -268,6 +270,7 @@ pub const RocmBackend = struct {
         const hipSetDevice = self.lookup(FnSetDevice, "hipSetDevice") orelse return error.RocmNotAvailable;
         const hipDeviceGetName = self.lookup(FnDeviceGetName, "hipDeviceGetName") orelse return error.RocmNotAvailable;
         self.hipDeviceSynchronize = self.lookup(FnDeviceSynchronize, "hipDeviceSynchronize") orelse return error.RocmNotAvailable;
+        self.hipMemGetInfo = self.lookup(FnMemGetInfo, "hipMemGetInfo");
         self.hipHostRegister = self.lookup(FnHostRegister, "hipHostRegister");
         self.hipHostUnregister = self.lookup(FnHostUnregister, "hipHostUnregister");
         const hipModuleLoadData = self.lookup(FnModuleLoadData, "hipModuleLoadData") orelse return error.RocmNotAvailable;
@@ -1290,6 +1293,14 @@ pub const RocmBackend = struct {
 
     /// Returns backend startup information for display.
     pub fn backendInfo(self: *const RocmBackend) backend_mod.BackendInfo {
+        var free_mem: usize = 0;
+        var total_mem: usize = 0;
+        if (self.hipMemGetInfo) |memInfo| {
+            if (memInfo(&free_mem, &total_mem) != HIP_SUCCESS) {
+                free_mem = 0;
+                total_mem = 0;
+            }
+        }
         return .{
             .name = "ROCm",
             .device_name = self.device_name[0..self.device_name_len],
@@ -1298,6 +1309,8 @@ pub const RocmBackend = struct {
             .kernel_type = "HSACO",
             .compute_cap = std.mem.sliceTo(&self.gcn_arch_str, 0),
             .driver_version = std.mem.sliceTo(&self.hip_ver_str, 0),
+            .total_mem = total_mem,
+            .avail_mem = free_mem,
         };
     }
 

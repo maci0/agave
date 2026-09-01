@@ -714,6 +714,16 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Whether this backend has a device-side weight cache a budget can bound.
+    /// False on CPU (no device), Metal and WebGPU (unified or driver-owned
+    /// memory, where evicting buys nothing back). Callers use it to avoid
+    /// reporting a budget the backend cannot honor.
+    pub inline fn hasWeightBudget(self: Backend) bool {
+        switch (self) {
+            inline else => |be| return comptime @hasDecl(@TypeOf(be.*), "setWeightBudget"),
+        }
+    }
+
     /// Bytes of weights resident on the device, and how many evictions the budget
     /// has forced. `resident` is 0 on a backend that does not budget. A large and
     /// growing `evictions` means the budget is below the model's working set and
