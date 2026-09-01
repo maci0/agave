@@ -2540,6 +2540,15 @@ const storage_buffer_offset_align: usize = 256;
     /// `findContainingAct` resolves sub-ranges, this works the same way it does on
     /// the pointer-based backends: establish the parent, and every per-token
     /// lookup binds a slice of it.
+    ///
+    /// It is also why batched prefill is slower than one token at a time here.
+    /// Measured on a 7900 XTX, Qwen2.5 1.5B: 2586 ms at chunk size 1, 5405 ms
+    /// batched, and 2858 ms batched with these reserves stubbed out. So the whole
+    /// range establishment is the cost, not the sub-range lookup (a one-entry memo
+    /// over that lookup measured no change at all and was dropped). Stubbing them
+    /// is not an option: without the parent, per-token slices upload from host and
+    /// miss whatever the GPU wrote. Correct and slower wins, and the prefill chunk
+    /// size defaults to 1 on this backend for that reason.
     pub fn reserveActivation(self: *VulkanBackend, ptr: *const anyopaque, bytes: usize, mode: backend_mod.Backend.ActReserve) void {
         if (bytes == 0) return;
         _ = switch (mode) {

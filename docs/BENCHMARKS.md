@@ -465,10 +465,15 @@ syncs once, which is nothing against a chunk of GEMMs.
 | ROCm | 1150 ms | **456 ms** | batched |
 | Vulkan | **2516 ms** | 5366 ms | 1 |
 
-Vulkan loses because every per-token op inside the batched fallback pays a linear scan of the
-activation cache to resolve its slice of the reserved parent. Indexing that lookup instead of
-scanning it is the open item; until then one token at a time is Vulkan's faster path. Both
-paths produce identical output, and an explicit flag always wins.
+Vulkan loses on establishing the parent buffers, not on looking slices up in them. Measured
+with the reserves stubbed out: 2858 ms, against 5405 ms with them and 2586 ms at chunk size 1.
+A one-entry memo over the sub-range lookup measured no change at all and was dropped.
+
+The reserves cannot simply go: without a parent, each per-token slice uploads from host and
+misses whatever the GPU wrote, which is the bug they exist to fix. Making them cheap means not
+re-establishing a whole range per op per layer when the device copy is already current, which
+is a change to how the activation cache tracks freshness. Until then one token at a time is
+Vulkan's faster path. Both paths produce identical output, and an explicit flag always wins.
 
 **A missing ROCm kernel, found by coverage.** `rmsNormAdd` is what Gemma 4 uses for its
 post-norm residual, and ROCm looked up a `rms_norm_add_kernel` that was never written, so it
