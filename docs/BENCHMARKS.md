@@ -406,7 +406,7 @@ mismatch. It is deliberately not part of `zig build test`, which has to pass on 
 a cross-compile host with no GPU. Verified to catch a regression: re-introducing the Q3_K scale
 transposition makes it exit 1.
 
-41 kernels x {ROCm, Vulkan}: **82 of 82 pass**, at k=896 and at k=900 (a multiple of neither
+44 kernels x {ROCm, Vulkan}: **88 of 88 pass**, at k=896 and at k=900 (a multiple of neither
 32 nor 256). Covers all 18 GEMV dtypes the backends dispatch, the batched prefill paths
 (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`, `sdpa_prefill`, `rms_norm_multi`), the
 elementwise and norm ops, the aliased-output forms the prefill path uses, and the
@@ -475,6 +475,13 @@ re-establishing a whole range per op per layer when the device copy is already c
 is a change to how the activation cache tracks freshness. Until then one token at a time is
 Vulkan's faster path. Both paths produce identical output, and an explicit flag always wins.
 
+**A Vulkan out-of-bounds read, found by coverage.** `embLookup` uploaded
+`dim * bytes * emb_max_vocab_size` from the embedding table, but the op's signature carries no
+row count, so a table smaller than that fixed 256000-row maximum was read far past its end. A
+512-row fixture segfaulted; a real checkpoint quietly uploaded whatever followed the tensor in
+the mapping. It now uploads only through the row being indexed, which `getOrUpload` grows to
+the largest token id actually seen.
+
 **A missing ROCm kernel, found by coverage.** `rmsNormAdd` is what Gemma 4 uses for its
 post-norm residual, and ROCm looked up a `rms_norm_add_kernel` that was never written, so it
 panicked with "kernel not loaded". Gemma 4 could not have run on ROCm at all. The kernel now
@@ -541,6 +548,13 @@ Evicting the most-recently-used entry keeps whatever filled the budget first, so
 becomes budget over working set and throughput degrades in proportion. `--vram-budget-policy`
 defaults to `mru` for that reason; `lru` remains for skewed reuse, which is what routed MoE
 experts have and what LRU is actually good at.
+
+Two ops are deliberately outside the gate. `rope_mrope` is CPU and Metal only and panics
+elsewhere by design, which is the documented contract for a missing GPU kernel. `all_reduce_add`
+is implemented only on CPU and the dispatcher skips it silently on everything else, so a
+comparison would measure only that skip; nothing calls `Backend.allReduceAdd` today, since the
+models reduce through `transport.allReduceAdd`. Worth knowing before anything starts calling it:
+the silent skip would make a tensor-parallel reduction quietly wrong on a GPU backend.
 
 A unit test pins the distinction directly: over a 40-entry cyclic scan under a 30-entry budget,
 LRU scores exactly zero hits and MRU over 65%.

@@ -538,8 +538,16 @@ pub fn build(b: *std.Build) void {
             "add",              "mul",               "rope",             "add_aliased",
             "silu_mul_aliased", "deinterleave",      "split_q_gate",     "add_rms_norm",
             "rms_norm_add",     "sigmoid_mul",       "gelu_mul",         "clamped_silu_mul",
-            "add_scaled",
+            "add_scaled",        "gemv_multi",        "gemv_t",           "emb_lookup",
         };
+        // Deliberately absent:
+        //   rope_mrope     - CPU and Metal only; it panics on ROCm and Vulkan by
+        //                    design, which is the documented contract for a
+        //                    missing GPU kernel rather than something to gate on.
+        //   all_reduce_add - no backend but CPU implements it and the dispatcher
+        //                    skips it silently, so a comparison would only measure
+        //                    that skip. Nothing calls Backend.allReduceAdd today;
+        //                    the models reduce through transport.allReduceAdd.
         const k_values = [_][]const u8{ "896", "900" };
         for (k_values) |kv| {
             for (kernels) |kern| {

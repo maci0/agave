@@ -2164,7 +2164,13 @@ const storage_buffer_offset_align: usize = 256;
             .bf16, .f16 => 2,
             else => 4,
         };
-        const table_sz = dim * bytes_per_elem * emb_max_vocab_size;
+        // Upload only through the row being indexed, never a fixed maximum vocab.
+        // The embLookup contract carries no row count, so a table smaller than
+        // that maximum was being read far past its end: a 512-row fixture asked
+        // for 256000 rows and segfaulted, and a real checkpoint quietly uploaded
+        // whatever followed the tensor in the mapping. getOrUpload grows its
+        // cached buffer, so this settles at the largest token id actually seen.
+        const table_sz = dim * bytes_per_elem * (@as(usize, token_id) + 1);
         const table_buf = self.getOrUpload(table.data, table_sz);
 
         const token_id_sz = @sizeOf(u32);
