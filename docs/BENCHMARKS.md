@@ -365,6 +365,31 @@ to layer N+1's, so a freed buffer almost always fits the next weight of the same
 gains more than Vulkan because `hipMalloc`/`hipFree` are costlier than Vulkan's create/destroy
 plus the command-buffer flush the recycle still needs.
 
+## Re-upload Cost, and Two Things It Is Not (RX 7900 XTX)
+
+**Date**: 2026-09-01. `agave-bench <kernel> --reupload` evicts the weight before each
+iteration; the delta against a plain run is what one `--vram-budget` eviction costs.
+n=8192 k=8192, median of 5.
+
+| Backend | Kernel | Cached | Re-upload | Delta | Weight | Effective |
+|---------|--------|-------:|----------:|------:|-------:|----------:|
+| ROCm | q8_0 | 0.22 ms | 6.04 ms | 5.82 ms | 68 MB | 12.3 GB/s |
+| ROCm | q4_k | 0.08 ms | 3.17 ms | 3.09 ms | 36 MB | 12.2 GB/s |
+| Vulkan | q8_0 | 0.67 ms | 8.86 ms | 8.20 ms | 68 MB | 8.7 GB/s |
+| Vulkan | q4_k | 0.64 ms | 5.01 ms | 4.37 ms | 36 MB | 8.6 GB/s |
+
+**This is not PCIe bandwidth.** The link is PCIe 4.0 x16 (`current_link_speed` 16.0 GT/s,
+x16 = 31.5 GB/s), so 12.3 is 39% of it. The gap is not the transfer: eviction also frees the
+device buffer and the re-upload allocates a new one, and those driver round trips dominate.
+Read the column as re-upload cost, which is what a budget actually pays.
+
+**Closed lead, do not retry: page-locking the weight mapping under a budget.**
+`hostRegister` over the whole 468 MB mapping succeeds and changes throughput not at all
+(ROCm at a 0.1 GiB budget: 30.6 tok/s before, 30.6 after; at 0.25 GiB: 23.7 before, 23.8
+after). Pinning speeds up a transfer that was never the bottleneck, and it wires host RAM
+that the OS could otherwise reclaim. The allocation churn is the real cost, and recycling
+the buffer already addresses it.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
