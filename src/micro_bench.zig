@@ -53,6 +53,12 @@ const batched_n_tok: usize = 4;
 const sdpa_prefill_n_tok: usize = 16;
 /// Scale for the addScaled fixture; any finite non-unit value exercises it.
 const add_scaled_factor: f32 = 0.75;
+/// mRoPE position components; distinct so a kernel that ignores one is caught.
+const mrope_t_pos: usize = 5;
+const mrope_h_pos: usize = 3;
+const mrope_w_pos: usize = 7;
+/// Row the embedding fixture reads; any in-range id works.
+const emb_lookup_token: u32 = 11;
 const default_rope_theta: f32 = 10000.0;
 const rms_norm_eps: f32 = 1e-6;
 const l2_norm_eps: f32 = 1e-6;
@@ -161,6 +167,11 @@ const Kernel = enum {
     gelu_mul,
     clamped_silu_mul,
     add_scaled,
+    gemv_multi,
+    gemv_t,
+    rope_mrope,
+    emb_lookup,
+    all_reduce_add,
     sdpa_prefill,
     rms_norm,
     silu,
@@ -380,6 +391,7 @@ fn printUsage() void {
         \\  gemv_fp8_e4m3  gemv_fp8_e5m2
         \\  deinterleave  split_q_gate  add_rms_norm  rms_norm_add
         \\  sigmoid_mul  gelu_mul  clamped_silu_mul  add_scaled
+        \\  gemv_multi  gemv_t  rope_mrope  emb_lookup  all_reduce_add
         \\  gemm_q8_0  rms_norm_batched  rope_batched  sdpa_prefill  (prefill paths)
         \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
@@ -782,6 +794,42 @@ fn runClampedSiluMul(ctx: *const BenchCtx) void {
 
 fn runAddScaled(ctx: *const BenchCtx) void {
     ctx.be.addScaled(ctx.y.ptr, ctx.x.ptr, add_scaled_factor, ctx.n);
+    ctx.be.sync();
+}
+
+/// Batched multi-output GEMV: several weight matrices against one activation.
+/// The model uses it for fused QKV, so a stride bug here is a wrong projection.
+fn runGemvMulti(ctx: *const BenchCtx) void {
+    const ops = [_]backend_mod.GemvOp{
+        .{ .w = ctx.td, .y = ctx.y.ptr, .n = ctx.n },
+        .{ .w = ctx.td, .y = ctx.norm_out.?.ptr, .n = ctx.n },
+    };
+    ctx.be.gemvMulti(ctx.x.ptr, &ops, ctx.k);
+    ctx.be.sync();
+}
+
+/// Transposed f32 GEMV (weights stored column-major).
+fn runGemvT(ctx: *const BenchCtx) void {
+    ctx.be.gemvT(ctx.x.ptr, @ptrCast(ctx.td.data), ctx.y.ptr, ctx.n, ctx.k);
+    ctx.be.sync();
+}
+
+/// Multimodal RoPE: three position components instead of one.
+fn runRopeMrope(ctx: *const BenchCtx) void {
+    ctx.be.ropeMrope(ctx.x.ptr, mrope_t_pos, mrope_h_pos, mrope_w_pos, ctx.n_heads, ctx.head_dim, ctx.head_dim, default_rope_theta);
+    ctx.be.sync();
+}
+
+/// Embedding row read. CLAUDE.md allows this one to run on the CPU inside a GPU
+/// backend, so the check is that the two agree, not that it dispatches a kernel.
+fn runEmbLookup(ctx: *const BenchCtx) void {
+    ctx.be.embLookup(ctx.td, emb_lookup_token, ctx.y.ptr, ctx.n);
+    ctx.be.sync();
+}
+
+/// Tensor-parallel reduction: dst += src.
+fn runAllReduceAdd(ctx: *const BenchCtx) void {
+    ctx.be.allReduceAdd(ctx.x.ptr, ctx.y.ptr, ctx.n);
     ctx.be.sync();
 }
 
@@ -1577,6 +1625,67 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                     validateVsCpu(runAddScaled, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             }
             emitJson(@tagName(kernel), be_name, median_ns, computeGbps(2 * n * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .gemv_multi, .gemv_t, .emb_lookup => {
+            const x = page.alloc(f32, k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const y2 = page.alloc(f32, n) catch return;
+            defer page.free(y2);
+            // f32 weights: gemvT and embLookup both index raw f32 rows.
+            const w = page.alloc(f32, n * k) catch return;
+            defer page.free(w);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticF32(w, synthetic_x_mod + 3, synthetic_x_scale, synthetic_x_offset);
+
+            var ctx = BenchCtx{
+                .be = be,
+                .x = x,
+                .y = y,
+                .norm_out = y2,
+                .n = n,
+                .k = k,
+                .td = TensorData{ .data = @ptrCast(w.ptr), .dtype = .f32 },
+            };
+            const median_ns = switch (kernel) {
+                .gemv_multi => collectMedian(runGemvMulti, &ctx, iters),
+                .gemv_t => collectMedian(runGemvT, &ctx, iters),
+                else => collectMedian(runEmbLookup, &ctx, iters),
+            };
+            if (validate) switch (kernel) {
+                .gemv_multi => validateVsCpu(runGemvMulti, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name),
+                .gemv_t => validateVsCpu(runGemvT, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name),
+                else => validateVsCpu(runEmbLookup, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name),
+            };
+            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(n * k * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .rope_mrope => {
+            const n_heads = default_n_heads;
+            const head_dim = default_head_dim;
+            const x = page.alloc(f32, n_heads * head_dim) catch return;
+            defer page.free(x);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            var ctx = BenchCtx{ .be = be, .x = x, .n_heads = n_heads, .head_dim = head_dim, .n = n, .k = k };
+            const median_ns = collectMedian(runRopeMrope, &ctx, iters);
+            if (validate) validateVsCpu(runRopeMrope, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
+            emitJson("rope_mrope", be_name, median_ns, computeGbps(2 * n_heads * head_dim * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .all_reduce_add => {
+            const x = page.alloc(f32, n) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticF32(y, synthetic_x_mod + 1, synthetic_x_scale, synthetic_x_offset);
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k };
+            const median_ns = collectMedian(runAllReduceAdd, &ctx, iters);
+            // Accumulates into x, so x is restored between runs.
+            if (validate) validateVsCpu(runAllReduceAdd, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
+            emitJson("all_reduce_add", be_name, median_ns, computeGbps(2 * n * @sizeOf(f32), median_ns), 0, iters);
         },
 
         .rms_norm => {
