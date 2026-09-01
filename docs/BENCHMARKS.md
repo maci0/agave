@@ -414,11 +414,28 @@ the batched prefill paths (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`, `sdp
 Fixing them makes Qwen2.5 0.5B (Q8_0), 0.5B (Q4_K_M mix) and 1.5B (Q4_K) all produce output
 identical to the CPU on ROCm and Vulkan, where every one of them previously emitted garbage.
 
-**Still open: multi-token prefill.** At `--prefill-batch-size` above 1 both backends produce
-wrong output from the first token, on every model, while chunk size 1 matches the CPU exactly.
-Every op passes validation individually AND batched, so the fault is in how they compose and is
-not yet located. The chunk size is forced to 1 on ROCm and Vulkan until it is; passing the flag
-explicitly overrides that and warns, which is how to reproduce it.
+**Third bug, found by elimination and fixed on ROCm: multi-token prefill.** Every op passed
+validation alone AND batched, yet output was wrong at any chunk size above 1. The fault was in
+how they compose. The GPU backends cache activations by exact host address, so a batched op
+implemented as a loop over `ptr + t * stride` creates a separate device allocation per token,
+each sized for one slice. A later whole-range op on the same buffer (`add(hidden, hidden2,
+hidden, n_tok * e)`, the residual) finds no entry big enough, evicts them, and re-uploads from
+HOST, which never saw those device-only per-token writes.
+
+`Backend.reserveActivation` fixes it on ROCm by establishing one device buffer over the whole
+range before the loop, so sub-range lookups resolve into it through `findContaining`. ROCm is
+now correct at every chunk size on every model, and batched prefill is worth having:
+
+| ROCm prefill, Qwen2.5 1.5B Q4_K, 24-token prompt | Time |
+|---|---:|
+| `--prefill-batch-size 1` | 1154 ms |
+| batched (default) | **456 ms** |
+
+**Vulkan is still guarded to chunk size 1.** It binds a whole `VkBuffer` to a shader with no
+offset, and its activation cache has no containing-range lookup, so a sub-range can never share
+the parent allocation the way a device pointer can. Teaching that cache offsets is the fix and
+is not a small change. `--prefill-batch-size` overrides the guard and warns, which is how to
+reproduce it.
 
 **Marginal: ROCm `sdpa_prefill`** at 0.0222 against a 0.02 tolerance, small absolute values.
 Not reached in practice while the chunk-size guard holds it at 1, where it reduces to `sdpa`.

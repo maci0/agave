@@ -2489,22 +2489,47 @@ pub const VulkanBackend = struct {
     pub fn hostUnregister(_: *VulkanBackend, _: [*]const u8, _: usize) void {}
 
     /// Create Vulkan buffer wrapping RAM-tier KV block with zero copy.
+
+    /// See `Backend.reserveActivation`. Vulkan cannot share a parent buffer the
+    /// way the pointer-based backends do: a shader binds a whole VkBuffer with no
+    /// offset, and the activation cache is keyed by exact address with no
+    /// containing-range lookup, so every `ptr + t * stride` necessarily gets its
+    /// own buffer uploaded from HOST.
+    ///
+    /// What that needs instead is for the host to be current before the loop
+    /// starts, which is what the flush gives it. Reserving a whole-range entry
+    /// here would be worse than doing nothing: the per-token lookups would still
+    /// miss, and the leftover base-address entry would later write a whole range
+    /// back over per-token results.
+    pub fn reserveActivation(self: *VulkanBackend, _: *const anyopaque, bytes: usize, _: backend_mod.Backend.ActReserve) void {
+        if (bytes == 0) return;
+        self.sync();
+    }
+
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
     /// Sequential loop-of-GEMV fallback, no native Vulkan GEMM kernel yet.
     pub fn gemm(self: *VulkanBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        // Reserve both ranges whole before the per-token loop; see
+        // `Backend.reserveActivation` for why a loop of sub-range ops otherwise
+        // leaves device state a later whole-range op cannot see.
+        self.reserveActivation(x, n_tok * n_in * @sizeOf(f32), .read);
+        self.reserveActivation(y, n_tok * n_out * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
     /// Batched RMS normalization, each of n_tok rows normalized independently.
     pub fn rmsNormBatched(self: *VulkanBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        self.reserveActivation(input, n_tok * dim * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * dim * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
     }
 
     /// Batched RoPE, each of n_tok vectors at positions[0..n_tok].
     pub fn ropeBatched(self: *VulkanBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const stride = n_heads * head_dim;
+        self.reserveActivation(x, n_tok * stride * @sizeOf(f32), .read_write);
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
@@ -2556,6 +2581,10 @@ pub const VulkanBackend = struct {
     /// Prefill SDPA, sequential loop over tokens, calling single-token sdpa.
     pub fn sdpaPrefill(self: *VulkanBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
+        self.reserveActivation(q, n_tok * nh * hd * @sizeOf(f32), .read);
+        self.reserveActivation(k, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(v, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * nh * hd * @sizeOf(f32), .write);
         for (0..n_tok) |t| {
             self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type_k, kv_type_v);
         }

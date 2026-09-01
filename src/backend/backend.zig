@@ -672,6 +672,32 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// How a reserved activation range will be used.
+    pub const ActReserve = enum { read, write, read_write };
+
+    /// Establish ONE device buffer covering `bytes` at `ptr` before running a
+    /// loop of sub-range ops over it.
+    ///
+    /// The GPU backends cache activations by exact host address. A batched op
+    /// implemented as a loop over `ptr + t * stride` therefore creates a separate
+    /// device allocation per token, each sized for one slice. A later whole-range
+    /// op on the same buffer finds no entry big enough, evicts them, and uploads
+    /// from HOST memory, which never saw those device-only per-token writes. The
+    /// result is correct at one token and wrong above it.
+    ///
+    /// Reserving the full range first makes every `ptr + t * stride` lookup
+    /// resolve into that one buffer, so the sub-range and whole-range views stay
+    /// the same memory. No-op on backends with no device-side activation cache.
+    pub inline fn reserveActivation(self: Backend, ptr: *const anyopaque, bytes: usize, mode: ActReserve) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "reserveActivation")) {
+                    be.reserveActivation(ptr, bytes, mode);
+                }
+            },
+        }
+    }
+
     /// Page-lock a host byte range so the backend can DMA out of it directly,
     /// without staging through a driver bounce buffer. Required for async H2D:
     /// `cuMemcpyHtoDAsync` rejects pageable source memory.

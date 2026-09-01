@@ -2761,24 +2761,27 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 /// Prefill chunk size, forced to 1 on backends whose multi-token prefill is
 /// known to produce wrong output.
 ///
-/// ROCm and Vulkan generate garbage from the first token at any chunk size above
-/// 1, on every model tested, while chunk size 1 matches the CPU exactly. Every
-/// individual op passes `agave-bench --validate` against the CPU, including the
-/// batched ones, so the fault is in how they compose and is not yet located.
-/// Until it is, a slower correct prefill beats a fast wrong answer.
+/// Vulkan binds a whole VkBuffer to a shader with no offset, and its activation
+/// cache is keyed by exact address with no containing-range lookup, so a batched
+/// op's per-token `ptr + t * stride` necessarily gets its own buffer uploaded
+/// from HOST. Any range the GPU wrote and has not flushed is therefore stale for
+/// the next token, and output is wrong from the first token at any chunk size
+/// above 1. Fixing it means teaching that cache offsets, not a one-line change.
+/// ROCm had the same class of bug and is fixed (see `reserveActivation`); it
+/// could resolve sub-ranges against a parent allocation, which Vulkan cannot.
 ///
 /// `--prefill-batch-size` still overrides this, loudly: the flag is how the bug
 /// gets reproduced and eventually fixed.
 fn chunkSizeFor(be: Backend, cli: *const CliArgs) u32 {
     const broken = switch (be) {
-        .rocm, .vulkan => true,
+        .vulkan => true,
         else => false,
     };
     if (!broken or cli.prefill_batch_size <= 1) return cli.prefill_batch_size;
     if (cli.prefill_batch_size_explicit) {
         eprint(
             "Warning: --prefill-batch-size {d} on this backend produces WRONG OUTPUT " ++
-                "(multi-token prefill is broken on ROCm/Vulkan); pass 1 for correct results\n",
+                "(Vulkan multi-token prefill is broken); pass 1 for correct results\n",
             .{cli.prefill_batch_size},
         );
         return cli.prefill_batch_size;

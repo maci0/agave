@@ -128,6 +128,8 @@ const Kernel = enum {
     rms_norm_batched,
     rope_batched,
     rms_norm_multi,
+    add_aliased,
+    silu_mul_aliased,
     sdpa_prefill,
     rms_norm,
     silu,
@@ -666,6 +668,21 @@ fn refillKvCache(ctx: *BenchCtx) void {
 /// n_tok * n_heads, so a stride or count bug shows only above one token.
 fn runRmsNormMulti(ctx: *const BenchCtx) void {
     ctx.be.rmsNormMulti(ctx.x.ptr, ctx.norm_weight.?.ptr, ctx.n_tok * ctx.n_heads, ctx.head_dim, rms_norm_eps);
+    ctx.be.sync();
+}
+
+/// add() with the destination aliasing the first source, which is how the
+/// batched prefill path writes its residual. The GPU backends cache activations
+/// by host address, so a buffer that is simultaneously input and output is the
+/// case most likely to confuse that bookkeeping.
+fn runAddAliased(ctx: *const BenchCtx) void {
+    ctx.be.add(ctx.x.ptr, ctx.y.ptr, ctx.x.ptr, ctx.n);
+    ctx.be.sync();
+}
+
+/// siluMul() writing back over its gate input, as prefillFeedForward does.
+fn runSiluMulAliased(ctx: *const BenchCtx) void {
+    ctx.be.siluMul(ctx.x.ptr, ctx.y.ptr, ctx.x.ptr, ctx.n);
     ctx.be.sync();
 }
 
@@ -1270,6 +1287,28 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             const median_ns = collectMedian(runRmsNormMulti, &ctx, iters);
             if (validate) validateVsCpu(runRmsNormMulti, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             emitJson("rms_norm_multi", be_name, median_ns, computeGbps(2 * total * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .add_aliased, .silu_mul_aliased => {
+            const x = page.alloc(f32, n) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticF32(y, synthetic_x_mod + 1, synthetic_x_scale, synthetic_x_offset);
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k };
+            const median_ns = if (kernel == .add_aliased)
+                collectMedian(runAddAliased, &ctx, iters)
+            else
+                collectMedian(runSiluMulAliased, &ctx, iters);
+            if (validate) {
+                if (kernel == .add_aliased)
+                    validateVsCpu(runAddAliased, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name)
+                else
+                    validateVsCpu(runSiluMulAliased, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
+            }
+            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(3 * n * @sizeOf(f32), median_ns), 0, iters);
         },
 
         .rms_norm => {

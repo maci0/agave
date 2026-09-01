@@ -1655,22 +1655,43 @@ pub const RocmBackend = struct {
         _ = self.hipFree(@ptrFromInt(d_bt));
     }
 
+
+    /// See `Backend.reserveActivation`. Routes to the same helpers the ops use,
+    /// so the entry it leaves behind is exactly what a later sub-range lookup
+    /// resolves through.
+    pub fn reserveActivation(self: *RocmBackend, ptr: *const anyopaque, bytes: usize, mode: backend_mod.Backend.ActReserve) void {
+        if (bytes == 0) return;
+        _ = switch (mode) {
+            .read => self.getInputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .write => self.getOutputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .read_write => self.getInPlaceBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+        };
+    }
+
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
     /// Sequential loop-of-GEMV fallback, no native ROCm GEMM kernel yet.
     pub fn gemm(self: *RocmBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        // Reserve both ranges whole before the per-token loop; see
+        // `Backend.reserveActivation` for why a loop of sub-range ops otherwise
+        // leaves device state a later whole-range op cannot see.
+        self.reserveActivation(x, n_tok * n_in * @sizeOf(f32), .read);
+        self.reserveActivation(y, n_tok * n_out * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
     /// Batched RMS normalization, each of n_tok rows normalized independently.
     pub fn rmsNormBatched(self: *RocmBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        self.reserveActivation(input, n_tok * dim * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * dim * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
     }
 
     /// Batched RoPE, each of n_tok vectors at positions[0..n_tok].
     pub fn ropeBatched(self: *RocmBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const stride = n_heads * head_dim;
+        self.reserveActivation(x, n_tok * stride * @sizeOf(f32), .read_write);
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
@@ -1713,6 +1734,10 @@ pub const RocmBackend = struct {
     /// Prefill SDPA, sequential loop over tokens, calling single-token sdpa.
     pub fn sdpaPrefill(self: *RocmBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
+        self.reserveActivation(q, n_tok * nh * hd * @sizeOf(f32), .read);
+        self.reserveActivation(k, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(v, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * nh * hd * @sizeOf(f32), .write);
         for (0..n_tok) |t| {
             self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type_k, kv_type_v);
         }
