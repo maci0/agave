@@ -20,7 +20,11 @@ export fn gemv_q4_1_kernel(
     const tid = cu.threadIdx();
     const bdim = cu.blockDim();
 
-    const nb = k / q4_1_block_elems;
+    // Round UP, matching the host row stride (backend.gemvRowBytes). Truncating
+    // does not merely drop a tail: nb is also the per-row block stride, so at a k
+    // that is not a multiple of the block size every row past the first reads
+    // another row's bytes.
+    const nb = (k + q4_1_block_elems - 1) / q4_1_block_elems;
     var sum: f32 = 0.0;
     const sparse_threshold: f32 = 0.005;
 

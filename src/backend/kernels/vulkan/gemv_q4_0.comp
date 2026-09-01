@@ -20,7 +20,11 @@ void main() {
     uint tg_size = gl_WorkGroupSize.x;
     if (row >= n) return;
 
-    uint nb = k / 32;
+    // Round UP, matching the host row stride (backend.gemvRowBytes). Truncating
+    // does not merely drop a tail: nb is also the per-row block stride below, so
+    // at a k that is not a multiple of the block size every row past the first
+    // reads another row's bytes.
+    uint nb = (k + 31u) / 32u;
     float sum = 0.0;
 
     for (uint b = tid; b < nb; b += tg_size) {
