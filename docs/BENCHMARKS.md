@@ -335,6 +335,12 @@ Residency tracks the cap, and a budget above the working set costs nothing (zero
 full speed). Below it, every eviction is a re-upload on the next touch, which is the price of
 running a model that does not fit. Unset (the default) keeps the previous unbounded behavior.
 
+`--vram-budget auto` sizes it from the device's free memory (75%, leaving room for the KV
+cache and activations, which the weight budget does not track). On the 7900 XTX that resolves
+to 13830 MB via ROCm's `hipMemGetInfo`; Vulkan reports no free-memory figure and falls back to
+75% of the 24560 MB total, saying so. It returns 0 on unified memory, where evicting a weight
+buys nothing back, and warns on a backend with no device-side weight cache.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
