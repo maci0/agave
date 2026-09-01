@@ -156,6 +156,23 @@ pub const physicalCoreIds = @import("cpu.zig").physicalCoreIds;
 /// main thread, so listing more cores than this cannot change the pool size.
 const max_pinned_core_ids: usize = 64;
 
+/// Byte-budgeted LRU over the GPU backends' cached weight uploads.
+pub const WeightBudget = @import("weight_budget.zig").WeightBudget;
+
+/// What a backend's weight budget currently holds. `resident` is 0 on a backend
+/// with no device-side weight cache.
+pub const WeightResidency = struct { resident: usize = 0, evictions: u64 = 0 };
+
+/// Distinct weights a budgeted backend tracks. A DeepSeek-V4-scale checkpoint
+/// reaches tens of thousands of expert tensors, and an untracked weight falls
+/// back to the unbounded path rather than failing.
+pub const weight_budget_capacity: usize = 65536;
+
+/// Evictions one admission may report. Beyond this the admission degrades to
+/// untracked (the buffer is still uploaded), which needs a weight hundreds of
+/// times the running average to reach.
+pub const max_weight_evictions: usize = 256;
+
 /// A page-aligned byte range covering an arbitrary host pointer and length.
 pub const PageRange = struct { base: usize, size: usize };
 
@@ -676,6 +693,39 @@ pub const Backend = union(enum) {
     pub inline fn hostUnregister(self: Backend, ptr: [*]const u8, len: usize) void {
         switch (self) {
             inline else => |be| be.hostUnregister(ptr, len),
+        }
+    }
+
+    /// Cap device memory held by cached weight uploads, evicting least-recently-
+    /// used weights until the cap holds. Zero (the default) keeps every uploaded
+    /// weight resident forever, which is the only correct choice when the model
+    /// fits: eviction costs a re-upload on the next touch.
+    ///
+    /// A budget is what lets a model larger than VRAM run at all, and it can be
+    /// lowered at runtime to hand memory back without reloading weights. No-op on
+    /// backends with no device-side weight cache (CPU, and Metal's unified memory).
+    pub inline fn setWeightBudget(self: Backend, bytes: usize) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "setWeightBudget")) {
+                    be.setWeightBudget(bytes);
+                }
+            },
+        }
+    }
+
+    /// Bytes of weights resident on the device, and how many evictions the budget
+    /// has forced. `resident` is 0 on a backend that does not budget. A large and
+    /// growing `evictions` means the budget is below the model's working set and
+    /// decode is paying a re-upload per layer.
+    pub inline fn weightResidency(self: Backend) WeightResidency {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "weightResidency")) {
+                    return be.weightResidency();
+                }
+                return .{};
+            },
         }
     }
 

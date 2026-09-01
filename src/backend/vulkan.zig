@@ -779,6 +779,11 @@ pub const VulkanBackend = struct {
     /// created and uploaded once on first use, then reused on subsequent calls.
     /// This eliminates re-uploading gigabytes of weight data per token.
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
+    /// Byte cap on `buf_cache` plus the scratch its eviction list is written
+    /// into. Null until `setWeightBudget`; unbounded until then.
+    weight_budget: ?backend_mod.WeightBudget = null,
+    evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
+    budget_allocator: std.mem.Allocator = undefined,
 
     // Dynamic library handle
     lib: std.DynLib = undefined,
@@ -923,6 +928,7 @@ pub const VulkanBackend = struct {
     pub fn init(allocator: std.mem.Allocator, device_id: u32) !VulkanBackend {
         var self = VulkanBackend{};
         self.allocator = allocator;
+        self.budget_allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
@@ -1423,6 +1429,7 @@ pub const VulkanBackend = struct {
         // Release all cached weight buffers
         self.deinitCachedBuffers();
         self.buf_cache.deinit();
+        if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
 
         const pipelines = [_]*PipelineInfo{
             // Elementwise
@@ -1623,10 +1630,17 @@ pub const VulkanBackend = struct {
     fn getOrUpload(self: *VulkanBackend, ptr: [*]const u8, size: usize) VkBuf {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.get(addr)) |cached| {
-            if (cached.size >= size) return cached.vk_buf;
-            // destroyBuffer submits pending commands first if needed.
-            self.destroyBuffer(cached.vk_buf);
-            _ = self.buf_cache.remove(addr);
+            if (cached.size >= size) {
+                if (self.weight_budget) |*wb| _ = wb.touch(addr);
+                return cached.vk_buf;
+            }
+            self.dropWeight(addr, cached.vk_buf);
+        }
+        if (self.weight_budget) |*wb| {
+            const adm = wb.admit(addr, size, &self.evict_scratch);
+            for (adm.evicted) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.vk_buf);
+            }
         }
         const buf = self.createBuffer(size);
         self.uploadBuffer(buf.mem, ptr, size);
@@ -1634,6 +1648,42 @@ pub const VulkanBackend = struct {
             std.log.warn("cache put failed: {}", .{err});
         };
         return buf;
+    }
+
+    /// Free one cached weight's buffer and drop every record of it.
+    /// `destroyBuffer` submits pending commands first, so this is safe to call
+    /// mid-recording.
+    fn dropWeight(self: *VulkanBackend, addr: usize, buf: VkBuf) void {
+        self.destroyBuffer(buf);
+        _ = self.buf_cache.remove(addr);
+        if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// See `Backend.setWeightBudget`.
+    pub fn setWeightBudget(self: *VulkanBackend, bytes: usize) void {
+        if (self.weight_budget) |*wb| {
+            for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
+                if (self.buf_cache.get(victim)) |c| {
+                    self.destroyBuffer(c.vk_buf);
+                    _ = self.buf_cache.remove(victim);
+                }
+            }
+            return;
+        }
+        if (bytes == 0) return;
+        self.weight_budget = backend_mod.WeightBudget.init(
+            self.budget_allocator,
+            backend_mod.weight_budget_capacity,
+            bytes,
+        ) catch |err| {
+            std.log.warn("Vulkan weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+    }
+
+    pub fn weightResidency(self: *VulkanBackend) backend_mod.WeightResidency {
+        if (self.weight_budget) |*wb| return .{ .resident = wb.used_bytes, .evictions = wb.evictions };
+        return .{};
     }
 
     fn uploadBuffer(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]const u8, size: usize) void {

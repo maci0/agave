@@ -319,6 +319,22 @@ real problem at 137 GB of expert banks): at the sizes reachable here, load time 
 bottleneck, so the aligned layout stays unbuilt. Re-measure before revisiting, on a
 checkpoint large enough that the page cache cannot hold it.
 
+## Weight Residency Budget (Vulkan, RX 7900 XTX)
+
+**Date**: 2026-09-01. Qwen2.5 0.5B Q4_K_M, `--backend vulkan --vram-budget <GiB>`. Working
+set is ~373 MB of cached weight uploads. Output is byte-identical at every budget.
+
+| `--vram-budget` | Resident | Evictions | tok/s |
+|-----------------|---------:|----------:|------:|
+| 2 GiB (above working set) | 373 MB | 0 | 33.3 |
+| 0.25 GiB | 255 MB | 543 | 12.3 |
+| 0.1 GiB | 102 MB | 558 | 11.0 |
+| 0.05 GiB | 50 MB | 604 | 7.2 |
+
+Residency tracks the cap, and a budget above the working set costs nothing (zero evictions,
+full speed). Below it, every eviction is a re-upload on the next touch, which is the price of
+running a model that does not fit. Unset (the default) keeps the previous unbounded behavior.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
