@@ -2525,6 +2525,19 @@ pub const CudaBackend = struct {
         }
     }
 
+
+    /// See `Backend.reserveActivation`. Routes to the same helpers the ops use,
+    /// so the entry it leaves behind is exactly what a later sub-range lookup
+    /// resolves through.
+    pub fn reserveActivation(self: *CudaBackend, ptr: *const anyopaque, bytes: usize, mode: backend_mod.Backend.ActReserve) void {
+        if (bytes == 0) return;
+        _ = switch (mode) {
+            .read => self.getInputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .write => self.getOutputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .read_write => self.getInPlaceBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+        };
+    }
+
     // ── Batched prefill ops ─────────────────────────────────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
