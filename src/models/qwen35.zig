@@ -1557,30 +1557,36 @@ pub const Qwen35Model = struct {
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
         }
 
-        // 6. Shared expert
-        t = self.perf.start();
-        const sg = self.fmt.layerTensor(li, "ffn_gate_shexp.weight") orelse return error.MissingTensor;
-        const su = self.fmt.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
-        const shared_ff: usize = self.shared_expert_ff_dim;
-        self.doGemvBatch2(self.hidden2.ptr, sg, self.ff_buf1.ptr, shared_ff, su, self.ff_buf2.ptr, shared_ff, e);
-        self.perf.end(.gemv_ffn, t);
+        // 6. Shared expert, when the architecture has one.
+        //
+        // Not every MoE does. Qwen3.5-A3B and Nex-N2-Pro carry a shared expert
+        // evaluated for every token; Mixtral, Qwen3-30B-A3B and OLMoE route
+        // purely and have no shexp tensors at all. Requiring them made those
+        // architectures fail to run with a bare MissingTensor.
+        if (self.fmt.layerTensor(li, "ffn_gate_shexp.weight")) |sg| {
+            const su = self.fmt.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
+            const sd = self.fmt.layerTensor(li, "ffn_down_shexp.weight") orelse return error.MissingTensor;
+            t = self.perf.start();
+            const shared_ff: usize = self.shared_expert_ff_dim;
+            self.doGemvBatch2(self.hidden2.ptr, sg, self.ff_buf1.ptr, shared_ff, su, self.ff_buf2.ptr, shared_ff, e);
+            self.perf.end(.gemv_ffn, t);
 
-        // SwiGLU for shared expert, GPU-accelerated, chains with gemvMulti
-        t = self.perf.start();
-        self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, shared_ff);
+            // SwiGLU for shared expert, GPU-accelerated, chains with gemvMulti
+            t = self.perf.start();
+            self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, shared_ff);
 
-        const sd = self.fmt.layerTensor(li, "ffn_down_shexp.weight") orelse return error.MissingTensor;
-        self.doGemv(self.ff_buf1.ptr, sd, self.attn_out.ptr, e, shared_ff);
-        self.be.sync();
-        self.perf.end(.gemv_ffn, t);
+            self.doGemv(self.ff_buf1.ptr, sd, self.attn_out.ptr, e, shared_ff);
+            self.be.sync();
+            self.perf.end(.gemv_ffn, t);
 
-        // Shared expert gate: sigmoid(dot(gate_weight, hidden2)) * shared_out
-        if (self.fmt.layerTensor(li, "ffn_gate_inp_shexp.weight")) |gw| {
-            const gate_ptr: [*]const f32 = @ptrCast(@alignCast(gw.data_ptr));
-            const gate_val = math_ops.sigmoid(math_ops.simdDotF32(gate_ptr, self.hidden2.ptr, e));
-            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, gate_val, e);
-        } else {
-            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
+            // Shared expert gate: sigmoid(dot(gate_weight, hidden2)) * shared_out
+            if (self.fmt.layerTensor(li, "ffn_gate_inp_shexp.weight")) |gw| {
+                const gate_ptr: [*]const f32 = @ptrCast(@alignCast(gw.data_ptr));
+                const gate_val = math_ops.sigmoid(math_ops.simdDotF32(gate_ptr, self.hidden2.ptr, e));
+                self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, gate_val, e);
+            } else {
+                self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
+            }
         }
 
         // 7. Residual: hidden += moe_out
