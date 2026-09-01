@@ -28,6 +28,10 @@ pub fn gemvTQ2_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
     const nb = (k + block_elems - 1) / block_elems;
     const row_bytes = nb * block_bytes;
 
+    // The activation vector is fixed for the whole GEMV, so its per-block
+    // sparsity is computed once here instead of once per row group.
+    const mask = sparsity.blockMask(x, nb, block_elems, k);
+
     var row: usize = 0;
     while (row < n) : (row += 1) {
         var sum: f32 = 0.0;
@@ -38,7 +42,7 @@ pub fn gemvTQ2_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize)
             const block_start = b * block_bytes;
             const elements_in_block = @min(block_elems, k - bk);
 
-            if (sparsity.isBlockSparse(x, bk, elements_in_block)) continue;
+            if (mask.isSparse(b)) continue;
 
             // f16 scale at bytes [0..2], qs at bytes [2..66]
             const scale = f16ToF32(@as(*const u16, @ptrCast(@alignCast(rp + block_start))).*);
