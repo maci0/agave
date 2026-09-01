@@ -24,6 +24,10 @@ pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
+    // The activation vector is fixed for the whole GEMV, so its per-block
+    // sparsity is computed once here instead of once per row group.
+    const mask = sparsity.blockMask(x, nb, qk, k);
+
     // Process 2 rows at a time for x-vector cache reuse.
     var row: usize = 0;
     while (row + 2 <= n) : (row += 2) {
@@ -32,7 +36,7 @@ pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp0 = w + row * row_bytes;
         const rp1 = w + (row + 1) * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * qk, qk)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
@@ -80,7 +84,7 @@ pub fn gemvQ4_1(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * qk, qk)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
@@ -114,6 +118,10 @@ pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
     const nb = (k + qk - 1) / qk;
     const row_bytes = nb * bpb;
 
+    // The activation vector is fixed for the whole GEMV, so its per-block
+    // sparsity is computed once here instead of once per row group.
+    const mask = sparsity.blockMask(x, nb, qk, k);
+
     // Process 2 rows at a time for x-vector cache reuse.
     var row: usize = 0;
     while (row + 2 <= n) : (row += 2) {
@@ -122,7 +130,7 @@ pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp0 = w + row * row_bytes;
         const rp1 = w + (row + 1) * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * qk, qk)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
@@ -190,7 +198,7 @@ pub fn gemvQ5_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * qk, qk)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp = rp + b * bpb;
             const d: f32 = @floatCast(@as(f16, @bitCast(std.mem.readInt(u16, bp[0..2], .little))));
@@ -235,6 +243,10 @@ pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
+    // The activation vector is fixed for the whole GEMV, so its per-block
+    // sparsity is computed once here instead of once per row group.
+    const mask = sparsity.blockMask(x, nb, bs, k);
+
     // Process 2 rows at a time for x-vector cache reuse.
     var row: usize = 0;
     while (row + 2 <= n) : (row += 2) {
@@ -243,7 +255,7 @@ pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp0 = w + row * row_bytes;
         const rp1 = w + (row + 1) * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
@@ -310,7 +322,7 @@ pub fn gemvQ2_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp = rp + b * bpb;
             const scales = bp[0..16];
@@ -362,6 +374,10 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
     const nb = (k + bs - 1) / bs;
     const row_bytes = nb * bpb;
 
+    // The activation vector is fixed for the whole GEMV, so its per-block
+    // sparsity is computed once here instead of once per row group.
+    const mask = sparsity.blockMask(x, nb, bs, k);
+
     // Process 2 rows at a time for x-vector cache reuse.
     var row: usize = 0;
     while (row + 2 <= n) : (row += 2) {
@@ -370,7 +386,7 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp0 = w + row * row_bytes;
         const rp1 = w + (row + 1) * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp0 = rp0 + b * bpb;
             const bp1 = rp1 + b * bpb;
@@ -468,7 +484,7 @@ pub fn gemvQ3_K(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         var sum: f32 = 0.0;
         const rp = w + row * row_bytes;
         for (0..nb) |b| {
-            if (sparsity.isBlockSparse(x, b * bs, bs)) continue;
+            if (mask.isSparse(b)) continue;
 
             const bp = rp + b * bpb;
             const hmask = bp[0..32];

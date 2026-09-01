@@ -274,6 +274,31 @@ against q8_0's 161: that gap is q4_k's nibble/scale unpack, and it is compute-bo
 roughly 3x of headroom. Widening those kernels from `@Vector(8, f32)` to the native AVX-512
 width is the open lead there; it changes summation order, so it needs golden re-baselining.
 
+## CPU GEMV Hoisted Sparsity Mask (AMD Ryzen 9 9950X)
+
+**Date**: 2026-09-01. `agave-bench <kernel> --iters 60`, median of 9 interleaved runs per
+side. Generation output is bit-identical. A VM and a llama-server were resident throughout,
+so absolute GB/s runs low; base and new were interleaved, so the ratio holds.
+
+| Kernel | n=8192 k=4096 (L3-resident) | n=32768 k=8192 (DRAM-bound) |
+|--------|----------------------------:|----------------------------:|
+| gemv_q4_k | 52.4 -> 78.1 (**+49.0%**) | 47.1 -> 51.2 (**+8.7%**) |
+| gemv_q4_0 | 97.5 -> 113.9 (**+16.8%**) | 44.8 -> 46.3 (+3.3%) |
+| gemv_q8_0 | 169.6 -> 197.0 (**+16.2%**) | 43.4 -> 46.8 (**+7.8%**) |
+
+`isBlockSparse` was called once per (block, row group). The activation vector does not
+change during a GEMV, so at n=32768 with 2-row batching the same block was rescanned 16384
+times. The mask is now computed once per call and the row loop tests a bit. Includes the
+weight prefetch from the previous entry, which measured flat in the L3-resident shape.
+
+End-to-end on Qwen2.5-0.5B Q4_K_M (`-n 192 -t 0`, median of 7): 53.3 -> 55.2 tok/s (+3.6%).
+The e2e gain is much smaller than the kernel gain because this model's GEMVs are small and
+decode spends most of its time elsewhere; the kernel number is what scales with model size.
+
+Applied to q4_0, q4_1, q5_0, q4_k, q5_k, q6_k, q8_0, q2_k, q3_k, iq4_nl, iq4_xs and tq2_0.
+The mask also clamps its final block to `k`, where the per-block call read past the
+activation buffer and let out-of-bounds bytes decide whether real elements were skipped.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.
