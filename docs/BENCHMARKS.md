@@ -400,10 +400,12 @@ difference. Exits non-zero past a 2% tolerance, so CI can gate on it.
 agave-bench gemv_q6_k --n 1024 --k 896 --backend rocm --validate
 ```
 
-33 kernels x {ROCm, Vulkan}: **66 of 66 pass**. Covers all 18 GEMV dtypes the backends
-dispatch, the batched prefill paths (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`,
-`sdpa_prefill`, `rms_norm_multi`), the elementwise and norm ops, and the aliased-output forms
-the prefill path actually uses.
+41 kernels x {ROCm, Vulkan}: **82 of 82 pass**, at k=896 and at k=900 (a multiple of neither
+32 nor 256). Covers all 18 GEMV dtypes the backends dispatch, the batched prefill paths
+(`gemm_q8_0`, `rms_norm_batched`, `rope_batched`, `sdpa_prefill`, `rms_norm_multi`), the
+elementwise and norm ops, the aliased-output forms the prefill path uses, and the
+`deinterleave` / `split_q_gate` / `add_rms_norm` / `rms_norm_add` / `sigmoid_mul` / `gelu_mul`
+/ `clamped_silu_mul` / `add_scaled` set that no benchmark previously reached.
 
 Quantized fixtures do not encode any block layout. Every byte is capped at 63, which makes an
 f16 read from any two adjacent bytes at most ~1.81 whatever offset a format keeps its scale at:
@@ -461,6 +463,12 @@ Vulkan loses because every per-token op inside the batched fallback pays a linea
 activation cache to resolve its slice of the reserved parent. Indexing that lookup instead of
 scanning it is the open item; until then one token at a time is Vulkan's faster path. Both
 paths produce identical output, and an explicit flag always wins.
+
+**A missing ROCm kernel, found by coverage.** `rmsNormAdd` is what Gemma 4 uses for its
+post-norm residual, and ROCm looked up a `rms_norm_add_kernel` that was never written, so it
+panicked with "kernel not loaded". Gemma 4 could not have run on ROCm at all. The kernel now
+exists (`kernels/rocm/rms_norm_add.zig`) and validates exactly. It is distinct from the
+existing `add_rms_norm`, which adds first and then normalizes the sum.
 
 **`sdpa_prefill` was a bad fixture, not a bug.** It seeded KV history by writing host memory.
 Vulkan uploads the KV cache and saw it; ROCm keeps it device-side and appends, so it did not,

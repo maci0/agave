@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-19 (last full re-run). **GPU kernel correctness (2026-09-01):** there is now a
 harness for it, `agave-bench <kernel> --validate`, which re-runs the kernel on the CPU backend with
-byte-identical inputs and exits non-zero past a 2% relative tolerance. 33 kernels x ROCm/Vulkan, all 66 pairs pass, covering all 18 GEMV dtypes;
+byte-identical inputs and exits non-zero past a 2% relative tolerance. 41 kernels x ROCm/Vulkan, all 82 pairs pass at two values of k, covering all 18 GEMV dtypes;
 see "GPU Kernel Validation" in BENCHMARKS.md for the one that does not and for what it found. **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for DeepSeek V4, Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested). Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
 
 **Hardware**:
