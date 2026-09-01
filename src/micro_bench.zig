@@ -51,6 +51,8 @@ const batched_n_tok: usize = 4;
 /// Tokens in the sdpa_prefill fixture. Larger than `batched_n_tok` so the last
 /// token attends over 15 earlier positions, all written during the same call.
 const sdpa_prefill_n_tok: usize = 16;
+/// Scale for the addScaled fixture; any finite non-unit value exercises it.
+const add_scaled_factor: f32 = 0.75;
 const default_rope_theta: f32 = 10000.0;
 const rms_norm_eps: f32 = 1e-6;
 const l2_norm_eps: f32 = 1e-6;
@@ -151,6 +153,14 @@ const Kernel = enum {
     rms_norm_multi,
     add_aliased,
     silu_mul_aliased,
+    deinterleave,
+    split_q_gate,
+    add_rms_norm,
+    rms_norm_add,
+    sigmoid_mul,
+    gelu_mul,
+    clamped_silu_mul,
+    add_scaled,
     sdpa_prefill,
     rms_norm,
     silu,
@@ -368,6 +378,8 @@ fn printUsage() void {
         \\  gemv_q5_0  gemv_q6_k  gemv_q4_1  gemv_q2_k  gemv_q3_k  gemv_q5_k
         \\  gemv_iq4_nl  gemv_iq4_xs  gemv_tq1_0  gemv_tq2_0
         \\  gemv_fp8_e4m3  gemv_fp8_e5m2
+        \\  deinterleave  split_q_gate  add_rms_norm  rms_norm_add
+        \\  sigmoid_mul  gelu_mul  clamped_silu_mul  add_scaled
         \\  gemm_q8_0  rms_norm_batched  rope_batched  sdpa_prefill  (prefill paths)
         \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
@@ -546,6 +558,20 @@ fn refillX(ctx: *BenchCtx) void {
     fillSyntheticF32(ctx.x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
 }
 
+/// addRmsNorm mutates its first argument in place and writes its output, so a
+/// second run needs both restored.
+fn refillAddRmsNorm(ctx: *BenchCtx) void {
+    refillX(ctx);
+    refillNormOut(ctx);
+}
+
+/// For ops that ACCUMULATE into their output (`rmsNormAdd` does `b[i] += ...`)
+/// rather than overwriting it. Refilling only the input would leave the second
+/// run adding onto the first run's result.
+fn refillNormOut(ctx: *BenchCtx) void {
+    fillSyntheticF32(ctx.norm_out.?, synthetic_x_mod + 2, synthetic_x_scale, synthetic_x_offset);
+}
+
 /// Largest relative difference tolerated between a backend's kernel and the CPU
 /// reference. Quantized GEMV accumulates in a different order on a GPU, so exact
 /// equality is not the bar; 2% separates reordering noise from a wrong kernel by
@@ -714,6 +740,48 @@ fn runAddAliased(ctx: *const BenchCtx) void {
 /// siluMul() writing back over its gate input, as prefillFeedForward does.
 fn runSiluMulAliased(ctx: *const BenchCtx) void {
     ctx.be.siluMul(ctx.x.ptr, ctx.y.ptr, ctx.x.ptr, ctx.n);
+    ctx.be.sync();
+}
+
+/// Ops the model uses but no benchmark reached. Several are on the batched
+/// prefill path, which is exactly where the composition bug lived.
+fn runDeinterleave(ctx: *const BenchCtx) void {
+    ctx.be.deinterleave(ctx.x.ptr, ctx.y.ptr, ctx.norm_out.?.ptr, ctx.head_dim, ctx.n_heads);
+    ctx.be.sync();
+}
+
+fn runSplitQGate(ctx: *const BenchCtx) void {
+    ctx.be.splitQGate(ctx.x.ptr, ctx.y.ptr, ctx.norm_out.?.ptr, ctx.head_dim, ctx.n_heads);
+    ctx.be.sync();
+}
+
+fn runAddRmsNorm(ctx: *const BenchCtx) void {
+    ctx.be.addRmsNorm(ctx.x.ptr, ctx.y.ptr, ctx.norm_weight.?.ptr, ctx.norm_out.?.ptr, ctx.n, rms_norm_eps);
+    ctx.be.sync();
+}
+
+fn runRmsNormAdd(ctx: *const BenchCtx) void {
+    ctx.be.rmsNormAdd(ctx.x.ptr, ctx.norm_weight.?.ptr, ctx.norm_out.?.ptr, ctx.n, rms_norm_eps);
+    ctx.be.sync();
+}
+
+fn runSigmoidMul(ctx: *const BenchCtx) void {
+    ctx.be.sigmoidMul(ctx.x.ptr, ctx.y.ptr, ctx.n);
+    ctx.be.sync();
+}
+
+fn runGeluMul(ctx: *const BenchCtx) void {
+    ctx.be.geluMul(ctx.x.ptr, ctx.y.ptr, ctx.norm_out.?.ptr, ctx.n);
+    ctx.be.sync();
+}
+
+fn runClampedSiluMul(ctx: *const BenchCtx) void {
+    ctx.be.clampedSiluMul(ctx.x.ptr, ctx.y.ptr, ctx.norm_out.?.ptr, ctx.n);
+    ctx.be.sync();
+}
+
+fn runAddScaled(ctx: *const BenchCtx) void {
+    ctx.be.addScaled(ctx.y.ptr, ctx.x.ptr, add_scaled_factor, ctx.n);
     ctx.be.sync();
 }
 
@@ -1428,6 +1496,87 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
                     validateVsCpu(runSiluMulAliased, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
             }
             emitJson(@tagName(kernel), be_name, median_ns, computeGbps(3 * n * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        // ── Ops the model uses that no benchmark reached ─────────
+        .deinterleave, .split_q_gate => {
+            const n_heads = 32;
+            const head_dim = 128;
+            const total = n_heads * head_dim * 2; // interleaved pairs
+            const x = page.alloc(f32, total) catch return;
+            defer page.free(x);
+            const a = page.alloc(f32, total / 2) catch return;
+            defer page.free(a);
+            const b = page.alloc(f32, total / 2) catch return;
+            defer page.free(b);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = a, .norm_out = b, .n_heads = n_heads, .head_dim = head_dim, .n = n, .k = k };
+            const median_ns = if (kernel == .deinterleave)
+                collectMedian(runDeinterleave, &ctx, iters)
+            else
+                collectMedian(runSplitQGate, &ctx, iters);
+            if (validate) {
+                if (kernel == .deinterleave)
+                    validateVsCpu(runDeinterleave, refillNone, &ctx, a, allocator, io, @tagName(kernel), be_name)
+                else
+                    validateVsCpu(runSplitQGate, refillNone, &ctx, a, allocator, io, @tagName(kernel), be_name);
+            }
+            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(2 * total * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .add_rms_norm, .rms_norm_add, .gelu_mul, .clamped_silu_mul => {
+            const x = page.alloc(f32, n) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const w_norm = page.alloc(f32, n) catch return;
+            defer page.free(w_norm);
+            const out = page.alloc(f32, n) catch return;
+            defer page.free(out);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticF32(y, synthetic_x_mod + 1, synthetic_x_scale, synthetic_x_offset);
+            for (w_norm, 0..) |*v, i| v.* = 1.0 + @as(f32, @floatFromInt(i % 5)) * 0.1;
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .norm_weight = w_norm, .norm_out = out, .n = n, .k = k };
+            // addRmsNorm mutates its first argument; rmsNormAdd accumulates into
+            // its output. Both need more than the input restored between runs.
+            const median_ns = switch (kernel) {
+                .add_rms_norm => collectMedian(runAddRmsNorm, &ctx, iters),
+                .rms_norm_add => collectMedian(runRmsNormAdd, &ctx, iters),
+                .gelu_mul => collectMedian(runGeluMul, &ctx, iters),
+                else => collectMedian(runClampedSiluMul, &ctx, iters),
+            };
+            if (validate) switch (kernel) {
+                .add_rms_norm => validateVsCpu(runAddRmsNorm, refillAddRmsNorm, &ctx, out, allocator, io, @tagName(kernel), be_name),
+                .rms_norm_add => validateVsCpu(runRmsNormAdd, refillNormOut, &ctx, out, allocator, io, @tagName(kernel), be_name),
+                .gelu_mul => validateVsCpu(runGeluMul, refillNone, &ctx, out, allocator, io, @tagName(kernel), be_name),
+                else => validateVsCpu(runClampedSiluMul, refillNone, &ctx, out, allocator, io, @tagName(kernel), be_name),
+            };
+            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(3 * n * @sizeOf(f32), median_ns), 0, iters);
+        },
+
+        .sigmoid_mul, .add_scaled => {
+            const x = page.alloc(f32, n) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticF32(y, synthetic_x_mod + 1, synthetic_x_scale, synthetic_x_offset);
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k };
+            // Both write in place through x, so x is refilled between runs.
+            const median_ns = if (kernel == .sigmoid_mul)
+                collectMedian(runSigmoidMul, &ctx, iters)
+            else
+                collectMedian(runAddScaled, &ctx, iters);
+            if (validate) {
+                if (kernel == .sigmoid_mul)
+                    validateVsCpu(runSigmoidMul, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name)
+                else
+                    validateVsCpu(runAddScaled, refillX, &ctx, x, allocator, io, @tagName(kernel), be_name);
+            }
+            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(2 * n * @sizeOf(f32), median_ns), 0, iters);
         },
 
         .rms_norm => {
