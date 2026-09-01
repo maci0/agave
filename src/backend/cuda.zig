@@ -361,6 +361,13 @@ pub const CudaBackend = struct {
     batch_sync_count: u32 = 0,
     batch_syncs: [max_batch_syncs]PendingSync = undefined,
 
+    /// Byte cap on `buf_cache` plus the scratch its eviction list is written
+    /// into. Null until `setWeightBudget`; unbounded until then. Entries in
+    /// `resident_map` are deliberately permanent and are never budgeted.
+    weight_budget: ?backend_mod.WeightBudget = null,
+    evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
+    budget_allocator: std.mem.Allocator = undefined,
+
     /// Registered UMA host memory regions (mmap'd weight files).
     /// Disabled (max = 0): cuMemHostRegister pins every page of the mapping,
     /// which faulted the 155GB DS4 checkpoint at ~19MB/s on a cold load
@@ -438,6 +445,7 @@ pub const CudaBackend = struct {
     pub fn init(allocator: std.mem.Allocator, device_id: u32) !CudaBackend {
         var self = CudaBackend{};
         self.allocator = allocator;
+        self.budget_allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
@@ -668,6 +676,7 @@ pub const CudaBackend = struct {
             }
         }
         self.buf_cache.deinit();
+        if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
 
         // Free the permanent resident weight chunks (DS4 EP-local experts).
         for (self.resident_chunks[0..self.resident_chunk_count]) |dptr| _ = self.cuMemFree(dptr);
@@ -874,14 +883,18 @@ pub const CudaBackend = struct {
         // Resident weights (DS4 EP-local experts): device copy is permanent.
         if (self.resident_map.get(addr)) |dptr| return dptr;
         if (self.buf_cache.get(addr)) |cached| {
-            if (cached.size >= size) return cached.dptr;
-            // Size mismatch, evict old entry
-            if (cached.is_registered) {
-                if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
-            } else {
-                _ = self.cuMemFree(cached.dptr);
+            if (cached.size >= size) {
+                if (self.weight_budget) |*wb| _ = wb.touch(addr);
+                return cached.dptr;
             }
-            _ = self.buf_cache.remove(addr);
+            self.dropWeight(addr, cached); // size mismatch
+        }
+
+        if (self.weight_budget) |*wb| {
+            const adm = wb.admit(addr, size, &self.evict_scratch);
+            for (adm.evicted) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c);
+            }
         }
 
         if (self.is_uma and self.isInUmaRegion(addr)) {
@@ -901,6 +914,45 @@ pub const CudaBackend = struct {
             std.log.warn("weight cache put failed (upload, size={d}): {}", .{ size, err });
         };
         return dptr;
+    }
+
+    /// Release one cached weight and drop every record of it. A UMA zero-copy
+    /// entry owns a host registration rather than a device allocation, so the
+    /// two release paths are not interchangeable.
+    fn dropWeight(self: *CudaBackend, addr: usize, cached: CachedBuf) void {
+        if (cached.is_registered) {
+            if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
+        } else {
+            _ = self.cuMemFree(cached.dptr);
+        }
+        _ = self.buf_cache.remove(addr);
+        if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// See `Backend.setWeightBudget`. Does not cover `resident_map`: those copies
+    /// are permanent by construction (DS4 EP-local experts), and evicting one
+    /// would re-fault the mmap pages the resident copy exists to avoid.
+    pub fn setWeightBudget(self: *CudaBackend, bytes: usize) void {
+        if (self.weight_budget) |*wb| {
+            for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c);
+            }
+            return;
+        }
+        if (bytes == 0) return;
+        self.weight_budget = backend_mod.WeightBudget.init(
+            self.budget_allocator,
+            backend_mod.weight_budget_capacity,
+            bytes,
+        ) catch |err| {
+            std.log.warn("CUDA weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+    }
+
+    pub fn weightResidency(self: *CudaBackend) backend_mod.WeightResidency {
+        if (self.weight_budget) |*wb| return .{ .resident = wb.used_bytes, .evictions = wb.evictions };
+        return .{};
     }
 
     // ── Activation cache (deferred sync) ────────────────────────

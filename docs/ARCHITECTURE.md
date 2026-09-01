@@ -103,6 +103,7 @@ agave/
 │   │   ├── cuda.zig       # CUDA: PTX kernels from Zig, deferred execution, Driver API
 │   │   ├── rocm.zig       # ROCm: HIP Runtime API, HSACO kernels, deferred execution
 │   │   ├── webgpu.zig     # WebGPU: WGSL shaders, browser + native (wgpu/Dawn)
+│   │   ├── weight_budget.zig # Byte-budgeted LRU over cached weight uploads (--vram-budget)
 │   │   ├── megakernel.zig # Weight offset computation for fused FFN megakernels
 │   │   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL at runtime)
 │   │   ├── accelerate.zig # Apple Accelerate.framework BLAS bindings (AMX-accelerated SGEMM)

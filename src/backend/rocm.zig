@@ -201,6 +201,12 @@ pub const RocmBackend = struct {
 
     /// Permanent cache: weight buffers uploaded once and reused forever.
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
+    /// Byte cap on `buf_cache`, and the scratch the eviction list is written
+    /// into. Null until `setWeightBudget`; the cache grows without limit until
+    /// then, which is right whenever the model fits in VRAM.
+    weight_budget: ?backend_mod.WeightBudget = null,
+    evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
+    budget_allocator: std.mem.Allocator = undefined,
 
     /// Activation cache: device mirrors of host activation buffers.
     act_cache: std.AutoHashMap(usize, ActBuf) = undefined,
@@ -240,6 +246,7 @@ pub const RocmBackend = struct {
     pub fn init(allocator: std.mem.Allocator, device_id: u32) !RocmBackend {
         var self = RocmBackend{};
         self.allocator = allocator;
+        self.budget_allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
@@ -376,6 +383,7 @@ pub const RocmBackend = struct {
         var wt_it = self.buf_cache.valueIterator();
         while (wt_it.next()) |cached| _ = self.hipFree(@ptrFromInt(cached.dptr));
         self.buf_cache.deinit();
+        if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
 
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
@@ -429,15 +437,60 @@ pub const RocmBackend = struct {
     fn getOrUpload(self: *RocmBackend, ptr: [*]const u8, size: usize) DevicePtr {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.get(addr)) |cached| {
-            if (cached.size >= size) return cached.dptr;
-            _ = self.hipFree(@ptrFromInt(cached.dptr));
-            _ = self.buf_cache.remove(addr);
+            if (cached.size >= size) {
+                if (self.weight_budget) |*wb| _ = wb.touch(addr);
+                return cached.dptr;
+            }
+            self.dropWeight(addr, cached.dptr);
+        }
+        if (self.weight_budget) |*wb| {
+            const adm = wb.admit(addr, size, &self.evict_scratch);
+            for (adm.evicted) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.dptr);
+            }
         }
         const dptr = self.uploadToDevice(ptr, size);
         self.buf_cache.put(addr, .{ .dptr = dptr, .size = size }) catch |err| {
             std.log.warn("ROCm buf_cache put failed: {}", .{err});
         };
         return dptr;
+    }
+
+    /// Free one cached weight's device buffer and drop every record of it.
+    /// The budget entry goes too, so a later re-upload is charged afresh.
+    fn dropWeight(self: *RocmBackend, addr: usize, dptr: DevicePtr) void {
+        _ = self.hipFree(@ptrFromInt(dptr));
+        _ = self.buf_cache.remove(addr);
+        if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// See `Backend.setWeightBudget`. Allocating the tracker can fail; the
+    /// warning matters because the caller asked for a cap and silently not
+    /// having one turns an out-of-VRAM into a driver failure much later.
+    pub fn setWeightBudget(self: *RocmBackend, bytes: usize) void {
+        if (self.weight_budget) |*wb| {
+            for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
+                if (self.buf_cache.get(victim)) |c| {
+                    _ = self.hipFree(@ptrFromInt(c.dptr));
+                    _ = self.buf_cache.remove(victim);
+                }
+            }
+            return;
+        }
+        if (bytes == 0) return;
+        self.weight_budget = backend_mod.WeightBudget.init(
+            self.budget_allocator,
+            backend_mod.weight_budget_capacity,
+            bytes,
+        ) catch |err| {
+            std.log.warn("ROCm weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+    }
+
+    pub fn weightResidency(self: *RocmBackend) backend_mod.WeightResidency {
+        if (self.weight_budget) |*wb| return .{ .resident = wb.used_bytes, .evictions = wb.evictions };
+        return .{};
     }
 
     // ── Activation cache (deferred sync) ────────────────────────
