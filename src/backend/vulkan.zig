@@ -1320,7 +1320,12 @@ pub const VulkanBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), size);
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer, and
+                    // a caller asking for a prefix (a batched op's first token) would
+                    // otherwise refresh only that prefix and then mark everything
+                    // clean, leaving tokens 1..n-1 reading stale device bytes. Correct
+                    // at n_tok == 1, silently wrong above it.
+                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), act.size);
                     act.state = .clean;
                 }
                 return act.vk_buf;

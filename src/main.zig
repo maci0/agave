@@ -572,6 +572,8 @@ const CliArgs = struct {
     profile: bool,
     use_mmap: bool,
     prefill_batch_size: u32,
+    /// True when the user passed --prefill-batch-size, so the backend guard defers to them.
+    prefill_batch_size_explicit: bool = false,
     /// Path to LoRA adapter GGUF. Applied at load time (merged into base weights as F32).
     lora_path: ?[]const u8 = null,
     /// Path to vision projector GGUF (mmproj file) for multimodal inference.
@@ -1332,6 +1334,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .disagg = res.flag("disagg"),
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = parseU32(res.option("prefill-batch-size"), "prefill-batch-size") orelse default_chunk_size,
+        .prefill_batch_size_explicit = res.option("prefill-batch-size") != null,
         .lora_path = res.option("lora"),
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
@@ -2755,6 +2758,37 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 }
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
+/// Prefill chunk size, forced to 1 on backends whose multi-token prefill is
+/// known to produce wrong output.
+///
+/// ROCm and Vulkan generate garbage from the first token at any chunk size above
+/// 1, on every model tested, while chunk size 1 matches the CPU exactly. Every
+/// individual op passes `agave-bench --validate` against the CPU, including the
+/// batched ones, so the fault is in how they compose and is not yet located.
+/// Until it is, a slower correct prefill beats a fast wrong answer.
+///
+/// `--prefill-batch-size` still overrides this, loudly: the flag is how the bug
+/// gets reproduced and eventually fixed.
+fn chunkSizeFor(be: Backend, cli: *const CliArgs) u32 {
+    const broken = switch (be) {
+        .rocm, .vulkan => true,
+        else => false,
+    };
+    if (!broken or cli.prefill_batch_size <= 1) return cli.prefill_batch_size;
+    if (cli.prefill_batch_size_explicit) {
+        eprint(
+            "Warning: --prefill-batch-size {d} on this backend produces WRONG OUTPUT " ++
+                "(multi-token prefill is broken on ROCm/Vulkan); pass 1 for correct results\n",
+            .{cli.prefill_batch_size},
+        );
+        return cli.prefill_batch_size;
+    }
+    if (!g_quiet) {
+        eprint("note: prefill chunk forced to 1 on this backend; multi-token prefill is incorrect here\n", .{});
+    }
+    return 1;
+}
+
 /// Fraction of reported device memory `--vram-budget auto` gives to weights.
 /// The rest covers the KV cache, activations and the driver's own allocations,
 /// which are not tracked by the weight budget and would otherwise be squeezed
@@ -2901,7 +2935,7 @@ fn initAndRun(
     defer mdl.deinit();
     mdl.setPool(pool);
     mdl.fixBlockAllocator();
-    mdl.setChunkSize(cli.prefill_batch_size);
+    mdl.setChunkSize(chunkSizeFor(be, cli));
 
     // Directional steering: load direction vectors and attach to model
     var dir_steering: ?DirectionalSteering = null;

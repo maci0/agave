@@ -1042,9 +1042,14 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer, and
+                    // a caller asking for a prefix (a batched op's first token) would
+                    // otherwise refresh only that prefix and then mark everything
+                    // clean, leaving tokens 1..n-1 reading stale device bytes. Correct
+                    // at n_tok == 1, silently wrong above it.
                     // Blocking: async H2D from unpinned host memory is
                     // rejected by the fresh-boot driver (719/700) on GB10.
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(act upload)");
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), act.size), "cuMemcpyHtoD(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
