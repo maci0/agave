@@ -48,6 +48,9 @@ const default_head_dim: usize = 128;
 /// Tokens a batched-op benchmark uses. The failure mode these exist to catch
 /// (any token past the first reading stale data) appears at 2.
 const batched_n_tok: usize = 4;
+/// Tokens in the sdpa_prefill fixture. Larger than `batched_n_tok` so the last
+/// token attends over 15 earlier positions, all written during the same call.
+const sdpa_prefill_n_tok: usize = 16;
 const default_rope_theta: f32 = 10000.0;
 const rms_norm_eps: f32 = 1e-6;
 const l2_norm_eps: f32 = 1e-6;
@@ -64,6 +67,14 @@ const q4_k_block_bytes = backend_mod.q4_k_block_bytes;
 const q4_0_block_bytes = backend_mod.q4_0_block_bytes;
 const q5_0_block_bytes = backend_mod.q5_0_block_bytes;
 const q6_k_block_bytes = backend_mod.q6_k_block_bytes;
+const q4_1_block_bytes = backend_mod.q4_1_block_bytes;
+const q2_k_block_bytes = backend_mod.q2_k_block_bytes;
+const q3_k_block_bytes = backend_mod.q3_k_block_bytes;
+const q5_k_block_bytes = backend_mod.q5_k_block_bytes;
+const iq4_nl_block_bytes = backend_mod.iq4_nl_block_bytes;
+const iq4_xs_block_bytes = backend_mod.iq4_xs_block_bytes;
+const tq1_0_block_bytes = backend_mod.tq1_0_block_bytes;
+const tq2_0_block_bytes = backend_mod.tq2_0_block_bytes;
 const quant_group_size = backend_mod.quant_block_elems;
 /// Little-endian f16 ≈ 0.00875.
 const synthetic_scale_byte_0: u8 = 0x1E;
@@ -124,6 +135,16 @@ const Kernel = enum {
     gemv_q4_0,
     gemv_q5_0,
     gemv_q6_k,
+    gemv_q4_1,
+    gemv_q2_k,
+    gemv_q3_k,
+    gemv_q5_k,
+    gemv_iq4_nl,
+    gemv_iq4_xs,
+    gemv_tq1_0,
+    gemv_tq2_0,
+    gemv_fp8_e4m3,
+    gemv_fp8_e5m2,
     gemm_q8_0,
     rms_norm_batched,
     rope_batched,
@@ -344,7 +365,9 @@ fn printUsage() void {
         \\
         \\KERNELS:
         \\  gemv_f32  gemv_bf16  gemv_f16  gemv_q8_0  gemv_q4_k  gemv_q4_0
-        \\  gemv_q5_0  gemv_q6_k
+        \\  gemv_q5_0  gemv_q6_k  gemv_q4_1  gemv_q2_k  gemv_q3_k  gemv_q5_k
+        \\  gemv_iq4_nl  gemv_iq4_xs  gemv_tq1_0  gemv_tq2_0
+        \\  gemv_fp8_e4m3  gemv_fp8_e5m2
         \\  gemm_q8_0  rms_norm_batched  rope_batched  sdpa_prefill  (prefill paths)
         \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
         \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
@@ -655,13 +678,21 @@ fn runSdpaPrefill(ctx: *const BenchCtx) void {
     ctx.be.sync();
 }
 
+/// Attention output is a convex combination of the value vectors, so a fixture
+/// whose values straddle zero can cancel to near-zero and then a tiny difference
+/// in the softmax weights flips the sign of a small number. That cannot
+/// distinguish a wrong kernel from float noise, which is the one thing a
+/// validation fixture has to do, so the values here are strictly positive: the
+/// output is then bounded by their range and any real disagreement shows as one.
+const sdpa_v_offset_positive: f32 = 0.05;
+
 /// sdpaPrefill appends into the KV cache, so a second run must start from the
 /// same cache contents or it attends over the first run's leftovers.
 fn refillKvCache(ctx: *BenchCtx) void {
     const keys_f32: []f32 = @alignCast(std.mem.bytesAsSlice(f32, ctx.keys.?));
     const values_f32: []f32 = @alignCast(std.mem.bytesAsSlice(f32, ctx.values.?));
     fillSyntheticF32(keys_f32, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
-    fillSyntheticF32(values_f32, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
+    fillSyntheticF32(values_f32, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset_positive);
 }
 
 /// Per-head RMS norm over n_heads vectors. The prefill path calls this with
@@ -826,6 +857,21 @@ fn fillSyntheticQ6_K(buf: []u8, n_rows: usize, k: usize) void {
         buf[d_off] = synthetic_scale_byte_0;
         buf[d_off + 1] = synthetic_scale_byte_1;
     }
+}
+
+/// Fill a quantized weight buffer with bytes that are valid in EVERY block
+/// layout, without encoding any of them.
+///
+/// Every byte is capped at 63, so a little-endian f16 read from any two adjacent
+/// bytes is at most 0x3F3F (about 1.81): always finite, never NaN or Inf,
+/// whatever offset a format keeps its scale at. Quantized codes are in range by
+/// construction since they are bit fields of the same bytes.
+///
+/// Validation does not need a well-formed quantization, only that the CPU and
+/// the GPU read the SAME bytes the same way. Arbitrary-but-finite content tests
+/// that harder than a tidy encoding would.
+fn fillSyntheticQuantBytes(buf: []u8) void {
+    for (buf, 0..) |*v, i| v.* = @truncate(i % 64);
 }
 
 /// Constructs a Q4_0 weight buffer with synthetic scale + nibble data.
@@ -1122,6 +1168,53 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             emitJson("gemv_q6_k", be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
         },
 
+        // ── Quantized GEMV formats sharing one generic body ──────
+        // Block geometry is the only thing that differs, so they are handled
+        // together rather than as ten near-identical blocks.
+        .gemv_q4_1,
+        .gemv_q2_k,
+        .gemv_q3_k,
+        .gemv_q5_k,
+        .gemv_iq4_nl,
+        .gemv_iq4_xs,
+        .gemv_tq1_0,
+        .gemv_tq2_0,
+        .gemv_fp8_e4m3,
+        .gemv_fp8_e5m2,
+        => {
+            const geom: struct { dtype: backend_mod.DType, elems: usize, bytes: usize } = switch (kernel) {
+                .gemv_q4_1 => .{ .dtype = .q4_1, .elems = quant_group_size, .bytes = q4_1_block_bytes },
+                .gemv_q2_k => .{ .dtype = .q2_k, .elems = 256, .bytes = q2_k_block_bytes },
+                .gemv_q3_k => .{ .dtype = .q3_k, .elems = 256, .bytes = q3_k_block_bytes },
+                .gemv_q5_k => .{ .dtype = .q5_k, .elems = 256, .bytes = q5_k_block_bytes },
+                .gemv_iq4_nl => .{ .dtype = .iq4_nl, .elems = quant_group_size, .bytes = iq4_nl_block_bytes },
+                .gemv_iq4_xs => .{ .dtype = .iq4_xs, .elems = 256, .bytes = iq4_xs_block_bytes },
+                .gemv_tq1_0 => .{ .dtype = .tq1_0, .elems = 256, .bytes = tq1_0_block_bytes },
+                .gemv_tq2_0 => .{ .dtype = .tq2_0, .elems = 256, .bytes = tq2_0_block_bytes },
+                // fp8 is byte-per-element, not blocked; one "block" of one byte.
+                .gemv_fp8_e4m3 => .{ .dtype = .fp8_e4m3, .elems = 1, .bytes = 1 },
+                .gemv_fp8_e5m2 => .{ .dtype = .fp8_e5m2, .elems = 1, .bytes = 1 },
+                else => unreachable,
+            };
+
+            const x = page.alloc(f32, k) catch return;
+            defer page.free(x);
+            const y = page.alloc(f32, n) catch return;
+            defer page.free(y);
+            const nb = (k + geom.elems - 1) / geom.elems;
+            const row_bytes = nb * geom.bytes;
+            const w = page.alloc(u8, n * row_bytes) catch return;
+            defer page.free(w);
+
+            fillSyntheticF32(x, synthetic_x_mod, synthetic_x_scale, synthetic_x_offset);
+            fillSyntheticQuantBytes(w);
+
+            var ctx = BenchCtx{ .be = be, .x = x, .y = y, .n = n, .k = k, .td = TensorData{ .data = w.ptr, .dtype = geom.dtype } };
+            const median_ns = if (reupload) collectMedian(runGemvReupload, &ctx, iters) else collectMedian(runGemv, &ctx, iters);
+            if (validate) validateVsCpu(runGemv, refillNone, &ctx, y, allocator, io, @tagName(kernel), be_name);
+            emitJson(@tagName(kernel), be_name, median_ns, computeGbps(n * row_bytes, median_ns), computeGflops(2 * n * k, median_ns), iters);
+        },
+
         .gemm_q8_0 => {
             const n_tok = batched_n_tok;
             const x = page.alloc(f32, n_tok * k) catch return;
@@ -1207,12 +1300,24 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
 
         .sdpa_prefill => {
             // The only batched op that writes the KV cache, and the one a
-            // single-token benchmark can never reach.
-            const n_tok = batched_n_tok;
+            // single-token benchmark can never reach. Longer than the other
+            // batched fixtures so the tail tokens attend over a real history that
+            // the same call produced.
+            const n_tok = sdpa_prefill_n_tok;
             const n_heads = default_n_heads;
             const n_kv_heads = default_n_heads;
             const head_dim = default_head_dim;
-            const prev_len: usize = 8;
+            // No pre-existing history: every position this attends over is written
+            // by the kernel itself during the call.
+            //
+            // Seeding the cache by writing host memory does not work as a fixture.
+            // Vulkan uploads the KV cache and would see it; ROCm keeps it
+            // device-side and appends, so it would not, and that difference is
+            // correct behaviour rather than a bug: in inference every earlier
+            // position was written by an earlier sdpa call on the device. A long
+            // enough chunk covers the attend-over-history path honestly, because
+            // the later tokens attend over positions the earlier ones just wrote.
+            const prev_len: usize = 0;
             const kv_dim = n_kv_heads * head_dim;
             const capacity = prev_len + n_tok;
 
@@ -1233,7 +1338,7 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
 
             fillSyntheticF32(q, sdpa_q_mod, sdpa_q_scale, sdpa_q_offset);
             fillSyntheticF32(k_new, sdpa_k_mod, sdpa_kv_scale, sdpa_k_offset);
-            fillSyntheticF32(v_new, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset);
+            fillSyntheticF32(v_new, sdpa_v_mod, sdpa_kv_scale, sdpa_v_offset_positive);
 
             var ctx = BenchCtx{
                 .be = be,
@@ -1257,7 +1362,21 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             };
             refillKvCache(&ctx);
             const median_ns = collectMedian(runSdpaPrefill, &ctx, iters);
-            if (validate) validateVsCpu(runSdpaPrefill, refillKvCache, &ctx, out, allocator, io, @tagName(kernel), be_name);
+
+            // Validate on a KV pair the timed loop never touched. ROCm keeps the
+            // KV cache device-side and keyed by host address, so refilling host
+            // memory does not reset it: the comparison would otherwise run
+            // against whatever the benchmark iterations left on the GPU. A pair
+            // used for the first time here has no device state to inherit.
+            if (validate) {
+                const keys2 = page.alloc(u8, capacity * kv_dim * @sizeOf(f32)) catch return;
+                defer page.free(keys2);
+                const values2 = page.alloc(u8, capacity * kv_dim * @sizeOf(f32)) catch return;
+                defer page.free(values2);
+                ctx.keys = keys2;
+                ctx.values = values2;
+                validateVsCpu(runSdpaPrefill, refillKvCache, &ctx, out, allocator, io, @tagName(kernel), be_name);
+            }
             emitJson("sdpa_prefill", be_name, median_ns, 0, 0, iters);
         },
 

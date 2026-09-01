@@ -400,9 +400,16 @@ difference. Exits non-zero past a 2% tolerance, so CI can gate on it.
 agave-bench gemv_q6_k --n 1024 --k 896 --backend rocm --validate
 ```
 
-21 kernels x {ROCm, Vulkan}: 39 of 40 pass. Covers every GEMV dtype the harness can build,
-the batched prefill paths (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`, `sdpa_prefill`,
-`rms_norm_multi`), and the elementwise and norm ops.
+33 kernels x {ROCm, Vulkan}: **66 of 66 pass**. Covers all 18 GEMV dtypes the backends
+dispatch, the batched prefill paths (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`,
+`sdpa_prefill`, `rms_norm_multi`), the elementwise and norm ops, and the aliased-output forms
+the prefill path actually uses.
+
+Quantized fixtures do not encode any block layout. Every byte is capped at 63, which makes an
+f16 read from any two adjacent bytes at most ~1.81 whatever offset a format keeps its scale at:
+always finite, never NaN. Validation does not need a well-formed quantization, only that both
+sides read the same bytes the same way, and arbitrary-but-finite content tests that harder than
+a tidy encoding would.
 
 **Two real bugs it found, both now fixed:**
 
@@ -410,6 +417,7 @@ the batched prefill paths (`gemm_q8_0`, `rms_norm_batched`, `rope_batched`, `sdp
 |-----|---------|-------|
 | ROCm `gemv_q6_k` | rel err 6-8 at every shape | Decoded Q6_K as a sequential nibble stream. GGML interleaves each 128-element half so `ql[l]` holds elements `l` and `l+64`, `ql[l+32]` holds `l+32` and `l+96`, with `qh[l]` supplying all four high-bit pairs. Rewritten against `kernels/cpu/gemv_q6_k.zig`. |
 | ROCm `gemv_q4_k` | rel err 0.1-1.1 when `k % 256 != 0` | `nblk = k / 256` truncated while the host row stride uses the rounded-up count, so the kernel both dropped the tail and read the wrong row. |
+| CPU **and** Vulkan `gemv_q3_k` | rel err 27 / 3.2 vs ROCm | The 6-bit scale takes its BYTE index from `j % 4` and its SHIFT from `j / 4` (ggml's `aux[]` shuffle). Both had them swapped, which permutes the 16 group scales and is invisible whenever the scales happen to be uniform. **ROCm was the only correct one**, so the harness first flagged the right implementation as the outlier; an independent test against ggml's formula settled it. |
 
 Fixing them makes Qwen2.5 0.5B (Q8_0), 0.5B (Q4_K_M mix) and 1.5B (Q4_K) all produce output
 identical to the CPU on ROCm and Vulkan, where every one of them previously emitted garbage.
@@ -454,8 +462,16 @@ activation cache to resolve its slice of the reserved parent. Indexing that look
 scanning it is the open item; until then one token at a time is Vulkan's faster path. Both
 paths produce identical output, and an explicit flag always wins.
 
-**Marginal: ROCm `sdpa_prefill`** at 0.0222 against a 0.02 tolerance, small absolute values.
-Not reached in practice while the chunk-size guard holds it at 1, where it reduces to `sdpa`.
+**`sdpa_prefill` was a bad fixture, not a bug.** It seeded KV history by writing host memory.
+Vulkan uploads the KV cache and saw it; ROCm keeps it device-side and appends, so it did not,
+and that difference is correct: in inference every earlier position was written by an earlier
+`sdpa` call on the device. The fixture now runs a 16-token chunk from an empty cache, so the
+tail tokens attend over history the same call produced, and both backends are exact.
+
+Its values are also strictly positive now. Attention output is a convex combination of the
+value vectors, so a fixture whose values straddle zero can cancel to near-zero, and then a tiny
+difference in the softmax weights flips the sign of a small number. That cannot tell a wrong
+kernel from float noise, which is the one thing a validation fixture has to do.
 
 ## Placement Under Budget Pressure (RX 7900 XTX)
 
