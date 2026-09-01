@@ -8,7 +8,7 @@ const posix = std.posix;
 const backend_mod = @import("backend.zig");
 
 /// Read a small file into buf via raw posix syscalls (no std.fs dependency).
-fn readSmallFile(comptime path: []const u8, buf: []u8) []const u8 {
+fn readSmallFile(path: []const u8, buf: []u8) []const u8 {
     const fd = posix.openat(posix.AT.FDCWD, path, .{}, 0) catch return "";
     defer _ = posix.system.close(fd);
     const n = posix.read(fd, buf) catch return "";
@@ -222,6 +222,116 @@ pub fn detectCacheSizes() CacheSizes {
     return .{};
 }
 
+// ── CPU topology ─────────────────────────────────────────────────
+
+/// Upper bound on logical CPUs scanned for topology, matching the kernel's
+/// default `cpu_set_t` width. CPUs past this are ignored, never miscounted.
+pub const max_logical_cpus: usize = 1024;
+
+/// Longest `/sys/devices/system/cpu/cpuN/topology/thread_siblings_list` path.
+const siblings_path_buf_size: usize = 80;
+
+/// A sibling list is a short comma/range expression ("0,8", "0-1,4-5").
+const siblings_read_buf_size: usize = 256;
+
+const CpuBitSet = [max_logical_cpus / @bitSizeOf(u64)]u64;
+
+fn bitTest(set: *const CpuBitSet, cpu: usize) bool {
+    return (set[cpu / 64] >> @intCast(cpu % 64)) & 1 != 0;
+}
+
+fn bitSet(set: *CpuBitSet, cpu: usize) void {
+    if (cpu >= max_logical_cpus) return;
+    set[cpu / 64] |= @as(u64, 1) << @intCast(cpu % 64);
+}
+
+/// Mark every CPU named by a sysfs `thread_siblings_list` expression.
+/// Accepts single ids and inclusive ranges, comma separated. Malformed input
+/// marks whatever parsed cleanly, so a kernel that changes the format degrades
+/// to counting logical CPUs rather than reporting a wrong core count.
+fn markSiblingList(data: []const u8, out: *CpuBitSet) void {
+    var i: usize = 0;
+    while (i < data.len) {
+        while (i < data.len and (data[i] < '0' or data[i] > '9')) : (i += 1) {}
+        if (i >= data.len) return;
+        var lo: usize = 0;
+        while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
+            lo = std.math.add(usize, std.math.mul(usize, lo, 10) catch return, data[i] - '0') catch return;
+        }
+        var hi = lo;
+        if (i < data.len and data[i] == '-') {
+            i += 1;
+            hi = 0;
+            while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
+                hi = std.math.add(usize, std.math.mul(usize, hi, 10) catch return, data[i] - '0') catch return;
+            }
+        }
+        if (hi < lo) return;
+        var cpu = lo;
+        while (cpu <= hi and cpu < max_logical_cpus) : (cpu += 1) bitSet(out, cpu);
+    }
+}
+
+/// Write one logical CPU per physical core into `out`, restricted to this
+/// process's CPU affinity, and return how many were written.
+///
+/// Memory-bandwidth-bound kernels (quantized GEMV above all) gain nothing from
+/// SMT siblings: they contend for the same core's load ports without adding
+/// bandwidth, and they make the thread pool's spin barrier degrade under
+/// oversubscription. One thread per physical core, pinned to it, is both faster
+/// and more stable than one per logical CPU.
+///
+/// The first allowed CPU of each core wins, so a cpuset that excludes CPU 0 but
+/// keeps its sibling still yields that core. Returns 0 where the platform
+/// exposes no usable topology (anything but Linux); callers fall back to
+/// `std.Thread.getCpuCount`.
+pub fn physicalCoreIds(out: []u32) usize {
+    if (comptime builtin.os.tag != .linux) return 0;
+    const linux = std.os.linux;
+
+    var allowed: linux.cpu_set_t = @splat(0);
+    if (linux.sched_getaffinity(0, @sizeOf(linux.cpu_set_t), &allowed) != 0) return 0;
+
+    var claimed: CpuBitSet = @splat(0);
+    var path_buf: [siblings_path_buf_size]u8 = undefined;
+    var read_buf: [siblings_read_buf_size]u8 = undefined;
+    var n: usize = 0;
+
+    var cpu: usize = 0;
+    while (cpu < max_logical_cpus and n < out.len) : (cpu += 1) {
+        // cpu_set_t is [N]usize; the affinity bit layout matches CpuBitSet's.
+        if ((allowed[cpu / @bitSizeOf(usize)] >> @intCast(cpu % @bitSizeOf(usize))) & 1 == 0) continue;
+        if (bitTest(&claimed, cpu)) continue;
+
+        out[n] = @intCast(cpu);
+        n += 1;
+        bitSet(&claimed, cpu);
+
+        const path = std.fmt.bufPrint(
+            &path_buf,
+            "/sys/devices/system/cpu/cpu{d}/topology/thread_siblings_list",
+            .{cpu},
+        ) catch continue;
+        markSiblingList(readSmallFile(path, &read_buf), &claimed);
+    }
+    return n;
+}
+
+/// Number of physical cores usable by this process, or the logical CPU count
+/// where topology is unavailable. See `physicalCoreIds` for why this is the
+/// right pool size for bandwidth-bound work.
+pub fn detectPhysicalCores() usize {
+    if (comptime builtin.os.tag == .macos) {
+        const n = sysctlU64("hw.physicalcpu");
+        if (n > 0) return n;
+    } else if (comptime builtin.os.tag == .linux) {
+        var ids: [max_logical_cpus]u32 = undefined;
+        const n = physicalCoreIds(&ids);
+        if (n > 0) return n;
+    }
+    return std.Thread.getCpuCount() catch 1;
+}
+
 // ── OS version detection ─────────────────────────────────────────
 
 const os_version_buf_size: usize = 128;
@@ -301,6 +411,15 @@ pub const CpuBackend = struct {
     pub fn freeKvSlice(_: *CpuBackend, allocator: std.mem.Allocator, slice: []u8) void {
         allocator.free(slice);
     }
+
+    /// No device, so no DMA and nothing to page-lock. `mlock` on the CPU
+    /// backend belongs to whoever owns the memory (see `expert_cache.zig`),
+    /// not to the compute backend.
+    pub fn hostRegister(_: *CpuBackend, _: [*]const u8, _: usize) bool {
+        return false;
+    }
+
+    pub fn hostUnregister(_: *CpuBackend, _: [*]const u8, _: usize) void {}
 
     /// Performs general matrix-vector multiplication: y = W @ x.
     /// When a thread pool is available and n >= parallel_min_rows,
@@ -1267,6 +1386,61 @@ test "CpuBackend, gemvSeq with F32 identity" {
     // x = [1,0,0,0] → y = first column of W
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), y[0], 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), y[1], 1e-5);
+}
+
+test "markSiblingList, single ids and ranges" {
+    var set: CpuBitSet = @splat(0);
+    markSiblingList("0,8\n", &set);
+    try std.testing.expect(bitTest(&set, 0));
+    try std.testing.expect(bitTest(&set, 8));
+    try std.testing.expect(!bitTest(&set, 1));
+
+    var r: CpuBitSet = @splat(0);
+    markSiblingList("4-7\n", &r);
+    for (4..8) |c| try std.testing.expect(bitTest(&r, c));
+    try std.testing.expect(!bitTest(&r, 3));
+    try std.testing.expect(!bitTest(&r, 8));
+
+    var mixed: CpuBitSet = @splat(0);
+    markSiblingList("0-1,4-5,9", &mixed);
+    for ([_]usize{ 0, 1, 4, 5, 9 }) |c| try std.testing.expect(bitTest(&mixed, c));
+    for ([_]usize{ 2, 3, 6, 7, 8 }) |c| try std.testing.expect(!bitTest(&mixed, c));
+}
+
+test "markSiblingList, malformed input marks nothing extra" {
+    var empty: CpuBitSet = @splat(0);
+    markSiblingList("", &empty);
+    markSiblingList("\n", &empty);
+    markSiblingList("garbage", &empty);
+    for (0..64) |c| try std.testing.expect(!bitTest(&empty, c));
+
+    // Descending range is rejected outright rather than wrapping the loop.
+    var rev: CpuBitSet = @splat(0);
+    markSiblingList("7-4", &rev);
+    for (0..16) |c| try std.testing.expect(!bitTest(&rev, c));
+
+    // Out-of-range ids are dropped, not folded back into a valid bit.
+    var big: CpuBitSet = @splat(0);
+    markSiblingList("99999", &big);
+    for (0..max_logical_cpus) |c| try std.testing.expect(!bitTest(&big, c));
+}
+
+test "physicalCoreIds, ids are ascending, distinct, and no more than logical CPUs" {
+    var ids: [128]u32 = undefined;
+    const n = physicalCoreIds(&ids);
+    if (comptime builtin.os.tag != .linux) {
+        try std.testing.expectEqual(@as(usize, 0), n);
+        return;
+    }
+    if (n == 0) return; // no sysfs topology (container without /sys): documented fallback
+    try std.testing.expect(n <= (std.Thread.getCpuCount() catch 1));
+    for (1..n) |i| try std.testing.expect(ids[i] > ids[i - 1]);
+}
+
+test "detectPhysicalCores, at least one and no more than logical CPUs" {
+    const cores = detectPhysicalCores();
+    try std.testing.expect(cores >= 1);
+    try std.testing.expect(cores <= (std.Thread.getCpuCount() catch 1));
 }
 
 test "detectSystemMem, returns non-zero" {

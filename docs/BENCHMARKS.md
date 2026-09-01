@@ -222,6 +222,27 @@ Suffix speculation on the 141GB MLX-community 4-bit model exceeds GPU-based ds4 
 Performance scales with sequence length: more output → more suffix history → more matches → fewer SSD-bound forwards.
 See [DS4_BENCHMARK.md](DS4_BENCHMARK.md) for full methodology, Metal investigation, and optimization details.
 
+## CPU Thread Placement (AMD Ryzen 9 9950X, 16C/32T)
+
+**Date**: 2026-09-01. Qwen2.5 0.5B Q4_K_M, `--backend cpu -n 128 -t 0 --seed 7`, 5 runs each,
+same binary flags and prompt on both sides.
+
+| Pool sizing | tok/s (5 runs) | Median |
+|-------------|----------------|-------:|
+| One worker per logical CPU, unpinned (previous) | 55.3, 50.8, 55.4, 51.9, 57.1 | 55.3 |
+| One worker per physical core, pinned (current)  | 56.3, 61.5, 60.0, 59.9, 59.7 | **59.9** |
+
++8.3% median, and the spread narrows from 6.3 to 5.2 tok/s. Quantized GEMV is
+DRAM-bandwidth-bound, so SMT siblings contend for one core's load ports without adding
+bandwidth, and `parallelFor`'s spin-wait degrades when two workers share a core.
+
+Verified placement: 15 workers each hold a single-CPU affinity mask (1-15); the main
+thread, which also runs `parallelFor` chunks, stays unpinned so it lands on core 0.
+
+Machines without sysfs topology (`/sys/devices/system/cpu/cpuN/topology/thread_siblings_list`)
+fall back to the logical CPU count unpinned, as before. macOS sizes by `hw.physicalcpu` and
+does not pin: its affinity API is advisory and is a no-op on Apple Silicon.
+
 ## Known Issues
 
 1. **Metal large-context hang**: With default context sizes (2048–4096) and many layers, the PagedKV block pre-allocation is slow. Workaround: use `--ctx-size 128` for benchmarks. Does not affect CPU backend.

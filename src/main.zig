@@ -2515,7 +2515,7 @@ pub fn main(init: std.process.Init) !void {
     if (!g_quiet) {
         display.printBanner(disp_info);
         var be_info = bs.be.backendInfo();
-        be_info.n_threads = @intCast(std.Thread.getCpuCount() catch 1);
+        be_info.n_threads = bs.computeThreads();
         if (be_info.system_mem == 0) be_info.system_mem = backend_mod.detectSystemMem();
         if (be_info.system_avail == 0) be_info.system_avail = backend_mod.detectAvailMem();
         if (be_info.l2_cache == 0) {
@@ -3046,6 +3046,7 @@ fn initAndRun(
                 // mlock the hot experts' weight ranges so the OS cannot evict them.
                 if (cli.ssd_streaming) {
                     var pin_count: u32 = 0;
+                    var dma_count: u32 = 0;
                     var pin_buf: [128]u8 = undefined;
                     for (0..@min(n_lay, p.n_layers)) |li| {
                         const k_pinned = p.topExperts(@intCast(li), 6, &top_ids);
@@ -3055,15 +3056,22 @@ fn initAndRun(
                                 const name = std.fmt.bufPrint(&pin_buf, "blk.{d}.{s}", .{ li, suffix }) catch continue;
                                 if (fmt.getTensor(name)) |t| {
                                     const stride = t.dataByteLen() / @as(usize, n_exp);
-                                    if (ec.pinExpert(t.data_ptr + eid * stride, stride))
-                                        pin_count += 1;
+                                    const range = t.data_ptr + eid * stride;
+                                    if (!ec.pinExpert(range, stride)) continue;
+                                    pin_count += 1;
+                                    // Only AFTER pinExpert has prefaulted and wired the
+                                    // range: registering a cold mapping makes the driver
+                                    // fault it in page-at-a-time (~19 MB/s measured).
+                                    if (be.hostRegister(range, stride)) dma_count += 1;
                                 }
                             }
                         }
                     }
                     if (pin_count > 0) {
-                        eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB)\n", .{
-                            pin_count, ec.total_pinned_bytes / (1024 * 1024),
+                        eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB){s}\n", .{
+                            pin_count,
+                            ec.total_pinned_bytes / (1024 * 1024),
+                            if (dma_count > 0) ", DMA-registered" else "",
                         });
                     }
                 }

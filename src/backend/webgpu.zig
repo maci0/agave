@@ -2122,6 +2122,14 @@ pub const WebGpuBackend = struct {
         allocator.free(slice);
     }
 
+    /// WebGPU exposes no host-pointer registration: `writeBuffer` and mapped
+    /// staging buffers are the only upload paths, and both copy.
+    pub fn hostRegister(_: *WebGpuBackend, _: [*]const u8, _: usize) bool {
+        return false;
+    }
+
+    pub fn hostUnregister(_: *WebGpuBackend, _: [*]const u8, _: usize) void {}
+
     pub fn backendInfo(_: *WebGpuBackend) backend_mod.BackendInfo {
         return .{
             .name = "WebGPU",

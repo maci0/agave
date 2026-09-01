@@ -2375,6 +2375,16 @@ pub const VulkanBackend = struct {
         allocator.free(slice);
     }
 
+    /// Vulkan cannot page-lock an arbitrary host pointer: importing existing
+    /// host memory needs VK_EXT_external_memory_host, whose allocation must be
+    /// imported as a VkDeviceMemory before use rather than registered in place.
+    /// Uploads keep going through the driver's host-visible staging buffer.
+    pub fn hostRegister(_: *VulkanBackend, _: [*]const u8, _: usize) bool {
+        return false;
+    }
+
+    pub fn hostUnregister(_: *VulkanBackend, _: [*]const u8, _: usize) void {}
+
     /// Create Vulkan buffer wrapping RAM-tier KV block with zero copy.
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
