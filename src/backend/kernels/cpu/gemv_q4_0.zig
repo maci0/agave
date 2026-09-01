@@ -6,6 +6,7 @@
 const std = @import("std");
 const backend_mod = @import("../../backend.zig");
 const sparsity = @import("activation_sparsity.zig");
+const prefetch = @import("prefetch.zig");
 const V8 = @Vector(8, f32);
 const V8u = @Vector(8, u8);
 const V8i16 = @Vector(8, i16);
@@ -36,6 +37,14 @@ pub fn gemvQ4_0(x: [*]const f32, w: [*]const u8, y: [*]f32, n: usize, k: usize) 
         const rp3 = w + (row + 3) * row_bytes;
 
         for (0..nb) |b| {
+            // Weight stream: read once per call, so hint it non-temporally and
+            // let the activations keep the cache. Issued before the sparse skip
+            // so a run of skipped blocks still walks the prefetch forward.
+            prefetch.weightBlock(rp0, b, bpb);
+            prefetch.weightBlock(rp1, b, bpb);
+            prefetch.weightBlock(rp2, b, bpb);
+            prefetch.weightBlock(rp3, b, bpb);
+            prefetch.activation(x, (b + 1) * qk);
             if (sparsity.isBlockSparse(x, b * qk, qk)) continue;
 
             const bp0 = rp0 + b * bpb;
