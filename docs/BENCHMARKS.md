@@ -397,8 +397,14 @@ with byte-identical inputs (only `ctx.be` is swapped) and reports the largest re
 difference. Exits non-zero past a 2% tolerance, so CI can gate on it.
 
 ```bash
-agave-bench gemv_q6_k --n 1024 --k 896 --backend rocm --validate
+agave-bench gemv_q6_k --n 1024 --k 896 --backend rocm --validate   # one kernel
+zig build validate -Dvalidate-backend=rocm                          # the whole sweep
 ```
+
+`zig build validate` runs all 41 kernels at both k values and fails the build on any
+mismatch. It is deliberately not part of `zig build test`, which has to pass on a CI runner or
+a cross-compile host with no GPU. Verified to catch a regression: re-introducing the Q3_K scale
+transposition makes it exit 1.
 
 41 kernels x {ROCm, Vulkan}: **82 of 82 pass**, at k=896 and at k=900 (a multiple of neither
 32 nor 256). Covers all 18 GEMV dtypes the backends dispatch, the batched prefill paths

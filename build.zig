@@ -512,6 +512,45 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| bench_run.addArgs(args);
     b.step("bench", "Run micro-benchmarks (ReleaseFast)").dependOn(&bench_run.step);
 
+    // ── GPU kernel correctness sweep ────────────────────────────
+    // Every kernel the harness can build, run on the chosen backend and again on
+    // the CPU with byte-identical inputs; agave-bench exits non-zero past its
+    // relative tolerance, so this fails the build on a wrong kernel.
+    //
+    // Not part of `zig build test`: it needs a working GPU, which a CI runner or
+    // a cross-compile host does not have. Run it where the hardware is:
+    //     zig build validate -Dvalidate-backend=rocm
+    //
+    // Two values of k, one a multiple of the 32- and 256-element block sizes and
+    // one a multiple of neither, because a truncated block count is only visible
+    // at the second (it is what made Q4_K produce garbage at k=896).
+    const validate_backend = b.option([]const u8, "validate-backend", "Backend for `zig build validate` (default: rocm)") orelse "rocm";
+    const validate_step = b.step("validate", "Validate every GPU kernel against the CPU backend");
+    {
+        const kernels = [_][]const u8{
+            "gemv_f32",         "gemv_f16",          "gemv_bf16",        "gemv_q8_0",
+            "gemv_q4_0",        "gemv_q4_1",         "gemv_q5_0",        "gemv_q2_k",
+            "gemv_q3_k",        "gemv_q4_k",         "gemv_q5_k",        "gemv_q6_k",
+            "gemv_iq4_nl",      "gemv_iq4_xs",       "gemv_tq1_0",       "gemv_tq2_0",
+            "gemv_fp8_e4m3",    "gemv_fp8_e5m2",     "gemm_q8_0",        "rms_norm_batched",
+            "rope_batched",     "sdpa_prefill",      "rms_norm_multi",   "rms_norm",
+            "silu",             "gelu",              "softmax",          "l2_norm",
+            "add",              "mul",               "rope",             "add_aliased",
+            "silu_mul_aliased", "deinterleave",      "split_q_gate",     "add_rms_norm",
+            "rms_norm_add",     "sigmoid_mul",       "gelu_mul",         "clamped_silu_mul",
+            "add_scaled",
+        };
+        const k_values = [_][]const u8{ "896", "900" };
+        for (k_values) |kv| {
+            for (kernels) |kern| {
+                const run = b.addRunArtifact(exe_bench);
+                run.addArgs(&.{ kern, "--backend", validate_backend, "--n", "1024", "--k", kv, "--iters", "3", "--validate" });
+                run.expectExitCode(0);
+                validate_step.dependOn(&run.step);
+            }
+        }
+    }
+
     // ── WASM build (browser inference) ──────────────────────────
     const wasm_step = b.step("wasm", "Build WebAssembly module for browser inference");
     const wasm_options = b.addOptions();
