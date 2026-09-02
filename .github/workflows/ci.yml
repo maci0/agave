@@ -24,10 +24,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LC_ALL: C
+  TZ: UTC
+
 jobs:
   fmt-check:
     name: Check formatting
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -84,7 +88,7 @@ jobs:
   test-linux-x86:
     name: Test on Linux x86_64
     needs: fmt-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,7 +114,7 @@ jobs:
   test-macos:
     name: Test on macOS (Apple Silicon)
     needs: fmt-check
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,7 +140,7 @@ jobs:
   docker-build:
     name: Verify Docker build
     needs: fmt-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     # GHA cache export for buildx requires actions: write.
     permissions:
@@ -231,7 +235,7 @@ jobs:
   cross-compile-check:
     name: Cross-compilation matrix
     needs: fmt-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -284,7 +288,7 @@ jobs:
   wasm-build:
     name: Build WASM module
     needs: fmt-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -322,7 +326,7 @@ jobs:
   kernel-artifacts:
     name: Kernel artifact freshness
     needs: fmt-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -347,7 +351,7 @@ jobs:
   fuzz-smoke:
     name: Fuzz smoke (parsers + API surfaces)
     needs: fmt-check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -377,7 +381,7 @@ jobs:
   # files are migrated; tsc --noEmit covers both regardless.
   lint-web:
     name: Lint and typecheck TypeScript
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -401,7 +405,7 @@ jobs:
     name: CI passed
     if: always()
     needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
       - name: Verify all jobs passed

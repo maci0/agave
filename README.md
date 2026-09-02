@@ -508,6 +508,7 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-rocm` | bool | true | ROCm backend (runtime dlopen) |
 | `enable-webgpu` | bool | true | WebGPU backend (runtime dlopen, WGSL) |
 | `enable-debug` | bool | true | Build the `agave-debug` (ReleaseSafe) binary |
+| `enable-bench` | bool | true | Install the `agave-bench` micro-benchmark binary |
 | `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120, plus sm_121) |
 | `rocm-arch` | enum | gfx1100 | ROCm GFX target (gfx90a..gfx1151) |
 

@@ -21,8 +21,9 @@ ARG ENABLE_VULKAN=true
 ARG ENABLE_CUDA=true
 ARG ENABLE_ROCM=true
 ARG ENABLE_WEBGPU=true
-# Debug binary is not copied into the runtime image; skip compiling it.
+# Debug and bench binaries are not copied into the runtime image; skip compiling them.
 ARG ENABLE_DEBUG=false
+ARG ENABLE_BENCH=false
 
 # Model enable flags (all enabled by default). Disable to reduce binary size.
 ARG ENABLE_GEMMA3=true
@@ -70,10 +71,10 @@ RUN ZIG_VER="${ZIG_VERSION:-$(tr -d '[:space:]' </tmp/agave.zigversion)}" && \
     elif [ "$ARCH" = "aarch64" ]; then EXPECTED_SHA256="$ZIG_SHA256_AARCH64"; \
     else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
     echo "Installing Zig ${ZIG_VER} (${ARCH})" && \
-    curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz && \
+    curl -fsSL --retry 3 --retry-all-errors "$ZIG_URL" -o /tmp/zig.tar.xz && \
     echo "${EXPECTED_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - && \
     mkdir -p /usr/local/zig && \
-    tar -xJf /tmp/zig.tar.xz -C /usr/local/zig --strip-components=1 && \
+    tar -xJf /tmp/zig.tar.xz -C /usr/local/zig --strip-components=1 --no-same-owner && \
     ln -s /usr/local/zig/zig /usr/local/bin/zig && \
     rm /tmp/zig.tar.xz
 
@@ -132,6 +133,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         -Denable-rocm="$ENABLE_ROCM" \
         -Denable-webgpu="$ENABLE_WEBGPU" \
         -Denable-debug="$ENABLE_DEBUG" \
+        -Denable-bench="$ENABLE_BENCH" \
         -Denable-gemma3="$ENABLE_GEMMA3" \
         -Denable-qwen35="$ENABLE_QWEN35" \
         -Denable-qwen4-exp="$ENABLE_QWEN4_EXP" \
@@ -154,6 +156,7 @@ FROM debian:bookworm-20260824-slim
 
 # Keep in sync with the build stage (same FROM day / snapshot).
 ARG DEBIAN_SNAPSHOT=20260824T000000Z
+ARG SOURCE_DATE_EPOCH=1787529600
 
 # Version label: build-arg validated against build.zig.zon in the build stage.
 # LABEL cannot read files, so plain builds fall back to "dev"; the authoritative
@@ -171,7 +174,8 @@ LABEL org.opencontainers.image.title="agave" \
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C \
-    TZ=UTC
+    TZ=UTC \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 # curl is only used by HEALTHCHECK (not on the inference hot path).
 # Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
