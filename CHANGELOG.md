@@ -22,6 +22,19 @@ must still appear under **Changed** or **Breaking** below. See
   the snapshot is advertised complete.
 - Docker Compose: named volume `agave-cache` (or `AGAVE_CACHE_DIR`) at
   `/home/agave/.cache` so conversations and caches survive container replace.
+- HTTP: `GET /v1/kv_cache` returns `400` (`code: invalid_value`) when `n_tokens`
+  exceeds current `kv_seq_len` (was `501`). Present-but-invalid `n_tokens` uses
+  `invalid_value`; missing still uses `missing_required_parameter`.
+- HTTP: `/v1/detokenize` returns `400` when `tokens` has more than 4096 entries
+  instead of silently truncating.
+- HTTP: `POST /v1/conversations` select/delete with missing or invalid `id`
+  returns `400` instead of coercing to `0` and `404`.
+- HTTP: unauthenticated `/ready` degraded responses include `reason`, matching
+  `/health` and the documented probe contract.
+- HTTP: `/v1/chat` image decode failures return JSON `400`
+  (`code: image_decode_failed`) like `/v1/chat/completions` (was HTML `200`).
+- HTTP: `/v1/kv_cache/info` format failure returns `500` instead of `200` `{}`.
+
 
 ## [0.2.0] - 2026-08-26
 
