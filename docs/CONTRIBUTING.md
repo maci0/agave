@@ -90,6 +90,8 @@ pub const YourBackend = struct {
 6. Add to `initAndRun` switch in `src/main.zig`
 7. Add weight loading in your model's `init()` using the `Format` interface (`getTensor`, `layerTensor`, `getMetaU32`, etc.)
 8. Add golden test against reference implementation
+9. Add `ARG ENABLE_YOURMODEL=true` to the Dockerfile and pass `-Denable-yourmodel` in the image `zig build` (defaults are on; omitting this makes the flag undisableable)
+10. Turn it off in the Gemma3-only local image: `docker-compose.yml`, CI `docker-build` (`ENABLE_YOURMODEL=false`), and the README "Minimal build" `--build-arg` list (`scripts/check-docs.py` enforces this)
 
 **Required interface** (see `src/models/model.zig` for the vtable contract):
 ```zig

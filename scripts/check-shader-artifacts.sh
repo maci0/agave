@@ -30,6 +30,10 @@ drift=0
 
 echo "== CUDA PTX (zig build ptx -Dcuda-sm=sm_120)"
 if ! command -v zig >/dev/null 2>&1; then
+    if $PTX_ONLY; then
+        echo "error: zig not found in PATH (required for --ptx-only)" >&2
+        exit 1
+    fi
     echo "SKIP: zig not found in PATH" >&2
 else
     zig build ptx -Dcuda-sm=sm_120 --prefix "$SCRATCH/ptx-out"

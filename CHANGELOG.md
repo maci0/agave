@@ -38,6 +38,13 @@ must still appear under **Changed** or **Breaking** below. See
   init/generate on that context (`0` = ok).
 
 ### Fixed
+- Docker image pin: `DEBIAN_SNAPSHOT` / `SOURCE_DATE_EPOCH` now match the
+  `debian:bookworm-20260824-slim` FROM tag (CI already required the calendar day).
+- Docker "CPU + Gemma 3 only" image (CI `docker-build` and README minimal
+  `docker buildx`) compiled Qwen4-Exp, DeepSeek V4, and DFlash2 because those
+  `ENABLE_*` build-args were omitted and default on. Flags now match Compose.
+- Docker Compose forwards `HF_TOKEN`, `NO_COLOR`, and `AGAVE_VISION_DEBUG` from
+  `.env` (empty is unset). Hub cache for compose stays on the `agave-cache` volume.
 - Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
   `refs/main` now publish via atomic replace; Hub blob downloads `fsync` before
   the snapshot is advertised complete.
