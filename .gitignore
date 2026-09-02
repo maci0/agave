@@ -103,6 +103,7 @@ outputs/
 progress.md
 .qwen/
 .pi-subagents/
+.impeccable/
 
 # Local tool run-state (single-writer locks, per-machine IDE config)
 *.lock
