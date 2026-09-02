@@ -7533,7 +7533,6 @@ test "Conversation.setTitle keeps trailing multi-byte characters" {
     try std.testing.expect(t.len < 47);
 }
 
-
 test "fuzz: all server functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {

@@ -394,4 +394,3 @@ test "fuzz: gemvMXFP4 gemvNVFP4" {
         }
     }.f, .{});
 }
-

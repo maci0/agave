@@ -2692,8 +2692,12 @@ pub const Ds4Model = struct {
         // multi-second cuMemAlloc stalls at every layer's combine sync).
         const residual_names = [_][]const u8{
             "ffn_gate_inp.weight",
-            "hc_attn_fn.weight", "hc_attn_base.weight", "hc_attn_scale.weight",
-            "hc_ffn_fn.weight", "hc_ffn_base.weight", "hc_ffn_scale.weight",
+            "hc_attn_fn.weight",
+            "hc_attn_base.weight",
+            "hc_attn_scale.weight",
+            "hc_ffn_fn.weight",
+            "hc_ffn_base.weight",
+            "hc_ffn_scale.weight",
         };
         for (0..self.n_layers) |li| {
             for (residual_names) |tn| {

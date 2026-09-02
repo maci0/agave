@@ -610,8 +610,6 @@ fn dequantQ4KRowDotHost(row: []const u8, x: []const f32, out_y: *f32) void {
 
 // ── Kernel runner functions ──────────────────────────────────────
 
-
-
 /// Input refills for `validateVsCpu`. In-place kernels need their input restored
 /// between the two runs; out-of-place ones only need `x` to be the same, which it
 /// already is, so `refillNone` is correct for them and cheaper.
@@ -1203,9 +1201,9 @@ fn benchKernel(kernel: Kernel, be: Backend, be_name: []const u8, n: usize, k: us
             const y = page.alloc(f32, n) catch return;
             defer page.free(y);
             // Round up, matching backend.gemvRowBytes: a k that is not a multiple of
-    // 256 still gets a whole final super-block on disk, and a kernel reading it
-    // must find allocated bytes there.
-    const nb = (k + 255) / 256;
+            // 256 still gets a whole final super-block on disk, and a kernel reading it
+            // must find allocated bytes there.
+            const nb = (k + 255) / 256;
             const row_bytes = nb * q4_k_block_bytes;
             const total_w = n * row_bytes;
             const w = page.alloc(u8, total_w) catch return;

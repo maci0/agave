@@ -2,6 +2,28 @@
 
 Templates and step-by-step guides for extending the inference engine.
 
+## Development setup
+
+Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). No other compile-time SDK is required; GPU backends `dlopen` drivers at runtime.
+
+```bash
+zig version          # must print 0.16.0
+zig build            # agave (ReleaseFast) + agave-debug (ReleaseSafe)
+zig build test       # unit tests
+zig build --help     # all steps
+```
+
+Before a PR, run `zig build check` (format check + docs hygiene + unit tests). That is the default CI gate on Linux and macOS. Extra jobs fire on specific surfaces:
+
+| You changed | Also run |
+|---|---|
+| CUDA kernel sources under `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` (then regenerate with `zig build ptx -Dcuda-sm=sm_120` if it drifts) |
+| WASM / `src/wasm_entry.zig` / `web/` | `zig build wasm` |
+| Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
+| Built-in chat UI TypeScript | `scripts/build-web.sh` (needs `bun`) |
+
+Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
+
 ## Where New Code Goes
 
 | Kind of change | Put it in |
@@ -13,7 +35,7 @@ Templates and step-by-step guides for extending the inference engine.
 | KV cache policy | `src/kvcache/` |
 | Speculative decoding | `src/spec/` |
 | HTTP API / scheduler / metrics | `src/server/` |
-| Built-in `--serve` chat UI | `src/web/` (TypeScript in `app.ts`; run `scripts/build-web.sh` to refresh `app.js`) |
+| Built-in `--serve` chat UI | `src/web/` (TypeScript in `app.ts`; `scripts/build-web.sh` refreshes `app.js`, needs `bun`) |
 | Browser WASM shell | `web/` (not `src/web/`; TypeScript in `agave.ts` / `shell.ts`, same compile script) |
 | Tokenizer | `src/tokenizer/` |
 | Distributed TP/PP transport | `src/parallel/` |
@@ -304,8 +326,13 @@ Notes:
 ## How to Run Tests
 
 ```bash
-# Format check (CI enforces this: run before pushing)
-zig fmt --check src/ tests/ build.zig build.zig.zon
+# Local CI gate (format + docs hygiene + unit tests). Run this before pushing.
+zig build check
+
+# Format check only (same paths as .github/workflows/ci.yml fmt-check)
+zig build fmt-check
+# Apply formatting
+zig build fmt
 
 # Run all tests (includes leak detection via std.testing.allocator)
 zig build test
@@ -319,7 +346,10 @@ zig build test -Dtest-filter=wht32
 # Run with a specific backend (tests that need GPU use target guards)
 zig build test -Denable-webgpu=false    # skip WebGPU tests
 
-# Golden tests (require model files, manual trigger only)
+# Fuzz smoke (CI fuzz-smoke job)
+zig build test --fuzz=1000 --summary all
+
+# Golden tests (require model files under ./models, manual trigger only)
 ./zig-out/bin/agave model.gguf --backend cpu -n 10 -t 0 "What is 2+2?"
 # Compare output against reference (llama.cpp or HuggingFace)
 ```
@@ -332,10 +362,11 @@ zig build test -Denable-webgpu=false    # skip WebGPU tests
 
 ### End-to-End Test Harness
 
-`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires Python 3.11+ and [`rich`](https://github.com/Textualize/rich) `15.0.0` (`uv sync --directory tests`).
+`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires Python 3.11+ and [`rich`](https://github.com/Textualize/rich) `15.0.0`.
 
 ```bash
-python tests/harness.py --models-dir /path/to/models
+uv sync --directory tests
+tests/.venv/bin/python tests/harness.py --model-dir ./models
 ```
 
 ---

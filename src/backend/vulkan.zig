@@ -1627,11 +1627,11 @@ pub const VulkanBackend = struct {
     /// (offset 0) may be destroyed or memory-mapped; a sub-range view borrows.
     const VkBuf = struct { buf: VkBuffer, mem: VkDeviceMemory, offset: usize = 0 };
 
-/// Vulkan's required limits cap `minStorageBufferOffsetAlignment` at 256, so a
-/// 256-aligned descriptor offset is legal on every implementation without
-/// querying the device. A sub-range that is not 256-aligned falls back to its
-/// own buffer rather than risking a validation error.
-const storage_buffer_offset_align: usize = 256;
+    /// Vulkan's required limits cap `minStorageBufferOffsetAlignment` at 256, so a
+    /// 256-aligned descriptor offset is legal on every implementation without
+    /// querying the device. A sub-range that is not 256-aligned falls back to its
+    /// own buffer rather than risking a validation error.
+    const storage_buffer_offset_align: usize = 256;
 
     fn createBuffer(self: *VulkanBackend, size: usize) VkBuf {
         const buf_ci = VkBufferCreateInfo{
@@ -2104,7 +2104,7 @@ const storage_buffer_offset_align: usize = 256;
         const d_buf = self.getInPlaceBuf(data, sz);
 
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuf{ d_buf };
+        const bufs = [_]VkBuf{d_buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_softmax, &bufs, &sizes, @ptrCast(&params), 4, 1);
     }
@@ -2123,7 +2123,7 @@ const storage_buffer_offset_align: usize = 256;
             .theta = theta,
         };
         const grid = (n_heads * rope_dim / 2 + workgroup_size - 1) / workgroup_size;
-        const bufs = [_]VkBuf{ x_buf };
+        const bufs = [_]VkBuf{x_buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_rope, &bufs, &sizes, @ptrCast(&params), 20, @intCast(grid));
     }
@@ -2244,7 +2244,7 @@ const storage_buffer_offset_align: usize = 256;
         const x_buf = self.getInPlaceBuf(x, sz);
 
         const params = extern struct { n_val: u32, eps_val: f32 }{ .n_val = @intCast(n), .eps_val = eps };
-        const bufs = [_]VkBuf{ x_buf };
+        const bufs = [_]VkBuf{x_buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_l2_norm, &bufs, &sizes, @ptrCast(&params), 8, 1);
     }
@@ -2531,7 +2531,6 @@ const storage_buffer_offset_align: usize = 256;
     pub fn hostUnregister(_: *VulkanBackend, _: [*]const u8, _: usize) void {}
 
     /// Create Vulkan buffer wrapping RAM-tier KV block with zero copy.
-
     /// See `Backend.reserveActivation`. Now that descriptors carry an offset and
     /// `findContainingAct` resolves sub-ranges, this works the same way it does on
     /// the pointer-based backends: establish the parent, and every per-token

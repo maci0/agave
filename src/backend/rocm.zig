@@ -1656,7 +1656,6 @@ pub const RocmBackend = struct {
         _ = self.hipFree(@ptrFromInt(d_bt));
     }
 
-
     /// See `Backend.reserveActivation`. Routes to the same helpers the ops use,
     /// so the entry it leaves behind is exactly what a later sub-range lookup
     /// resolves through.
