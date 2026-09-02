@@ -288,7 +288,6 @@ pub const RequestManager = struct {
     /// model.forward() concurrently and corrupt the shared KV cache.
     /// Lock order: server.mutex → model_mutex → manager mutex (never reversed).
     model_mutex: Mutex = .init,
-    next_id: std.atomic.Value(u64),
     completed_total: u32 = 0,
     cancelled_total: u32 = 0,
     /// Dirty flag: set when enqueue adds a new request, cleared after sort.
@@ -337,7 +336,6 @@ pub const RequestManager = struct {
             .allocator = allocator,
             .mutex = .init,
             .io = io,
-            .next_id = std.atomic.Value(u64).init(1),
             .tiered_cache = tiered_cache,
             .prefetcher = null,
         };
@@ -376,12 +374,16 @@ pub const RequestManager = struct {
     /// Returns pointer to the request (caller keeps reference for polling).
     /// Queries RadixTree for cached prefix match before allocating new blocks.
     /// Returns error.Overflow if the waiting queue is full.
-    pub fn enqueue(self: *RequestManager, prompt_tokens_slice: []const u32) !*Request {
+    ///
+    /// `request_id` is the HTTP correlation ID (`log_request_id`). Scheduler
+    /// logs use `req={d}` with this value so an operator can grep one ID from
+    /// the access log through prefill/decode failures.
+    pub fn enqueue(self: *RequestManager, prompt_tokens_slice: []const u32, request_id: u64) !*Request {
         const req = try self.allocator.create(Request);
         errdefer self.allocator.destroy(req);
 
         const now = milliTimestamp();
-        const id = self.next_id.fetchAdd(1, .monotonic);
+        const id = request_id;
 
         // Lock mutex for both RadixTree access and queue append (atomic check-and-insert)
         self.mutex.lockUncancelable(self.io);
@@ -797,11 +799,11 @@ test "enqueue increments waiting count" {
     defer manager.deinit();
 
     const tokens_a = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const req1 = try manager.enqueue(&tokens_a);
+    const req1 = try manager.enqueue(&tokens_a, 1);
     markSamplingReady(req1);
     // Requests in waiting queue are freed by manager.deinit(), no defer needed.
     const tokens_b = [_]u32{ 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 };
-    const req2 = try manager.enqueue(&tokens_b);
+    const req2 = try manager.enqueue(&tokens_b, 2);
     markSamplingReady(req2);
 
     const stats = manager.getStats();
@@ -809,6 +811,19 @@ test "enqueue increments waiting count" {
     try std.testing.expectEqual(@as(u32, 0), stats.running_count);
 
     try std.testing.expectEqual(@as(u64, 1), req1.id);
+    try std.testing.expectEqual(@as(u64, 2), req2.id);
+}
+
+test "enqueue uses HTTP request id for log correlation" {
+    const allocator = std.testing.allocator;
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 4, 30, null, testIo());
+    defer manager.deinit();
+
+    const tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const req = try manager.enqueue(&tokens, 47);
+    markSamplingReady(req);
+    try std.testing.expectEqual(@as(u64, 47), req.id);
 }
 
 test "step admits one request at a time while KV is single-sequence" {
@@ -819,9 +834,9 @@ test "step admits one request at a time while KV is single-sequence" {
 
     // Enqueue 3 requests, all freed by manager.deinit() (still in queues at test end)
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    markSamplingReady(try manager.enqueue(&dummy_tokens));
-    markSamplingReady(try manager.enqueue(&dummy_tokens));
-    markSamplingReady(try manager.enqueue(&dummy_tokens));
+    markSamplingReady(try manager.enqueue(&dummy_tokens, 1));
+    markSamplingReady(try manager.enqueue(&dummy_tokens, 2));
+    markSamplingReady(try manager.enqueue(&dummy_tokens, 3));
 
     // Create mock model
     var mock_model = MockModel{};
@@ -854,9 +869,9 @@ test "drainForShutdown hands queued requests to their handlers" {
     var manager = try RequestManager.init(allocator, &metrics, 4, 30, null, testIo());
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const running_req = try manager.enqueue(&dummy_tokens);
+    const running_req = try manager.enqueue(&dummy_tokens, 1);
     markSamplingReady(running_req);
-    const waiting_req = try manager.enqueue(&dummy_tokens);
+    const waiting_req = try manager.enqueue(&dummy_tokens, 2);
     markSamplingReady(waiting_req);
 
     var mock_model = MockModel{};
@@ -893,7 +908,7 @@ test "step removes finished requests" {
     defer manager.deinit();
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const req1 = try manager.enqueue(&dummy_tokens);
+    const req1 = try manager.enqueue(&dummy_tokens, 1);
     markSamplingReady(req1);
     // req1 is removed from running by step() when finished, handler (test) owns cleanup.
     defer {
@@ -901,7 +916,7 @@ test "step removes finished requests" {
         allocator.destroy(req1);
     }
     // req2 stays in running, freed by manager.deinit()
-    markSamplingReady(try manager.enqueue(&dummy_tokens));
+    markSamplingReady(try manager.enqueue(&dummy_tokens, 2));
 
     // Create mock model that returns non-EOS
     var mock_model = MockModel{};
@@ -937,7 +952,7 @@ test "step cancels timed-out requests" {
     defer manager.deinit();
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const req = try manager.enqueue(&dummy_tokens);
+    const req = try manager.enqueue(&dummy_tokens, 1);
     markSamplingReady(req);
     // After cancellation + remove, handler owns cleanup (not manager.deinit).
     defer {
@@ -978,7 +993,7 @@ test "step does not admit until sampling_ready" {
     defer manager.deinit();
 
     const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
-    const req = try manager.enqueue(&dummy_tokens);
+    const req = try manager.enqueue(&dummy_tokens, 1);
     // Intentionally leave sampling_ready=false (handler has not configured yet).
 
     var mock_model = MockModel{};
@@ -1461,7 +1476,7 @@ test "fuzz: all scheduler functions" {
             for (0..prompt_len) |pi| {
                 prompt_buf[pi] = smith.valueWithHash(u32, @intCast(13 + pi));
             }
-            _ = manager.enqueue(prompt_buf[0..prompt_len]) catch return;
+            _ = manager.enqueue(prompt_buf[0..prompt_len], smith.valueWithHash(u64, 14)) catch return;
             // Publish sampling so step can admit (mirrors configureSchedulerSampling).
             if (manager.waiting.items.len > 0) {
                 manager.waiting.items[manager.waiting.items.len - 1].sampling_ready.store(true, .release);

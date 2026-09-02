@@ -303,7 +303,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/kv_cache/info` | GET | KV cache metadata |
 | `/health` | GET | Health check |
 | `/ready` | GET | Readiness check (model loaded) |
-| `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth) |
+| `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth, `agave_ready`) |
 
 **Sampling parameters** (accepted in chat/completions request body):
 - `temperature` -- sampling temperature (0 = greedy)
