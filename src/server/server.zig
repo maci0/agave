@@ -449,12 +449,23 @@ const Conversation = struct {
         self.title_len = safe_len;
     }
 
+    /// Free one owned message: content and optional `tool_call_id`.
+    /// Matches `conv_store.Snapshot.deinit` so loaded tool messages cannot leak.
+    fn freeOwnedMessage(allocator: Allocator, msg: Message) void {
+        const content = @constCast(msg.content);
+        @memset(content, 0);
+        allocator.free(content);
+        if (msg.tool_call_id) |tcid| {
+            const t = @constCast(tcid);
+            @memset(t, 0);
+            allocator.free(t);
+        }
+    }
+
     fn freeMessageContents(self: *Conversation, allocator: Allocator) void {
         // Zero content before free so prompt/response text does not linger in the allocator freelist.
         for (self.messages.items) |msg| {
-            const content = @constCast(msg.content);
-            @memset(content, 0);
-            allocator.free(content);
+            freeOwnedMessage(allocator, msg);
         }
     }
 
@@ -3056,7 +3067,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (regen_conv.messages.items.len > 0) {
                 const last_msg = regen_conv.messages.items[regen_conv.messages.items.len - 1];
                 if (last_msg.role == .assistant) {
-                    wipeFree(g_server.allocator, @constCast(last_msg.content));
+                    Conversation.freeOwnedMessage(g_server.allocator, last_msg);
                     _ = regen_conv.messages.pop();
                     g_server.persistConversationsLocked();
                 }
@@ -7541,6 +7552,34 @@ test "Utf8Holdback releases invalid continuation raw like batch decode" {
     // Held bytes pass through raw rather than being dropped.
     try std.testing.expectEqualStrings("\xe4\xb8", pieces.head);
     try std.testing.expectEqualStrings("z", pieces.body);
+}
+
+test "Conversation.freeMessages releases tool_call_id" {
+    const allocator = std.testing.allocator;
+    var conv = Conversation{ .id = 1 };
+    const content = try allocator.dupe(u8, "ok");
+    const tcid = try allocator.dupe(u8, "call_1");
+    try conv.messages.append(allocator, .{
+        .role = .tool,
+        .content = content,
+        .tool_call_id = tcid,
+    });
+    conv.freeMessages(allocator);
+}
+
+test "Conversation.clearMessages releases tool_call_id" {
+    const allocator = std.testing.allocator;
+    var conv = Conversation{ .id = 1 };
+    defer conv.messages.deinit(allocator);
+    const content = try allocator.dupe(u8, "ok");
+    const tcid = try allocator.dupe(u8, "call_1");
+    try conv.messages.append(allocator, .{
+        .role = .tool,
+        .content = content,
+        .tool_call_id = tcid,
+    });
+    conv.clearMessages(allocator);
+    try std.testing.expectEqual(@as(usize, 0), conv.messages.items.len);
 }
 
 test "Conversation.setTitle keeps trailing multi-byte characters" {
