@@ -2376,8 +2376,6 @@ pub const CudaBackend = struct {
 
     // ── KV device cache (incremental upload) ───────────────────
 
-    /// Get or allocate device KV cache buffer. Returns device pointer.
-    /// Allocates full capacity on first use. Does NOT upload from host.
     /// Get or allocate a GPU KV cache buffer for the given host pointer.
     /// On first allocation, uploads the existing host data so that accumulated
     /// positions (pre-filled in host memory) are visible to GPU kernels.

@@ -1394,6 +1394,10 @@ pub const RocmBackend = struct {
 
     /// Get or grow device KV cache buffer for the given required size.
     /// Starts small and doubles when needed, copying existing data.
+    /// On first allocation, uploads existing host data so positions already
+    /// written on the CPU (prefix-cache hits, CPU prefill, KV import) are
+    /// visible to GPU kernels. Without that upload the device buffer is
+    /// uninitialized and SDPA attends over garbage when `seq_len > 0`.
     fn getOrAllocKvBuf(self: *RocmBackend, addr: usize, required: usize, max_capacity: usize) DevicePtr {
         if (self.kv_dev_cache.getPtr(addr)) |kv| {
             if (kv.capacity >= required) return kv.dptr;
@@ -1410,6 +1414,10 @@ pub const RocmBackend = struct {
         // First allocation: allocate full capacity to avoid repeated growth.
         const cap = max_capacity;
         const dptr = self.deviceAlloc(cap);
+        if (addr != 0 and cap > 0) {
+            if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), @ptrFromInt(addr), cap, hipMemcpyHostToDevice), "hipMemcpy(KV HtoD)"))
+                @panic("hipMemcpy(HtoD) failed, device KV left uninitialized");
+        }
         self.kv_dev_cache.put(addr, .{
             .dptr = dptr,
             .capacity = cap,
