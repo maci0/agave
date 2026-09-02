@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -217,8 +218,12 @@ def check_model_enable_flags() -> list[str]:
                 f"Dockerfile: missing {zig_flag} (model defaults on; image/compose cannot disable it)"
             )
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8", errors="replace")
-    # Local Compose claims "CPU + Gemma3 only"; any new model ENABLE_* must be
-    # turned off there or the image silently compiles it in (defaults are true).
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    # Local Compose / CI docker-build / README "minimal" claim "CPU + Gemma3
+    # only"; any new model ENABLE_* must be turned off there or the image
+    # silently compiles it in (Dockerfile ARG defaults are true).
     skip_compose = {
         "ENABLE_CPU",
         "ENABLE_METAL",
@@ -237,6 +242,46 @@ def check_model_enable_flags() -> list[str]:
                 f"docker-compose.yml: missing {arg} (Dockerfile ARG; "
                 "Gemma3-only image would compile it in at the Zig default)"
             )
+        if f"{arg}=false" not in ci:
+            errors.append(
+                f".github/workflows/ci.yml: missing {arg}=false "
+                "(docker-build is 'single model'; Dockerfile ARG defaults on)"
+            )
+        if f"{arg}=false" not in readme:
+            errors.append(
+                f"README.md: missing --build-arg {arg}=false "
+                "(Minimal build: single model + CPU only)"
+            )
+    return errors
+
+
+def check_debian_snapshot_pin() -> list[str]:
+    """FROM bookworm-YYYYMMDD-slim, DEBIAN_SNAPSHOT, and SOURCE_DATE_EPOCH share a day."""
+    text = (ROOT / "Dockerfile").read_text(encoding="utf-8", errors="replace")
+    days = re.findall(r"debian:bookworm-(\d{8})-slim", text)
+    snaps = re.findall(r"DEBIAN_SNAPSHOT=(\d{8})T", text)
+    epoch_m = re.search(r"^ARG SOURCE_DATE_EPOCH=(\d+)", text, re.M)
+    if not days:
+        return ["Dockerfile: missing debian:bookworm-YYYYMMDD-slim FROM tag"]
+    if not snaps:
+        return ["Dockerfile: missing DEBIAN_SNAPSHOT=YYYYMMDDT... ARG"]
+    if not epoch_m:
+        return ["Dockerfile: missing ARG SOURCE_DATE_EPOCH"]
+    from_day = days[0]
+    errors: list[str] = []
+    if any(d != from_day for d in days) or any(s != from_day for s in snaps):
+        errors.append(
+            f"Dockerfile: debian FROM days {days} and DEBIAN_SNAPSHOT days {snaps} "
+            f"must all equal {from_day}"
+        )
+    expected = int(
+        datetime.strptime(from_day, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp()
+    )
+    got = int(epoch_m.group(1))
+    if got != expected:
+        errors.append(
+            f"Dockerfile: SOURCE_DATE_EPOCH {got} != midnight UTC of {from_day} ({expected})"
+        )
     return errors
 
 
@@ -248,6 +293,7 @@ def main() -> int:
     errors.extend(check_version_consistency())
     errors.extend(check_cli_flags_in_readme())
     errors.extend(check_model_enable_flags())
+    errors.extend(check_debian_snapshot_pin())
     if errors:
         print(f"check-docs: {len(errors)} issue(s)")
         for e in errors:

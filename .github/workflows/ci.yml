@@ -66,7 +66,17 @@ jobs:
             echo "::error::Dockerfile debian day ($from_day) != DEBIAN_SNAPSHOT day ($snap_day)"
             exit 1
           fi
-          echo "Debian snapshot day OK: $from_day"
+          epoch="$(sed -n 's/^ARG SOURCE_DATE_EPOCH=\([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
+          expected_epoch="$(date -u -d "${from_day:0:4}-${from_day:4:2}-${from_day:6:2} 00:00:00 UTC" +%s)"
+          if [[ -z "$epoch" ]]; then
+            echo "::error::Could not parse ARG SOURCE_DATE_EPOCH from Dockerfile"
+            exit 1
+          fi
+          if [[ "$epoch" != "$expected_epoch" ]]; then
+            echo "::error::Dockerfile SOURCE_DATE_EPOCH ($epoch) != midnight UTC of debian day $from_day ($expected_epoch)"
+            exit 1
+          fi
+          echo "Debian snapshot day OK: $from_day (SOURCE_DATE_EPOCH=$epoch)"
 
       - name: Check formatting
         run: zig fmt --check src/ tests/ build.zig build.zig.zon
@@ -302,6 +312,15 @@ jobs:
 
       - uses: ./.github/actions/setup-zig
         id: zig
+
+      - name: Cache Zig build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-${{ steps.zig.outputs.version }}-ptx-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-ptx-
 
       - name: Compare committed PTX against fresh build
         run: scripts/check-shader-artifacts.sh --ptx-only

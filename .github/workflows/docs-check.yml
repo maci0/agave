@@ -19,6 +19,7 @@ on:
       - 'build.zig'
       - 'Dockerfile'
       - 'docker-compose.yml'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [ main ]
     paths:
@@ -37,6 +38,7 @@ on:
       - 'build.zig'
       - 'Dockerfile'
       - 'docker-compose.yml'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 permissions:
