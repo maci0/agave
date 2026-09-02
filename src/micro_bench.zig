@@ -205,7 +205,8 @@ const CliArgs = struct {
 };
 
 /// Parses CLI arguments from process args.
-/// Returns null on help/version (exit 0) or parse error (exit 1 via std.process.exit).
+/// Returns null on help/version (caller exits 0). Parse errors call
+/// `std.process.exit(2)` (usage error).
 fn parseCli(proc_args: std.process.Args) ?CliArgs {
     var args_iter = proc_args.iterate();
 
@@ -254,9 +255,7 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
     } else {
         result.kernel = parseKernelName(positional.?) orelse {
             eprint("Error: unknown kernel '{s}'\n", .{positional.?});
-            eprint("  Valid kernels: gemv_f32 gemv_bf16 gemv_f16 gemv_q8_0 gemv_q4_k gemv_q4_0\n", .{});
-            eprint("                 rms_norm silu gelu softmax l2_norm add mul rope\n", .{});
-            eprint("                 sdpa sdpa_turbo4 sdpa_turbo3 sdpa_turbo2\n", .{});
+            eprintKernelList();
             eprint("Run 'agave-bench --help' for more information.\n", .{});
             std.process.exit(2);
         };
@@ -372,8 +371,62 @@ fn parseBackendName(name: []const u8) ?BackendChoice {
     return std.meta.stringToEnum(BackendChoice, name);
 }
 
+/// Space-separated Kernel enum names. Help and unknown-kernel errors share this
+/// so the printed list cannot drift from what `parseKernelName` accepts.
+const kernel_names_joined = blk: {
+    var acc: []const u8 = "";
+    for (@typeInfo(Kernel).@"enum".fields) |f| {
+        if (acc.len > 0) acc = acc ++ " ";
+        acc = acc ++ f.name;
+    }
+    break :blk acc;
+};
+
+/// Wrap column for the kernel name list in --help and unknown-kernel errors.
+const kernel_list_wrap_width: usize = 72;
+
+/// Word-wrap `words` (space-separated) into `out`, prefixing each line with `indent`.
+fn wrapWords(out: []u8, words: []const u8, indent: []const u8, width: usize) []const u8 {
+    var pos: usize = 0;
+    const write = struct {
+        fn bytes(buf: []u8, p: *usize, s: []const u8) void {
+            const n = @min(s.len, buf.len - p.*);
+            if (n == 0) return;
+            @memcpy(buf[p.*..][0..n], s[0..n]);
+            p.* += n;
+        }
+    }.bytes;
+
+    var col: usize = 0;
+    var it = std.mem.tokenizeScalar(u8, words, ' ');
+    var first = true;
+    while (it.next()) |w| {
+        if (first) {
+            write(out, &pos, indent);
+            col = indent.len;
+            first = false;
+        } else if (col + 1 + w.len > width) {
+            write(out, &pos, "\n");
+            write(out, &pos, indent);
+            col = indent.len;
+        } else {
+            write(out, &pos, " ");
+            col += 1;
+        }
+        write(out, &pos, w);
+        col += w.len;
+    }
+    return out[0..pos];
+}
+
+fn eprintKernelList() void {
+    var buf: [2048]u8 = undefined;
+    const list = wrapWords(&buf, kernel_names_joined, "    ", kernel_list_wrap_width);
+    eprint("  Valid kernels:\n{s}\n", .{list});
+}
+
 fn printUsage() void {
-    const usage =
+    const usage_head =
         \\agave-bench, per-kernel and end-to-end micro-benchmark
         \\
         \\USAGE:
@@ -385,16 +438,9 @@ fn printUsage() void {
         \\  e2e            Load a model and run end-to-end inference timing
         \\
         \\KERNELS:
-        \\  gemv_f32  gemv_bf16  gemv_f16  gemv_q8_0  gemv_q4_k  gemv_q4_0
-        \\  gemv_q5_0  gemv_q6_k  gemv_q4_1  gemv_q2_k  gemv_q3_k  gemv_q5_k
-        \\  gemv_iq4_nl  gemv_iq4_xs  gemv_tq1_0  gemv_tq2_0
-        \\  gemv_fp8_e4m3  gemv_fp8_e5m2
-        \\  deinterleave  split_q_gate  add_rms_norm  rms_norm_add
-        \\  sigmoid_mul  gelu_mul  clamped_silu_mul  add_scaled
-        \\  gemv_multi  gemv_t  rope_mrope  emb_lookup  all_reduce_add
-        \\  gemm_q8_0  rms_norm_batched  rope_batched  sdpa_prefill  (prefill paths)
-        \\  rms_norm  silu  gelu  softmax  l2_norm  add  mul  rope
-        \\  sdpa  sdpa_turbo4  sdpa_turbo3  sdpa_turbo2
+        \\
+    ;
+    const usage_tail =
         \\
         \\OPTIONS:
         \\  -h, --help       Show this help message and exit
@@ -418,7 +464,12 @@ fn printUsage() void {
         \\  agave-bench e2e --model model.gguf --backend cpu --n 10
         \\
     ;
-    fdWriteAll(stdout_file.handle, usage);
+    fdWriteAll(stdout_file.handle, usage_head);
+    var buf: [2048]u8 = undefined;
+    const list = wrapWords(&buf, kernel_names_joined, "  ", kernel_list_wrap_width);
+    fdWriteAll(stdout_file.handle, list);
+    fdWriteAll(stdout_file.handle, "\n");
+    fdWriteAll(stdout_file.handle, usage_tail);
 }
 
 // ── Timing utilities ─────────────────────────────────────────────
@@ -2283,6 +2334,27 @@ test "parseKernelName invalid" {
     try std.testing.expect(parseKernelName("GEMV_F32") == null);
 }
 
+test "kernel_names_joined lists every Kernel" {
+    inline for (@typeInfo(Kernel).@"enum".fields) |f| {
+        try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, f.name) != null);
+    }
+    try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, "rms_norm_multi") != null);
+    try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, "add_aliased") != null);
+    try std.testing.expect(std.mem.indexOf(u8, kernel_names_joined, "silu_mul_aliased") != null);
+}
+
+test "wrapWords empty and single" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("", wrapWords(&buf, "", "  ", 72));
+    try std.testing.expectEqualStrings("  gemv_f32", wrapWords(&buf, "gemv_f32", "  ", 72));
+}
+
+test "wrapWords wraps at width" {
+    var buf: [64]u8 = undefined;
+    const s = wrapWords(&buf, "aaa bbb ccc", "  ", 8);
+    try std.testing.expectEqualStrings("  aaa\n  bbb\n  ccc", s);
+}
+
 test "parseBackendName valid" {
     try std.testing.expectEqual(BackendChoice.cpu, parseBackendName("cpu").?);
     try std.testing.expectEqual(BackendChoice.metal, parseBackendName("metal").?);
@@ -2302,15 +2374,20 @@ test "fuzz: micro_bench pure functions" {
                 _ = &print;
                 _ = &eprint;
                 _ = &printUsage;
+                _ = &eprintKernelList;
                 _ = &parseCli;
                 _ = &getArgValue;
                 _ = &collectMedian;
+                _ = &wrapWords;
             }
 
             var buf: [64]u8 = undefined;
             smith.bytesWithHash(&buf, 0);
             const len: usize = smith.valueWithHash(u8, 1) % 32;
             const s = buf[0..len];
+
+            var wrap_buf: [128]u8 = undefined;
+            _ = wrapWords(&wrap_buf, s, "  ", 40);
 
             // parseKeyValue with random key and arg
             _ = parseKeyValue(s, "--n");

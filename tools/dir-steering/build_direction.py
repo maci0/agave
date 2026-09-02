@@ -72,8 +72,8 @@ def main():
     bad_prompts = Path(args.bad_file).read_text().strip().split("\n")
 
     if len(good_prompts) != len(bad_prompts):
-        print(f"Error: good ({len(good_prompts)}) and bad ({len(bad_prompts)}) prompt counts differ")
-        sys.exit(1)
+        print(f"Error: good ({len(good_prompts)}) and bad ({len(bad_prompts)}) prompt counts differ", file=sys.stderr)
+        sys.exit(2)
 
     print(f"Building {args.component} direction from {len(good_prompts)} prompt pairs")
     print(f"Model: {args.model} ({args.n_layers} layers × {args.n_embd} embd)")

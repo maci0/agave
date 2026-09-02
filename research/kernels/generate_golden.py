@@ -404,8 +404,8 @@ def main():
     # Validate
     for t in targets:
         if t not in GENERATORS:
-            print(f"Unknown generator: {t!r}. Available: {', '.join(sorted(GENERATORS))}")
-            sys.exit(1)
+            print(f"Unknown generator: {t!r}. Available: {', '.join(sorted(GENERATORS))}", file=sys.stderr)
+            sys.exit(2)
 
     print(f"Generating golden test data in {GOLDEN_DIR}/\n")
     for t in targets:
