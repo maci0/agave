@@ -503,7 +503,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     // SSD expert streaming (MoE models)
     .{ .long = "ssd-streaming", .help = "Enable SSD expert streaming for large MoE models that don't fit in RAM/VRAM. Uses demand-paged LRU expert cache." },
     .{ .long = "vram-budget-policy", .kind = .option, .help = "Eviction order when the weight budget is full: mru (default) or lru. A dense model scans its layers cyclically, where lru evicts exactly what the next layer needs; lru suits skewed reuse such as routed MoE experts." },
-    .{ .long = "vram-budget", .kind = .option, .help = "Cap GPU memory held by cached weights: GiB (e.g. 20, or 0.5), or 'auto' to size it from free VRAM. Least-recently-used weights are evicted and re-uploaded on demand, which is what lets a model larger than VRAM run [default: unlimited]." },
+    .{ .long = "vram-budget", .kind = .option, .help = "Cap GPU memory held by cached weights: GiB (e.g. 20, or 0.5), or 'auto' to size it from free VRAM. Weights beyond the cap are evicted according to --vram-budget-policy (default mru) and re-uploaded on demand, which is what lets a model larger than VRAM run [default: unlimited]." },
     .{ .long = "ssd-cache-slots", .kind = .option, .help = "Number of expert slots to keep resident in the SSD expert cache [default: 256]. Higher = fewer SSD reads, more RAM." },
     .{ .long = "expert-profile-out", .kind = .option, .help = "Write expert activation profile JSON to this path after inference (for hotlist pre-pinning on future runs)." },
     .{ .long = "expert-profile-in", .kind = .option, .help = "Load expert activation profile JSON and pre-pin top experts into the SSD cache before inference starts." },
@@ -2421,7 +2421,10 @@ pub fn main(init: std.process.Init) !void {
     const vram_budget = resolveVramBudget(&cli, be);
     if (vram_budget > 0) {
         be.setWeightBudget(vram_budget, cli.vram_budget_policy);
-        if (!g_quiet) eprint("vram-budget: {d} MB for cached weights, LRU eviction beyond that\n", .{vram_budget / (1024 * 1024)});
+        if (!g_quiet) eprint("vram-budget: {d} MB for cached weights, {s} eviction beyond that\n", .{
+            vram_budget / (1024 * 1024),
+            if (cli.vram_budget_policy == .mru) "MRU" else "LRU",
+        });
     }
     // Function scope, not the block above: this must report after inference, not
     // after the setup. Evictions are the cost side of the budget, one re-upload
