@@ -136,7 +136,8 @@ agave/
 │   ├── devices/
 │   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; Metal via backend.listMetalDevices)
 │   ├── kvcache/
-│   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
+│   │   ├── view.zig       # Leaf CacheBlock + PagedKvView (SDPA kernels import this, not manager)
+│   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree (re-exports view types)
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
@@ -543,9 +544,9 @@ DDTree speculative decode -> output tokens
 - **Mixed path**: GPU SDPA with softmax statistics runs concurrently with CPU SDPA on the thread pool, then partial outputs are merged via [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) online softmax correction (exact, no approximation).
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
 
-**Paged KV cache and paged SDPA** (`src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
+**Paged KV cache and paged SDPA** (`src/kvcache/view.zig`, `src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
 - KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
-- `PagedKvView` provides block table indirection, translating logical token positions to physical block locations.
+- `PagedKvView` (in `view.zig`) provides block table indirection, translating logical token positions to physical block locations. Kernels and `backend.zig` import the leaf types; `manager.zig` re-exports them.
 - `sdpaPagedHeads` computes attention over paged blocks with thread-pool parallelism across heads.
 - Every backend implements `sdpaPaged()` natively. GPU paths gather scattered host blocks into a flat staging buffer, then run a GPU paged SDPA kernel (no silent CPU compute fallback). Staging gather is host-side by design: the paged pool lives in CPU-visible memory for prefix sharing and tier demotion.
 

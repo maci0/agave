@@ -1,12 +1,22 @@
 //! KV cache management: flat per-layer allocation (`allocKvCache`/`freeKvCache`),
 //! block-based paged caching (`PagedKvCache`), and prefix-aware radix tree
 //! sharing (`RadixTree`).
+//!
+//! Kernel-facing layout types (`CacheBlock`, `PagedKvView`) live in `view.zig`
+//! so SDPA kernels do not import this file.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // Block tier classification lives in tiered.zig; import it from there directly
 // (a convenience re-export here used to create a manager <-> tiered import cycle).
+
+/// Kernel-facing KV block layout. Re-exported so existing `manager.CacheBlock`
+/// / `manager.PagedKvView` paths keep working; new kernel/backend code should
+/// import `view.zig` directly.
+pub const CacheBlock = @import("view.zig").CacheBlock;
+/// Block-table view passed to paged SDPA. See `view.zig`.
+pub const PagedKvView = @import("view.zig").PagedKvView;
 
 /// Result of allocating a KV cache.
 /// Slices are byte arrays, the actual format (f32, f16, q8_0, etc.)
@@ -69,103 +79,12 @@ pub const KvF32View = struct {
     values: []f32,
 };
 
-/// A single cache block holds `block_size` positions of KV data.
-pub const CacheBlock = struct {
-    /// Key data: [block_size * kv_dim] f32.
-    keys: []f32,
-    /// Value data: [block_size * kv_dim] f32.
-    values: []f32,
-    /// Number of positions currently filled in this block (0..block_size).
-    used: u16 = 0,
-    /// Reference count for prefix sharing.
-    ref_count: u16 = 1,
-};
-
 /// Per-sequence metadata: which blocks hold this sequence's KV data.
 pub const SeqBlockTable = struct {
     /// Block indices per layer: block_table[layer][logical_block_idx] → physical block id.
     block_table: [][]u32,
     /// Current sequence length (total positions written).
     seq_len: usize = 0,
-};
-
-/// View into paged KV cache for one layer, passed to SDPA kernels.
-/// Enables block-table indirection: kernel walks block_table to find
-/// physical blocks instead of assuming contiguous memory.
-pub const PagedKvView = struct {
-    block_table: []const u32,
-    blocks: []const CacheBlock,
-    block_size: u16,
-    block_shift: std.math.Log2Int(u16),
-    block_mask: u16,
-    kv_dim: usize,
-    seq_len: usize,
-
-    /// Construct a view into the paged KV cache for one layer. Uses bit-shift
-    /// addressing when `block_size` is a power of two, division otherwise.
-    pub inline fn initView(block_table: []const u32, blocks: []const CacheBlock, block_size: u16, kv_dim: usize, seq_len: usize) PagedKvView {
-        std.debug.assert(block_size > 0);
-        return .{
-            .block_table = block_table,
-            .blocks = blocks,
-            .block_size = block_size,
-            .block_shift = if (std.math.isPowerOfTwo(block_size)) @intCast(@ctz(block_size)) else 0,
-            .block_mask = if (std.math.isPowerOfTwo(block_size)) block_size - 1 else 0,
-            .kv_dim = kv_dim,
-            .seq_len = seq_len,
-        };
-    }
-
-    inline fn blockIdx(self: PagedKvView, position: usize) usize {
-        return if (self.block_mask != 0) position >> self.block_shift else position / self.block_size;
-    }
-
-    inline fn posInBlock(self: PagedKvView, position: usize) usize {
-        return if (self.block_mask != 0) position & self.block_mask else position % self.block_size;
-    }
-
-    /// Checked: bounds-validate position and block translation.
-    inline fn physIdFor(self: PagedKvView, position: usize) u32 {
-        // `seq_len` is the length before this step's append. `sdpaPagedHeads`
-        // writes the new K/V at index `seq_len` and then attends over
-        // `seq_len + 1` positions, so index `seq_len` itself is in contract.
-        // Physical bounds are enforced by the two asserts below.
-        std.debug.assert(position <= self.seq_len);
-        const li = self.blockIdx(position);
-        std.debug.assert(li < self.block_table.len);
-        const phys = self.block_table[li];
-        std.debug.assert(phys < self.blocks.len);
-        return phys;
-    }
-
-    inline fn physOffset(self: PagedKvView, position: usize) usize {
-        const off = std.math.mul(usize, self.posInBlock(position), self.kv_dim) catch @panic("phys offset overflow");
-        return off;
-    }
-
-    /// Get key pointer for a specific position within the paged cache.
-    pub inline fn keyPtr(self: PagedKvView, position: usize) [*]const f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].keys.ptr + self.physOffset(position);
-    }
-
-    /// Get value pointer for a specific position within the paged cache.
-    pub inline fn valuePtr(self: PagedKvView, position: usize) [*]const f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].values.ptr + self.physOffset(position);
-    }
-
-    /// Get mutable key pointer for writing (KV append).
-    pub inline fn keyPtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].keys.ptr + self.physOffset(position);
-    }
-
-    /// Get mutable value pointer for writing (KV append).
-    pub inline fn valuePtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].values.ptr + self.physOffset(position);
-    }
 };
 
 /// Block-based paged KV cache allocator.

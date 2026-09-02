@@ -55,7 +55,9 @@ pub const DType = @import("../format/format.zig").DType;
 pub const KvQuantType = @import("../ops/kv_quant.zig").KvQuantType;
 
 /// Paged KV cache view for block-table-indexed SDPA.
-pub const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+/// Imported from the leaf layout module, not the cache manager, so the
+/// dispatcher does not pull RadixTree / PagedKvCache into every backend.
+pub const PagedKvView = @import("../kvcache/view.zig").PagedKvView;
 
 /// Parameters for DeltaNet SSM recurrence (Qwen3.5 hybrid model).
 /// Passed to `Backend.deltaNet()` to keep the function signature manageable.
