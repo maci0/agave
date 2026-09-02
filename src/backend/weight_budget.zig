@@ -129,7 +129,7 @@ pub const WeightBudget = struct {
     }
 
     /// Bytes currently charged to `key`, or null if untracked.
-    pub fn bytesOf(self: *const WeightBudget, key: usize) ?usize {
+    fn bytesOf(self: *const WeightBudget, key: usize) ?usize {
         const i = self.index.get(key) orelse return null;
         return self.nodes[i].bytes;
     }

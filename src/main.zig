@@ -4789,16 +4789,11 @@ fn generateSpeculative(
             target.prefetchAllLayers();
             // MoE-Spec (arXiv 2602.16052): reduce expert count during verification.
             target.setExpertBudget(4);
-            // forwardTree has no HC state, so skipping early layers is safe (unlike forward()).
-            // Colibri-inspired: freeze expert cache during verification.
-            // Prevents eviction of cached experts across sequential verify forwards.
-            // target.freezeExpertCache(); // disabled: hurts hit rate
         }
 
-        // Trust-mode threshold: after this many tokens, skip verification for suffix.
-        // With greedy decoding (t=0.0), suffix matches from model's own history are
-        // provably correct. Skipping verification eliminates ALL forwardTree cost.
-
+        // Suffix without --draft-model is is_self_draft: accept all drafts and
+        // run one forward() for the bonus token. forwardTree has no HC/experts
+        // and would give 0% acceptance on DS4, so it is not used here.
         const result = if (is_self_draft) blk: {
             // Self-draft: draft == target, 100% acceptance. Get bonus token.
             spec_state.recordRound(spec_state.n_draft);
@@ -4809,15 +4804,10 @@ fn generateSpeculative(
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
             spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
-        else if (use_suffix)
-            // Note: verifyBatched uses forwardTree which has no HC/experts and gives 0% acceptance.
-            // Suffix mode actually goes through is_self_draft (full forward) which gives 100% acceptance.
-            // This path is dead code, kept for reference.
-            spec_decode.verifyBatched(&spec_state, target, draft_model, last, pre_draft_pos)
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
 
-        // Reset expert budget and layer skip after verification.
+        // Reset expert budget after verification.
         if (use_suffix) {
             target.setExpertBudget(0);
         }
@@ -5445,6 +5435,7 @@ test {
     _ = @import("expert_profile.zig");
     _ = @import("expert_cache.zig");
     _ = @import("durable_file.zig");
+    _ = @import("dynlib.zig");
     _ = @import("server/conv_store.zig");
     _ = @import("term.zig");
     _ = @import("thread_pool.zig");
@@ -5627,15 +5618,9 @@ test "looksLikeUnknownShortOpt detects short typos" {
 // Without these comptime references, zig test won't find their test blocks.
 comptime {
     _ = @import("devices/discovery.zig");
-    _ = @import("dynlib.zig");
     _ = @import("parallel/peer_discovery.zig");
     _ = @import("parallel/tp.zig");
     _ = @import("kvcache/prefetch.zig");
-}
-
-test "dynlib and conv_store tests are linked" {
-    _ = @import("dynlib.zig");
-    _ = @import("server/conv_store.zig");
 }
 
 test "emitGeneratedTokens only rank 0 prints in a pair" {

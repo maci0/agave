@@ -505,11 +505,6 @@ pub const DFlash2Model = struct {
         @compileError("unknown dflash2 component: " ++ component);
     }
 
-    /// Public comptime accessor used by the compile-time dispatch sanity check.
-    pub fn componentIdxPublic(comptime component: []const u8) usize {
-        return componentIdx(component);
-    }
-
     fn tensor(self: *const DFlash2Model, names: []const []const u8, expect_elems: usize, what: []const u8) !TensorInfo {
         for (names) |n| {
             if (self.fmt.getTensor(n)) |t| {
@@ -1050,7 +1045,7 @@ comptime {
         "ffn_gate",    "ffn_up",      "ffn_down",
     };
     for (names, 0..) |n, i| {
-        if (DFlash2Model.componentIdxPublic(n) != i) @compileError("componentIdx mismatch");
+        if (DFlash2Model.componentIdx(n) != i) @compileError("componentIdx mismatch");
     }
 }
 

@@ -226,7 +226,7 @@ pub const SuffixState = struct {
     /// Propose up to `max_draft` tokens using suffix matching.
     /// Returns both the number proposed AND the effective match length
     /// (used to compute dynamic k: longer match → more draft tokens).
-    pub fn proposeWithDepth(self: *const SuffixState, max_draft: usize, out: []u32) struct { n: usize, match_len: usize } {
+    fn proposeWithDepth(self: *const SuffixState, max_draft: usize, out: []u32) struct { n: usize, match_len: usize } {
         if (self.len < min_suffix + 1 or max_draft == 0) return .{ .n = 0, .match_len = 0 };
         std.debug.assert(self.len <= self.history.len);
 

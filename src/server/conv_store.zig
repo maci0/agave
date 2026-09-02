@@ -84,7 +84,7 @@ fn formatDefaultPath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
 }
 
 /// Create parent directories of `path` (mkdir -p). Best-effort.
-pub fn ensureParent(path: []const u8) void {
+fn ensureParent(path: []const u8) void {
     const parent = std.fs.path.dirname(path) orelse return;
     mkdirP(parent);
 }
