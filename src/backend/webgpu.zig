@@ -297,6 +297,9 @@ const mxfp4_min_group_size: u32 = 8;
 const mxfp4_scale_e4m3: u32 = 0;
 /// scale_fmt uniform: OCP / MLX expert E8M0.
 const mxfp4_scale_e8m0: u32 = 1;
+/// Stable host address for a missing conv-bias so `getOrUpload` does not
+/// key `buf_cache` on a stack local (a new GPU buffer per call).
+const conv_missing_bias_zero: f32 = 0;
 
 // ── Pipeline info ───────────────────────────────────────────────────
 
@@ -1435,11 +1438,15 @@ pub const WebGpuBackend = struct {
         const o_sz = q_sz;
 
         const q_buf = self.getOrUpload(@ptrCast(q), q_sz);
-        // KV cache was just memcpy'd on CPU, upload fresh each time
+        // KV cache was just memcpy'd on CPU, upload fresh each time.
+        // These are per-token staging copies: host pointers are reused while
+        // byte size grows with seq_len, so they must not enter buf_cache.
         const k_buf = self.createOutputBuf(k_sz);
         self.uploadToBuffer(k_buf, @ptrCast(f32_keys), k_sz);
+        self.deferDestroy(k_buf);
         const v_buf = self.createOutputBuf(v_sz);
         self.uploadToBuffer(v_buf, @ptrCast(f32_values), v_sz);
+        self.deferDestroy(v_buf);
         const o_buf = self.createOutputBuf(o_sz);
 
         const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, sl_v: u32, scale_v: f32 };
@@ -1529,13 +1536,19 @@ pub const WebGpuBackend = struct {
         const o_sz = q_sz;
 
         const q_buf = self.getOrUpload(@ptrCast(q), q_sz);
+        // Flat K/V and the block table are per-dispatch staging: CUDA/ROCm
+        // hipFree/cuMemFree them after launch; Vulkan returns them to the
+        // pool. Destroy after the batched encoder submits.
         const k_buf = self.createOutputBuf(flat_bytes);
         self.uploadToBuffer(k_buf, @ptrCast(flat_keys.ptr), flat_bytes);
+        self.deferDestroy(k_buf);
         const v_buf = self.createOutputBuf(flat_bytes);
         self.uploadToBuffer(v_buf, @ptrCast(flat_vals.ptr), flat_bytes);
+        self.deferDestroy(v_buf);
         const o_buf = self.createOutputBuf(o_sz);
         const bt_buf = self.createOutputBuf(bt_sz);
         self.uploadToBuffer(bt_buf, @ptrCast(kv_view.block_table.ptr), bt_sz);
+        self.deferDestroy(bt_buf);
 
         const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, sl_v: u32, scale_v: f32, paged_bs_v: u32 };
         const p = Params{
@@ -1919,13 +1932,15 @@ pub const WebGpuBackend = struct {
         const w_sz = d_conv * conv_ch * @sizeOf(f32);
 
         const x_buf = self.getOrUpload(@ptrCast(x), ch_sz);
+        // Conv state is read for this dispatch then rewritten on the CPU
+        // after sync(); do not cache the GPU copy (stale vs host).
         const s_buf = self.createOutputBuf(state_sz);
         self.uploadToBuffer(s_buf, @ptrCast(state), state_sz);
+        self.deferDestroy(s_buf);
         const w_buf = self.getOrUpload(@ptrCast(conv_w), w_sz);
         const o_buf = self.createOutputBuf(ch_sz);
 
-        var zero: f32 = 0.0;
-        const b_buf = if (conv_bias) |b| self.getOrUpload(@ptrCast(b), ch_sz) else self.getOrUpload(@ptrCast(&zero), @sizeOf(f32));
+        const b_buf = if (conv_bias) |b| self.getOrUpload(@ptrCast(b), ch_sz) else self.getOrUpload(@ptrCast(&conv_missing_bias_zero), @sizeOf(f32));
 
         const Params = extern struct { conv_ch_v: u32, d_conv_v: u32, has_bias: u32, _pad: u32 };
         const p = Params{
@@ -2311,6 +2326,10 @@ test "WebGPU deferred_destroy capacity matches max_deferred_destroy" {
     // max_deferred_destroy must be a positive power of 2 for efficient modular arithmetic
     try testing.expect(max_deferred_destroy > 0);
     try testing.expect(max_deferred_destroy & (max_deferred_destroy - 1) == 0);
+    // sdpa queues 2 staging buffers + params; sdpaPaged queues 3 + params.
+    // Capacity must absorb a layer's worth without forcing a mid-dispatch sync.
+    try testing.expect(max_deferred_destroy >= 8);
+    try testing.expect(@intFromPtr(&conv_missing_bias_zero) != 0);
 
     // The deferred_destroy array in WebGpuBackend must have exactly max_deferred_destroy slots
     try testing.expectEqual(max_deferred_destroy, @as(u32, @intCast(@typeInfo(@TypeOf(@as(WebGpuBackend, undefined).deferred_destroy)).array.len)));
