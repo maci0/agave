@@ -41,6 +41,8 @@ services:
       HF_TOKEN: ${HF_TOKEN:-}
       NO_COLOR: ${NO_COLOR:-}
       AGAVE_VISION_DEBUG: ${AGAVE_VISION_DEBUG:-}
+      # Match image ENV HOME (Hub pulls, Vulkan cache, conversation store).
+      HOME: /home/agave
     volumes:
       - ${AGAVE_MODELS_DIR:-./models}:/models:ro
       # Survives container replace: conversation store, Vulkan pipeline cache,

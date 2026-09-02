@@ -647,4 +647,4 @@ zig build -Dtarget=aarch64-linux-musl \
 
 ## License
 
-GNU General Public License v3.0
+GNU General Public License v3.0 or later

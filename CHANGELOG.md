@@ -45,6 +45,11 @@ must still appear under **Changed** or **Breaking** below. See
   `ENABLE_*` build-args were omitted and default on. Flags now match Compose.
 - Docker Compose forwards `HF_TOKEN`, `NO_COLOR`, and `AGAVE_VISION_DEBUG` from
   `.env` (empty is unset). Hub cache for compose stays on the `agave-cache` volume.
+- Docker image ships `LICENSE` at `/usr/share/doc/agave/copyright`; the OCI
+  `org.opencontainers.image.licenses` label is `GPL-3.0-or-later` (was
+  `GPL-3.0-only`, which contradicted the repo license).
+- Docker image sets `HOME=/home/agave` so Hub pulls and `~/.cache` work on
+  runtimes that do not copy passwd HOME (Kubernetes, some Podman setups).
 - Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
   `refs/main` now publish via atomic replace; Hub blob downloads `fsync` before
   the snapshot is advertised complete.

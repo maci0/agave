@@ -163,9 +163,11 @@ ARG AGAVE_VERSION=dev
 
 LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.description="High-performance LLM inference engine" \
+      org.opencontainers.image.url="https://github.com/maci0/agave" \
       org.opencontainers.image.source="https://github.com/maci0/agave" \
+      org.opencontainers.image.documentation="https://github.com/maci0/agave/blob/main/README.md" \
       org.opencontainers.image.version="${AGAVE_VERSION}" \
-      org.opencontainers.image.licenses="GPL-3.0-only"
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C \
@@ -189,6 +191,8 @@ RUN set -eux; \
 COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 # Authoritative product version parsed from build.zig.zon (see build-stage check).
 COPY --link --from=build /agave-version /usr/share/agave/version
+# GPL-3.0-or-later: the notice must accompany the binary (keep LICENSE in context).
+COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
 
 # Writable workdir for non-root runtime (logs, temp files, bind-mount targets).
 WORKDIR /home/agave
@@ -198,7 +202,10 @@ EXPOSE 49453
 STOPSIGNAL SIGTERM
 
 # Keep in sync with the process listen port (CLI --port or AGAVE_PORT).
-ENV AGAVE_PORT=49453
+# HOME: Hub pulls, Vulkan pipeline cache, and conversation store use ~/.cache.
+# Set explicitly so Kubernetes/Podman (which do not copy passwd HOME) still work.
+ENV AGAVE_PORT=49453 \
+    HOME=/home/agave
 
 # Shell form + $$ so AGAVE_PORT expands at container runtime (not image build).
 # Use /ready (not /health): Docker HEALTHCHECK gates routing/depends_on, and
