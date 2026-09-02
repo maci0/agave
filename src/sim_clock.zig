@@ -4,9 +4,10 @@
 //! clock: milliNow/nanoNow read REALTIME (wall time: log timestamps, seeds,
 //! epoch fields), while monoMilli/monoNano read MONOTONIC (interval math:
 //! timeouts, rate-limit refill, scheduling priority, LRU stamps, power
-//! throttle) so NTP steps or manual clock changes cannot produce negative
-//! or inflated durations. Interval timers outside this module (perf
-//! counters, download progress) also use CLOCK_MONOTONIC directly.
+//! throttle, benches, profile counters, download progress) so NTP steps or
+//! manual clock changes cannot produce negative or inflated durations.
+//! Callers outside this module must not invoke clock_gettime; the exception
+//! is micro-benchmarks (`micro_bench.zig`), which measure real hardware.
 //!
 //! Tests and a future sim harness call setOverrideMs / advanceMs to drive
 //! timeouts, rate-limit refill, and scheduling priority from a single seed.

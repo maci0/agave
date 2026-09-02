@@ -17,6 +17,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const display_mod = @import("display.zig");
 const durable = @import("durable_file.zig");
+const sim_clock = @import("sim_clock.zig");
 const version = display_mod.version;
 
 // ── Named constants ──────────────────────────────────────────────────────────
@@ -40,12 +41,19 @@ const stderr_file = Io.File.stderr();
 /// Module-level Io instance, set by run() from caller.
 var mod_io: Io = undefined;
 
-/// Nanosecond timestamp via CLOCK_MONOTONIC (progress-interval deltas).
-/// REALTIME can jump under NTP and make the progress bar stutter or stall.
+/// Nanosecond timestamp via sim_clock's MONOTONIC timeline (progress-interval
+/// deltas). REALTIME can jump under NTP and make the progress bar stutter
+/// or stall. Under override, progress intervals follow virtual time so a
+/// replay does not inherit host download speed into the bar.
 fn nanoTimestamp() i128 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+    return sim_clock.monoNano();
+}
+
+/// Backoff before download retry `attempt` (1-based in the retry loop).
+/// Routes through sim_clock so a clock override advances virtual time
+/// instead of blocking wall-clock time between attempts.
+fn sleepRetry(attempt: u32) void {
+    sim_clock.sleepNs(retry_base_delay_ns << @intCast(attempt));
 }
 
 /// Validate that a filename from the API has no path traversal components
@@ -1054,9 +1062,7 @@ fn downloadFile(
             } else {
                 eprint("Retrying download (attempt {d}/{d})...\n", .{ attempt + 1, max_retries });
             }
-            mod_io.sleep(Io.Duration.fromNanoseconds(@intCast(retry_base_delay_ns << @intCast(attempt))), .awake) catch |err| {
-                std.log.warn("retry sleep failed: {s}", .{@errorName(err)});
-            };
+            sleepRetry(attempt);
         }
 
         downloadFileOnce(allocator, url, blob_path, token, is_tty, expected_size) catch |err| {
@@ -1733,6 +1739,21 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+
+test "nanoTimestamp follows sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(2_000);
+    try std.testing.expectEqual(@as(i128, 2_000) * 1_000_000, nanoTimestamp());
+    sim_clock.advanceMs(5);
+    try std.testing.expectEqual(@as(i128, 2_005) * 1_000_000, nanoTimestamp());
+}
+
+test "sleepRetry advances virtual clock" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(0);
+    sleepRetry(1); // 1s << 1 = 2s
+    try std.testing.expectEqual(@as(i64, 2_000), sim_clock.milliNow());
+}
 
 test "nonemptyEnv treats empty and whitespace as unset" {
     try std.testing.expect(nonemptyEnv(null) == null);

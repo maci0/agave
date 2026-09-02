@@ -89,6 +89,11 @@ fn nanoTimestamp(io: Io) i96 {
     return sim_clock.nanoNow();
 }
 
+/// Elapsed microseconds between two `sim_clock.monoNano()` samples.
+fn elapsedUs(t0_ns: i96, t1_ns: i96) i64 {
+    return @intCast(@divTrunc(t1_ns - t0_ns, 1000));
+}
+
 /// Read all piped stdin into an allocated buffer.
 fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
     var buf = std.ArrayList(u8).empty;
@@ -1737,22 +1742,16 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
     const fd = t.tcp_fds[0];
     var ping: [4]u8 = .{ 'P', 'I', 'N', 'G' };
     var pong: [4]u8 = undefined;
-    var ts_start: std.posix.system.timespec = undefined;
-    var ts_end: std.posix.system.timespec = undefined;
+    const t0 = sim_clock.monoNano();
     if (rank == 0) {
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
         _ = std.posix.system.send(fd, &ping, 4, 0);
         _ = std.posix.system.recv(fd, &pong, 4, 0);
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     } else {
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
         _ = std.posix.system.recv(fd, &pong, 4, 0);
         _ = std.posix.system.send(fd, &ping, 4, 0);
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     }
-    const start_us: u64 = @intCast(ts_start.sec * 1_000_000 + @divTrunc(ts_start.nsec, 1000));
-    const end_us: u64 = @intCast(ts_end.sec * 1_000_000 + @divTrunc(ts_end.nsec, 1000));
-    return end_us -| start_us;
+    const delta_us = elapsedUs(t0, sim_clock.monoNano());
+    return if (delta_us > 0) @intCast(delta_us) else 0;
 }
 
 fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
@@ -1994,14 +1993,12 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
     const n_gen = cli.max_tokens;
 
     // Prefill (batched when model supports it, sequential fallback)
-    var ts_start: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
+    const ts_start = sim_clock.monoNano();
     _ = model.prefill(token_ids) catch {
         eprint("Benchmark: prefill failed\n", .{});
         return;
     };
-    var ts_prefill: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_prefill);
+    const ts_prefill = sim_clock.monoNano();
 
     // Decode
     var last: u32 = math_ops.argmax(model.getLogits());
@@ -2015,11 +2012,10 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
         last = math_ops.argmax(model.getLogits());
         gen_count += 1;
     }
-    var ts_end: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
+    const ts_end = sim_clock.monoNano();
 
-    const prefill_us = (@as(i64, ts_prefill.sec) - @as(i64, ts_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_prefill.nsec) - @as(i64, ts_start.nsec), 1000);
-    const decode_us = (@as(i64, ts_end.sec) - @as(i64, ts_prefill.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_end.nsec) - @as(i64, ts_prefill.nsec), 1000);
+    const prefill_us = elapsedUs(ts_start, ts_prefill);
+    const decode_us = elapsedUs(ts_prefill, ts_end);
     const prefill_tps: f64 = if (prefill_us > 0) @as(f64, @floatFromInt(n_prompt)) / (@as(f64, @floatFromInt(prefill_us)) / 1e6) else 0;
     const decode_tps: f64 = if (decode_us > 0) @as(f64, @floatFromInt(gen_count)) / (@as(f64, @floatFromInt(decode_us)) / 1e6) else 0;
     const prefill_ms = @as(f64, @floatFromInt(prefill_us)) / 1000.0;
@@ -2098,14 +2094,12 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         const slice = if (ctx_len <= prompt.len) prompt[cursor..ctx_len] else prompt[cursor..];
         if (slice.len == 0) continue;
 
-        var ts0: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts0);
+        const ts0 = sim_clock.monoNano();
         _ = model.prefill(slice) catch {
             eprint("frontier-bench: prefill failed at ctx={d}\n", .{ctx_len});
             break;
         };
-        var ts1: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts1);
+        const ts1 = sim_clock.monoNano();
         cursor = @min(ctx_len, prompt.len);
 
         // Export KV snapshot before probe (64 MB should cover most models at frontier sizes).
@@ -2117,8 +2111,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         // Greedy probe starting from the last prefill logits.
         var last = math_ops.argmax(model.getLogits());
         var gen: u32 = 0;
-        var ts_dec_start: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_dec_start);
+        const ts_dec_start = sim_clock.monoNano();
         while (gen < probe_tokens) : (gen += 1) {
             if (isEogToken(last, eog)) break;
             last = model.forward(last) catch |err| {
@@ -2127,16 +2120,15 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
             };
             last = math_ops.argmax(model.getLogits());
         }
-        var ts2: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts2);
+        const ts2 = sim_clock.monoNano();
 
         // Restore KV state to the snapshot so the next frontier continues cleanly.
         if (kv_snapshot_buf) |s| {
             if (kv_snap_len > 0) _ = model.importKvPrefix(s[0..kv_snap_len], cursor);
         }
 
-        const pf_us: i64 = (@as(i64, ts1.sec) - @as(i64, ts0.sec)) * 1_000_000 + @divTrunc(@as(i64, ts1.nsec) - @as(i64, ts0.nsec), 1000);
-        const dec_us: i64 = (@as(i64, ts2.sec) - @as(i64, ts_dec_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts2.nsec) - @as(i64, ts_dec_start.nsec), 1000);
+        const pf_us: i64 = elapsedUs(ts0, ts1);
+        const dec_us: i64 = elapsedUs(ts_dec_start, ts2);
         const pf_tps: f64 = if (pf_us > 0) @as(f64, @floatFromInt(slice.len)) / (@as(f64, @floatFromInt(pf_us)) / 1e6) else 0;
         const dec_tps: f64 = if (dec_us > 0 and gen > 0) @as(f64, @floatFromInt(gen)) / (@as(f64, @floatFromInt(dec_us)) / 1e6) else 0;
 
@@ -5869,6 +5861,15 @@ test "shouldNoteSeed always surfaces auto-derived seeds" {
     try std.testing.expect(shouldNoteSeed(true, true));
 }
 
+test "elapsedUs follows sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+    const t0 = sim_clock.monoNano();
+    try std.testing.expectEqual(@as(i64, 0), elapsedUs(t0, sim_clock.monoNano()));
+    sim_clock.advanceMs(2);
+    try std.testing.expectEqual(@as(i64, 2_000), elapsedUs(t0, sim_clock.monoNano()));
+}
+
 test "fuzz: main.zig pure functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -5876,6 +5877,7 @@ test "fuzz: main.zig pure functions" {
             comptime {
                 _ = &milliTimestamp;
                 _ = &nanoTimestamp;
+                _ = &elapsedUs;
                 _ = &shouldNoteSeed;
                 _ = &noteSeed;
                 _ = &readStdinAll;
