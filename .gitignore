@@ -107,6 +107,7 @@ progress.md
 # Local tool run-state (single-writer locks, per-machine IDE config)
 *.lock
 !bun.lock
+!**/uv.lock
 opencode.json
 
 # JS tooling

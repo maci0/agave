@@ -10,9 +10,8 @@ quantization, and other concepts, see [DOCUMENTATION.md](../../docs/DOCUMENTATIO
 
 ```bash
 cd research/kernels
-uv sync                    # Install PyTorch + numpy (CPU only)
-uv sync --extra cuda       # With Triton (Linux + NVIDIA only)
-uv sync --extra bayesian   # With Optuna for parameter search
+uv sync                    # torch + numpy + gguf (CUDA wheels on Linux x86_64; CPU on macOS)
+uv sync --extra bayesian   # Optuna for Bayesian parameter search
 ```
 
 ---

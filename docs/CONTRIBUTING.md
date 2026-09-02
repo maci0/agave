@@ -332,7 +332,7 @@ zig build test -Denable-webgpu=false    # skip WebGPU tests
 
 ### End-to-End Test Harness
 
-`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires Python 3.8+ and [`rich`](https://github.com/Textualize/rich) for console output (`uv pip install rich` or `pip install rich`).
+`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires Python 3.11+ and [`rich`](https://github.com/Textualize/rich) `15.0.0` (`uv sync --directory tests`).
 
 ```bash
 python tests/harness.py --models-dir /path/to/models
