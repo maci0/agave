@@ -546,9 +546,10 @@ pub const DiffusionGemmaModel = struct {
         if (self.seq_table.block_table[layer].len == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         return .{

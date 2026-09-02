@@ -573,10 +573,7 @@ pub const GptOssModel = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            return tc.keysValues(block_id);
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,

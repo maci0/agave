@@ -111,8 +111,16 @@ pub const ThreadPool = struct {
     }
 
     /// Shut down all worker threads.
+    ///
+    /// `shutdown` is published before waiting for `active == 0` so a racing
+    /// `parallelFor` either completes its batch (workers still fetchSub) or
+    /// sees the flag and runs inline instead of waking threads that `join`
+    /// is about to reap.
     pub fn deinit(self: *ThreadPool) void {
         self.shutdown.store(true, .release);
+        while (self.active.load(.acquire) != 0) {
+            std.atomic.spinLoopHint();
+        }
         _ = self.generation.fetchAdd(1, .release);
         self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
         for (0..self.n_workers) |i| {
@@ -136,7 +144,7 @@ pub const ThreadPool = struct {
         const effective_grain = @max(grain, min_grain);
 
         // If work is too small for parallelism, run inline
-        if (self.n_workers == 0 or total <= effective_grain) {
+        if (self.n_workers == 0 or total <= effective_grain or self.shutdown.load(.acquire)) {
             func(ctx, 0, total);
             return;
         }
@@ -146,6 +154,14 @@ pub const ThreadPool = struct {
         // race, only one succeeds; the other falls back to inline execution.
         if (self.active.cmpxchgStrong(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
             std.log.err("ThreadPool: concurrent parallelFor detected (active={d}), running inline", .{still_active});
+            func(ctx, 0, total);
+            return;
+        }
+
+        // deinit() may have set shutdown after the check above and be waiting
+        // on active == 0. Drop the claim and run inline so join can proceed.
+        if (self.shutdown.load(.acquire)) {
+            self.active.store(0, .release);
             func(ctx, 0, total);
             return;
         }
@@ -197,17 +213,19 @@ pub const ThreadPool = struct {
             // Sleep until generation advances past our local copy
             pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
 
-            if (pool.shutdown.load(.acquire)) return;
-
             const new_gen = pool.generation.load(.acquire);
-            if (new_gen == local_gen) continue; // spurious wakeup
-            local_gen = new_gen;
+            if (new_gen != local_gen) {
+                local_gen = new_gen;
+                // Drain a posted batch even if deinit() already set shutdown.
+                // parallelFor claims `active` for each worker and waits for
+                // fetchSub; returning here without it deadlocks both.
+                if (pool.active.load(.acquire) != 0) {
+                    pool.doWork();
+                    _ = pool.active.fetchSub(1, .release);
+                }
+            }
 
-            // Do work
-            pool.doWork();
-
-            // Signal completion
-            _ = pool.active.fetchSub(1, .release);
+            if (pool.shutdown.load(.acquire) and pool.active.load(.acquire) == 0) return;
         }
     }
 };
@@ -290,6 +308,51 @@ test "init and deinit without work" {
 
     // After deinit, n_workers should be 0
     try std.testing.expectEqual(@as(usize, 0), pool.n_workers);
+}
+
+/// Parallel work that publishes `started` before finishing, so a racing
+/// `deinit` can overlap the batch.
+const OverlapContext = struct {
+    started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    result: std.atomic.Value(usize),
+
+    fn callback(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+        const self: *OverlapContext = @ptrCast(@alignCast(ctx_ptr));
+        self.started.store(true, .release);
+        const ts = std.posix.timespec{ .sec = 0, .nsec = 20 * std.time.ns_per_ms };
+        _ = std.posix.system.nanosleep(&ts, null);
+        var local_sum: usize = 0;
+        for (start..end) |i| {
+            local_sum += i;
+        }
+        _ = self.result.fetchAdd(local_sum, .acq_rel);
+    }
+};
+
+test "deinit waits for in-flight parallelFor" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    var pool = ThreadPool.init(2);
+    pool.spawn(threaded.io());
+
+    var ctx = OverlapContext{ .result = std.atomic.Value(usize).init(0) };
+    const n: usize = 64;
+
+    const Dispatch = struct {
+        fn run(p: *ThreadPool, c: *OverlapContext, total: usize) void {
+            p.parallelFor(total, 8, @ptrCast(c), OverlapContext.callback);
+        }
+    };
+    const t = try std.Thread.spawn(.{}, Dispatch.run, .{ &pool, &ctx, n });
+    while (!ctx.started.load(.acquire)) {
+        std.atomic.spinLoopHint();
+    }
+    pool.deinit();
+    t.join();
+
+    const expected: usize = (n - 1) * n / 2;
+    try std.testing.expectEqual(expected, ctx.result.load(.acquire));
 }
 
 test "fuzz: ThreadPool parallelFor" {

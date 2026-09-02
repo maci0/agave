@@ -872,10 +872,25 @@ pub const TieredKvCache = struct {
     ///
     /// Returns true if block is allocated (ref_count > 0) and in a lower tier than VRAM.
     /// Unallocated blocks in lower tiers are on free lists and must not be promoted.
+    /// Caller must hold `tier_lock` (prefetch worker and scheduler both mutate `tier`).
     pub fn needsPromotion(self: *const TieredKvCache, block_id: u32) bool {
         if (block_id >= self.blocks.len) return false;
         const blk = &self.blocks[block_id];
         return blk.base.ref_count > 0 and blk.tier != .vram;
+    }
+
+    /// Snapshot this block's key/value slices under `tier_lock`.
+    ///
+    /// The prefetch worker assigns `keys`/`values` when promoting SSD→RAM, so a
+    /// torn slice (new pointer, old length) would send attention through freed
+    /// or empty memory. The returned slices stay valid until this block is
+    /// demoted (scheduler, not the prefetcher) or the cache is destroyed.
+    pub fn keysValues(self: *TieredKvCache, block_id: u32) struct { keys: []f32, values: []f32 } {
+        std.debug.assert(block_id < self.blocks.len);
+        self.lockTier();
+        defer self.unlockTier();
+        const b = &self.blocks[block_id];
+        return .{ .keys = b.base.keys, .values = b.base.values };
     }
 };
 
@@ -887,6 +902,19 @@ test "TieredKvCache init and deinit" {
     try std.testing.expectEqual(@as(usize, 2), cache.ram_block_count);
     try std.testing.expectEqual(@as(usize, 0), cache.ssd_block_count);
     try std.testing.expectEqual(@as(usize, 0), cache.vram_used.load(.monotonic));
+}
+
+test "keysValues matches locked block slices and drops the lock" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 0, 0, 16, null);
+    defer cache.deinit();
+
+    const b0 = try cache.allocBlock();
+    const kv = cache.keysValues(b0);
+    try std.testing.expectEqual(cache.blocks[b0].base.keys.ptr, kv.keys.ptr);
+    try std.testing.expectEqual(cache.blocks[b0].base.keys.len, kv.keys.len);
+    try std.testing.expectEqual(cache.blocks[b0].base.values.ptr, kv.values.ptr);
+    try std.testing.expectEqual(@as(u32, 0), cache.tier_lock.load(.monotonic));
 }
 
 test "TieredKvCache allocBlock returns VRAM first" {

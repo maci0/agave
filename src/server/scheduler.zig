@@ -765,10 +765,23 @@ fn drainForShutdown(manager: *RequestManager) void {
     manager.waiting.clearRetainingCapacity();
 }
 
-/// Create a test Io instance for unit tests.
+/// Process-lifetime Io for tests. Returning `Threaded.io()` from a local
+/// `Threaded` leaves the mutex futex pointing at freed stack.
 fn testIo() Io {
-    var threaded = Io.Threaded.init(std.testing.allocator, .{});
-    return threaded.io();
+    const G = struct {
+        var lock: std.atomic.Value(u8) = .init(0);
+        var threaded: Io.Threaded = undefined;
+        var ready: std.atomic.Value(bool) = .init(false);
+    };
+    if (!G.ready.load(.acquire)) {
+        while (G.lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
+        defer G.lock.store(0, .release);
+        if (!G.ready.load(.acquire)) {
+            G.threaded = Io.Threaded.init(std.heap.page_allocator, .{});
+            G.ready.store(true, .release);
+        }
+    }
+    return G.threaded.io();
 }
 
 /// Tests enqueue without configureSchedulerSampling, mark ready so step can admit.

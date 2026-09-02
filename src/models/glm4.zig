@@ -429,10 +429,7 @@ pub const Glm4Model = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            return tc.keysValues(block_id);
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,
@@ -614,9 +611,10 @@ pub const Glm4Model = struct {
         if (num_blocks == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         return .{
