@@ -15,6 +15,7 @@ const std = @import("std");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const ssm_ops = @import("../ops/ssm.zig");
@@ -74,7 +75,7 @@ pub const NemotronHModel = struct {
     /// RMS-norm epsilon.
     rms_eps: f32 = 1e-5,
     /// End-of-sequence token identifier.
-    eos_token_id: u32 = 11,
+    eos_token_id: u32 = arch_mod.nemotron_h_fallback_eos,
     /// Maximum sequence length for the pre-allocated KV cache.
     max_seq_len: usize = 4096,
 

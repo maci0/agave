@@ -26,6 +26,7 @@ const kv_quant = @import("../ops/kv_quant.zig");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const dflash2_alg = @import("../spec/dflash2.zig");
 
 const Backend = backend_mod.Backend;
@@ -67,7 +68,7 @@ pub const DFlash2Model = struct {
     input_embedding_scale: f32 = 1.0,
     output_multiplier: f32 = 1.0,
     softcap: f32 = 0, // 0 disables final_logit_softcapping
-    eos_token_id: u32 = 248046,
+    eos_token_id: u32 = arch_mod.qwen_fallback_eos,
     max_seq_len: usize = 262144,
 
     /// True when loaded from SafeTensors (HF RMSNorm weights need +1 baked).

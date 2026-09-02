@@ -62,9 +62,6 @@ const emb_lookup_token: u32 = 11;
 const default_rope_theta: f32 = 10000.0;
 const rms_norm_eps: f32 = 1e-6;
 const l2_norm_eps: f32 = 1e-6;
-const gemma_fallback_eos = arch_mod.gemma_fallback_eos;
-const default_fallback_eos = arch_mod.default_fallback_eos;
-const default_bos_id = arch_mod.default_bos_id;
 const synthetic_x_scale: f32 = 0.01;
 const synthetic_x_offset: f32 = -0.08;
 const synthetic_w_scale: f32 = 0.001;
@@ -2117,9 +2114,13 @@ fn runE2e(allocator: std.mem.Allocator, cli: CliArgs) u8 {
     const tok_kind: TokenizerKind = if (arch == .gemma3 or arch == .gemma4 or arch == .diffusion_gemma) .spm_no_dummy else if (merges != null) .bpe else .spm;
     const eos_id = fmt.getMetaU32("tokenizer.ggml.eos_token_id") orelse
         fmt.getMetaU32("eos_token_id") orelse
-        if (arch == .gemma3 or arch == .gemma4 or arch == .diffusion_gemma) gemma_fallback_eos else default_fallback_eos;
-    const bos_id = fmt.getMetaU32("tokenizer.ggml.bos_token_id") orelse
-        fmt.getMetaU32("bos_token_id") orelse default_bos_id;
+        arch.defaultEos();
+    const bos_id: u32 = if (arch.templateIncludesBos())
+        0
+    else
+        fmt.getMetaU32("tokenizer.ggml.bos_token_id") orelse
+            fmt.getMetaU32("bos_token_id") orelse
+            arch.defaultBos() orelse 0;
 
     if (vocab) |v| {
         switch (tok_kind) {

@@ -147,22 +147,39 @@ pub const Arch = enum {
     }
 
     /// Fallback BOS token ID when metadata is missing.
-    /// Returns null for architectures that don't prepend BOS (GPT-2 family).
+    /// Returns null for GPT-2-family tokenizers (no BOS) and for architectures
+    /// whose chat template already emits the BOS string (see `templateIncludesBos`).
     pub fn defaultBos(self: Arch) ?u32 {
         return switch (self) {
-            .glm4, .deepseek4 => glm4_fallback_bos,
-            .qwen35, .qwen4_exp, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2 => null,
+            .qwen35, .qwen4_exp, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2, .glm4, .deepseek4 => null,
             .llama4 => llama4_fallback_bos,
             .gemma3, .gemma4, .diffusion_gemma => default_bos_id,
         };
     }
 
+    /// True when the chat template already emits BOS, so a numeric BOS must not
+    /// be prepended even if tokenizer metadata names one. GLM-4 emits
+    /// `[gMASK]<sop>`; DeepSeek V4 emits `<｜begin▁of▁sentence｜>`. GLM-4's
+    /// `[gMASK]` id (154822) is also outside DeepSeek's vocab.
+    pub fn templateIncludesBos(self: Arch) bool {
+        return switch (self) {
+            .glm4, .deepseek4 => true,
+            else => false,
+        };
+    }
+
     /// Fallback EOS token ID when metadata is missing.
+    /// Values match the field defaults on each architecture's model struct.
     pub fn defaultEos(self: Arch) u32 {
         return switch (self) {
             .gemma3, .gemma4, .diffusion_gemma => gemma_fallback_eos,
             .llama4 => llama4_fallback_eos,
-            else => default_fallback_eos,
+            .qwen35, .qwen4_exp, .dflash2 => qwen_fallback_eos,
+            .gpt_oss => gpt_oss_fallback_eos,
+            .glm4 => glm4_fallback_eos,
+            .deepseek4 => deepseek4_fallback_eos,
+            .nemotron_h => nemotron_h_fallback_eos,
+            .nemotron_nano => nemotron_nano_fallback_eos,
         };
     }
 
@@ -199,9 +216,21 @@ pub const Arch = enum {
 
 /// Fallback EOS token ID for Gemma models (used when metadata is missing).
 pub const gemma_fallback_eos: u32 = 1;
-/// Qwen-family fallback EOS token ID (used when metadata is missing).
-pub const default_fallback_eos: u32 = 248046;
-/// GLM-4 fallback BOS token ID (`[gMASK]`, used when metadata is missing).
+/// Qwen 3.5 / Qwen4-Exp / DFlash2 fallback EOS (`<|im_end|>`).
+pub const qwen_fallback_eos: u32 = 248046;
+/// GPT-OSS Harmony fallback EOS.
+pub const gpt_oss_fallback_eos: u32 = 200002;
+/// GLM-4 fallback EOS (`<|endoftext|>`).
+pub const glm4_fallback_eos: u32 = 154820;
+/// DeepSeek V4 Flash fallback EOS (`<｜end▁of▁sentence｜>`). Distinct from
+/// Gemma's token 1 even though the integer coincides.
+pub const deepseek4_fallback_eos: u32 = 1;
+/// Nemotron-H fallback EOS.
+pub const nemotron_h_fallback_eos: u32 = 11;
+/// Nemotron Nano fallback EOS.
+pub const nemotron_nano_fallback_eos: u32 = 2;
+/// GLM-4 `[gMASK]` token ID. The chat template already emits `[gMASK]<sop>`,
+/// so `defaultBos(.glm4)` is null; this is the vocabulary id only.
 pub const glm4_fallback_bos: u32 = 154822;
 /// Llama 4 fallback BOS token ID.
 pub const llama4_fallback_bos: u32 = 128000;
@@ -289,8 +318,8 @@ test "Arch.defaultBos" {
     try std.testing.expectEqual(@as(?u32, 2), Arch.gemma3.defaultBos());
     try std.testing.expectEqual(@as(?u32, 2), Arch.gemma4.defaultBos());
     try std.testing.expectEqual(@as(?u32, 2), Arch.diffusion_gemma.defaultBos());
-    try std.testing.expectEqual(@as(?u32, 154822), Arch.glm4.defaultBos());
-    try std.testing.expectEqual(@as(?u32, 154822), Arch.deepseek4.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.glm4.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.deepseek4.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.qwen35.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.qwen4_exp.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.gpt_oss.defaultBos());
@@ -300,17 +329,26 @@ test "Arch.defaultBos" {
     try std.testing.expectEqual(@as(?u32, 128000), Arch.llama4.defaultBos());
 }
 
+test "Arch.templateIncludesBos" {
+    try std.testing.expect(Arch.glm4.templateIncludesBos());
+    try std.testing.expect(Arch.deepseek4.templateIncludesBos());
+    try std.testing.expect(!Arch.gemma3.templateIncludesBos());
+    try std.testing.expect(!Arch.llama4.templateIncludesBos());
+    try std.testing.expect(!Arch.qwen35.templateIncludesBos());
+    try std.testing.expect(!Arch.gpt_oss.templateIncludesBos());
+}
+
 test "Arch.defaultEos" {
     try std.testing.expectEqual(@as(u32, 1), Arch.gemma3.defaultEos());
     try std.testing.expectEqual(@as(u32, 1), Arch.gemma4.defaultEos());
     try std.testing.expectEqual(@as(u32, 1), Arch.diffusion_gemma.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.qwen35.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.qwen4_exp.defaultEos());
-    try std.testing.expectEqual(@as(u32, 248046), Arch.gpt_oss.defaultEos());
-    try std.testing.expectEqual(@as(u32, 248046), Arch.glm4.defaultEos());
-    try std.testing.expectEqual(@as(u32, 248046), Arch.deepseek4.defaultEos());
-    try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_h.defaultEos());
-    try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_nano.defaultEos());
+    try std.testing.expectEqual(@as(u32, 200002), Arch.gpt_oss.defaultEos());
+    try std.testing.expectEqual(@as(u32, 154820), Arch.glm4.defaultEos());
+    try std.testing.expectEqual(@as(u32, 1), Arch.deepseek4.defaultEos());
+    try std.testing.expectEqual(@as(u32, 11), Arch.nemotron_h.defaultEos());
+    try std.testing.expectEqual(@as(u32, 2), Arch.nemotron_nano.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.dflash2.defaultEos());
     try std.testing.expectEqual(@as(u32, 128009), Arch.llama4.defaultEos());
 }
@@ -443,6 +481,7 @@ test "fuzz: all arch functions" {
             if (arch.defaultBos()) |bos| {
                 try std.testing.expect(bos > 0);
             }
+            try std.testing.expect(!(arch.templateIncludesBos() and arch.defaultBos() != null));
 
             const eos = arch.defaultEos();
             try std.testing.expect(eos > 0);
@@ -455,7 +494,12 @@ test "fuzz: all arch functions" {
             try std.testing.expect(bf.len > 0);
 
             try std.testing.expect(gemma_fallback_eos == 1);
-            try std.testing.expect(default_fallback_eos == 248046);
+            try std.testing.expect(qwen_fallback_eos == 248046);
+            try std.testing.expect(gpt_oss_fallback_eos == 200002);
+            try std.testing.expect(glm4_fallback_eos == 154820);
+            try std.testing.expect(deepseek4_fallback_eos == 1);
+            try std.testing.expect(nemotron_h_fallback_eos == 11);
+            try std.testing.expect(nemotron_nano_fallback_eos == 2);
             try std.testing.expect(glm4_fallback_bos == 154822);
             try std.testing.expect(llama4_fallback_bos == 128000);
             try std.testing.expect(llama4_fallback_eos == 128009);

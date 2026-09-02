@@ -7,6 +7,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const mlx_ops = @import("../ops/mlx.zig");
@@ -192,7 +193,7 @@ pub const Gemma3Model = struct {
                 f.getMetaU32("sliding_window_pattern") orelse
                 if (f.getArchU32(arch, "attention.sliding_window")) |_| default_sliding_window_pattern else 0,
             .rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse default_rms_eps,
-            .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1,
+            .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse arch_mod.gemma_fallback_eos,
             .attn_scale = blk: {
                 // Gemma uses query_pre_attn_scalar (config) or head_dim as the scaling denominator
                 const scalar = f.getMetaU32("query_pre_attn_scalar") orelse head_dim;
