@@ -1908,9 +1908,12 @@ test "quant block constants" {
 }
 
 test "BackendChoice, all variants exist" {
-    // Verify the enum has all expected variants.
-    const choices = [_]BackendChoice{ .auto, .cpu, .metal, .vulkan, .cuda, .rocm, .webgpu };
-    try std.testing.expectEqual(@as(usize, 7), choices.len);
+    const fields = @typeInfo(BackendChoice).@"enum".fields;
+    const expected = [_][]const u8{ "auto", "cpu", "metal", "vulkan", "cuda", "rocm", "webgpu" };
+    try std.testing.expectEqual(expected.len, fields.len);
+    inline for (expected, 0..) |name, i| {
+        try std.testing.expectEqualStrings(name, fields[i].name);
+    }
 }
 
 test "NullBackend, function signatures exist" {

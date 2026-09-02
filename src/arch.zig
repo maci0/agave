@@ -244,6 +244,10 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen2").?);
+    try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4_exp").?);
+    try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4_exp_text").?);
+    try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4exp").?);
+    try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4_text").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt-oss").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt_oss").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gptoss").?);
@@ -255,6 +259,10 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4").?);
     try std.testing.expectEqual(Arch.glm4, Arch.detect("deepseek2").?);
     try std.testing.expectEqual(Arch.glm4, Arch.detect("glm4_moe_lite").?);
+    try std.testing.expectEqual(Arch.deepseek4, Arch.detect("deepseek4").?);
+    try std.testing.expectEqual(Arch.deepseek4, Arch.detect("deepseek_v4").?);
+    try std.testing.expectEqual(Arch.deepseek4, Arch.detect("dflash").?);
+    try std.testing.expectEqual(Arch.dflash2, Arch.detect("dflash2").?);
     try std.testing.expectEqual(Arch.llama4, Arch.detect("llama4").?);
     try std.testing.expectEqual(Arch.llama4, Arch.detect("llama4_text").?);
     try std.testing.expectEqual(Arch.diffusion_gemma, Arch.detect("diffusion_gemma").?);
@@ -267,11 +275,14 @@ test "Arch.displayName" {
     try std.testing.expectEqualStrings("Gemma 4", Arch.gemma4.displayName());
     try std.testing.expectEqualStrings("DiffusionGemma", Arch.diffusion_gemma.displayName());
     try std.testing.expectEqualStrings("Qwen 3.5/3.8", Arch.qwen35.displayName());
+    try std.testing.expectEqualStrings("Qwen4-Exp", Arch.qwen4_exp.displayName());
     try std.testing.expectEqualStrings("GPT-OSS", Arch.gpt_oss.displayName());
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());
     try std.testing.expectEqualStrings("Nemotron-Nano", Arch.nemotron_nano.displayName());
     try std.testing.expectEqualStrings("GLM-4", Arch.glm4.displayName());
+    try std.testing.expectEqualStrings("DeepSeek V4 Flash", Arch.deepseek4.displayName());
     try std.testing.expectEqualStrings("Llama 4", Arch.llama4.displayName());
+    try std.testing.expectEqualStrings("DFlash2 Drafter", Arch.dflash2.displayName());
 }
 
 test "Arch.defaultBos" {
@@ -279,10 +290,13 @@ test "Arch.defaultBos" {
     try std.testing.expectEqual(@as(?u32, 2), Arch.gemma4.defaultBos());
     try std.testing.expectEqual(@as(?u32, 2), Arch.diffusion_gemma.defaultBos());
     try std.testing.expectEqual(@as(?u32, 154822), Arch.glm4.defaultBos());
+    try std.testing.expectEqual(@as(?u32, 154822), Arch.deepseek4.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.qwen35.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.qwen4_exp.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.gpt_oss.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_h.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_nano.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.dflash2.defaultBos());
     try std.testing.expectEqual(@as(?u32, 128000), Arch.llama4.defaultBos());
 }
 
@@ -291,10 +305,13 @@ test "Arch.defaultEos" {
     try std.testing.expectEqual(@as(u32, 1), Arch.gemma4.defaultEos());
     try std.testing.expectEqual(@as(u32, 1), Arch.diffusion_gemma.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.qwen35.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.qwen4_exp.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.gpt_oss.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.glm4.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.deepseek4.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_h.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.nemotron_nano.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.dflash2.defaultEos());
     try std.testing.expectEqual(@as(u32, 128009), Arch.llama4.defaultEos());
 }
 
@@ -321,51 +338,82 @@ test "Arch.imageTokens multimodal" {
     try std.testing.expectEqual(@as(?ImageTokens, null), Arch.nemotron_h.imageTokens());
     try std.testing.expectEqual(@as(?ImageTokens, null), Arch.nemotron_nano.imageTokens());
     try std.testing.expectEqual(@as(?ImageTokens, null), Arch.glm4.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.qwen4_exp.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.deepseek4.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.llama4.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.diffusion_gemma.imageTokens());
+    try std.testing.expectEqual(@as(?ImageTokens, null), Arch.dflash2.imageTokens());
 }
 
 test "Arch.chatTemplate returns correct template per arch" {
     // Verify each arch returns its expected template
     try std.testing.expectEqual(ChatTemplate.gemma, Arch.gemma3.chatTemplate());
     try std.testing.expectEqual(ChatTemplate.gemma4, Arch.gemma4.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.gemma4, Arch.diffusion_gemma.chatTemplate());
     try std.testing.expectEqual(ChatTemplate.qwen35, Arch.qwen35.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.qwen35, Arch.qwen4_exp.chatTemplate());
     try std.testing.expectEqual(ChatTemplate.gpt_oss, Arch.gpt_oss.chatTemplate());
     try std.testing.expectEqual(ChatTemplate.glm4, Arch.glm4.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.deepseek4, Arch.deepseek4.chatTemplate());
     try std.testing.expectEqual(ChatTemplate.llama4, Arch.llama4.chatTemplate());
-    // nemotron variants use chatml default
+    // nemotron variants and dflash2 use chatml default
     try std.testing.expectEqual(ChatTemplate.chatml, Arch.nemotron_h.chatTemplate());
     try std.testing.expectEqual(ChatTemplate.chatml, Arch.nemotron_nano.chatTemplate());
+    try std.testing.expectEqual(ChatTemplate.chatml, Arch.dflash2.chatTemplate());
+}
+
+test "Arch.chatTemplateForLayers gemma4 12B uses unified" {
+    try std.testing.expectEqual(ChatTemplate.gemma4_unified, Arch.gemma4.chatTemplateForLayers(48));
+    try std.testing.expectEqual(ChatTemplate.gemma4_unified, Arch.gemma4.chatTemplateForLayers(49));
+    try std.testing.expectEqual(ChatTemplate.gemma4, Arch.gemma4.chatTemplateForLayers(47));
+    try std.testing.expectEqual(ChatTemplate.gemma4, Arch.gemma4.chatTemplateForLayers(0));
+    try std.testing.expectEqual(ChatTemplate.gemma, Arch.gemma3.chatTemplateForLayers(48));
+    try std.testing.expectEqual(ChatTemplate.gemma4, Arch.diffusion_gemma.chatTemplateForLayers(48));
 }
 
 test "Arch.templateName returns non-empty strings" {
-    const fields = @typeInfo(Arch).@"enum".fields;
-    inline for (fields) |field| {
-        const arch: Arch = @enumFromInt(field.value);
-        const name = arch.templateName();
-        try std.testing.expect(name.len > 0);
-    }
+    try std.testing.expectEqualStrings("gemma", Arch.gemma3.templateName());
+    try std.testing.expectEqualStrings("gemma4", Arch.gemma4.templateName());
+    try std.testing.expectEqualStrings("gemma4", Arch.diffusion_gemma.templateName());
+    try std.testing.expectEqualStrings("qwen35", Arch.qwen35.templateName());
+    try std.testing.expectEqualStrings("qwen35", Arch.qwen4_exp.templateName());
+    try std.testing.expectEqualStrings("gpt-oss", Arch.gpt_oss.templateName());
+    try std.testing.expectEqualStrings("glm4", Arch.glm4.templateName());
+    try std.testing.expectEqualStrings("deepseek4", Arch.deepseek4.templateName());
+    try std.testing.expectEqualStrings("llama4", Arch.llama4.templateName());
+    try std.testing.expectEqualStrings("chatml", Arch.nemotron_h.templateName());
+    try std.testing.expectEqualStrings("chatml", Arch.nemotron_nano.templateName());
+    try std.testing.expectEqualStrings("chatml", Arch.dflash2.templateName());
 }
 
 test "Arch.buildFlag returns valid flag names" {
     try std.testing.expectEqualStrings("gemma3", Arch.gemma3.buildFlag());
     try std.testing.expectEqualStrings("gemma4", Arch.gemma4.buildFlag());
+    try std.testing.expectEqualStrings("diffusion-gemma", Arch.diffusion_gemma.buildFlag());
     try std.testing.expectEqualStrings("qwen35", Arch.qwen35.buildFlag());
+    try std.testing.expectEqualStrings("qwen4-exp", Arch.qwen4_exp.buildFlag());
     try std.testing.expectEqualStrings("gpt-oss", Arch.gpt_oss.buildFlag());
     try std.testing.expectEqualStrings("nemotron-h", Arch.nemotron_h.buildFlag());
     try std.testing.expectEqualStrings("nemotron-nano", Arch.nemotron_nano.buildFlag());
     try std.testing.expectEqualStrings("glm4", Arch.glm4.buildFlag());
+    try std.testing.expectEqualStrings("deepseek4", Arch.deepseek4.buildFlag());
     try std.testing.expectEqualStrings("llama4", Arch.llama4.buildFlag());
+    try std.testing.expectEqualStrings("dflash2", Arch.dflash2.buildFlag());
 }
 
-test "Arch.isEnabled returns bool for all variants" {
-    // This test just verifies isEnabled compiles and returns bool for every arch.
-    // Actual values depend on build flags.
-    const fields = @typeInfo(Arch).@"enum".fields;
-    inline for (fields) |field| {
-        const arch: Arch = @enumFromInt(field.value);
-        const enabled = arch.isEnabled();
-        // Just ensure it returns a valid bool (true or false)
-        try std.testing.expect(enabled or !enabled);
-    }
+test "Arch.isEnabled matches compile-time build flags" {
+    try std.testing.expectEqual(build_options.enable_gemma3, Arch.gemma3.isEnabled());
+    try std.testing.expectEqual(build_options.enable_gemma4, Arch.gemma4.isEnabled());
+    try std.testing.expectEqual(build_options.enable_diffusion_gemma, Arch.diffusion_gemma.isEnabled());
+    try std.testing.expectEqual(build_options.enable_qwen35, Arch.qwen35.isEnabled());
+    try std.testing.expectEqual(build_options.enable_qwen4_exp, Arch.qwen4_exp.isEnabled());
+    try std.testing.expectEqual(build_options.enable_gpt_oss, Arch.gpt_oss.isEnabled());
+    try std.testing.expectEqual(build_options.enable_nemotron_h, Arch.nemotron_h.isEnabled());
+    try std.testing.expectEqual(build_options.enable_nemotron_nano, Arch.nemotron_nano.isEnabled());
+    try std.testing.expectEqual(build_options.enable_glm4, Arch.glm4.isEnabled());
+    try std.testing.expectEqual(build_options.enable_deepseek4, Arch.deepseek4.isEnabled());
+    try std.testing.expectEqual(build_options.enable_llama4, Arch.llama4.isEnabled());
+    try std.testing.expectEqual(build_options.enable_dflash2, Arch.dflash2.isEnabled());
 }
 
 test "fuzz: all arch functions" {
