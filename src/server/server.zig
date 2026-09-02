@@ -774,7 +774,8 @@ fn elapsedBetween(start: i64, end: i64) u64 {
 /// fall back to byte-length estimate (1 byte = 1 token) to prevent rate
 /// limiter bypass on tokenizer failure.
 fn estimatePromptTokens(token_count: usize, text_len: usize) u32 {
-    return if (token_count > 0) @intCast(token_count) else @intCast(@max(1, text_len));
+    const n = if (token_count > 0) token_count else @max(1, text_len);
+    return std.math.cast(u32, n) orelse std.math.maxInt(u32);
 }
 
 /// Characters unsafe for direct embedding in JSON string values or HTML contexts.
@@ -833,10 +834,16 @@ const TimeComponents = struct { hours: u64, minutes: u64, seconds: u64 };
 
 fn getTimeComponents() TimeComponents {
     const now = timestamp();
+    // Floor division + Euclidean remainder so pre-epoch timestamps
+    // (now < 0) still wrap into 00..23 / 00..59 instead of truncating
+    // toward zero (`@divTrunc(-1, 3600) == 0` → 00:00:00 for 23:59:59 UTC).
+    const sph: i64 = @intCast(seconds_per_hour);
+    const spm: i64 = @intCast(seconds_per_minute);
+    const hpd: i64 = @intCast(hours_per_day);
     return .{
-        .hours = @intCast(@mod(@divTrunc(now, seconds_per_hour), hours_per_day)),
-        .minutes = @intCast(@mod(@divTrunc(now, seconds_per_minute), seconds_per_minute)),
-        .seconds = @intCast(@mod(now, seconds_per_minute)),
+        .hours = @intCast(@mod(@divFloor(now, sph), hpd)),
+        .minutes = @intCast(@mod(@divFloor(now, spm), spm)),
+        .seconds = @intCast(@mod(now, spm)),
     };
 }
 
@@ -5702,7 +5709,9 @@ fn computeLogprobs(logits: []const f32, token_id: u32, n_top: u32) ?LogprobInfo 
 /// Format logprobs JSON into buffer. Returns slice or empty on overflow.
 fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: LogprobInfo) []const u8 {
     var pos: usize = 0;
-    const header = std.fmt.bufPrint(buf, "\"logprobs\":{{\"content\":[{{\"token\":\"{s}\",\"logprob\":{d:.6},\"top_logprobs\":[", .{ token_text, info.token_logprob }) catch return "";
+    var lp_buf: [32]u8 = undefined;
+    const lp_s = json.formatFiniteF32(&lp_buf, info.token_logprob);
+    const header = std.fmt.bufPrint(buf, "\"logprobs\":{{\"content\":[{{\"token\":\"{s}\",\"logprob\":{s},\"top_logprobs\":[", .{ token_text, lp_s }) catch return "";
     pos = header.len;
     for (0..info.count) |i| {
         const top_decoded = decodeTokenText(tok, info.top_ids[i]) orelse continue;
@@ -5710,7 +5719,9 @@ fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: Logp
         const top_escaped = json.jsonEscape(g_server.allocator, top_decoded) catch continue;
         defer if (top_escaped.ptr != top_decoded.ptr) g_server.allocator.free(top_escaped);
         const prefix: []const u8 = if (i > 0) "," else "";
-        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{d:.6}}}", .{ prefix, top_escaped, info.top_logprobs[i] }) catch return "";
+        var top_lp_buf: [32]u8 = undefined;
+        const top_lp_s = json.formatFiniteF32(&top_lp_buf, info.top_logprobs[i]);
+        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{s}}}", .{ prefix, top_escaped, top_lp_s }) catch return "";
         pos += entry.len;
     }
     const tail = "]}]}";
@@ -6873,6 +6884,29 @@ test "writeStreamedContent emits empty delta with finish reason" {
     try std.testing.expectEqual(@as(usize, 1), frames.items.len);
     try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"content\":\"\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"finish_reason\":\"stop\"") != null);
+}
+
+test "getTimeComponents wraps pre-epoch timestamps" {
+    defer sim_clock.setOverrideMs(null);
+    // 1s before epoch → 1969-12-31 23:59:59 UTC. Truncating division used to
+    // report 00:00:00.
+    sim_clock.setOverrideMs(-1000);
+    const before = getTimeComponents();
+    try std.testing.expectEqual(@as(u64, 23), before.hours);
+    try std.testing.expectEqual(@as(u64, 59), before.minutes);
+    try std.testing.expectEqual(@as(u64, 59), before.seconds);
+
+    sim_clock.setOverrideMs(0);
+    const epoch = getTimeComponents();
+    try std.testing.expectEqual(@as(u64, 0), epoch.hours);
+    try std.testing.expectEqual(@as(u64, 0), epoch.minutes);
+    try std.testing.expectEqual(@as(u64, 0), epoch.seconds);
+
+    sim_clock.setOverrideMs(3_661_000); // 1h 1m 1s
+    const later = getTimeComponents();
+    try std.testing.expectEqual(@as(u64, 1), later.hours);
+    try std.testing.expectEqual(@as(u64, 1), later.minutes);
+    try std.testing.expectEqual(@as(u64, 1), later.seconds);
 }
 
 test "prngSeedFromSampling uses sim_clock when seed omitted" {

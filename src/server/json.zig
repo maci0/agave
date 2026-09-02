@@ -163,18 +163,42 @@ pub fn extractBoolField(json: []const u8, field: []const u8) bool {
     return i + 4 <= json.len and std.mem.eql(u8, json[i..][0..4], "true");
 }
 
+/// Max characters consumed for a JSON number token (ints, floats, scientific).
+const max_json_number_chars: usize = 32;
+/// Largest integer exactly representable in f64 (2^53 - 1). Float fallback
+/// for `extractIntField` stops here; larger digit strings still go through parseInt.
+const max_exact_f64_int: f64 = @floatFromInt((@as(u64, 1) << 53) - 1);
+
+/// True if `c` can appear in a JSON number (`-1.5e+2`).
+fn isJsonNumberChar(c: u8) bool {
+    return (c >= '0' and c <= '9') or c == '.' or c == '-' or c == '+' or c == 'e' or c == 'E';
+}
+
+/// Index just past a JSON number starting at `start`, capped at `max_json_number_chars`.
+fn scanJsonNumberEnd(json: []const u8, start: usize) usize {
+    var end = start;
+    while (end < json.len and end - start < max_json_number_chars and isJsonNumberChar(json[end])) : (end += 1) {}
+    return end;
+}
+
 /// Extract an integer field value from a JSON body (e.g., `"max_tokens": 128`).
-/// Scans at most 20 digits (max decimal length of u64) to bound parsing cost.
+/// Accepts whole-number JSON values including `128.0` and `1e3`. Rejects
+/// negatives, non-integers (`1.5`), and overflow (`1e999` → Inf). Digit-only
+/// strings parse exactly via `parseInt` so values above 2^53 stay intact.
 pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
-    const max_int_digits = 20;
     var search_start: usize = 0;
     while (findFieldValuePos(json, needle, &search_start)) |val_pos| {
-        var end = val_pos;
-        while (end < json.len and end - val_pos < max_int_digits and json[end] >= '0' and json[end] <= '9') : (end += 1) {}
+        const end = scanJsonNumberEnd(json, val_pos);
         if (end == val_pos) continue;
-        return std.fmt.parseInt(usize, json[val_pos..end], 10) catch continue;
+        const raw = json[val_pos..end];
+        if (std.fmt.parseInt(usize, raw, 10)) |v| return v else |_| {}
+        const v = std.fmt.parseFloat(f64, raw) catch continue;
+        if (!std.math.isFinite(v) or v < 0 or v > max_exact_f64_int) continue;
+        const truncated = @floor(v);
+        if (truncated != v) continue;
+        return @intFromFloat(truncated);
     }
     return null;
 }
@@ -185,17 +209,22 @@ pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
 pub fn extractFloatField(json: []const u8, field: []const u8) ?f32 {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
-    const max_float_chars = 32;
     var search_start: usize = 0;
     while (findFieldValuePos(json, needle, &search_start)) |val_pos| {
-        var end = val_pos;
-        while (end < json.len and end - val_pos < max_float_chars and (json[end] == '.' or (json[end] >= '0' and json[end] <= '9') or json[end] == '-' or json[end] == 'e' or json[end] == 'E' or json[end] == '+')) : (end += 1) {}
+        const end = scanJsonNumberEnd(json, val_pos);
         if (end == val_pos) continue;
         const v = std.fmt.parseFloat(f32, json[val_pos..end]) catch continue;
         if (!std.math.isFinite(v)) continue;
         return v;
     }
     return null;
+}
+
+/// Format `v` as a JSON number. Non-finite values become `null` because JSON
+/// has no Inf/NaN; callers must not emit `{d}` of a computed float into JSON.
+pub fn formatFiniteF32(buf: []u8, v: f32) []const u8 {
+    if (!std.math.isFinite(v)) return "null";
+    return std.fmt.bufPrint(buf, "{d:.6}", .{v}) catch "null";
 }
 
 /// Scan past a JSON string value starting at `start` (just after the opening `"`).
@@ -460,7 +489,7 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
                         while (vi < lb_str.len and lb_str[vi] == ' ') vi += 1;
                         // Find end of number
                         var ve = vi;
-                        while (ve < lb_str.len and (lb_str[ve] == '-' or lb_str[ve] == '.' or (lb_str[ve] >= '0' and lb_str[ve] <= '9'))) ve += 1;
+                        while (ve < lb_str.len and isJsonNumberChar(lb_str[ve])) ve += 1;
                         if (ve > vi) {
                             const bias = std.fmt.parseFloat(f32, lb_str[vi..ve]) catch {
                                 i = ve;
@@ -1435,6 +1464,21 @@ test "extractIntField handles negative and zero" {
     try std.testing.expect(extractIntField("{\"n\": -1}", "n") == null);
 }
 
+test "extractIntField accepts whole JSON numbers including scientific" {
+    try std.testing.expectEqual(@as(usize, 1000), extractIntField("{\"n\": 1e3}", "n").?);
+    try std.testing.expectEqual(@as(usize, 128), extractIntField("{\"n\": 128.0}", "n").?);
+    // Fractional values must not truncate ({\"n\": 1.5} used to parse as 1)
+    try std.testing.expect(extractIntField("{\"n\": 1.5}", "n") == null);
+    try std.testing.expect(extractIntField("{\"n\": 1e999}", "n") == null);
+}
+
+test "formatFiniteF32 rejects Inf and NaN" {
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("1.500000", formatFiniteF32(&buf, 1.5));
+    try std.testing.expectEqualStrings("null", formatFiniteF32(&buf, std.math.inf(f32)));
+    try std.testing.expectEqualStrings("null", formatFiniteF32(&buf, std.math.nan(f32)));
+}
+
 test "extractFloatField handles edge values" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), extractFloatField("{\"t\": 0.0}", "t").?, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -1.5), extractFloatField("{\"t\": -1.5}", "t").?, 0.001);
@@ -1739,6 +1783,19 @@ test "parseSampling logit_bias object" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), s.logit_bias_vals[0], 0.01);
     try std.testing.expectEqual(@as(u32, 456), s.logit_bias_ids[1]);
     try std.testing.expectApproxEqAbs(@as(f32, -2.0), s.logit_bias_vals[1], 0.01);
+}
+
+test "parseSampling logit_bias scientific notation" {
+    // Digit-only scan used to stop at 'e', turning 1e2 into bias 1.
+    var s = SamplingParams{};
+    parseSampling(&s,
+        \\{"logit_bias": {"7": 1e2, "8": -2.5e-1}}
+    );
+    try std.testing.expectEqual(@as(u32, 2), s.logit_bias_count);
+    try std.testing.expectEqual(@as(u32, 7), s.logit_bias_ids[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), s.logit_bias_vals[0], 0.01);
+    try std.testing.expectEqual(@as(u32, 8), s.logit_bias_ids[1]);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.25), s.logit_bias_vals[1], 0.01);
 }
 
 test "parseSampling logit_bias rejects non-finite values" {
