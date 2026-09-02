@@ -50,7 +50,7 @@ Entry points found in code:
 | Disagg prefill->decode KV transfer | `src/main.zig:3523-3564`, KV stream `src/models/qwen35.zig:2207-2259` | Plaintext TCP 49456; carries the entire prompt as KV |
 | Environment variables | `AGAVE_PORT/HOST/API_KEY` (`main.zig:956,1157,1170`), `HF_TOKEN` (`pull.zig:295`), `NCCL_*` logging (`transport.zig:343-351`) | No runtime config files; recipes and chat templates are compile-time (`src/chat_template.zig` is string concatenation, not Jinja eval) |
 | Browser demo fetches | `web/agave.ts` (`loadModel`) | Fetches arbitrary user-typed model URL into WASM memory; contained to browser sandbox |
-| Container | `Dockerfile:165-185` (non-root `USER agave`, EXPOSE 49453, entrypoint binds 0.0.0.0), `docker-compose.yml:31-55` (127.0.0.1 mapping, `AGAVE_API_KEY` required, cap_drop ALL, read_only rootfs) | Compose is hardened; raw Dockerfile entrypoint relies on the API-key enforcement below |
+| Container | `Dockerfile:199-222` (non-root `USER agave`, EXPOSE 49453, entrypoint binds 0.0.0.0), `docker-compose.yml:31-57` (127.0.0.1 mapping, `AGAVE_API_KEY` required, cap_drop ALL, read_only rootfs) | Compose is hardened; raw Dockerfile entrypoint relies on the API-key enforcement below |
 
 No stale entries exist yet: this is the first version of the model.
 
@@ -63,7 +63,7 @@ No stale entries exist yet: this is the first version of the model.
 5. **Same-host processes -> shm segments.** Only uid/file-mode checks; any same-uid process can attach.
 6. **Secrets -> process.** Env vars enter once at startup; `AGAVE_API_KEY` env wins over CLI to avoid `ps` exposure (`main.zig:1167-1189`). Rotation points: process restart. Storage: env only; request buffers holding secrets are zeroed (`server.zig:5818-5822`, `pull.zig:713-714`).
 
-Privilege transitions: none at runtime. The process starts and stays at its launching privilege; the Dockerfile drops to `agave` before exec (`Dockerfile:165`).
+Privilege transitions: none at runtime. The process starts and stays at its launching privilege; the Dockerfile drops to `agave` before exec (`Dockerfile:199`).
 
 ## 3. Threats per boundary
 
@@ -99,7 +99,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 | Parser bounds/caps (GGUF, SafeTensors) | Malicious artifact DoS/OOB | refs in section 3 |
 | Repo-id validation, filename screening, O_NOFOLLOW blob writes, redirect-safe token handling | Download-path abuse | `pull.zig:54-65,70-88,720-725,1124-1141` |
 | Secret zeroization, env-over-CLI key | Credential leakage via ps/buffers | `main.zig:1167-1189`, `server.zig:5818-5822`, `pull.zig:713-714` |
-| Container hardening | Container escape blast radius | `Dockerfile:165`, `docker-compose.yml:45-55` |
+| Container hardening | Container escape blast radius | `Dockerfile:199`, `docker-compose.yml:53-57` |
 | Bounded grammar/schema recursion | Grammar DoS | `grammar.zig:23-27`, fail-closed `server.zig:3459-3461` |
 
 Single points of failure: the API key alone carries all client-side authn on 49453; the loopback-bind default carries all safety for no-key users; neither extends to the distributed ports.

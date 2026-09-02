@@ -67,10 +67,10 @@ Thumbs.db
 .github/
 .gitignore
 
-# Docs (not needed in image)
+# Docs (not needed in the image). Keep LICENSE in context: the runtime stage
+# copies it to /usr/share/doc/agave/copyright (GPL-3.0-or-later).
 docs/
 *.md
-LICENSE
 
 # Log files
 *.log

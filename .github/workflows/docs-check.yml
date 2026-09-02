@@ -20,6 +20,8 @@ on:
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci.yml'
+      - '.dockerignore'
+      - 'LICENSE'
   pull_request:
     branches: [ main ]
     paths:
@@ -39,6 +41,8 @@ on:
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci.yml'
+      - '.dockerignore'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:

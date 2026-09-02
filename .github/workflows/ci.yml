@@ -196,6 +196,25 @@ jobs:
             exit 1
           fi
           echo "HEALTHCHECK ok: $hc"
+          # GPL requires the license to accompany the binary.
+          if ! docker run --rm --entrypoint cat agave:ci /usr/share/doc/agave/copyright | grep -q "GNU GENERAL PUBLIC LICENSE"; then
+            echo "::error::Runtime image missing GPL license at /usr/share/doc/agave/copyright"
+            exit 1
+          fi
+          echo "LICENSE ok: /usr/share/doc/agave/copyright"
+          # HOME must be set in the image config (k8s/podman do not copy passwd HOME).
+          home="$(docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' agave:ci | sed -n 's/^HOME=//p')"
+          if [[ "$home" != "/home/agave" ]]; then
+            echo "::error::Image HOME='$home'; expected /home/agave"
+            exit 1
+          fi
+          echo "HOME ok: $home"
+          lic="$(docker inspect --format='{{index .Config.Labels "org.opencontainers.image.licenses"}}' agave:ci)"
+          if [[ "$lic" != "GPL-3.0-or-later" ]]; then
+            echo "::error::OCI licenses label is '$lic'; expected GPL-3.0-or-later"
+            exit 1
+          fi
+          echo "OCI licenses ok: $lic"
           # All dlopen backends disabled above → Dockerfile must select musl static.
           ldd_out="$(docker run --rm --entrypoint ldd agave:ci /usr/local/bin/agave 2>&1 || true)"
           echo "$ldd_out"
