@@ -22,8 +22,8 @@ const quant_ops = @import("../ops/quant.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const attn_ops = @import("../ops/attention.zig");
-const cpu_norm = @import("../backend/kernels/cpu/norm.zig");
 const Backend = backend_mod.Backend;
+const gemvMXFP8 = backend_mod.CpuGemv.gemvMXFP8;
 const TransportMod = @import("../parallel/transport.zig");
 const KvQuantType = kv_quant.KvQuantType;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -2118,7 +2118,7 @@ pub const Ds4Model = struct {
                 // Use depth 0's wkv weights (shared across depths for KV cache)
                 if (mtp.get("mtp.0.attn.wkv.weight")) |kv_w| {
                     if (mtp.get("mtp.0.attn.wkv.scale")) |kv_s| {
-                        const gemv_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+                        const gemv_fn = gemvMXFP8;
                         // hidden → kv_proj (using MTP weights, not target weights)
                         gemv_fn(
                             self.hidden.ptr,
@@ -2193,7 +2193,7 @@ pub const Ds4Model = struct {
         _ = depth; // Draft position (used for inter-draft hidden state)
         const e = self.n_embd;
         const kd: usize = self.kv_lora_rank; // 512
-        const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+        const gemv_mxfp8_fn = gemvMXFP8;
 
         // Get embedding for the input token
         const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
@@ -2288,7 +2288,7 @@ pub const Ds4Model = struct {
 
     /// MTP attention layer: attn_norm → Q projection → KV cache → per-head attention → wo_a/wo_b.
     fn mtpAttentionLayer(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize, kd: usize) void {
-        const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+        const gemv_mxfp8_fn = gemvMXFP8;
         var buf: [64]u8 = undefined;
 
         // attn_norm
@@ -2471,7 +2471,7 @@ pub const Ds4Model = struct {
 
     /// MTP FFN layer: ffn_norm → shared expert (gate + up → silu → down) → residual add.
     fn mtpFfnLayer(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize) void {
-        const gemv_mxfp8_fn = @import("../backend/kernels/cpu/gemv_fp8.zig").gemvMXFP8;
+        const gemv_mxfp8_fn = gemvMXFP8;
         var buf: [64]u8 = undefined;
 
         // ffn_norm
@@ -3076,7 +3076,7 @@ pub const Ds4Model = struct {
                                 }
                             }
                             // SGEMM: y[n_tok, n_out] = x[n_tok, n_in] × W[n_out, n_in]^T
-                            const accel = @import("../backend/accelerate.zig");
+                            const accel = backend_mod.accelerate;
                             accel.sgemm(n_tok, n_out, n_in, x, self.pf_q.ptr, y);
                             return;
                         }
@@ -3095,7 +3095,7 @@ pub const Ds4Model = struct {
                             const pw: [*]const u32 = @ptrCast(@alignCast(t.data_ptr));
                             const sc: [*]const u16 = @ptrCast(@alignCast(comp.scales));
                             const bi: [*]const u16 = @ptrCast(@alignCast(comp.biases));
-                            const accel = @import("../backend/accelerate.zig");
+                            const accel = backend_mod.accelerate;
                             var row_start: usize = 0;
                             while (row_start < n_out) {
                                 const tile_n = @min(tile_rows, n_out - row_start);
@@ -3421,7 +3421,7 @@ pub const Ds4Model = struct {
                 // Use pre-dequanted f32 weights + Accelerate SGEMM
                 const rel = li - ft_skip;
                 if (comptime @import("builtin").os.tag == .macos and build_options.enable_metal) {
-                    const accel = @import("../backend/accelerate.zig");
+                    const accel = backend_mod.accelerate;
                     accel.sgemm(n, ql, e, self.pf_hidden2.ptr, self.pf_dequant_q_a.ptr + rel * ql * e, self.pf_q_a.ptr);
                 } else {
                     self.batchedGemm(self.pf_hidden2.ptr, q_a, self.pf_q_a.ptr, n, ql, e);
@@ -3536,7 +3536,7 @@ pub const Ds4Model = struct {
                 if (self.pf_dequant_ready) {
                     if (comptime @import("builtin").os.tag == .macos and build_options.enable_metal) {
                         const rel3 = li - ft_skip;
-                        const accel3 = @import("../backend/accelerate.zig");
+                        const accel3 = backend_mod.accelerate;
                         accel3.sgemm(1, e, og * olr, self.lora_out.ptr, self.pf_dequant_wo_b.ptr + rel3 * e * og * olr, self.pf_hidden.ptr + t * e);
                     } else {
                         self.doGemv(self.lora_out.ptr, wo_b, self.pf_hidden.ptr + t * e, e, og * olr);

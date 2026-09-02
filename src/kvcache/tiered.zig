@@ -885,7 +885,7 @@ pub const TieredKvCache = struct {
     /// torn slice (new pointer, old length) would send attention through freed
     /// or empty memory. The returned slices stay valid until this block is
     /// demoted (scheduler, not the prefetcher) or the cache is destroyed.
-    pub fn keysValues(self: *TieredKvCache, block_id: u32) struct { keys: []f32, values: []f32 } {
+    pub fn keysValues(self: *TieredKvCache, block_id: u32) manager.KvF32View {
         std.debug.assert(block_id < self.blocks.len);
         self.lockTier();
         defer self.unlockTier();

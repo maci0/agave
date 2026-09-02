@@ -43,6 +43,47 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
 
 const page_size = std.heap.page_size_min;
 
+/// Enumerate Metal GPUs without creating a compute context.
+/// Used by `devices/discovery.zig` via `backend.listMetalDevices` so ObjC types
+/// stay inside this file.
+pub fn listDevices(out: []backend_mod.MetalDeviceListEntry) usize {
+    if (out.len == 0) return 0;
+    // Foundation missing (very early boot / broken runtime): no devices to list.
+    _ = objc.getClass("NSArray") orelse return 0;
+
+    const devices_arr: ?objc.id = objc.MTLCopyAllDevices();
+    if (devices_arr == null) {
+        const default_dev = objc.MTLCreateSystemDefaultDevice() orelse return 0;
+        fillListedDevice(&out[0], default_dev);
+        return 1;
+    }
+    const arr = devices_arr.?;
+    defer objc.msgSend(void, arr, objc.sel("release"), .{});
+    const count: u64 = objc.msgSend(u64, arr, objc.sel("count"), .{});
+    if (count == 0) return 0;
+    var n: usize = 0;
+    var i: u64 = 0;
+    while (i < count and n < out.len) : (i += 1) {
+        const dev: objc.id = objc.msgSend(objc.id, arr, objc.sel("objectAtIndex:"), .{i});
+        fillListedDevice(&out[n], dev);
+        n += 1;
+    }
+    return n;
+}
+
+fn fillListedDevice(entry: *backend_mod.MetalDeviceListEntry, mtl_dev: objc.id) void {
+    entry.* = .{};
+    const name_ns: objc.id = objc.msgSend(objc.id, mtl_dev, objc.sel("name"), .{});
+    const name_cstr: ?[*:0]const u8 = objc.msgSend(?[*:0]const u8, name_ns, objc.sel("UTF8String"), .{});
+    if (name_cstr) |cstr| {
+        const name_slice = std.mem.sliceTo(cstr, 0);
+        const copy_len = @min(name_slice.len, backend_mod.metal_list_name_buf_size);
+        @memcpy(entry.name[0..copy_len], name_slice[0..copy_len]);
+        entry.name_len = copy_len;
+    }
+    entry.total_mem = objc.msgSend(u64, mtl_dev, objc.sel("recommendedMaxWorkingSetSize"), .{});
+}
+
 // ── Tuning constants ────────────────────────────────────────────
 // These thresholds control when the Metal backend falls back to CPU
 // or caps kernel dispatch sizes. Tuned for Apple Silicon M-series.

@@ -61,6 +61,14 @@ pub fn freeKvCache(allocator: Allocator, cache: KvCache) void {
 // Sequences reference blocks through a block table (indirection), allowing
 // fine-grained memory reclamation.
 
+/// Flat f32 key/value slices for one layer or block.
+/// Named so `TieredKvCache.keysValues` and model `getLayerKvView` share one type;
+/// identical anonymous structs are distinct types in Zig and fail to coerce.
+pub const KvF32View = struct {
+    keys: []f32,
+    values: []f32,
+};
+
 /// A single cache block holds `block_size` positions of KV data.
 pub const CacheBlock = struct {
     /// Key data: [block_size * kv_dim] f32.

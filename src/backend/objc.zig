@@ -25,6 +25,9 @@ extern "c" fn objc_msgSend() void;
 /// Get the default Metal device (plain C function, not ObjC).
 pub extern "c" fn MTLCreateSystemDefaultDevice() ?id;
 
+/// NSArray of MTLDevice. Caller must `release` the array.
+pub extern "c" fn MTLCopyAllDevices() ?id;
+
 /// Register (or look up) an Objective-C selector by name.
 pub fn sel(name: [*:0]const u8) SEL {
     return sel_registerName(name);
