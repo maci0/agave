@@ -53,7 +53,7 @@ Entry points found in code:
 | Shared memory transport | `/agave_0to1`, `/agave_1to0` (`transport.zig:227-241`) | Same-host, mode 0600 |
 | NCCL | dlopen `libnccl.so.2` (`transport.zig:318-321`) | 128-byte NCCL ID exchanged over the unauthenticated TCP link (:339-356) |
 | Disagg prefill->decode KV transfer | listen `src/main.zig:3832-3843`, KV stream `src/models/qwen35.zig:2264-2282` | Plaintext TCP 49456; carries the entire prompt as KV |
-| Environment variables | `AGAVE_PORT/HOST/API_KEY` (`src/main.zig:1220-1235,2233-2235`), `HF_TOKEN` (`pull.zig:306`), `NCCL_*` logging (`transport.zig:372-383`), `HOME`/`TMPDIR`/`XDG_CACHE_HOME` | No runtime config files; recipes and chat templates are compile-time (`src/chat_template.zig` is string concatenation, not Jinja eval) |
+| Environment variables | `AGAVE_PORT/HOST/API_KEY` (`src/main.zig:1226-1262,2252-2266`), `HF_TOKEN` (`pull.zig:328`), `NCCL_*` logging (`transport.zig:372-383`), `HOME`/`TMPDIR`/`XDG_CACHE_HOME` | Empty/whitespace env is unset (`pull.nonemptyEnv`). No runtime config files; recipes and chat templates are compile-time (`src/chat_template.zig` is string concatenation, not Jinja eval) |
 | Browser WASM demo | `web/agave.ts` `loadModel` :238-252; `src/wasm_entry.zig` | Fetches a user-typed model URL into WASM memory; contained to the browser sandbox |
 | Container | `Dockerfile:199-222` (non-root `USER agave`, EXPOSE 49453, entrypoint binds 0.0.0.0), `docker-compose.yml:31-65` (127.0.0.1 mapping, `AGAVE_API_KEY` required, cap_drop ALL, read_only rootfs) | Compose is hardened; raw Dockerfile entrypoint relies on the API-key enforcement below. Compose volume persists conversations + Hub blobs |
 
@@ -61,12 +61,12 @@ No listed entry point in the previous revision has been removed. Added since las
 
 ## 2. Trust boundaries and data flow
 
-1. **Client -> HTTP API.** Authn point: `validateAuth` constant-time compare (`src/server/server.zig:1248-1269`). Policy: non-loopback binds refuse to start without a key (`src/main.zig:1236-1242`); loopback binds are open by design. Unauthenticated mode also rejects non-loopback `Host` (DNS rebind, :915-918, :1781-1788) and mismatched `Origin` vs `Host` (CSRF, :924-928, :1791-1801).
+1. **Client -> HTTP API.** Authn point: `validateAuth` constant-time compare (`src/server/server.zig:1248-1269`). Policy: non-loopback binds refuse to start without a key (`src/main.zig:1247-1253`); loopback binds are open by design. Unauthenticated mode also rejects non-loopback `Host` (DNS rebind, :915-918, :1781-1788) and mismatched `Origin` vs `Host` (CSRF, :924-928, :1791-1801).
 2. **Artifact -> loader.** Whoever supplies the file (local user, Hub download, LoRA adapter, mmproj, PNG) crosses into mmap/decode native code. Validation lives inside the parsers (see mitigations).
 3. **HF Hub -> local cache.** Transport-authenticated (TLS) but content-unverified; blobs land under `$HF_HOME`-derived paths with `O_NOFOLLOW` writes (`src/pull.zig:1190-1197`). Commit SHA is used for snapshot directory naming (`pull.zig:1454`), not as a pin on the download URL (`resolve/main` :1025).
 4. **Peer node -> this node (TP/PP/disagg).** No authentication point exists anywhere on this boundary. First TCP `accept` wins a rank slot (`transport.zig:215-222`, `main.zig:1620`); first UDP `AGAVE-JOIN` wins discovery (`peer_discovery.zig:107-112`). Largest unauthenticated boundary.
 5. **Same-host processes -> shm segments.** Only uid/file-mode checks; names are fixed.
-6. **Secrets -> process.** Env vars enter once at startup; `AGAVE_API_KEY` env wins over CLI to avoid `ps` exposure (`src/main.zig:1232-1235`). Rotation: process restart. Storage: env only; HTTP request buffers holding secrets are zeroed (`server.zig:6711-6714`); Hub `Authorization` buffers zeroed (`pull.zig:737,1089`).
+6. **Secrets -> process.** Env vars enter once at startup; nonempty `AGAVE_API_KEY` wins over CLI to avoid `ps` exposure (`src/main.zig:1241-1246`); empty env is unset. Rotation: process restart. Storage: env only; HTTP request buffers holding secrets are zeroed (`server.zig:6711-6714`); Hub `Authorization` buffers zeroed (`pull.zig:737,1089`).
 7. **Process -> conversation file.** Prompts written to `$HOME/.cache/agave/conversations.json` unless `--no-conv-store` (`server.zig:6859-6864`, `conv_store.zig:68-73`). Compose maps this under `agave-cache`.
 8. **Embedded UI -> jsDelivr.** `src/web/head.html:12-16` loads marked / DOMPurify / highlight.js from `cdn.jsdelivr.net` with SRI. CSP allowlists that origin (`server.zig:1238`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
 

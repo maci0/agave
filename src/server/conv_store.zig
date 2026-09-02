@@ -68,8 +68,8 @@ pub const ConvView = struct {
 /// Default path: `$XDG_CACHE_HOME/agave/conversations.json`, else
 /// `$HOME/.cache/agave/conversations.json`. Null if neither env var is set.
 pub fn defaultPath(buf: []u8) ?[]u8 {
-    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.span(c) else null;
-    const home = if (std.c.getenv("HOME")) |c| std.mem.span(c) else null;
+    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
+    const home = if (std.c.getenv("HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
     return formatDefaultPath(buf, xdg, home);
 }
 

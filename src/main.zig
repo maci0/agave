@@ -569,6 +569,9 @@ const CliArgs = struct {
     host: [4]u8 = .{ 127, 0, 0, 1 },
     api_key: ?[]const u8 = null,
     debug: bool,
+    /// Dump DFlash2 speculation-round traces. Set from AGAVE_DF2_DEBUG=1 at parse
+    /// time (not getenv in the generate loop).
+    df2_debug: bool = false,
     json: bool,
     model_info: bool,
     benchmark: bool = false,
@@ -1014,14 +1017,19 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Validate port range (1-65535, u16 parse already enforces upper bound).
-    // CLI --port wins over AGAVE_PORT; both are validated the same way.
-    const port_raw = res.option("port") orelse g_environ.get("AGAVE_PORT");
-    if (parseU16(port_raw, "port")) |p| {
+    // CLI --port wins over AGAVE_PORT. Empty AGAVE_PORT is unset (Compose `${VAR:-}`).
+    const port_cli = res.option("port");
+    const port_env = pull.nonemptyEnv(g_environ.get("AGAVE_PORT"));
+    const port_raw = port_cli orelse port_env;
+    const port_label: []const u8 = if (port_cli != null) "--port" else "AGAVE_PORT";
+    const parsed_port: u16 = blk: {
+        const p = parseUintLabel(u16, port_raw, port_label) orelse break :blk default_port;
         if (p == 0) {
-            eprint("Error: --port / AGAVE_PORT must be in range 1-65535\n", .{});
+            eprint("Error: {s} must be in range 1-65535\n", .{port_label});
             std.process.exit(2);
         }
-    }
+        break :blk p;
+    };
 
     // Validate max-batch-size (0 would silently fall back inside the server)
     if (parseU32(res.option("max-batch-size"), "max-batch-size")) |mbs| {
@@ -1058,17 +1066,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (!res.flag("serve")) {
         if (res.option("port") != null) {
             eprint("Warning: --port has no effect without --serve\n", .{});
-        } else if (g_environ.get("AGAVE_PORT") != null) {
+        } else if (port_env != null) {
             eprint("Warning: AGAVE_PORT has no effect without --serve\n", .{});
         }
         if (res.option("host") != null) {
             eprint("Warning: --host has no effect without --serve\n", .{});
-        } else if (g_environ.get("AGAVE_HOST") != null) {
+        } else if (pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) != null) {
             eprint("Warning: AGAVE_HOST has no effect without --serve\n", .{});
         }
         if (res.option("api-key") != null) {
             eprint("Warning: --api-key has no effect without --serve\n", .{});
-        } else if (g_environ.get("AGAVE_API_KEY") != null) {
+        } else if (pull.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
             eprint("Warning: AGAVE_API_KEY has no effect without --serve\n", .{});
         }
         if (res.option("rate-limit-rpm") != null or res.option("rate-limit-tpm") != null) {
@@ -1089,8 +1097,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --benchmark exits before server starts; remove --serve or --benchmark\n", .{});
         if (res.flag("model-info"))
             eprint("Warning: --model-info exits before server starts; remove --serve or --model-info\n", .{});
-        // --api-key appears in `ps`/`/proc/*/cmdline`; AGAVE_API_KEY wins when both are set.
-        if (res.option("api-key") != null and g_environ.get("AGAVE_API_KEY") != null) {
+        // --api-key appears in `ps`/`/proc/*/cmdline`; nonempty AGAVE_API_KEY wins when both are set.
+        if (res.option("api-key") != null and pull.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
             eprint("Warning: both --api-key and AGAVE_API_KEY set; using AGAVE_API_KEY (CLI value ignored)\n", .{});
         } else if (res.option("api-key") != null) {
             eprint("Warning: --api-key is visible in process listings; prefer AGAVE_API_KEY\n", .{});
@@ -1217,31 +1225,34 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
 
     // Resolve bind address before auth checks so loopback uses the parsed octets
     // (entire 127.0.0.0/8), not only the string forms "127.0.0.1"/"localhost".
-    // CLI --host wins over AGAVE_HOST.
+    // CLI --host wins over AGAVE_HOST. Empty AGAVE_HOST is unset.
     const bind_host: [4]u8 = blk: {
-        const host_str = res.option("host") orelse g_environ.get("AGAVE_HOST") orelse break :blk [4]u8{ 127, 0, 0, 1 };
+        const host_str = res.option("host") orelse pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse break :blk [4]u8{ 127, 0, 0, 1 };
         if (std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0")) break :blk [4]u8{ 0, 0, 0, 0 };
         if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
         var parts: [4]u8 = undefined;
         if (!parseIpv4(host_str, &parts)) {
-            eprint("Error: invalid host address '{s}' (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{host_str});
+            const host_label: []const u8 = if (res.option("host") != null) "--host" else "AGAVE_HOST";
+            eprint("Error: invalid host address '{s}' from {s} (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{ host_str, host_label });
             std.process.exit(2);
         }
         break :blk parts;
     };
     const api_key: ?[]const u8 = blk: {
-        // Prefer AGAVE_API_KEY over --api-key so the active secret is not taken from
-        // process listings when both are present (CLI value is still visible in ps).
-        const key = g_environ.get("AGAVE_API_KEY") orelse res.option("api-key");
+        // Prefer nonempty AGAVE_API_KEY over --api-key so the active secret is not
+        // taken from process listings when both are present. Empty env is unset so
+        // a sourced `.env.example` (`AGAVE_API_KEY=`) does not override --api-key
+        // or fail loopback --serve.
+        const key = preferredSecret(g_environ.get("AGAVE_API_KEY"), res.option("api-key"));
         // Non-loopback bind without a key exposes the full inference API.
         const is_loopback = bind_host[0] == 127;
         if (res.flag("serve") and !is_loopback and key == null) {
-            const host_str = res.option("host") orelse g_environ.get("AGAVE_HOST") orelse "127.0.0.1";
+            const host_str = res.option("host") orelse pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse "127.0.0.1";
             eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
             eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
             std.process.exit(2);
         }
-        // Empty/whitespace key would satisfy "key present" checks while accepting any empty header.
+        // Empty/whitespace --api-key would satisfy "key present" checks while accepting any empty header.
         if (key) |k| {
             const trimmed = std.mem.trim(u8, k, " \t\r\n");
             if (trimmed.len == 0) {
@@ -1257,7 +1268,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .model_path = res.positional(0).?,
         .prompt = res.positional(1),
         .serve = res.flag("serve"),
-        .port = parseU16(port_raw, "port") orelse default_port,
+        .port = parsed_port,
         .max_tokens = parseU32(res.option("max-tokens"), "max-tokens") orelse default_max_tokens,
         .temperature = temperature,
         .top_p = top_p,
@@ -1323,6 +1334,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .host = bind_host,
         .api_key = api_key,
         .debug = res.flag("debug"),
+        .df2_debug = pull.envFlagIsOne(g_environ.get("AGAVE_DF2_DEBUG")),
         .json = json_mode,
         .model_info = res.flag("model-info"),
         .benchmark = res.flag("benchmark"),
@@ -1720,12 +1732,22 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
 }
 
 fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
+    return parseUintLabel(T, s, "--" ++ flag);
+}
+
+/// Parse an unsigned integer, naming `label` (`--port` or `AGAVE_PORT`) in errors.
+fn parseUintLabel(comptime T: type, s: ?[]const u8, label: []const u8) ?T {
     const str = s orelse return null;
     return std.fmt.parseInt(T, str, 10) catch {
-        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
+        eprint("Error: invalid value for {s}: '{s}' is not a valid integer\n", .{ label, str });
         eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     };
+}
+
+/// Env wins when nonempty; empty/whitespace env is unset so a CLI value still applies.
+fn preferredSecret(env_val: ?[]const u8, cli_val: ?[]const u8) ?[]const u8 {
+    return pull.nonemptyEnv(env_val) orelse cli_val;
 }
 
 fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
@@ -2231,9 +2253,13 @@ fn printUsage() void {
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
         \\  TERM                 Set to dumb to disable color and TTY decorations
         \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
+        \\                         Empty/whitespace is unset (does not override --api-key)
         \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
+        \\                         Empty/whitespace is unset
         \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
+        \\                         Empty/whitespace is unset
         \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
+        \\  AGAVE_DF2_DEBUG      Dump DFlash2 speculation-round traces when set to 1
         \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
         \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
         \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
@@ -4870,7 +4896,7 @@ fn generateSpeculative(
         // DFlash2: maintain hybrid history (features are ingested at the top
         // of the next iteration).
         if (use_dflash2) {
-            if (pull.getenv("AGAVE_DF2_DEBUG") != null) {
+            if (cli.df2_debug) {
                 std.debug.print("df2 round {d}: pos={d} drafted={d} accepted={d} next={d} drafts={any}\n", .{
                     spec_state.total_rounds,                                 pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
                     spec_state.draft_tokens[0..@min(spec_state.n_draft, 8)],
@@ -5728,6 +5754,16 @@ test "noColorRequested follows no-color.org" {
     try std.testing.expect(noColorRequested("true"));
 }
 
+test "preferredSecret empty env does not override CLI" {
+    try std.testing.expectEqualStrings("cli", preferredSecret("", "cli").?);
+    try std.testing.expectEqualStrings("cli", preferredSecret("  ", "cli").?);
+    try std.testing.expectEqualStrings("env", preferredSecret("env", "cli").?);
+    try std.testing.expect(preferredSecret("", null) == null);
+    try std.testing.expect(preferredSecret(null, null) == null);
+    try std.testing.expectEqualStrings("", preferredSecret(null, "").?);
+    try std.testing.expectEqualStrings("key", preferredSecret("  key  ", "cli").?);
+}
+
 test "fuzz: main.zig pure functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -5749,6 +5785,8 @@ test "fuzz: main.zig pure functions" {
                 _ = &parseU32;
                 _ = &parseU64;
                 _ = &parseU16;
+                _ = &parseUintLabel;
+                _ = &preferredSecret;
                 _ = &parseF32;
                 _ = &noColorRequested;
                 _ = &rejectEqualsOnFlag;
