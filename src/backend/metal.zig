@@ -669,6 +669,45 @@ pub const MetalBackend = struct {
         );
     }
 
+    /// Queue `buf` for release after the next GPU sync. If the queue cannot grow,
+    /// log and leak: releasing before sync is a use-after-free on the GPU.
+    fn queueRelease(self: *MetalBackend, buf: objc.id) void {
+        self.pending_release.append(self.allocator, buf) catch |err| {
+            std.log.warn("Metal pending_release append failed: {}", .{err});
+        };
+    }
+
+    /// Move a cached buffer onto pending_release. False means the queue could not
+    /// grow; the caller must leave the cache entry in place so deinit still frees it.
+    fn deferCachedRelease(self: *MetalBackend, buf: objc.id) bool {
+        self.pending_release.append(self.allocator, buf) catch |err| {
+            std.log.warn("Metal pending_release append failed: {}", .{err});
+            return false;
+        };
+        return true;
+    }
+
+    /// Copy `len` bytes for this dispatch only and release the copy after sync.
+    fn oneShotCopy(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
+        const copy = self.makeBuffer(ptr, len);
+        self.queueRelease(copy);
+        return .{ .buf = copy, .offset = 0 };
+    }
+
+    /// Cache `buf`, or queue it for post-sync release if the map cannot grow.
+    fn cacheOrDefer(
+        self: *MetalBackend,
+        cache: *std.AutoHashMap(usize, BufferInfo),
+        key: usize,
+        buf: objc.id,
+        len: usize,
+    ) void {
+        cache.put(key, .{ .metal_buf = buf, .len = len }) catch |err| {
+            std.log.warn("Metal buffer cache put failed: {}", .{err});
+            self.queueRelease(buf);
+        };
+    }
+
     /// Release all cached buffers, pipeline states, the scratch buffer, and free the cache map.
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
@@ -685,6 +724,8 @@ pub const MetalBackend = struct {
         release(self.scratch_buf);
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
+        for (self.pending_release.items) |buf| release(buf);
+        self.pending_release.deinit(self.allocator);
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
@@ -724,13 +765,15 @@ pub const MetalBackend = struct {
         if (self.volatile_weights and needed >= volatile_weight_threshold) {
             if (self.stable_cache.get(aligned_base)) |cached| {
                 if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-                self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+                if (!self.deferCachedRelease(cached.metal_buf)) {
+                    return self.oneShotCopy(ptr, len);
+                }
                 _ = self.stable_cache.remove(aligned_base);
             }
             const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
             const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
             const buf = self.makeBuffer(aligned_ptr, aligned_len);
-            self.stable_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
+            self.cacheOrDefer(&self.stable_cache, aligned_base, buf, aligned_len);
             return .{ .buf = buf, .offset = offset };
         }
 
@@ -738,7 +781,9 @@ pub const MetalBackend = struct {
         if (self.buf_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
             // Buffer too small (e.g. KV cache grew), release old, recreate below
-            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+            if (!self.deferCachedRelease(cached.metal_buf)) {
+                return self.oneShotCopy(ptr, len);
+            }
             _ = self.buf_cache.remove(aligned_base);
         }
 
@@ -746,18 +791,16 @@ pub const MetalBackend = struct {
         const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
         if (self.wrapBuffer(aligned_ptr, aligned_len)) |buf| {
             self.buf_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch |err| {
-                // Cache full, release wrap buffer to avoid leak, fall through to copy path
+                // Wrap buffer was never submitted; safe to release now.
                 std.log.warn("Metal buf_cache put failed: {}", .{err});
                 release(buf);
-                return .{ .buf = self.makeBuffer(ptr, len), .offset = 0 };
+                return self.oneShotCopy(ptr, len);
             };
             return .{ .buf = buf, .offset = offset };
         }
         // Fallback: copy the data into a Metal-managed buffer (extremely rare)
         const copy_buf = self.makeBuffer(ptr, len);
-        self.buf_cache.put(addr, .{ .metal_buf = copy_buf, .len = len }) catch |err| {
-            std.log.warn("Metal buf_cache put failed: {}", .{err});
-        };
+        self.cacheOrDefer(&self.buf_cache, addr, copy_buf, len);
         return .{ .buf = copy_buf, .offset = 0 };
     }
 
@@ -775,7 +818,9 @@ pub const MetalBackend = struct {
         // Check stable_cache first (persists across sync)
         if (self.stable_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+            if (!self.deferCachedRelease(cached.metal_buf)) {
+                return self.oneShotCopy(ptr, len);
+            }
             _ = self.stable_cache.remove(aligned_base);
         }
         // Also check buf_cache (from getBufRef calls for same data)
@@ -787,7 +832,7 @@ pub const MetalBackend = struct {
         const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
         const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
         const buf = self.makeBuffer(aligned_ptr, aligned_len);
-        self.stable_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
+        self.cacheOrDefer(&self.stable_cache, aligned_base, buf, aligned_len);
         return .{ .buf = buf, .offset = offset };
     }
 

@@ -533,7 +533,9 @@ fn saveVkCacheFile(data: []const u8) void {
         _ = std.c.mkdir(dir, 0o755);
     }
     // Atomic replace: a crash mid-write must not truncate a previously good cache.
-    @import("../durable_file.zig").replace(path, data) catch {};
+    @import("../durable_file.zig").replace(path, data) catch |err| {
+        std.log.warn("Vulkan pipeline cache save failed ({s}): {}", .{ path, err });
+    };
 }
 
 const FnCmdBindPipeline = *const fn (VkCommandBuffer, c_int, VkPipeline) callconv(.c) void;
