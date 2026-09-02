@@ -1124,10 +1124,12 @@ const html_page = @embedFile("../web/head.html") ++
     @embedFile("../web/app.js") ++
     "\n</script></body></html>\n";
 
+/// Wyhash walks the embedded page in 48-byte rounds; the default comptime
+/// branch quota (1000) is below ~96 KiB of head+css+body+app.js.
+const html_page_hash_eval_quota: u32 = 1_000_000;
+
 const html_page_hash = blk: {
-    // ~96 KiB of concatenated web assets; Wyhash's 48-byte round exceeds the
-    // default 1000-branch comptime quota.
-    @setEvalBranchQuota(1_000_000);
+    @setEvalBranchQuota(html_page_hash_eval_quota);
     break :blk std.hash.Wyhash.hash(0, html_page);
 };
 const html_etag = std.fmt.comptimePrint("\"{x}\"", .{html_page_hash});

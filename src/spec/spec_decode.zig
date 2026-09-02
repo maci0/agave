@@ -18,7 +18,6 @@ const math_ops = @import("../ops/math.zig");
 const ddtree = @import("ddtree.zig");
 const dspark = @import("dspark.zig");
 const ngram_mod = @import("ngram.zig");
-const DFlash2Model = @import("../models/dflash2.zig").DFlash2Model;
 
 pub const max_draft_tokens: usize = 32;
 const log_softmax_eps: f32 = 1e-10;
@@ -242,7 +241,7 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
 /// unchanged.
 pub fn draftDFlash2(
     state: *SpecState,
-    drafter: *DFlash2Model,
+    drafter: anytype,
     anchor: u32,
     anchor_pos: usize,
     temperature: f32,

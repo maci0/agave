@@ -248,7 +248,7 @@ pub fn scaledDotProductAttentionTiered(
 
 // ── PagedAttention ────────────────────────────────────────────────
 
-const CacheBlock = @import("../kvcache/manager.zig").CacheBlock;
+const CacheBlock = @import("../kvcache/view.zig").CacheBlock;
 
 /// Paged SDPA: block-table-based attention (f32 KV cache only, no windowing/offsets).
 ///

@@ -37,7 +37,6 @@ const GGUFFile = format_mod.GGUFFile;
 const SafeTensorsDir = format_mod.SafeTensorsDir;
 const Model = model_mod.Model;
 const ModelStorage = model_mod.ModelStorage;
-const DFlash2Model = @import("models/dflash2.zig").DFlash2Model;
 const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
@@ -3453,7 +3452,7 @@ fn initAndRun(
     }
 
     // ── MTP weight loading ──────────────────────────────────────
-    const MtpWeights = @import("models/ds4_mtp.zig").MtpWeights;
+    const MtpWeights = model_mod.MtpWeights;
     var mtp_weights: ?MtpWeights = null;
     defer if (mtp_weights) |*mw| mw.deinit(allocator);
 
@@ -3789,24 +3788,26 @@ fn initAndRun(
         // The checkpoint ships no embeddings or LM head; bind the target's.
         // Target-side feature capture feeds the drafter's context injection,
         // and --spec-mode defaults to dflash2 when this drafter is loaded.
-        if (draft_mdl_storage.? == .dflash2) {
-            if (cli.tp_degree > 1 or cli.pp_degree > 1) {
-                eprint("Error: DFlash2 speculative decoding requires tp=1 and pp=1\n", .{});
-                return false;
+        if (comptime build_options.enable_dflash2) {
+            if (draft_mdl_storage.?.dflash2Drafter()) |df2| {
+                if (cli.tp_degree > 1 or cli.pp_degree > 1) {
+                    eprint("Error: DFlash2 speculative decoding requires tp=1 and pp=1\n", .{});
+                    return false;
+                }
+                const emb_t = fmt.getTensor("token_embd.weight") orelse {
+                    eprint("Error: target model lacks token_embd.weight for DFlash2 binding\n", .{});
+                    return false;
+                };
+                const head_t = fmt.getTensor("output.weight") orelse fmt.getTensor("token_embd.weight") orelse {
+                    eprint("Error: target model lacks output.weight for DFlash2 binding\n", .{});
+                    return false;
+                };
+                df2.bindTarget(emb_t, head_t, fmt);
+                mdl.setCaptureLayers(df2.target_layer_ids, df2.cap) catch |e| {
+                    eprint("Error: failed to enable DFlash2 feature capture on target: {}\n", .{e});
+                    return false;
+                };
             }
-            const emb_t = fmt.getTensor("token_embd.weight") orelse {
-                eprint("Error: target model lacks token_embd.weight for DFlash2 binding\n", .{});
-                return false;
-            };
-            const head_t = fmt.getTensor("output.weight") orelse fmt.getTensor("token_embd.weight") orelse {
-                eprint("Error: target model lacks output.weight for DFlash2 binding\n", .{});
-                return false;
-            };
-            draft_mdl_storage.?.dflash2.bindTarget(emb_t, head_t, fmt);
-            mdl.setCaptureLayers(draft_mdl_storage.?.dflash2.target_layer_ids, draft_mdl_storage.?.dflash2.cap) catch |e| {
-                eprint("Error: failed to enable DFlash2 feature capture on target: {}\n", .{e});
-                return false;
-            };
         }
     } else if (cli.spec_mode != .none) {
         draft_ptr = &model_if;
@@ -4023,7 +4024,10 @@ fn initAndRun(
             generateDiffusion(allocator, &model_if, tok, cli, tok_kind, arch, prompt, !g_quiet);
         } else {
             // DFlash2 drafter + feature reader, resolved once where storage lives.
-            const df2_ptr: ?*DFlash2Model = if (draft_mdl_storage != null and draft_mdl_storage.? == .dflash2) &draft_mdl_storage.?.dflash2 else null;
+            const df2_ptr = if (comptime build_options.enable_dflash2)
+                if (draft_mdl_storage) |*ds| ds.dflash2Drafter() else null
+            else
+                null;
             const feat_reader: ?ModelStorage.FeatureReader = if (df2_ptr != null) mdl.featureReader() else null;
             generateAndPrint(allocator, &model_if, df2_ptr, feat_reader, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
         }
@@ -4282,9 +4286,6 @@ fn generateDiffusion(
     const canvas_len = cli.diffusion_canvas;
     const confidence_threshold = cli.diffusion_confidence;
 
-    // Use DiffusionGemmaModel directly for forwardCanvas.
-    const DiffusionModel = @import("models/diffusion_gemma.zig").DiffusionGemmaModel;
-
     var total_generated: u32 = 0;
     var block_count: u32 = 0;
     const max_blocks = (cli.max_tokens + canvas_len - 1) / canvas_len;
@@ -4321,19 +4322,10 @@ fn generateDiffusion(
 
         var n_locked: u32 = 0;
 
-        // Retrieve DiffusionGemmaModel pointer for forwardCanvas.
-        // The model vtable wraps DiffusionGemmaModel; we access it via downcasting.
-        // Since we know the arch, the storage is DiffusionGemmaModel.
-        // We can't call forwardCanvas through the vtable (it's not there), so we
-        // look up the concrete model through the ModelStorage union.
-        // NOTE: We pass the model ptr and rely on the vtable's ptr field being
-        // the DiffusionGemmaModel directly (Model.from stores m as ptr).
-        const concrete: *DiffusionModel = @ptrCast(@alignCast(model.ptr));
-
         // Denoising loop.
         for (0..max_steps) |step| {
             // Forward pass over canvas with bidirectional attention.
-            concrete.forwardCanvas(canvas, canvas_logits) catch |e| {
+            model.forwardCanvas(canvas, canvas_logits) catch |e| {
                 eprint("Error: forwardCanvas failed: {}\n", .{e});
                 return;
             };
@@ -4415,7 +4407,7 @@ fn generateDiffusion(
 /// cursor resyncs to the ring start, matching the drafter's sliding window.
 fn dflash2Ingest(
     reader: ModelStorage.FeatureReader,
-    drafter: *DFlash2Model,
+    drafter: anytype,
     ingested: *usize,
     stage: []f32,
 ) void {
@@ -4448,7 +4440,7 @@ fn dflash2Ingest(
 fn generateAndPrint(
     allocator: std.mem.Allocator,
     mdl: *Model,
-    df2: ?*DFlash2Model,
+    df2: anytype,
     feat_reader: ?ModelStorage.FeatureReader,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
@@ -4480,7 +4472,7 @@ fn generateSpeculative(
     target: *Model,
     draft_model: *Model,
     pflash_scorer: ?*Model,
-    df2: ?*DFlash2Model,
+    df2: anytype,
     feat_reader: ?ModelStorage.FeatureReader,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
@@ -4571,14 +4563,16 @@ fn generateSpeculative(
     var ctx_ingested: usize = 0;
     var df2_stage: []f32 = &.{};
     defer if (df2_stage.len > 0) allocator.free(df2_stage);
-    if (df2 != null and feat_reader != null) {
-        const concat_dim: usize = df2.?.target_layer_ids.len * df2.?.n_embd;
-        const ingest_chunk: usize = 32;
-        df2_stage = allocator.alloc(f32, ingest_chunk * concat_dim) catch |e| {
-            eprint("Error: DFlash2 ingest staging failed: {}\n", .{e});
-            return;
-        };
-        dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+    if (comptime build_options.enable_dflash2) {
+        if (df2 != null and feat_reader != null) {
+            const concat_dim: usize = df2.?.target_layer_ids.len * df2.?.n_embd;
+            const ingest_chunk: usize = 32;
+            df2_stage = allocator.alloc(f32, ingest_chunk * concat_dim) catch |e| {
+                eprint("Error: DFlash2 ingest staging failed: {}\n", .{e});
+                return;
+            };
+            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+        }
     }
 
     // Sampling setup. Distributed pairs stay greedy so draft tokens match.
@@ -4691,8 +4685,10 @@ fn generateSpeculative(
         // DFlash2: ingest any newly captured features before drafting so the
         // drafter's context counter always matches the target's KV position
         // (covers cooldown/fallback single-token decodes too).
-        if (use_dflash2 and feat_reader != null and df2 != null) {
-            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+        if (comptime build_options.enable_dflash2) {
+            if (use_dflash2 and feat_reader != null and df2 != null) {
+                dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+            }
         }
         const pre_draft_pos = target.kvSeqLen();
         // Set when the cooldown branch produced pure n-gram drafts; skips the
@@ -4817,19 +4813,22 @@ fn generateSpeculative(
         } else if (use_dflash2) blk: {
             // DFlash2 block-diffusion drafting: one parallel pass proposes the
             // whole block; the candidate selector picks a coherent chain.
-            if (df2 == null) break :blk 0;
-            const drafter = df2.?;
-            const k_df2 = @min(spec_state.optimalK(), drafter.block_size -| 1);
-            // Selector samples at the generation temperature; greedy walks at T=0.
-            const sel_temp: f32 = if (use_sampling) cli.temperature else 0;
-            var n = spec_decode.draftDFlash2(&spec_state, drafter, last, drafter.contextLen(), sel_temp, prng.random());
-            // Hybrid n-gram composition (greedy only): confirm/extend the block
-            // with exact-match history continuations.
-            if (n > 0 and !use_sampling) {
-                spec_decode.dflash2HybridNgram(&spec_state, &ngram_state, if (ngram_mod.global_pool) |*pl| pl else null, k_df2);
-                n = spec_state.n_draft;
+            if (comptime build_options.enable_dflash2) {
+                if (df2 == null) break :blk 0;
+                const drafter = df2.?;
+                const k_df2 = @min(spec_state.optimalK(), drafter.block_size -| 1);
+                // Selector samples at the generation temperature; greedy walks at T=0.
+                const sel_temp: f32 = if (use_sampling) cli.temperature else 0;
+                var n = spec_decode.draftDFlash2(&spec_state, drafter, last, drafter.contextLen(), sel_temp, prng.random());
+                // Hybrid n-gram composition (greedy only): confirm/extend the block
+                // with exact-match history continuations.
+                if (n > 0 and !use_sampling) {
+                    spec_decode.dflash2HybridNgram(&spec_state, &ngram_state, if (ngram_mod.global_pool) |*pl| pl else null, k_df2);
+                    n = spec_state.n_draft;
+                }
+                break :blk @as(u32, @intCast(n));
             }
-            break :blk @as(u32, @intCast(n));
+            break :blk 0;
         } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
         else
@@ -5538,6 +5537,7 @@ test {
     _ = @import("server/scheduler.zig");
     _ = @import("sim_clock.zig");
     _ = @import("kvcache/block_allocator.zig");
+    _ = @import("kvcache/view.zig");
     _ = @import("kvcache/manager.zig");
     _ = @import("kvcache/tiered.zig");
     _ = @import("kvcache/checkpoint.zig");
