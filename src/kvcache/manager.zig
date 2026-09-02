@@ -349,8 +349,12 @@ pub const RadixTree = struct {
     hash_cache: std.AutoHashMap(u64, HashCacheEntry) = undefined,
     hash_cache_inited: bool = false,
 
-    const HashCacheEntry = struct { matched: usize, node: *RadixNode, query_len: usize };
+    const HashCacheEntry = struct { matched: usize, node: *RadixNode, query_len: usize, verify_hash: u64 };
     const hash_cache_max_entries: usize = 64;
+    /// Independent xxHash seed used as a second fingerprint so a primary-hash
+    /// collision cannot return another query's prefix match.
+    const hash_seed_primary: u64 = 0;
+    const hash_seed_verify: u64 = 1;
 
     /// Create an empty radix tree with a root node.
     pub fn init(allocator: Allocator) !RadixTree {
@@ -385,8 +389,18 @@ pub const RadixTree = struct {
     }
 
     /// Hash a token sequence using xxHash64 for prefix cache lookup.
-    fn hashTokens(tokens: []const u32) u64 {
-        return std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(tokens));
+    fn hashTokens(tokens: []const u32, seed: u64) u64 {
+        return std.hash.XxHash64.hash(seed, std.mem.sliceAsBytes(tokens));
+    }
+
+    /// Drop one arbitrary hash-cache entry so new prefixes can enter once
+    /// `hash_cache_max_entries` is reached (no LRU list; hash order is enough
+    /// to keep the map from freezing on the first 64 queries).
+    fn evictOneHashCacheEntry(self: *RadixTree) void {
+        var it = self.hash_cache.iterator();
+        const entry = it.next() orelse return;
+        const key = entry.key_ptr.*;
+        _ = self.hash_cache.remove(key);
     }
 
     /// Find the longest prefix of `tokens` that exists in the tree.
@@ -394,13 +408,14 @@ pub const RadixTree = struct {
     pub fn matchPrefix(self: *RadixTree, tokens: []const u32) PrefixMatch {
         // Fast path: check hash cache for exact prefix match
         if (self.hash_cache_inited and tokens.len > 0) {
-            const h = hashTokens(tokens);
+            const h = hashTokens(tokens, hash_seed_primary);
             if (self.hash_cache.get(h)) |entry| {
-                // Verify query length matches exactly to reduce xxHash64 collision risk.
-                // Note: a residual collision is still possible when two different token
-                // sequences of the same length produce the same hash, but this is
-                // astronomically unlikely with 64-bit hashes.
-                if (entry.query_len == tokens.len and entry.matched <= tokens.len) {
+                // Length plus a second independent hash: a single xxHash64
+                // collision of two same-length queries must not return the
+                // other query's node / block IDs.
+                if (entry.query_len == tokens.len and entry.matched <= tokens.len and
+                    entry.verify_hash == hashTokens(tokens, hash_seed_verify))
+                {
                     self.touchNode(entry.node);
                     return .{ .matched = entry.matched, .blocks = entry.node.block_ids };
                 }
@@ -439,12 +454,18 @@ pub const RadixTree = struct {
 
         // Cache result for future lookups
         if (self.hash_cache_inited and pos > 0 and tokens.len > 0) {
-            const h = hashTokens(tokens);
-            if (self.hash_cache.count() < hash_cache_max_entries) {
-                self.hash_cache.put(h, .{ .matched = pos, .node = node, .query_len = tokens.len }) catch |err| {
-                    std.log.debug("prefix cache hash insert failed: {s}", .{@errorName(err)});
-                };
+            const h = hashTokens(tokens, hash_seed_primary);
+            if (self.hash_cache.count() >= hash_cache_max_entries and self.hash_cache.get(h) == null) {
+                self.evictOneHashCacheEntry();
             }
+            self.hash_cache.put(h, .{
+                .matched = pos,
+                .node = node,
+                .query_len = tokens.len,
+                .verify_hash = hashTokens(tokens, hash_seed_verify),
+            }) catch |err| {
+                std.log.debug("prefix cache hash insert failed: {s}", .{@errorName(err)});
+            };
         }
 
         return .{ .matched = pos, .blocks = node.block_ids };
@@ -1094,6 +1115,48 @@ test "RadixTree multiple disjoint sequences" {
     // Neither should interfere with the other
     const m3 = tree.matchPrefix(&.{ 1, 200, 300 });
     try std.testing.expectEqual(@as(usize, 0), m3.matched);
+}
+
+test "RadixTree hash cache verify hash rejects a planted collision" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
+    const genuine = [_]u32{ 1, 2, 3 };
+    const m1 = tree.matchPrefix(&genuine);
+    try std.testing.expectEqual(@as(usize, 3), m1.matched);
+
+    const h = RadixTree.hashTokens(&genuine, RadixTree.hash_seed_primary);
+    // Same primary hash key, same length, wrong verify fingerprint: the
+    // fast path must miss and the tree walk must not return the planted node.
+    const planted_verify: u64 = 0xdead_beef_dead_beef;
+    try tree.hash_cache.put(h, .{
+        .matched = 3,
+        .node = tree.root,
+        .query_len = genuine.len,
+        .verify_hash = planted_verify,
+    });
+
+    const m2 = tree.matchPrefix(&genuine);
+    try std.testing.expectEqual(@as(usize, 3), m2.matched);
+    try std.testing.expectEqual(@as(u32, 12), m2.blocks[m2.blocks.len - 1]);
+}
+
+test "RadixTree hash cache evicts when full so new prefixes can enter" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    var i: u32 = 1;
+    while (i <= RadixTree.hash_cache_max_entries + 8) : (i += 1) {
+        const tokens = [_]u32{ i, i + 1 };
+        const blocks = [_]u32{ i * 10, i * 10 + 1 };
+        try tree.insert(&tokens, &blocks);
+        const m = tree.matchPrefix(&tokens);
+        try std.testing.expectEqual(@as(usize, 2), m.matched);
+    }
+    try std.testing.expect(tree.hash_cache.count() <= RadixTree.hash_cache_max_entries);
 }
 
 test "freeBlock double-free guard" {

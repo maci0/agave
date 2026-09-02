@@ -155,6 +155,20 @@ pub const BpeTokenizer = struct {
         self.word_cache_lock.store(0, .release);
     }
 
+    /// Drop one arbitrary word_cache entry. Called under `word_cache_lock`
+    /// when the map is at `max_word_cache_entries` so a long-lived --serve
+    /// process can still admit newly hot segments instead of freezing on
+    /// the first 8192 unique pretokens.
+    fn evictOneWordCacheEntry(self: *BpeTokenizer) void {
+        var it = self.word_cache.iterator();
+        const entry = it.next() orelse return;
+        const old_key = entry.key_ptr.*;
+        const old_val = entry.value_ptr.*;
+        _ = self.word_cache.remove(old_key);
+        self.allocator.free(old_key);
+        self.allocator.free(old_val);
+    }
+
     /// Free all owned memory (vocab, merges, byte mappings).
     pub fn deinit(self: *BpeTokenizer) void {
         // Free byte_to_unicode mappings allocated by initByteMappings
@@ -604,7 +618,10 @@ pub const BpeTokenizer = struct {
                     if (seg_ids.len > 0 and seg.len <= max_word_cache_seg_bytes) {
                         self.lockWordCache();
                         defer self.unlockWordCache();
-                        if (self.word_cache.count() < max_word_cache_entries and !self.word_cache.contains(seg)) {
+                        if (!self.word_cache.contains(seg)) {
+                            if (self.word_cache.count() >= max_word_cache_entries) {
+                                self.evictOneWordCacheEntry();
+                            }
                             const owned_key = try self.allocator.dupe(u8, seg);
                             errdefer self.allocator.free(owned_key);
                             const owned_val = try self.allocator.dupe(u32, seg_ids);
@@ -1252,6 +1269,29 @@ test "BPE heap merge order matches naive findBestMerge" {
         }
     }
     try std.testing.expectEqual(ids.len, naive.items.len);
+}
+
+test "word_cache evicts an entry so a new segment can be admitted" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const k1 = try allocator.dupe(u8, "alpha");
+    const v1 = try allocator.dupe(u32, &.{1});
+    try tok.word_cache.put(allocator, k1, v1);
+    const k2 = try allocator.dupe(u8, "beta");
+    const v2 = try allocator.dupe(u32, &.{2});
+    try tok.word_cache.put(allocator, k2, v2);
+    try std.testing.expectEqual(@as(usize, 2), tok.word_cache.count());
+
+    tok.evictOneWordCacheEntry();
+    try std.testing.expectEqual(@as(usize, 1), tok.word_cache.count());
+
+    const k3 = try allocator.dupe(u8, "gamma");
+    const v3 = try allocator.dupe(u32, &.{3});
+    try tok.word_cache.put(allocator, k3, v3);
+    try std.testing.expectEqual(@as(usize, 2), tok.word_cache.count());
+    try std.testing.expect(tok.word_cache.contains("gamma"));
 }
 
 test "decodeOne matches single-token decode in all modes" {
