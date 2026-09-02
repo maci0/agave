@@ -12,6 +12,8 @@ zig build test                     # unit tests at ReleaseSafe so asserts fire. 
 zig build check                    # fmt-check + docs hygiene + unit tests (local CI gate)
 zig build fmt                      # apply zig fmt to the paths CI checks
 zig build fmt-check                # check formatting without writing
+bun run lint                       # oxlint (web TypeScript; blocking in CI)
+bun run typecheck                  # tsc --noEmit for src/web and web
 zig build bench                    # agave-bench micro-benchmarks
 ./zig-out/bin/agave model.gguf "prompt"
 ./zig-out/bin/agave model.gguf --serve
