@@ -5,7 +5,7 @@ description = "TileLang kernel-generation experiment for Agave backends (researc
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "tilelang==0.1.13",
-    "numpy==2.4.3",
+    "numpy==2.4.6",
     "gguf==0.18.0",
 ]
 # torch is installed from a hardware-specific index (see README). Listing it
