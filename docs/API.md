@@ -45,6 +45,8 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 
 Serves the built-in web chat UI (single-page HTML). Requires authentication when `--api-key` is set. The UI communicates with the server via `POST /v1/chat` (streaming HTML responses).
 
+The document is gzip-compressed when `Accept-Encoding` includes `gzip` (`Vary: Accept-Encoding`). `ETag` is a content hash (`-gzip` suffix when encoded); a matching `If-None-Match` returns `304`. `Cache-Control` is `private, no-cache` so browsers revalidate instead of keeping a stale UI across binary upgrades. API JSON responses still send `Cache-Control: no-store`.
+
 ### POST /v1/chat/completions
 
 OpenAI-compatible chat completions.
@@ -663,7 +665,7 @@ All responses include these headers:
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
 | `Permissions-Policy` | Disables geolocation, microphone, camera, accelerometer, gyroscope |
 | `Content-Security-Policy` | Restrictive CSP: `default-src 'none'`, allows inline scripts/styles and CDN resources for the web UI |
-| `Cache-Control` | `no-store` |
+| `Cache-Control` | `no-store` on API, SSE, and error responses. `GET /` (chat UI) uses `private, no-cache` plus `ETag` / `Vary: Accept-Encoding`. |
 | `Connection` | `close` (non-streaming) or `keep-alive` (SSE streaming) |
 
 Rate-limited responses (429) and connection-capacity responses (503 with

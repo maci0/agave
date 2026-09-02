@@ -1,4 +1,5 @@
-/** CDN globals injected by `head.html` before the embedded chat script. */
+/** CDN globals. marked and DOMPurify load with `defer` in `head.html`.
+ * highlight.js is fetched on the first fenced code block. */
 
 type MarkedOptions = {
   breaks?: boolean;
@@ -10,7 +11,7 @@ type MarkedStatic = {
   parse(src: string): string;
 };
 
-declare const marked: MarkedStatic;
+declare const marked: MarkedStatic | undefined;
 
 type DOMPurifyConfig = {
   ADD_TAGS?: Array<string>;

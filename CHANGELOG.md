@@ -103,6 +103,9 @@ must still appear under **Changed** or **Breaking** below. See
   pointer as a writable buffer.
 
 ### Changed
+- Chat UI (`GET /`): gzip the embedded page when the client accepts it, send
+  `ETag`/`304` and `Cache-Control: private, no-cache` for the document, `defer`
+  marked/DOMPurify, and load highlight.js only when a code block is rendered.
 - `--allow-cpu-fallback` help and README now state the flag is unimplemented
   (GPU backends fail closed on missing kernels). Behavior is unchanged: the
   flag only warns.

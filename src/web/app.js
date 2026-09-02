@@ -1,7 +1,6 @@
 "use strict";
 // Server chat UI (embedded by src/server/server.zig). Not the WASM browser shell in web/.
 // Source of truth: compile with `scripts/build-web.sh` (tsc) to refresh app.js.
-marked.setOptions({ breaks: true, gfm: true });
 /** Required document query; throws if the chat shell markup is missing a node. */
 function qs(sel) {
     const el = document.querySelector(sel);
@@ -666,33 +665,95 @@ function addAssistant() {
     scrollBottom();
     return m;
 }
-function highlightCodeBlocks(el) {
-    for (const b of el.querySelectorAll('pre code')) {
-        hljs?.highlightElement(b);
-        const pre = b.parentElement;
-        const lang = (b.className.match(/language-(\w+)/) ?? [])[1] ?? '';
-        if (lang) {
-            const l = document.createElement('span');
-            l.className = 'code-lang';
-            l.textContent = lang;
-            pre?.append(l);
-        }
-        const c = document.createElement('button');
-        c.type = 'button';
-        c.className = 'copy-btn';
-        c.textContent = 'Copy';
-        c.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
-        c.addEventListener('click', function () {
-            navigator.clipboard.writeText(b.textContent ?? '').then(function () {
-                c.textContent = 'Copied!';
-                announceToSR('Code copied to clipboard');
-                setTimeout(function () { c.textContent = 'Copy'; }, 2000);
-            }).catch(function () { c.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function () { c.textContent = 'Copy'; }, 2000); });
-        });
-        pre?.append(c);
+const hljs_script_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js';
+const hljs_script_integrity = 'sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp';
+const hljs_style_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/kimbie-dark.min.css';
+const hljs_style_integrity = 'sha384-o5F1vUaMNOmou1sQrsWiFo4/QUGSV0svqNZW+EesmKxWC8MpFJcveBhAyfvTHbGb';
+let hljsLoad = null;
+/** Fetch highlight.js and its theme on first code block. Copy/lang chrome does not wait. */
+function loadHighlightJs() {
+    if (hljs) {
+        return Promise.resolve(true);
     }
+    if (hljsLoad) {
+        return hljsLoad;
+    }
+    hljsLoad = new Promise(function (resolve) {
+        if (!document.querySelector('link[data-agave-hljs]')) {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = hljs_style_url;
+            link.integrity = hljs_style_integrity;
+            link.crossOrigin = 'anonymous';
+            link.referrerPolicy = 'no-referrer';
+            link.dataset.agaveHljs = '1';
+            document.head.append(link);
+        }
+        const s = document.createElement('script');
+        s.src = hljs_script_url;
+        s.integrity = hljs_script_integrity;
+        s.crossOrigin = 'anonymous';
+        s.referrerPolicy = 'no-referrer';
+        s.addEventListener('load', function () { resolve(Boolean(hljs)); });
+        s.addEventListener('error', function () { resolve(false); });
+        document.head.append(s);
+    });
+    return hljsLoad;
 }
-// NOTE: All HTML rendered via innerHTML is sanitized through DOMPurify (loaded in index.html).
+function decorateCodeBlock(b) {
+    const pre = b.parentElement;
+    if (pre?.querySelector('.copy-btn')) {
+        return;
+    }
+    const lang = (b.className.match(/language-(\w+)/) ?? [])[1] ?? '';
+    if (lang) {
+        const l = document.createElement('span');
+        l.className = 'code-lang';
+        l.textContent = lang;
+        pre?.append(l);
+    }
+    const c = document.createElement('button');
+    c.type = 'button';
+    c.className = 'copy-btn';
+    c.textContent = 'Copy';
+    c.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
+    c.addEventListener('click', function () {
+        navigator.clipboard.writeText(b.textContent ?? '').then(function () {
+            c.textContent = 'Copied!';
+            announceToSR('Code copied to clipboard');
+            setTimeout(function () { c.textContent = 'Copy'; }, 2000);
+        }).catch(function () { c.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function () { c.textContent = 'Copy'; }, 2000); });
+    });
+    pre?.append(c);
+}
+function highlightCodeBlocks(el) {
+    const blocks = el.querySelectorAll('pre code');
+    if (blocks.length === 0) {
+        return;
+    }
+    for (const b of blocks) {
+        decorateCodeBlock(b);
+    }
+    const apply = function () {
+        if (!hljs || !el.isConnected) {
+            return;
+        }
+        for (const b of el.querySelectorAll('pre code')) {
+            if (b.classList.contains('hljs')) {
+                continue;
+            }
+            hljs.highlightElement(b);
+        }
+    };
+    if (hljs) {
+        apply();
+        return;
+    }
+    loadHighlightJs().then(function (ok) { if (ok) {
+        apply();
+    } });
+}
+// NOTE: All HTML rendered via innerHTML is sanitized through DOMPurify (deferred CDN in head.html).
 // The DOMPurify.sanitize() call strips any script injection from marked.parse() output.
 // This is safe because: (1) user input goes through marked.parse() which escapes HTML,
 // (2) the result is then passed through DOMPurify.sanitize() before DOM insertion,
@@ -713,10 +774,14 @@ function escapeHtmlEntities(text) {
 function escapeHtmlText(text) {
     return escapeHtmlEntities(text).replaceAll('\n', '<br>');
 }
+let markedConfigured = false;
 function markdownToHtml(dc) {
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- optional CDN dependency feature detection
-    if (typeof marked === 'undefined') {
+    if (!marked) {
         return escapeHtmlText(dc);
+    }
+    if (!markedConfigured) {
+        marked.setOptions({ breaks: true, gfm: true });
+        markedConfigured = true;
     }
     try {
         return marked.parse(dc);

@@ -565,6 +565,8 @@ const Server = struct {
     health_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(HealthState.ok)),
     /// Process-level tools (register/dispose). Request JSON tools overlay these.
     tool_registry: tools_mod.Registry = .{},
+    /// gzip of `html_page`, filled once in `run()`. Empty if compression failed.
+    html_gzip: []const u8 = &.{},
 
     fn getActiveConv(self: *Server) ?*Conversation {
         return self.getConvById(self.active_id);
@@ -846,6 +848,43 @@ fn getHeaderValue(headers: []const u8, name: []const u8) ?[]const u8 {
     return found;
 }
 
+/// True when `Accept-Encoding` lists `name` with q > 0.
+fn acceptsEncoding(headers: []const u8, name: []const u8) bool {
+    const ae = getHeaderValue(headers, "accept-encoding") orelse return false;
+    var tokens = std.mem.splitScalar(u8, ae, ',');
+    while (tokens.next()) |raw| {
+        const item = std.mem.trim(u8, raw, " \t");
+        if (item.len == 0) continue;
+        var parts = std.mem.splitScalar(u8, item, ';');
+        const coding = std.mem.trim(u8, parts.next() orelse continue, " \t");
+        var q: f32 = 1.0;
+        while (parts.next()) |param| {
+            const p = std.mem.trim(u8, param, " \t");
+            if (p.len >= 2 and std.ascii.eqlIgnoreCase(p[0..2], "q=")) {
+                q = std.fmt.parseFloat(f32, std.mem.trim(u8, p[2..], " \t")) catch 0;
+            }
+        }
+        if (std.ascii.eqlIgnoreCase(coding, name) and q > 0) return true;
+    }
+    return false;
+}
+
+/// True when `If-None-Match` is `*` or lists `etag` (strong or weak).
+fn ifNoneMatch(headers: []const u8, etag: []const u8) bool {
+    const inm = getHeaderValue(headers, "if-none-match") orelse return false;
+    const trimmed = std.mem.trim(u8, inm, " \t");
+    if (std.mem.eql(u8, trimmed, "*")) return true;
+    var iter = std.mem.splitScalar(u8, trimmed, ',');
+    while (iter.next()) |part| {
+        var tag = std.mem.trim(u8, part, " \t");
+        if (std.mem.startsWith(u8, tag, "W/")) {
+            tag = std.mem.trim(u8, tag[2..], " \t");
+        }
+        if (std.mem.eql(u8, tag, etag)) return true;
+    }
+    return false;
+}
+
 /// Copy `raw` into `buf` when it is a safe correlation token (alnum, `-`, `_`, `.`).
 /// Returns 0 (ignore) on empty, oversized, or illegal characters (CWE-117).
 fn sanitizeClientRequestId(raw: []const u8, buf: []u8) usize {
@@ -1036,6 +1075,29 @@ const html_page = @embedFile("../web/head.html") ++
     @embedFile("../web/body.html") ++
     @embedFile("../web/app.js") ++
     "\n</script></body></html>\n";
+
+const html_page_hash = std.hash.Wyhash.hash(0, html_page);
+const html_etag = std.fmt.comptimePrint("\"{x}\"", .{html_page_hash});
+const html_etag_gzip = std.fmt.comptimePrint("\"{x}-gzip\"", .{html_page_hash});
+const gzip_id1: u8 = 0x1f;
+const gzip_id2: u8 = 0x8b;
+
+/// gzip `src` at best effort. Caller owns the slice.
+/// Returns `error.NoCompressionGain` when the result is not smaller than `src`.
+fn gzipAlloc(allocator: Allocator, src: []const u8) ![]u8 {
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, @max(src.len / 2, 16));
+    errdefer aw.deinit();
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var compressor = try std.compress.flate.Compress.init(&aw.writer, &window, .gzip, .best);
+    try compressor.writer.writeAll(src);
+    try compressor.finish();
+    const out = try aw.toOwnedSlice();
+    if (out.len >= src.len) {
+        allocator.free(out);
+        return error.NoCompressionGain;
+    }
+    return out;
+}
 
 /// Return the current thread's request ID (set at start of handleRequest).
 /// Used for API response IDs so they match log correlation IDs.
@@ -1249,15 +1311,23 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = "" } };
 }
 
-/// Common security headers appended to every response.
-const security_headers =
+/// Security headers without Cache-Control. API/SSE/error responses append
+/// `Cache-Control: no-store` via `security_headers`. The chat UI document
+/// uses `private, no-cache` plus ETag instead (see `sendHtmlPage`).
+const security_headers_base =
     "X-Content-Type-Options: nosniff\r\n" ++
     "X-Frame-Options: DENY\r\n" ++
     "Referrer-Policy: no-referrer\r\n" ++
-    "Cache-Control: no-store\r\n" ++
     "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" ++
     "Permissions-Policy: geolocation=(), microphone=(), camera=(), accelerometer=(), gyroscope=()\r\n" ++
     "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
+
+/// Common security headers appended to every API/SSE/error response.
+const security_headers = security_headers_base ++ "Cache-Control: no-store\r\n";
+
+const document_cache_headers =
+    "Cache-Control: private, no-cache\r\n" ++
+    "Vary: Accept-Encoding\r\n";
 
 /// Validate Authorization header against configured API key.
 /// Supports both OpenAI-style `Authorization: Bearer <key>` and
@@ -1338,6 +1408,49 @@ fn sendJson(stream: TcpStream, body: []const u8) void {
 /// Send a 200 OK HTTP response with `text/html; charset=utf-8` content type.
 fn sendHtml(stream: TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
+}
+
+fn sendDocumentNotModified(stream: TcpStream, etag: []const u8) void {
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
+        security_headers_base ++ document_cache_headers ++
+        "Content-Length: 0\r\nConnection: close\r\n\r\n", .{ etag, log_request_id, corsHeaders() }) catch {
+        std.log.warn("req={d} 304 header overflow", .{log_request_id});
+        return;
+    };
+    stream.writeAll(hdr) catch |err| {
+        std.log.warn("req={d} 304 write failed: {}", .{ log_request_id, err });
+    };
+}
+
+/// Serve the embedded chat UI. gzip when the client accepts it; 304 when ETag matches.
+/// API JSON still uses `security_headers` (`Cache-Control: no-store`).
+fn sendHtmlPage(stream: TcpStream, req_headers: []const u8) u16 {
+    const gzip_body = g_server.html_gzip;
+    const use_gzip = gzip_body.len > 0 and acceptsEncoding(req_headers, "gzip");
+    const etag: []const u8 = if (use_gzip) html_etag_gzip else html_etag;
+    if (ifNoneMatch(req_headers, etag)) {
+        sendDocumentNotModified(stream, etag);
+        return 304;
+    }
+    const body: []const u8 = if (use_gzip) gzip_body else html_page;
+    const encoding_hdr: []const u8 = if (use_gzip) "Content-Encoding: gzip\r\n" else "";
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\n{s}ETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
+        security_headers_base ++ document_cache_headers ++
+        "Connection: close\r\n\r\n", .{ body.len, encoding_hdr, etag, log_request_id, corsHeaders() }) catch {
+        sendHtml(stream, html_page);
+        return 200;
+    };
+    stream.writeAll(hdr) catch |err| {
+        std.log.warn("req={d} HTML write failed (headers): {}", .{ log_request_id, err });
+        return 200;
+    };
+    stream.writeAll(body) catch |err| {
+        std.log.warn("req={d} HTML write failed (body, {d} bytes): {}", .{ log_request_id, body.len, err });
+        return 200;
+    };
+    return 200;
 }
 
 /// True when this request should inject tools and parse <tool_call> output.
@@ -1964,8 +2077,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
-        sendHtml(stream, html_page);
-        logRequestDone(method, path, 200, elapsedMs(request_start));
+        const ui_status = sendHtmlPage(stream, req.headers);
+        logRequestDone(method, path, ui_status, elapsedMs(request_start));
         return;
     }
 
@@ -6902,6 +7015,12 @@ pub fn run(config: ServerConfig) !void {
 
     g_server = &server;
 
+    server.html_gzip = gzipAlloc(allocator, html_page) catch |err| blk: {
+        std.log.warn("server: gzip of chat UI failed ({s}), serving uncompressed", .{@errorName(err)});
+        break :blk &.{};
+    };
+    defer if (server.html_gzip.len != 0) allocator.free(server.html_gzip);
+
     // Initialize continuous batching scheduler and background thread.
     // The scheduler owns the model forward loop; HTTP handlers enqueue
     // requests and poll for results instead of calling model.forward() directly.
@@ -7275,6 +7394,49 @@ test "getHeaderValue trims and rejects duplicates" {
     try std.testing.expectEqualStrings("127.0.0.1:49453", getHeaderValue("Host: 127.0.0.1:49453\r\n", "host").?);
     try std.testing.expect(getHeaderValue("Host: a\r\nHost: b\r\n", "host") == null);
     try std.testing.expect(getHeaderValue("Accept: */*\r\n", "origin") == null);
+}
+
+test "acceptsEncoding honors gzip q-values" {
+    try std.testing.expect(acceptsEncoding("Accept-Encoding: gzip, deflate, br\r\n", "gzip"));
+    try std.testing.expect(acceptsEncoding("accept-encoding: GZIP\r\n", "gzip"));
+    try std.testing.expect(!acceptsEncoding("Accept-Encoding: gzip;q=0\r\n", "gzip"));
+    try std.testing.expect(!acceptsEncoding("Accept-Encoding: deflate, br\r\n", "gzip"));
+    try std.testing.expect(!acceptsEncoding("Host: localhost\r\n", "gzip"));
+    try std.testing.expect(acceptsEncoding("Accept-Encoding: gzip;q=1.0, identity;q=0.5\r\n", "gzip"));
+}
+
+test "ifNoneMatch matches listed ETags" {
+    try std.testing.expect(ifNoneMatch("If-None-Match: \"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(ifNoneMatch("If-None-Match: W/\"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(ifNoneMatch("If-None-Match: \"x\", \"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(ifNoneMatch("If-None-Match: *\r\n", "\"abc\""));
+    try std.testing.expect(!ifNoneMatch("If-None-Match: \"xyz\"\r\n", "\"abc\""));
+    try std.testing.expect(!ifNoneMatch("Host: localhost\r\n", "\"abc\""));
+}
+
+test "gzipAlloc shrinks the chat UI and round-trips" {
+    const gz = try gzipAlloc(std.testing.allocator, html_page);
+    defer std.testing.allocator.free(gz);
+    try std.testing.expect(gz.len < html_page.len);
+    try std.testing.expectEqual(gzip_id1, gz[0]);
+    try std.testing.expectEqual(gzip_id2, gz[1]);
+
+    var reader: std.Io.Reader = .fixed(gz);
+    var window_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompress = std.compress.flate.Decompress.init(&reader, .gzip, &window_buf);
+    const out = try std.testing.allocator.alloc(u8, html_page.len + 1);
+    defer std.testing.allocator.free(out);
+    var writer: std.Io.Writer = .fixed(out);
+    _ = try decompress.reader.streamRemaining(&writer);
+    try std.testing.expectEqualSlices(u8, html_page, out[0..writer.end]);
+}
+
+test "chat UI defers markdown CDN and does not render-block highlight.js" {
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "rel=\"preconnect\" href=\"https://cdn.jsdelivr.net\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "marked.min.js") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "referrerpolicy=\"no-referrer\" defer></script>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "<script src=\"https://cdn.jsdelivr.net/gh/highlightjs") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/gh/highlightjs") == null);
 }
 
 test "sanitizeClientRequestId accepts correlation tokens" {
@@ -7986,6 +8148,8 @@ test "fuzz: HTTP header and request-line helpers" {
 
             // getHeaderValue: any returned value must be a subslice of the
             // input, and must not contain the line separator.
+            _ = acceptsEncoding(headers, "gzip");
+            _ = ifNoneMatch(headers, "\"abc\"");
             if (getHeaderValue(headers, "host")) |val| {
                 const v0 = @intFromPtr(val.ptr);
                 const v1 = v0 + val.len;

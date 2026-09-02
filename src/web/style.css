@@ -302,8 +302,9 @@ button.model-badge:focus-visible {
 .msg pre { background: var(--bg); padding: 14px; border-radius: 6px; overflow-x: auto; margin: 12px 0; position: relative; border: 1px solid var(--border); }
 .msg pre code { font-family: var(--mono); font-size: 13px; line-height: 1.5; background: none !important; padding: 0; border: none; color: inherit; }
 /* kimbie-dark token lifts: two ramps measured below 4.5:1 on --bg (#98676a 3.82:1,
-   #dc3958 4.05:1). Lightened within their hue to 5.9:1 / 5.7:1. This inline sheet
-   loads after the hljs CDN link, so these overrides win. */
+   #dc3958 4.05:1). Lightened within their hue to 5.9:1 / 5.7:1. Selectors are
+   more specific than the highlight.js theme (`.msg pre .hljs-*`) so they win
+   after that stylesheet loads on the first code block. */
 .msg pre .hljs-function, .msg pre .hljs-keyword, .msg pre .hljs-selector-tag { color: #c08488; }
 .msg pre .hljs-meta, .msg pre .hljs-name, .msg pre .hljs-regexp, .msg pre .hljs-selector-class,
 .msg pre .hljs-selector-id, .msg pre .hljs-tag, .msg pre .hljs-template-variable, .msg pre .hljs-variable { color: #e56b82; }
