@@ -218,6 +218,33 @@ Generate TriAttention calibration data for frequency-domain KV eviction:
 
 The calibration pass records per-head Q/K frequency statistics used by the `--kv-eviction tri` policy. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
+## Browser WASM
+
+In-browser inference uses `web/agave.ts` (`AgaveEngine`) against `agave.wasm`
+(`zig build wasm`). The engine is a small library, not the HTTP `/v1` API.
+
+```js
+const agave = new AgaveEngine();
+await agave.init(); // or agave.init(wasmBytes)
+await agave.loadModel('https://example.com/model.gguf');
+try {
+  const output = await agave.generate('What is 2+2?', { maxTokens: 100 });
+} catch (e) {
+  if (e instanceof AgaveError && e.code === 'no_model') {
+    // load a model, then retry
+  }
+  throw e;
+}
+agave.destroy();
+```
+
+`AgaveError.code` is the supported way to distinguish failures (`not_initialized`,
+`no_model`, `alloc_failed`, `wasm_fetch_failed`, `wasm_invalid`, `download_failed`,
+`gguf_parse`, `unsupported_arch`, `no_vocab`, `tokenizer`, `init_failed`,
+`generate_failed`). Serve `web/` as a static directory after `zig build wasm`.
+Forward-pass generation in WASM is still blocked by a Zig wasm32 codegen bug;
+load and tokenize work.
+
 ## HTTP Server
 
 Start with `--serve`. Supports both synchronous JSON and SSE streaming.

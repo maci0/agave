@@ -62,6 +62,38 @@ function clearUrlError() {
 }
 /** Map engine/network failures to short, actionable copy. */
 function friendlyLoadError(error) {
+    if (error instanceof AgaveError) {
+        switch (error.code) {
+            case 'wasm_fetch_failed':
+                return 'Could not load the inference engine. Reload the page, or check that agave.wasm is being served.';
+            case 'wasm_invalid':
+                return 'The inference engine failed to start. Reload the page.';
+            case 'download_failed':
+                if (error.httpStatus === 404) {
+                    return 'The model URL was not found. Check the link.';
+                }
+                if (error.httpStatus === 403 || error.httpStatus === 401) {
+                    return 'The model URL refused the download. Try dropping a GGUF file instead.';
+                }
+                return 'Could not download the model. Check the URL, or drop a GGUF file instead. Some hosts block browser downloads.';
+            case 'gguf_parse':
+                return 'This file is not a valid GGUF model.';
+            case 'unsupported_arch':
+                return 'This model architecture is not supported in the browser.';
+            case 'no_vocab':
+                return 'This GGUF file has no vocabulary and cannot be used.';
+            case 'tokenizer':
+                return 'Could not read the tokenizer from this model file.';
+            case 'init_failed':
+                return 'Could not initialize this model in the browser.';
+            case 'alloc_failed':
+                return 'The model is too large to fit in this browser.';
+            case 'not_initialized':
+                return 'The engine is not ready. Reload the page and try again.';
+            default:
+                return error.message.startsWith('Could not') ? error.message : `Could not load model: ${error.message}`;
+        }
+    }
     const msg = error instanceof Error ? error.message : String(error);
     const lower = msg.toLowerCase();
     if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
@@ -316,9 +348,11 @@ async function send() {
     }
     catch (e) {
         pending.remove();
+        const no_model = e instanceof AgaveError
+            && (e.code === 'no_model' || e.code === 'not_initialized');
         const message = e instanceof Error ? e.message : String(e);
         const lower = message.toLowerCase();
-        const shown = lower === 'no model loaded' || lower === 'model not initialized'
+        const shown = no_model || lower === 'no model loaded' || lower === 'model not initialized'
             ? 'Load a GGUF model first.'
             : `Could not generate a reply: ${message}`;
         addMessage('error', shown);
