@@ -223,7 +223,6 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     while (n < effective_k and n < max_draft_tokens) {
         const tok = model.mtpForward(prev_tok, n) catch break;
         state.draft_tokens[n] = tok;
-        std.log.info("MTP draft[{d}]: token {d} (prev={d})", .{ n, tok, prev_tok });
         prev_tok = tok; // Chain: each draft uses the previous draft token
         n += 1;
     }

@@ -601,6 +601,7 @@ pub const Ds4Model = struct {
         errdefer allocator.free(self.logits_buf);
         self.mtp_hidden_buf = try allocator.alloc(f32, e);
         errdefer allocator.free(self.mtp_hidden_buf);
+        @memset(self.mtp_hidden_buf, 0);
         // MTP KV cache: max_seq_len positions × kv_lora_rank dims
         self.mtp_kv_cache = try allocator.alloc(f32, @as(usize, self.max_seq_len) * self.kv_lora_rank);
         errdefer allocator.free(self.mtp_kv_cache);
@@ -2231,15 +2232,6 @@ pub const Ds4Model = struct {
             self.dequantBf16(&mn_f32, mn_t.data_ptr, e);
             self.computeBackend().rmsNorm(self.hidden2.ptr, &mn_f32, self.hidden2.ptr, e, self.rms_eps);
             self.be.sync();
-        }
-
-        // Debug: check main_proj output
-        if (true) {
-            var hs: f32 = 0;
-            for (self.hidden2[0..e]) |v| hs += v * v;
-            std.log.info("MTP: after main_proj L2={d:.3} first=[{d:.4},{d:.4},{d:.4}]", .{
-                @sqrt(hs), self.hidden2[0], self.hidden2[1], self.hidden2[2],
-            });
         }
 
         // Run MTP layers 0, 1, 2 with HC mixing (hidden2 carries the state)

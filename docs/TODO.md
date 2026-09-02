@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-08-26
+**Last updated**: 2026-09-02
 
 ---
 
@@ -143,7 +143,7 @@ and Vulkan (gfx1100) despite full kernel coverage.
 
 | Feature | Status |
 |---------|--------|
-| Tensor/Pipeline parallelism (6 modes, TCP/shm/NCCL) | Working |
+| Tensor/Pipeline parallelism (2-rank TP or PP, TCP/shm/NCCL; RCCL declared) | Working |
 | Grammar-constrained decoding (GBNF + JSON schema) | Working |
 | TriAttention KV eviction (norm + frequency) | Phase 1+2 |
 | Speculative decoding (15 modes: standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2, auto) | Working |
