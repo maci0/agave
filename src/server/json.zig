@@ -314,17 +314,19 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
     const raw_freq_pen = extractFloatField(body, "frequency_penalty") orelse 0;
     const raw_pres_pen = extractFloatField(body, "presence_penalty") orelse 0;
     // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", ...}
-    // Extract the response_format object using structural parsing (extractObjectField)
-    // to avoid false matches inside string values.
+    // Read the `type` field (not a substring of the whole object) so a schema
+    // description that mentions "json_object" cannot flip json_mode on. Nested
+    // `schema` is taken from the response_format object, not the full body.
     var json_mode = false;
     var schema_from_rf: ?[]const u8 = null;
     if (extractObjectField(body, "response_format")) |rf_obj| {
-        // Search within the extracted object only, not the full body.
-        if (std.mem.indexOf(u8, rf_obj, "json_object") != null) {
-            json_mode = true;
-        } else if (std.mem.indexOf(u8, rf_obj, "json_schema") != null) {
-            if (extractObjectField(body, "schema")) |s| {
-                schema_from_rf = s;
+        if (extractField(rf_obj, "type")) |rf_type| {
+            if (std.mem.eql(u8, rf_type, "json_object")) {
+                json_mode = true;
+            } else if (std.mem.eql(u8, rf_type, "json_schema")) {
+                if (extractObjectField(rf_obj, "schema")) |s| {
+                    schema_from_rf = s;
+                }
             }
         }
     }
@@ -771,26 +773,38 @@ pub fn extractFormImage(body: []const u8) ?[]const u8 {
 
 /// Extract text from an OpenAI-format content array.
 /// Handles `"content": [{"type":"text","text":"What's in this image?"}, ...]`
-/// Returns the "text" field from the first text-type content part, or null.
+/// Returns the "text" field from the first text-type part (key order inside
+/// the part does not matter). Returns `""` when `content` is an array with no
+/// text part (image-only turns) so callers keep the message. Returns null when
+/// `content` is missing or not an array.
 fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
     const arr = extractObjectField(obj, "content") orelse return null;
     if (arr.len == 0 or arr[0] != '[') return null;
     var pos: usize = 0;
-    while (pos < arr.len) {
-        const type_pos = std.mem.indexOfPos(u8, arr, pos, "\"type\"") orelse break;
-        pos = type_pos + 6;
-        // Check if this part is type "text"
-        const val_start = skipToJsonValue(arr, pos) orelse continue;
-        const val_end = findJsonStringEnd(arr, val_start);
-        const type_val = arr[val_start..val_end];
-        if (std.mem.eql(u8, type_val, "text")) {
-            // Found text type, extract its "text" field
-            const remaining = arr[val_end..];
-            return extractField(remaining, "text");
+    while (findObjectStart(arr, &pos)) |obj_pos| {
+        var depth: usize = 1;
+        var obj_end: usize = obj_pos + 1;
+        while (obj_end < arr.len and depth > 0) : (obj_end += 1) {
+            if (arr[obj_end] == '{') {
+                depth += 1;
+            } else if (arr[obj_end] == '}') {
+                depth -= 1;
+            } else if (arr[obj_end] == '"') {
+                obj_end += 1;
+                while (obj_end < arr.len and arr[obj_end] != '"') : (obj_end += 1) {
+                    if (arr[obj_end] == '\\' and obj_end + 1 < arr.len) obj_end += 1;
+                }
+            }
         }
-        pos = val_end;
+        const part = arr[obj_pos..obj_end];
+        pos = obj_end;
+        const type_val = extractField(part, "type") orelse continue;
+        if (std.mem.eql(u8, type_val, "text")) {
+            return extractField(part, "text") orelse "";
+        }
     }
-    return null;
+    // Content is a part array (vision, etc.) but none of the parts is text.
+    return "";
 }
 
 /// Extract base64 image data from a JSON body.
@@ -1614,11 +1628,39 @@ test "extractTextFromContentArray" {
     try std.testing.expectEqualStrings("What is in this image?", text);
 }
 
+test "extractTextFromContentArray text key before type" {
+    const obj =
+        \\{"role":"user","content":[{"text":"What is in this image?","type":"text"}]}
+    ;
+    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("What is in this image?", text);
+}
+
+test "extractTextFromContentArray image-only returns empty string" {
+    const obj =
+        \\{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
+    ;
+    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("", text);
+}
+
 test "extractTextFromContentArray string content" {
     const obj =
         \\{"role":"user","content":"hello"}
     ;
     try std.testing.expect(extractTextFromContentArray(obj) == null);
+}
+
+test "extractMessages keeps image-only user turns" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}
+    ;
+    const extracted = extractMessages(json, allocator) orelse return error.TestUnexpectedResult;
+    defer extracted.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), extracted.messages.len);
+    try std.testing.expectEqual(Role.user, extracted.messages[0].role);
+    try std.testing.expectEqualStrings("", extracted.messages[0].content);
 }
 
 test "parseSampling logit_bias object" {
@@ -1680,6 +1722,26 @@ test "parseSampling response_format json_schema with nested schema" {
     );
     try std.testing.expect(s.json_schema != null);
     try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "object") != null);
+    try std.testing.expect(!s.json_mode);
+}
+
+test "parseSampling json_schema type is not confused by json_object in schema" {
+    var s = SamplingParams{};
+    parseSampling(&s,
+        \\{"response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object", "description": "json_object"}}}}
+    );
+    try std.testing.expect(!s.json_mode);
+    try std.testing.expect(s.json_schema != null);
+}
+
+test "parseSampling json_schema is taken from response_format not a sibling schema" {
+    var s = SamplingParams{};
+    parseSampling(&s,
+        \\{"schema": {"type": "string"}, "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object"}}}}
+    );
+    try std.testing.expect(s.json_schema != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "object") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "string") == null);
 }
 
 test "extractLastMessage returns last content" {
