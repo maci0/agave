@@ -264,8 +264,9 @@ OpenAI `user` request field is ignored (often an email or username). Message
 text is zeroed in RAM on delete/clear.
 
 **Durability:** the web-UI conversation list is written to
-`~/.cache/agave/conversations.json` (override with `--conv-store PATH`, disable
-with `--no-conv-store`). Saves use a sibling `.tmp` file, `fsync`, and rename, so
+`$XDG_CACHE_HOME/agave/conversations.json` (fallback `~/.cache/agave/conversations.json`;
+override with `--conv-store PATH`, disable with `--no-conv-store`). Saves use a sibling
+`.tmp` file, `fsync`, and rename, so
 a crash cannot truncate the live file. On startup the server loads that file;
 a corrupt file is renamed to `{path}.corrupt` and the server starts empty
 rather than overwriting the only copy. Instance restart RPO is the last

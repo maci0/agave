@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test PP=2 NCCL between two GB10 nodes.
 # Usage: ./scripts/test-pp-nccl.sh <rank> <peer_ip> <model_path>
 # Example:

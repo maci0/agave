@@ -468,7 +468,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
     .{ .long = "rate-limit-rpm", .kind = .option, .help = "Server max requests per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-tpm." },
     .{ .long = "rate-limit-tpm", .kind = .option, .help = "Server max prompt tokens per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-rpm." },
-    .{ .long = "conv-store", .kind = .option, .help = "Path to persist web-UI conversations as JSON [default: ~/.cache/agave/conversations.json]." },
+    .{ .long = "conv-store", .kind = .option, .help = "Path to persist web-UI conversations as JSON [default: $XDG_CACHE_HOME/agave/conversations.json, else ~/.cache/agave/conversations.json]." },
     .{ .long = "no-conv-store", .help = "Do not persist or restore web-UI conversations (in-memory only)." },
     // LoRA
     .{ .long = "lora", .kind = .option, .help = "Path to LoRA adapter GGUF file. Merged at load time into the base model weights." },
@@ -2166,7 +2166,7 @@ fn printUsage() void {
         \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
         \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
         \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
-        \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: ~/.cache/agave/conversations.json]
+        \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: $XDG_CACHE_HOME/agave/conversations.json]
         \\      --no-conv-store    Do not persist or restore web-UI conversations
         \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
         \\
@@ -2237,7 +2237,7 @@ fn printUsage() void {
         \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
         \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
         \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
-        \\  XDG_CACHE_HOME       XDG cache base for pull (fallback: ~/.cache)
+        \\  XDG_CACHE_HOME       Cache base for pull, conversations, Vulkan pipeline cache (fallback: ~/.cache)
         \\
         \\EXAMPLES:
         \\  agave model.gguf                          Interactive REPL
@@ -5594,9 +5594,15 @@ test "looksLikeUnknownShortOpt detects short typos" {
 // Without these comptime references, zig test won't find their test blocks.
 comptime {
     _ = @import("devices/discovery.zig");
+    _ = @import("dynlib.zig");
     _ = @import("parallel/peer_discovery.zig");
     _ = @import("parallel/tp.zig");
     _ = @import("kvcache/prefetch.zig");
+}
+
+test "dynlib and conv_store tests are linked" {
+    _ = @import("dynlib.zig");
+    _ = @import("server/conv_store.zig");
 }
 
 test "emitGeneratedTokens only rank 0 prints in a pair" {

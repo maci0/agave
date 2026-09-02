@@ -134,11 +134,7 @@ fn enumerateCuda(list: *DeviceList) void {
     const FnCtxDestroy = *const fn (?*anyopaque) callconv(.c) CUresult;
 
     const cuda_lib_name = if (builtin.os.tag == .linux) "libcuda.so.1" else "libcuda.dylib";
-    var lib = std.DynLib.open(cuda_lib_name) catch
-        std.DynLib.open("/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-        std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-        std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ cuda_lib_name) catch
-        return;
+    var lib = @import("../dynlib.zig").open(cuda_lib_name) orelse return;
     defer lib.close();
 
     const cuInit = lib.lookup(FnInit, "cuInit") orelse return;
@@ -218,11 +214,7 @@ fn enumerateRocm(list: *DeviceList) void {
     const FnGetCount = *const fn (*c_int) callconv(.c) HipResult;
 
     const lib_name = "libamdhip64.so";
-    var lib = std.DynLib.open(lib_name) catch
-        std.DynLib.open("/opt/rocm/lib/" ++ lib_name) catch
-        std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ lib_name) catch
-        std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ lib_name) catch
-        return;
+    var lib = @import("../dynlib.zig").open(lib_name) orelse return;
     defer lib.close();
 
     const hipInit = lib.lookup(FnInit, "hipInit") orelse return;
@@ -321,10 +313,7 @@ fn enumerateVulkan(list: *DeviceList) void {
     const FnGetPhysDevMemProps = *const fn (VkPhysicalDevice, *VkPhysicalDeviceMemoryProperties) callconv(.c) void;
 
     const vk_lib_name = if (builtin.os.tag == .macos) "libvulkan.1.dylib" else "libvulkan.so.1";
-    var lib = std.DynLib.open(vk_lib_name) catch
-        std.DynLib.open("/usr/lib/x86_64-linux-gnu/libvulkan.so.1") catch
-        std.DynLib.open("/usr/lib/aarch64-linux-gnu/libvulkan.so.1") catch
-        return;
+    var lib = @import("../dynlib.zig").open(vk_lib_name) orelse return;
     defer lib.close();
 
     const vkCreateInstance = lib.lookup(FnCreateInstance, "vkCreateInstance") orelse return;

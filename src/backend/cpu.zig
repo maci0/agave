@@ -38,6 +38,12 @@ const memavail_read_buf_size: usize = 2048;
 const kb_to_bytes: usize = 1024;
 /// Bytes per megabyte, used for sysfs cache size parsing.
 const mb_to_bytes: usize = 1024 * 1024;
+/// Sysfs cache indices scanned for L1d/L2/L3. Kernels expose a handful of
+/// indexN directories; 8 covers big.LITTLE plus extra slice caches.
+const sysfs_cache_index_max: usize = 8;
+const sysfs_cache_path_buf_size: usize = 80;
+const sysfs_cache_type_buf_size: usize = 16;
+const sysfs_cache_level_buf_size: usize = 8;
 
 // ── CPU model detection ─────────────────────────────────────────
 
@@ -129,7 +135,7 @@ fn sysctlU64(comptime name: [*:0]const u8) usize {
 }
 
 /// Parse a Linux sysfs cache size file (e.g., "32K", "4096K", "16M").
-fn parseSysfsCacheSize(comptime path: []const u8) usize {
+fn parseSysfsCacheSize(path: []const u8) usize {
     if (comptime builtin.os.tag != .linux) return 0;
     var buf: [32]u8 = undefined;
     const raw = readSmallFile(path, &buf);
@@ -204,6 +210,52 @@ pub fn detectAvailMem() usize {
 
 const CacheSizes = backend_mod.CacheSizes;
 
+/// Map a sysfs cache `type` + `level` onto L1d/L2/L3. Instruction caches are
+/// skipped: index0 is L1 data on x86 and often L1 instruction on ARM.
+fn cacheSlot(level: u8, typ: []const u8) enum { none, l1, l2, l3 } {
+    const dataish = std.mem.eql(u8, typ, "Data") or std.mem.eql(u8, typ, "Unified");
+    if (!dataish) return .none;
+    return switch (level) {
+        1 => .l1,
+        2 => .l2,
+        3 => .l3,
+        else => .none,
+    };
+}
+
+fn detectLinuxCacheSizes() CacheSizes {
+    if (comptime builtin.os.tag != .linux) return .{};
+    var result: CacheSizes = .{};
+    var path_buf: [sysfs_cache_path_buf_size]u8 = undefined;
+    var type_buf: [sysfs_cache_type_buf_size]u8 = undefined;
+    var level_buf: [sysfs_cache_level_buf_size]u8 = undefined;
+    var idx: usize = 0;
+    while (idx < sysfs_cache_index_max) : (idx += 1) {
+        const type_path = std.fmt.bufPrint(&path_buf, "/sys/devices/system/cpu/cpu0/cache/index{d}/type", .{idx}) catch continue;
+        const typ = std.mem.trimEnd(u8, readSmallFile(type_path, &type_buf), "\n ");
+        if (typ.len == 0) continue;
+        const level_path = std.fmt.bufPrint(&path_buf, "/sys/devices/system/cpu/cpu0/cache/index{d}/level", .{idx}) catch continue;
+        const level_raw = std.mem.trimEnd(u8, readSmallFile(level_path, &level_buf), "\n ");
+        const level = std.fmt.parseInt(u8, level_raw, 10) catch continue;
+        const size_path = std.fmt.bufPrint(&path_buf, "/sys/devices/system/cpu/cpu0/cache/index{d}/size", .{idx}) catch continue;
+        const size = parseSysfsCacheSize(size_path);
+        if (size == 0) continue;
+        switch (cacheSlot(level, typ)) {
+            .l1 => if (result.l1 == 0) {
+                result.l1 = size;
+            },
+            .l2 => if (result.l2 == 0) {
+                result.l2 = size;
+            },
+            .l3 => if (result.l3 == 0) {
+                result.l3 = size;
+            },
+            .none => {},
+        }
+    }
+    return result;
+}
+
 /// Detect CPU cache sizes (L1 data, L2, L3) in bytes.
 pub fn detectCacheSizes() CacheSizes {
     if (comptime builtin.os.tag == .macos) {
@@ -213,11 +265,7 @@ pub fn detectCacheSizes() CacheSizes {
             .l3 = sysctlU64("hw.l3cachesize"),
         };
     } else if (comptime builtin.os.tag == .linux) {
-        return .{
-            .l1 = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size"),
-            .l2 = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index2/size"),
-            .l3 = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index3/size"),
-        };
+        return detectLinuxCacheSizes();
     }
     return .{};
 }
@@ -1497,17 +1545,24 @@ test "parallel constants, values are reasonable" {
 
 test "parseSysfsCacheSize, returns 0 on non-linux or valid size" {
     if (comptime builtin.os.tag == .linux) {
-        // On Linux, index0 is typically L1 data cache (32K-128K).
-        const l1 = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size");
-        // Must be >0 on any real Linux box with sysfs.
-        try std.testing.expect(l1 > 0);
-        // L1 should be a multiple of 1 KB.
-        try std.testing.expectEqual(@as(usize, 0), l1 % kb_to_bytes);
+        // index0 exists on real hardware; it may be L1i or L1d depending on arch.
+        const size = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size");
+        try std.testing.expect(size > 0);
+        try std.testing.expectEqual(@as(usize, 0), size % kb_to_bytes);
     } else {
-        // On non-Linux, parseSysfsCacheSize is a comptime no-op returning 0.
         const val = parseSysfsCacheSize("/sys/devices/system/cpu/cpu0/cache/index0/size");
         try std.testing.expectEqual(@as(usize, 0), val);
     }
+}
+
+test "cacheSlot, skips instruction and maps data/unified by level" {
+    try std.testing.expectEqual(.none, cacheSlot(1, "Instruction"));
+    try std.testing.expectEqual(.l1, cacheSlot(1, "Data"));
+    try std.testing.expectEqual(.l1, cacheSlot(1, "Unified"));
+    try std.testing.expectEqual(.l2, cacheSlot(2, "Unified"));
+    try std.testing.expectEqual(.l3, cacheSlot(3, "Unified"));
+    try std.testing.expectEqual(.none, cacheSlot(4, "Unified"));
+    try std.testing.expectEqual(.none, cacheSlot(1, "Trace"));
 }
 
 test "detectCpuModel, returns non-empty on supported platforms" {

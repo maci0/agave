@@ -29,6 +29,14 @@ const max_alignment: u32 = 1 << 20;
 /// Buffer size for tensor/metadata name formatting (must fit longest GGUF key).
 const name_buf_size: usize = 256;
 
+fn closeFd(fd: posix.fd_t) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = posix.system.close(fd);
+    } else {
+        _ = std.c.close(fd);
+    }
+}
+
 /// GGML quantization type identifiers.
 pub const GGMLType = enum(u32) {
     f32 = 0,
@@ -285,13 +293,7 @@ pub const GGUFFile = struct {
     pub fn open(allocator: Allocator, path: []const u8) !GGUFFile {
         const fd = try posix.openat(posix.AT.FDCWD, path, .{}, 0);
         var close_fd = true;
-        errdefer if (close_fd) {
-            if (comptime @import("builtin").os.tag == .linux) {
-                _ = posix.system.close(fd);
-            } else {
-                _ = std.c.close(fd);
-            }
-        };
+        errdefer if (close_fd) closeFd(fd);
         const file_size: usize = blk: {
             if (comptime @import("builtin").os.tag == .linux) {
                 var buf: std.os.linux.Statx = undefined;
@@ -379,28 +381,28 @@ pub const GGUFFile = struct {
                     var buf2: std.os.linux.Statx = undefined;
                     const rc = std.os.linux.statx(sfd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf2);
                     if (rc != 0) {
-                        _ = std.c.close(sfd);
+                        closeFd(sfd);
                         continue;
                     }
                     break :blk @intCast(buf2.size);
                 } else {
                     var ss: posix.Stat = undefined;
                     if (std.c.fstat(sfd, &ss) != 0) {
-                        _ = std.c.close(sfd);
+                        closeFd(sfd);
                         continue;
                     }
                     break :blk @intCast(ss.size);
                 }
             };
-            _ = std.c.close(sfd); // close the stat fd; re-open for mmap below
+            closeFd(sfd); // close the stat fd; re-open for mmap below
 
             // mmap the shard and parse its tensor table.
             const sfd2 = posix.openat(posix.AT.FDCWD, shard_name, .{}, 0) catch continue;
             const smapped = posix.mmap(null, sfsize, .{ .READ = true }, .{ .TYPE = .SHARED }, sfd2, 0) catch {
-                _ = std.c.close(sfd2);
+                closeFd(sfd2);
                 continue;
             };
-            _ = std.c.close(sfd2);
+            closeFd(sfd2);
             posix.madvise(smapped.ptr, smapped.len, posix.MADV.SEQUENTIAL) catch {};
 
             self.extra_shards.append(self.allocator, smapped) catch {
@@ -633,13 +635,7 @@ pub const GGUFFile = struct {
         self.owned_u32_arrays.deinit(self.allocator);
         if (comptime @import("builtin").os.tag != .freestanding) {
             if (!self.is_buffer) posix.munmap(self.mapped_data);
-            if (self.file_fd >= 0) {
-                if (comptime @import("builtin").os.tag == .linux) {
-                    _ = posix.system.close(self.file_fd);
-                } else {
-                    _ = std.c.close(self.file_fd);
-                }
-            }
+            if (self.file_fd >= 0) closeFd(self.file_fd);
             for (self.extra_shards.items) |shard| posix.munmap(shard);
             self.extra_shards.deinit(self.allocator);
         }

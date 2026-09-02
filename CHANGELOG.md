@@ -50,6 +50,11 @@ must still appear under **Changed** or **Breaking** below. See
   `GPL-3.0-only`, which contradicted the repo license).
 - Docker image sets `HOME=/home/agave` so Hub pulls and `~/.cache` work on
   runtimes that do not copy passwd HOME (Kubernetes, some Podman setups).
+- Conversations and the Vulkan pipeline cache honor `XDG_CACHE_HOME` (same
+  fallback as `agave pull`: `$HOME/.cache`). GPU backends also search Fedora
+  `/usr/lib64`, Alpine `/lib`, and Homebrew for dlopen libraries.
+- ReleaseFast build: reconstruct tiered KV slices in Gemma 3, GLM-4, GPT-OSS,
+  and Llama 4 so anonymous structs from `keysValues` type-check.
 - Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
   `refs/main` now publish via atomic replace; Hub blob downloads `fsync` before
   the snapshot is advertised complete.

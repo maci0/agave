@@ -193,6 +193,11 @@ pub const CudaBackend = struct {
     cuMemcpyHtoDAsync: FnMemcpyHtoDAsync = undefined,
     cuStreamCreate: FnStreamCreate = undefined,
     cuStreamSynchronize: FnStreamSync = undefined,
+    /// TEMP PERF: launch latency sampling.
+    launch_count: u64 = 0,
+    launch_total_ms: u64 = 0,
+    /// TEMP PERF: drain sampling.
+    drain_count: u64 = 0,
 
     /// Dedicated compute stream. All kernel launches and copy-backs go here
     /// (never the legacy null stream): blocking copies on the null stream
@@ -447,12 +452,7 @@ pub const CudaBackend = struct {
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
         errdefer self.kv_dev_cache.deinit();
 
-        // Dynamically load libcuda (try standard name, then platform-specific paths)
-        self.lib = std.DynLib.open(cuda_lib_name) catch
-            std.DynLib.open("/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ cuda_lib_name) catch
-            return error.CudaNotAvailable;
+        self.lib = @import("../dynlib.zig").open(cuda_lib_name) orelse return error.CudaNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -635,11 +635,11 @@ pub const CudaBackend = struct {
 
         // Detect GPUDirect Storage (cuFile) for NVMe→VRAM direct transfer
         if (!self.is_uma) {
-            if (std.DynLib.open("libcufile.so")) |lib| {
+            if (@import("../dynlib.zig").open("libcufile.so")) |lib| {
                 self.cufile_lib = lib;
                 self.has_gds = true;
                 std.log.info("GPUDirect Storage available (libcufile.so)", .{});
-            } else |_| {}
+            }
         }
 
         return self;
