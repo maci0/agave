@@ -294,7 +294,27 @@ fn configureSchedulerSampling(req: *scheduler.Request, sampling: SamplingParams)
     noteAutoSeed(sampling, sched_seed);
     req.prng = std.Random.DefaultPrng.init(sched_seed);
     req.rebuildSampler();
+    req.image_embeddings = pending_visual_embeddings;
+    req.n_visual_tokens = pending_visual_tokens;
+    req.image_pad_token_id = if (pending_visual_tokens > 0) g_server.image_pad_token_id else 0;
     req.sampling_ready.store(true, .release);
+}
+
+/// Install this handler's pending vision embeddings on the model.
+/// Caller must hold `model_mutex` (direct-path generate, after
+/// `lockModelWithScheduler`). Scheduler requests go through Request fields
+/// instead so this thread never races `forward()`.
+fn applyPendingVisionEmbeddings() void {
+    if (pending_visual_tokens > 0) {
+        g_server.model.setImageEmbeddings(pending_visual_embeddings, pending_visual_tokens, g_server.image_pad_token_id);
+    } else {
+        g_server.model.setImageEmbeddings(null, 0, 0);
+    }
+}
+
+fn clearPendingVision() void {
+    pending_visual_tokens = 0;
+    pending_visual_embeddings = null;
 }
 
 /// Architecture image placeholder IDs from the running server config.
@@ -802,6 +822,11 @@ threadlocal var log_client_rid_len: usize = 0;
 /// Must not live on Server: concurrent text requests would observe another
 /// connection's count and inject bogus image pad tokens into the prompt.
 threadlocal var pending_visual_tokens: u32 = 0;
+/// Borrowed encoder output for `pending_visual_tokens`. Valid while this
+/// handler holds `vision_mutex`. Copied onto the scheduler Request (or
+/// installed under `model_mutex` on the direct path); never written to
+/// `Model.image_embeddings` from the handler thread.
+threadlocal var pending_visual_embeddings: ?[]const f32 = null;
 
 /// Write a formatted log message to stderr under the server stdout mutex,
 /// ensuring concurrent handler threads do not interleave output.
@@ -2222,8 +2247,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
         }
         defer if (completions_image_embedded) {
-            g_server.model.setImageEmbeddings(null, 0, 0);
-            pending_visual_tokens = 0;
+            clearPendingVision();
         };
 
         if (json.extractBoolField(body, "stream")) {
@@ -2906,8 +2930,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
         }
         defer if (anthropic_image_embedded) {
-            g_server.model.setImageEmbeddings(null, 0, 0);
-            pending_visual_tokens = 0;
+            clearPendingVision();
         };
 
         if (json.extractBoolField(body, "stream")) {
@@ -3341,8 +3364,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         // Ensure image embeddings are cleared after generation
         defer if (image_embedded) {
-            g_server.model.setImageEmbeddings(null, 0, 0);
-            pending_visual_tokens = 0;
+            clearPendingVision();
         };
 
         // Handle REPL-style commands in the chat interface
@@ -3588,8 +3610,9 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
 /// Process a base64-encoded image from a web UI form submission.
 ///
 /// Decodes URL-encoded base64 image bytes, decodes PNG to RGB, resizes to
-/// the vision encoder's expected input size, and encodes visual token
-/// embeddings onto the model for the next forward pass.
+/// the vision encoder's expected input size, and stashes visual token
+/// embeddings on this handler thread. The scheduler copies them onto the
+/// model under `model_mutex`; the direct path does the same after locking.
 ///
 /// HTTP vision accepts PNG only (JPEG is detected and rejected; PPM is
 /// CLI/`--image` only). Returns true on success, false on any failure.
@@ -3655,7 +3678,7 @@ fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
                 return false;
             }
             const n_vis: u32 = @intCast(visual_tokens.len / ve.projection_dim);
-            g_server.model.setImageEmbeddings(visual_tokens, n_vis, g_server.image_pad_token_id);
+            pending_visual_embeddings = visual_tokens;
             pending_visual_tokens = n_vis;
             std.log.info("req={d} vision: encoded {d} visual tokens ({d}x{d})", .{ log_request_id, n_vis, png.width, png.height });
             return true;
@@ -3957,6 +3980,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
 
     // Re-check kv_valid under mutex, the caller's `reset` flag may be stale
     // if another thread invalidated the cache (e.g. /clear) between the caller's
@@ -4583,6 +4607,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
     // Re-check kv_valid under mutex, caller's `reset` may be stale if another
     // thread invalidated the cache between the caller's unlock and this lock.
     const actual_reset = reset or !g_server.kv_valid;
@@ -5298,6 +5323,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
     model.resetCache();
     g_server.clearCachedPromptIds();
 
@@ -5763,6 +5789,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
     model.resetCache();
     g_server.clearCachedPromptIds();
 
@@ -6417,6 +6444,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
 
     // Prompt prefix caching (streaming): reuse KV cache for shared prefix
     var s_prefix_len: usize = 0;
