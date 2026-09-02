@@ -19,6 +19,10 @@ must still appear under **Changed** or **Breaking** below. See
   the model may call.
 
 ### Added
+- Browser WASM (`web/agave.ts`): `init()` accepts `ArrayBufferView` (same as
+  `loadModel`); `init()` and `loadModel()` take an optional `AbortSignal` as
+  the last argument. `AgaveError.code` `invalid_argument` for a `maxTokens`
+  that is not a non-negative 32-bit integer (0 still means the default).
 - Server: persist web-UI conversations to `~/.cache/agave/conversations.json`
   (override `--conv-store`, disable `--no-conv-store`). Atomic tmp+fsync+rename;
   corrupt files are quarantined to `{path}.corrupt` on load.
@@ -31,13 +35,18 @@ must still appear under **Changed** or **Breaking** below. See
   DeltaNet + QSA, PLE ngram SSD streaming (`--ssd-streaming`), NVFP4.
 - Browser WASM engine (`web/agave.ts`): `AgaveError` with a stable `code` (and
   optional `httpStatus`) so callers can handle init, download, and generate
-  failures without matching `Error.message`. `init(source)` accepts a module
-  URL or `ArrayBuffer`; `loadModel` accepts `ArrayBufferView` in addition to
-  URL/`ArrayBuffer`.
+  failures without matching `Error.message`.
 - WASM export `agave_last_error(ctx)`: integer `WasmError` for the last
   init/generate on that context (`0` = ok).
 
 ### Fixed
+- Browser WASM (`web/agave.ts`): `fetch` network, CORS, and abort failures
+  throw `AgaveError` (`wasm_fetch_failed` / `download_failed`) instead of a
+  raw `TypeError`. Re-`init()` frees the previous model against the old
+  module before swapping, so a stale `ctx` is not used in new linear memory.
+  `generate()` releases the prompt buffer if the WASM call throws. `destroy()`
+  clears `initMessage`. Empty-prompt `agave_generate` no longer slices a null
+  host pointer.
 - Linux/macOS release binaries are linked as PIE. Docker's runtime stage
   freezes `SOURCE_DATE_EPOCH` to the same calendar day as the build stage.
 - `-Denable-bench=false` skips installing `agave-bench` (Docker image default).
