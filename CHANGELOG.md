@@ -38,6 +38,9 @@ must still appear under **Changed** or **Breaking** below. See
   init/generate on that context (`0` = ok).
 
 ### Fixed
+- Linux/macOS release binaries are linked as PIE. Docker's runtime stage
+  freezes `SOURCE_DATE_EPOCH` to the same calendar day as the build stage.
+- `-Denable-bench=false` skips installing `agave-bench` (Docker image default).
 - Docker image pin: `DEBIAN_SNAPSHOT` / `SOURCE_DATE_EPOCH` now match the
   `debian:bookworm-20260824-slim` FROM tag (CI already required the calendar day).
 - Docker "CPU + Gemma 3 only" image (CI `docker-build` and README minimal

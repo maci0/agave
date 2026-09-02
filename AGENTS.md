@@ -21,6 +21,7 @@ zig build bench                    # agave-bench micro-benchmarks
 zig build -Denable-<model>=false   # gemma3 gemma4 diffusion-gemma qwen35 qwen4-exp gpt-oss nemotron-h nemotron-nano glm4 deepseek4 llama4 dflash2
 zig build -Denable-<backend>=false # cpu cuda metal rocm vulkan webgpu
 zig build -Denable-debug=false     # skip agave-debug
+zig build -Denable-bench=false     # skip installing agave-bench
 ```
 
 `--spec-mode`: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp (alias medusa), eagle, eagle3, mlp, pflash, dspark, dflash2. Flag list: `src/main.zig` `cli_specs`, or `agave --help`.

@@ -12,6 +12,10 @@ concurrency:
   group: golden-tests-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LC_ALL: C
+  TZ: UTC
+
 jobs:
   golden-tests:
     name: Golden Tests - ${{ matrix.backend }}
@@ -22,13 +26,13 @@ jobs:
       matrix:
         include:
           - backend: CPU
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-suffix: linux
           - backend: Metal
-            runner: macos-latest
+            runner: macos-15
             cache-suffix: macos
           - backend: Vulkan
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-suffix: vulkan
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

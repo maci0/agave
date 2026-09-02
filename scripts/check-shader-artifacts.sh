@@ -16,6 +16,7 @@
 # Exit 0 when everything matches; exit 1 on drift or missing copies.
 # Usage: scripts/check-shader-artifacts.sh [--ptx-only]
 set -euo pipefail
+export LC_ALL=C TZ=UTC
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CUDA_DIR="$REPO_ROOT/src/backend/kernels/cuda"
@@ -30,26 +31,29 @@ drift=0
 
 echo "== CUDA PTX (zig build ptx -Dcuda-sm=sm_120)"
 if ! command -v zig >/dev/null 2>&1; then
-    if $PTX_ONLY; then
-        echo "error: zig not found in PATH (required for --ptx-only)" >&2
-        exit 1
-    fi
-    echo "SKIP: zig not found in PATH" >&2
-else
-    zig build ptx -Dcuda-sm=sm_120 --prefix "$SCRATCH/ptx-out"
-    for gen in "$SCRATCH"/ptx-out/ptx/*.ptx; do
-        name="$(basename "$gen")"
-        committed="$CUDA_DIR/$name"
-        if [[ ! -f "$committed" ]]; then
-            echo "MISSING committed copy: src/backend/kernels/cuda/$name"
-            drift=$((drift + 1))
-        elif ! cmp -s "$gen" "$committed"; then
-            echo "STALE: src/backend/kernels/cuda/$name differs from fresh build"
-            drift=$((drift + 1))
-        fi
-    done
-    [[ $drift -eq 0 ]] && echo "OK: all committed PTX match a fresh build"
+    echo "error: zig not found in PATH (required to rebuild CUDA PTX)" >&2
+    exit 1
 fi
+zig build ptx -Dcuda-sm=sm_120 --prefix "$SCRATCH/ptx-out"
+shopt -s nullglob
+ptx_built=("$SCRATCH"/ptx-out/ptx/*.ptx)
+shopt -u nullglob
+if [[ ${#ptx_built[@]} -eq 0 ]]; then
+    echo "error: zig build ptx produced no .ptx files" >&2
+    exit 1
+fi
+for gen in "${ptx_built[@]}"; do
+    name="$(basename "$gen")"
+    committed="$CUDA_DIR/$name"
+    if [[ ! -f "$committed" ]]; then
+        echo "MISSING committed copy: src/backend/kernels/cuda/$name"
+        drift=$((drift + 1))
+    elif ! cmp -s "$gen" "$committed"; then
+        echo "STALE: src/backend/kernels/cuda/$name differs from fresh build"
+        drift=$((drift + 1))
+    fi
+done
+[[ $drift -eq 0 ]] && echo "OK: all committed PTX match a fresh build"
 
 if $PTX_ONLY; then
     echo

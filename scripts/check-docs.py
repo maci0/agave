@@ -167,6 +167,7 @@ _BACKEND_ENABLE = frozenset(
         "enable-vulkan",
         "enable-webgpu",
         "enable-debug",
+        "enable-bench",
     }
 )
 
@@ -233,6 +234,7 @@ def check_model_enable_flags() -> list[str]:
         "ENABLE_ROCM",
         "ENABLE_WEBGPU",
         "ENABLE_DEBUG",
+        "ENABLE_BENCH",
         "ENABLE_GEMMA3",
     }
     for arg in re.findall(r"^ARG (ENABLE_[A-Z0-9_]+)=", dockerfile, re.M):
@@ -282,6 +284,11 @@ def check_debian_snapshot_pin() -> list[str]:
     if got != expected:
         errors.append(
             f"Dockerfile: SOURCE_DATE_EPOCH {got} != midnight UTC of {from_day} ({expected})"
+        )
+    epochs = re.findall(r"SOURCE_DATE_EPOCH=(\d+)", text)
+    if epochs and any(e != str(got) for e in epochs):
+        errors.append(
+            f"Dockerfile: SOURCE_DATE_EPOCH values disagree: {epochs} (expected {got})"
         )
     return errors
 
@@ -359,6 +366,22 @@ def check_docker_packaging() -> list[str]:
     return errors
 
 
+def check_ci_runner_pins() -> list[str]:
+    """GitHub Actions must not use floating *-latest runner tags."""
+    errors: list[str] = []
+    workflows = ROOT / ".github" / "workflows"
+    if not workflows.is_dir():
+        return [".github/workflows: missing"]
+    for path in sorted(workflows.glob("*.yml")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        rel = path.relative_to(ROOT)
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.split("#", 1)[0]
+            if re.search(r"\b(ubuntu|macos|windows)-latest\b", stripped):
+                errors.append(f"{rel}:{i}: floating runner tag (pin ubuntu-24.04 / macos-15)")
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
     errors.extend(check_links())
@@ -369,6 +392,7 @@ def main() -> int:
     errors.extend(check_model_enable_flags())
     errors.extend(check_debian_snapshot_pin())
     errors.extend(check_docker_packaging())
+    errors.extend(check_ci_runner_pins())
     if errors:
         print(f"check-docs: {len(errors)} issue(s)")
         for e in errors:
