@@ -1483,6 +1483,9 @@ function showInfo() {
             cb.focus();
         }
     }
+    if (m._trapFocus) {
+        m.removeEventListener('keydown', m._trapFocus);
+    }
     m._trapFocus = function (e) {
         if (e.key !== 'Tab') {
             return;

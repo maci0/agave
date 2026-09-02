@@ -1245,6 +1245,7 @@ function showInfo() {
   else {
     const cb = m.querySelector('.modal-close'); if (cb instanceof HTMLElement) {cb.focus();}
   }
+  if (m._trapFocus) { m.removeEventListener('keydown', m._trapFocus); }
   m._trapFocus = function(e: KeyboardEvent) {
     if (e.key !== 'Tab') {return;}
     const root = dlg ?? m;
