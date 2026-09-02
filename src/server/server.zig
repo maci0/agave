@@ -1115,8 +1115,9 @@ const html_page = @embedFile("../web/head.html") ++
     @embedFile("../web/app.js") ++
     "\n</script></body></html>\n";
 
-// ~96KB of embedded UI; Wyhash's comptime loop exceeds the default 1000-branch quota.
 const html_page_hash = blk: {
+    // ~96 KiB of concatenated web assets; Wyhash's 48-byte round exceeds the
+    // default 1000-branch comptime quota.
     @setEvalBranchQuota(1_000_000);
     break :blk std.hash.Wyhash.hash(0, html_page);
 };

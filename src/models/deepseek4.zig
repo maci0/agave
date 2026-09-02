@@ -16,6 +16,7 @@ const Allocator = std.mem.Allocator;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 
 const quant_ops = @import("../ops/quant.zig");
@@ -255,7 +256,7 @@ pub const Ds4Model = struct {
     compress_rope_freq: f32 = 160000.0,
     vocab_size: u32 = 129280,
     max_seq_len: u32 = 512,
-    eos_token_id: u32 = 1,
+    eos_token_id: u32 = arch_mod.deepseek4_fallback_eos,
     /// Per-layer compression ratios: 0=none, 4=CSA, 128=HCA. Drives rope freq selection.
     compress_ratios: [64]u32 = [_]u32{0} ** 64,
 

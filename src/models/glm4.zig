@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 const kvcache = @import("../kvcache/manager.zig");
@@ -62,7 +63,7 @@ pub const Glm4Model = struct {
     first_k_dense_replace: u32 = 1,
     rope_theta: f32 = 1000000.0,
     rms_eps: f32 = 1e-5,
-    eos_token_id: u32 = 154820,
+    eos_token_id: u32 = arch_mod.glm4_fallback_eos,
     max_seq_len: usize = 4096,
     mlx_bits: u32 = 6,
 

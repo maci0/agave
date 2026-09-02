@@ -26,6 +26,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const quant = @import("../ops/quant.zig");
@@ -88,7 +89,7 @@ pub const Qwen4ExpModel = struct {
     rope_dim: u32 = 64,
     rms_eps: f32 = 1e-6,
     full_attn_interval: u32 = 4,
-    eos_token_id: u32 = 248046,
+    eos_token_id: u32 = arch_mod.qwen_fallback_eos,
     max_seq_len: usize = 4096,
 
     ssm_d_conv: u32 = 4,

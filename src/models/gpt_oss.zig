@@ -15,6 +15,7 @@ const std = @import("std");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
@@ -90,7 +91,7 @@ pub const GptOssModel = struct {
     /// MLX quantization bit width (4, 6, or 8). 0 = not MLX format.
     mlx_bits: u32 = 0,
     /// End-of-sequence token identifier.
-    eos_token_id: u32 = 200002,
+    eos_token_id: u32 = arch_mod.gpt_oss_fallback_eos,
     /// Maximum sequence length for the pre-allocated KV cache.
     max_seq_len: usize = 4096,
 

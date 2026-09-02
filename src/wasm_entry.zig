@@ -115,7 +115,10 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
         return fail(ctx, .no_vocab, "No vocab in GGUF", .{});
     };
     ctx.eos_id = fmt.getMetaU32("tokenizer.ggml.eos_token_id") orelse ctx.arch.defaultEos();
-    ctx.bos_id = fmt.getMetaU32("tokenizer.ggml.bos_token_id") orelse 0;
+    ctx.bos_id = if (ctx.arch.templateIncludesBos())
+        0
+    else
+        fmt.getMetaU32("tokenizer.ggml.bos_token_id") orelse ctx.arch.defaultBos() orelse 0;
     ctx.vocab_size = @intCast(vocab.len);
 
     const merges = fmt.getMerges();

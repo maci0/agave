@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const ssm_ops = @import("../ops/ssm.zig");
@@ -77,7 +78,7 @@ pub const NemotronNanoModel = struct {
     rope_theta: f32 = 10000.0,
     rope_dim: u32 = 128,
     rms_eps: f32 = 1e-5,
-    eos_token_id: u32 = 2,
+    eos_token_id: u32 = arch_mod.nemotron_nano_fallback_eos,
     max_seq_len: usize = 4096,
 
     // Mamba-2 SSM parameters

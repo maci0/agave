@@ -19,6 +19,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const mlx_ops = @import("../ops/mlx.zig");
@@ -325,7 +326,7 @@ pub const Gemma4Model = struct {
     image_batch_end: usize = 0,
 
     // ── Public fields required by Model vtable ───────────────────
-    eos_token_id: u32 = 1,
+    eos_token_id: u32 = arch_mod.gemma_fallback_eos,
     /// Exposed for Model vtable, uses sliding-window head count (dominant layer type).
     n_head: u32 = default_sl_n_head,
     /// Exposed for Model vtable, uses sliding-window KV head count.
@@ -502,7 +503,7 @@ pub const Gemma4Model = struct {
         const rms_eps = getArchAny.f32_(f, arch, "attention.layer_norm_rms_epsilon") orelse
             f.getMetaF32("rms_norm_eps") orelse default_rms_eps;
 
-        const eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1;
+        const eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse arch_mod.gemma_fallback_eos;
 
         var max_sl: usize = default_max_seq_len;
         if (getArchAny.u32_(f, arch, "context_length")) |cl| max_sl = cl;

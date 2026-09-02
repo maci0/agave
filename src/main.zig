@@ -2681,8 +2681,9 @@ pub fn main(init: std.process.Init) !void {
         fmt.getMetaU32("eos_token_id") orelse
         arch.defaultEos();
     const bos_id: u32 = blk: {
-        // GLM-4: template includes [gMASK]<sop>, don't also prepend metadata BOS
-        if (arch == .glm4) break :blk 0;
+        // Chat template already emits BOS (GLM-4 `[gMASK]<sop>`, DeepSeek V4
+        // `<｜begin▁of▁sentence｜>`). Don't also prepend a numeric BOS.
+        if (arch.templateIncludesBos()) break :blk 0;
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
         if (fmt.getMetaU32("bos_token_id")) |id| break :blk id;
         // GPT-2 based tokenizers (Qwen, etc.) don't use BOS by default.
