@@ -206,7 +206,9 @@ pub const Request = struct {
         self.visible_len.store(@intCast(self.tokens.items.len), .release);
     }
 
-    /// Calculate elapsed time since request was enqueued (in seconds).
+    /// Whole seconds since enqueue, truncated toward zero (log/display only).
+    /// Timeout decisions must use `requestTimedOut` so a 120s limit cannot
+    /// silently become 121s via this truncation.
     /// Both stamps come from the monotonic clock, but the clamp is kept as a
     /// cheap invariant guard against any future non-monotonic source.
     pub fn elapsedSeconds(self: *const Request, now: i64) u32 {
@@ -226,6 +228,19 @@ pub const Request = struct {
         self.tokens.deinit(self.allocator);
     }
 };
+
+/// True when `now` is strictly after the request's timeout deadline.
+///
+/// Compares monotonic milliseconds, not truncated seconds: `elapsedSeconds`
+/// divides by 1000 toward zero, so `elapsed_s > timeout_sec` would not fire
+/// until `timeout_sec + 1` whole seconds had passed (a 120s server limit
+/// would allow 121s). Exclusive at the exact deadline (1000ms with a 1s
+/// limit is not yet timed out; 1001ms is).
+fn requestTimedOut(enqueued_at: i64, now: i64, timeout_sec: u32) bool {
+    const elapsed_ms = now - enqueued_at;
+    const timeout_ms = @as(i64, timeout_sec) * std.time.ms_per_s;
+    return elapsed_ms > timeout_ms;
+}
 
 /// Calculate cache-aware priority for a request.
 /// SGLang-style cache-aware scheduling: longer cached prefixes get priority boost.
@@ -468,8 +483,8 @@ pub const RequestManager = struct {
             // 2. Check timeout on running requests
             for (self.running.items) |req| {
                 if (req.is_cancelled.load(.acquire)) continue;
-                const elapsed = req.elapsedSeconds(now);
-                if (elapsed > self.timeout_sec) {
+                if (requestTimedOut(req.enqueued_at, now, self.timeout_sec)) {
+                    const elapsed = req.elapsedSeconds(now);
                     std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, elapsed, self.timeout_sec });
                     req.is_timed_out.store(true, .release);
                     req.is_cancelled.store(true, .release);
@@ -920,15 +935,16 @@ test "step cancels timed-out requests" {
     var mock_model = MockModel{};
     var model = Model.from(MockModel, &mock_model);
 
-    // At exactly timeout_sec seconds, elapsed > timeout is false, must not cancel yet.
+    // At exactly timeout_sec seconds, elapsed_ms > timeout_ms is false, must not cancel yet.
     sim_clock.advanceMs(1000);
     try manager.step(&model, &[_]u32{}); // admit to running
     try std.testing.expect(!req.is_cancelled.load(.acquire));
     try std.testing.expectEqual(@as(u32, 1), manager.getStats().running_count);
     try std.testing.expectEqual(@as(u64, 0), metrics.requests_timeout.load(.monotonic));
 
-    // Cross into the next whole second while running (elapsedSeconds uses ms/1000).
-    sim_clock.advanceMs(1000);
+    // One millisecond past the limit must fire (do not wait for the next
+    // truncated whole second, which used to grant timeout_sec+1 seconds).
+    sim_clock.advanceMs(1);
     try manager.step(&model, &[_]u32{});
     try std.testing.expect(req.is_cancelled.load(.acquire));
     try std.testing.expect(req.is_timed_out.load(.acquire));
@@ -1020,6 +1036,16 @@ test "appendToken updates visible_len and last_token_id" {
     req.appendToken(99, &[_]u32{});
     try std.testing.expectEqual(@as(u32, 2), req.visible_len.load(.acquire));
     try std.testing.expectEqual(@as(u32, 99), req.last_token_id);
+}
+
+test "requestTimedOut fires one millisecond after the second limit" {
+    // Exclusive at the exact deadline; truncation of elapsedSeconds must not
+    // push a 1s timeout out to 2s or a 120s timeout out to 121s.
+    try std.testing.expect(!requestTimedOut(0, 1000, 1));
+    try std.testing.expect(requestTimedOut(0, 1001, 1));
+    try std.testing.expect(!requestTimedOut(0, 120_000, 120));
+    try std.testing.expect(requestTimedOut(0, 120_001, 120));
+    try std.testing.expect(!requestTimedOut(5000, 4000, 1));
 }
 
 test "elapsedSeconds clamps negative to zero" {

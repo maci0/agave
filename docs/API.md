@@ -307,7 +307,7 @@ Additional fields beyond OpenAI spec: `backend` (compute backend), `kv_seq_len` 
 
 Liveness probe (no auth required). Returns HTTP 200 for `"ok"` and `"degraded"` states, HTTP 503 only when `"shutting_down"`. Use `/ready` instead if your load balancer should stop routing traffic on degraded state.
 
-Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
+Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. `uptime_s` is elapsed process time from a monotonic clock, not a wall-clock difference, so an NTP step cannot zero or inflate it. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
 
 The `sleeping` field is `true` when the server has been idle longer than `--sleep-after`; it auto-clears on the next request.
 
