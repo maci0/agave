@@ -866,12 +866,15 @@ pub const CudaBackend = struct {
         }
         const dptr = self.resident_chunks[self.resident_chunk_count - 1] + self.resident_buf_used;
         if (!cuCheck(self.cuMemcpyHtoD(dptr, @ptrCast(ptr), len), "cuMemcpyHtoD(resident)")) return;
+        self.resident_map.put(addr, dptr) catch |err| {
+            std.log.warn("CUDA resident_map put failed (size={d}): {}", .{ len, err });
+            return;
+        };
         const page_size: usize = std.heap.page_size_min;
         const aligned = addr & ~@as(usize, page_size - 1);
         const warm_len = (addr - aligned) + len;
         std.posix.madvise(@ptrFromInt(aligned), warm_len, std.posix.system.MADV.DONTNEED) catch {};
         self.resident_buf_used += len;
-        self.resident_map.put(addr, dptr) catch {};
     }
 
     /// madvise WILLNEED on an aligned range (prefault into the page cache).

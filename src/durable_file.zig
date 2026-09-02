@@ -113,7 +113,7 @@ fn readPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
             break :blk @intCast(st.size);
         } else {
             var st: std.c.Stat = undefined;
-            _ = std.c.fstat(fd, &st);
+            if (std.c.fstat(fd, &st) != 0) return error.StatFailed;
             if (st.size <= 0) return error.StatFailed;
             break :blk @intCast(st.size);
         }
@@ -126,6 +126,7 @@ fn readPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         if (n == 0) break;
         got += n;
     }
+    if (got != size) return error.ReadFailed;
     return buf;
 }
 

@@ -681,7 +681,17 @@ const Server = struct {
                 std.log.info("conversation store: {s} (new)", .{path});
                 return;
             }
-            std.log.warn("conversation store load failed ({s}): {}", .{ path, err });
+            // Corrupt/unsupported files are quarantined before this error returns,
+            // so persisting a fresh store is safe. Any other failure left the live
+            // file in place: do not overwrite it with an empty in-memory list.
+            if (err == error.CorruptStore or err == error.UnsupportedVersion) {
+                std.log.warn("conversation store load failed ({s}): {}", .{ path, err });
+                return;
+            }
+            std.log.err("conversation store: disabling persist to avoid overwriting {s}: {}", .{
+                path, err,
+            });
+            self.conv_store_path = null;
             return;
         };
         defer snap.deinit();

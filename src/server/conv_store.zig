@@ -126,7 +126,9 @@ pub fn save(
 }
 
 /// Load a store from `path`. FileNotFound if missing. Quarantines a corrupt
-/// file to `{path}.corrupt` and returns error.CorruptStore.
+/// file to `{path}.corrupt` and returns error.CorruptStore. OutOfMemory and
+/// I/O errors leave the live file in place (error.QuarantineFailed if a
+/// corrupt file could not be preserved).
 pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
     const data = readFile(allocator, path) catch |err| {
         if (err == error.FileNotFound) return error.FileNotFound;
@@ -135,7 +137,15 @@ pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
     defer allocator.free(data);
 
     const snap = parse(allocator, data) catch |err| {
-        quarantine(path);
+        // OOM is not corruption: quarantining would rename a valid store away
+        // and the next save would replace it with an empty one.
+        if (err == error.OutOfMemory) return err;
+        quarantine(path, data) catch |qerr| {
+            std.log.err("conversation store: failed to preserve {s} ({}, original {})", .{
+                path, qerr, err,
+            });
+            return error.QuarantineFailed;
+        };
         return err;
     };
     return snap;
@@ -193,7 +203,7 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
         const id_raw = json.extractIntField(obj, "id") orelse return error.CorruptStore;
         const id: u32 = @intCast(id_raw);
         const title_raw = json.extractField(obj, "title") orelse "";
-        const title_un = json.jsonUnescapeOwned(allocator, title_raw) catch return error.CorruptStore;
+        const title_un = try json.jsonUnescapeOwned(allocator, title_raw);
         const title_len = @min(title_un.len, max_title_len);
         const title = allocator.dupe(u8, title_un[0..title_len]) catch |err| {
             allocator.free(title_un);
@@ -278,7 +288,7 @@ fn parseMessages(allocator: Allocator, arr: []const u8) ![]Message {
             return error.CorruptStore;
 
         const content_raw = json.extractField(obj, "content") orelse "";
-        const content = json.jsonUnescapeOwned(allocator, content_raw) catch return error.CorruptStore;
+        const content = try json.jsonUnescapeOwned(allocator, content_raw);
 
         var tool_call_id: ?[]const u8 = null;
         if (json.extractField(obj, "tool_call_id")) |tcid_raw| {
@@ -336,10 +346,18 @@ fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
     return buf;
 }
 
-fn quarantine(path: []const u8) void {
+fn quarantine(path: []const u8, data: []const u8) !void {
     var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dest = std.fmt.bufPrint(&dest_buf, "{s}.corrupt", .{path}) catch return;
-    durable.renameOver(path, dest) catch {};
+    const dest = std.fmt.bufPrint(&dest_buf, "{s}.corrupt", .{path}) catch return error.NameTooLong;
+    durable.renameOver(path, dest) catch |err| {
+        // Rename is preferred so the live path is vacated. If it fails, copy
+        // the already-read bytes so the next save cannot destroy the only copy.
+        std.log.warn("conversation store: rename {s} -> {s} failed ({}): writing copy", .{
+            path, dest, err,
+        });
+        try durable.replace(dest, data);
+    };
+    std.log.warn("conversation store: quarantined corrupt file to {s}", .{dest});
 }
 
 fn mkdirP(path: []const u8) void {
@@ -416,3 +434,70 @@ test "load quarantines corrupt store" {
 test "load missing file is FileNotFound" {
     try std.testing.expectError(error.FileNotFound, load(std.testing.allocator, "test_conv_store_missing.json"));
 }
+
+test "load OOM does not quarantine a valid store" {
+    const allocator = std.testing.allocator;
+    const path = "test_conv_store_oom.json";
+    defer deleteTestPath(path);
+    defer deleteTestPath(path ++ ".corrupt");
+
+    const msgs = [_]Message{
+        .{ .role = .user, .content = "keep me" },
+    };
+    const convs = [_]ConvView{
+        .{ .id = 1, .title = "Keep", .messages = &msgs },
+    };
+    try save(allocator, path, 1, 2, &convs);
+
+    // One allocation is the file buffer in readFile; the next (parse) must fail.
+    var fail = FailAfterN{ .parent = allocator, .remaining = 1 };
+    try std.testing.expectError(error.OutOfMemory, load(fail.allocator(), path));
+
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch return error.StoreDeletedOnOom;
+    _ = std.posix.system.close(fd);
+
+    _ = std.posix.openat(std.posix.AT.FDCWD, path ++ ".corrupt", .{}, 0) catch |err| {
+        try std.testing.expect(err == error.FileNotFound);
+        return;
+    };
+    return error.QuarantinedOnOom;
+}
+
+const FailAfterN = struct {
+    parent: Allocator,
+    remaining: usize,
+
+    fn allocator(self: *FailAfterN) Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+        const self: *FailAfterN = @ptrCast(@alignCast(ctx));
+        if (self.remaining == 0) return null;
+        self.remaining -= 1;
+        return self.parent.rawAlloc(len, alignment, ret_addr);
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+        const self: *FailAfterN = @ptrCast(@alignCast(ctx));
+        return self.parent.rawResize(memory, alignment, new_len, ret_addr);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        const self: *FailAfterN = @ptrCast(@alignCast(ctx));
+        return self.parent.rawRemap(memory, alignment, new_len, ret_addr);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+        const self: *FailAfterN = @ptrCast(@alignCast(ctx));
+        self.parent.rawFree(memory, alignment, ret_addr);
+    }
+};
