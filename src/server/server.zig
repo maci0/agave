@@ -1175,7 +1175,7 @@ fn toolsWanted(tp: *const json.ToolParams) bool {
 }
 
 /// Build system prompt with tool definitions injected.
-fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, existing_system: ?[]const u8, registry: *const tools_mod.Registry) ![]u8 {
+fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const json.ToolParams, existing_system: ?[]const u8, registry: *const tools_mod.Registry) ![]u8 {
     var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     if (existing_system) |sys| {
@@ -1202,13 +1202,13 @@ fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, exist
     for (merged[0..n]) |maybe| {
         const tool = maybe orelse continue;
         try buf.appendSlice(allocator, "- ");
-        try buf.appendSlice(allocator, tool.name);
+        try tmpl.writeUntrusted(allocator, &buf, tool.name);
         if (tool.description.len > 0) {
             try buf.appendSlice(allocator, ": ");
-            try buf.appendSlice(allocator, tool.description);
+            try tmpl.writeUntrusted(allocator, &buf, tool.description);
         }
         try buf.appendSlice(allocator, "\n  Parameters: ");
-        try buf.appendSlice(allocator, tool.parameters_json);
+        try tmpl.writeUntrusted(allocator, &buf, tool.parameters_json);
         try buf.appendSlice(allocator, "\n");
     }
     try buf.appendSlice(allocator,
@@ -1229,6 +1229,34 @@ fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, exist
 /// Returns true if tool calls found and writes response. Otherwise returns false.
 fn hasToolCalls(text: []const u8) bool {
     return std.mem.indexOf(u8, text, "<tool_call>") != null;
+}
+
+fn toolCallNameAllowed(name: []const u8, tp: *const json.ToolParams, registry: *const tools_mod.Registry) bool {
+    return tp.hasTool(name) or registry.hasName(name);
+}
+
+/// Advance `search_pos` through `text` to the next `<tool_call>` payload whose
+/// `name` is in the request tools or the process registry. Returns the JSON
+/// between the tags, or null when none remain. Undeclared names are skipped.
+fn nextAllowedToolCall(text: []const u8, search_pos: *usize, tp: *const json.ToolParams, registry: *const tools_mod.Registry) ?[]const u8 {
+    const tc_start_tag = "<tool_call>";
+    const tc_end_tag = "</tool_call>";
+    while (search_pos.* < text.len) {
+        const tc_start = std.mem.indexOfPos(u8, text, search_pos.*, tc_start_tag) orelse return null;
+        const json_start = tc_start + tc_start_tag.len;
+        const tc_end = std.mem.indexOfPos(u8, text, json_start, tc_end_tag) orelse return null;
+        const tc_json = text[json_start..tc_end];
+        search_pos.* = tc_end + tc_end_tag.len;
+        const name = json.extractField(tc_json, "name") orelse continue;
+        if (!toolCallNameAllowed(name, tp, registry)) {
+            if (!@import("builtin").is_test) {
+                std.log.warn("req={d} dropping tool call with undeclared name", .{log_request_id});
+            }
+            continue;
+        }
+        return tc_json;
+    }
+    return null;
 }
 
 /// Split generated text into (reasoning, content) parts.
@@ -1274,22 +1302,13 @@ fn splitThinkingContent(text: []const u8) ThinkingSplit {
 /// otherwise replaced with `{}` and logged, an invalid `input` would break
 /// spec-compliant clients. Returns "" when no <tool_call> payload parses;
 /// callers fall back to a plain text response.
-fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
-
+fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
     var blocks_buf: [4096]u8 = undefined;
     var blocks_pos: usize = 0;
     var search_pos: usize = 0;
     var call_idx: usize = 0;
 
-    while (search_pos < raw_text.len) {
-        const tc_start = std.mem.indexOfPos(u8, raw_text, search_pos, tc_start_tag) orelse break;
-        const json_start = tc_start + tc_start_tag.len;
-        const tc_end = std.mem.indexOfPos(u8, raw_text, json_start, tc_end_tag) orelse break;
-        const tc_json = raw_text[json_start..tc_end];
-        search_pos = tc_end + tc_end_tag.len;
-
+    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
         const name = json.extractField(tc_json, "name") orelse continue;
 
         // Resolve input as a JSON object text (see resolveAnthropicToolInput).
@@ -1324,9 +1343,7 @@ fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
 
 /// Build tool_calls JSON response from model output containing <tool_call> tags.
 /// Supports multiple tool calls. Arguments are JSON-escaped strings per OpenAI spec.
-fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
+fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
     const total = prompt_tokens + completion_tokens;
 
     // Build tool_calls array entries
@@ -1335,13 +1352,7 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
     var search_pos: usize = 0;
     var call_idx: usize = 0;
 
-    while (search_pos < raw_text.len) {
-        const tc_start = std.mem.indexOfPos(u8, raw_text, search_pos, tc_start_tag) orelse break;
-        const json_start = tc_start + tc_start_tag.len;
-        const tc_end = std.mem.indexOfPos(u8, raw_text, json_start, tc_end_tag) orelse break;
-        const tc_json = raw_text[json_start..tc_end];
-        search_pos = tc_end + tc_end_tag.len;
-
+    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
         const name = json.extractField(tc_json, "name") orelse continue;
         const args = json.extractObjectField(tc_json, "arguments") orelse
             (json.extractField(tc_json, "arguments") orelse "{}");
@@ -1764,7 +1775,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var tool_system: ?[]u8 = null;
         defer if (tool_system) |ts| wipeFree(g_server.allocator, ts);
         if (toolsWanted(&tool_params)) {
-            tool_system = buildToolSystemPrompt(g_server.allocator, &tool_params, if (extracted) |ex| ex.system else null, &g_server.tool_registry) catch |err| {
+            tool_system = buildToolSystemPrompt(g_server.allocator, g_server.chat_template, &tool_params, if (extracted) |ex| ex.system else null, &g_server.tool_registry) catch |err| {
                 std.log.err("req={d} tool system prompt build failed: {}", .{ log_request_id, err });
                 sendJsonError(stream, "500 Internal Server Error", "server_error", "Failed to build tool definitions");
                 g_server.metrics.recordFailure();
@@ -1858,7 +1869,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             toolReplayStore(rid_str, gen.raw);
         }
         const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
-            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated);
+            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params);
             break :blk if (tc_resp.len > 0) tc_resp else std.fmt.bufPrint(&resp_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
             , .{ req_id, created, g_server.model_name, system_fingerprint, gen.escaped, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
@@ -2434,7 +2445,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var tool_system_m: ?[]u8 = null;
         defer if (tool_system_m) |ts| wipeFree(g_server.allocator, ts);
         if (want_tools_m) {
-            tool_system_m = buildToolSystemPrompt(g_server.allocator, &tool_params_m, system_msg, &g_server.tool_registry) catch |err| {
+            tool_system_m = buildToolSystemPrompt(g_server.allocator, g_server.chat_template, &tool_params_m, system_msg, &g_server.tool_registry) catch |err| {
                 std.log.err("req={d} anthropic tool system prompt build failed: {}", .{ log_request_id, err });
                 sendAnthropicError(stream, "500", "api_error", "Failed to build tool definitions");
                 g_server.metrics.recordFailure();
@@ -2507,7 +2518,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         if (json.extractBoolField(body, "stream")) {
             if (want_tools_m) {
-                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
+                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, &tool_params_m);
             } else {
                 startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
             }
@@ -2536,7 +2547,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // parses (small-model malformed output), mirroring /v1/chat/completions.
         var resp_buf_tc: [response_buf_size]u8 = undefined;
         if (want_tools_m and hasToolCalls(gen.raw)) {
-            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated);
+            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params_m);
             if (anth_tc.len > 0) {
                 sendJson(stream, anth_tc);
                 g_server.metrics.recordLatency(elapsedMs(req_start_time));
@@ -4579,7 +4590,7 @@ const anthropic_delta_piece_len: usize = 256;
 /// generation runs to completion first and the parsed result is emitted as
 /// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
 /// the raw text as a `text` block when nothing parses (small-model fallback).
-fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
+fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, tp: *const json.ToolParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -4605,17 +4616,9 @@ fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_t
 
     var call_idx: usize = 0;
     if (hasToolCalls(gen.raw)) {
-        const tc_start_tag = "<tool_call>";
-        const tc_end_tag = "</tool_call>";
         var search_pos: usize = 0;
 
-        while (search_pos < gen.raw.len) {
-            const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
-            const json_start = tc_start + tc_start_tag.len;
-            const tc_end = std.mem.indexOfPos(u8, gen.raw, json_start, tc_end_tag) orelse break;
-            const tc_json = gen.raw[json_start..tc_end];
-            search_pos = tc_end + tc_end_tag.len;
-
+        while (nextAllowedToolCall(gen.raw, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
             const name = json.extractField(tc_json, "name") orelse continue;
             const resolved_input = resolveAnthropicToolInput(g_server.allocator, tc_json, call_idx);
             defer if (resolved_input.owned) |p| g_server.allocator.free(p);
@@ -5576,7 +5579,6 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
 /// Streaming with tool call support. Generates full output first, then emits
 /// tool_calls delta chunks if tool calls detected, otherwise streams content.
 fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, tp: *const json.ToolParams) void {
-    _ = tp;
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -5601,17 +5603,9 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
     var call_idx: usize = 0;
     if (hasToolCalls(gen.raw)) {
         // Emit tool calls as delta chunks
-        const tc_start_tag = "<tool_call>";
-        const tc_end_tag = "</tool_call>";
         var search_pos: usize = 0;
 
-        while (search_pos < gen.raw.len) {
-            const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
-            const json_start = tc_start + tc_start_tag.len;
-            const tc_end = std.mem.indexOfPos(u8, gen.raw, json_start, tc_end_tag) orelse break;
-            const tc_json = gen.raw[json_start..tc_end];
-            search_pos = tc_end + tc_end_tag.len;
-
+        while (nextAllowedToolCall(gen.raw, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
             const name = json.extractField(tc_json, "name") orelse continue;
             const args = json.extractObjectField(tc_json, "arguments") orelse
                 (json.extractField(tc_json, "arguments") orelse "{}");
@@ -6916,6 +6910,47 @@ test "isSafeErrorToken" {
     try std.testing.expect(isSafeErrorToken("n_not_supported"));
     try std.testing.expect(!isSafeErrorToken("a\"b"));
     try std.testing.expect(!isSafeErrorToken(""));
+}
+
+test "nextAllowedToolCall skips undeclared names" {
+    var tp = json.ToolParams{};
+    tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
+    tp.tool_count = 1;
+    var reg = tools_mod.Registry{};
+    const text =
+        \\<tool_call>{"name": "rm", "arguments": {"path": "/"}}</tool_call>
+        \\<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>
+        \\<tool_call>{"name": "shell", "arguments": {}}</tool_call>
+    ;
+    var pos: usize = 0;
+    const first = nextAllowedToolCall(text, &pos, &tp, &reg) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, first, "get_weather") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "rm") == null);
+    try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
+}
+
+test "nextAllowedToolCall accepts registry names" {
+    var tp = json.ToolParams{};
+    var reg = tools_mod.Registry{};
+    _ = try reg.register(.{ .name = "search", .description = "", .parameters_json = "{}" });
+    const text =
+        \\<tool_call>{"name": "search", "arguments": {}}</tool_call>
+    ;
+    var pos: usize = 0;
+    const hit = nextAllowedToolCall(text, &pos, &tp, &reg) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, hit, "search") != null);
+}
+
+test "nextAllowedToolCall rejects payload without name" {
+    var tp = json.ToolParams{};
+    tp.tools[0] = .{ .name = "a", .description = "", .parameters_json = "{}" };
+    tp.tool_count = 1;
+    var reg = tools_mod.Registry{};
+    const text =
+        \\<tool_call>{"arguments": {}}</tool_call>
+    ;
+    var pos: usize = 0;
+    try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
 }
 
 test "anthropicStatusLine maps known codes" {
