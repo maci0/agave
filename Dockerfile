@@ -176,7 +176,9 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     rm -rf /var/lib/apt/lists/*; \
     groupadd -r -g 10001 agave; \
-    useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave
+    useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave; \
+    mkdir -p /home/agave/.cache; \
+    chown agave:agave /home/agave/.cache
 
 COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 # Authoritative product version parsed from build.zig.zon (see build-stage check).

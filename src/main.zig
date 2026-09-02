@@ -468,6 +468,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
     .{ .long = "rate-limit-rpm", .kind = .option, .help = "Server max requests per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-tpm." },
     .{ .long = "rate-limit-tpm", .kind = .option, .help = "Server max prompt tokens per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-rpm." },
+    .{ .long = "conv-store", .kind = .option, .help = "Path to persist web-UI conversations as JSON [default: ~/.cache/agave/conversations.json]." },
+    .{ .long = "no-conv-store", .help = "Do not persist or restore web-UI conversations (in-memory only)." },
     // LoRA
     .{ .long = "lora", .kind = .option, .help = "Path to LoRA adapter GGUF file. Merged at load time into the base model weights." },
     // Multimodal
@@ -603,6 +605,10 @@ const CliArgs = struct {
     rate_limit_rpm: u32 = 0,
     /// Server rate limit: max prompt tokens per minute (0 = unlimited / disabled).
     rate_limit_tpm: u32 = 0,
+    /// Explicit conversation store path (null = default ~/.cache/agave/conversations.json).
+    conv_store_path: ?[]const u8 = null,
+    /// Disable conversation persist/restore.
+    no_conv_store: bool = false,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     /// Path to MTP weight file (safetensors) for multi-token prediction.
@@ -1069,6 +1075,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (res.option("rate-limit-rpm") != null or res.option("rate-limit-tpm") != null) {
             eprint("Warning: --rate-limit-rpm/--rate-limit-tpm have no effect without --serve\n", .{});
         }
+        if (res.option("conv-store") != null or res.flag("no-conv-store")) {
+            eprint("Warning: --conv-store/--no-conv-store have no effect without --serve\n", .{});
+        }
     } else {
         // Warn about flags ignored in server mode (early, before model loading)
         if (n_positionals > 1)
@@ -1350,6 +1359,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .max_batch_size = parseU32(res.option("max-batch-size"), "max-batch-size") orelse 8,
         .rate_limit_rpm = parseU32(res.option("rate-limit-rpm"), "rate-limit-rpm") orelse 0,
         .rate_limit_tpm = parseU32(res.option("rate-limit-tpm"), "rate-limit-tpm") orelse 0,
+        .conv_store_path = res.option("conv-store"),
+        .no_conv_store = res.flag("no-conv-store"),
         .video = res.option("video"),
         .video_fps = blk: {
             // Range already validated above; re-parse for the struct field.
@@ -2157,6 +2168,8 @@ fn printUsage() void {
         \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
         \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
         \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
+        \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: ~/.cache/agave/conversations.json]
+        \\      --no-conv-store    Do not persist or restore web-UI conversations
         \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
         \\
         \\PARALLELISM:
@@ -3783,6 +3796,8 @@ fn initAndRun(
             .max_batch_size = cli.max_batch_size,
             .rate_limit_rpm = cli.rate_limit_rpm,
             .rate_limit_tpm = cli.rate_limit_tpm,
+            .conv_store_path = cli.conv_store_path,
+            .no_conv_store = cli.no_conv_store,
         }) catch |e| {
             // Listen failures already print a specific message inside
             // server.run(); re-printing the raw error name would just add noise.
@@ -5387,6 +5402,8 @@ test {
     _ = @import("eval.zig");
     _ = @import("expert_profile.zig");
     _ = @import("expert_cache.zig");
+    _ = @import("durable_file.zig");
+    _ = @import("server/conv_store.zig");
     _ = @import("term.zig");
     _ = @import("thread_pool.zig");
     _ = @import("ops/kv_quant.zig");

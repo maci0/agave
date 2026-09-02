@@ -36,6 +36,9 @@ services:
       AGAVE_API_KEY: ${AGAVE_API_KEY:?Set AGAVE_API_KEY in .env (see .env.example)}
     volumes:
       - ${AGAVE_MODELS_DIR:-./models}:/models:ro
+      # Survives container replace: conversation store, Vulkan pipeline cache,
+      # HuggingFace / agave pull blobs (HOME is otherwise tmpfs).
+      - ${AGAVE_CACHE_DIR:-agave-cache}:/home/agave/.cache
     # ENTRYPOINT is already: agave --host 0.0.0.0
     command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]
     restart: unless-stopped
@@ -67,3 +70,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+volumes:
+  agave-cache:

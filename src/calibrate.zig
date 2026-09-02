@@ -15,6 +15,7 @@ const format_mod = @import("format/format.zig");
 const model_mod = @import("models/model.zig");
 const display_mod = @import("display.zig");
 const kv_evict = @import("ops/kv_evict.zig");
+const durable = @import("durable_file.zig");
 
 const Backend = backend_mod.Backend;
 const BackendState = backend_mod.BackendState;
@@ -485,8 +486,14 @@ const CalibrationResult = struct {
 ///               [n_layers * n_q_heads * n_bands] f32, concentration
 fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
     const io = mod_io;
-    const file = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
-    defer file.close(io);
+    var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{path}) catch return error.NameTooLong;
+    const file = try Io.Dir.cwd().createFile(io, tmp_path, .{ .read = true });
+    var fd_open = true;
+    errdefer {
+        if (fd_open) file.close(io);
+        Io.Dir.cwd().deleteFile(io, tmp_path) catch {};
+    }
 
     var offset: u64 = 0;
     // Helper: write bytes at current offset and advance
@@ -509,6 +516,13 @@ fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
     try pwrite(file, io, std.mem.sliceAsBytes(result.q_center_phase), &offset);
     try pwrite(file, io, std.mem.sliceAsBytes(result.q_expected_norm), &offset);
     try pwrite(file, io, std.mem.sliceAsBytes(result.concentration), &offset);
+
+    // Crash-safe publish: fsync tmp, close, rename over the live .cal, fsync dir.
+    try durable.syncFd(file.handle);
+    file.close(io);
+    fd_open = false;
+    try Io.Dir.rename(Io.Dir.cwd(), tmp_path, Io.Dir.cwd(), path, io);
+    durable.syncParent(path);
 }
 
 /// Read calibration data from a .cal file and return TriCalibration structs
