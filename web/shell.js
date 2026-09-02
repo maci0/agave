@@ -294,8 +294,8 @@ function restoreEmptyChat() {
     empty.id = 'chat-empty';
     empty.className = 'msg empty-hint';
     empty.textContent = engine.ctx
-        ? 'Type a message to start chatting.'
-        : 'Load a GGUF model above, then type a message to start chatting.';
+        ? 'Send a prompt.'
+        : 'Load a GGUF model above, then send a prompt.';
     chat.append(empty);
 }
 function clearChat() {

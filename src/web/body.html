@@ -6,7 +6,7 @@
 <header>
 <div class="logo">
 <button type="button" class="hdr-btn menu-btn" onclick="toggleSidebar()" title="Menu" aria-label="Open sidebar" aria-expanded="false" aria-controls="sidebar" id="menu-btn">&#9776;</button>
-<h1><span aria-hidden="true">&#127797; </span>agave</h1><span class="model-badge" id="model-name" aria-live="polite">Loading…</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
+<h1><span class="mark" aria-hidden="true"></span>agave</h1><span class="model-badge" id="model-name" aria-live="polite">Loading…</span><span class="ctx-badge" id="ctx-badge" aria-live="polite"></span></div>
 <div class="hdr-btns">
 <button type="button" class="new-chat-btn" onclick="newConv()" aria-label="New conversation">+ New</button>
 <button type="button" class="hdr-btn" onclick="exportConv()" title="Export conversation" aria-label="Export conversation"><span class="btn-text">Export </span>&#8681;</button>
@@ -28,8 +28,8 @@
 <main class="main">
 <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
 <div id="empty">
-<div class="icon" aria-hidden="true">&#127797;</div><h2>Start a conversation</h2>
-<p>Type a message below to chat with the model.</p>
+<span class="mark mark-lg" aria-hidden="true"></span><h2>Prompt the model</h2>
+<p>Runs locally. Conversations stay on this machine.</p>
 <div class="hints">
 <button class="hint" type="button" onclick="runCommand('/help')">/help for commands</button>
 <span class="hint">Enter to send</span>
@@ -39,7 +39,7 @@
 <div class="modal-overlay" id="info-modal" onclick="if(event.target===this)hideInfo()" aria-hidden="true">
 <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1">
 <div class="modal-head">
-<h2 class="modal-title" id="modal-title"><span aria-hidden="true">&#127797; </span>About Agave</h2>
+<h2 class="modal-title" id="modal-title"><span class="mark" aria-hidden="true"></span>About Agave</h2>
 <button type="button" class="modal-close" onclick="hideInfo()" aria-label="Close dialog">&#10005;</button>
 </div>
 <div class="modal-body">
@@ -98,7 +98,7 @@
 <div class="input-row">
 <input type="file" id="img-input" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none" aria-label="Attach image" onchange="onImageSelect(event)">
 <button type="button" class="hdr-btn img-btn" id="img-btn" hidden onclick="document.getElementById('img-input').click()" title="Attach image (or paste / drop)" aria-label="Attach image. You can also paste or drop an image.">&#128247;</button>
-<textarea id="msg" placeholder="Send a message..." rows="1" aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" autofocus dir="auto"></textarea>
+<textarea id="msg" placeholder="Prompt" rows="1" aria-label="Message input" aria-describedby="input-hint" enterkeyhint="send" autocomplete="off" autofocus dir="auto"></textarea>
 <button type="button" class="settings-toggle" id="settings-toggle" onclick="toggleSettings()" title="Sampling settings" aria-label="Open sampling settings" aria-expanded="false" aria-controls="settings-panel">&#9881;</button>
 <button type="submit" class="send-btn" id="send-btn" title="Send message (Enter)" aria-label="Send message">Send</button>
 <button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" title="Stop generation" aria-label="Stop generation">Stop</button>

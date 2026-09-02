@@ -971,12 +971,11 @@ function stopGen() { if (abortCtrl) {abortCtrl.abort();} }
 function showEmpty() {
   chat.replaceChildren();
   const empty = document.createElement('div'); empty.id = 'empty';
-  // Hardcoded HTML constant, no user input, safe without sanitization
-  const icon = document.createElement('div'); icon.className = 'icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '\uD83C\uDF35';
-  const h2 = document.createElement('h2'); h2.textContent = 'Start a conversation';
-  const p = document.createElement('p'); p.textContent = 'Type a message below to chat with the model.';
+  const icon = document.createElement('span'); icon.className = 'mark mark-lg'; icon.setAttribute('aria-hidden', 'true');
+  const h2 = document.createElement('h2'); h2.textContent = 'Prompt the model';
+  const p = document.createElement('p'); p.textContent = 'Runs locally. Conversations stay on this machine.';
   const hintsEl = document.createElement('div'); hintsEl.className = 'hints';
-  // Skip "type a message" filler: the paragraph above already says it.
+  // Skip prompt filler: the heading and paragraph already say it.
   for (const t of ['/help for commands', 'Enter to send']) {
     const isHelp = t === '/help for commands';
     const s = document.createElement(isHelp ? 'button' : 'span');
