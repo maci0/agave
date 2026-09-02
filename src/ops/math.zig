@@ -812,6 +812,9 @@ test "applyReluSquared" {
     try std.testing.expectEqual(@as(f32, 9.0), buf[2]);
     try std.testing.expectEqual(@as(f32, 0.25), buf[4]);
     try std.testing.expectEqual(@as(f32, 16.0), buf[5]);
+    // Last SIMD lane (index 7) and scalar tail (index 8)
+    try std.testing.expectEqual(@as(f32, 4.0), buf[7]);
+    try std.testing.expectEqual(@as(f32, 1.0), buf[8]);
 }
 
 test "applyGelu" {
@@ -828,6 +831,10 @@ test "applyGelu" {
     try std.testing.expectApproxEqAbs(@as(f32, 1.9546), buf[3], 0.001);
     // GELU(-2) ≈ -0.0454
     try std.testing.expectApproxEqAbs(@as(f32, -0.0454), buf[4], 0.001);
+    // Remaining SIMD lanes including the last (index 7)
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3457), buf[5], 0.001); // GELU(0.5)
+    try std.testing.expectApproxEqAbs(@as(f32, -0.1543), buf[6], 0.001); // GELU(-0.5)
+    try std.testing.expectApproxEqAbs(@as(f32, 2.9964), buf[7], 0.001); // GELU(3)
     // Scalar tail: GELU(-3) ≈ -0.00436
     try std.testing.expectApproxEqAbs(@as(f32, -0.00436), buf[8], 0.001);
     // Scalar tail: GELU(1.5) ≈ 1.3990

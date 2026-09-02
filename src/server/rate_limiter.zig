@@ -182,6 +182,8 @@ fn testIo() Io {
 
 // Unit tests
 test "consume full capacity then fail" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
     var limiter = RateLimiter.init(10, 100, testIo());
 
     // Consume all 10 requests
@@ -232,6 +234,8 @@ test "long idle clamps to capacity" {
 }
 
 test "retry after matches calculation" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
     var limiter = RateLimiter.init(60, 600, testIo());
 
     // Consume all requests (60)
@@ -248,6 +252,8 @@ test "retry after matches calculation" {
 test "token bucket exhaustion blocks even with requests available" {
     // 100 requests/min but only 5 tokens/min, token bucket should be the bottleneck.
     // Verifies the dual-bucket check: both must have capacity.
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
     var limiter = RateLimiter.init(100, 5, testIo());
 
     // Consume 5 requests with 1 token each, exhausts token bucket
@@ -266,6 +272,8 @@ test "token bucket exhaustion blocks even with requests available" {
 }
 
 test "tryConsumeOrRetryAfter combines check and retry" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
     var limiter = RateLimiter.init(10, 100, testIo());
 
     // Should succeed (returns null) when capacity is available

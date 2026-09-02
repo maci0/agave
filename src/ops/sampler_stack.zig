@@ -95,6 +95,7 @@ test "empty stack apply is no-op" {
     stack.apply(&logits, .{});
     try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
     try std.testing.expectEqual(@as(f32, 2.0), logits[1]);
+    try std.testing.expectEqual(@as(f32, 3.0), logits[2]);
 }
 
 test "bias processor boosts id" {
@@ -110,6 +111,7 @@ test "bias processor boosts id" {
     });
     try std.testing.expectEqual(@as(f32, 11.0), logits[0]);
     try std.testing.expectEqual(@as(f32, 5.0), logits[1]);
+    try std.testing.expectEqual(@as(f32, 2.0), logits[2]);
 }
 
 test "dispose clears so later apply is no-op" {
@@ -126,13 +128,49 @@ test "dispose clears so later apply is no-op" {
         .logit_bias_count = 1,
     });
     try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 5.0), logits[1]);
+}
+
+test "push past max_processors is ignored" {
+    var stack = Stack{};
+    for (0..max_processors) |_| stack.push(.bias);
+    try std.testing.expectEqual(@as(u8, max_processors), stack.len);
+    stack.push(.repeat);
+    try std.testing.expectEqual(@as(u8, max_processors), stack.len);
+    try std.testing.expectEqual(Kind.bias, stack.kinds[max_processors - 1]);
 }
 
 test "push order is apply order" {
-    var stack = Stack{};
-    stack.push(.bias);
-    stack.push(.repeat);
-    try std.testing.expectEqual(Kind.bias, stack.kinds[0]);
-    try std.testing.expectEqual(Kind.repeat, stack.kinds[1]);
-    try std.testing.expectEqual(@as(u8, 2), stack.len);
+    // bias then repeat: (1+10)/2 = 5.5. Reverse order: 1/2+10 = 10.5.
+    const ids = [_]u32{0};
+    const vals = [_]f32{10.0};
+    const tokens = [_]u32{0};
+    const params = Params{
+        .tokens = &tokens,
+        .repetition_penalty = 2.0,
+        .logit_bias_ids = &ids,
+        .logit_bias_vals = &vals,
+        .logit_bias_count = 1,
+    };
+
+    var bias_then_repeat = Stack{};
+    bias_then_repeat.push(.bias);
+    bias_then_repeat.push(.repeat);
+    try std.testing.expectEqual(Kind.bias, bias_then_repeat.kinds[0]);
+    try std.testing.expectEqual(Kind.repeat, bias_then_repeat.kinds[1]);
+    try std.testing.expectEqual(@as(u8, 2), bias_then_repeat.len);
+    var logits_br = [_]f32{ 1.0, 5.0, 2.0 };
+    bias_then_repeat.apply(&logits_br, params);
+    try std.testing.expectEqual(@as(f32, 5.5), logits_br[0]);
+    try std.testing.expectEqual(@as(f32, 5.0), logits_br[1]);
+    try std.testing.expectEqual(@as(f32, 2.0), logits_br[2]);
+
+    var repeat_then_bias = Stack{};
+    repeat_then_bias.push(.repeat);
+    repeat_then_bias.push(.bias);
+    var logits_rb = [_]f32{ 1.0, 5.0, 2.0 };
+    repeat_then_bias.apply(&logits_rb, params);
+    try std.testing.expectEqual(@as(f32, 10.5), logits_rb[0]);
+    try std.testing.expectEqual(@as(f32, 5.0), logits_rb[1]);
+    try std.testing.expectEqual(@as(f32, 2.0), logits_rb[2]);
 }

@@ -436,8 +436,12 @@ test "DeviceInfo, name buffer size" {
 }
 
 test "BackendKind, all variants" {
-    const kinds = [_]BackendKind{ .cpu, .metal, .cuda, .rocm, .vulkan };
-    try @import("std").testing.expectEqual(@as(usize, 5), kinds.len);
+    const fields = @typeInfo(BackendKind).@"enum".fields;
+    const expected = [_][]const u8{ "cpu", "metal", "cuda", "rocm", "vulkan" };
+    try std.testing.expectEqual(expected.len, fields.len);
+    inline for (expected, 0..) |name, i| {
+        try std.testing.expectEqualStrings(name, fields[i].name);
+    }
 }
 
 test "enumerate, always includes CPU" {
@@ -515,11 +519,34 @@ test "enumerate, returns DeviceList with at least one device" {
     try std.testing.expect(std.mem.indexOf(u8, cpu_name, "threads") != null);
 }
 
-test "printDeviceTable, function signature comptime check" {
-    comptime {
-        const T = @TypeOf(printDeviceTable);
-        _ = T;
-    }
+test "printDeviceTable writes a table for mixed devices" {
+    const test_stdout = @import("../test_stdout.zig");
+    const silencer = try test_stdout.Silencer.init();
+    defer silencer.release();
+
+    var list = DeviceList{};
+    var cpu = DeviceInfo{ .backend = .cpu, .device_id = 0 };
+    const cpu_name = "12 threads";
+    @memcpy(cpu.name[0..cpu_name.len], cpu_name);
+    cpu.name_len = cpu_name.len;
+    list.add(cpu);
+
+    var gpu = DeviceInfo{
+        .backend = .cuda,
+        .device_id = 1,
+        .is_uma = true,
+        .total_mem = 16 * 1024 * 1024 * 1024,
+    };
+    const gpu_name = "NVIDIA GB10";
+    @memcpy(gpu.name[0..gpu_name.len], gpu_name);
+    gpu.name_len = gpu_name.len;
+    const cc = "sm_121";
+    @memcpy(gpu.compute_cap[0..cc.len], cc);
+    gpu.cc_len = cc.len;
+    list.add(gpu);
+
+    printDeviceTable(&list);
+    try std.testing.expectEqual(@as(usize, 2), list.count);
 }
 
 /// Formats and writes a human-readable device table to stdout.
