@@ -355,9 +355,6 @@ pub const Ds4Model = struct {
     expert_pool_slot_size: u32 = 0,
     /// Base address of mmap'd GGUF data (for computing file offsets from data_ptr).
     gguf_mmap_base: ?[*]const u8 = null,
-    /// Companion pool for expert scales/biases (heap staging for GPU safety).
-    companion_pool: []u8 = &.{},
-    companion_pool_slot_size: u32 = 0,
     expert_profile: ?*ExpertProfile = null,
     /// MTP (multi-token prediction) weights loaded from separate safetensors.
     mtp_weights: ?*MtpWeights = null,
@@ -593,14 +590,6 @@ pub const Ds4Model = struct {
             errdefer allocator.free(self.expert_pool);
             self.expert_pool_slots = n_pool_slots;
             self.expert_pool_slot_size = max_expert_bytes;
-            // Companion pool for scales/biases: each slot holds one expert's
-            // scales+biases data. Max size: n_out × groups_per_row × 2 (BF16).
-            if (e % 32 != 0) return error.InvalidFormat;
-            const max_companion_bytes: u32 = @intCast(ff * (e / 32) * 2); // generous upper bound
-            const comp_pool_size = std.math.mul(usize, n_pool_slots, max_companion_bytes) catch return error.OutOfMemory;
-            self.companion_pool = try allocator.alloc(u8, comp_pool_size);
-            errdefer allocator.free(self.companion_pool);
-            self.companion_pool_slot_size = max_companion_bytes;
         }
         self.tensor_overrides = std.StringHashMap([*]const u8).init(allocator);
         self.tensor_overrides_inited = true;
@@ -724,7 +713,7 @@ pub const Ds4Model = struct {
             &self.expert_scratch,  &self.ff_gate_scratch,  &self.ff_up_scratch,  &self.router_logits,  &self.logits_buf,
             &self.kv_k_bytes,      &self.csa_comp_kv,      &self.csa_comp_score, &self.csa_k,          &self.csa_score_scratch,
             &self.lid_comp_k,      &self.lid_query,        &self.lid_head_w,     &self.lid_scores,     &self.rope_cos_buf,
-            &self.rope_sin_buf,    &self.gpu_slot_weights, &self.expert_pool,    &self.companion_pool, &self.gpu_top_ids,
+            &self.rope_sin_buf,    &self.gpu_slot_weights, &self.expert_pool,    &self.gpu_top_ids,
             &self.gpu_top_weights,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
@@ -806,15 +795,7 @@ pub const Ds4Model = struct {
         return self.kv_k_bytes[li * layer_bytes ..][0..layer_bytes];
     }
 
-    /// K=V in DS4 MLA, V cache is the same buffer as K cache.
-    fn kvVLayer(self: *Ds4Model, li: usize) []u8 {
-        return self.kvKLayer(li);
-    }
-
     // ── Hyper Connection ──────────────────────────────────────────
-
-    /// Debug: disable HC, use mean of streams as identity
-    const debug_disable_hc = false;
 
     /// Compute HC pre-weights and sublayer input in `self.hidden`.
     fn hcPre(
@@ -823,16 +804,6 @@ pub const Ds4Model = struct {
         hc_base: TensorInfo,
         hc_scale: TensorInfo,
     ) void {
-        if (debug_disable_hc) {
-            // Identity: just mean of HC streams
-            const e = self.n_embd;
-            @memset(self.hidden, 0.0);
-            for (0..n_hc) |s| {
-                const stream = self.hc_state[s * e ..][0..e];
-                for (0..e) |i| self.hidden[i] += stream[i] * (1.0 / n_hc);
-            }
-            return;
-        }
         self.be.sync();
         self.hcPreCpu(hc_fn, hc_base, hc_scale);
     }
@@ -911,11 +882,6 @@ pub const Ds4Model = struct {
 
     /// Update HC state after a sublayer. Sublayer output must be in `self.hidden`.
     fn hcPost(self: *Ds4Model) void {
-        if (debug_disable_hc) {
-            const e = self.n_embd;
-            for (0..n_hc) |s| @memcpy(self.hc_state[s * e ..][0..e], self.hidden);
-            return;
-        }
         const e = self.n_embd;
 
         self.be.sync();
@@ -947,15 +913,6 @@ pub const Ds4Model = struct {
 
     /// HC head: merge 4 streams → self.hidden.
     fn hcHead(self: *Ds4Model, hc_fn: TensorInfo, hc_base: TensorInfo, hc_scale: TensorInfo) void {
-        if (debug_disable_hc) {
-            const e = self.n_embd;
-            @memset(self.hidden, 0.0);
-            for (0..n_hc) |s| {
-                const stream = self.hc_state[s * e ..][0..e];
-                for (0..e) |i| self.hidden[i] += stream[i] * (1.0 / n_hc);
-            }
-            return;
-        }
         const e = self.n_embd;
 
         self.be.sync();
@@ -3697,20 +3654,6 @@ pub const Ds4Model = struct {
         return math_ops.argmax(self.logits_buf);
     }
 
-    /// Clear all heap-copied tensor overrides (free memory).
-    /// Called between layers to limit heap usage to ~40MB per layer.
-    fn clearHeapOverrides(self: *Ds4Model) void {
-        if (!self.tensor_overrides_inited) return;
-        var it = self.tensor_overrides.valueIterator();
-        while (it.next()) |ptr| {
-            // Free the heap allocation (we know the size from the original alloc)
-            // Actually, we can't free because we don't know the slice length.
-            // Use a simpler approach: just clear the map (leak the memory for now).
-            _ = ptr;
-        }
-        self.tensor_overrides.clearRetainingCapacity();
-    }
-
     /// Return a TensorInfo with heap-overridden data pointer (Metal-safe).
     /// If the tensor has been heap-copied, returns a copy with the heap pointer.
     /// Otherwise returns the original TensorInfo unchanged.
@@ -3761,30 +3704,6 @@ pub const Ds4Model = struct {
         return heap.ptr;
     }
 
-    /// Copy expert data to heap pool for GPU safety. Uses pread for GGUF,
-    /// memcpy for SafeTensors. The heap pool is always resident, Metal GPU
-    /// can safely read via wrapBuffer without page cache interference.
-    fn poolExpert(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
-        if (self.expert_pool.len == 0) return data_ptr;
-        if (slot >= self.expert_pool_slots) return data_ptr;
-        const slot_offset = @as(usize, slot) * self.expert_pool_slot_size;
-        if (slot_offset + size > self.expert_pool.len) return data_ptr;
-        const dst = self.expert_pool[slot_offset..][0..size];
-        @memcpy(dst, data_ptr[0..size]);
-        return dst.ptr;
-    }
-
-    /// Copy companion (scales/biases) data to companion pool for GPU safety.
-    fn poolCompanion(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
-        if (self.companion_pool.len == 0) return data_ptr;
-        if (slot >= self.expert_pool_slots) return data_ptr;
-        const slot_offset = @as(usize, slot) * self.companion_pool_slot_size;
-        if (slot_offset + size > self.companion_pool.len) return data_ptr;
-        const dst = self.companion_pool[slot_offset..][0..size];
-        @memcpy(dst, data_ptr[0..size]);
-        return dst.ptr;
-    }
-
     /// Read expert weight data via pread into a pool buffer slot (GGUF only).
     fn preadExpert(self: *Ds4Model, data_ptr: [*]const u8, size: usize, slot: u32) [*]const u8 {
         if (self.gguf_fd < 0 or self.expert_pool.len == 0 or self.gguf_mmap_base == null)
@@ -3812,45 +3731,6 @@ pub const Ds4Model = struct {
 
         if (total_read == actual_size) return pool_ptr;
         return data_ptr; // fallback to mmap if pread failed
-    }
-
-    /// Copy non-expert weights to heap-allocated buffers (one-time at init).
-    /// Makes ALL Metal GEMVs safe (heap memory never has page fault issues).
-    /// Called after model init when SSD streaming + Metal is active.
-    pub fn copyNonExpertWeightsToHeap(self: *Ds4Model) void {
-        // Non-expert tensors to copy: attn_q_a, q_b, kv, wo_a, wo_b, norms, HC, output head
-        // Total: ~15GB. One-time cost at startup.
-        const tensor_names = [_][]const u8{
-            "attn_q_a.weight",       "attn_q_a_norm.weight",
-            "attn_q_b.weight",       "attn_kv.weight",
-            "attn_kv_a_norm.weight", "attn_output_a.weight",
-            "attn_output_b.weight",  "attn_norm.weight",
-            "ffn_norm.weight",       "attn_sinks.weight",
-            "hc_attn_fn.weight",     "hc_attn_base.weight",
-            "hc_attn_scale.weight",  "hc_ffn_fn.weight",
-            "hc_ffn_base.weight",    "hc_ffn_scale.weight",
-            "ffn_gate_inp.weight",   "ffn_gate_shexp.weight",
-            "ffn_up_shexp.weight",   "ffn_down_shexp.weight",
-        };
-        var total_copied: usize = 0;
-        for (0..self.n_layers) |li| {
-            for (tensor_names) |name| {
-                if (self.layerTensor(li, name)) |t| {
-                    const size = t.dataByteLen();
-                    if (size > 0 and size < 256 * 1024 * 1024) { // cap at 256MB per tensor
-                        const heap = self.allocator.alloc(u8, size) catch continue;
-                        @memcpy(heap, @as([*]const u8, t.data_ptr)[0..size]);
-                        // Can't modify TensorInfo directly (it's from Format vtable).
-                        // Need a different approach, see note below.
-                        self.allocator.free(heap);
-                        total_copied += size;
-                    }
-                }
-            }
-        }
-        std.log.info("copyNonExpertWeightsToHeap: would copy {d:.1} MB", .{
-            @as(f64, @floatFromInt(total_copied)) / 1e6,
-        });
     }
 
     /// Pre-fault expert weights for ALL layers using PARALLEL page touching.

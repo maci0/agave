@@ -2461,57 +2461,6 @@ pub const Gemma4Model = struct {
         );
     }
 
-    /// Batched GEMV dispatch: multiple ops sharing the same input vector.
-    /// Dispatches all ops in a single batch without barriers, enabling concurrent
-    /// GPU execution (e.g., fused Q+K+V or gate+up projections).
-    const GemvSpec = struct { t: TensorInfo, y: [*]f32, n: usize };
-
-    fn doGemvMulti(self: *Gemma4Model, x: [*]const f32, k: usize, specs: []const GemvSpec) void {
-        const GemvOp = backend_mod.GemvOp;
-        var ops: [4]GemvOp = undefined; // max 4 ops (Q+K+V+output or gate+up+down+...)
-        std.debug.assert(specs.len <= ops.len);
-
-        for (specs, 0..) |spec, i| {
-            if (spec.t.dtype == .mlx_q) {
-                // MLX-Q: resolve companion pointers
-                const key = @intFromPtr(spec.t.data_ptr);
-                const slot = key % mlx_companion_cache_size;
-                var companion: MlxCompanion = undefined;
-                if (self.mlx_cc_keys[slot] == key) {
-                    companion = self.mlx_cc_vals[slot];
-                } else {
-                    const base = spec.t.name;
-                    const plen = if (std.mem.endsWith(u8, base, ".weight")) base.len - 7 else base.len;
-                    var sb: [model_mod.tensor_name_buf_size]u8 = undefined;
-                    var bb: [model_mod.tensor_name_buf_size]u8 = undefined;
-                    const sn = std.fmt.bufPrint(&sb, "{s}.scales", .{base[0..plen]}) catch return;
-                    const bn = std.fmt.bufPrint(&bb, "{s}.biases", .{base[0..plen]}) catch return;
-                    const st = self.fmt.getTensor(sn) orelse return;
-                    const bt = self.fmt.getTensor(bn) orelse return;
-                    companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr, .group_size = model_mod.inferMlxGroupSize(st, k) };
-                    self.mlx_cc_keys[slot] = key;
-                    self.mlx_cc_vals[slot] = companion;
-                }
-                ops[i] = .{
-                    .w = .{ .data = spec.t.data_ptr, .dtype = spec.t.dtype },
-                    .y = spec.y,
-                    .n = spec.n,
-                    .mlx_scales = companion.scales,
-                    .mlx_biases = companion.biases,
-                    .mlx_bits = self.mlx_bits,
-                    .mlx_group_size = companion.group_size,
-                };
-            } else {
-                ops[i] = .{
-                    .w = .{ .data = spec.t.data_ptr, .dtype = spec.t.dtype },
-                    .y = spec.y,
-                    .n = spec.n,
-                };
-            }
-        }
-        self.be.gemvMulti(x, ops[0..specs.len], k);
-    }
-
     /// Dispatch GEMV for a single expert slice from a packed expert tensor.
     fn doGemvExpert(self: *Gemma4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
         const data = exp_t.data_ptr + ei * stride;

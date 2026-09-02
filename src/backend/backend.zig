@@ -971,52 +971,6 @@ pub const Backend = union(enum) {
     /// synchronizes the context, downloads dirty activations, and marks
     /// all activation cache entries as stale (so subsequent CPU writes
     /// are re-uploaded on next GPU use).
-    /// CPU-only GEMV: bypasses Metal/GPU entirely. Used for SSD-streamed expert
-    /// weights that may be on evicted mmap pages (Metal can't handle page faults).
-    /// Uses the thread pool for parallelism when available.
-    pub inline fn cpuGemv(self: Backend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-        // Flush any pending GPU work before CPU reads the input buffer
-        switch (self) {
-            .metal => {},
-            else => {},
-        }
-        // Get thread pool from the active backend
-        const pool: ?*@import("../thread_pool.zig").ThreadPool = switch (self) {
-            .metal => |be| be.pool,
-            .cpu => |be| be.pool,
-            inline else => |be| if (@hasField(@TypeOf(be.*), "pool")) be.pool else null,
-        };
-        // Dispatch through CPU GEMV kernel with parallelism
-        if (pool) |p| {
-            const rb = @import("kernels/cpu/gemv.zig").gemvRowBytes(w.dtype, k);
-            if (rb > 0 and n >= 32) {
-                var ctx = struct {
-                    x_ptr: [*]const f32,
-                    w_data: [*]const u8,
-                    y_ptr: [*]f32,
-                    k_val: usize,
-                    row_bytes: usize,
-                    dt: DType,
-
-                    fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
-                        const c: *const @This() = @ptrCast(@alignCast(ctx_ptr));
-                        @import("kernels/cpu/gemv.zig").gemvSeq(
-                            c.x_ptr,
-                            c.w_data + start * c.row_bytes,
-                            c.dt,
-                            c.y_ptr + start,
-                            end - start,
-                            c.k_val,
-                        );
-                    }
-                }{ .x_ptr = x, .w_data = w.data, .y_ptr = y, .k_val = k, .row_bytes = rb, .dt = w.dtype };
-                p.parallelFor(n, 16, @ptrCast(&ctx), @TypeOf(ctx).work);
-                return;
-            }
-        }
-        @import("kernels/cpu/gemv.zig").gemvSeq(x, w.data, w.dtype, y, n, k);
-    }
-
     pub inline fn sync(self: Backend) void {
         switch (self) {
             inline else => |be| be.sync(),

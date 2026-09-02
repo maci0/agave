@@ -754,76 +754,6 @@ fn unlockModelWithScheduler() void {
     if (g_server.request_manager) |rm| rm.model_mutex.unlock(g_server.io);
 }
 
-/// Tool call exact-replay map: maps tool_call_id (u64, XxHash64 of ID string)
-/// → raw generated output bytes containing the original <tool_call>…</tool_call> text.
-/// Lets the server reconstruct the exact token stream when a client resends
-/// tool call history, same approach as ds4's DSML replay map.
-/// Capped at tool_replay_max entries (LRU eviction via insertion-order counter).
-const tool_replay_max: usize = 10_000;
-const ToolReplayEntry = struct {
-    raw: []u8, // owned, allocated via g_tool_replay_allocator
-    seq: u64, // insertion sequence number (for LRU eviction)
-};
-var g_tool_replay: std.AutoHashMapUnmanaged(u64, ToolReplayEntry) = .{};
-var g_tool_replay_allocator: std.mem.Allocator = undefined;
-var g_tool_replay_seq: u64 = 0;
-/// Simple atomic spinlock for tool replay map (replaces std.Thread.Mutex which
-/// was removed in Zig 0.16 in favour of Io.Mutex; replay writes are rare so
-/// spinning is fine here).
-var g_tool_replay_lock: std.atomic.Value(u32) = .init(0);
-
-/// Store a tool call result keyed by its ID for later replay. Evicts the
-/// oldest entry when the cache is at capacity.
-fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
-    if (id_str.len == 0) return;
-    const key = std.hash.XxHash64.hash(0, id_str);
-    const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
-
-    // Acquire spinlock, protects g_tool_replay and g_tool_replay_seq.
-    while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
-        std.atomic.spinLoopHint();
-    defer g_tool_replay_lock.store(0, .release);
-
-    // Evict oldest entry if at capacity.
-    if (g_tool_replay.count() >= tool_replay_max) {
-        var oldest_key: u64 = 0;
-        var oldest_seq: u64 = std.math.maxInt(u64);
-        var it = g_tool_replay.iterator();
-        while (it.next()) |e| {
-            if (e.value_ptr.seq < oldest_seq) {
-                oldest_seq = e.value_ptr.seq;
-                oldest_key = e.key_ptr.*;
-            }
-        }
-        if (g_tool_replay.fetchRemove(oldest_key)) |removed| g_tool_replay_allocator.free(removed.value.raw);
-    }
-    g_tool_replay_seq += 1;
-    const entry = ToolReplayEntry{ .raw = owned, .seq = g_tool_replay_seq };
-    const put_result = g_tool_replay.fetchPut(g_tool_replay_allocator, key, entry) catch {
-        g_tool_replay_allocator.free(owned);
-        return;
-    };
-    if (put_result) |old| g_tool_replay_allocator.free(old.value.raw);
-}
-
-/// Look up a cached tool call output by its ID. Returns a copy of the raw
-/// result bytes allocated with `allocator` (caller owns and frees), or null
-/// if the ID is empty, not found, or allocation fails.
-/// The copy is made under the spinlock on purpose: handing out the map-owned
-/// slice would race with toolReplayStore freeing it (same-key overwrite or
-/// LRU eviction) after this function releases the lock.
-fn toolReplayGet(allocator: Allocator, id_str: []const u8) ?[]u8 {
-    if (id_str.len == 0) return null;
-    const key = std.hash.XxHash64.hash(0, id_str);
-
-    while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
-        std.atomic.spinLoopHint();
-    defer g_tool_replay_lock.store(0, .release);
-
-    const entry = g_tool_replay.get(key) orelse return null;
-    return allocator.dupe(u8, entry.raw) catch null;
-}
-
 /// Per-thread request ID for log correlation. Set at the start of each
 /// handleRequest() call so all log lines from the same request (including
 /// logGeneration calls deep in generate functions) share the same ID.
@@ -2176,14 +2106,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
 
-        // Check if output contains tool calls.
-        // Store raw output in the replay map keyed by request ID so future turns
-        // can reconstruct the exact token stream from stored bytes (ds4 replay approach).
-        if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) {
-            var rid_buf: [24]u8 = undefined;
-            const rid_str = std.fmt.bufPrint(&rid_buf, "{d}", .{req_id}) catch "";
-            toolReplayStore(rid_str, gen.raw);
-        }
         const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
             const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params);
             break :blk if (tc_resp.len > 0) tc_resp else std.fmt.bufPrint(&resp_buf,
@@ -6958,7 +6880,6 @@ pub fn run(config: ServerConfig) !void {
     }
 
     g_server = &server;
-    g_tool_replay_allocator = config.allocator;
 
     // Initialize continuous batching scheduler and background thread.
     // The scheduler owns the model forward loop; HTTP handlers enqueue

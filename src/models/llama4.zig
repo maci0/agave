@@ -1028,7 +1028,8 @@ pub const Llama4Model = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return tc.keysValues(block_id);
+            const kv = tc.keysValues(block_id);
+            return .{ .keys = kv.keys, .values = kv.values };
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,

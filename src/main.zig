@@ -568,7 +568,6 @@ const CliArgs = struct {
     kv_budget: u32 = 0,
     host: [4]u8 = .{ 127, 0, 0, 1 },
     api_key: ?[]const u8 = null,
-    allow_cpu_fallback: bool,
     debug: bool,
     json: bool,
     model_info: bool,
@@ -1323,7 +1322,6 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .kv_budget = parseU32(res.option("kv-budget"), "kv-budget") orelse 0,
         .host = bind_host,
         .api_key = api_key,
-        .allow_cpu_fallback = res.flag("allow-cpu-fallback"),
         .debug = res.flag("debug"),
         .json = json_mode,
         .model_info = res.flag("model-info"),
@@ -4415,7 +4413,6 @@ fn generateSpeculative(
             .alpha = cli.pflash_alpha,
             .block_size = cli.pflash_block_size,
             .max_kept_ratio = 0.20,
-            .score_tail = 16,
         };
         var pflash_state = pflash.PFlashState.init(allocator, pflash_cfg, prefill_toks.len) catch |e| {
             eprint("Error: PFlash state init failed: {}\n", .{e});

@@ -109,8 +109,6 @@ pub fn sparsityRatio(mask: BlockMask) f32 {
 
 // ── Block-Sparse SDPA (CPU, f32 KV) ────────────────────────────────────────
 
-const kv_quant = @import("kv_quant.zig");
-const KvQuantType = kv_quant.KvQuantType;
 const V8 = @Vector(8, f32);
 const v8zero: V8 = @splat(0.0);
 const sparse_v_threshold: f32 = 1e-6;
@@ -188,64 +186,9 @@ pub fn sdpaHeadSparse(
     }
 }
 
-/// Compute block-sparse SDPA for a single head with quantized KV cache.
-pub fn sdpaQuantHeadSparse(
-    q: [*]const f32,
-    keys: [*]const u8,
-    values: [*]const u8,
-    output: [*]f32,
-    h: usize,
-    nh: usize,
-    nkv: usize,
-    hd: usize,
-    sl: usize,
-    scale: f32,
-    kv_type_k: KvQuantType,
-    kv_type_v: KvQuantType,
-    mask: *const BlockMask,
-) void {
-    if (sl > max_seq_len or hd > max_hd) {
-        @panic("sparse SDPA quant: sequence or head dim exceeds stack buffer limit");
-    }
-    const kvd = nkv * hd;
-    const hpg = nh / nkv;
-    const kvh = h / hpg;
-    const q_base = h * hd;
-    const bs = @as(usize, mask.block_size);
-    const qi = @as(u32, @intCast((sl - 1) / bs));
-
-    var scores_buf: [max_seq_len]f32 = undefined;
-    var q_cached: [max_hd]f32 = undefined;
-    @memcpy(q_cached[0..hd], q[q_base..][0..hd]);
-
-    for (0..sl) |t| {
-        const ki = @as(u32, @intCast(t / bs));
-        if (!mask.get(qi, ki)) {
-            scores_buf[t] = -std.math.inf(f32);
-            continue;
-        }
-        const k_byte_off = kv_quant.kvByteOffset(kv_type_k, t * kvd + kvh * hd);
-        scores_buf[t] = kv_quant.kvDot(q_cached[0..hd].ptr, keys + k_byte_off, hd, kv_type_k) * scale;
-    }
-
-    softmaxSparse(scores_buf[0..sl]);
-
-    @memset(output[q_base..][0..hd], 0);
-    for (0..sl) |t| {
-        if (scores_buf[t] < sparse_v_threshold) continue;
-        const v_byte_off = kv_quant.kvByteOffset(kv_type_v, t * kvd + kvh * hd);
-        kv_quant.kvMulAccum(output + q_base, scores_buf[t], values + v_byte_off, hd, kv_type_v);
-    }
-}
-
 /// All-head sparse SDPA dispatch (f32 KV).
 pub fn sdpaHeadsSparse(q: [*]const f32, keys: [*]const f32, values: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, mask: *const BlockMask) void {
     for (0..nh) |h| sdpaHeadSparse(q, keys, values, output, h, nh, nkv, hd, sl, scale, mask);
-}
-
-/// All-head sparse SDPA dispatch (quantized KV).
-pub fn sdpaQuantHeadsSparse(q: [*]const f32, keys: [*]const u8, values: [*]const u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, sl: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType, mask: *const BlockMask) void {
-    for (0..nh) |h| sdpaQuantHeadSparse(q, keys, values, output, h, nh, nkv, hd, sl, scale, kv_type_k, kv_type_v, mask);
 }
 
 /// Stable softmax that handles -inf entries (masked positions).
