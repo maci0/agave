@@ -485,12 +485,38 @@ const FnBindBufferMemory = *const fn (VkDevice, VkBuffer, VkDeviceMemory, VkDevi
 const FnMapMemory = *const fn (VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkFlags, *?*anyopaque) callconv(.c) VkResult;
 const FnUnmapMemory = *const fn (VkDevice, VkDeviceMemory) callconv(.c) void;
 
-// Pipeline cache helpers: load/save ~/.cache/agave/vk_pipeline_cache.bin via POSIX
-fn vkCachePath(buf: *[512]u8) ?[]u8 {
-    const home_c = std.c.getenv("HOME") orelse return null;
-    const home = std.mem.span(home_c);
-    return std.fmt.bufPrint(buf, "{s}/.cache/agave/vk_pipeline_cache.bin", .{home}) catch null;
+// Pipeline cache helpers: load/save $XDG_CACHE_HOME/agave/vk_pipeline_cache.bin
+// (fallback: ~/.cache/agave/vk_pipeline_cache.bin) via POSIX.
+fn formatVkCachePath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
+    if (xdg) |dir| {
+        if (dir.len > 0)
+            return std.fmt.bufPrint(buf, "{s}/agave/vk_pipeline_cache.bin", .{dir}) catch null;
+    }
+    const h = home orelse return null;
+    if (h.len == 0) return null;
+    return std.fmt.bufPrint(buf, "{s}/.cache/agave/vk_pipeline_cache.bin", .{h}) catch null;
 }
+
+fn vkCachePath(buf: *[512]u8) ?[]u8 {
+    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.span(c) else null;
+    const home = if (std.c.getenv("HOME")) |c| std.mem.span(c) else null;
+    return formatVkCachePath(buf, xdg, home);
+}
+
+fn mkdirParents(path: []const u8) void {
+    var buf: [512:0]u8 = undefined;
+    if (path.len == 0 or path.len >= buf.len) return;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    var i: usize = if (path[0] == '/') 1 else 0;
+    while (i <= path.len) : (i += 1) {
+        if (i != path.len and path[i] != '/') continue;
+        buf[i] = 0;
+        _ = std.c.mkdir(@ptrCast(buf[0..i :0]), 0o755);
+        if (i < path.len) buf[i] = '/';
+    }
+}
+
 fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
     var path_buf: [512]u8 = undefined;
     const path = vkCachePath(&path_buf) orelse return null;
@@ -527,11 +553,7 @@ fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
 fn saveVkCacheFile(data: []const u8) void {
     var path_buf: [512]u8 = undefined;
     const path = vkCachePath(&path_buf) orelse return;
-    // ensure ~/.cache/agave exists
-    var dir_buf: [512:0]u8 = undefined;
-    if (std.fmt.bufPrintZ(&dir_buf, "{s}", .{std.fs.path.dirname(path) orelse return}) catch null) |dir| {
-        _ = std.c.mkdir(dir, 0o755);
-    }
+    mkdirParents(std.fs.path.dirname(path) orelse return);
     // Atomic replace: a crash mid-write must not truncate a previously good cache.
     @import("../durable_file.zig").replace(path, data) catch |err| {
         std.log.warn("Vulkan pipeline cache save failed ({s}): {}", .{ path, err });
@@ -930,12 +952,7 @@ pub const VulkanBackend = struct {
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
-        // Dynamically load Vulkan library (try standard name, then platform-specific paths)
-        self.lib = std.DynLib.open(vk_lib_name) catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ vk_lib_name) catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ vk_lib_name) catch
-            std.DynLib.open("/opt/homebrew/lib/" ++ vk_lib_name) catch
-            return error.VulkanNotAvailable;
+        self.lib = @import("../dynlib.zig").open(vk_lib_name) orelse return error.VulkanNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -3103,6 +3120,23 @@ test "Vulkan VK_API_VERSION_1_1 encoding" {
     const minor = (VK_API_VERSION_1_1 >> 12) & 0x3FF;
     try testing.expectEqual(@as(u32, 1), major);
     try testing.expectEqual(@as(u32, 1), minor);
+}
+
+test "vkCachePath prefers XDG_CACHE_HOME then HOME/.cache" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "/custom/cache/agave/vk_pipeline_cache.bin",
+        formatVkCachePath(&buf, "/custom/cache", "/home/user").?,
+    );
+    try std.testing.expectEqualStrings(
+        "/home/user/.cache/agave/vk_pipeline_cache.bin",
+        formatVkCachePath(&buf, null, "/home/user").?,
+    );
+    try std.testing.expectEqualStrings(
+        "/Users/me/.cache/agave/vk_pipeline_cache.bin",
+        formatVkCachePath(&buf, "", "/Users/me").?,
+    );
+    try std.testing.expect(formatVkCachePath(&buf, null, null) == null);
 }
 
 test "Vulkan n_pipelines and lib_name" {

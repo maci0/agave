@@ -260,12 +260,7 @@ pub const RocmBackend = struct {
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
         errdefer self.kv_dev_cache.deinit();
 
-        // Dynamically load HIP runtime (try standard name, then platform-specific paths)
-        self.lib = std.DynLib.open("libamdhip64.so") catch
-            std.DynLib.open("/opt/rocm/lib/libamdhip64.so") catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/libamdhip64.so") catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/libamdhip64.so") catch
-            return error.RocmNotAvailable;
+        self.lib = @import("../dynlib.zig").open("libamdhip64.so") orelse return error.RocmNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers

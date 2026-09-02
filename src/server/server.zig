@@ -6884,7 +6884,7 @@ pub fn run(config: ServerConfig) !void {
     } else {
         server.conv_store_path = conv_store.defaultPath(&conv_path_buf);
         if (server.conv_store_path == null) {
-            std.log.warn("conversation store disabled: HOME is unset (pass --conv-store PATH)", .{});
+            std.log.warn("conversation store disabled: no XDG_CACHE_HOME or HOME (pass --conv-store PATH)", .{});
         }
     }
     server.loadConversationsLocked();

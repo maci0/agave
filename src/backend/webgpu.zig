@@ -461,15 +461,13 @@ pub const WebGpuBackend = struct {
         var self = WebGpuBackend{ .allocator = allocator, .lib = undefined };
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
 
-        const lib_names = switch (@import("builtin").os.tag) {
-            .macos => [_][:0]const u8{ "libwgpu_native.dylib", "/opt/homebrew/lib/libwgpu_native.dylib", "/usr/local/lib/libwgpu_native.dylib" },
-            .linux => [_][:0]const u8{ "libwgpu_native.so", "/usr/lib/libwgpu_native.so", "/usr/local/lib/libwgpu_native.so" },
-            .windows => [_][:0]const u8{ "wgpu_native.dll", "wgpu_native.dll", "wgpu_native.dll" },
+        const soname: [:0]const u8 = switch (@import("builtin").os.tag) {
+            .macos => "libwgpu_native.dylib",
+            .linux => "libwgpu_native.so",
+            .windows => "wgpu_native.dll",
             else => return error.WebGpuNotAvailable,
         };
-        self.lib = for (lib_names) |name| {
-            break std.DynLib.open(name) catch continue;
-        } else return error.WebGpuNotAvailable;
+        self.lib = @import("../dynlib.zig").open(soname) orelse return error.WebGpuNotAvailable;
         errdefer self.lib.close();
         std.log.info("WebGPU: library loaded", .{});
 

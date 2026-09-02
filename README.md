@@ -442,7 +442,7 @@ agave [OPTIONS] <model> [prompt]
       --max-batch-size <N> Server concurrent batch size [default: 8] (admission is one-at-a-time until per-request paged KV is wired)
       --rate-limit-rpm <N> Server max requests/min (0=unlimited)
       --rate-limit-tpm <N> Server max prompt tokens/min (0=unlimited)
-      --conv-store <PATH>  Persist web-UI conversations [default: ~/.cache/agave/conversations.json]
+      --conv-store <PATH>  Persist web-UI conversations [default: $XDG_CACHE_HOME/agave/conversations.json]
       --no-conv-store      Do not persist or restore web-UI conversations
       --no-kv-cache        Prefill-only / embedding server mode
       --list-devices       List available compute devices and exit

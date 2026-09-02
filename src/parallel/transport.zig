@@ -306,10 +306,8 @@ pub const Transport = struct {
     /// Initialize NCCL communicator. Requires TCP connection for unique ID exchange.
     /// Call after connectPeer/acceptPeer establishes TCP link.
     pub fn setupNccl(self: *Transport) !void {
-        var lib = std.DynLib.open("libnccl.so.2") catch
-            std.DynLib.open("libnccl.so") catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/libnccl.so.2") catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/libnccl.so.2") catch
+        var lib = @import("../dynlib.zig").open("libnccl.so.2") orelse
+            @import("../dynlib.zig").open("libnccl.so") orelse
             return error.NcclNotAvailable;
         errdefer lib.close();
 

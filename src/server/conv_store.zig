@@ -65,12 +65,22 @@ pub const ConvView = struct {
     messages: []const Message,
 };
 
-/// Default path: `$HOME/.cache/agave/conversations.json`. Null if HOME is unset.
+/// Default path: `$XDG_CACHE_HOME/agave/conversations.json`, else
+/// `$HOME/.cache/agave/conversations.json`. Null if neither env var is set.
 pub fn defaultPath(buf: []u8) ?[]u8 {
-    const home_c = std.c.getenv("HOME") orelse return null;
-    const home = std.mem.span(home_c);
-    if (home.len == 0) return null;
-    return std.fmt.bufPrint(buf, "{s}/.cache/agave/conversations.json", .{home}) catch null;
+    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.span(c) else null;
+    const home = if (std.c.getenv("HOME")) |c| std.mem.span(c) else null;
+    return formatDefaultPath(buf, xdg, home);
+}
+
+fn formatDefaultPath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
+    if (xdg) |dir| {
+        if (dir.len > 0)
+            return std.fmt.bufPrint(buf, "{s}/agave/conversations.json", .{dir}) catch null;
+    }
+    const h = home orelse return null;
+    if (h.len == 0) return null;
+    return std.fmt.bufPrint(buf, "{s}/.cache/agave/conversations.json", .{h}) catch null;
 }
 
 /// Create parent directories of `path` (mkdir -p). Best-effort.
@@ -381,6 +391,24 @@ fn deleteTestPath(path: []const u8) void {
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
     _ = std.c.unlink(@ptrCast(buf[0..path.len :0]));
+}
+
+test "defaultPath prefers XDG_CACHE_HOME then HOME/.cache" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "/custom/cache/agave/conversations.json",
+        formatDefaultPath(&buf, "/custom/cache", "/home/user").?,
+    );
+    try std.testing.expectEqualStrings(
+        "/home/user/.cache/agave/conversations.json",
+        formatDefaultPath(&buf, null, "/home/user").?,
+    );
+    try std.testing.expectEqualStrings(
+        "/home/user/.cache/agave/conversations.json",
+        formatDefaultPath(&buf, "", "/home/user").?,
+    );
+    try std.testing.expect(formatDefaultPath(&buf, null, null) == null);
+    try std.testing.expect(formatDefaultPath(&buf, "", "") == null);
 }
 
 test "save/load round-trips conversations and tool ids" {
