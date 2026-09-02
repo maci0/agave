@@ -2,7 +2,7 @@
 
 **Tutorial:** [Server / HTTP API](tutorial/23-server-http-api.md)
 
-Product version **0.2.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
+Product version **0.3.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
 major bump; see [CHANGELOG](../CHANGELOG.md) and
 [Versioning & Releases](CONTRIBUTING.md#versioning--releases)).
 `system_fingerprint` and `/health` `version` report this string.
@@ -103,7 +103,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
   "object": "chat.completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.2.0",
+  "system_fingerprint": "agave-v0.3.0",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "..."},
@@ -138,7 +138,7 @@ Same sampling parameters as chat completions. Prompt is raw text (no chat templa
   "object": "text_completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.2.0",
+  "system_fingerprint": "agave-v0.3.0",
   "choices": [{"text": "Paris.", "index": 0, "finish_reason": "stop"}],
   "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
 }
@@ -335,7 +335,7 @@ Returns status, uptime, active connections, KV cache utilization, and request co
 The `sleeping` field is `true` when the server has been idle longer than `--sleep-after`; it auto-clears on the next request.
 
 ```json
-{"status":"ok","reason":"none","version":"0.2.0","model":"model-name","backend":"metal",
+{"status":"ok","reason":"none","version":"0.3.0","model":"model-name","backend":"metal",
  "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
  "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
  "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096,

@@ -644,7 +644,7 @@ zig build -Dtarget=aarch64-linux-musl \
 - **[Kernel Status](docs/KERNELS.md)**: Per-backend kernel implementation status
 - **[Distributed Inference](docs/PARALLELISM.md)**: TP, PP, disaggregated prefill/decode
 - **[Contributing](docs/CONTRIBUTING.md)**: How to add backends, models, quantization; [versioning & releases](docs/CONTRIBUTING.md#versioning--releases)
-- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.2.0`, 0.x SemVer)
+- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.3.0`, 0.x SemVer)
 - **[API Reference](docs/API.md)**: HTTP API endpoints, request/response formats
 - **[Megakernel System](docs/MEGAKERNEL.md)**: Composable fused GPU dispatch
 - **[CLAUDE.md](CLAUDE.md)**: Engineering standards for contributors
