@@ -5,7 +5,7 @@ description = "Reference kernels, golden test generation, and benchmark harness 
 requires-python = ">=3.11"
 dependencies = [
     "torch==2.10.0",
-    "numpy==2.4.3",
+    "numpy==2.4.6",
     "gguf==0.18.0",
 ]
 
