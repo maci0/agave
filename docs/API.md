@@ -359,6 +359,8 @@ Shutdown response (503):
 
 Prometheus-format metrics: request count, latency, throughput, TTFT, token counts.
 
+`agave_up` is liveness (the process answered the scrape). `agave_ready` is 1 when `GET /ready` would return 200 and 0 when the server is degraded (KV pressure or high server-fault error rate) or shutting down.
+
 Requires authentication when `--api-key` or `AGAVE_API_KEY` is set (returns 401 otherwise). No auth when neither is configured.
 
 ---
@@ -653,7 +655,7 @@ All responses include these headers:
 
 | Header | Description |
 |--------|-------------|
-| `X-Request-Id` | Monotonic request counter for log correlation (matches server-side `req=N` logs) |
+| `X-Request-Id` | Server monotonic request counter for log correlation (matches `req=N` in handler and scheduler logs). Inbound `X-Request-Id` is not reused as this value; a sanitized copy is logged as `xid=` so proxy/client IDs still grep. |
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
 | `Referrer-Policy` | `no-referrer` |

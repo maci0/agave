@@ -117,6 +117,8 @@ const hdr_buf_size: usize = 2048;
 const short_hdr_buf_size: usize = 512;
 const error_body_buf_size: usize = 512;
 const max_log_path_len: usize = 256;
+/// Max length of an inbound `X-Request-Id` copied into access logs as `xid=`.
+const max_client_request_id_len: usize = 64;
 const health_buf_size: usize = 768;
 const metrics_render_buf_size: usize = 65536;
 const stats_buf_size: usize = 512;
@@ -387,6 +389,15 @@ const kv_cache_degradation_pct: u32 = 90;
 const error_rate_min_requests: u64 = 10;
 /// Error rate percentage (failed / (completed + failed)) above which `/health` reports "degraded".
 const error_rate_degradation_pct: u64 = 50;
+
+/// Compact `/health`/`/ready` state for transition logs and `agave_ready`.
+const HealthState = enum(u8) {
+    ok = 0,
+    kv_pressure = 1,
+    high_error_rate = 2,
+    kv_pressure_and_errors = 3,
+    shutting_down = 4,
+};
 /// Seconds per minute, used for UTC time decomposition in request logs.
 const seconds_per_minute: u64 = 60;
 /// Seconds per hour, used for UTC time decomposition in request logs.
@@ -539,6 +550,8 @@ const Server = struct {
     last_request_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     /// True when the server is in sleep mode (idle too long).
     sleeping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Last published `/health` state (`HealthState`) for transition-only logs.
+    health_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(HealthState.ok)),
     /// Process-level tools (register/dispose). Request JSON tools overlay these.
     tool_registry: tools_mod.Registry = .{},
 
@@ -561,7 +574,7 @@ const Server = struct {
         defer self.mutex.unlock(self.io);
         if (self.cached_user_prefix_ids) |ids| return ids;
         const ids = self.tokenizer.encode(self.chat_template.user_prefix) catch |err| {
-            std.log.warn("user_prefix tokenize failed: {}", .{err});
+            std.log.warn("req={d} user_prefix tokenize failed: {}", .{ log_request_id, err });
             return &.{};
         };
         self.cached_user_prefix_ids = ids;
@@ -815,6 +828,9 @@ fn toolReplayGet(allocator: Allocator, id_str: []const u8) ?[]u8 {
 /// handleRequest() call so all log lines from the same request (including
 /// logGeneration calls deep in generate functions) share the same ID.
 threadlocal var log_request_id: u64 = 0;
+/// Sanitized inbound `X-Request-Id` (empty when the client omitted one).
+threadlocal var log_client_rid: [max_client_request_id_len]u8 = undefined;
+threadlocal var log_client_rid_len: usize = 0;
 /// Visual token count from processVisionImage for the current handler thread only.
 /// Must not live on Server: concurrent text requests would observe another
 /// connection's count and inject bogus image pad tokens into the prompt.
@@ -877,6 +893,25 @@ fn getHeaderValue(headers: []const u8, name: []const u8) ?[]const u8 {
         }
     }
     return found;
+}
+
+/// Copy `raw` into `buf` when it is a safe correlation token (alnum, `-`, `_`, `.`).
+/// Returns 0 (ignore) on empty, oversized, or illegal characters (CWE-117).
+fn sanitizeClientRequestId(raw: []const u8, buf: []u8) usize {
+    if (raw.len == 0 or raw.len > buf.len) return 0;
+    for (raw, 0..) |c, i| {
+        const ok = std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.';
+        if (!ok) return 0;
+        buf[i] = c;
+    }
+    return raw.len;
+}
+
+/// Capture inbound `X-Request-Id` for access-log correlation (`xid=`).
+fn captureClientRequestId(headers: []const u8) void {
+    log_client_rid_len = 0;
+    const raw = getHeaderValue(headers, "x-request-id") orelse return;
+    log_client_rid_len = sanitizeClientRequestId(raw, &log_client_rid);
 }
 
 /// True when `Origin` is `http(s)://` + Host (no path/userinfo). CWE-346.
@@ -951,7 +986,11 @@ fn logRequest(method: []const u8, path: []const u8) void {
     const safe_method = sanitizeForLog(method, &method_buf);
     const safe_path = sanitizeForLog(path, &path_buf);
     const rid = log_request_id;
-    slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path });
+    if (log_client_rid_len > 0) {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} xid={s} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path });
+    } else {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path });
+    }
 }
 
 /// Log completion of a request with status code and duration.
@@ -962,7 +1001,11 @@ fn logRequestDone(method: []const u8, path: []const u8, status: u16, duration_ms
     const safe_method = sanitizeForLog(method, &method_buf);
     const safe_path = sanitizeForLog(path, &path_buf);
     const rid = log_request_id;
-    slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path, status, duration_ms });
+    if (log_client_rid_len > 0) {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} xid={s} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path, status, duration_ms });
+    } else {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path, status, duration_ms });
+    }
 }
 
 fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
@@ -1626,12 +1669,104 @@ fn send503Retry(stream: TcpStream, body: []const u8, retry_after: u32) void {
 
 // ── Request handler ─────────────────────────────────────────────
 
+/// Snapshot of liveness/readiness inputs. Shared by `/health`, `/ready`,
+/// `/metrics` (`agave_ready`), and health-transition logs so the formula
+/// cannot drift across those surfaces.
+const HealthView = struct {
+    shutting_down: bool,
+    kv_pressure: bool,
+    high_error_rate: bool,
+    kv_used: u32,
+    kv_total: u32,
+    queue: u32,
+    completed: u64,
+    failed: u64,
+    cancelled: u64,
+    sched_errs: u64,
+    preemptions: u64,
+    sleeping: bool,
+
+    fn state(self: HealthView) HealthState {
+        if (self.shutting_down) return .shutting_down;
+        if (self.kv_pressure and self.high_error_rate) return .kv_pressure_and_errors;
+        if (self.kv_pressure) return .kv_pressure;
+        if (self.high_error_rate) return .high_error_rate;
+        return .ok;
+    }
+
+    fn ready(self: HealthView) bool {
+        return self.state() == .ok;
+    }
+
+    fn statusStr(self: HealthView) []const u8 {
+        return switch (self.state()) {
+            .ok => "ok",
+            .shutting_down => "shutting_down",
+            else => "degraded",
+        };
+    }
+
+    fn reasonStr(self: HealthView) []const u8 {
+        return switch (self.state()) {
+            .ok => "none",
+            .kv_pressure => "kv_pressure",
+            .high_error_rate => "high_error_rate",
+            .kv_pressure_and_errors => "kv_pressure,high_error_rate",
+            .shutting_down => "shutting_down",
+        };
+    }
+};
+
+fn loadHealthView() HealthView {
+    const m = &g_server.metrics;
+    const kv_used = m.kv_blocks_used.load(.monotonic);
+    const kv_total = m.kv_blocks_total.load(.monotonic);
+    const completed = m.requests_completed.load(.monotonic);
+    const failed = m.requests_failed.load(.monotonic);
+    const settled = completed + failed;
+    return .{
+        .shutting_down = g_server.shutdown_requested.load(.acquire),
+        .kv_pressure = kv_total > 0 and kv_used * 100 / kv_total >= kv_cache_degradation_pct,
+        .high_error_rate = settled >= error_rate_min_requests and failed * 100 / settled >= error_rate_degradation_pct,
+        .kv_used = kv_used,
+        .kv_total = kv_total,
+        .queue = m.queue_depth.load(.monotonic),
+        .completed = completed,
+        .failed = failed,
+        .cancelled = m.requests_cancelled.load(.monotonic),
+        .sched_errs = m.scheduler_errors.load(.monotonic),
+        .preemptions = m.preemptions_total.load(.monotonic),
+        .sleeping = g_server.sleeping.load(.acquire),
+    };
+}
+
+/// Log once when `/health`/`/ready` state changes (ok ↔ degraded/shutdown).
+fn noteHealthTransition(view: HealthView) void {
+    const next = @intFromEnum(view.state());
+    const prev = g_server.health_state.swap(next, .acq_rel);
+    if (prev == next) return;
+    const prev_state: HealthState = if (prev <= @intFromEnum(HealthState.shutting_down))
+        @enumFromInt(prev)
+    else
+        .ok;
+    if (view.state() == .ok) {
+        std.log.info("server: health recovered ({s} -> ok, kv={d}/{d} errors={d}/{d})", .{
+            @tagName(prev_state), view.kv_used, view.kv_total, view.failed, view.completed + view.failed,
+        });
+    } else {
+        std.log.warn("server: health {s} (was {s}, kv={d}/{d} errors={d}/{d} queue={d})", .{
+            @tagName(view.state()), @tagName(prev_state), view.kv_used, view.kv_total, view.failed, view.completed + view.failed, view.queue,
+        });
+    }
+}
+
 /// Main HTTP request dispatcher. Wakes the server from sleep mode if needed,
 /// enforces CORS policy and authentication, then routes the request by method
 /// and path to the appropriate endpoint handler (health, chat completions,
 /// models, metrics, etc.).
 fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const request_start = milliTimestamp();
+    captureClientRequestId(req.headers);
     // Wake from sleep mode on any incoming request. Mutex serializes with
     // sleepMonitorLoop so a late sleep store cannot overwrite this wake.
     var woke_from_sleep = false;
@@ -1656,10 +1791,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // malicious page cannot drive inference or read conversation state on a
     // loopback --serve (CWE-352 / CWE-942).
     if (isCrossOriginUnauthenticated(req.headers)) {
+        logRequest(method, path);
         g_server.metrics.recordRequest();
         g_server.metrics.recordClientError();
         std.log.warn("req={d} cross-origin request rejected (no API key)", .{log_request_id});
         sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Cross-origin request rejected", null, "cross_origin_forbidden");
+        logRequestDone(method, path, 403, elapsedMs(request_start));
         return;
     }
 
@@ -1690,19 +1827,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     if (is_get and std.mem.eql(u8, path, "/health")) {
         var buf: [health_buf_size]u8 = undefined;
         const uptime: i64 = uptimeSeconds(g_server.start_mono_ms, milliTimestamp());
-        const queue = g_server.metrics.queue_depth.load(.monotonic);
-        const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
-        const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
-        const completed = g_server.metrics.requests_completed.load(.monotonic);
-        const failed = g_server.metrics.requests_failed.load(.monotonic);
-        const cancelled = g_server.metrics.requests_cancelled.load(.monotonic);
-        const is_shutting_down = g_server.shutdown_requested.load(.acquire);
-        const kv_pressure = kv_total > 0 and kv_used * 100 / kv_total >= kv_cache_degradation_pct;
-        const total_settled = completed + failed;
-        const high_error_rate = total_settled >= error_rate_min_requests and failed * 100 / total_settled >= error_rate_degradation_pct;
-        const status: []const u8 = if (is_shutting_down) "shutting_down" else if (kv_pressure or high_error_rate) "degraded" else "ok";
-        const reason: []const u8 = if (is_shutting_down) "shutting_down" else if (kv_pressure and high_error_rate) "kv_pressure,high_error_rate" else if (kv_pressure) "kv_pressure" else if (high_error_rate) "high_error_rate" else "none";
-        const http_status: []const u8 = if (is_shutting_down) "503 Service Unavailable" else "200 OK";
+        const hv = loadHealthView();
+        noteHealthTransition(hv);
+        const status = hv.statusStr();
+        const reason = hv.reasonStr();
+        const http_status: []const u8 = if (hv.shutting_down) "503 Service Unavailable" else "200 OK";
         // When API key is configured and auth is not provided, return only
         // liveness status, omit model/version/backend to prevent fingerprinting.
         if (g_server.api_key != null and !validateAuth(g_server, req.headers)) {
@@ -1713,12 +1842,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const kv_seq_len = g_server.model.kvSeqLen();
-        const sched_errs = g_server.metrics.scheduler_errors.load(.monotonic);
-        const preemptions = g_server.metrics.preemptions_total.load(.monotonic);
-        const sleeping = g_server.sleeping.load(.acquire);
         const json_body = std.fmt.bufPrint(&buf,
             \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d},"sleeping":{s}}}
-        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), completed, failed, cancelled, queue, kv_used, kv_total, kv_seq_len, g_server.ctx_size, sched_errs, preemptions, if (sleeping) "true" else "false" }) catch
+        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), hv.completed, hv.failed, hv.cancelled, hv.queue, hv.kv_used, hv.kv_total, kv_seq_len, g_server.ctx_size, hv.sched_errs, hv.preemptions, if (hv.sleeping) "true" else "false" }) catch
             std.fmt.bufPrint(&buf, "{{\"status\":\"{s}\"}}", .{status}) catch return;
         sendResponse(stream, http_status, "application/json", json_body);
         return;
@@ -1726,40 +1852,32 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     // Readiness check endpoint, returns 503 if shutting down, under KV cache pressure, or high error rate
     if (is_get and std.mem.eql(u8, path, "/ready")) {
-        const kv_used_r = g_server.metrics.kv_blocks_used.load(.monotonic);
-        const kv_total_r = g_server.metrics.kv_blocks_total.load(.monotonic);
-        const queue_r = g_server.metrics.queue_depth.load(.monotonic);
-        const is_shutting_down_r = g_server.shutdown_requested.load(.acquire);
-        const kv_pressure_r = kv_total_r > 0 and kv_used_r * 100 / kv_total_r >= kv_cache_degradation_pct;
-        const completed_r = g_server.metrics.requests_completed.load(.monotonic);
-        const failed_r = g_server.metrics.requests_failed.load(.monotonic);
-        const total_settled_r = completed_r + failed_r;
-        const high_error_rate_r = total_settled_r >= error_rate_min_requests and failed_r * 100 / total_settled_r >= error_rate_degradation_pct;
+        const hv = loadHealthView();
+        noteHealthTransition(hv);
         // Unauthenticated probes omit queue/KV details; degraded still includes `reason`.
         const authed = g_server.api_key == null or validateAuth(g_server, req.headers);
-        if (is_shutting_down_r) {
+        if (hv.shutting_down) {
             if (authed) {
                 var sbuf: [health_buf_size]u8 = undefined;
                 const sjson = std.fmt.bufPrint(&sbuf,
                     \\{{"status":"shutting_down","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
-                , .{ queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"shutting_down\"}";
+                , .{ hv.queue, hv.kv_used, hv.kv_total }) catch "{\"status\":\"shutting_down\"}";
                 sendResponse(stream, "503 Service Unavailable", "application/json", sjson);
             } else {
                 sendResponse(stream, "503 Service Unavailable", "application/json", "{\"status\":\"shutting_down\"}");
             }
-        } else if (kv_pressure_r or high_error_rate_r) {
-            const ready_reason: []const u8 = if (kv_pressure_r and high_error_rate_r) "kv_pressure,high_error_rate" else if (kv_pressure_r) "kv_pressure" else "high_error_rate";
+        } else if (!hv.ready()) {
             if (authed) {
                 var rbuf: [health_buf_size]u8 = undefined;
                 const rjson = std.fmt.bufPrint(&rbuf,
                     \\{{"status":"degraded","reason":"{s}","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
-                , .{ ready_reason, queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"degraded\"}";
+                , .{ hv.reasonStr(), hv.queue, hv.kv_used, hv.kv_total }) catch "{\"status\":\"degraded\"}";
                 sendResponse(stream, "503 Service Unavailable", "application/json", rjson);
             } else {
                 var rbuf: [health_buf_size]u8 = undefined;
                 const rjson = std.fmt.bufPrint(&rbuf,
                     \\{{"status":"degraded","reason":"{s}"}}
-                , .{ready_reason}) catch "{\"status\":\"degraded\"}";
+                , .{hv.reasonStr()}) catch "{\"status\":\"degraded\"}";
                 sendResponse(stream, "503 Service Unavailable", "application/json", rjson);
             }
         } else {
@@ -1767,7 +1885,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 var rbuf: [health_buf_size]u8 = undefined;
                 const rjson = std.fmt.bufPrint(&rbuf,
                     \\{{"status":"ready","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
-                , .{ queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"ready\"}";
+                , .{ hv.queue, hv.kv_used, hv.kv_total }) catch "{\"status\":\"ready\"}";
                 sendJson(stream, rjson);
             } else {
                 sendJson(stream, "{\"status\":\"ready\"}");
@@ -1797,6 +1915,13 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Build info metric, standard Prometheus pattern for version tracking
         writer.print("# HELP agave_build_info Agave server version and configuration\n# TYPE agave_build_info gauge\nagave_build_info{{version=\"{s}\",backend=\"{s}\",language=\"zig\"}} 1\n", .{ engine_version, g_server.backend_name }) catch {
             std.log.warn("req={d} metrics buffer overflow: build_info metric truncated ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
+        };
+        // Ready gauge: same conditions as GET /ready so Prometheus alerts do
+        // not have to reimplement /health JSON (agave_up is liveness only).
+        const hv = loadHealthView();
+        noteHealthTransition(hv);
+        writer.print("# HELP agave_ready 1 when /ready would return 200, 0 when degraded or shutting down\n# TYPE agave_ready gauge\nagave_ready {d}\n", .{@as(u32, if (hv.ready()) 1 else 0)}) catch {
+            std.log.warn("req={d} metrics buffer overflow: agave_ready metric truncated ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
         };
         sendResponse(stream, "200 OK", "text/plain; version=0.0.4; charset=utf-8", fbs.getWritten());
         logRequestDone(method, path, 200, elapsedMs(request_start));
@@ -1938,7 +2063,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (g_server.vision_encoder) |ve| {
                 if (processVisionImage(b64_data, ve)) {
                     completions_image_embedded = true;
-                    slog("  Image attached and encoded ({d} visual tokens)\n", .{if (ve.patch_size > 0) ve.image_size / ve.patch_size * (ve.image_size / ve.patch_size) else 0});
                 } else {
                     std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
                     sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
@@ -2631,7 +2755,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (g_server.vision_encoder) |ve| {
                 if (processVisionImage(b64_data, ve)) {
                     anthropic_image_embedded = true;
-                    slog("  Image attached and encoded\n", .{});
                 } else {
                     std.log.err("req={d} anthropic image attached but decode/encode failed", .{log_request_id});
                     sendAnthropicError(stream, "400", "invalid_request_error", "Failed to decode or encode attached image");
@@ -2962,7 +3085,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         defer wipeFree(g_server.allocator, @constCast(regen_formatted));
         const regen_msg_count = regen_prep.?.msg_count;
 
-        slog("  [regenerate] Re-generating from {d} messages\n", .{regen_msg_count});
+        std.log.info("req={d} regenerate from {d} messages", .{ log_request_id, regen_msg_count });
 
         // Rate limit check
         const regen_prompt_ids_owned = g_server.tokenizer.encode(regen_formatted) catch |err| blk: {
@@ -3051,7 +3174,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
 
         // Log message receipt without content (avoid leaking prompts in shared deployments)
-        slog("  User message ({d} chars)\n", .{decoded.len});
+        std.log.info("req={d} user message ({d} chars)", .{ log_request_id, decoded.len });
 
         // Check for attached image data (base64-encoded data URI from web UI)
         // If a vision encoder is available, decode and encode the image into
@@ -3064,7 +3187,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (g_server.vision_encoder) |ve| {
                 if (processVisionImage(b64_data, ve)) {
                     image_embedded = true;
-                    slog("  Image attached and encoded ({d} visual tokens)\n", .{if (ve.patch_size > 0) ve.image_size / ve.patch_size * (ve.image_size / ve.patch_size) else 0});
                 } else {
                     std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
                     sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
@@ -3073,7 +3195,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     return;
                 }
             } else {
-                slog("  Image attached (no vision encoder, ignored)\n", .{});
+                std.log.warn("req={d} image attached but no vision encoder, ignored", .{log_request_id});
             }
         }
         // Ensure image embeddings are cleared after generation
@@ -3288,7 +3410,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             g_server.persistConversationsLocked();
         }
         if (ngram_mod.global_pool) |*pool| pool.clear();
-        slog("  [command] /clear\n", .{});
+        std.log.info("req={d} chat command /clear", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
     if (std.mem.eql(u8, cmd, "/reset")) {
@@ -3304,11 +3426,11 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             g_server.persistConversationsLocked();
         }
         if (ngram_mod.global_pool) |*pool| pool.clear();
-        slog("  [command] /reset\n", .{});
+        std.log.info("req={d} chat command /reset", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
     if (std.mem.eql(u8, cmd, "/model")) {
-        slog("  [command] /model\n", .{});
+        std.log.info("req={d} chat command /model", .{log_request_id});
         const escaped_name = json.htmlEscape(g_server.allocator, g_server.model_name) catch return null;
         defer if (escaped_name.ptr != g_server.model_name.ptr) g_server.allocator.free(escaped_name);
         return std.fmt.bufPrint(&cmd_buf,
@@ -3316,7 +3438,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
         , .{escaped_name}) catch null;
     }
     if (std.mem.eql(u8, cmd, "/help")) {
-        slog("  [command] /help\n", .{});
+        std.log.info("req={d} chat command /help", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">/clear &mdash; Clear conversation and KV cache&lt;br&gt;/stats &mdash; Toggle generation statistics&lt;br&gt;/model &mdash; Show model name&lt;br&gt;/help &mdash; Show available commands</div>";
     }
     return null;
@@ -3332,26 +3454,25 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
 /// CLI/`--image` only). Returns true on success, false on any failure.
 fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
     const allocator = g_server.allocator;
-    slog("  vision: processing image ({d} bytes base64)\n", .{b64_raw.len});
+    std.log.info("req={d} vision: encoding image ({d} bytes base64)", .{ log_request_id, b64_raw.len });
 
     // URL-decode the base64 data (form fields encode +, /, = as %2B, %2F, %3D)
     const url_decoded = json.urlDecode(allocator, b64_raw) catch |err| {
-        slog("  vision: URL decode failed: {}\n", .{err});
+        std.log.warn("req={d} vision: URL decode failed: {}", .{ log_request_id, err });
         return false;
     };
     defer {
         @memset(url_decoded, 0);
         allocator.free(url_decoded);
     }
-    slog("  vision: URL decoded ({d} bytes)\n", .{url_decoded.len});
 
     // Base64 decode to raw image bytes
     const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(url_decoded) catch |err| {
-        slog("  vision: base64 size calc failed: {}\n", .{err});
+        std.log.warn("req={d} vision: base64 size calc failed: {}", .{ log_request_id, err });
         return false;
     };
     const image_bytes = allocator.alloc(u8, decoded_size) catch |err| {
-        slog("  vision: alloc failed for {d} bytes: {}\n", .{ decoded_size, err });
+        std.log.warn("req={d} vision: alloc failed for {d} bytes: {}", .{ log_request_id, decoded_size, err });
         return false;
     };
     defer {
@@ -3359,27 +3480,24 @@ fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
         allocator.free(image_bytes);
     }
     std.base64.standard.Decoder.decode(image_bytes, url_decoded) catch |err| {
-        slog("  vision: base64 decode failed: {}\n", .{err});
+        std.log.warn("req={d} vision: base64 decode failed: {}", .{ log_request_id, err });
         return false;
     };
-    slog("  vision: decoded image ({d} bytes)\n", .{image_bytes.len});
 
     // Detect format and decode to RGB pixels
     const format = image_mod.detectFormat(image_bytes);
     switch (format) {
         .png => {
-            slog("  vision: PNG detected, decoding...\n", .{});
             var png = image_mod.decodePng(allocator, image_bytes) catch |err| {
-                slog("  vision: PNG decode failed: {}\n", .{err});
+                std.log.warn("req={d} vision: PNG decode failed: {}", .{ log_request_id, err });
                 return false;
             };
             defer png.deinit();
-            slog("  vision: decoded {d}x{d} PNG\n", .{ png.width, png.height });
 
             // Resize to vision encoder's expected input size
             const target = ve.image_size;
             const resized = image_mod.resize(allocator, png.pixels, png.width, png.height, target, target) catch |err| {
-                slog("  vision: resize failed: {}\n", .{err});
+                std.log.warn("req={d} vision: resize failed: {}", .{ log_request_id, err });
                 return false;
             };
             defer {
@@ -3387,28 +3505,27 @@ fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
                 allocator.free(resized);
             }
 
-            // Encode into visual token embeddings
-            slog("  vision: running encoder...\n", .{});
             const visual_tokens = ve.encode(resized) catch |err| {
-                slog("  vision: encode failed: {}\n", .{err});
+                std.log.warn("req={d} vision: encode failed: {}", .{ log_request_id, err });
                 return false;
             };
             if (ve.projection_dim == 0) {
-                slog("  vision: projection_dim is 0\n", .{});
+                std.log.warn("req={d} vision: projection_dim is 0", .{log_request_id});
                 return false;
             }
             const n_vis: u32 = @intCast(visual_tokens.len / ve.projection_dim);
             g_server.model.setImageEmbeddings(visual_tokens, n_vis, g_server.image_pad_token_id);
             pending_visual_tokens = n_vis;
-            slog("  vision: encoded {d} visual tokens\n", .{n_vis});
+            std.log.info("req={d} vision: encoded {d} visual tokens ({d}x{d})", .{ log_request_id, n_vis, png.width, png.height });
             return true;
         },
         .jpeg => {
-            slog("  vision: JPEG images not supported, convert to PNG\n", .{});
+            std.log.warn("req={d} vision: JPEG images not supported, convert to PNG", .{log_request_id});
             return false;
         },
         else => {
-            slog("  vision: unrecognized image format (first bytes: {x:0>2}{x:0>2}{x:0>2}{x:0>2})\n", .{
+            std.log.warn("req={d} vision: unrecognized image format (first bytes: {x:0>2}{x:0>2}{x:0>2}{x:0>2})", .{
+                log_request_id,
                 if (image_bytes.len > 0) image_bytes[0] else 0,
                 if (image_bytes.len > 1) image_bytes[1] else 0,
                 if (image_bytes.len > 2) image_bytes[2] else 0,
@@ -3595,7 +3712,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     if (g_server.request_manager != null and !use_grammar_pre and !sampling.json_mode) {
         const rm = g_server.request_manager.?;
         const gen_start = milliTimestamp();
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             return .{ .data = g_server.allocator.dupe(u8, "[enqueue error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
         };
@@ -3719,7 +3836,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             // Shared prefix found, rollback KV cache to prefix boundary
             const bos_offset: usize = if (g_server.bos_token_id > 0) 1 else 0;
             model.setKvSeqLen(prefix_len + bos_offset);
-            slog("  Prefix cache hit: {d}/{d} tokens reused\n", .{ prefix_len, token_ids.len });
+            std.log.info("req={d} prefix cache hit: {d}/{d} tokens reused", .{ log_request_id, prefix_len, token_ids.len });
         } else {
             prefix_len = 0;
         }
@@ -4209,7 +4326,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     if (g_server.request_manager != null and !use_grammar_cs and !sampling.json_mode) {
         const rm = g_server.request_manager.?;
         const gen_start = milliTimestamp();
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
@@ -4795,7 +4912,7 @@ fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_t
             const block_start = std.fmt.bufPrint(&blk_buf,
                 \\{{"type":"content_block_start","index":{d},"content_block":{{"type":"tool_use","id":"toolu_{d}_{d}","name":"{s}"}}}}
             , .{ call_idx, req_id, call_idx, escaped_name }) catch {
-                slog("req={d} stream anthropic tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
+                std.log.warn("req={d} stream anthropic tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
                 continue;
             };
             if (!sseWriteEvent(stream, "content_block_start", block_start)) return;
@@ -4895,7 +5012,7 @@ fn sendAnthropicMessageEnd(stream: TcpStream, stop_reason: []const u8, token_cou
     const delta = std.fmt.bufPrint(&delta_buf,
         \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
     , .{ stop_reason, token_count }) catch {
-        std.log.warn("Anthropic message_delta exceeded buffer", .{});
+        std.log.warn("req={d} anthropic message_delta exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteEvent(stream, "message_delta", delta);
@@ -4938,7 +5055,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     const use_grammar_anth = (sampling_a.grammar_string != null or sampling_a.json_schema != null) and !sampling_a.json_mode;
     if (g_server.request_manager != null and !use_grammar_anth and !sampling_a.json_mode) {
         const rm = g_server.request_manager.?;
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             sendAnthropicFinalEvents(stream, "end_turn", 0);
@@ -5206,7 +5323,7 @@ fn sendAnthropicFinalEvents(stream: TcpStream, stop_reason: []const u8, token_co
     const delta = std.fmt.bufPrint(&delta_buf,
         \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
     , .{ stop_reason, token_count }) catch {
-        std.log.warn("Anthropic message_delta exceeded buffer", .{});
+        std.log.warn("req={d} anthropic message_delta exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteEvent(stream, "message_delta", delta);
@@ -5225,7 +5342,7 @@ fn emitAnthropicDeltaPiece(stream: TcpStream, text: []const u8) bool {
     const data = std.fmt.bufPrint(&buf,
         \\{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{s}"}}}}
     , .{escaped}) catch {
-        std.log.warn("Anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{escaped.len});
+        std.log.warn("req={d} anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
     return sseWriteEvent(stream, "content_block_delta", data);
@@ -5288,7 +5405,7 @@ fn emitResponsesDeltaPiece(stream: TcpStream, text: []const u8) bool {
     const data = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_text.delta","item_id":"msg_0","output_index":0,"content_index":0,"delta":"{s}"}}
     , .{escaped}) catch {
-        std.log.warn("Responses SSE delta exceeded buffer ({d} bytes escaped)", .{escaped.len});
+        std.log.warn("req={d} responses SSE delta exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
     return sseWriteEvent(stream, "response.output_text.delta", data);
@@ -5321,7 +5438,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const text_done = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_text.done","item_id":"msg_0","output_index":0,"content_index":0,"text":"{s}"}}
     , .{escaped_text}) catch {
-        std.log.warn("Responses output_text.done exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses output_text.done exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.output_text.done", text_done);
@@ -5329,7 +5446,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const part_done = std.fmt.bufPrint(&buf,
         \\{{"type":"response.content_part.done","item_id":"msg_0","output_index":0,"content_index":0,"part":{{"type":"output_text","text":"{s}"}}}}
     , .{escaped_text}) catch {
-        std.log.warn("Responses content_part.done exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses content_part.done exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.content_part.done", part_done);
@@ -5337,7 +5454,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const item_done = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_item.done","output_index":0,"item":{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}}}
     , .{escaped_text}) catch {
-        std.log.warn("Responses output_item.done exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses output_item.done exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.output_item.done", item_done);
@@ -5345,7 +5462,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const completed = std.fmt.bufPrint(&buf,
         \\{{"type":"response.completed","response":{{"id":"resp-{d}","object":"response","created_at":{d},"status":"completed","model":"{s}","stop_reason":"{s}","output":[{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"input_tokens":{d},"output_tokens":{d},"total_tokens":{d}}}}}}}
     , .{ req_id, created, g_server.model_name, stop_reason, escaped_text, input_tokens, output_tokens, total }) catch {
-        std.log.warn("Responses completed event exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses completed event exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.completed", completed);
@@ -5383,7 +5500,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     const use_grammar_resp = (sampling_r.grammar_string != null or sampling_r.json_schema != null) and !sampling_r.json_mode;
     if (g_server.request_manager != null and !use_grammar_resp and !sampling_r.json_mode) {
         const rm = g_server.request_manager.?;
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
@@ -5729,7 +5846,7 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
         else
             "null";
         const chunk = formatContentDeltaChunk(chunk_buf, model_name, req_id, created, piece, fr_json) orelse {
-            slog("req={d} stream content chunk overflow: dropping remainder from byte {d}", .{ log_request_id, pos });
+            std.log.warn("req={d} stream content chunk overflow: dropping remainder from byte {d}", .{ log_request_id, pos });
             return;
         };
         _ = sseWriteData(stream, chunk);
@@ -5787,7 +5904,7 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             const role_chunk = std.fmt.bufPrint(&chunk_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","tool_calls":[{{"index":{d},"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}]}},"finish_reason":null}}]}}
             , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, escaped_name, escaped_args }) catch {
-                slog("req={d} stream tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
+                std.log.warn("req={d} stream tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
                 continue;
             };
             _ = sseWriteData(stream, role_chunk);
@@ -5938,7 +6055,7 @@ fn writeOpenAiChunk(
     if (chunk) |c| {
         return sseWriteData(stream, c);
     } else |_| {
-        std.log.warn("SSE stream chunk exceeded buffer ({d} bytes escaped)", .{escaped.len});
+        std.log.warn("req={d} SSE stream chunk exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     }
 }
@@ -5985,7 +6102,7 @@ fn sendUsageChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: 
     const chunk = std.fmt.bufPrint(chunk_buf,
         \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
     , .{ id_prefix, req_id, obj_type, created, g_server.model_name, prompt_tokens, completion_tokens, total }) catch {
-        std.log.warn("SSE usage chunk exceeded buffer", .{});
+        std.log.warn("req={d} SSE usage chunk exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteData(stream, chunk);
@@ -6003,7 +6120,7 @@ fn sendFinalChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: 
     const final = std.fmt.bufPrint(chunk_buf,
         \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[{{"index":0,{s},"finish_reason":"{s}"}}]}}
     , .{ id_prefix, req_id, obj_type, created, g_server.model_name, delta_or_text, finish_reason }) catch {
-        std.log.warn("SSE final chunk exceeded buffer", .{});
+        std.log.warn("req={d} SSE final chunk exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteData(stream, final);
@@ -6047,7 +6164,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     const use_grammar_stream = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
     if (g_server.request_manager != null and !use_grammar_stream and !sampling.json_mode) {
         const rm = g_server.request_manager.?;
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
@@ -6563,21 +6680,25 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 // ── Connection handler & server entry point ─────────────────────
 
 fn handleConnection(stream: TcpStream) void {
+    // Assign the correlation ID before any log so socket-option failures
+    // can be grepped with the same req=N as the rest of the request.
+    log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
+    log_client_rid_len = 0;
     // Set read/write timeouts to prevent slow loris attacks, without this,
     // stream.read()/writeAll() block indefinitely and an attacker can exhaust
     // all max_concurrent_connections slots with incomplete requests or stalled reads.
     const timeout = std.posix.timeval{ .sec = connection_read_timeout_sec, .usec = 0 };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("Failed to set connection read timeout: {}", .{err});
+        std.log.warn("req={d} failed to set connection read timeout: {}", .{ log_request_id, err });
     };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("Failed to set connection write timeout: {}", .{err});
+        std.log.warn("req={d} failed to set connection write timeout: {}", .{ log_request_id, err });
     };
     // Disable Nagle's algorithm, SSE streaming writes small token chunks (~20-100 bytes)
     // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
     const nodelay_val: c_int = 1;
     std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&nodelay_val)) catch |err| {
-        std.log.warn("Failed to set TCP_NODELAY: {}", .{err});
+        std.log.warn("req={d} failed to set TCP_NODELAY: {}", .{ log_request_id, err });
     };
 
     // active_connections already incremented by accept loop before thread spawn.
@@ -6585,7 +6706,6 @@ fn handleConnection(stream: TcpStream) void {
         _ = g_server.metrics.active_connections.fetchSub(1, .release);
         stream.close();
     }
-    log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
     // Heap buffer: avoid ~1MB stack per connection thread (up to max_concurrent_connections).
     const buf = g_server.allocator.alloc(u8, http_buf_size) catch {
         g_server.metrics.recordRequest();
@@ -6619,11 +6739,11 @@ fn handleConnection(stream: TcpStream) void {
         // Connection-level failures below are not client protocol errors: no
         // 4xx is produced (the peer is gone or unresponsive), so they are kept
         // out of requests_client_error to preserve that signal's meaning.
-        // Probes/port scans make plain closes common, log once, move on.
+        // Probes/port scans make plain closes common; debug so production
+        // ReleaseFast logs are not flooded.
         .connection_closed => {
             g_server.metrics.recordRequest();
-            const t = getTimeComponents();
-            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Connection closed before request completed\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+            std.log.debug("req={d} connection closed before request completed", .{log_request_id});
         },
         .read_error => {
             g_server.metrics.recordRequest();
@@ -6825,7 +6945,7 @@ pub fn run(config: ServerConfig) !void {
     // Without this, accept() blocks indefinitely and Ctrl+C doesn't work on macOS.
     const timeout = std.posix.timeval{ .sec = accept_timeout_sec, .usec = 0 };
     std.posix.setsockopt(tcp.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("Failed to set accept timeout: {}", .{err});
+        std.log.warn("server: failed to set accept timeout: {}", .{err});
     };
     defer tcp.deinit(io);
 
@@ -7119,6 +7239,46 @@ test "getHeaderValue trims and rejects duplicates" {
     try std.testing.expectEqualStrings("127.0.0.1:49453", getHeaderValue("Host: 127.0.0.1:49453\r\n", "host").?);
     try std.testing.expect(getHeaderValue("Host: a\r\nHost: b\r\n", "host") == null);
     try std.testing.expect(getHeaderValue("Accept: */*\r\n", "origin") == null);
+}
+
+test "sanitizeClientRequestId accepts correlation tokens" {
+    var buf: [max_client_request_id_len]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), sanitizeClientRequestId("abc", &buf));
+    try std.testing.expectEqualStrings("abc", buf[0..3]);
+    try std.testing.expectEqual(@as(usize, 36), sanitizeClientRequestId("550e8400-e29b-41d4-a716-446655440000", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("has space", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("bad\nid", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("a" ** 65, &buf));
+}
+
+test "HealthView maps degradation reasons" {
+    var hv = HealthView{
+        .shutting_down = false,
+        .kv_pressure = false,
+        .high_error_rate = false,
+        .kv_used = 0,
+        .kv_total = 100,
+        .queue = 0,
+        .completed = 0,
+        .failed = 0,
+        .cancelled = 0,
+        .sched_errs = 0,
+        .preemptions = 0,
+        .sleeping = false,
+    };
+    try std.testing.expect(hv.ready());
+    try std.testing.expectEqualStrings("ok", hv.statusStr());
+    try std.testing.expectEqualStrings("none", hv.reasonStr());
+    hv.kv_pressure = true;
+    try std.testing.expect(!hv.ready());
+    try std.testing.expectEqual(HealthState.kv_pressure, hv.state());
+    try std.testing.expectEqualStrings("kv_pressure", hv.reasonStr());
+    hv.high_error_rate = true;
+    try std.testing.expectEqualStrings("kv_pressure,high_error_rate", hv.reasonStr());
+    hv.shutting_down = true;
+    try std.testing.expectEqualStrings("shutting_down", hv.statusStr());
+    try std.testing.expectEqualStrings("shutting_down", hv.reasonStr());
 }
 
 test "isSafeErrorToken" {
@@ -7811,6 +7971,13 @@ test "fuzz: HTTP header and request-line helpers" {
                 try std.testing.expect(std.ascii.eqlIgnoreCase(rest, host));
                 try std.testing.expect(std.mem.indexOfAny(u8, rest, "/@?#") == null);
             }
+
+            // sanitizeClientRequestId: either rejects (0) or copies the whole
+            // input; never panics or returns a length that would overrun `out`.
+            var out: [max_client_request_id_len]u8 = undefined;
+            const n = sanitizeClientRequestId(headers, &out);
+            try std.testing.expect(n == 0 or n == headers.len);
+            if (n > 0) try std.testing.expectEqualStrings(headers, out[0..n]);
         }
     }.f, .{});
 }
