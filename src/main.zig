@@ -105,7 +105,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
         buf.appendSlice(allocator, read_buf[0..n]) catch {
             eprint("Error: out of memory reading piped input ({d} bytes read)\n", .{buf.items.len});
             buf.deinit(allocator);
-            return null;
+            std.process.exit(1);
         };
     }
     if (buf.items.len == 0) {
@@ -115,7 +115,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
     return buf.toOwnedSlice(allocator) catch {
         eprint("Error: out of memory finalizing piped input ({d} bytes)\n", .{buf.items.len});
         buf.deinit(allocator);
-        return null;
+        std.process.exit(1);
     };
 }
 
@@ -438,7 +438,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
     .{ .long = "json-output", .help = "Constrain generation to valid JSON via grammar (not output format; see --json)." },
-    .{ .long = "json-schema", .kind = .option, .help = "JSON schema for structured output (converts to GBNF grammar)." },
+    .{ .long = "json-schema", .kind = .option, .help = "Inline JSON schema string (not a file) for constrained decoding (converts to GBNF grammar)." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
@@ -743,7 +743,19 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     if (res.flag("version")) {
-        display_mod.printVersion();
+        const decorate = blk: {
+            if (res.flag("no-color")) break :blk false;
+            if (res.option("color")) |cm| {
+                if (std.mem.eql(u8, cm, "never")) break :blk false;
+                if (std.mem.eql(u8, cm, "always")) break :blk true;
+            }
+            break :blk display_mod.versionDecorate(
+                stdout_file.isTty(g_io) catch false,
+                g_environ.get("TERM"),
+                g_environ.get("NO_COLOR"),
+            );
+        };
+        display_mod.printVersionWith(decorate);
         return null;
     }
 
@@ -1221,12 +1233,17 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.option("dir-steering-file")) |p| validateFileExists(p, "--dir-steering-file");
     if (res.option("expert-profile-in")) |p| validateFileExists(p, "--expert-profile-in");
 
-    // JSON mode + interactive REPL would corrupt the JSON output stream
-    if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
+    // JSON mode + interactive REPL would corrupt the JSON output stream.
+    // --benchmark / --frontier-bench / --model-info / --serve don't need a prompt.
+    if (json_mode and jsonNeedsPrompt(
+        res.flag("model-info"),
+        res.flag("serve"),
+        res.flag("benchmark"),
+        res.flag("frontier-bench"),
+        n_positionals,
+    )) {
         if ((stdin_file.isTty(g_io) catch false)) {
-            eprint("Error: --json requires a prompt or --model-info\n", .{});
-            eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
-            eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
+            eprintJsonRequiresPrompt();
             std.process.exit(2);
         }
     }
@@ -1758,6 +1775,26 @@ fn preferredSecret(env_val: ?[]const u8, cli_val: ?[]const u8) ?[]const u8 {
     return pull.nonemptyEnv(env_val) orelse cli_val;
 }
 
+/// Trimmed prompt, or null when absent/whitespace-only (empty piped stdin is not a prompt).
+fn nonemptyPrompt(s: ?[]const u8) ?[]const u8 {
+    const v = s orelse return null;
+    const t = std.mem.trim(u8, v, " \t\r\n");
+    return if (t.len == 0) null else t;
+}
+
+/// True when `--json` without a positional prompt would start a REPL.
+/// `--model-info`, `--serve`, `--benchmark`, and `--frontier-bench` don't need one.
+fn jsonNeedsPrompt(model_info: bool, serve: bool, benchmark: bool, frontier_bench: bool, n_positionals: usize) bool {
+    if (model_info or serve or benchmark or frontier_bench) return false;
+    return n_positionals < 2;
+}
+
+fn eprintJsonRequiresPrompt() void {
+    eprint("Error: --json requires a prompt, --model-info, --benchmark, or --frontier-bench\n", .{});
+    eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
+    eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
+}
+
 fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
     return parseUint(u32, s, flag);
 }
@@ -2117,199 +2154,226 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
     if (cli.json) _ = std.posix.system.write(stdout_file.handle, "]\n", 2);
 }
 
+/// Target architectures listed in `--help`. DFlash2 is a drafter (`--draft-model`), not a target.
+const supported_arch_help = blk: {
+    const order = [_]Arch{
+        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4_exp,
+        .gpt_oss, .nemotron_h, .nemotron_nano,   .glm4,   .deepseek4,
+        .llama4,
+    };
+    var acc: []const u8 = "";
+    for (order) |a| {
+        if (acc.len > 0) acc = acc ++ ", ";
+        acc = acc ++ a.buildFlag();
+    }
+    for (@typeInfo(Arch).@"enum".fields) |f| {
+        const a: Arch = @field(Arch, f.name);
+        if (a == .dflash2) continue;
+        var found = false;
+        for (order) |o| {
+            if (o == a) found = true;
+        }
+        if (!found) @compileError("supported_arch_help missing " ++ f.name);
+    }
+    break :blk acc;
+};
+
+const usage_text =
+    \\agave: Zig LLM inference engine
+    \\
+    \\USAGE:
+    \\  agave [OPTIONS] <model.gguf|model-dir/> [prompt]
+    \\  agave [OPTIONS] -- <model.gguf|model-dir/> [prompt]
+    \\  echo "prompt" | agave model.gguf
+    \\
+    \\ARGUMENTS:
+    \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
+    \\  [prompt]                 Text prompt (omit for interactive REPL)
+    \\
+    \\GENERAL:
+    \\  -h, --help             Show this help message and exit
+    \\  -v, --version          Print version and exit
+    \\  -q, --quiet            Suppress banner and stats (raw output only)
+    \\                         Short boolean flags may be clustered (e.g. -qV)
+    \\      --color <MODE>     Color mode: auto, always, never [default: auto]
+    \\      --no-color         Disable colored output (same as --color=never; do not combine with --color)
+    \\
+    \\GENERATION:
+    \\  -n, --max-tokens <N>      Maximum tokens to generate [default: 512]
+    \\  -t, --temperature <T>     Sampling temperature, 0 = greedy [default: 0]
+    \\      --top-p <P>           Nucleus sampling threshold [default: 1.0]
+    \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
+    \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
+    \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
+    \\      --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
+    \\      --dry-length <N>      DRY minimum n-gram length [default: 2]
+    \\      --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
+    \\      --xtc-threshold <T>   XTC probability threshold [default: 0.1]
+    \\      --mirostat-mode <N>   Mirostat sampling: 0=off, 2=Mirostat 2.0 [default: 0]
+    \\      --mirostat-tau <T>    Mirostat target entropy [default: 5.0]
+    \\      --mirostat-eta <E>    Mirostat learning rate [default: 0.1]
+    \\      --seed <N>            Random seed for sampling [default: random]
+    \\      --system <TEXT>       System prompt for chat formatting
+    \\      --grammar <FILE>      GBNF grammar file for constrained decoding
+    \\      --grammar-string <G>  Inline GBNF grammar string
+    \\      --json-output         Constrain generation to valid JSON via grammar (not output format; see --json)
+    \\      --json-schema <JSON>  Inline JSON schema string (not a file) for constrained decoding
+    \\
+    \\BACKEND & MODEL:
+    \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
+    \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
+    \\      --list-devices        List available compute devices and exit
+    \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
+    \\      --allow-cpu-fallback  Not implemented; GPU backends fail closed (flag only warns)
+    \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
+    \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
+    \\
+    \\KV CACHE:
+    \\      --kv-type <TYPE>      KV cache quantization [default: f16]
+    \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla,
+    \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3,
+    \\                                   planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, rotor2/rq2,
+    \\                                   rotor3/rq3, rotor4/rq4
+    \\                            Preset: turbo (K=q8_0, V=turbo4)
+    \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
+    \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
+    \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
+    \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
+    \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
+    \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
+    \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
+    \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
+    \\      --no-kv-cache         Disable KV cache (prefill-only / embedding; no decode)
+    \\
+    \\SERVER:
+    \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
+    \\  -p, --port <PORT>      Server port [default: 49453] (falls back to AGAVE_PORT)
+    \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
+    \\                         Non-loopback binds require --api-key (or AGAVE_API_KEY)
+    \\                         Falls back to AGAVE_HOST when --host is omitted
+    \\      --api-key <KEY>    API key for server auth (prefer AGAVE_API_KEY; CLI arg is visible in ps)
+    \\                         When both are set, AGAVE_API_KEY wins
+    \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
+    \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
+    \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
+    \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
+    \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: $XDG_CACHE_HOME/agave/conversations.json]
+    \\      --no-conv-store    Do not persist or restore web-UI conversations
+    \\
+    \\PARALLELISM:
+    \\      --tp <N>              Tensor parallelism degree [default: 1; 1 or 2 (2-rank pair)]
+    \\      --pp <N>              Pipeline parallelism stages [default: 1; 1 or 2]
+    \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
+    \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
+    \\      --transport <TYPE>    IPC transport: auto, tcp, shm, nccl [default: auto]
+    \\      --disagg              Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
+    \\
+    \\SPECULATIVE DECODING:
+    \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
+    \\      --mtp-model <PATH>    MTP weight file (safetensors) for multi-token prediction
+    \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
+    \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
+    \\      --tree-budget <N>     DDTree node budget [default: 64]
+    \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
+    \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
+    \\      --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
+    \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
+    \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
+    \\
+    \\ADAPTERS & DIFFUSION:
+    \\      --lora <PATH>         Merge LoRA adapter GGUF at load time into base weights
+    \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
+    \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
+    \\      --diffusion-confidence <F>  Diffusion acceptance confidence (0.0-1.0) [default: 0.5]
+    \\      --dir-steering-file <PATH>  Directional steering f32 vector (n_layers × n_embd floats)
+    \\      --dir-steering-ffn <F>      Steering scale for FFN outputs [default: 1.0 with file]
+    \\      --dir-steering-attn <F>     Steering scale for attention outputs [default: 0]
+    \\
+    \\OPTIMIZATION:
+    \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
+    \\      --power <N>                  Target GPU utilisation percent (1-100)
+    \\
+    \\EXPERT STREAMING:
+    \\      --vram-budget <GIB>          Cap GPU memory for cached weights in GiB (e.g. 20, 0.5, or auto)
+    \\      --vram-budget-policy <P>     Eviction order when full: mru (default) or lru
+    \\      --ssd-streaming              Stream MoE experts from SSD
+    \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
+    \\      --expert-profile-out <FILE>  Save expert activation profile
+    \\      --expert-profile-in <FILE>   Load expert activation profile for cache warming
+    \\
+    \\MULTIMODAL:
+    \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
+    \\      --image <PATH>     Path to image file (PNG or PPM P6)
+    \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
+    \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
+    \\
+    \\DIAGNOSTICS:
+    \\  -V, --verbose          Show technical details (params, load times, EOG)
+    \\  -d, --debug            Enable debug logging (token IDs, layer timing); implies --verbose
+    \\      --json             Output results as JSON (implies --quiet)
+    \\      --model-info       Print model metadata and exit (supports --json)
+    \\      --profile          Profile per-op timing (halves throughput)
+    \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
+    \\      --frontier-bench             Frontier benchmark (snapshot KV at each context)
+    \\      --frontier-ctx <LIST>        Comma-separated context lengths for frontier bench
+    \\
+    \\ENVIRONMENT:
+    \\  NO_COLOR             Disable colored output when set (https://no-color.org)
+    \\  TERM                 Set to dumb to disable color and TTY decorations
+    \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
+    \\                         Empty/whitespace is unset (does not override --api-key)
+    \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
+    \\                         Empty/whitespace is unset
+    \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
+    \\                         Empty/whitespace is unset
+    \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
+    \\  AGAVE_DF2_DEBUG      Dump DFlash2 speculation-round traces when set to 1
+    \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
+    \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
+    \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
+    \\  XDG_CACHE_HOME       Cache base for pull, conversations, Vulkan pipeline cache (fallback: ~/.cache)
+    \\
+    \\EXAMPLES:
+    \\  agave model.gguf                          Interactive REPL
+    \\  agave model.gguf "What is 2+2?"           Single prompt
+    \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
+    \\  agave model.gguf --serve --port 3000      HTTP server on port 3000
+    \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
+    \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
+    \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
+    \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
+    \\  echo "Explain TCP" | agave model.gguf     Pipe prompt from stdin
+    \\  agave model.gguf --json "Hello"           JSON output with stats
+    \\  agave model.gguf --json --model-info      Model metadata as JSON
+    \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
+    \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
+    \\  agave model.gguf --ctx-size auto "Hello"  Auto-fit context to available memory
+    \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
+    \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
+    \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
+    \\  agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
+    \\  agave target.gguf --draft-model draft.gguf "Hello"    Speculative decoding (DDTree)
+    \\  agave model.gguf --spec-mode self --draft-layers 9 "Hello"  Self-speculative
+    \\  agave model.gguf --megakernel "Hello"                 Fused FFN megakernel
+    \\  agave model.gguf --benchmark --json                   Benchmark with JSON output
+    \\
+    \\SUBCOMMANDS:
+    \\  agave pull <org/repo>                    Download model from HuggingFace
+    \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
+    \\  agave pull <org/repo> --list             List available model files
+    \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
+    \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
+    \\
+    \\SUPPORTED ARCHITECTURES:
+    \\  
+++ supported_arch_help ++
+    \\
+    \\
+    \\REPL COMMANDS:
+++ repl_help;
+
 fn printUsage() void {
-    const usage =
-        \\agave: Zig LLM inference engine
-        \\
-        \\USAGE:
-        \\  agave [OPTIONS] <model.gguf|model-dir/> [prompt]
-        \\  agave [OPTIONS] -- <model.gguf|model-dir/> [prompt]
-        \\  echo "prompt" | agave model.gguf
-        \\
-        \\ARGUMENTS:
-        \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
-        \\  [prompt]                 Text prompt (omit for interactive REPL)
-        \\
-        \\GENERAL:
-        \\  -h, --help             Show this help message and exit
-        \\  -v, --version          Print version and exit
-        \\  -q, --quiet            Suppress banner and stats (raw output only)
-        \\                         Short boolean flags may be clustered (e.g. -qV)
-        \\      --color <MODE>     Color mode: auto, always, never [default: auto]
-        \\      --no-color         Disable colored output (same as --color=never; do not combine with --color)
-        \\
-        \\GENERATION:
-        \\  -n, --max-tokens <N>      Maximum tokens to generate [default: 512]
-        \\  -t, --temperature <T>     Sampling temperature, 0 = greedy [default: 0]
-        \\      --top-p <P>           Nucleus sampling threshold [default: 1.0]
-        \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
-        \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
-        \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
-        \\      --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
-        \\      --dry-length <N>      DRY minimum n-gram length [default: 2]
-        \\      --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
-        \\      --xtc-threshold <T>   XTC probability threshold [default: 0.1]
-        \\      --mirostat-mode <N>   Mirostat sampling: 0=off, 2=Mirostat 2.0 [default: 0]
-        \\      --mirostat-tau <T>    Mirostat target entropy [default: 5.0]
-        \\      --mirostat-eta <E>    Mirostat learning rate [default: 0.1]
-        \\      --seed <N>            Random seed for sampling [default: random]
-        \\      --system <TEXT>       System prompt for chat formatting
-        \\      --grammar <FILE>      GBNF grammar file for constrained decoding
-        \\      --grammar-string <G>  Inline GBNF grammar string
-        \\      --json-output         Constrain generation to valid JSON via grammar (not output format; see --json)
-        \\      --json-schema <JSON>  JSON schema for structured output
-        \\
-        \\BACKEND & MODEL:
-        \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
-        \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
-        \\      --list-devices        List available compute devices and exit
-        \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
-        \\      --allow-cpu-fallback  Not implemented; GPU backends fail closed (flag only warns)
-        \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
-        \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
-        \\
-        \\KV CACHE:
-        \\      --kv-type <TYPE>      KV cache quantization [default: f16]
-        \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla,
-        \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3,
-        \\                                   planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, rotor2/rq2,
-        \\                                   rotor3/rq3, rotor4/rq4
-        \\                            Preset: turbo (K=q8_0, V=turbo4)
-        \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
-        \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
-        \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
-        \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
-        \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
-        \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
-        \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
-        \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
-        \\
-        \\SERVER:
-        \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
-        \\  -p, --port <PORT>      Server port [default: 49453] (falls back to AGAVE_PORT)
-        \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
-        \\                         Non-loopback binds require --api-key (or AGAVE_API_KEY)
-        \\                         Falls back to AGAVE_HOST when --host is omitted
-        \\      --api-key <KEY>    API key for server auth (prefer AGAVE_API_KEY; CLI arg is visible in ps)
-        \\                         When both are set, AGAVE_API_KEY wins
-        \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
-        \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
-        \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
-        \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
-        \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: $XDG_CACHE_HOME/agave/conversations.json]
-        \\      --no-conv-store    Do not persist or restore web-UI conversations
-        \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
-        \\
-        \\PARALLELISM:
-        \\      --tp <N>              Tensor parallelism degree [default: 1; 1 or 2 (2-rank pair)]
-        \\      --pp <N>              Pipeline parallelism stages [default: 1; 1 or 2]
-        \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
-        \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
-        \\      --transport <TYPE>    IPC transport: auto, tcp, shm, nccl [default: auto]
-        \\      --disagg              Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
-        \\
-        \\SPECULATIVE DECODING:
-        \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --mtp-model <PATH>    MTP weight file (safetensors) for multi-token prediction
-        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
-        \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
-        \\      --tree-budget <N>     DDTree node budget [default: 64]
-        \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
-        \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
-        \\      --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
-        \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
-        \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
-        \\
-        \\ADAPTERS & DIFFUSION:
-        \\      --lora <PATH>         Merge LoRA adapter GGUF at load time into base weights
-        \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
-        \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
-        \\      --diffusion-confidence <F>  Diffusion acceptance confidence (0.0-1.0) [default: 0.5]
-        \\      --dir-steering-file <PATH>  Directional steering f32 vector (n_layers × n_embd floats)
-        \\      --dir-steering-ffn <F>      Steering scale for FFN outputs [default: 1.0 with file]
-        \\      --dir-steering-attn <F>     Steering scale for attention outputs [default: 0]
-        \\
-        \\OPTIMIZATION:
-        \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
-        \\      --power <N>                  Target GPU utilisation percent (1-100)
-        \\
-        \\EXPERT STREAMING:
-        \\      --vram-budget <GIB>          Cap GPU memory for cached weights in GiB (e.g. 20, 0.5, or auto)
-        \\      --vram-budget-policy <P>     Eviction order when full: mru (default) or lru
-        \\      --ssd-streaming              Stream MoE experts from SSD
-        \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
-        \\      --expert-profile-out <FILE>  Save expert activation profile
-        \\      --expert-profile-in <FILE>   Load expert activation profile for cache warming
-        \\
-        \\MULTIMODAL:
-        \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
-        \\      --image <PATH>     Path to image file (PNG or PPM P6)
-        \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
-        \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
-        \\
-        \\DIAGNOSTICS:
-        \\  -V, --verbose          Show technical details (params, load times, EOG)
-        \\  -d, --debug            Enable debug logging (token IDs, layer timing); implies --verbose
-        \\      --json             Output results as JSON (implies --quiet)
-        \\      --model-info       Print model metadata and exit (supports --json)
-        \\      --profile          Profile per-op timing (halves throughput)
-        \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
-        \\      --frontier-bench             Frontier benchmark (snapshot KV at each context)
-        \\      --frontier-ctx <LIST>        Comma-separated context lengths for frontier bench
-        \\
-        \\ENVIRONMENT:
-        \\  NO_COLOR             Disable colored output when set (https://no-color.org)
-        \\  TERM                 Set to dumb to disable color and TTY decorations
-        \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
-        \\                         Empty/whitespace is unset (does not override --api-key)
-        \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
-        \\                         Empty/whitespace is unset
-        \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
-        \\                         Empty/whitespace is unset
-        \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
-        \\  AGAVE_DF2_DEBUG      Dump DFlash2 speculation-round traces when set to 1
-        \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
-        \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
-        \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
-        \\  XDG_CACHE_HOME       Cache base for pull, conversations, Vulkan pipeline cache (fallback: ~/.cache)
-        \\
-        \\EXAMPLES:
-        \\  agave model.gguf                          Interactive REPL
-        \\  agave model.gguf "What is 2+2?"           Single prompt
-        \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
-        \\  agave model.gguf --serve --port 3000      HTTP server on port 3000
-        \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
-        \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
-        \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
-        \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
-        \\  echo "Explain TCP" | agave model.gguf     Pipe prompt from stdin
-        \\  agave model.gguf --json "Hello"           JSON output with stats
-        \\  agave model.gguf --json --model-info      Model metadata as JSON
-        \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
-        \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
-        \\  agave model.gguf --ctx-size auto "Hello"  Auto-fit context to available memory
-        \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
-        \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
-        \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
-        \\  agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
-        \\  agave target.gguf --draft-model draft.gguf "Hello"    Speculative decoding (DDTree)
-        \\  agave model.gguf --spec-mode self --draft-layers 9 "Hello"  Self-speculative
-        \\  agave model.gguf --megakernel "Hello"                 Fused FFN megakernel
-        \\  agave model.gguf --benchmark --json                   Benchmark with JSON output
-        \\
-        \\SUBCOMMANDS:
-        \\  agave pull <org/repo>                    Download model from HuggingFace
-        \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
-        \\  agave pull <org/repo> --list             List available model files
-        \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
-        \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
-        \\
-        \\SUPPORTED ARCHITECTURES:
-        \\  gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4
-        \\
-        \\REPL COMMANDS:
-    ++ repl_help;
-    _ = std.posix.system.write(stdout_file.handle, usage.ptr, usage.len);
+    _ = std.posix.system.write(stdout_file.handle, usage_text.ptr, usage_text.len);
 }
 
 // ── Formatting helpers ───────────────────────────────────────────
@@ -2741,16 +2805,28 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // ── Init model ───────────────────────────────────────────────
-    const effective_prompt = cli.prompt orelse if (piped_prompt) |p|
-        std.mem.trim(u8, p, " \t\r\n")
-    else
-        null;
+    const effective_prompt = nonemptyPrompt(cli.prompt) orelse nonemptyPrompt(piped_prompt);
 
     // Warn about piped stdin in server mode (positional prompt and --system
     // are already warned in parseCli before model loading).
     // Note: piped_prompt is only read when !cli.serve, so check isatty directly.
     if (cli.serve and cli.prompt == null and !(stdin_file.isTty(g_io) catch false)) {
         eprint("Warning: piped stdin ignored in server mode (--serve)\n", .{});
+    }
+
+    // Don't start a REPL (or emit non-JSON stdout) when the invocation is non-interactive.
+    if (effective_prompt == null and !cli.serve and !cli.benchmark and !cli.frontier_bench) {
+        const stdin_tty = stdin_file.isTty(g_io) catch false;
+        if (cli.json) {
+            eprintJsonRequiresPrompt();
+            std.process.exit(2);
+        }
+        if (!stdin_tty) {
+            eprint("Error: missing prompt (stdin is not a TTY)\n", .{});
+            eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
+            eprint("Run 'agave --help' for more information.\n", .{});
+            std.process.exit(2);
+        }
     }
 
     // ── Construct load info ────────────────────────────────────────
@@ -5351,7 +5427,7 @@ fn generateAndPrintInner(
     if (emitGeneratedTokens(cli) and !g_tty and display.mode != .json and started_output) {
         _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
-    if (hit_eog and g_verbose) print("\n[EOG]\n", .{});
+    if (hit_eog and g_verbose) eprint("[EOG]\n", .{});
     const gen_ms = elapsedMs(gen_start);
 
     // Decode full response text for return value (skip if caller doesn't need it)
@@ -5757,6 +5833,35 @@ test "preferredSecret empty env does not override CLI" {
     try std.testing.expectEqualStrings("key", preferredSecret("  key  ", "cli").?);
 }
 
+test "nonemptyPrompt treats whitespace as absent" {
+    try std.testing.expect(nonemptyPrompt(null) == null);
+    try std.testing.expect(nonemptyPrompt("") == null);
+    try std.testing.expect(nonemptyPrompt("  \n\t") == null);
+    try std.testing.expectEqualStrings("hi", nonemptyPrompt("  hi  ").?);
+}
+
+test "jsonNeedsPrompt skips exit-early flags" {
+    try std.testing.expect(jsonNeedsPrompt(false, false, false, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, false, false, false, 2));
+    try std.testing.expect(!jsonNeedsPrompt(true, false, false, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, true, false, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, false, true, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, false, false, true, 1));
+}
+
+test "usage_text documents every cli_spec" {
+    for (cli_specs) |spec| {
+        var needle_buf: [80]u8 = undefined;
+        const needle = std.fmt.bufPrint(&needle_buf, "--{s}", .{spec.long}) catch unreachable;
+        try std.testing.expect(std.mem.indexOf(u8, usage_text, needle) != null);
+    }
+}
+
+test "usage_text lists qwen4-exp" {
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, "qwen4-exp") != null);
+    try std.testing.expectEqualStrings(supported_arch_help, "gemma3, gemma4, diffusion-gemma, qwen35, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4");
+}
+
 test "shouldNoteSeed always surfaces auto-derived seeds" {
     try std.testing.expect(shouldNoteSeed(false, false));
     try std.testing.expect(shouldNoteSeed(false, true));
@@ -5789,6 +5894,9 @@ test "fuzz: main.zig pure functions" {
                 _ = &parseU16;
                 _ = &parseUintLabel;
                 _ = &preferredSecret;
+                _ = &nonemptyPrompt;
+                _ = &jsonNeedsPrompt;
+                _ = &eprintJsonRequiresPrompt;
                 _ = &parseF32;
                 _ = &noColorRequested;
                 _ = &rejectEqualsOnFlag;

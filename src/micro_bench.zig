@@ -307,7 +307,7 @@ fn parseCli(proc_args: std.process.Args) ?CliArgs {
 
     if (result.mode == .kernel and result.kernel == null) {
         eprint("Error: kernel name required\n", .{});
-        printUsage();
+        eprint("Run 'agave-bench --help' for more information.\n", .{});
         std.process.exit(2);
     }
 
