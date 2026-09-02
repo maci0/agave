@@ -84,33 +84,34 @@ pub fn build(b: *std.Build) void {
     {
         const kernel_files = [_][]const u8{
             // Core ops
-            "all",             "silu",          "gelu",           "add",            "mul",
-            "rms_norm",        "softmax",       "l2_norm",        "rope",           "add_scaled",
-            "silu_mul",        "gelu_mul",      "add_rms_norm",   "rms_norm_add",   "rms_norm_batched",
-            "rope_batched",    "sigmoid_mul",   "deinterleave",   "split_qgate",    "deltanet_recurrence",
+            "all",             "silu",           "gelu",          "add",            "mul",
+            "rms_norm",        "softmax",        "l2_norm",       "rope",           "add_scaled",
+            "silu_mul",        "gelu_mul",       "add_rms_norm",  "rms_norm_add",   "rms_norm_batched",
+            "rope_batched",    "sigmoid_mul",    "deinterleave",  "split_qgate",    "deltanet_recurrence",
             // SDPA
-            "sdpa",            "sdpa_turbo",    "sdpa_prefill",   "sdpa_tree",
+            "sdpa",            "sdpa_turbo",     "sdpa_prefill",  "sdpa_tree",
             // Dense GEMV
                  "gemv_f32",
-            "gemv_bf16",       "gemv_f16",      "gemv_t_q8_0",
+            "gemv_bf16",       "gemv_f16",       "gemv_t_q8_0",
             // Quantized GEMV, standard GGUF formats
-               "gemv_q8_0",      "gemv_q4_0",
-            "gemv_q4_0_batch", "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",
-            "gemv_q6_k",       "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
+              "gemv_q8_0",      "gemv_q4_0",
+            "gemv_q4_0_batch", "gemv_q4_1",      "gemv_q5_0",     "gemv_q4_k",      "gemv_q5_k",
+            "gemv_q6_k",       "gemv_q2_k",      "gemv_q3_k",     "gemv_iq4_nl",    "gemv_iq4_xs",
             // FP8/FP4
-            "gemv_fp8_e4m3",   "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_mxfp4_st_batched", "gemv_fp4_tc",
+            "gemv_fp8_e4m3",   "gemv_fp8_e5m2",  "gemv_nvfp4_st", "gemv_mxfp4_st",  "gemv_mxfp4_st_batched",
+            "gemv_fp4_tc",
             // MLX / TQ
-            "gemv_mlx_q4",     "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",     "gemv_tq2_0",
+                "gemv_mlx_q4",    "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",
+            "gemv_tq2_0",
             // Specialist formats
-            "gemv_gptq",       "gemv_awq",      "gemv_hqq",
+                 "gemv_gptq",      "gemv_awq",      "gemv_hqq",
             // GEMM
                   "gemm_q8_0",
             // Megakernels
-                 "mega_qwen35_q8",
-            "mega_gemma_q4k",  "mega_gemma_q8",
+            "mega_qwen35_q8",  "mega_gemma_q4k", "mega_gemma_q8",
             // Fused FFN
-            "fused_ffn_q8_0", "fused_ffn_q4_k", "fused_ffn_q5_k",
-            "fused_ffn_q6_k",
+            "fused_ffn_q8_0", "fused_ffn_q4_k",
+            "fused_ffn_q5_k",  "fused_ffn_q6_k",
         };
 
         for (kernel_files) |name| {
@@ -528,17 +529,17 @@ pub fn build(b: *std.Build) void {
     const validate_step = b.step("validate", "Validate every GPU kernel against the CPU backend");
     {
         const kernels = [_][]const u8{
-            "gemv_f32",         "gemv_f16",          "gemv_bf16",        "gemv_q8_0",
-            "gemv_q4_0",        "gemv_q4_1",         "gemv_q5_0",        "gemv_q2_k",
-            "gemv_q3_k",        "gemv_q4_k",         "gemv_q5_k",        "gemv_q6_k",
-            "gemv_iq4_nl",      "gemv_iq4_xs",       "gemv_tq1_0",       "gemv_tq2_0",
-            "gemv_fp8_e4m3",    "gemv_fp8_e5m2",     "gemm_q8_0",        "rms_norm_batched",
-            "rope_batched",     "sdpa_prefill",      "rms_norm_multi",   "rms_norm",
-            "silu",             "gelu",              "softmax",          "l2_norm",
-            "add",              "mul",               "rope",             "add_aliased",
-            "silu_mul_aliased", "deinterleave",      "split_q_gate",     "add_rms_norm",
-            "rms_norm_add",     "sigmoid_mul",       "gelu_mul",         "clamped_silu_mul",
-            "add_scaled",        "gemv_multi",        "gemv_t",           "emb_lookup",
+            "gemv_f32",         "gemv_f16",      "gemv_bf16",      "gemv_q8_0",
+            "gemv_q4_0",        "gemv_q4_1",     "gemv_q5_0",      "gemv_q2_k",
+            "gemv_q3_k",        "gemv_q4_k",     "gemv_q5_k",      "gemv_q6_k",
+            "gemv_iq4_nl",      "gemv_iq4_xs",   "gemv_tq1_0",     "gemv_tq2_0",
+            "gemv_fp8_e4m3",    "gemv_fp8_e5m2", "gemm_q8_0",      "rms_norm_batched",
+            "rope_batched",     "sdpa_prefill",  "rms_norm_multi", "rms_norm",
+            "silu",             "gelu",          "softmax",        "l2_norm",
+            "add",              "mul",           "rope",           "add_aliased",
+            "silu_mul_aliased", "deinterleave",  "split_q_gate",   "add_rms_norm",
+            "rms_norm_add",     "sigmoid_mul",   "gelu_mul",       "clamped_silu_mul",
+            "add_scaled",       "gemv_multi",    "gemv_t",         "emb_lookup",
         };
         // Deliberately absent:
         //   rope_mrope     - CPU and Metal only; it panics on ROCm and Vulkan by
@@ -602,4 +603,30 @@ pub fn build(b: *std.Build) void {
         .dest_dir = .{ .override = .{ .custom = "web" } },
     });
     wasm_step.dependOn(&install_wasm.step);
+
+    // Contributor gates. Paths must stay in lockstep with
+    // `.github/workflows/ci.yml` fmt-check (`zig fmt --check src/ tests/ build.zig build.zig.zon`).
+    const fmt_paths = [_][]const u8{ "src/", "tests/", "build.zig", "build.zig.zon" };
+    {
+        const fmt_apply = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt" });
+        fmt_apply.addArgs(&fmt_paths);
+        fmt_apply.has_side_effects = true;
+        b.step("fmt", "Apply zig fmt to the paths CI checks").dependOn(&fmt_apply.step);
+
+        const fmt_check_cmd = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", "--check" });
+        fmt_check_cmd.addArgs(&fmt_paths);
+        fmt_check_cmd.has_side_effects = true;
+        const fmt_check_step = b.step("fmt-check", "Check formatting (same paths as CI)");
+        fmt_check_step.dependOn(&fmt_check_cmd.step);
+
+        const docs_check_cmd = b.addSystemCommand(&.{ "python3", "scripts/check-docs.py" });
+        docs_check_cmd.has_side_effects = true;
+        const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py)");
+        docs_check_step.dependOn(&docs_check_cmd.step);
+
+        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
+        check_step.dependOn(fmt_check_step);
+        check_step.dependOn(docs_check_step);
+        check_step.dependOn(test_step);
+    }
 }

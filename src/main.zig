@@ -3311,13 +3311,19 @@ fn initAndRun(
             for (0..4) |i| { // probe 4 shard names — if any present, model has PLE
                 var buf: [128]u8 = undefined;
                 const name = std.fmt.bufPrint(&buf, "ple_ngram_{d}.weight", .{i}) catch continue;
-                if (fmt.getTensor(name) != null) { has_ple = true; break; }
+                if (fmt.getTensor(name) != null) {
+                    has_ple = true;
+                    break;
+                }
             }
             if (!has_ple) {
                 for (0..2) |i| {
                     var buf: [256]u8 = undefined;
                     const name = std.fmt.bufPrint(&buf, "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_{d}.weight", .{i}) catch continue;
-                    if (fmt.getTensor(name) != null) { has_ple = true; break; }
+                    if (fmt.getTensor(name) != null) {
+                        has_ple = true;
+                        break;
+                    }
                 }
             }
             if (has_ple) {
@@ -4859,7 +4865,7 @@ fn generateSpeculative(
         if (use_dflash2) {
             if (pull.getenv("AGAVE_DF2_DEBUG") != null) {
                 std.debug.print("df2 round {d}: pos={d} drafted={d} accepted={d} next={d} drafts={any}\n", .{
-                    spec_state.total_rounds, pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
+                    spec_state.total_rounds,                                 pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
                     spec_state.draft_tokens[0..@min(spec_state.n_draft, 8)],
                 });
             }

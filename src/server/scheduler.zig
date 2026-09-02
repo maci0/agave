@@ -307,7 +307,6 @@ pub const RequestManager = struct {
     /// recurrent state. Re-introducing it requires capturing the state at
     /// end-of-prefix and skipping recompute of exactly those tokens (which
     /// additionally needs RadixTree block sharing to feed attention).
-
     /// Initialize request manager.
     ///
     /// If tiered_cache is provided, Prefetcher is constructed but not started.

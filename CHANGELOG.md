@@ -68,10 +68,11 @@ must still appear under **Changed** or **Breaking** below. See
 - Browser WASM (`web/agave.ts`): a model URL that is not HTTP 2xx no longer
   initializes from the error page; `agave_init` results that do not start with
   `Loaded:` are load failures. A failed reload keeps the previous model.
-- Docker Compose "CPU + Gemma 3 only" local image compiled DeepSeek V4,
-  Qwen4-Exp, and DFlash2 anyway (`-Denable-deepseek4` / `-Denable-qwen4-exp` /
-  `-Denable-dflash2` were never passed, so they defaulted on). Those flags are
-  now wired and the Compose override turns them off.
+- Docker CPU+Gemma3-only image (`docker compose` and CI `docker-build`) compiled
+  DeepSeek V4, Qwen4-Exp, and DFlash2 anyway (`-Denable-deepseek4` /
+  `-Denable-qwen4-exp` / `-Denable-dflash2` were never passed in the Dockerfile,
+  so they defaulted on). Those flags are now wired and the Compose override
+  turns them off.
 - WASM: `agave_free` now releases the model buffer passed to `agave_init`, so
   reloading a GGUF no longer leaks the previous file in linear memory.
 - WASM glue: `init()` fails with `AgaveError` when `agave.wasm` is missing or

@@ -79,11 +79,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
-from rich.table import Table
-from rich import box
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+    from rich.table import Table
+    from rich import box
+except ImportError:
+    sys.stderr.write(
+        "harness: the 'rich' package is required. From the repo root run:\n"
+        "  uv sync --directory tests\n"
+        "then:\n"
+        "  tests/.venv/bin/python tests/harness.py --help\n"
+    )
+    sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1454,7 +1463,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Asymmetric K/V type combos (e.g., q8_0:turbo4 f16:turbo3)")
 
     cfg = p.add_argument_group("Configuration")
-    cfg.add_argument("--model-dir", type=Path, default=DEFAULT_WEIGHTS_DIR,
+    cfg.add_argument("--model-dir", "--models-dir", type=Path, default=DEFAULT_WEIGHTS_DIR,
+                     dest="model_dir",
                      help=f"Model search directory (default: {DEFAULT_WEIGHTS_DIR})")
     cfg.add_argument("--prompt", default=DEFAULT_PROMPT,
                      help="Prompt text for inference tests")
@@ -1574,8 +1584,14 @@ def main() -> int:
         console.print(model_table)
 
     if not models:
-        console.print(f"\n[yellow]No models found in {args.model_dir}[/]")
-        console.print("[dim]Download models or specify --model-dir / --model[/]")
+        model_dir = args.model_dir
+        if model_dir.is_symlink() and not model_dir.exists():
+            target = model_dir.readlink()
+            console.print(f"\n[red]{model_dir} is a broken symlink -> {target}[/]")
+            console.print("[dim]Put GGUF/SafeTensors under ./models (gitignored) or pass --model-dir[/]")
+        else:
+            console.print(f"\n[yellow]No models found in {model_dir}[/]")
+            console.print("[dim]Download with `agave pull ...` into ./models, or pass --model-dir / --model[/]")
         return 1
 
     # Build KV configs to test

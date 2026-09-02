@@ -1669,7 +1669,10 @@ fn fuseOneProjection(
             if (tensors.get(gi_gs_name)) |gs_entry| {
                 if (gs_entry.shard_idx < shard_data.len and shard_data[gs_entry.shard_idx].data.len > 0) {
                     const shard = shard_data[gs_entry.shard_idx];
-                    const abs = std.math.add(usize, shard.tensor_base, gs_entry.data_start) catch { gs_array[gi] = 1.0; continue; };
+                    const abs = std.math.add(usize, shard.tensor_base, gs_entry.data_start) catch {
+                        gs_array[gi] = 1.0;
+                        continue;
+                    };
                     if (std.math.add(usize, abs, 4) catch shard.data.len + 1 <= shard.data.len) {
                         gs_array[gi] = std.mem.bytesToValue(f32, shard.data[abs..][0..4]);
                         continue;
@@ -1694,7 +1697,10 @@ fn fuseOneProjection(
             if (tensors.get(gi_is)) |is_e| {
                 if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
                     const sh2 = shard_data[is_e.shard_idx];
-                    const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch { is_array[gi] = 1.0; continue; };
+                    const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch {
+                        is_array[gi] = 1.0;
+                        continue;
+                    };
                     if (std.math.add(usize, a2, 4) catch sh2.data.len + 1 <= sh2.data.len) {
                         is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
                         continue;

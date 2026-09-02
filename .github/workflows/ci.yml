@@ -154,13 +154,16 @@ jobs:
             ENABLE_WEBGPU=false
             ENABLE_DEBUG=false
             ENABLE_QWEN35=false
+            ENABLE_QWEN4_EXP=false
             ENABLE_GPT_OSS=false
             ENABLE_NEMOTRON_H=false
             ENABLE_NEMOTRON_NANO=false
             ENABLE_GLM4=false
             ENABLE_GEMMA4=false
             ENABLE_DIFFUSION_GEMMA=false
+            ENABLE_DEEPSEEK4=false
             ENABLE_LLAMA4=false
+            ENABLE_DFLASH2=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

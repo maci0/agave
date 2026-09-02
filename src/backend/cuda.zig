@@ -77,7 +77,6 @@ const PendingSync = struct {
 const max_shard_ranges: usize = 64;
 const ShardRange = struct { base: usize = 0, size: usize = 0 };
 
-
 /// Shared memory for block reductions (8 warps × 4 bytes).
 const reduction_smem: u32 = 32;
 
@@ -206,7 +205,6 @@ pub const CudaBackend = struct {
     launch_total_ms: u64 = 0,
     /// TEMP PERF: drain sampling.
     drain_count: u64 = 0,
-
 
     /// Dedicated compute stream. All kernel launches and copy-backs go here
     /// (never the legacy null stream): blocking copies on the null stream
@@ -2086,8 +2084,8 @@ pub const CudaBackend = struct {
             .fp8_e4m3 => 0,
         };
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_w),   @ptrCast(&d_s),
-            @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
+            @ptrCast(&d_x),    @ptrCast(&d_w),        @ptrCast(&d_s),
+            @ptrCast(&d_y),    @ptrCast(&n_u32),      @ptrCast(&k_u32),
             @ptrCast(&gs_u32), @ptrCast(&scale_mode),
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
@@ -2169,10 +2167,10 @@ pub const CudaBackend = struct {
         var t_s = tab + 32 * @sizeOf(u64);
         var t_y = tab + 48 * @sizeOf(u64);
         var params = [_]?*anyopaque{
-            @ptrCast(&t_x),  @ptrCast(&t_w),
-            @ptrCast(&t_s),  @ptrCast(&t_y),
-            @ptrCast(&n_u32), @ptrCast(&k_u32),
-            @ptrCast(&gs_u32), @ptrCast(&scale_mode),
+            @ptrCast(&t_x),         @ptrCast(&t_w),
+            @ptrCast(&t_s),         @ptrCast(&t_y),
+            @ptrCast(&n_u32),       @ptrCast(&k_u32),
+            @ptrCast(&gs_u32),      @ptrCast(&scale_mode),
             @ptrCast(&n_slots_u32),
         };
         self.launch(self.fn_gemv_mxfp4_st_batched, @intCast(n), block_size, reduction_smem, &params);
@@ -2525,7 +2523,6 @@ pub const CudaBackend = struct {
             head_sum[h] = 1.0;
         }
     }
-
 
     /// See `Backend.reserveActivation`. Routes to the same helpers the ops use,
     /// so the entry it leaves behind is exactly what a later sub-range lookup

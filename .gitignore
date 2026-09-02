@@ -15,7 +15,7 @@ __pycache__/
 .idea/
 .playwright-mcp/
 
-# Model weights (large files)
+# Model weights (local only; do not commit a `models` symlink)
 /models/
 *.gguf
 *.safetensors

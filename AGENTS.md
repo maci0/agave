@@ -9,6 +9,9 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 ```bash
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe)
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
+zig build check                    # fmt-check + docs hygiene + unit tests (local CI gate)
+zig build fmt                      # apply zig fmt to the paths CI checks
+zig build fmt-check                # check formatting without writing
 zig build bench                    # agave-bench micro-benchmarks
 ./zig-out/bin/agave model.gguf "prompt"
 ./zig-out/bin/agave model.gguf --serve

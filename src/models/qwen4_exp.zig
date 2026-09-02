@@ -317,7 +317,9 @@ pub const Qwen4ExpModel = struct {
             if (f.getMetaU32("num_attention_heads")) |v| self.n_head = v;
             if (f.getMetaU32("num_key_value_heads")) |v| self.n_head_kv = v;
             if (f.getMetaU32("head_dim")) |v| self.head_dim = v;
-            if (f.getMetaU32("vocab_size")) |v| { if (v > self.vocab_size) self.vocab_size = v; }
+            if (f.getMetaU32("vocab_size")) |v| {
+                if (v > self.vocab_size) self.vocab_size = v;
+            }
         }
         // Qwen3.8-27B: n_embd=5120, n_head=24, head_dim=256 (5120 is not 24*256).
         // Never infer head_dim from n_embd/n_head when they do not divide.
@@ -2483,7 +2485,6 @@ pub const Qwen4ExpModel = struct {
         }
         return null;
     }
-
 };
 
 const expertWeightStride = model_mod.expertWeightStride;

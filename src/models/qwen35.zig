@@ -2449,7 +2449,6 @@ pub const Qwen35Model = struct {
         }
         return null;
     }
-
 };
 
 const expertWeightStride = model_mod.expertWeightStride;

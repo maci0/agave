@@ -80,6 +80,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 ## Quick Start
 
 ```bash
+# Requires Zig 0.16.0 (pin: .zigversion). https://ziglang.org/download/
 # Build (produces both ReleaseFast and Debug binaries)
 zig build
 
@@ -351,9 +352,10 @@ All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GP
 
 ## Prerequisites
 
-- **Zig 0.16.0**
+- **Zig 0.16.0** (pin in `.zigversion`; must match `build.zig.zon` `.minimum_zig_version`). Download: https://ziglang.org/download/
 - macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU, WebGPU backends)
 - GPU backends load drivers at runtime via dlopen, no SDK needed at build time
+- Contributors: `zig build check` is the local CI gate (format + docs hygiene + unit tests). See [Contributing](docs/CONTRIBUTING.md).
 
 ## CLI Options
 
@@ -583,13 +585,16 @@ docker buildx build --load -t agave \
   --build-arg ENABLE_ROCM=false \
   --build-arg ENABLE_WEBGPU=false \
   --build-arg ENABLE_QWEN35=false \
+  --build-arg ENABLE_QWEN4_EXP=false \
   --build-arg ENABLE_GPT_OSS=false \
   --build-arg ENABLE_NEMOTRON_H=false \
   --build-arg ENABLE_NEMOTRON_NANO=false \
   --build-arg ENABLE_GLM4=false \
   --build-arg ENABLE_GEMMA4=false \
   --build-arg ENABLE_DIFFUSION_GEMMA=false \
-  --build-arg ENABLE_LLAMA4=false .
+  --build-arg ENABLE_DEEPSEEK4=false \
+  --build-arg ENABLE_LLAMA4=false \
+  --build-arg ENABLE_DFLASH2=false .
 
 # One-shot inference (--no-healthcheck: image HEALTHCHECK expects --serve /ready)
 docker run --rm --no-healthcheck -v /path/to/models:/models agave /models/model.gguf "Hello"
