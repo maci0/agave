@@ -16,6 +16,7 @@
 const std = @import("std");
 const c = std.c;
 const posix = std.posix;
+const sim_clock = @import("../sim_clock.zig");
 
 const discovery_port: u16 = 49460;
 const beacon_interval_ms: u32 = 500;
@@ -27,10 +28,10 @@ const usec_per_ms: u32 = 1000;
 
 /// Monotonic milliseconds for the discovery deadline. Counting assumed
 /// `beacon_interval_ms` after a 1s `SO_RCVTIMEO` made a 30s timeout take ~60s.
+/// Routes through sim_clock so a clock override can expire the 30s window
+/// without waiting on wall-clock time (and without hanging a replay).
 fn monoMilli() u64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * std.time.ms_per_s + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
+    return @intCast(@max(@as(i64, 0), sim_clock.monoMilli()));
 }
 
 /// Split a millisecond interval into `timeval` seconds + microseconds.
@@ -52,6 +53,13 @@ pub const DiscoveredPeer = struct {
 /// Returns null on timeout or failure.
 pub fn discoverPeer(rank: u32, world_size: u32, port: u16) ?[4]u8 {
     if (world_size < 2) return null;
+    // Under a clock override there is no network model: expire the deadline
+    // in virtual time and return immediately so SO_RCVTIMEO cannot block a
+    // simulated run for 30s of wall-clock time.
+    if (sim_clock.isOverridden()) {
+        sim_clock.advanceMs(discovery_timeout_ms);
+        return null;
+    }
 
     const sock = c.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
     if (sock < 0) return null;
@@ -151,6 +159,16 @@ test "discovery, world_size < 2 returns null" {
     // Single-node (world_size=1) should return null immediately.
     const result = discoverPeer(0, 1, 8080);
     try @import("std").testing.expectEqual(@as(?[4]u8, null), result);
+}
+
+test "discovery times out in virtual time under sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+    // world_size >= 2 would otherwise bind UDP and block on SO_RCVTIMEO.
+    const result = discoverPeer(0, 2, 8080);
+    try std.testing.expectEqual(@as(?[4]u8, null), result);
+    try std.testing.expectEqual(@as(i64, 1_000 + discovery_timeout_ms), sim_clock.milliNow());
+    try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 2, 8080));
 }
 
 test "discovery, beacon message format" {
@@ -256,18 +274,15 @@ test "fuzz: all discovery functions" {
             try std.testing.expectEqual(rank_val, peer.rank);
 
             // ── discoverPeer (pub fn) ──
+            // Clock override expires the deadline in virtual time so fuzz
+            // inputs with world_size >= 2 cannot block on SO_RCVTIMEO.
+            defer sim_clock.setOverrideMs(null);
+            sim_clock.setOverrideMs(1_000);
             const fuzz_rank = smith.valueWithHash(u32, 5);
             const fuzz_world = smith.valueWithHash(u32, 6);
             const fuzz_port = smith.valueWithHash(u16, 7);
             const result = discoverPeer(fuzz_rank, fuzz_world, fuzz_port);
-            // world_size < 2 must always return null
-            if (fuzz_world < 2) {
-                try std.testing.expectEqual(@as(?[4]u8, null), result);
-            }
-            // If non-null, addr must be 4 bytes (type guarantees this)
-            if (result) |ip| {
-                try std.testing.expect(ip.len == 4);
-            }
+            try std.testing.expectEqual(@as(?[4]u8, null), result);
         }
     }.f, .{});
 }

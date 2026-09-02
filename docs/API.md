@@ -73,7 +73,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | frequency_penalty | float | 0 | Penalize by token frequency in output [-2, 2] |
 | presence_penalty | float | 0 | Penalize tokens that appeared at all [-2, 2] |
 | repetition_penalty | float | 1.0 | Multiplicative penalty for repeated tokens (>1 = penalize) |
-| seed | int | random | PRNG seed for reproducible output |
+| seed | int | random | PRNG seed for reproducible output. When omitted, the server derives a seed from the injectable clock and logs `req=N seed=S (auto; pass seed to reproduce)` so a sampled run can be replayed |
 | stop | string/array | null | Stop sequence(s): `"stop": "\n"` or `"stop": ["\n", "END"]` |
 | xtc_probability | float | 0 | XTC sampling: probability of excluding top tokens [0, 1] |
 | xtc_threshold | float | 0.1 | XTC sampling: probability threshold for exclusion [0, 1] |

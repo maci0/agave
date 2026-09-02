@@ -57,7 +57,7 @@ agave/
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool (one worker per physical core, pinned)
-│   ├── sim_clock.zig      # Injectable wall clock (deterministic tests / future sim harness)
+│   ├── sim_clock.zig      # Injectable wall/monotonic clock (deterministic tests / future sim harness)
 │   ├── perf.zig           # Performance timer utilities
 │   ├── readline.zig       # Line editor for interactive REPL
 │   ├── term.zig           # Terminal I/O: key parser, ANSI sequences, display width (pure Zig, no libc)
@@ -175,7 +175,7 @@ Irreversible or high-cost choices. Rationale lives here so they are not re-litig
 | HTTP surface | OpenAI + Anthropic shapes on one server | Clients already speak those protocols; one binary | A third incompatible protocol becomes a first-class requirement |
 | Scheduling | Continuous batching scheduler; admission serialized to one request at a time until per-request paged KV is wired | The model layer exposes a single shared KV sequence (scalar `kv_seq_len`, one `seq_table` row); interleaving requests corrupts attention state silently. Serialization matches vLLM-class *interfaces* while keeping output correct | `Request.block_table` is plumbed through the model vtable as a per-request sequence row (raise `scheduler.max_running_requests_single_sequence`) |
 | Spec CLI aliases | Normalize at parse (`medusa` → `mtp`); domain enum has no synonyms | Call sites must not re-branch on marketing names | A “alias” gains a divergent inference path |
-| Wall clock | `sim_clock` for server/scheduler/rate-limiter/tiered KV; MONOTONIC for interval timers (`perf`, `pull`, benches) | One injectable clock for deterministic timeout/refill tests; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks |
+| Wall clock | `sim_clock` for server/scheduler/rate-limiter/tiered KV, peer-discovery deadlines, and CLI power-throttle intervals (`monoMilli`/`monoNano`); MONOTONIC for interval timers (`perf`, `pull`, benches) | One injectable clock for deterministic timeout/refill/throttle tests; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks |
 | Device discovery `BackendKind` | `cpu/metal/cuda/rocm/vulkan` only (no `webgpu`) | `--list-devices` / TP-PP target discrete GPUs; WebGPU is a single logical adapter (browser or wgpu), not multi-device topology | WebGPU multi-adapter or peer groups become real |
 | Parallel transport topology | Fixed 2-rank pair (`rank 0 ↔ 1`); CLI rejects `--tp > 2` and `--pp > 2` | SHM region names, `tcp_fds[0]`, and `sendBuf` peer encoding are pair-shaped; multi-rank ring/tree not built | Ring/tree all-reduce and multi-stage PP ship |
 | Server sleep mode | Flag in `/health` only; weights stay resident | Orchestrators need an idle signal without cold-start latency | Memory pressure requires actual weight unload / sleep-to-disk |

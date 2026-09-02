@@ -190,6 +190,18 @@ fn schedulerPrngSeed(req_id: u64, sampling: SamplingParams) u64 {
     return base ^ (req_id *% prng_seed_mix_golden);
 }
 
+/// True when a sampled request used a clock-derived seed that is not in
+/// the request body. Logging it is what makes the run replayable.
+fn shouldNoteAutoSeed(sampling: SamplingParams) bool {
+    return sampling.temperature > 0 and sampling.seed == null;
+}
+
+/// Log the effective PRNG seed when the client omitted `seed`.
+fn noteAutoSeed(sampling: SamplingParams, seed: u64) void {
+    if (!shouldNoteAutoSeed(sampling)) return;
+    std.log.info("req={d} seed={d} (auto; pass seed to reproduce)", .{ log_request_id, seed });
+}
+
 /// Sleep via sim_clock so virtual time advances under a clock override.
 fn sleepNs(ns: u64) void {
     sim_clock.sleepNs(ns);
@@ -278,7 +290,9 @@ fn configureSchedulerSampling(req: *scheduler.Request, sampling: SamplingParams)
     @memcpy(req.logit_bias_vals[0..n_bias], sampling.logit_bias_vals[0..n_bias]);
     // Always re-seed: enqueue leaves a placeholder id-based PRNG; null seed must
     // follow prngSeedFromSampling (sim_clock) like the direct generation paths.
-    req.prng = std.Random.DefaultPrng.init(schedulerPrngSeed(req.id, sampling));
+    const sched_seed = schedulerPrngSeed(req.id, sampling);
+    noteAutoSeed(sampling, sched_seed);
+    req.prng = std.Random.DefaultPrng.init(sched_seed);
     req.rebuildSampler();
     req.sampling_ready.store(true, .release);
 }
@@ -4015,6 +4029,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     // Apply sampling to first generated token (from prefill's last forward call)
     const use_sampling = sampling.temperature > 0;
     const prng_seed = prngSeedFromSampling(sampling);
+    noteAutoSeed(sampling, prng_seed);
     var prng = std.Random.Xoshiro256.init(prng_seed);
     var mirostat_mu: f32 = sampling.mirostat_tau * 2.0;
     var json_depth: i32 = 0;
@@ -4612,7 +4627,9 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
 
     // Apply sampling to first generated token (from prefill's last forward call)
     const use_sampling = sampling.temperature > 0;
-    var prng_cs = std.Random.Xoshiro256.init(prngSeedFromSampling(sampling));
+    const prng_seed_cs = prngSeedFromSampling(sampling);
+    noteAutoSeed(sampling, prng_seed_cs);
+    var prng_cs = std.Random.Xoshiro256.init(prng_seed_cs);
     if (use_sampling and token_ids.len > 0) {
         const cs_logits = model.getLogits();
         if (sampling.min_p > 0) math_ops.applyMinP(cs_logits, sampling.min_p);
@@ -5295,7 +5312,9 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
 
     // Prefill
     const use_sampling_a = sampling_a.temperature > 0;
-    var prng_a = std.Random.Xoshiro256.init(prngSeedFromSampling(sampling_a));
+    const prng_seed_a = prngSeedFromSampling(sampling_a);
+    noteAutoSeed(sampling_a, prng_seed_a);
+    var prng_a = std.Random.Xoshiro256.init(prng_seed_a);
     const anth_prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
@@ -5758,7 +5777,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
     // Prefill
     const use_sampling_r = sampling_r.temperature > 0;
-    var prng_r = std.Random.Xoshiro256.init(prngSeedFromSampling(sampling_r));
+    const prng_seed_r = prngSeedFromSampling(sampling_r);
+    noteAutoSeed(sampling_r, prng_seed_r);
+    var prng_r = std.Random.Xoshiro256.init(prng_seed_r);
     const resp_prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
@@ -6470,6 +6491,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     // Prefill, capture the last forward's return value (first generated token)
     const use_sampling_s = sampling.temperature > 0;
     const prng_seed_s = prngSeedFromSampling(sampling);
+    noteAutoSeed(sampling, prng_seed_s);
     var prng_s = std.Random.Xoshiro256.init(prng_seed_s);
     var mirostat_mu_s: f32 = sampling.mirostat_tau * 2.0;
     const prefill_start = milliTimestamp();
@@ -7353,6 +7375,13 @@ test "prngSeedFromSampling uses sim_clock when seed omitted" {
     const mixed = schedulerPrngSeed(7, sampling);
     try std.testing.expect(mixed != seed);
     try std.testing.expectEqual(seed ^ (7 *% prng_seed_mix_golden), mixed);
+}
+
+test "shouldNoteAutoSeed only when sampling and seed omitted" {
+    try std.testing.expect(!shouldNoteAutoSeed(.{}));
+    try std.testing.expect(shouldNoteAutoSeed(.{ .temperature = 0.7 }));
+    try std.testing.expect(!shouldNoteAutoSeed(.{ .temperature = 0.7, .seed = 42 }));
+    try std.testing.expect(!shouldNoteAutoSeed(.{ .temperature = 0, .seed = 42 }));
 }
 
 test "originMatchesHost accepts same-origin http" {

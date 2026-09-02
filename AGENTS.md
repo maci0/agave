@@ -105,7 +105,7 @@ Non-negotiable. Every change must respect all of them.
 - `main()` takes `std.process.Init`: `init.io`, `init.gpa`, `init.minimal.args`. Thread `io` through all I/O.
 - Files: `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
 - Stdout/stderr: `Io.File.stdout()` / `Io.File.stderr()`, write with `posix.system.write(file.handle, ...)`.
-- Durations: `CLOCK_MONOTONIC` (`sim_clock.monoMilli`, or `clock_gettime(.MONOTONIC)`). `sim_clock.milliNow` is REALTIME: logs, seeds, epoch only.
+- Durations: `CLOCK_MONOTONIC` (`sim_clock.monoMilli` / `sim_clock.monoNano`, or `clock_gettime(.MONOTONIC)`). `sim_clock.milliNow` is REALTIME: logs, seeds, epoch only.
 - Futex: `io.futexWaitUncancelable(u32, &atomic.raw, expected)`, `io.futexWake(u32, &atomic.raw, count)`.
 - Mutex: `Io.Mutex`, `lockUncancelable(io)` / `unlock(io)`. No custom spinlocks.
 - Allocators: `init.gpa`, or `std.heap.DebugAllocator` in standalone tools.
