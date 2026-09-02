@@ -774,6 +774,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (res.flag("no-color")) break :blk false;
         // NO_COLOR env var (https://no-color.org): present and non-empty
         if (noColorRequested(g_environ.get("NO_COLOR"))) break :blk false;
+        // TERM=dumb: no ANSI / TTY decorations even when stdout is a TTY
+        if (display_mod.termIsDumbValue(g_environ.get("TERM"))) break :blk false;
         // Auto: color only on TTY
         break :blk g_tty;
     };
@@ -2190,7 +2192,7 @@ fn printUsage() void {
         \\      --power <N>                  Target GPU utilisation percent (1-100)
         \\
         \\EXPERT STREAMING:
-        \\      --vram-budget <GIB>          Cap GPU memory held by cached weights; evict beyond it
+        \\      --vram-budget <GIB>          Cap GPU memory for cached weights in GiB (e.g. 20, 0.5, or auto)
         \\      --vram-budget-policy <P>     Eviction order when full: mru (default) or lru
         \\      --ssd-streaming              Stream MoE experts from SSD
         \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
@@ -2215,6 +2217,7 @@ fn printUsage() void {
         \\
         \\ENVIRONMENT:
         \\  NO_COLOR             Disable colored output when set (https://no-color.org)
+        \\  TERM                 Set to dumb to disable color and TTY decorations
         \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
         \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
         \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
@@ -5685,6 +5688,13 @@ test "parseUint valid input" {
     try std.testing.expectEqual(@as(?u16, 0), parseUint(u16, "0", "port"));
 }
 
+test "noColorRequested follows no-color.org" {
+    try std.testing.expect(!noColorRequested(null));
+    try std.testing.expect(!noColorRequested(""));
+    try std.testing.expect(noColorRequested("1"));
+    try std.testing.expect(noColorRequested("true"));
+}
+
 test "fuzz: main.zig pure functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -5707,6 +5717,7 @@ test "fuzz: main.zig pure functions" {
                 _ = &parseU64;
                 _ = &parseU16;
                 _ = &parseF32;
+                _ = &noColorRequested;
                 _ = &rejectEqualsOnFlag;
                 _ = &rejectUnknownOptions;
                 _ = &rejectFlagAsValue;

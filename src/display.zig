@@ -36,9 +36,21 @@ fn writeStdout(text: []const u8) void {
     _ = posix.system.write(stdout_file.handle, text.ptr, text.len);
 }
 
-/// Print version to stdout, with cactus emoji on TTY.
+/// True when `val` is the literal terminal type `dumb` (no ANSI, no emoji).
+/// Unset, empty, and any other TERM value are not dumb.
+pub fn termIsDumbValue(val: ?[]const u8) bool {
+    const v = val orelse return false;
+    return std.mem.eql(u8, v, "dumb");
+}
+
+fn getenvTerm() ?[]const u8 {
+    const result = std.c.getenv("TERM") orelse return null;
+    return std.mem.span(result);
+}
+
+/// Print version to stdout. Cactus emoji only on a TTY whose TERM is not dumb.
 pub fn printVersion() void {
-    const text = if (isTty(stdout_file.handle))
+    const text = if (isTty(stdout_file.handle) and !termIsDumbValue(getenvTerm()))
         cactus ++ " agave " ++ version ++ "\n"
     else
         "agave " ++ version ++ "\n";
@@ -1034,6 +1046,14 @@ test "formatSize zero" {
     try std.testing.expectEqualStrings("KB", result.unit);
 }
 
+test "termIsDumbValue only matches dumb" {
+    try std.testing.expect(!termIsDumbValue(null));
+    try std.testing.expect(!termIsDumbValue(""));
+    try std.testing.expect(!termIsDumbValue("xterm-256color"));
+    try std.testing.expect(!termIsDumbValue("vt100"));
+    try std.testing.expect(termIsDumbValue("dumb"));
+}
+
 test "fuzz: all display functions" {
     const test_stdout = @import("test_stdout.zig");
     try std.testing.fuzz({}, struct {
@@ -1047,6 +1067,8 @@ test "fuzz: all display functions" {
             // ── pub constants ──
             _ = version;
             _ = cactus;
+            _ = termIsDumbValue(null);
+            _ = termIsDumbValue("dumb");
 
             // ── pub fn formatSize ──
             const size_val = smith.valueWithHash(usize, 0);
