@@ -43,18 +43,42 @@ pub fn termIsDumbValue(val: ?[]const u8) bool {
     return std.mem.eql(u8, v, "dumb");
 }
 
+/// True when NO_COLOR is present and non-empty (https://no-color.org).
+/// `NO_COLOR=` (empty) keeps auto behavior.
+pub fn noColorValue(val: ?[]const u8) bool {
+    const v = val orelse return false;
+    return v.len > 0;
+}
+
+/// Whether `--version` should include the cactus emoji.
+/// TTY + a non-dumb TERM, unless NO_COLOR is set.
+pub fn versionDecorate(tty: bool, term_val: ?[]const u8, no_color: ?[]const u8) bool {
+    return tty and !termIsDumbValue(term_val) and !noColorValue(no_color);
+}
+
 fn getenvTerm() ?[]const u8 {
     const result = std.c.getenv("TERM") orelse return null;
     return std.mem.span(result);
 }
 
-/// Print version to stdout. Cactus emoji only on a TTY whose TERM is not dumb.
-pub fn printVersion() void {
-    const text = if (isTty(stdout_file.handle) and !termIsDumbValue(getenvTerm()))
+fn getenvNoColor() ?[]const u8 {
+    const result = std.c.getenv("NO_COLOR") orelse return null;
+    return std.mem.span(result);
+}
+
+/// Print version to stdout. Cactus emoji only when `decorate` is true.
+pub fn printVersionWith(decorate: bool) void {
+    const text = if (decorate)
         cactus ++ " agave " ++ version ++ "\n"
     else
         "agave " ++ version ++ "\n";
     writeStdout(text);
+}
+
+/// Print version to stdout. Cactus emoji only on a TTY whose TERM is not dumb
+/// and NO_COLOR is unset.
+pub fn printVersion() void {
+    printVersionWith(versionDecorate(isTty(stdout_file.handle), getenvTerm(), getenvNoColor()));
 }
 
 /// Bits per byte, used for bits-per-weight (bpw) calculation.
@@ -1063,6 +1087,22 @@ test "termIsDumbValue only matches dumb" {
     try std.testing.expect(termIsDumbValue("dumb"));
 }
 
+test "noColorValue follows no-color.org" {
+    try std.testing.expect(!noColorValue(null));
+    try std.testing.expect(!noColorValue(""));
+    try std.testing.expect(noColorValue("1"));
+    try std.testing.expect(noColorValue("true"));
+}
+
+test "versionDecorate respects TTY, TERM=dumb, and NO_COLOR" {
+    try std.testing.expect(versionDecorate(true, "xterm", null));
+    try std.testing.expect(versionDecorate(true, "xterm", ""));
+    try std.testing.expect(!versionDecorate(false, "xterm", null));
+    try std.testing.expect(!versionDecorate(true, "dumb", null));
+    try std.testing.expect(!versionDecorate(true, "xterm", "1"));
+    try std.testing.expect(!versionDecorate(true, "xterm", "true"));
+}
+
 test "fuzz: all display functions" {
     const test_stdout = @import("test_stdout.zig");
     try std.testing.fuzz({}, struct {
@@ -1078,6 +1118,10 @@ test "fuzz: all display functions" {
             _ = cactus;
             _ = termIsDumbValue(null);
             _ = termIsDumbValue("dumb");
+            _ = noColorValue(null);
+            _ = noColorValue("1");
+            _ = versionDecorate(true, "xterm", null);
+            _ = versionDecorate(false, "dumb", "1");
 
             // ── pub fn formatSize ──
             const size_val = smith.valueWithHash(usize, 0);
@@ -1085,9 +1129,11 @@ test "fuzz: all display functions" {
             try std.testing.expect(std.math.isFinite(fs.val));
             try std.testing.expect(fs.unit.len > 0);
 
-            // ── pub fn printVersion ──
+            // ── pub fn printVersion / printVersionWith ──
             // Writes to stdout (silenced above); verify it does not crash.
             printVersion();
+            printVersionWith(false);
+            printVersionWith(true);
 
             // ── ModelInfo.bitsPerWeight ──
             const n_params = smith.valueWithHash(u64, 1);
