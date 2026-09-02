@@ -371,19 +371,24 @@ agave [OPTIONS] <model> [prompt]
       --color <MODE>       Color mode: auto, always, never [default: auto]
       --kv-type-k <TYPE>   KV key quantization (overrides --kv-type)
       --kv-type-v <TYPE>   KV value quantization (overrides --kv-type)
+      --cache-type-k <TYPE> Alias for --kv-type-k
+      --cache-type-v <TYPE> Alias for --kv-type-v
   -V, --verbose            Show technical details (params, load times, EOG)
-      --allow-cpu-fallback Allow GPU backends to fall back to CPU
+      --allow-cpu-fallback Not implemented; GPU backends fail closed (flag only warns)
   -d, --debug              Enable debug logging (token IDs, layer timing); implies --verbose
       --json               Output results as JSON (implies --quiet)
       --model-info         Print model metadata and exit (combine with --json)
       --profile            Profile per-op timing (halves throughput)
       --benchmark          Run decode benchmark with built-in prompt
+      --frontier-bench     Frontier benchmark: tok/s at each --frontier-ctx length
+      --frontier-ctx <LIST> Comma-separated context lengths [default: 512,2048,8192]
       --mmproj <PATH>      Path to vision projector GGUF (mmproj file)
       --image <PATH>       Path to image file for multimodal inference (PNG or PPM)
       --kv-eviction <MODE> KV cache eviction policy: none, norm, tri [default: none]
       --kv-budget <N>      Max KV entries to retain after eviction [default: 80% of ctx-size]
       --mmap               Use lazy mmap instead of preloading weights into RAM
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
+      --power <N>          Target GPU utilisation percent 1-100 [default: 100]
       --draft-model <PATH> Draft model GGUF for speculative decoding
       --mtp-model <PATH>   MTP weight file (safetensors) for multi-token prediction
       --spec-mode <MODE>   Speculative mode: auto, standard, ddtree, self, ngram, suffix,
@@ -485,12 +490,12 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-gemma4` | bool | true | Gemma 4 model support |
 | `enable-diffusion-gemma` | bool | true | DiffusionGemma model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
-| `enable-qwen4-exp` | bool | true | Qwen4-Exp model support |
+| `enable-qwen4-exp` | bool | true | Qwen4-Exp / Qwen3.8-Flash-Next |
 | `enable-gpt-oss` | bool | true | GPT-OSS model support |
 | `enable-nemotron-h` | bool | true | Nemotron-H model support |
 | `enable-nemotron-nano` | bool | true | Nemotron Nano model support |
 | `enable-glm4` | bool | true | GLM-4 model support |
-| `enable-deepseek4` | bool | true | DeepSeek V4 model support |
+| `enable-deepseek4` | bool | true | DeepSeek V4 Flash model support |
 | `enable-llama4` | bool | true | Llama 4 model support |
 | `enable-dflash2` | bool | true | DFlash2 block-diffusion drafter support |
 

@@ -443,7 +443,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "rank", .kind = .option, .help = "This node's rank for TP/PP/disagg [default: 0]." },
     .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. rdma/udp/grpc are rejected until implemented." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit, whichever is smaller]." },
-    .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
+    .{ .long = "allow-cpu-fallback", .help = "Accepted for compatibility; not implemented. GPU backends fail closed on missing kernels (the flag only warns)." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
     .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
     // KV cache
@@ -2136,7 +2136,7 @@ fn printUsage() void {
         \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
         \\      --list-devices        List available compute devices and exit
         \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
-        \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
+        \\      --allow-cpu-fallback  Not implemented; GPU backends fail closed (flag only warns)
         \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
         \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
         \\

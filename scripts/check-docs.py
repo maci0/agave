@@ -146,6 +146,97 @@ def check_version_consistency() -> list[str]:
             "(match build.zig.zon .version)"
         )
 
+    # Leftover "until the next tagged product release bumps `0.1.0`" after a 0.2.0 cut.
+    for bump in re.findall(r"bumps `([0-9]+\.[0-9]+\.[0-9]+)`", changelog):
+        if bump != product:
+            errors.append(
+                f"CHANGELOG.md: 'bumps `{bump}`' is stale (product version is {product})"
+            )
+
+    return errors
+
+
+_BACKEND_ENABLE = frozenset(
+    {
+        "enable-cpu",
+        "enable-metal",
+        "enable-cuda",
+        "enable-rocm",
+        "enable-vulkan",
+        "enable-webgpu",
+        "enable-debug",
+    }
+)
+
+
+def check_cli_flags_in_readme() -> list[str]:
+    """Every cli_specs long flag must appear in the README CLI Options block."""
+    main = (ROOT / "src" / "main.zig").read_text(encoding="utf-8", errors="replace")
+    specs = re.search(
+        r"const cli_specs = \[_\]cli_mod\.ArgSpec\{(.*?)^};",
+        main,
+        re.S | re.M,
+    )
+    if not specs:
+        return ["src/main.zig: could not find cli_specs array"]
+    flags = re.findall(r'\.long = "([^"]+)"', specs.group(1))
+    if not flags:
+        return ["src/main.zig: cli_specs has no .long flags"]
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8", errors="replace")
+    cli_block = re.search(r"## CLI Options\n\n```(?:[a-z]*)\n(.*?)```", readme, re.S)
+    if not cli_block:
+        return ["README.md: missing ## CLI Options fenced block"]
+    block = cli_block.group(1)
+    errors: list[str] = []
+    for flag in flags:
+        if f"--{flag}" not in block:
+            errors.append(
+                f"README.md CLI Options: missing --{flag} (declared in src/main.zig cli_specs)"
+            )
+    return errors
+
+
+def check_model_enable_flags() -> list[str]:
+    """Model -Denable-* flags must be documented and passable through Docker."""
+    build = (ROOT / "build.zig").read_text(encoding="utf-8", errors="replace")
+    all_enable = re.findall(r'b\.option\(bool, "(enable-[^"]+)"', build)
+    models = [name for name in all_enable if name not in _BACKEND_ENABLE]
+    if not models:
+        return ["build.zig: no model enable-* options found"]
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8", errors="replace")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8", errors="replace")
+    errors: list[str] = []
+    for name in models:
+        if f"`{name}`" not in readme:
+            errors.append(f"README.md: missing build option `{name}`")
+        zig_flag = f"-D{name}="
+        if zig_flag not in dockerfile:
+            errors.append(
+                f"Dockerfile: missing {zig_flag} (model defaults on; image/compose cannot disable it)"
+            )
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8", errors="replace")
+    # Local Compose claims "CPU + Gemma3 only"; any new model ENABLE_* must be
+    # turned off there or the image silently compiles it in (defaults are true).
+    skip_compose = {
+        "ENABLE_CPU",
+        "ENABLE_METAL",
+        "ENABLE_VULKAN",
+        "ENABLE_CUDA",
+        "ENABLE_ROCM",
+        "ENABLE_WEBGPU",
+        "ENABLE_DEBUG",
+        "ENABLE_GEMMA3",
+    }
+    for arg in re.findall(r"^ARG (ENABLE_[A-Z0-9_]+)=", dockerfile, re.M):
+        if arg in skip_compose:
+            continue
+        if f"{arg}:" not in compose:
+            errors.append(
+                f"docker-compose.yml: missing {arg} (Dockerfile ARG; "
+                "Gemma3-only image would compile it in at the Zig default)"
+            )
     return errors
 
 
@@ -155,6 +246,8 @@ def main() -> int:
     errors.extend(check_diagram_counts())
     errors.extend(check_kernel_constants())
     errors.extend(check_version_consistency())
+    errors.extend(check_cli_flags_in_readme())
+    errors.extend(check_model_enable_flags())
     if errors:
         print(f"check-docs: {len(errors)} issue(s)")
         for e in errors:

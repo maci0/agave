@@ -27,13 +27,16 @@ ARG ENABLE_DEBUG=false
 # Model enable flags (all enabled by default). Disable to reduce binary size.
 ARG ENABLE_GEMMA3=true
 ARG ENABLE_QWEN35=true
+ARG ENABLE_QWEN4_EXP=true
 ARG ENABLE_GPT_OSS=true
 ARG ENABLE_NEMOTRON_H=true
 ARG ENABLE_NEMOTRON_NANO=true
 ARG ENABLE_GLM4=true
 ARG ENABLE_GEMMA4=true
 ARG ENABLE_DIFFUSION_GEMMA=true
+ARG ENABLE_DEEPSEEK4=true
 ARG ENABLE_LLAMA4=true
+ARG ENABLE_DFLASH2=true
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C \
@@ -131,13 +134,16 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         -Denable-debug="$ENABLE_DEBUG" \
         -Denable-gemma3="$ENABLE_GEMMA3" \
         -Denable-qwen35="$ENABLE_QWEN35" \
+        -Denable-qwen4-exp="$ENABLE_QWEN4_EXP" \
         -Denable-gpt-oss="$ENABLE_GPT_OSS" \
         -Denable-nemotron-h="$ENABLE_NEMOTRON_H" \
         -Denable-nemotron-nano="$ENABLE_NEMOTRON_NANO" \
         -Denable-glm4="$ENABLE_GLM4" \
         -Denable-gemma4="$ENABLE_GEMMA4" \
         -Denable-diffusion-gemma="$ENABLE_DIFFUSION_GEMMA" \
+        -Denable-deepseek4="$ENABLE_DEEPSEEK4" \
         -Denable-llama4="$ENABLE_LLAMA4" \
+        -Denable-dflash2="$ENABLE_DFLASH2" \
         --prefix /out
 
 # Runtime image: Debian for glibc dlopen compatibility.
