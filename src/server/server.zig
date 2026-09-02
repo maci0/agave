@@ -6748,17 +6748,25 @@ pub fn run(config: ServerConfig) !void {
         std.log.info("Draining {d} active connections...", .{active_count});
     }
 
+    var drain_warned = false;
     while (g_server.metrics.active_connections.load(.acquire) > 0) {
         const elapsed = milliTimestamp() - drain_start;
-        if (elapsed > drain_timeout_ms) {
-            std.log.warn("Drain timeout after {d}ms, forcing shutdown", .{elapsed});
-            break;
+        if (elapsed > drain_timeout_ms and !drain_warned) {
+            // Detached handler threads still use g_server (stack Server in run()).
+            // Freeing conversations / prefix IDs while they run is a use-after-free.
+            // Keep waiting; connection read timeouts and the cancelled scheduler
+            // make in-flight handlers exit.
+            std.log.warn("Drain timeout after {d}ms, still {d} connection(s); waiting so handlers cannot use freed server state", .{
+                elapsed,
+                g_server.metrics.active_connections.load(.acquire),
+            });
+            drain_warned = true;
         }
         sleepNs(drain_poll_interval_ms * std.time.ns_per_ms);
     }
 
-    // Free conversation storage under mutex, handler threads may still
-    // be running (drain timeout exceeded) and accessing conversations.
+    // Free conversation storage under mutex. Handlers have all exited
+    // (active_connections == 0), so they cannot still be reading these.
     {
         server.mutex.lockUncancelable(server.io);
         defer server.mutex.unlock(server.io);

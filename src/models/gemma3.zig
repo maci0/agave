@@ -713,10 +713,7 @@ pub const Gemma3Model = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            return tc.keysValues(block_id);
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,
@@ -812,10 +809,9 @@ pub const Gemma3Model = struct {
         // Tiered cache path: partition blocks by tier, run split-attention
         // when KV spans both GPU and CPU memory.
         if (self.tiered_cache) |tc| {
-            const partition = split_attn.partitionBlocks(
+            const partition = split_attn.partitionBlocksLocked(
+                tc,
                 self.seq_table.block_table[li],
-                tc.blocks,
-                tc.block_size,
                 self.kv_seq_len + 1,
             );
             // Extract thread pool from CPU backend for parallel CPU SDPA heads
