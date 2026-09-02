@@ -29,6 +29,13 @@ must still appear under **Changed** or **Breaking** below. See
   `auto` sizes the cap from free device memory (75%).
 - **Qwen4-Exp / Qwen3.8-Flash-Next** (`qwen4_exp`, `-Denable-qwen4-exp`): Gated
   DeltaNet + QSA, PLE ngram SSD streaming (`--ssd-streaming`), NVFP4.
+- Browser WASM engine (`web/agave.ts`): `AgaveError` with a stable `code` (and
+  optional `httpStatus`) so callers can handle init, download, and generate
+  failures without matching `Error.message`. `init(source)` accepts a module
+  URL or `ArrayBuffer`; `loadModel` accepts `ArrayBufferView` in addition to
+  URL/`ArrayBuffer`.
+- WASM export `agave_last_error(ctx)`: integer `WasmError` for the last
+  init/generate on that context (`0` = ok).
 
 ### Fixed
 - Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
@@ -65,6 +72,14 @@ must still appear under **Changed** or **Breaking** below. See
   Qwen4-Exp, and DFlash2 anyway (`-Denable-deepseek4` / `-Denable-qwen4-exp` /
   `-Denable-dflash2` were never passed, so they defaulted on). Those flags are
   now wired and the Compose override turns them off.
+- WASM: `agave_free` now releases the model buffer passed to `agave_init`, so
+  reloading a GGUF no longer leaks the previous file in linear memory.
+- WASM glue: `init()` fails with `AgaveError` when `agave.wasm` is missing or
+  not a valid module, instead of a generic `WebAssembly.CompileError`.
+- WASM glue: `generate()` throws `AgaveError` on engine failures instead of
+  returning the diagnostic string as if it were model output.
+- WASM glue: empty-prompt and failed `agave_alloc` no longer treat a null
+  pointer as a writable buffer.
 
 ### Changed
 - `--allow-cpu-fallback` help and README now state the flag is unimplemented

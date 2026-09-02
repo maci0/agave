@@ -4,9 +4,11 @@
 //! - agave_init(model_ptr, model_len) → context handle
 //! - agave_generate(ctx, prompt_ptr, prompt_len, max_tokens) → token count
 //! - agave_get_output(ctx, buf_ptr, buf_len) → bytes written
-//! - agave_free(ctx)
+//! - agave_last_error(ctx) → WasmError as i32 (0 = ok)
+//! - agave_free(ctx) — also frees the model buffer passed to agave_init
 //!
-//! Model data is passed as a byte buffer from JS (no file I/O).
+//! Model data is passed as a byte buffer from JS (no file I/O). The context
+//! takes ownership of that buffer and releases it in `agave_free`.
 //! Uses CPU backend only (no GPU in WASM freestanding).
 //!
 //! NOTE: Full forward pass is blocked by a Zig 0.16 + LLVM 21 wasm32
@@ -36,6 +38,19 @@ const gpa = std.heap.page_allocator;
 
 const max_output_bytes = 16384;
 
+/// Stable codes for `agave_last_error`. Host glue maps these to `AgaveError.code`.
+pub const WasmError = enum(i32) {
+    ok = 0,
+    not_ready = 1,
+    tokenize = 2,
+    gguf_parse = 3,
+    unsupported_arch = 4,
+    no_vocab = 5,
+    tokenizer = 6,
+    model_init = 7,
+    invalid_handle = 8,
+};
+
 const InferenceContext = struct {
     gguf: GGUFFile,
     tok: BpeTokenizer,
@@ -53,7 +68,21 @@ const InferenceContext = struct {
     vocab_size: u32 = 0,
     arch_name: []const u8 = "",
     model_name: []const u8 = "",
+    /// Host-allocated model bytes (`agave_alloc`). Freed in `agave_free`.
+    model_buf: []u8 = &.{},
+    last_error: i32 = 0,
 };
+
+fn writeErr(ctx: *InferenceContext, code: WasmError, comptime fmt: []const u8, args: anytype) void {
+    ctx.last_error = @intFromEnum(code);
+    const msg = std.fmt.bufPrint(&ctx.output_buf, fmt, args) catch "";
+    ctx.output_len = msg.len;
+}
+
+fn fail(ctx: *InferenceContext, code: WasmError, comptime fmt: []const u8, args: anytype) usize {
+    writeErr(ctx, code, fmt, args);
+    return @intFromPtr(ctx);
+}
 
 /// Loads a GGUF model from a raw byte buffer provided by the JS host.
 /// Returns a context pointer (as `usize`) on success, or 0 on allocation failure.
@@ -66,29 +95,24 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     ctx.* = .{
         .gguf = undefined,
         .tok = BpeTokenizer.init(gpa),
+        .model_buf = @constCast(model_ptr[0..model_len]),
     };
-    ctx.gguf = GGUFFile.fromBuffer(gpa, model_ptr[0..model_len]) catch |e| {
-        const msg = std.fmt.bufPrint(&ctx.output_buf, "GGUF parse error: {s}", .{@errorName(e)}) catch "";
-        ctx.output_len = msg.len;
-        return @intFromPtr(ctx);
+    ctx.gguf = GGUFFile.fromBuffer(gpa, ctx.model_buf) catch |e| {
+        return fail(ctx, .gguf_parse, "GGUF parse error: {s}", .{@errorName(e)});
     };
     ctx.gguf_valid = true;
 
     const fmt = ctx.gguf.format();
     const arch_str = fmt.getMetaStr("general.architecture") orelse "unknown";
     ctx.arch = Arch.detect(arch_str) orelse {
-        const msg = std.fmt.bufPrint(&ctx.output_buf, "Unsupported arch: {s}", .{arch_str}) catch "";
-        ctx.output_len = msg.len;
-        return @intFromPtr(ctx);
+        return fail(ctx, .unsupported_arch, "Unsupported arch: {s}", .{arch_str});
     };
     ctx.arch_name = arch_str;
     ctx.model_name = fmt.getMetaStr("general.name") orelse arch_str;
 
     // Load tokenizer
     const vocab = fmt.getVocab() orelse {
-        const msg = std.fmt.bufPrint(&ctx.output_buf, "No vocab in GGUF", .{}) catch "";
-        ctx.output_len = msg.len;
-        return @intFromPtr(ctx);
+        return fail(ctx, .no_vocab, "No vocab in GGUF", .{});
     };
     ctx.eos_id = fmt.getMetaU32("tokenizer.ggml.eos_token_id") orelse ctx.arch.defaultEos();
     ctx.bos_id = fmt.getMetaU32("tokenizer.ggml.bos_token_id") orelse 0;
@@ -97,15 +121,11 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     const merges = fmt.getMerges();
     if (merges == null or ctx.arch == .gemma3 or ctx.arch == .gemma4) {
         ctx.tok.loadFromGGUFSpm(vocab, ctx.eos_id) catch |e| {
-            const msg = std.fmt.bufPrint(&ctx.output_buf, "Tok error: {s}", .{@errorName(e)}) catch "";
-            ctx.output_len = msg.len;
-            return @intFromPtr(ctx);
+            return fail(ctx, .tokenizer, "Tok error: {s}", .{@errorName(e)});
         };
     } else {
         ctx.tok.loadFromGGUF(vocab, merges.?, ctx.eos_id) catch |e| {
-            const msg = std.fmt.bufPrint(&ctx.output_buf, "Tok error: {s}", .{@errorName(e)}) catch "";
-            ctx.output_len = msg.len;
-            return @intFromPtr(ctx);
+            return fail(ctx, .tokenizer, "Tok error: {s}", .{@errorName(e)});
         };
     }
     ctx.tok.bos_token_id = ctx.bos_id;
@@ -120,12 +140,11 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
     ctx.n_embd = fmt.getArchU32(arch_str, "embedding_length") orelse 0;
 
     ctx.mdl = ModelStorage.initFromArch(ctx.arch, gpa, fmt, be, capped_ctx, .f16, .f16, 0, 0, null, 0, 1) catch |e| {
-        const msg = std.fmt.bufPrint(&ctx.output_buf, "Model init error: {s}", .{@errorName(e)}) catch "";
-        ctx.output_len = msg.len;
-        return @intFromPtr(ctx);
+        return fail(ctx, .model_init, "Model init error: {s}", .{@errorName(e)});
     };
 
     ctx.ready = true;
+    ctx.last_error = 0;
     const msg = std.fmt.bufPrint(&ctx.output_buf, "Loaded: {s} ({d} layers, {d}D, vocab={d})", .{
         ctx.model_name,
         ctx.n_layers,
@@ -144,8 +163,7 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
     if (ctx_ptr == 0) return 0;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     if (!ctx.ready) {
-        const msg = std.fmt.bufPrint(&ctx.output_buf, "Model not initialized", .{}) catch "";
-        ctx.output_len = msg.len;
+        writeErr(ctx, .not_ready, "Model not initialized", .{});
         return 0;
     }
 
@@ -166,8 +184,7 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
     const formatted = formatted_owned orelse prompt;
 
     const token_ids = tok_iface.encode(formatted) catch {
-        const msg = std.fmt.bufPrint(&ctx.output_buf, "Tokenize error", .{}) catch "";
-        ctx.output_len = msg.len;
+        writeErr(ctx, .tokenize, "Tokenize error", .{});
         return 0;
     };
     defer {
@@ -176,6 +193,7 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
     }
 
     // Report tokenization (forward pass blocked by Zig wasm32 LLVM bug)
+    ctx.last_error = 0;
     const msg = std.fmt.bufPrint(&ctx.output_buf, "[{s}] Tokenized {d} tokens from prompt. " ++
         "Model: {d} layers, {d}D. " ++
         "Forward pass pending Zig wasm32 codegen fix.", .{
@@ -199,15 +217,26 @@ export fn agave_get_output(ctx_ptr: usize, buf_ptr: [*]u8, buf_len: usize) usize
     return copy_len;
 }
 
+/// Last `WasmError` for `ctx_ptr` as i32. `0` means the previous init/generate
+/// succeeded. Null handle returns `invalid_handle` so the host can distinguish
+/// "no context" from "ok" without string-matching the output buffer.
+export fn agave_last_error(ctx_ptr: usize) i32 {
+    if (ctx_ptr == 0) return @intFromEnum(WasmError.invalid_handle);
+    const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
+    return ctx.last_error;
+}
+
 /// Frees an inference context previously returned by `agave_init`.
-/// Releases the model, tokenizer, GGUF data, and the context allocation itself.
-/// Safe to call with `ctx_ptr == 0` (no-op).
+/// Releases the model, tokenizer, GGUF data, the host model buffer, and the
+/// context allocation itself. Safe to call with `ctx_ptr == 0` (no-op).
 export fn agave_free(ctx_ptr: usize) void {
     if (ctx_ptr == 0) return;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     if (ctx.mdl) |*m| m.deinit();
     ctx.tok.deinit();
     if (ctx.gguf_valid) ctx.gguf.deinit();
+    // GGUF borrows this buffer; free it only after gguf.deinit().
+    if (ctx.model_buf.len > 0) gpa.free(ctx.model_buf);
     gpa.destroy(ctx);
 }
 
@@ -258,6 +287,45 @@ test "agave_dealloc zero ptr is safe" {
     agave_dealloc(ptr, 8);
 }
 
+test "agave_last_error null handle is invalid_handle" {
+    try std.testing.expectEqual(
+        @intFromEnum(WasmError.invalid_handle),
+        agave_last_error(0),
+    );
+}
+
+test "agave_generate on unready context sets not_ready" {
+    const ctx = try std.testing.allocator.create(InferenceContext);
+    defer std.testing.allocator.destroy(ctx);
+    ctx.* = .{
+        .gguf = undefined,
+        .tok = BpeTokenizer.init(std.testing.allocator),
+        .ready = false,
+    };
+    defer ctx.tok.deinit();
+    const dummy: [1]u8 = .{0};
+    try std.testing.expectEqual(@as(u32, 0), agave_generate(@intFromPtr(ctx), &dummy, dummy.len, 8));
+    try std.testing.expectEqual(@intFromEnum(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
+    var out: [64]u8 = undefined;
+    const n = agave_get_output(@intFromPtr(ctx), &out, out.len);
+    try std.testing.expectEqualStrings("Model not initialized", out[0..n]);
+}
+
+test "agave_init parse failure is recoverable and agave_free owns the buffer" {
+    const ptr = agave_alloc(64);
+    try std.testing.expect(ptr != 0);
+    const slice: [*]u8 = @ptrFromInt(ptr);
+    @memset(slice[0..64], 0);
+    const ctx = agave_init(slice, 64);
+    try std.testing.expect(ctx != 0);
+    try std.testing.expectEqual(@intFromEnum(WasmError.gguf_parse), agave_last_error(ctx));
+    var out: [64]u8 = undefined;
+    const n = agave_get_output(ctx, &out, out.len);
+    try std.testing.expect(std.mem.startsWith(u8, out[0..n], "GGUF parse error:"));
+    // Must not agave_dealloc(ptr): init took ownership. Double-free would trap.
+    agave_free(ctx);
+}
+
 test "fuzz: wasm entry pure functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -266,6 +334,7 @@ test "fuzz: wasm entry pure functions" {
                 _ = &agave_init;
                 _ = &agave_generate;
                 _ = &agave_get_output;
+                _ = &agave_last_error;
                 _ = &agave_free;
                 _ = &agave_alloc;
                 _ = &agave_dealloc;
