@@ -271,8 +271,10 @@ fn findFieldValuePos(json_buf: []const u8, needle: []const u8, search_start: *us
 }
 
 /// Extract the string value of a JSON field by key name.
-/// Returns the unescaped content between quotes, or null if the field is missing.
-/// Handles false matches inside string values by requiring a colon after the key.
+/// Returns the raw quoted-string contents with JSON escapes intact (callers
+/// that need decoded text must run `jsonUnescape` / `jsonUnescapeOwned`), or
+/// null if the field is missing. Handles false matches inside string values
+/// by requiring a colon after the key.
 pub fn extractField(json: []const u8, field: []const u8) ?[]const u8 {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
@@ -956,6 +958,24 @@ fn escapeWith(allocator: Allocator, input: []const u8, comptime escape_fn: fn (u
     return buf;
 }
 
+/// U+FFFD as UTF-8. Substituted for invalid byte sequences so JSON stays well-formed.
+const utf8_replacement = "\xef\xbf\xbd";
+
+/// One JSON-escape step at `src[i]`: the bytes to emit and how many source bytes
+/// were consumed. Invalid UTF-8 is replaced with U+FFFD rather than copied raw
+/// (raw invalid bytes make the whole JSON document illegal).
+fn jsonEscapeStep(src: []const u8, i: usize) struct { out: []const u8, n: usize } {
+    const c = src[i];
+    if (jsonEscapeChar(c)) |rep| return .{ .out = rep, .n = 1 };
+    const seq_len = std.unicode.utf8ByteSequenceLength(c) catch
+        return .{ .out = utf8_replacement, .n = 1 };
+    if (i + seq_len > src.len)
+        return .{ .out = utf8_replacement, .n = 1 };
+    _ = std.unicode.utf8Decode(src[i..][0..seq_len]) catch
+        return .{ .out = utf8_replacement, .n = 1 };
+    return .{ .out = src[i .. i + seq_len], .n = seq_len };
+}
+
 fn jsonEscapeChar(c: u8) ?[]const u8 {
     return switch (c) {
         '"' => "\\\"",
@@ -1009,10 +1029,31 @@ fn htmlEscapeChar(c: u8) ?[]const u8 {
 }
 
 /// Escape a string for safe embedding in JSON (quotes, backslashes, control chars).
+/// Invalid UTF-8 is replaced with U+FFFD so the result is always well-formed JSON.
 /// Returns the input pointer unchanged (no allocation) when no escaping is needed.
 /// Callers must compare `result.ptr != input.ptr` before freeing the result.
 pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
-    return escapeWith(allocator, input, jsonEscapeChar);
+    var out_len: usize = 0;
+    var i: usize = 0;
+    while (i < input.len) {
+        const step = jsonEscapeStep(input, i);
+        out_len += step.out.len;
+        i += step.n;
+    }
+    // Escapes and U+FFFD replacement always expand, so equal length means a
+    // byte-identical copy of valid UTF-8 with no JSON specials.
+    if (out_len == input.len) return @constCast(input);
+
+    const buf = try allocator.alloc(u8, out_len);
+    var pos: usize = 0;
+    i = 0;
+    while (i < input.len) {
+        const step = jsonEscapeStep(input, i);
+        @memcpy(buf[pos..][0..step.out.len], step.out);
+        pos += step.out.len;
+        i += step.n;
+    }
+    return buf;
 }
 
 /// Escape `src` for safe embedding in JSON into `dst` without allocating.
@@ -1020,16 +1061,13 @@ pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
 /// (escaped output can be up to 6× the input length for control chars).
 pub fn jsonEscapeInto(dst: []u8, src: []const u8) ?[]const u8 {
     var pos: usize = 0;
-    for (src) |c| {
-        const replacement = jsonEscapeChar(c) orelse {
-            if (pos + 1 > dst.len) return null;
-            dst[pos] = c;
-            pos += 1;
-            continue;
-        };
-        if (pos + replacement.len > dst.len) return null;
-        @memcpy(dst[pos..][0..replacement.len], replacement);
-        pos += replacement.len;
+    var i: usize = 0;
+    while (i < src.len) {
+        const step = jsonEscapeStep(src, i);
+        if (pos + step.out.len > dst.len) return null;
+        @memcpy(dst[pos..][0..step.out.len], step.out);
+        pos += step.out.len;
+        i += step.n;
     }
     return dst[0..pos];
 }
@@ -1313,6 +1351,20 @@ test "jsonUnescape \\uXXXX" {
     const cjk = try jsonUnescape(allocator, "\\u4e16\\u754c");
     defer allocator.free(cjk);
     try std.testing.expectEqualStrings("世界", cjk);
+}
+
+test "jsonUnescape surrogate pair and lone surrogate" {
+    const allocator = std.testing.allocator;
+
+    // 😀 is U+1F600 = high D83D + low DE00
+    const emoji = try jsonUnescape(allocator, "\\uD83D\\uDE00");
+    defer allocator.free(emoji);
+    try std.testing.expectEqualStrings("\xf0\x9f\x98\x80", emoji);
+
+    // Lone high surrogate becomes U+FFFD
+    const lone = try jsonUnescape(allocator, "\\uD83Dhello");
+    defer allocator.free(lone);
+    try std.testing.expectEqualStrings("\xef\xbf\xbdhello", lone);
 }
 
 test "jsonUnescapeOwned always allocates" {
@@ -1951,6 +2003,8 @@ test "jsonEscapeInto matches jsonEscape output" {
         "with \"quotes\" and \\ backslash",
         "line1\nline2\ttabbed\r",
         "\x00\x01\x1f control",
+        "café 世界",
+        "\xff\xfe incomplete",
         "",
     };
     for (inputs) |input| {
@@ -1960,6 +2014,21 @@ test "jsonEscapeInto matches jsonEscape output" {
         const into_escaped = jsonEscapeInto(&buf, input).?;
         try std.testing.expectEqualStrings(heap_escaped, into_escaped);
     }
+}
+
+test "jsonEscape replaces invalid UTF-8 with U+FFFD" {
+    const allocator = std.testing.allocator;
+    const input = "ok\xffmore";
+    const escaped = try jsonEscape(allocator, input);
+    defer allocator.free(escaped);
+    try std.testing.expectEqualStrings("ok\xef\xbf\xbdmore", escaped);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(escaped));
+
+    // Valid non-ASCII is passed through unchanged (no allocation).
+    const cafe = "café";
+    const cafe_esc = try jsonEscape(allocator, cafe);
+    try std.testing.expect(cafe_esc.ptr == cafe.ptr);
+    try std.testing.expectEqualStrings(cafe, cafe_esc);
 }
 
 test "extractFormField basic" {

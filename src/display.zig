@@ -264,11 +264,11 @@ fn truncateToWidth(s: []const u8, max_cols: usize) []const u8 {
 /// Replaces bytes 0x00-0x1F and 0x7F with '?' to prevent terminal injection
 /// via crafted GGUF model metadata (CWE-150).
 fn sanitizeMetadata(buf: *[max_meta_len]u8, s: []const u8) []const u8 {
-    const len = @min(s.len, buf.len);
-    for (s[0..len], 0..) |c, i| {
+    const prefix = term.utf8BytePrefix(s, buf.len);
+    for (prefix, 0..) |c, i| {
         buf[i] = if (c < 0x20 or c == 0x7F) '?' else c;
     }
-    return buf[0..len];
+    return buf[0..prefix.len];
 }
 
 // ── Display Struct ───────────────────────────────────────────────
@@ -1018,6 +1018,15 @@ test "sanitizeMetadata strips control characters" {
     try std.testing.expectEqual(@as(u8, '?'), result[15]);
     // Regular chars preserved
     try std.testing.expectEqual(@as(u8, 'h'), result[0]);
+}
+
+test "sanitizeMetadata does not split a trailing UTF-8 character" {
+    var buf: [max_meta_len]u8 = undefined;
+    // 86 CJK chars = 258 bytes; max_meta_len is 256, which splits the last 世.
+    const input = "\xe4\xb8\x96" ** 86;
+    const result = sanitizeMetadata(&buf, input);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(result));
+    try std.testing.expectEqual(@as(usize, 255), result.len);
 }
 
 test "version is non-empty semver-shaped product string" {
