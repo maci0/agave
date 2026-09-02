@@ -53,6 +53,7 @@ agave/
 │   ├── eval.zig           # Token NLL scoring library (scoreCase; no --eval CLI yet)
 │   ├── expert_profile.zig # MoE expert activation profiler (library; no CLI yet)
 │   ├── expert_cache.zig   # SSD expert LRU streaming cache (--ssd-streaming CLI)
+│   ├── ngram_cache.zig    # PLE ngram shard LRU (Qwen4-Exp; same --ssd-streaming flag as experts)
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool (one worker per physical core, pinned)
@@ -82,6 +83,8 @@ agave/
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
 │   │   ├── deepseek4.zig    # DeepSeek V4 Flash (HC, MLA, CSA/HCA, LID; Vulkan/WebGPU GEMV shaders; CpuBackend for rms/SDPA/HC)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
+│   │   ├── dflash2.zig      # DFlash2 block-diffusion drafter (binds target embeddings/LM head)
+│   │   ├── ds4_mtp.zig      # DeepSeek V4 MTP heads loaded from a separate safetensors file
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
@@ -128,7 +131,8 @@ agave/
 │   │   ├── ddtree.zig     # DDTree tree construction (best-first heap, compile, walk)
 │   │   ├── ngram.zig      # N-gram / suffix / lookahead (history-based, no draft model)
 │   │   ├── pflash.zig     # PFlash speculative prefill (block scoring, alpha threshold)
-│   │   └── dspark.zig     # DSpark confidence-scheduled verification (trim + SPS)
+│   │   ├── dspark.zig     # DSpark confidence-scheduled verification (trim + SPS)
+│   │   └── dflash2.zig    # DFlash2 pure algorithm kernels (block draft + path selector)
 │   ├── devices/
 │   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; not peer discovery)
 │   ├── kvcache/
@@ -360,16 +364,17 @@ Browser inference entry point for running Agave in WebAssembly environments. Pro
 
 ### Speculative Decoding (`src/spec/`)
 
-Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`):
+Agave supports 15 speculative decoding modes via `--spec-mode` (including `auto` and the `medusa` alias for `mtp`):
 
 | Module | Description |
 |--------|-------------|
-| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting, DSpark confidence trim |
+| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting, DSpark confidence trim, DFlash2 ingest |
 | `caps.zig` | Per-mode provider requirements; missing provider is a named wait, not a crash in `forward_tree` |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
 | `ngram.zig` | N-gram, SharedNgramPool (server cross-request), SuffixState (10k cache), LookaheadState (Jacobi) |
 | `pflash.zig` | PFlash speculative prefill: block scoring, alpha-threshold selection, compressed prefill |
 | `dspark.zig` | DSpark: confidence-scheduled verification, hardware-aware prefix scheduler, Markov/RNN sequential head, SPS profiling |
+| `dflash2.zig` | DFlash2 block-diffusion draft kernels (parallel block + candidate path selector); model wrapper is `src/models/dflash2.zig` |
 
 | Backend Kernel | Description |
 |----------------|-------------|
@@ -393,6 +398,7 @@ Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`
 | `mlp` | Hidden-state conditioned draft (frozen) | Yes (`waiting for draft`) |
 | `pflash` | Block-scored speculative prefill | Yes (`waiting for draft`) |
 | `dspark` | Confidence-scheduled verification (any drafter) | Optional |
+| `dflash2` | Block-diffusion parallel drafter (`dflash` alias) | Yes (`waiting for draft`) |
 
 EAGLE uses `get_hidden_state` + `eagle_forward` vtable methods on the target model to extract last residual hidden state and feed it to the draft model. FR-Spec (`--spec-token-map`) restricts draft logits to a frequency-ranked token subset.
 

@@ -4,7 +4,7 @@
 
 **Time:** ~29 min
 
-> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP overview, and all 14 speculative decoding modes.
+> After this chapter you can explain draft/verify/accept, DDTree, self-speculative, EAGLE, MTP overview, and all 15 speculative decoding modes.
 
 Standard autoregressive decoding generates one token per forward pass. For large models, each pass takes tens of milliseconds, the token generation rate is bottlenecked by model size, not memory bandwidth. Speculative decoding breaks this bottleneck by using a cheap draft model to propose multiple candidate tokens, then verifying them against the full target model.
 
@@ -289,6 +289,16 @@ The `src/spec/dspark.zig` module provides the full Algorithm 1 scheduler (`sched
 **Training** (requires DeepSpec):
 Loss = `α_ce × L_ce + α_tv × L_tv + α_conf × L_conf` with position weights `exp(-(k-1)/γ)`. The TV loss (`‖p_draft − p_target‖₁`) directly maximises expected acceptance rate. The confidence loss trains `c_k` to predict the analytical acceptance rate `1 − ½‖p_d − p_t‖₁`.
 
+### DFlash2 (`--spec-mode dflash2`)
+
+DFlash2 is a block-diffusion drafter: one parallel forward predicts a whole block of draft tokens instead of walking them autoregressively. Slot 0 holds the last verified token; remaining slots start as mask embeddings. Attention is bidirectional within the block over injected target-model hidden features plus ephemeral block keys. The checkpoint ships no embeddings or LM head; both bind from the target at load (`bindTarget`). Alias: `dflash`.
+
+```bash
+agave target.gguf --draft-model draft.gguf --spec-mode dflash2 "prompt"
+```
+
+`--spec-mode dflash2` without `--draft-model` waits for the draft provider (same as EAGLE/PFlash). Algorithm kernels live in `src/spec/dflash2.zig`; the model wrapper is `src/models/dflash2.zig`.
+
 ### Medusa (`--spec-mode medusa`)
 
 Multiple parallel prediction heads (MLP-based) trained on top of the base model. Each head predicts the token at position +1, +2, ..., +N simultaneously from the same hidden state. Uses the same `mtpForward(token, depth)` inference path as MTP.
@@ -324,10 +334,12 @@ src/spec/
 ├── spec_decode.zig  , orchestrator: draft, verify, generation loop
 │                       draftEagle, draftMlpSpeculator, draftLookahead,
 │                       buildTokenMask (FR-Spec), dsparkTrimDraft
+├── caps.zig         , per-mode provider table (named wait if unsatisfied)
 ├── ddtree.zig       , DDTree: heap, tree build, compile, acceptance walk
 ├── pflash.zig       , PFlash: block scoring, adaptive selection, compressed prefill
 ├── dspark.zig       , DSpark: SpsProfile, ConfidenceBlock, scheduleVerification (Alg 1)
 │                       MarkovHead, RnnHead, ConfidenceHead, calibrateSts (STS)
+├── dflash2.zig      , DFlash2 block-diffusion draft kernels + path selector
 └── ngram.zig        , N-gram history + SharedNgramPool (server cross-request)
                         SuffixState (10k cache, dynamic k)
                         LookaheadState (Jacobi branches)
@@ -339,7 +351,7 @@ src/models/model.zig
 └── VTable: get_hidden_state, eagle_forward , EAGLE hidden-state conditioning
 ```
 
-Agave supports **14 speculative decoding modes**:
+Agave supports **15 speculative decoding modes**:
 
 | Mode | Flag | Draft source | Draft model needed? |
 |------|------|------|------|
@@ -357,6 +369,7 @@ Agave supports **14 speculative decoding modes**:
 | MLP Speculator | `--spec-mode mlp` | Frozen hidden-state | Yes |
 | PFlash | `--spec-mode pflash` | Draft model + block scoring | Yes |
 | DSpark | `--spec-mode dspark` | Draft model + confidence trim | Optional |
+| DFlash2 | `--spec-mode dflash2` | Block-diffusion parallel drafter (`dflash` alias) | Yes |
 
 ### Data Flow
 
@@ -692,11 +705,11 @@ flowchart TD
 
 ### Batch Tree Verification
 
-Models with `forwardTree()` support (currently Gemma3) can verify the entire draft tree in a **single** target forward pass using tree-masked SDPA (`sdpaTree`). This reduces verification from O(K) sequential forwards to O(1), making speculative decoding significantly faster.
+Gemma 3's `forwardTree()` verifies the entire draft tree in a **single** target forward pass using tree-masked SDPA (`sdpaTree`). This reduces verification from O(K) sequential forwards to O(1). DeepSeek V4 also implements `forwardTree()`/`treeLogits()`, but with standard causal attention (ancestor masks unused, no hyper connections), so it is not the same tree-masked path.
 
 The `sdpaTree` kernel has native implementations on all 6 backends: CPU, Metal, CUDA, Vulkan, ROCm, and WebGPU. GPU kernels use FlashAttention-2 with ancestor bitmask masking -- one threadgroup per (node, head) pair.
 
-Models without `forwardTree()` (Qwen3.5, Nemotron, etc.) fall back to sequential verification, which still works but doesn't benefit from batching.
+Models without `forwardTree()` (Qwen 3.5, Nemotron, etc.) fall back to sequential verification, which still works but doesn't benefit from batching.
 
 ### Example Speedup
 
