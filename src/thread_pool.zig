@@ -86,7 +86,10 @@ pub const ThreadPool = struct {
     fn pinSelf(cpu: u32) void {
         if (comptime builtin.os.tag != .linux) return;
         const linux = std.os.linux;
-        if (cpu >= linux.CPU_SETSIZE * @bitSizeOf(usize)) return;
+        // CPU_SETSIZE is the mask size in bytes, not in words: the bit capacity
+        // is @bitSizeOf(cpu_set_t) (1024 on every word size). Multiplying by
+        // @bitSizeOf(usize) overshoots 8x and indexes the mask out of bounds.
+        if (cpu >= @bitSizeOf(linux.cpu_set_t)) return;
         var set: linux.cpu_set_t = @splat(0);
         set[cpu / @bitSizeOf(usize)] = @as(usize, 1) << @intCast(cpu % @bitSizeOf(usize));
         linux.sched_setaffinity(0, &set) catch {};
