@@ -56,6 +56,17 @@ pub const ToolParams = struct {
     tools: [max_tools]?ToolDef = .{null} ** max_tools,
     tool_count: u32 = 0,
     tool_choice: []const u8 = "auto",
+
+    /// True when `name` matches a tool declared in this request.
+    pub fn hasTool(self: *const ToolParams, name: []const u8) bool {
+        var i: u32 = 0;
+        while (i < self.tool_count) : (i += 1) {
+            if (self.tools[i]) |t| {
+                if (std.mem.eql(u8, t.name, name)) return true;
+            }
+        }
+        return false;
+    }
 };
 
 /// Per-request sampling parameters. Defaults match greedy decoding.
@@ -1935,6 +1946,10 @@ test "parseTools multiple tools" {
     try std.testing.expectEqualStrings("add", t0.name);
     const t1 = tp.tools[1].?;
     try std.testing.expectEqualStrings("sub", t1.name);
+    try std.testing.expect(tp.hasTool("add"));
+    try std.testing.expect(tp.hasTool("sub"));
+    try std.testing.expect(!tp.hasTool("mul"));
+    try std.testing.expect(!tp.hasTool(""));
 }
 
 test "extractField grammar from API request body" {
