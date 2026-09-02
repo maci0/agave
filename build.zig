@@ -9,6 +9,20 @@ const builtin = @import("builtin");
 const package_version: []const u8 = @import("build.zig.zon").version;
 
 pub fn build(b: *std.Build) void {
+    // Exact pin (.zigversion), not only build.zig.zon minimum_zig_version.
+    // A newer compiler passes the minimum and then fails later with a parse error.
+    const pinned_zig = std.mem.trim(u8, @embedFile(".zigversion"), " \t\r\n");
+    const pinned_semver = std.SemanticVersion.parse(pinned_zig) catch std.debug.panic(
+        ".zigversion ({s}) is not a semantic version",
+        .{pinned_zig},
+    );
+    if (builtin.zig_version.order(pinned_semver) != .eq) {
+        std.debug.panic(
+            "Zig {s} does not match .zigversion pin {s}. Install {s} from https://ziglang.org/download/",
+            .{ builtin.zig_version_string, pinned_zig, pinned_zig },
+        );
+    }
+
     const target = b.standardTargetOptions(.{});
 
     // ── Backend enable/disable flags (all default to true) ────────
@@ -63,9 +77,10 @@ pub fn build(b: *std.Build) void {
     // ── CUDA PTX kernels (cross-compiled via nvptx64-cuda) ─────────
     // Compiles Zig CUDA kernels to PTX assembly. The resulting .s file
     // is placed in zig-out/ and can be embedded into cuda.zig via @embedFile.
-    // Build with: zig build ptx [-Dcuda-sm=sm_80]
+    // Build with: zig build ptx [-Dcuda-sm=sm_120]
+    // Default matches committed PTX and CI (`scripts/check-shader-artifacts.sh --ptx-only`).
     const CudaSm = enum { sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120, sm_121 };
-    const cuda_sm = b.option(CudaSm, "cuda-sm", "CUDA SM target (default: sm_90)") orelse .sm_90;
+    const cuda_sm = b.option(CudaSm, "cuda-sm", "CUDA SM target (default: sm_120)") orelse .sm_120;
     const sm_model: *const std.Target.Cpu.Model = switch (cuda_sm) {
         .sm_50 => &std.Target.nvptx.cpu.sm_50,
         .sm_60 => &std.Target.nvptx.cpu.sm_60,
@@ -637,11 +652,22 @@ pub fn build(b: *std.Build) void {
         const fmt_check_step = b.step("fmt-check", "Check formatting (same paths as CI)");
         fmt_check_step.dependOn(&fmt_check_cmd.step);
 
-        const docs_check_cmd = b.addSystemCommand(&.{ "python3", "scripts/check-docs.py" });
-        pin_spawned_python(docs_check_cmd);
-        docs_check_cmd.has_side_effects = true;
         const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py)");
-        docs_check_step.dependOn(&docs_check_cmd.step);
+        if (b.findProgram(&.{"python3"}, &.{}) catch null) |python3| {
+            const docs_check_cmd = b.addSystemCommand(&.{ python3, "scripts/check-docs.py" });
+            pin_spawned_python(docs_check_cmd);
+            docs_check_cmd.has_side_effects = true;
+            docs_check_step.dependOn(&docs_check_cmd.step);
+        } else {
+            docs_check_step.dependOn(&b.addFail(
+                "python3 not found; zig build check needs Python 3.11+ for scripts/check-docs.py",
+            ).step);
+        }
+
+        const lint_web_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-web.sh" });
+        lint_web_cmd.has_side_effects = true;
+        const lint_web_step = b.step("lint-web", "oxlint + tsc (CI lint-web job)");
+        lint_web_step.dependOn(&lint_web_cmd.step);
 
         const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
         check_step.dependOn(fmt_check_step);
