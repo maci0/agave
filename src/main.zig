@@ -42,6 +42,7 @@ const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
 const math_ops = @import("ops/math.zig");
+const kv_evict = @import("ops/kv_evict.zig");
 const grammar_mod = @import("grammar.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
@@ -2967,7 +2968,7 @@ fn initAndRun(
     // Use ModelStorage to initialize the model without exposing concrete types.
     const init_start = milliTimestamp(g_io);
     const eviction_budget: u32 = if (cli.kv_eviction != .none)
-        (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
+        (if (cli.kv_budget > 0) cli.kv_budget else kv_evict.defaultBudget(cli.ctx_size))
     else
         0;
     var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, cli.tp_rank, cli.tp_degree) catch |e| {

@@ -339,11 +339,16 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
 
 /// Compute log probability of a specific token from raw logits.
 /// Returns log(softmax(logits)[token_id]).
+///
+/// All-`-inf` (or otherwise non-finite) logits used to yield NaN via
+/// `(-inf) - (-inf)` in the log-sum-exp; that NaN was then written into
+/// JSON logprobs. Non-finite softmax is reported as `-inf` (log of zero).
 pub fn tokenLogProb(logits: []const f32, token_id: u32) f32 {
     if (token_id >= logits.len) return -std.math.inf(f32);
 
     const n = logits.len;
     const max_val = simdMaxF32(logits);
+    if (!std.math.isFinite(max_val)) return -std.math.inf(f32);
     // SIMD exp-sum
     const log_sum: f32 = blk: {
         const max_v: V8 = @splat(max_val);
@@ -356,7 +361,9 @@ pub fn tokenLogProb(logits: []const f32, token_id: u32) f32 {
         while (si < n) : (si += 1) s += @exp(logits[si] - max_val);
         break :blk s;
     };
-    return (logits[token_id] - max_val) - @log(log_sum);
+    if (!(log_sum > 0) or !std.math.isFinite(log_sum)) return -std.math.inf(f32);
+    const lp = (logits[token_id] - max_val) - @log(log_sum);
+    return if (std.math.isFinite(lp)) lp else -std.math.inf(f32);
 }
 
 /// Compute top-N tokens by logit value and their log probabilities.
@@ -367,8 +374,8 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
     const len = logits.len;
 
     const max_val = simdMaxF32(logits);
-    // SIMD exp-sum
     const log_norm: f32 = blk: {
+        if (!std.math.isFinite(max_val)) break :blk std.math.inf(f32);
         const max_v: V8 = @splat(max_val);
         var sum_v: V8 = @splat(@as(f32, 0.0));
         var si: usize = 0;
@@ -377,6 +384,7 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
         }
         var s = @reduce(.Add, sum_v);
         while (si < len) : (si += 1) s += @exp(logits[si] - max_val);
+        if (!(s > 0) or !std.math.isFinite(s)) break :blk std.math.inf(f32);
         break :blk @log(s);
     };
 
@@ -398,7 +406,8 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
 
     for (0..limit) |i| {
         out_ids[i] = top_ids[i];
-        out_logprobs[i] = (top_vals[i] - max_val) - log_norm;
+        const lp = (top_vals[i] - max_val) - log_norm;
+        out_logprobs[i] = if (std.math.isFinite(lp)) lp else -std.math.inf(f32);
     }
     return limit;
 }
@@ -1132,6 +1141,26 @@ test "tokenLogProb dominant" {
     const lp = tokenLogProb(&logits, 0);
     try std.testing.expect(lp <= 0);
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), lp, 1e-4);
+}
+
+test "tokenLogProb all -inf is not NaN" {
+    // Grammar masking can zero the whole vocab; (-inf)-(-inf) used to NaN.
+    const logits = [_]f32{ -std.math.inf(f32), -std.math.inf(f32), -std.math.inf(f32) };
+    const lp = tokenLogProb(&logits, 0);
+    try std.testing.expect(!std.math.isNan(lp));
+    try std.testing.expectEqual(-std.math.inf(f32), lp);
+}
+
+test "topLogProbs all -inf is not NaN" {
+    const logits = [_]f32{ -std.math.inf(f32), -std.math.inf(f32) };
+    var ids: [2]u32 = undefined;
+    var probs: [2]f32 = undefined;
+    const n = topLogProbs(&logits, 2, &ids, &probs);
+    try std.testing.expectEqual(@as(u32, 2), n);
+    for (probs[0..n]) |p| {
+        try std.testing.expect(!std.math.isNan(p));
+        try std.testing.expect(p <= 0);
+    }
 }
 
 test "topLogProbs returns correct ids" {
