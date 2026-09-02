@@ -878,6 +878,47 @@ pub fn extractJsonImage(body: []const u8) ?[]const u8 {
     return null;
 }
 
+/// True when `field` is present as a JSON key with a following colon (any value
+/// type). Distinguishes "missing" from "present but not a string" for 400s.
+pub fn hasField(body: []const u8, field: []const u8) bool {
+    var buf: [extract_field_buf_size]u8 = undefined;
+    const needle = quoteFieldKey(&buf, field) orelse return false;
+    var search_start: usize = 0;
+    return findFieldValuePos(body, needle, &search_start) != null;
+}
+
+/// True when any `"type"` string value equals `want` (scans every occurrence so
+/// a leading `"type":"text"` part does not hide a later image part).
+fn jsonHasTypeValue(body: []const u8, want: []const u8) bool {
+    var buf: [extract_field_buf_size]u8 = undefined;
+    const needle = quoteFieldKey(&buf, "type") orelse return false;
+    var search_start: usize = 0;
+    while (search_start < body.len) {
+        const rel = std.mem.indexOf(u8, body[search_start..], needle) orelse return false;
+        const after = search_start + rel + needle.len;
+        const start = skipToJsonValue(body, after) orelse {
+            search_start = after;
+            continue;
+        };
+        const end = findJsonStringEnd(body, start);
+        if (std.mem.eql(u8, body[start..end], want)) return true;
+        search_start = after;
+    }
+    return false;
+}
+
+/// True when the JSON body includes an OpenAI `image_url` part or an Anthropic
+/// image `source` block, even if the payload is not a data URI we can decode.
+/// Used to 400 instead of silently dropping HTTP(S) URLs or unknown shapes.
+pub fn hasJsonImagePart(body: []const u8) bool {
+    if (extractJsonImage(body) != null) return true;
+    if (jsonHasTypeValue(body, "image_url")) return true;
+    if (extractObjectField(body, "image_url") != null) return true;
+    if (extractField(body, "image_url") != null) return true;
+    if (jsonHasTypeValue(body, "image") and extractObjectField(body, "source") != null) return true;
+    return false;
+}
+
 // ── URL decoding ────────────────────────────────────────────────
 
 /// Decode a URL-encoded (percent-encoded) string. `+` becomes space, `%XX` becomes the byte.
@@ -1549,6 +1590,33 @@ test "extractJsonImage handles truncated base64 marker" {
         \\{"content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,"}}]}
     ;
     try std.testing.expect(extractJsonImage(body) == null);
+}
+
+test "hasField distinguishes missing from non-string values" {
+    try std.testing.expect(!hasField("{}", "prompt"));
+    try std.testing.expect(hasField("{\"prompt\":\"hi\"}", "prompt"));
+    try std.testing.expect(hasField("{\"prompt\":[\"hi\"]}", "prompt"));
+    try std.testing.expect(hasField("{\"prompt\":null}", "prompt"));
+    try std.testing.expect(hasField("{\"input\":{\"text\":\"x\"}}", "input"));
+    try std.testing.expect(!hasField("{\"content\":\"prompt: yes\"}", "prompt"));
+}
+
+test "hasJsonImagePart detects OpenAI and Anthropic image blocks" {
+    try std.testing.expect(!hasJsonImagePart("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"));
+    try std.testing.expect(hasJsonImagePart(
+        \\{"messages":[{"role":"user","content":[{"type":"text","text":"What?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo"}}]}]}
+    ));
+    // HTTP(S) URL: not a data URI, still an image part the server must reject.
+    try std.testing.expect(hasJsonImagePart(
+        \\{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}
+    ));
+    try std.testing.expect(hasJsonImagePart(
+        \\{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}]}]}
+    ));
+    // Text part first must not hide a later image part.
+    try std.testing.expect(hasJsonImagePart(
+        \\{"content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}
+    ));
 }
 
 test "extractFormFloat handles boundary values" {
@@ -2276,6 +2344,10 @@ test "fuzz: all json functions" {
             if (extractJsonImage(input)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
+
+            // 17b. hasField / hasJsonImagePart, always return bool
+            _ = hasField(input, field);
+            _ = hasJsonImagePart(input);
 
             // 18. urlDecode, allocates, must free
             const decoded = urlDecode(allocator, input) catch return;

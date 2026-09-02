@@ -241,14 +241,15 @@ pub const Metrics = struct {
         _ = self.requests_cancelled.fetchAdd(1, .monotonic);
     }
 
-    /// Increment failed request counter (5xx errors, encode/forward failures).
-    /// Do not use for client 4xx, those go to recordClientError() so readiness
-    /// error-rate checks are not poisoned by bad requests.
+    /// Increment failed request counter (5xx encode/forward failures).
+    /// Do not use for client 4xx or expected 501 stubs, those go to
+    /// recordClientError() so readiness error-rate checks are not poisoned
+    /// by bad requests or unimplemented-endpoint probes.
     pub fn recordFailure(self: *Metrics) void {
         _ = self.requests_failed.fetchAdd(1, .monotonic);
     }
 
-    /// Increment client-error counter (400/404/405/413 and similar).
+    /// Increment client-error counter (400/404/405/413/501 stubs and similar).
     /// Does not affect /health|/ready high_error_rate degradation.
     pub fn recordClientError(self: *Metrics) void {
         _ = self.requests_client_error.fetchAdd(1, .monotonic);

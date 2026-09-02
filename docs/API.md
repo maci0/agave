@@ -129,6 +129,7 @@ curl http://localhost:49453/v1/completions -d '{
 ```
 
 Same sampling parameters as chat completions. Prompt is raw text (no chat template).
+`prompt` must be a string; an array or object returns `400` (`code: invalid_value`).
 
 **Response:**
 ```json
@@ -150,11 +151,13 @@ OpenAI Responses API format.
 ```bash
 curl http://localhost:49453/v1/responses -d '{
   "input": "Explain quantum computing",
-  "max_tokens": 200
+  "max_output_tokens": 200
 }'
 ```
 
-Same sampling parameters as chat completions.
+Same sampling parameters as chat completions. Token limit accepts OpenAI
+`max_output_tokens`, then `max_tokens`, then `max_completion_tokens`. `input`
+must be a string; an array or object returns `400` (`code: invalid_value`).
 
 **Response:**
 ```json
@@ -217,7 +220,7 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
 
 ### POST /v1/chat
 
-Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`).
+Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode, image on a non-vision model) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`, `vision_not_supported`).
 
 ### POST /v1/chat/regenerate
 
@@ -426,6 +429,8 @@ curl http://localhost:49453/v1/chat/completions -d '{
 
 The `content` field can be either a string (text only) or an array of content parts. Text parts (`"type": "text"`) provide the prompt; image parts (`"type": "image_url"`) provide the image as a base64 data URI. Only one image per request is supported. The image is processed by the vision encoder (SigLIP-2) and injected as visual tokens at the appropriate position in the prompt.
 
+HTTP(S) image URLs are not fetched. A request that includes an `image_url` or Anthropic image `source` that is not a base64 data URI returns `400` (`code: image_decode_failed`). A request that includes an image when the loaded model has no vision encoder returns `400` (`code: vision_not_supported`) rather than dropping the image.
+
 Supported image formats over HTTP: PNG only (JPEG is rejected; convert to PNG first). The CLI `--image` path also accepts PPM P6. Maximum resolution depends on the model (Gemma 4 E2B/E4B: 224×224, Gemma 4 26B: 768×768, Gemma 3: 896×896, Qwen VL: model metadata / native).
 
 ---
@@ -612,7 +617,7 @@ All endpoints return JSON error bodies on failure.
 ```
 
 `param` names the offending field or query key when known; otherwise `null`.
-`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `message_too_long`, `image_decode_failed`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
+`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `host_forbidden`, `message_too_long`, `image_decode_failed`, `vision_not_supported`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
 
 **Anthropic format** (`/v1/messages` only):
 ```json
