@@ -134,18 +134,16 @@ pub const Grammar = struct {
         if (state.completed) return;
         if (state.stack.items.len == 0) return;
 
-        // Pre-allocate a reusable test state, avoids per-token heap allocation.
+        // Reuse state.scratch across tokens so the test stack is allocated once.
         // acceptCharInner recursion allows depth 0..max_accept_depth, each pushes at most 1 entry.
-        const required_cap = state.stack.items.len + max_stack_growth_per_token;
+        const src = state.stack.items;
+        try state.prepareScratch(src);
         var test_state = GrammarState{
             .grammar = self,
-            .stack = std.ArrayList(StackEntry).empty,
+            .stack = state.scratch,
             .completed = state.completed,
         };
-        try test_state.stack.ensureTotalCapacity(self.allocator, required_cap);
-        defer test_state.stack.deinit(self.allocator);
-
-        const src = state.stack.items;
+        defer state.scratch = test_state.stack;
 
         // Build first-byte acceptance bitmap: test each byte 0..255 against current
         // grammar state. Rejects ~90% of vocab tokens without per-token state copy.
@@ -204,16 +202,14 @@ pub const Grammar = struct {
         if (state.completed) return null;
         if (state.stack.items.len == 0) return null;
 
-        const required_cap = state.stack.items.len + max_stack_growth_per_token;
+        const src = state.stack.items;
+        state.prepareScratch(src) catch return null;
         var test_state = GrammarState{
             .grammar = self,
-            .stack = std.ArrayList(StackEntry).empty,
+            .stack = state.scratch,
             .completed = state.completed,
         };
-        test_state.stack.ensureTotalCapacity(self.allocator, required_cap) catch return null;
-        defer test_state.stack.deinit(self.allocator);
-
-        const src = state.stack.items;
+        defer state.scratch = test_state.stack;
 
         // First-byte bitmap: skip tokens whose first byte is rejected
         var first_byte_valid: [256]bool = .{false} ** 256;
@@ -287,6 +283,9 @@ pub const GrammarState = struct {
     grammar: *const Grammar,
     stack: std.ArrayList(StackEntry),
     completed: bool = false,
+    /// Reused by `maskLogits` / `singleValidToken` so each generated token does
+    /// not heap-allocate a fresh test stack.
+    scratch: std.ArrayList(StackEntry) = .empty,
 
     /// Initialize a grammar state by pushing the root rule onto the stack.
     /// Uses the grammar's allocator for stack storage.
@@ -302,6 +301,15 @@ pub const GrammarState = struct {
     /// Free the rule stack using the grammar's allocator.
     pub fn deinit(self: *GrammarState) void {
         self.stack.deinit(self.grammar.allocator);
+        self.scratch.deinit(self.grammar.allocator);
+    }
+
+    /// Reset `scratch` to a copy of `src` with room for acceptChar recursion.
+    fn prepareScratch(self: *GrammarState, src: []const StackEntry) error{OutOfMemory}!void {
+        const required_cap = src.len + max_stack_growth_per_token;
+        try self.scratch.ensureTotalCapacity(self.grammar.allocator, required_cap);
+        self.scratch.items.len = src.len;
+        if (src.len > 0) @memcpy(self.scratch.items[0..src.len], src);
     }
 
     /// Test whether byte `c` is accepted by the current grammar state.

@@ -3967,7 +3967,9 @@ fn runRepl(
     var system_prompt_owned: ?[]const u8 = null;
     defer if (system_prompt_owned) |sp| allocator.free(sp);
 
-    // Conversation history for multi-turn support
+    // Conversation history for multi-turn support. Cap so a long REPL session
+    // cannot grow without bound; drop the oldest message when full.
+    const max_repl_history_messages: usize = 100;
     var history: std.ArrayList(Message) = .empty;
     defer {
         for (history.items) |msg| allocator.free(@constCast(msg.content));
@@ -4071,6 +4073,10 @@ fn runRepl(
             eprint("Error: out of memory\n", .{});
             continue;
         };
+        if (history.items.len >= max_repl_history_messages) {
+            const old = history.orderedRemove(0);
+            allocator.free(@constCast(old.content));
+        }
         history.append(allocator, .{ .role = .user, .content = user_content }) catch {
             allocator.free(user_content);
             continue;
@@ -4109,6 +4115,10 @@ fn runRepl(
                     allocator.free(text);
                     continue;
                 };
+                if (history.items.len >= max_repl_history_messages) {
+                    const old = history.orderedRemove(0);
+                    allocator.free(@constCast(old.content));
+                }
                 history.append(allocator, .{ .role = .assistant, .content = resp_content }) catch {
                     allocator.free(resp_content);
                 };
@@ -5136,15 +5146,11 @@ fn generateAndPrintInner(
         } else if (grammar_state != null or json_mode_active) {
             first_gen_token = math_ops.argmax(first_logits);
         }
-        // Update grammar state with first accepted token
+        // Update grammar state with first accepted token.
+        // Raw vocab text (not decode()) so getEffectiveText matches maskLogits.
         if (grammar_state) |*gs| {
-            const tok_slice = [1]u32{first_gen_token};
-            const text = tok.decode(&tok_slice) catch |err| blk: {
-                eprint("Warning: grammar token decode failed (id={d}): {}\n", .{ first_gen_token, err });
-                break :blk null;
-            };
-            defer if (text) |t| allocator.free(t);
-            gs.acceptToken(text orelse "");
+            const raw_text = if (first_gen_token < tok.id_to_token.items.len) tok.id_to_token.items[first_gen_token] else "";
+            gs.acceptToken(raw_text);
         }
         // Track JSON brace depth (scan raw token text, avoids allocation)
         if (json_mode_active and first_gen_token < tok.id_to_token.items.len) {
