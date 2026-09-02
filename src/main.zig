@@ -223,11 +223,19 @@ fn dbg(comptime fmt: []const u8, args: anytype) void {
     eprint("[dbg] " ++ fmt ++ "\n", args);
 }
 
-/// Surface the effective sampling seed under --verbose. When --seed is
-/// omitted the seed derives from sim_clock, so echoing it is what makes a
-/// sampled run replayable byte-for-byte.
+/// True when the effective seed must be printed. Auto-derived seeds are
+/// always surfaced: they come from sim_clock and a failure is otherwise
+/// unreplayable. Explicit `--seed` is already in argv, so it is echoed
+/// only under --verbose.
+fn shouldNoteSeed(seed_explicit: bool, verbose: bool) bool {
+    return !seed_explicit or verbose;
+}
+
+/// Surface the effective sampling seed. When --seed is omitted the seed
+/// derives from sim_clock, so echoing it is what makes a sampled run
+/// replayable byte-for-byte.
 fn noteSeed(cli: *const CliArgs) void {
-    if (!g_verbose) return;
+    if (!shouldNoteSeed(cli.seed_explicit, g_verbose)) return;
     if (cli.seed_explicit) {
         eprint("[seed] {d}\n", .{cli.seed});
     } else {
@@ -5256,16 +5264,15 @@ fn generateAndPrintInner(
             // of blocking wall-clock time in simulation runs.
             if (idle_ns > 0) sim_clock.sleepNs(idle_ns);
         }
-        var power_ts0: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts0);
+        // Measure forward duration on the injectable monotonic clock so a
+        // seed replay does not inherit host execution speed into idle_ns.
+        const power_ts0 = sim_clock.monoNano();
         var next = mdl.forward(last) catch |e| {
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
-        var power_ts1: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts1);
-        const power_delta_ns: i64 = (@as(i64, power_ts1.sec) - @as(i64, power_ts0.sec)) * 1_000_000_000 + (@as(i64, power_ts1.nsec) - @as(i64, power_ts0.nsec));
-        power_last_forward_ns = @intCast(@max(0, power_delta_ns));
+        const power_ts1 = sim_clock.monoNano();
+        power_last_forward_ns = @intCast(@max(@as(i96, 0), power_ts1 - power_ts0));
         // Apply repeat penalty to logits for recently generated tokens
         const logits = mdl.getLogits();
         if (use_repeat_penalty and token_count > 0) {
@@ -5764,6 +5771,13 @@ test "preferredSecret empty env does not override CLI" {
     try std.testing.expectEqualStrings("key", preferredSecret("  key  ", "cli").?);
 }
 
+test "shouldNoteSeed always surfaces auto-derived seeds" {
+    try std.testing.expect(shouldNoteSeed(false, false));
+    try std.testing.expect(shouldNoteSeed(false, true));
+    try std.testing.expect(!shouldNoteSeed(true, false));
+    try std.testing.expect(shouldNoteSeed(true, true));
+}
+
 test "fuzz: main.zig pure functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -5771,6 +5785,8 @@ test "fuzz: main.zig pure functions" {
             comptime {
                 _ = &milliTimestamp;
                 _ = &nanoTimestamp;
+                _ = &shouldNoteSeed;
+                _ = &noteSeed;
                 _ = &readStdinAll;
                 _ = &kvTypeOrExit;
                 _ = &detectFreeRam;

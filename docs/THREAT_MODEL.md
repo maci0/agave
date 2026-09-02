@@ -49,7 +49,7 @@ Entry points found in code:
 | Video frames | `src/main.zig:3517-3543` | `ffmpeg` spawned with argv (not a shell); local CLI only |
 | Hub download channel | `src/pull.zig` (`huggingface.co` :30) | Repo ids validated (:71-88); TLS via `std.http.Client` system CA bundle; blob URL is `resolve/main` (:1025) |
 | Distributed TCP data plane | rank-0 listen `src/main.zig:1610-1620`, ports :139-145 | Binds `addr = 0` (all interfaces, :1611); raw f32 frames (`src/parallel/transport.zig` `tcpSend`/`tcpRecv` :608-660) |
-| UDP peer discovery | `src/parallel/peer_discovery.zig:20,72-112,275-287` | Global broadcast 255.255.255.255; first `AGAVE-JOIN` wins (:107-112) |
+| UDP peer discovery | `src/parallel/peer_discovery.zig:21,80-127,283-293` | Global broadcast 255.255.255.255; first `AGAVE-JOIN` wins (:117-121) |
 | Shared memory transport | `/agave_0to1`, `/agave_1to0` (`transport.zig:227-241`) | Same-host, mode 0600 |
 | NCCL | dlopen `libnccl.so.2` (`transport.zig:318-321`) | 128-byte NCCL ID exchanged over the unauthenticated TCP link (:339-356) |
 | Disagg prefill->decode KV transfer | listen `src/main.zig:3832-3843`, KV stream `src/models/qwen35.zig:2264-2282` | Plaintext TCP 49456; carries the entire prompt as KV |
@@ -64,7 +64,7 @@ No listed entry point in the previous revision has been removed. Added since las
 1. **Client -> HTTP API.** Authn point: `validateAuth` constant-time compare (`src/server/server.zig:1248-1269`). Policy: non-loopback binds refuse to start without a key (`src/main.zig:1247-1253`); loopback binds are open by design. Unauthenticated mode also rejects non-loopback `Host` (DNS rebind, :915-918, :1781-1788) and mismatched `Origin` vs `Host` (CSRF, :924-928, :1791-1801).
 2. **Artifact -> loader.** Whoever supplies the file (local user, Hub download, LoRA adapter, mmproj, PNG) crosses into mmap/decode native code. Validation lives inside the parsers (see mitigations).
 3. **HF Hub -> local cache.** Transport-authenticated (TLS) but content-unverified; blobs land under `$HF_HOME`-derived paths with `O_NOFOLLOW` writes (`src/pull.zig:1190-1197`). Commit SHA is used for snapshot directory naming (`pull.zig:1454`), not as a pin on the download URL (`resolve/main` :1025).
-4. **Peer node -> this node (TP/PP/disagg).** No authentication point exists anywhere on this boundary. First TCP `accept` wins a rank slot (`transport.zig:215-222`, `main.zig:1620`); first UDP `AGAVE-JOIN` wins discovery (`peer_discovery.zig:107-112`). Largest unauthenticated boundary.
+4. **Peer node -> this node (TP/PP/disagg).** No authentication point exists anywhere on this boundary. First TCP `accept` wins a rank slot (`transport.zig:215-222`, `main.zig:1620`); first UDP `AGAVE-JOIN` wins discovery (`peer_discovery.zig:117-121`). Largest unauthenticated boundary.
 5. **Same-host processes -> shm segments.** Only uid/file-mode checks; names are fixed.
 6. **Secrets -> process.** Env vars enter once at startup; nonempty `AGAVE_API_KEY` wins over CLI to avoid `ps` exposure (`src/main.zig:1241-1246`); empty env is unset. Rotation: process restart. Storage: env only; HTTP request buffers holding secrets are zeroed (`server.zig:6711-6714`); Hub `Authorization` buffers zeroed (`pull.zig:737,1089`).
 7. **Process -> conversation file.** Prompts written to `$HOME/.cache/agave/conversations.json` unless `--no-conv-store` (`server.zig:6859-6864`, `conv_store.zig:68-73`). Compose maps this under `agave-cache`.
@@ -90,7 +90,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 - Tampering: repo contents change between listing and blob GET; branch `main` is fetched, not the listed SHA (`pull.zig:1025`; SHA used for snapshot directory :1454). Verification ends at GGUF magic bytes + Content-Length match (`verifyGgufBlob` :1419-1433, `advertisedSizeAgrees` :976-978): T2.
 
 **Peer node <-> peer node**
-- All six STRIDE classes apply with no control present: spoofed rank joins, tensor tampering via allReduce (`transport.zig:426-471`), repudiation impossible (no identity), disclosure via disagg KV stream = full prompt transcript (`qwen35.zig:2264-2282`), DoS via connection race, elevation by becoming rank 0 through spoofed beacons (`peer_discovery.zig:107-112`). TCP `recvBuf` now fails on short reads (`transport.zig:648-660`) rather than zero-filling; that does not authenticate the peer: T1.
+- All six STRIDE classes apply with no control present: spoofed rank joins, tensor tampering via allReduce (`transport.zig:426-471`), repudiation impossible (no identity), disclosure via disagg KV stream = full prompt transcript (`qwen35.zig:2264-2282`), DoS via connection race, elevation by becoming rank 0 through spoofed beacons (`peer_discovery.zig:117-121`). TCP `recvBuf` now fails on short reads (`transport.zig:648-660`) rather than zero-filling; that does not authenticate the peer: T1.
 
 **Local processes -> shm**
 - Tampering/disclosure by same-uid processes on predictable names (`transport.zig:227-241`). `shm_unlink` then `O_EXCL` create discards a pre-planted send segment, then fails if a racer recreates it; it does not randomize the name: T5. Send-size guard is a ReleaseFast-stripped assert (`transport.zig:282`).
@@ -126,7 +126,7 @@ Docs-vs-code check (2026-09-02): `docs/API.md` auth / CORS / Host-rebind / rate-
 1. **Budget denial:** one key holder streams maximal requests. With limits unset, nothing throttles GPU time. With limits set, the single global TPM/RPM bucket starves every other client (`rate_limiter.zig:56-59,125-144`).
 2. **Cross-request state reach:** a key holder exports `/v1/kv_cache` after other users' traffic and receives hidden-state blocks derived from their prompts on a shared single-key deployment (`server.zig:2441`; radix prefix cache is likewise global, `scheduler.zig:277,397`).
 3. **Latency gaming:** repeated user-supplied GBNF grammars or `json_mode` force inline parse-and-constrain outside the batch scheduler, degrading concurrent clients (`server.zig:3701-3705`).
-4. **Cluster hijack (no auth needed):** a LAN host answers the UDP beacon first or wins the TCP connect race and becomes a trusted rank, then feeds arbitrary f32 tensors (`transport.zig:215-222`, `peer_discovery.zig:107-112`).
+4. **Cluster hijack (no auth needed):** a LAN host answers the UDP beacon first or wins the TCP connect race and becomes a trusted rank, then feeds arbitrary f32 tensors (`transport.zig:215-222`, `peer_discovery.zig:117-121`).
 5. **Prompt harvest from disk:** on a shared Unix user or a leaked compose volume, read `conversations.json` (`conv_store.zig:68-73`).
 6. **Client-side trust note:** the `--serve` web UI enforces nothing itself; all checks are server-side (correct posture). The standalone browser demo will load any model URL a visitor types (`web/agave.ts` `loadModel` :238-252), so a linked model can serve attacker-chosen completions locally, inside the sandbox.
 

@@ -2,11 +2,11 @@
 //!
 //! Production leaves the override unset so each reader hits its natural OS
 //! clock: milliNow/nanoNow read REALTIME (wall time: log timestamps, seeds,
-//! epoch fields), while monoMilli reads MONOTONIC (interval math: timeouts,
-//! rate-limit refill, scheduling priority, LRU stamps) so NTP steps or manual
-//! clock changes cannot produce negative or inflated durations. Interval
-//! timers outside this module (perf counters, download progress) also use
-//! CLOCK_MONOTONIC directly.
+//! epoch fields), while monoMilli/monoNano read MONOTONIC (interval math:
+//! timeouts, rate-limit refill, scheduling priority, LRU stamps, power
+//! throttle) so NTP steps or manual clock changes cannot produce negative
+//! or inflated durations. Interval timers outside this module (perf
+//! counters, download progress) also use CLOCK_MONOTONIC directly.
 //!
 //! Tests and a future sim harness call setOverrideMs / advanceMs to drive
 //! timeouts, rate-limit refill, and scheduling priority from a single seed.
@@ -68,7 +68,7 @@ pub fn setOverrideMs(ms: ?i64) void {
     override_ms.store(ms orelse no_override);
 }
 
-/// True when milliNow/nanoNow/sleepNs are driven by the override (not the OS clock).
+/// True when milliNow/nanoNow/monoMilli/monoNano/sleepNs are driven by the override.
 pub fn isOverridden() bool {
     return override_ms.load() != no_override;
 }
@@ -117,6 +117,26 @@ pub fn monoMilli() i64 {
     const t = override_ms.load();
     if (t != no_override) return t;
     return monoNowWall();
+}
+
+fn monoNowNanoWall() i96 {
+    if (comptime is_freestanding) return 0;
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+    return @as(i96, ts.sec) * 1_000_000_000 + ts.nsec;
+}
+
+/// Monotonic nanoseconds for sub-millisecond interval math (power throttle).
+///
+/// Production reads CLOCK_MONOTONIC so NTP steps cannot inflate or negate
+/// a measured duration. Under override, values are override_ms * 1e6 (the
+/// same simulated timeline as milliNow/monoMilli/nanoNow) so a frozen
+/// virtual clock yields a zero delta and a replay does not inherit host
+/// execution speed.
+pub fn monoNano() i96 {
+    const t = override_ms.load();
+    if (t != no_override) return @as(i96, t) * 1_000_000;
+    return monoNowNanoWall();
 }
 
 /// Nanoseconds since epoch (simulated when override is set).
@@ -187,4 +207,17 @@ test "monoMilli follows override and monotonic clock" {
     try std.testing.expectEqual(milliNow(), monoMilli());
     advanceMs(250);
     try std.testing.expectEqual(@as(i64, 1_700_000_000_250), monoMilli());
+}
+
+test "monoNano follows override and monotonic clock" {
+    defer setOverrideMs(null);
+    const a = monoNano();
+    const b = monoNano();
+    try std.testing.expect(b >= a);
+    setOverrideMs(1_700_000_000_000);
+    try std.testing.expectEqual(nanoNow(), monoNano());
+    advanceMs(250);
+    try std.testing.expectEqual(@as(i96, 1_700_000_000_250) * 1_000_000, monoNano());
+    // A pair of reads with no advance is a zero delta (replay-stable).
+    try std.testing.expectEqual(@as(i96, 0), monoNano() - monoNano());
 }
