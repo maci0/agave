@@ -98,6 +98,9 @@ class AgaveEngine {
         // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|ArrayBuffer union; no schema parser to delegate to
         if (typeof source === 'string') {
             const response = await fetch(source);
+            if (!response.ok) {
+                throw new Error(`Failed to download model (HTTP ${String(response.status)})`);
+            }
             data = await response.arrayBuffer();
         }
         // Allocate WASM memory and copy model data
@@ -107,19 +110,31 @@ class AgaveEngine {
         }
         const wasmMem = new Uint8Array(exp.memory.buffer, ptr, data.byteLength);
         wasmMem.set(new Uint8Array(data));
-        // Initialize inference context
-        this.ctx = exp.agave_init(ptr, data.byteLength);
+        // Initialize a new context first; keep the previous one until this succeeds
+        // so a failed reload does not leave the chat with no model.
+        const newCtx = exp.agave_init(ptr, data.byteLength);
         // Model buffer is borrowed by GGUF, do NOT agave_dealloc until agave_free.
-        if (this.ctx === 0) {
+        if (newCtx === 0) {
             throw new Error('Failed to initialize model');
         }
         // Read init status message
         const statusBufSize = 4096;
         const statusPtr = exp.agave_alloc(statusBufSize);
-        const statusLen = exp.agave_get_output(this.ctx, statusPtr, statusBufSize);
+        const statusLen = exp.agave_get_output(newCtx, statusPtr, statusBufSize);
         const statusMem = new Uint8Array(exp.memory.buffer, statusPtr, statusLen);
-        this.initMessage = new TextDecoder().decode(statusMem);
+        const initMessage = new TextDecoder().decode(statusMem);
         exp.agave_dealloc(statusPtr, statusBufSize);
+        // agave_init returns a context on parse/init errors too, with a diagnostic
+        // instead of the "Loaded:" banner. Do not treat that as a successful load.
+        if (!initMessage.startsWith('Loaded:')) {
+            exp.agave_free(newCtx);
+            throw new Error(initMessage || 'Failed to initialize model');
+        }
+        if (this.ctx) {
+            exp.agave_free(this.ctx);
+        }
+        this.ctx = newCtx;
+        this.initMessage = initMessage;
         // oxlint-disable-next-line no-console -- engine diagnostics for WASM debugging
         console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB, ${this.initMessage}`);
     }

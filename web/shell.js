@@ -8,6 +8,8 @@ const chat = document.getElementById('chat');
 const statusEl = document.getElementById('status');
 const promptInput = document.getElementById('prompt');
 const dropZone = document.getElementById('drop-zone');
+/** GGUF files start with this 4-byte magic (`GGUF`). */
+const gguf_magic = [0x47, 0x47, 0x55, 0x46];
 function announceToSR(text) {
     const el = document.getElementById('sr-announce');
     if (el) {
@@ -15,9 +17,129 @@ function announceToSR(text) {
         setTimeout(() => { el.textContent = text; }, 100);
     }
 }
+function fmtMb(bytes) {
+    return (bytes / 1024 / 1024).toLocaleString(undefined, {
+        maximumFractionDigits: 1,
+        minimumFractionDigits: 1,
+    });
+}
+function isGgufName(name) {
+    return name.toLowerCase().endsWith('.gguf');
+}
+function isGgufBuffer(data) {
+    if (data.byteLength < gguf_magic.length) {
+        return false;
+    }
+    const head = new Uint8Array(data, 0, gguf_magic.length);
+    return head[0] === gguf_magic[0] && head[1] === gguf_magic[1]
+        && head[2] === gguf_magic[2] && head[3] === gguf_magic[3];
+}
+function isHttpUrl(value) {
+    try {
+        const parsed = new URL(value);
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    }
+    catch {
+        return false;
+    }
+}
+function setUrlError(message) {
+    const urlInput = document.getElementById('model-url');
+    const urlError = document.getElementById('url-error');
+    statusEl.textContent = message;
+    urlError.textContent = message;
+    announceToSR(message);
+    urlInput.setAttribute('aria-invalid', 'true');
+    urlInput.setAttribute('aria-describedby', 'url-error');
+    urlInput.focus();
+}
+function clearUrlError() {
+    const urlInput = document.getElementById('model-url');
+    const urlError = document.getElementById('url-error');
+    urlInput.removeAttribute('aria-invalid');
+    urlInput.removeAttribute('aria-describedby');
+    urlError.textContent = '';
+}
+/** Map engine/network failures to short, actionable copy. */
+function friendlyLoadError(error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    const lower = msg.toLowerCase();
+    if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
+        return 'Could not download the model. Check the URL, or drop a GGUF file instead. Some hosts block browser downloads.';
+    }
+    if (lower.includes('http 404')) {
+        return 'The model URL was not found. Check the link.';
+    }
+    if (lower.includes('http 403') || lower.includes('http 401')) {
+        return 'The model URL refused the download. Try dropping a GGUF file instead.';
+    }
+    if (lower.startsWith('gguf parse error') || lower.includes('not a valid gguf')) {
+        return 'This file is not a valid GGUF model.';
+    }
+    if (lower.startsWith('unsupported arch')) {
+        return 'This model architecture is not supported in the browser.';
+    }
+    if (lower.startsWith('no vocab')) {
+        return 'This GGUF file has no vocabulary and cannot be used.';
+    }
+    if (lower.startsWith('tok error')) {
+        return 'Could not read the tokenizer from this model file.';
+    }
+    if (lower.startsWith('model init error') || lower === 'failed to initialize model') {
+        return 'Could not initialize this model in the browser.';
+    }
+    if (lower.includes('failed to allocate')) {
+        return 'The model is too large to fit in this browser.';
+    }
+    if (lower === 'engine not initialized') {
+        return 'The engine is not ready. Reload the page and try again.';
+    }
+    return msg.startsWith('Could not') ? msg : `Could not load model: ${msg}`;
+}
+async function downloadModel(url) {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to download model (HTTP ${String(response.status)})`);
+    }
+    const total = Number(response.headers.get('content-length')) || 0;
+    const reader = response.body?.getReader();
+    if (!reader) {
+        return response.arrayBuffer();
+    }
+    const chunks = [];
+    let received = 0;
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+            break;
+        }
+        chunks.push(value);
+        received += value.byteLength;
+        if (total > 0) {
+            const pct = Math.round((received / total) * 100);
+            statusEl.textContent = `Downloading model… ${fmtMb(received)} / ${fmtMb(total)} MB (${String(pct)}%)`;
+        }
+        else {
+            statusEl.textContent = `Downloading model… ${fmtMb(received)} MB`;
+        }
+    }
+    const out = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return out.buffer;
+}
 // Drag & drop
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('dragleave', (e) => {
+    const to = e.relatedTarget;
+    if (to instanceof Node && dropZone.contains(to)) {
+        return;
+    }
+    dropZone.classList.remove('dragover');
+});
 dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
@@ -28,24 +150,24 @@ dropZone.addEventListener('drop', (e) => {
 });
 async function loadModelFromUrl() {
     const urlInput = document.getElementById('model-url');
-    const urlError = document.getElementById('url-error');
     const url = urlInput.value.trim();
     if (!url) {
-        statusEl.textContent = 'Enter a model URL first';
-        urlError.textContent = 'Enter a model URL first';
-        announceToSR('Enter a model URL first');
-        urlInput.setAttribute('aria-invalid', 'true');
-        urlInput.setAttribute('aria-describedby', 'url-error');
-        urlInput.focus();
+        setUrlError('Enter a model URL first');
         return;
     }
-    urlInput.removeAttribute('aria-invalid');
-    urlInput.removeAttribute('aria-describedby');
-    urlError.textContent = '';
+    if (!isHttpUrl(url)) {
+        setUrlError('Enter a valid http(s) URL to a GGUF file');
+        return;
+    }
+    clearUrlError();
     await initAndLoad(async () => {
         statusEl.textContent = 'Downloading model…';
-        await engine.loadModel(url);
-    });
+        const data = await downloadModel(url);
+        if (!isGgufBuffer(data)) {
+            throw new Error('This file is not a valid GGUF model.');
+        }
+        await engine.loadModel(data);
+    }, true);
 }
 function loadModelFromFile(event) {
     const input = event.target;
@@ -56,21 +178,37 @@ function loadModelFromFile(event) {
     void loadModelFromBuffer(file);
 }
 async function loadModelFromBuffer(file) {
+    if (file.name && !isGgufName(file.name)) {
+        const message = 'This is not a GGUF model file. Choose a file ending in .gguf.';
+        statusEl.textContent = message;
+        addMessage('error', message);
+        announceToSR(message);
+        return;
+    }
     await initAndLoad(async () => {
-        statusEl.textContent = `Reading ${file.name} (${(file.size / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} MB)…`;
+        statusEl.textContent = `Reading ${file.name} (${fmtMb(file.size)} MB)…`;
         const data = await file.arrayBuffer();
+        if (!isGgufBuffer(data)) {
+            throw new Error('This file is not a valid GGUF model.');
+        }
         await engine.loadModel(data);
-    });
+    }, false);
 }
-async function initAndLoad(loadFn) {
+async function initAndLoad(loadFn, fromUrl) {
     const loadBtn = document.getElementById('load-btn');
     const dropZoneEl = document.getElementById('drop-zone');
     const fileInput = document.getElementById('file-input');
+    const urlInput = document.getElementById('model-url');
+    const sendBtn = document.getElementById('send-btn');
+    const hadModel = Boolean(engine.ctx);
     loadBtn.disabled = true;
     loadBtn.setAttribute('aria-busy', 'true');
     loadBtn.textContent = 'Loading…';
     dropZoneEl.setAttribute('aria-disabled', 'true');
     fileInput.disabled = true;
+    urlInput.disabled = true;
+    promptInput.disabled = true;
+    sendBtn.disabled = true;
     statusEl.textContent = 'Initializing engine…';
     try {
         if (!engine.ready) {
@@ -82,25 +220,67 @@ async function initAndLoad(loadFn) {
         announceToSR('Model loaded. Ready to chat.');
         promptInput.disabled = false;
         promptInput.placeholder = 'Type a message...';
-        document.getElementById('send-btn').disabled = false;
+        sendBtn.disabled = false;
         const hint = document.getElementById('input-hint');
         if (hint) {
             hint.hidden = false;
         }
         promptInput.setAttribute('aria-describedby', 'input-hint');
+        const clearBtn = document.getElementById('clear-btn');
+        if (clearBtn) {
+            clearBtn.hidden = false;
+        }
         promptInput.focus();
     }
     catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        statusEl.textContent = `Could not load model: ${message}`;
-        addMessage('error', `Could not load model: ${message}`);
+        const message = friendlyLoadError(e);
+        statusEl.textContent = message;
+        addMessage('error', message);
         announceToSR(`Error loading model: ${message}`);
+        if (fromUrl) {
+            urlInput.setAttribute('aria-invalid', 'true');
+            urlInput.setAttribute('aria-describedby', 'url-error');
+            const urlError = document.getElementById('url-error');
+            urlError.textContent = message;
+        }
+        // A failed reload must not disable chat if the previous model is still loaded.
+        if (hadModel && engine.ctx) {
+            promptInput.disabled = false;
+            sendBtn.disabled = false;
+        }
     }
     loadBtn.disabled = false;
     loadBtn.removeAttribute('aria-busy');
     loadBtn.textContent = 'Load model';
     dropZoneEl.removeAttribute('aria-disabled');
     fileInput.disabled = false;
+    urlInput.disabled = false;
+}
+function restoreEmptyChat() {
+    chat.replaceChildren();
+    const empty = document.createElement('div');
+    empty.id = 'chat-empty';
+    empty.className = 'msg empty-hint';
+    empty.textContent = engine.ctx
+        ? 'Type a message to start chatting.'
+        : 'Load a GGUF model above, then type a message to start chatting.';
+    chat.append(empty);
+}
+function clearChat() {
+    if (isSending) {
+        return;
+    }
+    if (document.getElementById('chat-empty')) {
+        statusEl.textContent = 'Nothing to clear';
+        return;
+    }
+    if (!confirm('Clear this conversation?')) {
+        return;
+    } // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
+    restoreEmptyChat();
+    statusEl.textContent = engine.ctx ? 'Ready' : 'Load a GGUF model to begin';
+    announceToSR('Conversation cleared');
+    promptInput.focus();
 }
 let isSending = false;
 async function send() {
@@ -137,7 +317,11 @@ async function send() {
     catch (e) {
         pending.remove();
         const message = e instanceof Error ? e.message : String(e);
-        addMessage('error', `Error: ${message}`);
+        const lower = message.toLowerCase();
+        const shown = lower === 'no model loaded' || lower === 'model not initialized'
+            ? 'Load a GGUF model first.'
+            : `Could not generate a reply: ${message}`;
+        addMessage('error', shown);
     }
     promptInput.disabled = false;
     sendBtn.disabled = false;
@@ -199,15 +383,7 @@ promptInput.addEventListener('keydown', (e) => {
     }
 });
 const modelUrl = document.getElementById('model-url');
-modelUrl.addEventListener('input', (e) => {
-    const target = e.target;
-    target.removeAttribute('aria-invalid');
-    target.removeAttribute('aria-describedby');
-    const urlError = document.getElementById('url-error');
-    if (urlError) {
-        urlError.textContent = '';
-    }
-});
+modelUrl.addEventListener('input', () => { clearUrlError(); });
 modelUrl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
         e.preventDefault();
@@ -217,3 +393,4 @@ modelUrl.addEventListener('keydown', (e) => {
 globalThis.loadModelFromUrl = loadModelFromUrl;
 globalThis.loadModelFromFile = loadModelFromFile;
 globalThis.send = send;
+globalThis.clearChat = clearChat;
