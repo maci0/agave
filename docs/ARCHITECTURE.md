@@ -160,6 +160,8 @@ agave/
 
 ## Design Decisions
 
+**Status**: accepted (current). This table is the decision log; there is no separate `docs/adr/` set. Supersede a row in place and point at the replacement.
+
 Irreversible or high-cost choices. Rationale lives here so they are not re-litigated casually.
 
 | Decision | Choice | Why | Revisit when |
@@ -474,7 +476,7 @@ DDTree speculative decode -> output tokens
 |--------|-------------|
 | `transport.zig` | Transport layer: TCP (cross-node), POSIX shm (same-node zero-copy), NCCL (GPU-optimized RoCE RDMA) |
 
-**Modes**: Tensor Parallelism (`--tp N`), Pipeline Parallelism (`--pp N`), Hybrid TP+PP, Disaggregated Prefill/Decode (`--disagg`). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")`, no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device. See [PARALLELISM.md](PARALLELISM.md).
+**Modes**: Tensor Parallelism (`--tp 2`) and Pipeline Parallelism (`--pp 2`) on a 2-rank pair; Disaggregated Prefill/Decode (`--disagg`). Hybrid TP+PP (`--tp 2 --pp 2`) does not launch: TP transport is skipped when `pp_degree > 1` (see [PARALLELISM.md](PARALLELISM.md)). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")`, no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device.
 
 ### Quantization Types
 
