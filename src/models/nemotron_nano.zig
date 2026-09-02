@@ -1118,11 +1118,6 @@ pub const NemotronNanoModel = struct {
         return self.fmt.getTensor(name);
     }
 
-    /// Look up a SafeTensors tensor by full runtime name.
-    fn stTensor(self: *NemotronNanoModel, name: []const u8) ?TensorInfo {
-        return self.fmt.getTensor(name);
-    }
-
     /// Look up scale companion for a tensor: tries `.weight_scale` then `.scales`.
     fn findScaleTensor(self: *NemotronNanoModel, li: u32, comptime prefix: []const u8) ?TensorInfo {
         return self.stLayerTensor(li, prefix ++ ".scales") orelse

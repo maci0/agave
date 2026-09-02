@@ -798,14 +798,6 @@ pub const MetalBackend = struct {
         });
     }
 
-    /// Read `count` f32 values back from a Metal buffer's contents pointer.
-    fn readBuffer(buf: objc.id, dst: [*]f32, count: usize) void {
-        const contents: [*]const f32 = @ptrCast(@alignCast(
-            objc.msgSend(*anyopaque, buf, objc.sel("contents"), .{}),
-        ));
-        @memcpy(dst[0..count], contents[0..count]);
-    }
-
     /// Release an ObjC object (decrements retain count).
     fn release(obj: objc.id) void {
         objc.msgSend(void, obj, objc.sel("release"), .{});
