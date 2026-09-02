@@ -53,13 +53,6 @@ fn getenv(name: []const u8) ?[]const u8 {
     return std.mem.sliceTo(ptr, 0);
 }
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
-fn perfMonoMs() u64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
-}
-
 // NCCL types and constants
 const NcclComm = ?*anyopaque;
 const NcclUniqueId = [128]u8;
@@ -124,8 +117,6 @@ pub const Transport = struct {
     /// Device memory for topology-aware partitioning (reserved for future use).
     local_mem: usize = 0,
     peer_mem: usize = 0,
-    /// TEMP PERF: allReduce call counter for latency sampling.
-    allreduce_calls: u64 = 0,
 
     /// Opaque backend pointer for device pointer lookup.
     cuda_backend: ?*anyopaque = null,
@@ -426,14 +417,6 @@ pub const Transport = struct {
     /// Dispatches to NCCL (GPU-direct or staging), SHM, or TCP depending on transport kind.
     /// Falls back to TCP when the NCCL communicator is unavailable.
     pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
-        const t_start = perfMonoMs();
-        defer {
-            // TEMP PERF: sample the allReduce latency every 40th call.
-            self.allreduce_calls += 1;
-            if (self.allreduce_calls % 40 == 0) {
-                std.log.info("TPPERF allReduce call {d}: {d}ms", .{ self.allreduce_calls, perfMonoMs() - t_start });
-            }
-        }
         if (self.kind == .nccl) {
             self.ensureNcclComm();
             if (self.nccl_comm == null) {

@@ -98,7 +98,6 @@ pub const MtpWeights = struct {
             const n_dims: u32 = @intCast(@min(shape_arr.items.len, 4));
             for (0..n_dims) |i| shape[i] = @intCast(shape_arr.items[i].integer);
 
-            // Detect MTP depth from tensor name
             if (std.mem.startsWith(u8, name, "mtp.")) {
                 const depth_char = name[4];
                 if (depth_char >= '0' and depth_char <= '9') {
@@ -107,7 +106,6 @@ pub const MtpWeights = struct {
                 }
             }
 
-            // Store with original HF name as key
             const name_owned = try allocator.dupe(u8, name);
             try self.tensors.put(name_owned, .{
                 .data_ptr = data_base + start,
@@ -130,7 +128,6 @@ pub const MtpWeights = struct {
     }
 
     pub fn deinit(self: *MtpWeights, allocator: Allocator) void {
-        // Free owned name strings
         var kit = self.tensors.keyIterator();
         while (kit.next()) |k| allocator.free(k.*);
         self.tensors.deinit();
