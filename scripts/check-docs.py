@@ -12,6 +12,7 @@ and Docker image packaging (Debian pin, OCI license, LICENSE shipment).
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from datetime import datetime, timezone
@@ -366,6 +367,67 @@ def check_docker_packaging() -> list[str]:
     return errors
 
 
+def check_bun_pin() -> list[str]:
+    """package.json packageManager, engines.bun, and CI lint-web must agree."""
+    errors: list[str] = []
+    pkg = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    pm = pkg.get("packageManager", "")
+    m = re.fullmatch(r"bun@([0-9]+\.[0-9]+\.[0-9]+)", str(pm))
+    if not m:
+        return ['package.json: packageManager must be bun@X.Y.Z']
+    ver = m.group(1)
+    engines = (pkg.get("engines") or {}).get("bun")
+    if engines != ver:
+        errors.append(
+            f"package.json: engines.bun ({engines!r}) must equal packageManager bun@{ver}"
+        )
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    if f'bun-version: "{ver}"' not in ci:
+        errors.append(
+            f'.github/workflows/ci.yml: bun-version must be "{ver}" '
+            "(package.json packageManager)"
+        )
+    return errors
+
+
+def check_cuda_sm_default() -> list[str]:
+    """Bare `zig build ptx` must match CI kernel-artifacts (committed PTX SM)."""
+    build = (ROOT / "build.zig").read_text(encoding="utf-8", errors="replace")
+    m = re.search(
+        r'b\.option\(CudaSm, "cuda-sm", "CUDA SM target \(default: (sm_\d+)\)"\) orelse \.(sm_\d+)',
+        build,
+    )
+    if not m:
+        return ['build.zig: could not parse cuda-sm default']
+    if m.group(1) != m.group(2):
+        return [
+            f"build.zig: cuda-sm option text default {m.group(1)} != orelse .{m.group(2)}"
+        ]
+    default = m.group(1)
+    errors: list[str] = []
+    script = (ROOT / "scripts" / "check-shader-artifacts.sh").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    if f"zig build ptx -Dcuda-sm={default}" not in script:
+        errors.append(
+            f"scripts/check-shader-artifacts.sh: PTX rebuild must use -Dcuda-sm={default} "
+            "(same as build.zig default so `zig build ptx` matches CI)"
+        )
+    readme = (ROOT / "README.md").read_text(encoding="utf-8", errors="replace")
+    if not re.search(
+        rf"`cuda-sm`\s*\|\s*enum\s*\|\s*{re.escape(default)}\s*\|",
+        readme,
+    ):
+        errors.append(f"README.md: cuda-sm default column must be {default}")
+    if '@embedFile(".zigversion")' not in build:
+        errors.append(
+            "build.zig: must embed .zigversion and refuse a mismatched compiler"
+        )
+    return errors
+
+
 def check_ci_runner_pins() -> list[str]:
     """GitHub Actions must not use floating *-latest runner tags."""
     errors: list[str] = []
@@ -383,6 +445,11 @@ def check_ci_runner_pins() -> list[str]:
 
 
 def main() -> int:
+    if sys.version_info < (3, 11):
+        sys.exit(
+            f"check-docs: Python {sys.version.split()[0]} is too old; need 3.11+ "
+            "(PEP 723 requires-python in this file)"
+        )
     errors: list[str] = []
     errors.extend(check_links())
     errors.extend(check_diagram_counts())
@@ -393,6 +460,8 @@ def main() -> int:
     errors.extend(check_debian_snapshot_pin())
     errors.extend(check_docker_packaging())
     errors.extend(check_ci_runner_pins())
+    errors.extend(check_bun_pin())
+    errors.extend(check_cuda_sm_default())
     if errors:
         print(f"check-docs: {len(errors)} issue(s)")
         for e in errors:

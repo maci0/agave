@@ -358,7 +358,7 @@ All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GP
 - **Zig 0.16.0** (pin in `.zigversion`; must match `build.zig.zon` `.minimum_zig_version`). Download: https://ziglang.org/download/
 - macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU, WebGPU backends)
 - GPU backends load drivers at runtime via dlopen, no SDK needed at build time
-- Contributors: `zig build check` is the local CI gate (format + docs hygiene + unit tests). TypeScript under `src/web/` and `web/` also needs `bun run lint` and `bun run typecheck`. See [Contributing](docs/CONTRIBUTING.md).
+- Contributors: `zig build check` is the local Zig CI gate (format + docs hygiene + unit tests; needs Python 3.11+). TypeScript under `src/web/` and `web/` is `zig build lint-web` (`bun 1.4.0`, `bun install --frozen-lockfile`). See [Contributing](docs/CONTRIBUTING.md).
 
 ## CLI Options
 
@@ -492,9 +492,10 @@ zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-qwen4-exp=false \
   -Denable-deepseek4=false -Denable-dflash2=false \
   -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false
 
-# Override GPU architecture targets
-zig build -Dcuda-sm=sm_120        # Blackwell
-zig build -Drocm-arch=gfx942      # MI300X
+# Override GPU architecture targets (kernel codegen steps, not the main binary)
+zig build ptx                     # CUDA PTX, default sm_120 (committed artifacts / CI)
+zig build ptx -Dcuda-sm=sm_90     # Hopper
+zig build amdgcn -Drocm-arch=gfx942  # MI300X (default gfx1100)
 
 # Cross-compile
 zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
@@ -512,8 +513,8 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-webgpu` | bool | true | WebGPU backend (runtime dlopen, WGSL) |
 | `enable-debug` | bool | true | Build the `agave-debug` (ReleaseSafe) binary |
 | `enable-bench` | bool | true | Install the `agave-bench` micro-benchmark binary |
-| `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120, plus sm_121) |
-| `rocm-arch` | enum | gfx1100 | ROCm GFX target (gfx90a..gfx1151) |
+| `cuda-sm` | enum | sm_120 | CUDA SM target for `zig build ptx` (sm_50..sm_121) |
+| `rocm-arch` | enum | gfx1100 | ROCm GFX target for `zig build amdgcn` (gfx90a..gfx1151) |
 
 **Model Options:**
 

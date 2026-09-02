@@ -118,6 +118,8 @@ must still appear under **Changed** or **Breaking** below. See
   pointer as a writable buffer.
 
 ### Changed
+- `zig build ptx` defaults to `-Dcuda-sm=sm_120` (was `sm_90`) so a bare PTX
+  rebuild matches committed kernels and CI `kernel-artifacts`.
 - Chat UI (`GET /`): gzip the embedded page when the client accepts it, send
   `ETag`/`304` and `Cache-Control: private, no-cache` for the document, `defer`
   marked/DOMPurify, and load highlight.js only when a code block is rendered.
