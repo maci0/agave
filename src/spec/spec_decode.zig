@@ -204,7 +204,6 @@ pub fn dsparkTrimDraft(state: *SpecState) void {
             0.75; // prior until we have data
         survival *= c;
         // Stop if expected marginal gain < 0.15 (single-request threshold).
-        // In production, the hardware-aware scheduler would compute this dynamically.
         if (survival < 0.15) {
             state.n_draft = @intCast(k + 1);
             return;
@@ -213,7 +212,7 @@ pub fn dsparkTrimDraft(state: *SpecState) void {
 }
 
 /// Generate draft tokens using MTP (Multi-Token Prediction) heads.
-/// Each depth produces one draft token from a lightweight single-layer forward pass.
+/// Each depth produces one draft token from the target's MTP decoder.
 pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     const max_depth = model.getMtpDepth();
     if (max_depth == 0) return 0;

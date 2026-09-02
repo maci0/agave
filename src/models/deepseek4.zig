@@ -39,12 +39,6 @@ const TensorData = backend_mod.TensorData;
 const name_buf_size: usize = model_mod.tensor_name_buf_size;
 const n_hc: usize = 4;
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
-fn perfMonoMs() u64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
-}
 const hc_mix_dim: usize = (2 + n_hc) * n_hc; // = 24
 /// Must match GGUF deepseek4.hyper_connection.sinkhorn_iterations (default 20).
 const hc_sinkhorn_iters: usize = 20;
@@ -707,15 +701,14 @@ pub const Ds4Model = struct {
         for (self.norm_cache[0..self.norm_cache_len]) |e| self.allocator.free(e.data);
         const a = self.allocator;
         inline for (.{
-            &self.hc_state,        &self.new_hc,           &self.hc_mixes,       &self.hc_pre_w,       &self.hc_post_w,
-            &self.hc_comb,         &self.hidden,           &self.hidden2,        &self.flat_norm,      &self.q_compressed,
-            &self.q_full,          &self.kv_proj,          &self.scores_buf,     &self.attn_out,       &self.lora_out,
-            &self.attn_result,     &self.ff_gate,          &self.ff_up,          &self.ff_down,        &self.expert_accum,
-            &self.expert_scratch,  &self.ff_gate_scratch,  &self.ff_up_scratch,  &self.router_logits,  &self.logits_buf,
-            &self.kv_k_bytes,      &self.csa_comp_kv,      &self.csa_comp_score, &self.csa_k,          &self.csa_score_scratch,
-            &self.lid_comp_k,      &self.lid_query,        &self.lid_head_w,     &self.lid_scores,     &self.rope_cos_buf,
-            &self.rope_sin_buf,    &self.gpu_slot_weights, &self.expert_pool,    &self.gpu_top_ids,
-            &self.gpu_top_weights,
+            &self.hc_state,       &self.new_hc,           &self.hc_mixes,       &self.hc_pre_w,      &self.hc_post_w,
+            &self.hc_comb,        &self.hidden,           &self.hidden2,        &self.flat_norm,     &self.q_compressed,
+            &self.q_full,         &self.kv_proj,          &self.scores_buf,     &self.attn_out,      &self.lora_out,
+            &self.attn_result,    &self.ff_gate,          &self.ff_up,          &self.ff_down,       &self.expert_accum,
+            &self.expert_scratch, &self.ff_gate_scratch,  &self.ff_up_scratch,  &self.router_logits, &self.logits_buf,
+            &self.kv_k_bytes,     &self.csa_comp_kv,      &self.csa_comp_score, &self.csa_k,         &self.csa_score_scratch,
+            &self.lid_comp_k,     &self.lid_query,        &self.lid_head_w,     &self.lid_scores,    &self.rope_cos_buf,
+            &self.rope_sin_buf,   &self.gpu_slot_weights, &self.expert_pool,    &self.gpu_top_ids,   &self.gpu_top_weights,
         }) |buf| a.free(buf.*);
         if (self.lid_topk_ids.len > 0) a.free(self.lid_topk_ids);
         // Prefill buffers (page_allocator), currently empty slices (allocation deferred).
@@ -1553,15 +1546,6 @@ pub const Ds4Model = struct {
     fn ffnLayer(self: *Ds4Model, li: usize, token_id: u32) !void {
         const e = self.n_embd;
         const ff: usize = self.ff_exp;
-        const t_ffn_start = perfMonoMs();
-        // TEMP PERF: per-phase instrumentation (first 3 layers only).
-        var t_norm: u64 = 0;
-        var t_route: u64 = 0;
-        var t_phase1: u64 = 0;
-        var t_silu: u64 = 0;
-        var t_phase3: u64 = 0;
-        var t_combine: u64 = 0;
-        var t_prev = t_ffn_start;
         // MoE-Spec: use reduced expert budget during verification for fewer SSD reads.
         const nk: usize = if (self.expert_budget > 0) self.expert_budget else self.n_expert_used;
         const ne: usize = self.n_experts;
@@ -1569,8 +1553,6 @@ pub const Ds4Model = struct {
         // Pre-norm: GPU only (no sync, expert GEMVs and routing GEMV also GPU)
         const nw = try self.layerTensorReq(li, "ffn_norm.weight");
         self.cpu.rmsNorm(self.hidden.ptr, self.normAsF32(nw, e), self.hidden2.ptr, e, self.rms_eps);
-        t_norm += perfMonoMs() - t_prev;
-        t_prev = perfMonoMs();
 
         // Route
         var top_ids: [8]usize = undefined;
@@ -1645,8 +1627,6 @@ pub const Ds4Model = struct {
         // Batched FFN: gate+up+activation per expert, then down GEMVs.
         // Try fused kernel (gate+up+clampedSiluMul in 1 dispatch per expert)
         // when Q2_K weights on Metal. Falls back to 3-phase unfused path.
-        t_route += perfMonoMs() - t_prev;
-        t_prev = perfMonoMs();
         var n_scratch: usize = 0;
         var slot_weights: [9]f32 = [_]f32{0.0} ** 9;
 
@@ -1840,15 +1820,10 @@ pub const Ds4Model = struct {
             }
         }
 
-        t_phase1 += perfMonoMs() - t_prev;
-        t_prev = perfMonoMs();
-
         // Phase 2: clampedSiluMul, skip when fused path already applied activation.
         if (!fused_experts and n_scratch > 0) {
             self.computeBackend().clampedSiluMul(self.ff_gate_scratch.ptr, self.ff_up_scratch.ptr, self.ff_gate_scratch.ptr, n_scratch * ff);
         }
-        t_silu += perfMonoMs() - t_prev;
-        t_prev = perfMonoMs();
 
         // Phase 3: all down GEMVs into expert_scratch, batch for no barriers.
         self.gemvBackend().beginBatch();
@@ -1900,9 +1875,6 @@ pub const Ds4Model = struct {
         }
 
         self.gemvBackend().endBatch(); // end down GEMVs batch
-
-        t_phase3 += perfMonoMs() - t_prev;
-        t_prev = perfMonoMs();
 
         // Hash layers 0-2 defer expert weights until after gate logits are on host.
         if (li < self.hash_layer_count) {
@@ -1977,14 +1949,6 @@ pub const Ds4Model = struct {
                 }
             }
         }
-        t_combine += perfMonoMs() - t_prev;
-
-        // TEMP PERF: per-phase timing for the first 3 layers.
-        if (li < 3) {
-            std.log.info("FFNPERF layer {d}: norm {d}ms route {d}ms phase1 {d}ms silu {d}ms phase3 {d}ms combine {d}ms total {d}ms", .{
-                li, t_norm, t_route, t_phase1, t_silu, t_phase3, t_combine, perfMonoMs() - t_ffn_start,
-            });
-        }
     }
 
     // ── Forward pass ─────────────────────────────────────────────
@@ -2036,13 +2000,6 @@ pub const Ds4Model = struct {
             }
         }
 
-        // TEMP PERF: per-phase timing instrumentation
-        var t_attn_ms: u64 = 0;
-        var t_ffn_ms: u64 = 0;
-        var t_hc_ms: u64 = 0;
-        const t_total_start = perfMonoMs();
-        var t_prev = t_total_start;
-
         for (0..nl) |li| {
             if (self.cancelled.load(.monotonic)) return error.Cancelled;
 
@@ -2055,30 +2012,17 @@ pub const Ds4Model = struct {
             const ab = try self.layerTensorReq(li, "hc_attn_base.weight");
             const as_ = try self.layerTensorReq(li, "hc_attn_scale.weight");
             self.hcPre(af, ab, as_);
-            t_hc_ms += perfMonoMs() - t_prev;
-            t_prev = perfMonoMs();
             try self.attentionLayer(li);
-            t_attn_ms += perfMonoMs() - t_prev;
-            t_prev = perfMonoMs();
             self.hcPost();
-            t_hc_ms += perfMonoMs() - t_prev;
 
             // FFN: HC pre → ffn → HC post
             const ff = try self.layerTensorReq(li, "hc_ffn_fn.weight");
             const fb = try self.layerTensorReq(li, "hc_ffn_base.weight");
             const fs = try self.layerTensorReq(li, "hc_ffn_scale.weight");
-            t_prev = perfMonoMs();
             self.hcPre(ff, fb, fs);
-            t_hc_ms += perfMonoMs() - t_prev;
-            t_prev = perfMonoMs();
             try self.ffnLayer(li, token_id);
-            t_ffn_ms += perfMonoMs() - t_prev;
-            t_prev = perfMonoMs();
             self.hcPost();
-            t_hc_ms += perfMonoMs() - t_prev;
         }
-
-        std.log.info("DS4PERF token {d} seq={d}: total {d}ms attn {d}ms ffn {d}ms hc {d}ms", .{ token_id, self.kv_seq_len, perfMonoMs() - t_total_start, t_attn_ms, t_ffn_ms, t_hc_ms });
 
         // Non-last PP stage: send HC state downstream and wait for the sampled token.
         if (self.pp_degree > 1 and self.pp_rank + 1 < self.pp_degree) {
@@ -2174,29 +2118,22 @@ pub const Ds4Model = struct {
     /// Reset MTP KV cache to match the target model's position.
     /// Called after speculative rejection to discard stale MTP KV entries.
     pub fn resetMtpCache(self: *Ds4Model) void {
-        // Reset MTP KV to the target model's current KV length.
-        // After rejection, only positions 0..kv_seq_len-1 are valid.
         if (self.mtp_kv_len > self.kv_seq_len) {
             self.mtp_kv_len = self.kv_seq_len;
         }
     }
 
-    /// MTP forward: predict draft token at the given depth.
-    /// Uses MTP weights (separate from main model) with shared expert FFN only.
-    /// Requires target model to have just completed a forward() pass (hidden state saved).
-    /// MTP forward: run the 3-layer MTP decoder to predict the next token.
-    /// Each call produces ONE draft token by running mtp.0 → mtp.1 → mtp.2.
-    /// `depth` is the DRAFT POSITION (for chaining multiple drafts).
-    /// The MTP decoder is a 3-layer transformer that shares the main model's
-    /// embedding table and LM head but has its own attention/FFN weights.
+    /// Run the 3-layer MTP decoder to predict one draft token (mtp.0 → mtp.1 → mtp.2).
+    /// Shares the main model's embedding table and LM head; attention/FFN weights are MTP's.
+    /// Requires a completed `forward()` so `hidden` and `hc_state` are current.
+    /// `depth` is the draft position for chaining; hidden-state chaining uses `mtp_hidden_buf`.
     pub fn mtpForward(self: *Ds4Model, token_id: u32, depth: u32) !u32 {
         const mtp = self.mtp_weights orelse return error.MissingTensor;
-        _ = depth; // Draft position (used for inter-draft hidden state)
+        _ = depth;
         const e = self.n_embd;
         const kd: usize = self.kv_lora_rank; // 512
         const gemv_mxfp8_fn = gemvMXFP8;
 
-        // Get embedding for the input token
         const emb_t = self.fmt.getTensor("token_embd.weight") orelse return error.MissingTensor;
         const emb_bytes = backend_mod.weightBytes(emb_t.dtype, 1, e);
         const emb_ptr = emb_t.data_ptr + token_id * emb_bytes;
@@ -2207,10 +2144,8 @@ pub const Ds4Model = struct {
         @memcpy(mtp_input[e .. 2 * e], self.mtp_hidden_buf[0..e]);
         quant_ops.dequantToF32(mtp_input[2 * e .. 3 * e], emb_ptr, emb_t.dtype, e);
 
-        // Initialize MTP HC state from target's last HC state
         @memcpy(self.mtp_hc_state[0 .. n_hc * e], self.hc_state[0 .. n_hc * e]);
 
-        // === MTP Layer 0: main_proj + main_norm + attention + FFN ===
         if (mtp.get("mtp.0.main_proj.weight")) |proj_w| {
             if (mtp.get("mtp.0.main_proj.scale")) |proj_s| {
                 gemv_mxfp8_fn(
@@ -2226,7 +2161,6 @@ pub const Ds4Model = struct {
         } else {
             @memcpy(self.hidden2[0..e], mtp_input[0..e]);
         }
-        // main_norm
         if (mtp.get("mtp.0.main_norm.weight")) |mn_t| {
             var mn_f32: [4096]f32 = undefined;
             self.dequantBf16(&mn_f32, mn_t.data_ptr, e);
@@ -2236,17 +2170,11 @@ pub const Ds4Model = struct {
 
         // Run MTP layers 0, 1, 2 with HC mixing (hidden2 carries the state)
         for (0..3) |layer| {
-            // HC pre (attn) → hidden2 = weighted sum of HC streams
-            self.mtpHcPre(mtp, layer, e);
-            // Attention
+            self.mtpHcPre(mtp, layer, e, "attn");
             self.mtpAttentionLayer(mtp, layer, e, kd);
-            // HC post (attn) → update MTP HC state
             self.mtpHcPost(e);
-            // HC pre (ffn), use ffn HC weights
-            self.mtpHcPreFfn(mtp, layer, e);
-            // FFN (shared expert only)
+            self.mtpHcPre(mtp, layer, e, "ffn");
             self.mtpFfnLayer(mtp, layer, e);
-            // HC post (ffn)
             self.mtpHcPost(e);
         }
 
@@ -2883,21 +2811,19 @@ pub const Ds4Model = struct {
     pub fn getBlockTable(_: *const Ds4Model) []const u32 {
         return &.{};
     }
-    /// MTP HC pre: compute weighted sum of MTP HC streams → hidden2.
-    /// Uses MTP-specific HC weights from safetensors.
-    fn mtpHcPre(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize) void {
+    /// Weighted sum of MTP HC streams into `hidden2` using `hc_{stem}_*` weights.
+    fn mtpHcPre(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize, comptime stem: []const u8) void {
         var b1: [64]u8 = undefined;
         var b2: [64]u8 = undefined;
         var b3: [64]u8 = undefined;
-        const fn_name = std.fmt.bufPrint(&b1, "mtp.{d}.hc_attn_fn", .{layer}) catch return;
-        const base_name = std.fmt.bufPrint(&b2, "mtp.{d}.hc_attn_base", .{layer}) catch return;
-        const scale_name = std.fmt.bufPrint(&b3, "mtp.{d}.hc_attn_scale", .{layer}) catch return;
+        const fn_name = std.fmt.bufPrint(&b1, "mtp.{d}.hc_" ++ stem ++ "_fn", .{layer}) catch return;
+        const base_name = std.fmt.bufPrint(&b2, "mtp.{d}.hc_" ++ stem ++ "_base", .{layer}) catch return;
+        const scale_name = std.fmt.bufPrint(&b3, "mtp.{d}.hc_" ++ stem ++ "_scale", .{layer}) catch return;
         const fn_t = mtp.get(fn_name) orelse return;
         const base_t = mtp.get(base_name) orelse return;
         const scale_t = mtp.get(scale_name) orelse return;
 
         const flat_size = n_hc * e;
-        // RMS scale factor from mtp_hc_state
         const V8 = @Vector(8, f32);
         const rms_inv = blk: {
             var acc: V8 = @splat(0.0);
@@ -2911,7 +2837,6 @@ pub const Ds4Model = struct {
             break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
         };
 
-        // mixes[24] = hc_fn @ mtp_hc_state (F32 GEMV, tiny)
         var mixes: [hc_mix_dim]f32 = undefined;
         cpuGemvF32(fn_t.data_ptr, self.mtp_hc_state, &mixes, flat_size);
         for (&mixes) |*m| m.* *= rms_inv;
@@ -2919,7 +2844,6 @@ pub const Ds4Model = struct {
         const base: [*]const f32 = @ptrCast(@alignCast(base_t.data_ptr));
         const scale: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
 
-        // pre/post/comb weights
         for (0..n_hc) |s| {
             self.hc_pre_w[s] = sigmoid(mixes[s] * scale[0] + base[s]) + hc_eps;
             self.hc_post_w[s] = sigmoid(mixes[n_hc + s] * scale[1] + base[n_hc + s]) * 2.0;
@@ -2929,7 +2853,6 @@ pub const Ds4Model = struct {
         }
         hcSinkhorn(self.hc_comb);
 
-        // Weighted sum: hidden2 = Σ pre_w[s] * mtp_hc_state[s]
         var i: usize = 0;
         while (i + 8 <= e) : (i += 8) {
             var acc2: V8 = @splat(@as(f32, 0.0));
@@ -2971,64 +2894,6 @@ pub const Ds4Model = struct {
         }
         // Swap: mtp_hc_state ← new_hc
         @memcpy(self.mtp_hc_state, self.new_hc[0 .. n_hc * e]);
-    }
-
-    /// MTP HC pre for FFN: same as mtpHcPre but uses hc_ffn_* weights.
-    fn mtpHcPreFfn(self: *Ds4Model, mtp: *const MtpWeights, layer: usize, e: usize) void {
-        var b1: [64]u8 = undefined;
-        var b2: [64]u8 = undefined;
-        var b3: [64]u8 = undefined;
-        const fn_name = std.fmt.bufPrint(&b1, "mtp.{d}.hc_ffn_fn", .{layer}) catch return;
-        const base_name = std.fmt.bufPrint(&b2, "mtp.{d}.hc_ffn_base", .{layer}) catch return;
-        const scale_name = std.fmt.bufPrint(&b3, "mtp.{d}.hc_ffn_scale", .{layer}) catch return;
-        const fn_t = mtp.get(fn_name) orelse return;
-        const base_t = mtp.get(base_name) orelse return;
-        const scale_t = mtp.get(scale_name) orelse return;
-
-        const flat_size = n_hc * e;
-        const V8 = @Vector(8, f32);
-        const rms_inv = blk: {
-            var acc: V8 = @splat(0.0);
-            var ri: usize = 0;
-            while (ri + 8 <= flat_size) : (ri += 8) {
-                const v: V8 = self.mtp_hc_state[ri..][0..8].*;
-                acc = @mulAdd(V8, v, v, acc);
-            }
-            var ss: f32 = @reduce(.Add, acc);
-            while (ri < flat_size) : (ri += 1) ss += self.mtp_hc_state[ri] * self.mtp_hc_state[ri];
-            break :blk 1.0 / @sqrt(ss / @as(f32, @floatFromInt(flat_size)) + self.rms_eps);
-        };
-
-        var mixes: [hc_mix_dim]f32 = undefined;
-        cpuGemvF32(fn_t.data_ptr, self.mtp_hc_state, &mixes, flat_size);
-        for (&mixes) |*m| m.* *= rms_inv;
-
-        const base: [*]const f32 = @ptrCast(@alignCast(base_t.data_ptr));
-        const scale: [*]const f32 = @ptrCast(@alignCast(scale_t.data_ptr));
-
-        for (0..n_hc) |s| {
-            self.hc_pre_w[s] = sigmoid(mixes[s] * scale[0] + base[s]) + hc_eps;
-            self.hc_post_w[s] = sigmoid(mixes[n_hc + s] * scale[1] + base[n_hc + s]) * 2.0;
-        }
-        for (0..n_hc * n_hc) |s| {
-            self.hc_comb[s] = mixes[2 * n_hc + s] * scale[2] + base[2 * n_hc + s];
-        }
-        hcSinkhorn(self.hc_comb);
-
-        var i: usize = 0;
-        while (i + 8 <= e) : (i += 8) {
-            var acc2: V8 = @splat(@as(f32, 0.0));
-            for (0..n_hc) |s| {
-                const w: V8 = @splat(self.hc_pre_w[s]);
-                acc2 = @mulAdd(V8, @as(V8, self.mtp_hc_state[s * e + i ..][0..8].*), w, acc2);
-            }
-            self.hidden2[i..][0..8].* = acc2;
-        }
-        while (i < e) : (i += 1) {
-            var v: f32 = 0.0;
-            for (0..n_hc) |s| v += self.mtp_hc_state[s * e + i] * self.hc_pre_w[s];
-            self.hidden2[i] = v;
-        }
     }
 
     /// Batched forward for speculative verification.

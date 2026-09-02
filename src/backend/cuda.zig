@@ -48,13 +48,6 @@ const CUdeviceptr = u64;
 
 const CUDA_SUCCESS: CUresult = 0;
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
-fn perfMonoMs() u64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
-}
-
 // ── Tuning constants ─────────────────────────────────────────────
 
 /// Block size for elementwise and reduction kernels.
@@ -200,11 +193,6 @@ pub const CudaBackend = struct {
     cuMemcpyHtoDAsync: FnMemcpyHtoDAsync = undefined,
     cuStreamCreate: FnStreamCreate = undefined,
     cuStreamSynchronize: FnStreamSync = undefined,
-    /// TEMP PERF: launch latency sampling.
-    launch_count: u64 = 0,
-    launch_total_ms: u64 = 0,
-    /// TEMP PERF: drain sampling.
-    drain_count: u64 = 0,
 
     /// Dedicated compute stream. All kernel launches and copy-backs go here
     /// (never the legacy null stream): blocking copies on the null stream
@@ -1220,14 +1208,7 @@ pub const CudaBackend = struct {
     }
 
     fn launch(self: *CudaBackend, func: CUfunction, grid: u32, block: u32, smem: u32, params: [*]?*anyopaque) void {
-        // TEMP PERF: sample kernel launch latency.
-        const t_l = perfMonoMs();
         _ = cuCheck(self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, self.stream, params, null), "cuLaunchKernel");
-        self.launch_total_ms += perfMonoMs() - t_l;
-        self.launch_count += 1;
-        if (self.launch_count % 300 == 0) {
-            std.log.info("CUDA: {d} launches, avg {d}µs (last {d}ms)", .{ self.launch_count, @as(u64, self.launch_total_ms * 1000) / self.launch_count, perfMonoMs() - t_l });
-        }
     }
 
     // ── Weight size helper ──────────────────────────────────────
