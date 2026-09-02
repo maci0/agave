@@ -47,6 +47,14 @@ must still appear under **Changed** or **Breaking** below. See
   `generate()` releases the prompt buffer if the WASM call throws. `destroy()`
   clears `initMessage`. Empty-prompt `agave_generate` no longer slices a null
   host pointer.
+- HTTP: image parts on a model without a vision encoder return `400`
+  (`code: vision_not_supported`) instead of being dropped. Non-data-URI
+  `image_url` values return `400` (`code: image_decode_failed`).
+- HTTP: `/v1/responses` honors OpenAI `max_output_tokens` (and
+  `max_completion_tokens`). Non-string `input`/`prompt` return `400`
+  (`code: invalid_value`) instead of `missing_required_parameter`.
+- HTTP: `/v1/embeddings` and unsupported KV export `501` responses no longer
+  count toward `/ready` error-rate degradation.
 - Linux/macOS release binaries are linked as PIE. Docker's runtime stage
   freezes `SOURCE_DATE_EPOCH` to the same calendar day as the build stage.
 - `-Denable-bench=false` skips installing `agave-bench` (Docker image default).

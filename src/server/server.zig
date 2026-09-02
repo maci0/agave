@@ -92,6 +92,15 @@ fn clampMaxTokens(raw: ?usize) usize {
     return @max(1, @min(raw orelse default_max_gen_tokens, max_gen_tokens_cap));
 }
 
+/// First present alias wins. Chat uses `max_tokens` / `max_completion_tokens`;
+/// `/v1/responses` prefers OpenAI's `max_output_tokens`.
+fn extractMaxGenTokens(body: []const u8, comptime names: []const []const u8) usize {
+    inline for (names) |name| {
+        if (json.extractIntField(body, name)) |v| return clampMaxTokens(v);
+    }
+    return clampMaxTokens(null);
+}
+
 /// Estimate bytes needed for `exportKvPrefix(n_tokens)`.
 /// Uses model dims with headroom for per-layer KV variation; capped at `kv_export_max_bytes`.
 fn estimateKvExportBytes(model: Model, n_tokens: usize) usize {
@@ -1929,6 +1938,57 @@ fn noteHealthTransition(view: HealthView) void {
     }
 }
 
+const ImageReject = enum { none, missing_vision, decode_failed };
+
+/// Cheap image-presence check used before generation. Decode still happens in
+/// `processVisionImage`; this only rejects requests that would otherwise drop
+/// the image on the floor (no encoder, or not a data URI).
+fn classifyRequestImage(body: []const u8, form: bool) ImageReject {
+    if (form) {
+        if (json.extractFormField(body, "image") == null) return .none;
+        if (g_server.vision_encoder == null) return .missing_vision;
+        if (json.extractFormImage(body) == null) return .decode_failed;
+        return .none;
+    }
+    if (!json.hasJsonImagePart(body)) return .none;
+    if (g_server.vision_encoder == null) return .missing_vision;
+    if (json.extractJsonImage(body) == null) return .decode_failed;
+    return .none;
+}
+
+/// Send 400 for an unusable image attachment. Returns true when the caller
+/// should return (response already written).
+fn rejectBadImage(
+    stream: TcpStream,
+    body: []const u8,
+    form: bool,
+    anthropic: bool,
+    request_start: i64,
+    method: []const u8,
+    path: []const u8,
+) bool {
+    const kind = classifyRequestImage(body, form);
+    if (kind == .none) return false;
+    const msg: []const u8 = switch (kind) {
+        .none => unreachable,
+        .missing_vision => "This model does not support vision",
+        .decode_failed => "Failed to decode or encode attached image",
+    };
+    const code: []const u8 = switch (kind) {
+        .none => unreachable,
+        .missing_vision => "vision_not_supported",
+        .decode_failed => "image_decode_failed",
+    };
+    if (anthropic) {
+        sendAnthropicError(stream, "400", "invalid_request_error", msg);
+    } else {
+        sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", msg, "image", code);
+    }
+    g_server.metrics.recordClientError();
+    logRequestDone(method, path, 400, elapsedMs(request_start));
+    return true;
+}
+
 /// Main HTTP request dispatcher. Wakes the server from sleep mode if needed,
 /// enforces CORS policy and authentication, then routes the request by method
 /// and path to the appropriate endpoint handler (health, chat completions,
@@ -2175,7 +2235,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
-        const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens"));
+        const max_tokens = extractMaxGenTokens(body, &.{ "max_tokens", "max_completion_tokens" });
         var sampling = json.SamplingParams{};
         json.parseSampling(&sampling, body);
 
@@ -2192,6 +2252,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
+        if (rejectBadImage(stream, body, false, false, request_start, method, path)) return;
         const fallback_str = fallback_raw orelse "";
         const fallback_content = json.jsonUnescape(g_server.allocator, fallback_str) catch @constCast(fallback_str);
         defer if (fallback_content.ptr != fallback_str.ptr) wipeFree(g_server.allocator, fallback_content);
@@ -2365,14 +2426,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const prompt_raw = json.extractField(body, "prompt") orelse {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: prompt", "prompt", "missing_required_parameter");
+            if (json.hasField(body, "prompt")) {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "prompt must be a string", "prompt", "invalid_value");
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: prompt", "prompt", "missing_required_parameter");
+            }
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         };
         const prompt = json.jsonUnescape(g_server.allocator, prompt_raw) catch @constCast(prompt_raw);
         defer if (prompt.ptr != prompt_raw.ptr) wipeFree(g_server.allocator, prompt);
-        const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens"));
+        const max_tokens = extractMaxGenTokens(body, &.{"max_tokens"});
         var sampling_c = json.SamplingParams{};
         json.parseSampling(&sampling_c, body);
 
@@ -2478,7 +2543,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 200, elapsedMs(request_start));
                 return;
             }
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Provide text, content, or messages", null, "missing_required_parameter");
+            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Provide text, content, or messages", "text", "missing_required_parameter");
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
@@ -2687,7 +2752,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 },
                 .unsupported => {
                     sendJsonErrorEx(stream, "501 Not Implemented", "not_implemented", "Model does not support KV export", null, "not_implemented");
-                    g_server.metrics.recordFailure();
+                    g_server.metrics.recordClientError();
                     logRequestDone(method, path, 501, elapsedMs(request_start));
                     return;
                 },
@@ -2736,7 +2801,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         g_server.metrics.recordRequest();
         sendJsonErrorEx(stream, "501 Not Implemented", "not_implemented", "Embeddings endpoint not implemented", null, "not_implemented");
-        g_server.metrics.recordFailure();
+        g_server.metrics.recordClientError();
         logRequestDone(method, path, 501, elapsedMs(request_start));
         return;
     }
@@ -2760,14 +2825,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const input_raw = json.extractField(body, "input") orelse {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: input", "input", "missing_required_parameter");
+            if (json.hasField(body, "input")) {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "input must be a string", "input", "invalid_value");
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: input", "input", "missing_required_parameter");
+            }
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         };
         const input = json.jsonUnescape(g_server.allocator, input_raw) catch @constCast(input_raw);
         defer if (input.ptr != input_raw.ptr) wipeFree(g_server.allocator, input);
-        const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens"));
+        const max_tokens = extractMaxGenTokens(body, &.{ "max_output_tokens", "max_tokens", "max_completion_tokens" });
         var sampling_r = json.SamplingParams{};
         json.parseSampling(&sampling_r, body);
 
@@ -2845,7 +2914,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const max_tokens_m = clampMaxTokens(json.extractIntField(body, "max_tokens"));
+        const max_tokens_m = extractMaxGenTokens(body, &.{"max_tokens"});
         var sampling_m = json.SamplingParams{};
         json.parseSampling(&sampling_m, body);
 
@@ -2889,6 +2958,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
+        if (rejectBadImage(stream, body, false, true, request_start, method, path)) return;
         const fallback_str_m = fallback_raw_m orelse "";
         const fallback_content_m = json.jsonUnescape(g_server.allocator, fallback_str_m) catch @constCast(fallback_str_m);
         defer if (fallback_content_m.ptr != fallback_str_m.ptr) wipeFree(g_server.allocator, fallback_content_m);
@@ -3348,6 +3418,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Check for attached image data (base64-encoded data URI from web UI)
         // If a vision encoder is available, decode and encode the image into
         // visual token embeddings that the model injects during generation.
+        if (rejectBadImage(stream, body, true, false, request_start, method, path)) return;
         const chat_has_image = json.extractFormImage(body) != null and g_server.vision_encoder != null;
         if (chat_has_image) g_server.vision_mutex.lockUncancelable(g_server.io);
         defer if (chat_has_image) g_server.vision_mutex.unlock(g_server.io);
@@ -3363,8 +3434,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     logRequestDone(method, path, 400, elapsedMs(request_start));
                     return;
                 }
-            } else {
-                std.log.warn("req={d} image attached but no vision encoder, ignored", .{log_request_id});
             }
         }
         // Ensure image embeddings are cleared after generation
@@ -7696,6 +7765,24 @@ test "parseFormConversationId rejects missing zero and non-numeric" {
     try std.testing.expectEqual(@as(u32, 42), b.value);
 }
 
+test "extractMaxGenTokens prefers first present alias" {
+    try std.testing.expectEqual(@as(usize, 10), extractMaxGenTokens(
+        "{\"max_output_tokens\":10,\"max_tokens\":20}",
+        &.{ "max_output_tokens", "max_tokens", "max_completion_tokens" },
+    ));
+    try std.testing.expectEqual(@as(usize, 20), extractMaxGenTokens(
+        "{\"max_tokens\":20}",
+        &.{ "max_output_tokens", "max_tokens", "max_completion_tokens" },
+    ));
+    try std.testing.expectEqual(@as(usize, 30), extractMaxGenTokens(
+        "{\"max_completion_tokens\":30}",
+        &.{ "max_tokens", "max_completion_tokens" },
+    ));
+    try std.testing.expectEqual(default_max_gen_tokens, extractMaxGenTokens("{}", &.{"max_tokens"}));
+    try std.testing.expectEqual(@as(usize, 1), extractMaxGenTokens("{\"max_tokens\":0}", &.{"max_tokens"}));
+    try std.testing.expectEqual(max_gen_tokens_cap, extractMaxGenTokens("{\"max_tokens\":99999}", &.{"max_tokens"}));
+}
+
 test "known_endpoints include kv_cache routes" {
     var found_cache = false;
     var found_info = false;
@@ -7874,6 +7961,16 @@ test "fuzz: all server functions" {
                 // null case
                 const null_result = clampMaxTokens(null);
                 std.debug.assert(null_result == default_max_gen_tokens);
+            }
+
+            // extractMaxGenTokens: first present alias wins, missing → default
+            {
+                const a = extractMaxGenTokens("{\"max_output_tokens\":10,\"max_tokens\":20}", &.{ "max_output_tokens", "max_tokens" });
+                std.debug.assert(a == 10);
+                const b = extractMaxGenTokens("{\"max_tokens\":20}", &.{ "max_output_tokens", "max_tokens" });
+                std.debug.assert(b == 20);
+                const c = extractMaxGenTokens("{}", &.{"max_tokens"});
+                std.debug.assert(c == default_max_gen_tokens);
             }
 
             // tokensPerSec
