@@ -602,16 +602,22 @@ const Server = struct {
     }
 
     /// Delete a conversation by ID. Caller must hold self.mutex.
-    /// When the active conversation is deleted, immediately wipe KV / prefix
-    /// cache and n-gram history so prompt-derived state does not survive
-    /// an explicit erasure request (matches `/clear` / `/reset`).
+    /// Always wipe the shared n-gram pool: it mixes tokens from every
+    /// conversation, so one erasure cannot surgically remove its history.
+    /// When the active conversation is deleted, also wipe KV / prefix cache
+    /// so prompt-derived state does not survive (matches `/clear` / `/reset`).
     fn deleteConv(self: *Server, id: u32) void {
+        var removed = false;
         for (self.conversations.items, 0..) |*conv, i| {
             if (conv.id == id) {
                 conv.freeMessages(self.allocator);
                 _ = self.conversations.orderedRemove(i);
+                removed = true;
                 break;
             }
+        }
+        if (removed) {
+            if (ngram_mod.global_pool) |*pool| pool.clear();
         }
         if (self.active_id == id) {
             self.active_id = if (self.conversations.items.len > 0)
@@ -623,7 +629,6 @@ const Server = struct {
             self.model.resetCache();
             self.kv_valid = false;
             self.clearCachedPromptIds();
-            if (ngram_mod.global_pool) |*pool| pool.clear();
         }
         self.persistConversationsLocked();
     }

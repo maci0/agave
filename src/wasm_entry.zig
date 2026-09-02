@@ -159,7 +159,10 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
         std.log.warn("chat template format failed: {s}, using raw prompt", .{@errorName(err)});
         break :blk null;
     };
-    defer if (formatted_owned) |f| gpa.free(f);
+    defer if (formatted_owned) |f| {
+        @memset(f, 0);
+        gpa.free(f);
+    };
     const formatted = formatted_owned orelse prompt;
 
     const token_ids = tok_iface.encode(formatted) catch {
@@ -167,7 +170,10 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
         ctx.output_len = msg.len;
         return 0;
     };
-    defer gpa.free(token_ids);
+    defer {
+        @memset(std.mem.sliceAsBytes(token_ids), 0);
+        gpa.free(token_ids);
+    }
 
     // Report tokenization (forward pass blocked by Zig wasm32 LLVM bug)
     const msg = std.fmt.bufPrint(&ctx.output_buf, "[{s}] Tokenized {d} tokens from prompt. " ++

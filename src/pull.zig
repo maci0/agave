@@ -450,16 +450,15 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             },
         }
     };
-    defer allocator.free(body);
+    defer {
+        @memset(body, 0);
+        allocator.free(body);
+    }
 
-    // Parse JSON response.
+    // Parse JSON response. Do not echo the body: Hub model-card JSON includes
+    // publisher identity fields (author/username) and may include account data.
     const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, body, .{}) catch {
-        const preview_len = @min(body.len, 200);
-        var sanitized_preview: [200]u8 = undefined;
-        for (body[0..preview_len], 0..) |c, i| {
-            sanitized_preview[i] = if (c < 0x20 or c == 0x7F) '?' else c;
-        }
-        eprint("Error: failed to parse API response (first {d} bytes: {s})\n", .{ preview_len, sanitized_preview[0..preview_len] });
+        eprint("Error: failed to parse API response ({d} bytes)\n", .{body.len});
         return PullError.ApiResponseInvalid;
     };
     const root = parsed.value;
