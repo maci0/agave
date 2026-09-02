@@ -1,12 +1,16 @@
 //! Speculative decoding orchestrator.
 //!
-//! Verification modes (selected via --spec-mode):
-//! - Standard greedy: single-path draft → sequential argmax verification
-//! - Rejection sampling: stochastic acceptance with temperature (Leviathan et al. 2023)
-//! - DDTree: tree-structured draft → greedy tree walk (Ringel & Romano, 2026)
-//! - Self-speculative: layer-skip self-drafting (no separate draft model)
-//! - N-gram: history-based n-gram prediction (no draft model)
-//! - MTP: multi-token prediction heads
+//! `--spec-mode` values (CLI also accepts `auto`, and `medusa` as an alias of `mtp`):
+//! - Standard: single-path draft, then sequential argmax verification.
+//! - DDTree: tree-structured draft, then a greedy tree walk (Ringel & Romano, 2026).
+//! - Self: layer-skip self-drafting (no separate draft model).
+//! - N-gram / suffix / lookahead: history-based; no draft model.
+//! - MTP: multi-token prediction heads (`waiting for mtp` if the target has none).
+//! - EAGLE / EAGLE-3 / MLP / PFlash / DFlash2: require `--draft-model`.
+//! - DSpark: confidence-scheduled trim on top of any drafter.
+//!
+//! Rejection sampling (Leviathan et al. 2023) is the stochastic accept path
+//! inside standard/ddtree verify, not a separate `--spec-mode`.
 
 const std = @import("std");
 const Model = @import("../models/model.zig").Model;

@@ -54,12 +54,12 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 
 ## Features
 
-- **11 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5/4-Exp, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4
+- **11 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, Qwen4-Exp, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4 (plus DFlash2 as a block-diffusion drafter, not a chat model)
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU, individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
-- **18 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
+- **19 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, NVFP4-MLA, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
 - **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch (`--kv-tiers vram+ram+ssd`)
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS, Llama 4)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
@@ -68,12 +68,13 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **HTTP Server**: OpenAI + Anthropic API compatible, built-in chat UI, Prometheus metrics, Bearer token auth
 - **Multimodal**: Image (`--image`) and video frames (`--video`, `--video-fps`) via Gemma 4 SigLIP-2, Gemma 3 SigLIP, and Qwen VL encoders; also HTTP API
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
-- **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, seed. HTTP API also: frequency/presence penalties, stop sequences
+- **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, DRY, XTC, Mirostat, seed. HTTP API also: frequency/presence penalties, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
 - **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
-- **Speculative Decoding**: Modes: standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark; plus FR-Spec vocab map and LoRA (`--lora`)
+- **Speculative Decoding**: Modes: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark, dflash2; plus FR-Spec vocab map and LoRA (`--lora`)
 - **Fused Megakernels**: Composable GPU megakernels, gate+up+SiLU fused into single dispatch (3→1)
 - **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
+- **SSD Expert Streaming**: `--ssd-streaming` demand-pages MoE experts (and Qwen4-Exp PLE ngrams) from disk via an LRU cache; `--vram-budget` caps resident GPU weights
 - **~125 tok/s** on Qwen3.5 0.8B Q8_0 Metal (M4 Pro; see [docs/BENCHMARKS.md](docs/BENCHMARKS.md) as the source of truth), **24.9 tok/s** on Qwen3.5 9B MLX-4bit
 
 ## Quick Start
@@ -357,7 +358,7 @@ agave [OPTIONS] <model> [prompt]
       --grammar <FILE>     GBNF grammar file for constrained decoding
       --grammar-string <G> Inline GBNF grammar string
       --json-schema <S>    JSON schema for structured output
-      --json-output        Force valid JSON object output
+      --json-output        Constrain generation to valid JSON via grammar (not output format; see --json)
       --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2 through planar4/pq4, iso2/iq2 through iso4/iq4, rotor2/rq2 through rotor4/rq4, turbo (preset: K=q8_0, V=turbo4) [default: f16]
       --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
       --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]
@@ -372,7 +373,7 @@ agave [OPTIONS] <model> [prompt]
       --kv-type-v <TYPE>   KV value quantization (overrides --kv-type)
   -V, --verbose            Show technical details (params, load times, EOG)
       --allow-cpu-fallback Allow GPU backends to fall back to CPU
-  -d, --debug              Enable debug logging (token IDs, layer timing)
+  -d, --debug              Enable debug logging (token IDs, layer timing); implies --verbose
       --json               Output results as JSON (implies --quiet)
       --model-info         Print model metadata and exit (combine with --json)
       --profile            Profile per-op timing (halves throughput)
@@ -384,8 +385,9 @@ agave [OPTIONS] <model> [prompt]
       --mmap               Use lazy mmap instead of preloading weights into RAM
       --megakernel         Enable fused FFN megakernels (3→1 dispatch per layer)
       --draft-model <PATH> Draft model GGUF for speculative decoding
+      --mtp-model <PATH>   MTP weight file (safetensors) for multi-token prediction
       --spec-mode <MODE>   Speculative mode: auto, standard, ddtree, self, ngram, suffix,
-                           lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark
+                           lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
       --draft-layers <N>   Layers for self-speculative draft [default: auto]
@@ -394,6 +396,9 @@ agave [OPTIONS] <model> [prompt]
       --pflash-block-size <N>  PFlash scoring block size [default: 64]
       --pflash-scorer <P>  Separate model for PFlash scoring
       --lora <PATH>        Merge LoRA adapter GGUF at load time
+      --dir-steering-file <PATH>  Directional steering f32 vector (n_layers × n_embd)
+      --dir-steering-ffn <F>      Steering scale for FFN outputs [default: 1.0 with file]
+      --dir-steering-attn <F>     Steering scale for attention outputs [default: 0]
       --video <PATH>       Video file for multimodal (frames extracted via ffmpeg)
       --video-fps <N>      Video frame sampling rate [default: 1]
       --diffusion-steps <N>  DiffusionGemma denoising steps [default: 16]
@@ -414,6 +419,15 @@ agave [OPTIONS] <model> [prompt]
       --rank <N>           This node's rank [default: 0]
       --transport <TYPE>   IPC transport: auto, tcp, shm, nccl [default: auto]
       --disagg             Disaggregated prefill/decode
+      --power <N>          Target GPU utilisation percent (1-100) [default: 100]
+      --vram-budget <GIB>  Cap GPU memory for cached weights (GiB, e.g. 20, 0.5, or auto)
+      --vram-budget-policy <P>  Weight eviction when full: mru (default) or lru
+      --ssd-streaming      Stream MoE experts from SSD
+      --ssd-cache-slots <N> LRU expert cache size [default: 256]
+      --expert-profile-out <FILE>  Save expert activation profile
+      --expert-profile-in <FILE>   Load expert activation profile for cache warming
+      --frontier-bench     Frontier benchmark (snapshot KV at each context)
+      --frontier-ctx <LIST> Comma-separated context lengths for frontier bench
 ```
 
 ## Build Options
@@ -435,9 +449,10 @@ zig build -Denable-cpu=false
 zig build -Denable-glm4=false
 
 # Minimal build: single model (Gemma 3) + single backend (Metal)
-zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-gpt-oss=false \
-  -Denable-nemotron-h=false -Denable-nemotron-nano=false -Denable-glm4=false \
-  -Denable-llama4=false \
+zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-qwen4-exp=false \
+  -Denable-gpt-oss=false -Denable-nemotron-h=false -Denable-nemotron-nano=false \
+  -Denable-glm4=false -Denable-llama4=false -Denable-diffusion-gemma=false \
+  -Denable-deepseek4=false -Denable-dflash2=false \
   -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false
 
 # Override GPU architecture targets
@@ -458,7 +473,8 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-cuda` | bool | true | CUDA backend (runtime dlopen) |
 | `enable-rocm` | bool | true | ROCm backend (runtime dlopen) |
 | `enable-webgpu` | bool | true | WebGPU backend (runtime dlopen, WGSL) |
-| `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120) |
+| `enable-debug` | bool | true | Build the `agave-debug` (ReleaseSafe) binary |
+| `cuda-sm` | enum | sm_90 | CUDA SM target (sm_50..sm_120, plus sm_121) |
 | `rocm-arch` | enum | gfx1100 | ROCm GFX target (gfx90a..gfx1151) |
 
 **Model Options:**
@@ -469,11 +485,14 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-gemma4` | bool | true | Gemma 4 model support |
 | `enable-diffusion-gemma` | bool | true | DiffusionGemma model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
+| `enable-qwen4-exp` | bool | true | Qwen4-Exp model support |
 | `enable-gpt-oss` | bool | true | GPT-OSS model support |
 | `enable-nemotron-h` | bool | true | Nemotron-H model support |
 | `enable-nemotron-nano` | bool | true | Nemotron Nano model support |
 | `enable-glm4` | bool | true | GLM-4 model support |
+| `enable-deepseek4` | bool | true | DeepSeek V4 model support |
 | `enable-llama4` | bool | true | Llama 4 model support |
+| `enable-dflash2` | bool | true | DFlash2 block-diffusion drafter support |
 
 ## Recipes
 
@@ -488,7 +507,7 @@ recipe: Qwen3.5 Q4 Metal
 ./zig-out/bin/agave model.gguf -t 0  # overrides recipe temperature
 ```
 
-Current presets: Qwen3.5 Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, GLM-4 generic, CPU generic. Add new recipes in `src/recipe.zig`.
+Current presets: Qwen3.5 Q4 Metal, Qwen2 Q4 Metal, Gemma Q4 Metal, GPT-OSS Metal, GLM-4 generic, DeepSeek V4 Flash, DeepSeek V2 generic, Llama 4 generic, CPU generic. Add new recipes in `src/recipe.zig`.
 
 ## Project Structure
 

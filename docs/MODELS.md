@@ -27,10 +27,10 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 
 | Model | DDTree | Self-Spec | EAGLE/EAGLE-3 | MTP | N-gram | Suffix | Lookahead | PFlash | DSpark | Notes |
 |-------|--------|-----------|---------------|-----|--------|--------|-----------|--------|--------|-------|
-| Gemma 3 | ✅ `forwardTree` | ✅ | ✅/⚠️² | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with native tree verification |
+| Gemma 3 | ✅ ancestor-mask `forwardTree` | ✅ | ✅/⚠️² | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | Only model with tree-masked SDPA (`be.sdpaTree`) |
 | Gemma 4 | ❌ | ✅ | ❌/✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | KV export/import for cross-instance sharing |
 | Qwen 3.5 | ❌ | ✅ | ✅/❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | SSM state save/restore for rollback |
-| DeepSeek V4 | ❌ | ✅ `setLayerSkip` | ❌/❌ | ✅ `--mtp-model` | ✅ | ✅ | ✅ | ✅ | ✅ | Layer-skip self-speculative; dedicated MTP weights (`ds4_mtp.zig`) |
+| DeepSeek V4 | ⚠️ causal `forwardTree` | ✅ `setLayerSkip` | ❌/❌ | ✅ `--mtp-model` | ✅ | ✅ | ✅ | ✅ | ✅ | `forwardTree` ignores ancestor masks (no HC); dedicated MTP weights (`ds4_mtp.zig`) |
 | GLM-4 | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
 | GPT-OSS | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
 | Nemotron-H | ❌ | ✅ | ✅/❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |  |
@@ -39,7 +39,9 @@ agave pull google/gemma-4-4b-it-gguf --list          # list available files
 | Qwen4-Exp | ❌ | ✅ | ✅/❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | MTP-1, PLE ngram, QSA dense fallback |
 | DiffusionGemma | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Block diffusion (not autoregressive) |
 
-All autoregressive models support standard draft-verify, n-gram, suffix, lookahead, PFlash, and DSpark modes. DDTree tree verification requires `forwardTree`/`treeLogits` (currently Gemma 3 only). EAGLE-3 requires `hidden_pre_norm` (Gemma 4, DiffusionGemma). MTP requires dedicated MTP heads in the model weights.
+All autoregressive models support standard draft-verify, n-gram, suffix, lookahead, PFlash, and DSpark modes. Ancestor-masked DDTree verification (`be.sdpaTree`) is Gemma 3 only. DeepSeek V4 also implements `forwardTree`/`treeLogits`, but with standard causal attention (the ancestor-mask argument is unused). EAGLE-3 requires `hidden_pre_norm` (Gemma 4, DiffusionGemma). MTP requires dedicated MTP heads in the model weights.
+
+**DFlash2** is a block-diffusion *drafter* (`arch` `dflash2`, `-Denable-dflash2`), not a chat model. Load it with `--draft-model` and `--spec-mode dflash2` (alias `dflash`). The checkpoint has no embeddings or LM head; both bind from the target at runtime. See `src/models/dflash2.zig`.
 
 ² Gemma 3 lacks `hidden_pre_norm`, so EAGLE-3 falls back to post-norm hidden state (equivalent to regular EAGLE, no additional benefit).
 

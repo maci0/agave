@@ -146,7 +146,7 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | Tensor/Pipeline parallelism (6 modes, TCP/shm/NCCL) | Working |
 | Grammar-constrained decoding (GBNF + JSON schema) | Working |
 | TriAttention KV eviction (norm + frequency) | Phase 1+2 |
-| Speculative decoding (14 modes: standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, auto) | Working |
+| Speculative decoding (15 modes: standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2, auto) | Working |
 | CUDA fused FFN megakernels | Done |
 | GPTQ SafeTensors support | Working |
 | Native FP4 on Blackwell SM121 | Working |
@@ -156,7 +156,7 @@ and Vulkan (gfx1100) despite full kernel coverage.
 
 ## Model Abstraction (Deferred)
 
-All 10 models share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
+All 11 chat architectures plus the DFlash2 drafter share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
 1. Models rarely change once working
 2. Each has unique quirks (Gemma scaling, GPT-OSS sinks, Qwen DeltaNet, GLM4 MLA)
 3. Self-contained files are easier to debug

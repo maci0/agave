@@ -23,14 +23,14 @@ A progressive tutorial series that builds understanding layer by layer:
 14. [Format Conventions](tutorial/14-format-conventions.md), GGUF vs SafeTensors, tensor layout
 15. [Chat Templates](tutorial/15-chat-templates.md), data-driven role markers, EOG tokens
 16. [Recipe System](tutorial/16-recipe-system.md), per-model/hardware defaults, user overrides
-17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md), 14 modes: auto, standard, DDTree, self-spec, n-gram, suffix, lookahead, MTP/Medusa, EAGLE, EAGLE-3, MLP Speculator, PFlash, DSpark (plus FR-Spec vocab map)
+17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md), 15 modes: auto, standard, DDTree, self-spec, n-gram, suffix, lookahead, MTP/Medusa, EAGLE, EAGLE-3, MLP Speculator, PFlash, DSpark, DFlash2 (plus FR-Spec vocab map)
 18. [Multi-Token Prediction](tutorial/18-multi-token-prediction.md), MTP heads, +1 offset norm, draft/verify loop
 19. [PFlash and Block Sparse Attention](tutorial/19-pflash-and-block-sparse.md), block sparsity, speculative prefill, alpha tuning, scoring models, PFlash+DDTree composition
 20. [Diffusion Language Models](tutorial/20-diffusion-lm.md), DiffusionGemma, block diffusion, uniform state diffusion, bidirectional canvas attention, confidence-based acceptance, block autoregressive chaining
 21. [LoRA Adapters](tutorial/21-lora.md): load-time F32 merge of low-rank adapter weights
 22. [Distributed Inference](tutorial/22-distributed-inference.md): tensor/pipeline parallelism, transport selection, device sharding
 23. [Server / HTTP API](tutorial/23-server-http-api.md): HTTP request pipeline, sessions, streaming, structured output
-24. [Advanced Features](tutorial/24-advanced-features.md): directional steering (CLI); NLL scoring, expert profiling, KV checkpoint headers, SSD expert streaming (library); mixed-quant splicing (tooling)
+24. [Advanced Features](tutorial/24-advanced-features.md): directional steering (CLI); SSD expert streaming (CLI); expert profiling (CLI); NLL scoring and KV checkpoint headers (library); mixed-quant splicing (tooling)
 
 **Appendices:**
 - [Troubleshooting](tutorial/appendix-troubleshooting.md): symptom → cause → fix for common inference failures
@@ -45,7 +45,7 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 
 - **[HTTP API](API.md)**: server endpoints, sampling parameters, structured output, streaming
 - **[Architecture](ARCHITECTURE.md)**: project structure, Design Decisions table, module reference, inference pipeline
-- **[Models](MODELS.md)**: 10 supported architectures (incl. DeepSeek V4, DiffusionGemma), parameters, per-model details, benchmarks
+- **[Models](MODELS.md)**: 11 supported architectures (incl. Qwen4-Exp, DeepSeek V4, DiffusionGemma), parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)**: per-backend kernel implementation status
 - **[Megakernel System](MEGAKERNEL.md)**: three-tier megakernel architecture (fused FFN, true megakernels, composed megakernels)
 - **[Benchmarks](BENCHMARKS.md)**: performance data across models, backends, and quantization types
