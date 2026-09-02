@@ -11,10 +11,24 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Breaking
+- HTTP tool calling: parsed `<tool_call>` payloads whose `name` is not in the
+  request `tools` list or the process-level registry are dropped. If nothing
+  remains, the response is plain text instead of `finish_reason: "tool_calls"`.
+  Previously any parseable name was returned. Declare (or register) every tool
+  the model may call.
+
 ### Added
 - Server: persist web-UI conversations to `~/.cache/agave/conversations.json`
   (override `--conv-store`, disable `--no-conv-store`). Atomic tmp+fsync+rename;
   corrupt files are quarantined to `{path}.corrupt` on load.
+- CLI: `--vram-budget` (GiB, or `auto`) caps GPU memory held by cached weights
+  so a model larger than VRAM can run; weights past the cap are evicted and
+  re-uploaded on demand. `--vram-budget-policy mru|lru` selects eviction order
+  (default `mru`: a dense layer loop with LRU evicts the next layer's weights).
+  `auto` sizes the cap from free device memory (75%).
+- **Qwen4-Exp / Qwen3.8-Flash-Next** (`qwen4_exp`, `-Denable-qwen4-exp`): Gated
+  DeltaNet + QSA, PLE ngram SSD streaming (`--ssd-streaming`), NVFP4.
 
 ### Fixed
 - Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
@@ -34,7 +48,30 @@ must still appear under **Changed** or **Breaking** below. See
 - HTTP: `/v1/chat` image decode failures return JSON `400`
   (`code: image_decode_failed`) like `/v1/chat/completions` (was HTML `200`).
 - HTTP: `/v1/kv_cache/info` format failure returns `500` instead of `200` `{}`.
+- Q3_K GEMV produced wrong output on CPU, Vulkan, and WebGPU (truncating block
+  counts). Workloads on those backends with Q3_K checkpoints were garbled.
+- Vulkan and ROCm multi-token prefill produced wrong results.
+- CUDA: blocking copies and a NULL-scale guard so fresh-boot drivers do not
+  return stale or empty GEMV results.
+- Vulkan `embLookup` could read past the embedding table.
+- MoE: the shared-expert tensor is optional. Checkpoints without
+  `ffn_gate_shexp` load instead of failing with `MissingTensor`.
+- HTTP: `response_format.json_schema` is taken from the `response_format`
+  object, not a sibling `schema` field on the request body.
+- Browser WASM (`web/agave.ts`): a model URL that is not HTTP 2xx no longer
+  initializes from the error page; `agave_init` results that do not start with
+  `Loaded:` are load failures. A failed reload keeps the previous model.
+- Docker Compose "CPU + Gemma 3 only" local image compiled DeepSeek V4,
+  Qwen4-Exp, and DFlash2 anyway (`-Denable-deepseek4` / `-Denable-qwen4-exp` /
+  `-Denable-dflash2` were never passed, so they defaulted on). Those flags are
+  now wired and the Compose override turns them off.
 
+### Changed
+- `--allow-cpu-fallback` help and README now state the flag is unimplemented
+  (GPU backends fail closed on missing kernels). Behavior is unchanged: the
+  flag only warns.
+- Linux CPU thread pool pins workers to physical cores (SMT siblings no longer
+  share a spin-wait core). Outputs are unchanged; tok/s may change.
 
 ## [0.2.0] - 2026-08-26
 
@@ -197,7 +234,7 @@ must still appear under **Changed** or **Breaking** below. See
   instantiation. A mismatched `agave.wasm` now fails at load naming the missing
   export instead of throwing "not a function" partway through a generate call.
 - Changelog entries are consumer-oriented; date-stamped sections below remain the
-  historical log until the next tagged product release bumps `0.1.0`
+  historical log until they are folded into a later tagged product release
 - `--diffusion-confidence` docs/help now report default `0.5` (runtime default was
   already `0.5`; help/README previously said `0.9`)
 - `--max-batch-size` help no longer claims default `1`; runtime default remains `8`

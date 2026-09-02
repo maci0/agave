@@ -510,7 +510,10 @@ maintainers (avoid commit hashes as the only description).
 5. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
    builders).
 6. Run `python3 scripts/check-docs.py` (SemVer string must match across
-   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, and `docs/CONTRIBUTING.md`).
+   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, and `docs/CONTRIBUTING.md`;
+   every `cli_specs` flag must appear in the README CLI Options block; every
+   model `-Denable-*` must appear in README, `Dockerfile`, and the Gemma3-only
+   Compose override).
 
 ### Deprecation
 

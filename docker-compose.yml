@@ -16,13 +16,16 @@ services:
         ENABLE_WEBGPU: "false"
         ENABLE_DEBUG: "false"
         ENABLE_QWEN35: "false"
+        ENABLE_QWEN4_EXP: "false"
         ENABLE_GPT_OSS: "false"
         ENABLE_NEMOTRON_H: "false"
         ENABLE_NEMOTRON_NANO: "false"
         ENABLE_GLM4: "false"
         ENABLE_GEMMA4: "false"
         ENABLE_DIFFUSION_GEMMA: "false"
+        ENABLE_DEEPSEEK4: "false"
         ENABLE_LLAMA4: "false"
+        ENABLE_DFLASH2: "false"
     image: agave:local
     # Match Dockerfile USER agave (uid/gid 10001); keeps tmpfs mounts consistent.
     user: "10001:10001"
