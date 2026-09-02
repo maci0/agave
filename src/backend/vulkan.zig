@@ -1372,6 +1372,7 @@ pub const VulkanBackend = struct {
                 return act.vk_buf;
             }
             self.destroyBuffer(act.vk_buf);
+            _ = self.act_cache.remove(addr);
         }
         if (self.findContainingAct(addr, size, true, false)) |sub| return sub;
         const buf = self.createBuffer(size);
@@ -1394,6 +1395,7 @@ pub const VulkanBackend = struct {
                 return act.vk_buf;
             }
             self.destroyBuffer(act.vk_buf);
+            _ = self.act_cache.remove(addr);
         }
         if (self.findContainingAct(addr, size, true, true)) |sub| return sub;
         const buf = self.createBuffer(size);

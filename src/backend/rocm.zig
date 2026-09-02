@@ -615,7 +615,10 @@ pub const RocmBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice), "hipMemcpy(weight upload)");
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer.
+                    // A prefix refresh (batched first token) would leave the rest
+                    // stale on device, same contract as getInputBuf.
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), act.size, hipMemcpyHostToDevice), "hipMemcpy(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -1398,6 +1401,8 @@ pub const RocmBackend = struct {
     /// written on the CPU (prefix-cache hits, CPU prefill, KV import) are
     /// visible to GPU kernels. Without that upload the device buffer is
     /// uninitialized and SDPA attends over garbage when `seq_len > 0`.
+    /// A later host rewrite at the same address must call
+    /// `invalidateDeviceKv` or this returns the previous device contents.
     fn getOrAllocKvBuf(self: *RocmBackend, addr: usize, required: usize, max_capacity: usize) DevicePtr {
         if (self.kv_dev_cache.getPtr(addr)) |kv| {
             if (kv.capacity >= required) return kv.dptr;
@@ -1415,7 +1420,7 @@ pub const RocmBackend = struct {
         const cap = max_capacity;
         const dptr = self.deviceAlloc(cap);
         if (addr != 0 and cap > 0) {
-            if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), @ptrFromInt(addr), cap, hipMemcpyHostToDevice), "hipMemcpy(KV HtoD)"))
+            if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), @as(?*const anyopaque, @ptrFromInt(addr)), cap, hipMemcpyHostToDevice), "hipMemcpy(KV HtoD)"))
                 @panic("hipMemcpy(HtoD) failed, device KV left uninitialized");
         }
         self.kv_dev_cache.put(addr, .{
@@ -1425,6 +1430,14 @@ pub const RocmBackend = struct {
             std.log.warn("ROCm kv_dev_cache put failed: {}", .{err});
         };
         return dptr;
+    }
+
+    /// Free every device KV mirror. Next `getOrAllocKvBuf` re-allocates and
+    /// re-uploads from host. Call after `importKvPrefix` and similar host writes.
+    pub fn invalidateDeviceKv(self: *RocmBackend) void {
+        var kv_it = self.kv_dev_cache.valueIterator();
+        while (kv_it.next()) |kv| _ = self.hipFree(@ptrFromInt(kv.dptr));
+        self.kv_dev_cache.clearRetainingCapacity();
     }
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
@@ -1916,6 +1929,7 @@ test "ROCm backend public function signatures compile" {
         _ = @TypeOf(RocmBackend.backendInfo);
         _ = @TypeOf(RocmBackend.flushActivations);
         _ = @TypeOf(RocmBackend.invalidateAct);
+        _ = @TypeOf(RocmBackend.invalidateDeviceKv);
         _ = @TypeOf(RocmBackend.invalidateWeight);
 
         // KV cache
@@ -2029,6 +2043,11 @@ test "RocmBackend.invalidateAct" {
 test "RocmBackend.invalidateWeight" {
     comptime {
         _ = &RocmBackend.invalidateWeight;
+    }
+}
+test "RocmBackend.invalidateDeviceKv" {
+    comptime {
+        _ = &RocmBackend.invalidateDeviceKv;
     }
 }
 test "RocmBackend.gemv" {
@@ -2256,6 +2275,7 @@ test "fuzz: all rocm functions" {
                 _ = &RocmBackend.deinit;
                 _ = &RocmBackend.flushActivations;
                 _ = &RocmBackend.invalidateAct;
+                _ = &RocmBackend.invalidateDeviceKv;
                 _ = &RocmBackend.invalidateWeight;
                 _ = &RocmBackend.gemv;
                 _ = &RocmBackend.gemvGptq;

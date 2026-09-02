@@ -1275,6 +1275,19 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Drop device-side KV mirrors so the next SDPA re-uploads from host.
+    /// Required after host writes that bypass GPU append (KV import, prefix
+    /// restore). No-op on backends without a `kv_dev_cache`.
+    pub inline fn invalidateDeviceKv(self: Backend) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "invalidateDeviceKv")) {
+                    be.invalidateDeviceKv();
+                }
+            },
+        }
+    }
+
     /// Copy a just-computed GEMV output back to host and mark it stale, so
     /// CPU code can read the result between GPU GEMVs (DS4's interleaved
     /// rmsNorm/pooling passes). No-op on backends without a device cache.
@@ -2582,6 +2595,12 @@ test "Backend.invalidateWeight via CPU dispatch, no-op" {
     be.invalidateWeight(@as([*]const u8, &buf)); // CpuBackend has no invalidateWeight, no-op
 }
 
+test "Backend.invalidateDeviceKv via CPU dispatch, no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    be.invalidateDeviceKv(); // CpuBackend has no kv_dev_cache
+}
+
 test "Backend.allReduceAdd via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
@@ -2974,6 +2993,7 @@ test "fuzz: all backend functions" {
             be.invalidateActivation(&out);
             try std.testing.expectEqual(@as(u64, 0), be.getDevicePtr(@as([*]const f32, &out)));
             be.invalidateWeight(@as([*]const u8, @ptrCast(&out)));
+            be.invalidateDeviceKv();
             var ar_dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
             var ar_src = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
             be.allReduceAdd(&ar_dst, &ar_src, dim);
@@ -3112,6 +3132,7 @@ test "fuzz: all backend functions" {
                 _ = &Backend.backendInfo;
                 _ = &Backend.setThreadContext;
                 _ = &Backend.invalidateActivation;
+                _ = &Backend.invalidateDeviceKv;
                 _ = &Backend.getDevicePtr;
                 _ = &Backend.invalidateWeight;
                 _ = &Backend.allReduceAdd;

@@ -1093,7 +1093,10 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(weight upload)");
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer.
+                    // A prefix refresh (batched first token) would leave the rest
+                    // stale on device, same contract as getInputBuf.
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), act.size), "cuMemcpyHtoD(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -2358,10 +2361,16 @@ pub const CudaBackend = struct {
     // ── KV device cache (incremental upload) ───────────────────
 
     /// Get or allocate a GPU KV cache buffer for the given host pointer.
-    /// On first allocation, uploads the existing host data so that accumulated
-    /// positions (pre-filled in host memory) are visible to GPU kernels.
+    /// On first allocation (or when the cached capacity is too small), uploads
+    /// the existing host data so pre-filled / imported positions are visible
+    /// to GPU kernels. A later host rewrite at the same address must call
+    /// `invalidateDeviceKv` or this returns the previous device contents.
     fn getOrAllocKvBuf(self: *CudaBackend, addr: usize, capacity: usize) CUdeviceptr {
-        if (self.kv_dev_cache.getPtr(addr)) |kv| return kv.dptr;
+        if (self.kv_dev_cache.getPtr(addr)) |kv| {
+            if (kv.capacity >= capacity) return kv.dptr;
+            _ = self.cuMemFree(kv.dptr);
+            _ = self.kv_dev_cache.remove(addr);
+        }
 
         var dptr: CUdeviceptr = 0;
         _ = cuCheck(self.cuMemAlloc(&dptr, @max(capacity, 4)), "cuMemAlloc(KV)");
@@ -2377,6 +2386,14 @@ pub const CudaBackend = struct {
             std.log.warn("cache put failed: {}", .{err});
         };
         return dptr;
+    }
+
+    /// Free every device KV mirror. Next `getOrAllocKvBuf` re-allocates and
+    /// re-uploads from host. Call after `importKvPrefix` and similar host writes.
+    pub fn invalidateDeviceKv(self: *CudaBackend) void {
+        var kv_it = self.kv_dev_cache.valueIterator();
+        while (kv_it.next()) |kv| _ = self.cuMemFree(kv.dptr);
+        self.kv_dev_cache.clearRetainingCapacity();
     }
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
@@ -3045,6 +3062,7 @@ test "CUDA backend public function signatures compile" {
         _ = @TypeOf(CudaBackend.backendInfo);
         _ = @TypeOf(CudaBackend.flushActivations);
         _ = @TypeOf(CudaBackend.invalidateAct);
+        _ = @TypeOf(CudaBackend.invalidateDeviceKv);
         _ = @TypeOf(CudaBackend.invalidateWeight);
         _ = @TypeOf(CudaBackend.setThreadContext);
         _ = @TypeOf(CudaBackend.registerHostRegion);
@@ -3217,6 +3235,11 @@ test "CudaBackend.getDevicePtr" {
 test "CudaBackend.invalidateWeight" {
     comptime {
         _ = &CudaBackend.invalidateWeight;
+    }
+}
+test "CudaBackend.invalidateDeviceKv" {
+    comptime {
+        _ = &CudaBackend.invalidateDeviceKv;
     }
 }
 test "CudaBackend.gemv" {
@@ -3476,6 +3499,7 @@ test "fuzz: all cuda functions" {
                 _ = &CudaBackend.registerHostRegion;
                 _ = &CudaBackend.flushActivations;
                 _ = &CudaBackend.invalidateAct;
+                _ = &CudaBackend.invalidateDeviceKv;
                 _ = &CudaBackend.getDevicePtrOpaque;
                 _ = &CudaBackend.getDevicePtr;
                 _ = &CudaBackend.invalidateWeight;

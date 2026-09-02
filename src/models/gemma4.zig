@@ -1665,6 +1665,10 @@ pub const Gemma4Model = struct {
             offset += v_bytes;
         }
         self.kv_seq_len = n_tokens;
+        // Host KV is now the source of truth. Discrete GPU backends cache a
+        // device mirror keyed by host address and would otherwise keep the
+        // previous contents on the next SDPA.
+        self.be.invalidateDeviceKv();
         return true;
     }
 
@@ -2962,8 +2966,8 @@ test "Gemma4 model vtable compiles" {
 /// Minimal KV-only model for export/import tests: capacity 4 tokens,
 /// one layer with kvd=2. Only fields touched by exportKvPrefix/importKvPrefix
 /// are initialized; deinit is never called (buffers freed by the caller).
-/// `layer_tables` must outlive every use of the returned model.
-fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32) Gemma4Model {
+/// `layer_tables` and `cpu_be` must outlive every use of the returned model.
+fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32, cpu_be: *backend_mod.CpuBackend) Gemma4Model {
     var m: Gemma4Model = .{
         .n_layers = 1,
         .n_embd = 0,
@@ -2989,7 +2993,7 @@ fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32) Gemma4Model
         .dense_ff_dim = 0,
         .global_layer_interval = 0,
         .fmt = undefined,
-        .be = undefined,
+        .be = .{ .cpu = cpu_be },
         .allocator = std.testing.allocator,
         .norm_add_one = false,
     };
@@ -3013,7 +3017,8 @@ test "Gemma4 importKvPrefix round-trips an exported prefix" {
     for (keys, 0..) |*k, i| k.* = @floatFromInt(i);
     for (vals, 0..) |*v, i| v.* = @floatFromInt(100 + i);
     var layer_tables: [2][1][]f32 = undefined;
-    var m = kvOnlyModel(keys, vals, &layer_tables);
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
 
     var blob: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
     m.kv_seq_len = 3;
@@ -3028,7 +3033,8 @@ test "Gemma4 importKvPrefix round-trips an exported prefix" {
     @memset(keys2, 0);
     @memset(vals2, 0);
     var layer_tables2: [2][1][]f32 = undefined;
-    var m2 = kvOnlyModel(keys2, vals2, &layer_tables2);
+    var cpu_be2: backend_mod.CpuBackend = .{};
+    var m2 = kvOnlyModel(keys2, vals2, &layer_tables2, &cpu_be2);
 
     try std.testing.expect(m2.importKvPrefix(blob[0..n], 3));
     try std.testing.expectEqual(@as(usize, 3), m2.kv_seq_len);
@@ -3047,7 +3053,8 @@ test "Gemma4 importKvPrefix rejects oversized or short inputs" {
     @memset(keys, 0);
     @memset(vals, 0);
     var layer_tables: [2][1][]f32 = undefined;
-    var m = kvOnlyModel(keys, vals, &layer_tables);
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
 
     const full_bytes = cap * kvd * @sizeOf(f32) * 2;
 
@@ -3093,7 +3100,8 @@ test "Gemma4 exportKvPrefix rejects positions beyond capacity" {
     @memset(keys, 0);
     @memset(vals, 0);
     var layer_tables: [2][1][]f32 = undefined;
-    var m = kvOnlyModel(keys, vals, &layer_tables);
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
     m.kv_seq_len = cap;
 
     var dst: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
