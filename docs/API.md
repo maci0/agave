@@ -619,7 +619,7 @@ All endpoints return JSON error bodies on failure.
 |--------|------|
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
 | `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` or `X-API-Key` when `--api-key` is set |
-| `403 Forbidden` | Cross-origin browser request rejected when no `--api-key` is configured (CSRF protection) |
+| `403 Forbidden` | Cross-origin request, or non-loopback `Host`, when no `--api-key` is configured |
 | `404 Not Found` | Unknown endpoint or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |
@@ -669,4 +669,4 @@ Rate-limited responses (429) and connection-capacity responses (503 with
 `code` `server_overloaded`) include `Retry-After` with seconds until the next
 request is allowed.
 
-When no `--api-key` is configured, cross-origin browser requests (mismatched `Origin` vs `Host`) are rejected with 403 to prevent CSRF against a local `--serve`. Same-origin use of the embedded UI is unchanged. CORS `Access-Control-Allow-Origin` is not emitted; use a reverse proxy if a separate web origin must call the API.
+When no `--api-key` is configured, the server rejects (403) requests whose `Host` is not loopback (`localhost`, `127.0.0.0/8`, `::1`) so a public name that DNS-rebinds to the process cannot drive the API. Cross-origin browser requests (mismatched `Origin` vs `Host`) are also rejected to prevent CSRF against a local `--serve`. Same-origin use of the embedded UI on `http://127.0.0.1` or `http://localhost` is unchanged. CORS `Access-Control-Allow-Origin` is not emitted; use a reverse proxy if a separate web origin must call the API.

@@ -51,15 +51,15 @@ fn nanoTimestamp() i128 {
 /// Validate that a filename from the API has no path traversal components
 /// and no URL-special characters that could inject query/fragment into
 /// download URLs (CWE-74).
-/// Rejects embedded '..', '/', '\', null bytes, and URL metacharacters.
+/// Allowlist: ASCII alphanumerics, `-`, `_`, `.`. Rejects `..`, `%` (encoding
+/// bypass), spaces, quotes, and other URL/JSON metacharacters.
 fn isSafeFilename(name: []const u8) bool {
     if (name.len == 0 or name.len > 255) return false;
     if (std.mem.indexOf(u8, name, "..") != null) return false;
     for (name) |c| {
         switch (c) {
-            '/', '\\', '?', '#', '@' => return false,
-            0...31, 127 => return false, // control characters
-            else => {},
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => {},
+            else => return false,
         }
     }
     return true;
@@ -747,18 +747,26 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
         break :blk priv_headers_buf[0..1];
     } else &.{};
 
-    // Use allocating writer for response body.
-    var aw: std.Io.Writer.Allocating = .init(allocator);
-    defer aw.deinit();
+    // Cap the listing body while reading. Checking length after
+    // `toOwnedSlice` still allocated the full payload (CWE-400).
+    const cap = max_api_response_size + 1;
+    const buf = try allocator.alloc(u8, cap);
+    defer allocator.free(buf);
+    var writer: std.Io.Writer = .fixed(buf);
 
     const result = client.fetch(.{
         .location = .{ .url = url },
         .privileged_headers = priv_headers,
-        .response_writer = &aw.writer,
+        .response_writer = &writer,
     }) catch |err| {
         eprint("Error: HTTP request failed: {}\n", .{err});
         return PullError.HttpRequestFailed;
     };
+
+    if (writer.end > max_api_response_size) {
+        eprint("Error: API response exceeds {d} bytes\n", .{max_api_response_size});
+        return PullError.HttpRequestFailed;
+    }
 
     switch (result.status) {
         .ok => {},
@@ -770,12 +778,7 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
         },
     }
 
-    const body = aw.toOwnedSlice() catch return error.OutOfMemory;
-    if (body.len > max_api_response_size) {
-        allocator.free(body);
-        return PullError.HttpRequestFailed;
-    }
-    return body;
+    return allocator.dupe(u8, buf[0..writer.end]);
 }
 
 // ── Cache layout & file system helpers ───────────────────────────────────────
@@ -1863,6 +1866,10 @@ test "isSafeFilename rejects traversal" {
     try std.testing.expect(!isSafeFilename("model.gguf?q=1"));
     try std.testing.expect(!isSafeFilename("model.gguf#frag"));
     try std.testing.expect(!isSafeFilename("user@host"));
+    try std.testing.expect(!isSafeFilename("evil%2e%2e%2fpasswd.gguf"));
+    try std.testing.expect(!isSafeFilename("model\".gguf"));
+    try std.testing.expect(!isSafeFilename("model name.gguf"));
+    try std.testing.expect(!isSafeFilename("model&x=1.gguf"));
     try std.testing.expect(isSafeFilename("model-Q4_K_M.gguf"));
     try std.testing.expect(isSafeFilename("weights.safetensors"));
 }
@@ -2199,10 +2206,17 @@ test "fuzz: pull helper functions" {
 
             // isSafeFilename: must not crash on any input.
             const safe = isSafeFilename(input);
-            // If safe, must not contain ".." or control chars.
+            // If safe, only allowlisted characters and no "..".
             if (safe) {
                 try std.testing.expect(std.mem.indexOf(u8, input, "..") == null);
                 try std.testing.expect(input.len <= 255);
+                for (input) |c| {
+                    const ok = (c >= 'a' and c <= 'z') or
+                        (c >= 'A' and c <= 'Z') or
+                        (c >= '0' and c <= '9') or
+                        c == '-' or c == '_' or c == '.';
+                    try std.testing.expect(ok);
+                }
             }
 
             // isValidRepoName: must not crash on any input.
