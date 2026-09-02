@@ -1600,6 +1600,13 @@ test "parseSampling min_p and seed" {
     try std.testing.expectEqual(@as(u64, 42), s.seed.?);
 }
 
+test "parseSampling does not ingest OpenAI user field" {
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"user\": \"user@example.com\", \"temperature\": 0.2}");
+    try std.testing.expect(s.user == null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), s.temperature, 0.001);
+}
+
 test "parseSampling json_schema" {
     var s = SamplingParams{};
     parseSampling(&s, "{\"json_schema\": \"{\\\"type\\\": \\\"string\\\"}\"}");

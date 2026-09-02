@@ -33,6 +33,7 @@ fn historyPush(history: []u32, len: *usize, token: u32) void {
     } else {
         const keep = history.len / 2;
         std.mem.copyForwards(u32, history[0..keep], history[history.len - keep ..]);
+        @memset(history[keep..], 0);
         len.* = keep;
         history[len.*] = token;
         len.* += 1;
@@ -128,6 +129,7 @@ pub const SharedNgramPool = struct {
     pub fn clear(self: *SharedNgramPool) void {
         self.lock();
         defer self.unlock();
+        @memset(&self.history, 0);
         self.len = 0;
     }
 
@@ -210,6 +212,7 @@ pub const SuffixState = struct {
     /// subsequent calls are no-ops after the first free.
     pub fn deinit(self: *SuffixState) void {
         if (self.history.len == 0) return;
+        @memset(self.history, 0);
         self.allocator.free(self.history);
         self.history = &.{};
         self.len = 0;
@@ -312,10 +315,21 @@ test "shared pool clear resets len" {
     try std.testing.expect(pool.len == 5);
     pool.clear();
     try std.testing.expect(pool.len == 0);
+    for (pool.history) |tok| try std.testing.expectEqual(@as(u32, 0), tok);
     // After clear, propose returns nothing (empty pool).
     var draft: [4]u32 = undefined;
     const n = pool.propose(&[_]u32{ 10, 20, 30 }, 4, &draft);
     try std.testing.expectEqual(@as(usize, 0), n);
+}
+
+test "shared pool compaction zeros discarded tokens" {
+    var pool = SharedNgramPool{};
+    const cap = SharedNgramPool.pool_capacity;
+    var i: u32 = 1;
+    while (i <= cap + 1) : (i += 1) pool.push(i);
+    const keep = cap / 2;
+    try std.testing.expectEqual(keep + 1, pool.len);
+    for (pool.history[pool.len..]) |tok| try std.testing.expectEqual(@as(u32, 0), tok);
 }
 
 test "shared pool propose finds late alignment" {
