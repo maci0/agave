@@ -1115,7 +1115,11 @@ const html_page = @embedFile("../web/head.html") ++
     @embedFile("../web/app.js") ++
     "\n</script></body></html>\n";
 
-const html_page_hash = std.hash.Wyhash.hash(0, html_page);
+// ~96KB of embedded UI; Wyhash's comptime loop exceeds the default 1000-branch quota.
+const html_page_hash = blk: {
+    @setEvalBranchQuota(1_000_000);
+    break :blk std.hash.Wyhash.hash(0, html_page);
+};
 const html_etag = std.fmt.comptimePrint("\"{x}\"", .{html_page_hash});
 const html_etag_gzip = std.fmt.comptimePrint("\"{x}-gzip\"", .{html_page_hash});
 const gzip_id1: u8 = 0x1f;

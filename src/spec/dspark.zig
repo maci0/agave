@@ -199,7 +199,7 @@ pub const MarkovHead = struct {
 
     /// Compute transition bias B(x_{k-1}, ·) → bias[0..vocab_size].
     /// bias must be pre-allocated to vocab_size floats.
-    pub fn transitionBias(self: MarkovHead, prev_token: u32, bias: []f32) void {
+    fn transitionBias(self: MarkovHead, prev_token: u32, bias: []f32) void {
         std.debug.assert(prev_token < self.vocab_size);
         std.debug.assert(bias.len >= self.vocab_size);
         const r = self.rank;

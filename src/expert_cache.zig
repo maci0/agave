@@ -236,7 +236,7 @@ pub const ExpertCache = struct {
 
     /// Unpin all previously mlocked expert ranges via munlock.
     /// Called from `deinit` before freeing allocations.
-    pub fn unpinAll(self: *ExpertCache) void {
+    fn unpinAll(self: *ExpertCache) void {
         if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
         for (self.pinned_ranges[0..self.n_pinned]) |range| {
             std.process.unlockMemory(range.ptr[0..range.len]) catch {};

@@ -5,8 +5,7 @@
 
 const std = @import("std");
 
-/// Re-export for callers that historically imported FixedBufStream from metrics.
-pub const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
+const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 
 /// Finite histogram bucket: observation bound + Prometheus `le` label.
 /// Recording and rendering share this table so bounds and labels cannot drift.

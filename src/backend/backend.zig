@@ -1301,18 +1301,6 @@ pub const Backend = union(enum) {
         }
     }
 
-    /// Make a weight range GPU-resident (prefault zero-copy regions, upload
-    /// and release host pages otherwise). No-op on backends without CUDA.
-    pub inline fn prefaultWeight(self: Backend, ptr: [*]const u8, len: usize) void {
-        switch (self) {
-            inline else => |be| {
-                if (comptime @hasDecl(@TypeOf(be.*), "prefaultWeight")) {
-                    be.prefaultWeight(ptr, len);
-                }
-            },
-        }
-    }
-
     /// Make a weight range GPU-resident (permanent device copy or zero-copy
     /// prefault). No-op on backends without CUDA.
     pub inline fn residentWeight(self: Backend, ptr: [*]const u8, len: usize) void {
