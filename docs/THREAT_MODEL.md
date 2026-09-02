@@ -54,7 +54,7 @@ Entry points found in code:
 | NCCL | dlopen `libnccl.so.2` (`transport.zig:318-321`) | 128-byte NCCL ID exchanged over the unauthenticated TCP link (:339-356) |
 | Disagg prefill->decode KV transfer | listen `src/main.zig:3832-3843`, KV stream `src/models/qwen35.zig:2264-2282` | Plaintext TCP 49456; carries the entire prompt as KV |
 | Environment variables | `AGAVE_PORT/HOST/API_KEY` (`src/main.zig:1226-1262,2252-2266`), `HF_TOKEN` (`pull.zig:328`), `NCCL_*` logging (`transport.zig:372-383`), `HOME`/`TMPDIR`/`XDG_CACHE_HOME` | Empty/whitespace env is unset (`pull.nonemptyEnv`). No runtime config files; recipes and chat templates are compile-time (`src/chat_template.zig` is string concatenation, not Jinja eval) |
-| Browser WASM demo | `web/agave.ts` `loadModel` :238-252; `src/wasm_entry.zig` | Fetches a user-typed model URL into WASM memory; contained to the browser sandbox |
+| Browser WASM demo | `web/agave.ts` `loadModel` :292-310; `src/wasm_entry.zig` | Fetches a user-typed model URL into WASM memory; contained to the browser sandbox |
 | Container | `Dockerfile:199-222` (non-root `USER agave`, EXPOSE 49453, entrypoint binds 0.0.0.0), `docker-compose.yml:31-65` (127.0.0.1 mapping, `AGAVE_API_KEY` required, cap_drop ALL, read_only rootfs) | Compose is hardened; raw Dockerfile entrypoint relies on the API-key enforcement below. Compose volume persists conversations + Hub blobs |
 
 No listed entry point in the previous revision has been removed. Added since last review: on-disk conversation store, PNG/HTTP image path, DNS-rebind Host check, `Transfer-Encoding` rejection.
@@ -128,7 +128,7 @@ Docs-vs-code check (2026-09-02): `docs/API.md` auth / CORS / Host-rebind / rate-
 3. **Latency gaming:** repeated user-supplied GBNF grammars or `json_mode` force inline parse-and-constrain outside the batch scheduler, degrading concurrent clients (`server.zig:3701-3705`).
 4. **Cluster hijack (no auth needed):** a LAN host answers the UDP beacon first or wins the TCP connect race and becomes a trusted rank, then feeds arbitrary f32 tensors (`transport.zig:215-222`, `peer_discovery.zig:117-121`).
 5. **Prompt harvest from disk:** on a shared Unix user or a leaked compose volume, read `conversations.json` (`conv_store.zig:68-73`).
-6. **Client-side trust note:** the `--serve` web UI enforces nothing itself; all checks are server-side (correct posture). The standalone browser demo will load any model URL a visitor types (`web/agave.ts` `loadModel` :238-252), so a linked model can serve attacker-chosen completions locally, inside the sandbox.
+6. **Client-side trust note:** the `--serve` web UI enforces nothing itself; all checks are server-side (correct posture). The standalone browser demo will load any model URL a visitor types (`web/agave.ts` `loadModel` :292-310), so a linked model can serve attacker-chosen completions locally, inside the sandbox.
 
 ## 6. Gaps requiring sec-review follow-up (ranked)
 

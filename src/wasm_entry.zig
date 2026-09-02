@@ -159,7 +159,7 @@ export fn agave_init(model_ptr: [*]const u8, model_len: usize) usize {
 /// Tokenizes the prompt, applies the model's chat template, and returns the
 /// number of tokens produced. The textual output is written into the context's
 /// internal buffer and can be retrieved with `agave_get_output`. Returns 0 on error.
-export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: usize, max_tokens: u32) u32 {
+export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]allowzero const u8, prompt_len: usize, max_tokens: u32) u32 {
     if (ctx_ptr == 0) return 0;
     const ctx: *InferenceContext = @ptrFromInt(ctx_ptr);
     if (!ctx.ready) {
@@ -167,7 +167,12 @@ export fn agave_generate(ctx_ptr: usize, prompt_ptr: [*]const u8, prompt_len: us
         return 0;
     }
 
-    const prompt = prompt_ptr[0..prompt_len];
+    // len 0 must not slice a null host pointer: JS `generate("")` passes ptr=0.
+    if (prompt_len != 0 and @intFromPtr(prompt_ptr) == 0) {
+        writeErr(ctx, .tokenize, "Tokenize error", .{});
+        return 0;
+    }
+    const prompt: []const u8 = if (prompt_len == 0) &.{} else @as([*]const u8, @ptrCast(prompt_ptr))[0..prompt_len];
     _ = max_tokens;
 
     // Tokenize prompt to verify pipeline
@@ -294,6 +299,20 @@ test "agave_last_error null handle is invalid_handle" {
     );
 }
 
+test "agave_generate null handle returns 0" {
+    const dummy: [1]u8 = .{0};
+    try std.testing.expectEqual(@as(u32, 0), agave_generate(0, &dummy, dummy.len, 8));
+    try std.testing.expectEqual(
+        @intFromEnum(WasmError.invalid_handle),
+        agave_last_error(0),
+    );
+}
+
+test "agave_get_output null handle returns 0" {
+    var out: [8]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), agave_get_output(0, &out, out.len));
+}
+
 test "agave_generate on unready context sets not_ready" {
     const ctx = try std.testing.allocator.create(InferenceContext);
     defer std.testing.allocator.destroy(ctx);
@@ -305,6 +324,9 @@ test "agave_generate on unready context sets not_ready" {
     defer ctx.tok.deinit();
     const dummy: [1]u8 = .{0};
     try std.testing.expectEqual(@as(u32, 0), agave_generate(@intFromPtr(ctx), &dummy, dummy.len, 8));
+    try std.testing.expectEqual(@intFromEnum(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
+    const null_ptr: [*]allowzero const u8 = @ptrFromInt(0);
+    try std.testing.expectEqual(@as(u32, 0), agave_generate(@intFromPtr(ctx), null_ptr, 0, 8));
     try std.testing.expectEqual(@intFromEnum(WasmError.not_ready), agave_last_error(@intFromPtr(ctx)));
     var out: [64]u8 = undefined;
     const n = agave_get_output(@intFromPtr(ctx), &out, out.len);

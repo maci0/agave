@@ -8,7 +8,7 @@
  *
  * Usage:
  *   const agave = new AgaveEngine();
- *   await agave.init();
+ *   await agave.init(); // or agave.init(wasmBytes)
  *   await agave.loadModel('https://example.com/model.gguf');
  *   try {
  *     const output = await agave.generate('What is 2+2?', { maxTokens: 100 });
@@ -50,7 +50,8 @@ type AgaveErrorCode =
   | 'no_vocab'
   | 'tokenizer'
   | 'init_failed'
-  | 'generate_failed';
+  | 'generate_failed'
+  | 'invalid_argument';
 
 /**
  * Recoverable engine failure. `code` is stable; `message` is diagnostic text.
@@ -70,6 +71,9 @@ class AgaveError extends Error {
 
 /** Token budget used when the caller omits one or passes zero. */
 const default_max_tokens = 100;
+
+/** Max `u32` the WASM `agave_generate` export accepts. */
+const max_u32 = 0xFFFF_FFFF;
 
 /** Scratch buffer for `agave_get_output` (matches `max_output_bytes` in wasm_entry). */
 const output_buf_size = 16_384;
@@ -101,12 +105,25 @@ const required_exports = [
   'agave_free',
 ] as const;
 
+const wrapFetchError = (error: unknown, code: AgaveErrorCode, label: string): AgaveError => {
+  if (error instanceof AgaveError) {return error;}
+  const msg = error instanceof Error ? error.message : String(error);
+  return new AgaveError(code, `Failed to download ${label}: ${msg}`);
+};
+
 const fetchBuffer = async (
   url: string,
   code: AgaveErrorCode,
   label: string,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> => {
-  const response = await fetch(url);
+  const init: RequestInit | undefined = signal === undefined ? undefined : { signal };
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    throw wrapFetchError(error, code, label);
+  }
   if (!response.ok) {
     throw new AgaveError(
       code,
@@ -114,7 +131,11 @@ const fetchBuffer = async (
       response.status,
     );
   }
-  return response.arrayBuffer();
+  try {
+    return await response.arrayBuffer();
+  } catch (error) {
+    throw wrapFetchError(error, code, label);
+  }
 };
 
 const instantiateModule = async (
@@ -162,6 +183,16 @@ const bytesFromBuffer = (source: ArrayBuffer | ArrayBufferView): Uint8Array => {
   return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
 };
 
+/** Copy a view (possibly SharedArrayBuffer-backed) into a detachable ArrayBuffer. */
+const arrayBufferFromSource = (source: ArrayBuffer | ArrayBufferView): ArrayBuffer => {
+  if (source instanceof ArrayBuffer) {
+    return source;
+  }
+  const copy = new Uint8Array(source.byteLength);
+  copy.set(bytesFromBuffer(source));
+  return copy.buffer;
+};
+
 const readCtxOutput = (exp: AgaveWasmExports, ctx: number): string => {
   const outPtr = exp.agave_alloc(output_buf_size);
   if (outPtr === 0) {
@@ -189,6 +220,9 @@ const initErrorCode = (wasm_code: number): AgaveErrorCode => {
     case wasm_err.tokenizer: {
       return 'tokenizer';
     }
+    case wasm_err.model_init: {
+      return 'init_failed';
+    }
     default: {
       return 'init_failed';
     }
@@ -210,13 +244,17 @@ class AgaveEngine {
 
   /**
    * Instantiate `agave.wasm`. Pass a URL or an already-fetched module buffer to
-   * skip the default same-origin fetch (tests, custom hosting).
+   * skip the default same-origin fetch (tests, custom hosting). `signal` aborts
+   * the URL fetch; it does not unload a module that already instantiated.
    */
-  async init(source: string | ArrayBuffer = default_wasm_url): Promise<void> {
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|ArrayBuffer union
+  async init(
+    source: string | ArrayBuffer | ArrayBufferView = default_wasm_url,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|buffer union
     const bytes = typeof source === 'string'
-      ? await fetchBuffer(source, 'wasm_fetch_failed', 'agave.wasm')
-      : source;
+      ? await fetchBuffer(source, 'wasm_fetch_failed', 'agave.wasm', signal)
+      : arrayBufferFromSource(source);
     let wasmMemory: WebAssembly.Memory | null = null;
     const importObject: WebAssembly.Imports = {
       env: {
@@ -243,21 +281,30 @@ class AgaveEngine {
 
     const instance = await instantiateModule(bytes, importObject);
     wasmMemory = wasmExports(instance).memory;
+    /* Swap only after the new module is valid so a failed re-init keeps the
+       previous engine. Free the old context against the old instance: its
+       pointer is meaningless in the new linear memory. */
+    const prev = this.wasm;
+    const prev_ctx = this.ctx;
     this.wasm = instance;
+    this.ctx = 0;
+    this.initMessage = '';
     this.ready = true;
+    if (prev && prev_ctx) {wasmExports(prev).agave_free(prev_ctx);}
     // oxlint-disable-next-line no-console -- engine diagnostics for WASM debugging
     console.log('Agave WASM engine initialized');
   }
 
   /**
-   * Load a model from a URL, ArrayBuffer, or typed-array view.
+   * Load a model from a URL, ArrayBuffer, or typed-array view. `signal` aborts
+   * the URL fetch; a model already copied into WASM is not cancelled.
    */
-  async loadModel(source: ModelSource): Promise<void> {
+  async loadModel(source: ModelSource, signal?: AbortSignal): Promise<void> {
     if (!this.wasm) { throw new AgaveError('not_initialized', 'Engine not initialized'); }
     const exp = wasmExports(this.wasm);
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|buffer union; no schema parser to delegate to
     const data = typeof source === 'string'
-      ? new Uint8Array(await fetchBuffer(source, 'download_failed', 'model'))
+      ? new Uint8Array(await fetchBuffer(source, 'download_failed', 'model', signal))
       : bytesFromBuffer(source);
 
     // Allocate WASM memory and copy model data
@@ -314,37 +361,49 @@ class AgaveEngine {
     if (!this.ctx) { throw new AgaveError('no_model', 'No model loaded'); }
     const exp = wasmExports(this.wasm);
 
+    const requested = options.maxTokens;
+    if (requested !== undefined && requested !== 0) {
+      if (!Number.isInteger(requested) || requested < 0 || requested > max_u32) {
+        throw new AgaveError(
+          'invalid_argument',
+          'maxTokens must be a non-negative integer that fits in 32 bits (0 uses the default)',
+        );
+      }
+    }
     // Both an omitted and an explicitly zero budget mean "use the default".
-    const maxTokens = options.maxTokens === undefined || options.maxTokens === 0
+    const maxTokens = requested === undefined || requested === 0
       ? default_max_tokens
-      : options.maxTokens;
+      : requested;
     const encoder = new TextEncoder();
     const promptBytes = encoder.encode(prompt);
 
     // Copy prompt to WASM memory. alloc(0) returns 0, which is not an OOM.
     let promptPtr = 0;
-    if (promptBytes.length > 0) {
-      promptPtr = exp.agave_alloc(promptBytes.length);
-      if (promptPtr === 0) {
-        throw new AgaveError('alloc_failed', 'Failed to allocate WASM memory for prompt');
+    try {
+      if (promptBytes.length > 0) {
+        promptPtr = exp.agave_alloc(promptBytes.length);
+        if (promptPtr === 0) {
+          throw new AgaveError('alloc_failed', 'Failed to allocate WASM memory for prompt');
+        }
+        const promptMem = new Uint8Array(exp.memory.buffer, promptPtr, promptBytes.length);
+        promptMem.set(promptBytes);
       }
-      const promptMem = new Uint8Array(exp.memory.buffer, promptPtr, promptBytes.length);
-      promptMem.set(promptBytes);
+
+      exp.agave_generate(this.ctx, promptPtr, promptBytes.length, maxTokens);
+
+      const output = readCtxOutput(exp, this.ctx);
+      const wasm_code = exp.agave_last_error(this.ctx);
+      if (wasm_code !== wasm_err.ok) {
+        throw new AgaveError(
+          generateErrorCode(wasm_code),
+          output || 'Generation failed',
+        );
+      }
+
+      return output;
+    } finally {
+      if (promptPtr !== 0) {exp.agave_dealloc(promptPtr, promptBytes.length);}
     }
-
-    exp.agave_generate(this.ctx, promptPtr, promptBytes.length, maxTokens);
-    if (promptPtr !== 0) {exp.agave_dealloc(promptPtr, promptBytes.length);}
-
-    const output = readCtxOutput(exp, this.ctx);
-    const wasm_code = exp.agave_last_error(this.ctx);
-    if (wasm_code !== wasm_err.ok) {
-      throw new AgaveError(
-        generateErrorCode(wasm_code),
-        output || 'Generation failed',
-      );
-    }
-
-    return output;
   }
 
   /**
@@ -354,8 +413,9 @@ class AgaveEngine {
   destroy(): void {
     if (this.wasm && this.ctx) {
       wasmExports(this.wasm).agave_free(this.ctx);
-      this.ctx = 0;
     }
+    this.ctx = 0;
+    this.initMessage = '';
   }
 }
 
