@@ -26,6 +26,14 @@ function fmtNum(n, digits) {
 function fmtInt(n) {
     return Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
+/** Local calendar date as YYYY-MM-DD. `toISOString().slice(0, 10)` is UTC, so
+ * a US-evening export would be stamped with tomorrow's date. */
+function localDateYmd(now = new Date()) {
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
 function lastFocusable(list) {
     if (list.length === 0) {
         return undefined;
@@ -592,7 +600,7 @@ function exportConv() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `agave-chat-${new Date().toISOString().slice(0, 10)}.md`;
+    a.download = `agave-chat-${localDateYmd()}.md`;
     document.body.append(a);
     a.click();
     a.remove();

@@ -23,6 +23,23 @@ const discovery_timeout_ms: u32 = 30000;
 const beacon_prefix = "AGAVE-DISCOVER:";
 const join_prefix = "AGAVE-JOIN:";
 const max_msg_len: usize = 64;
+const usec_per_ms: u32 = 1000;
+
+/// Monotonic milliseconds for the discovery deadline. Counting assumed
+/// `beacon_interval_ms` after a 1s `SO_RCVTIMEO` made a 30s timeout take ~60s.
+fn monoMilli() u64 {
+    var ts: std.posix.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ms_per_s + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
+}
+
+/// Split a millisecond interval into `timeval` seconds + microseconds.
+fn msToTimeval(interval_ms: u32) posix.system.timeval {
+    return .{
+        .sec = @intCast(interval_ms / std.time.ms_per_s),
+        .usec = @intCast((interval_ms % std.time.ms_per_s) * usec_per_ms),
+    };
+}
 
 /// A peer node discovered via UDP broadcast, identified by IPv4 address and rank.
 pub const DiscoveredPeer = struct {
@@ -60,8 +77,9 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
     };
     if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
 
-    // Set receive timeout
-    const tv = posix.system.timeval{ .sec = 1, .usec = 0 };
+    // Recv timeout matches the beacon interval so each empty poll waits ~500ms,
+    // not 1s (which previously doubled the advertised 30s discovery window).
+    const tv = msToTimeval(beacon_interval_ms);
     _ = c.setsockopt(sock, posix.SOL.SOCKET, posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
 
     // Broadcast address
@@ -76,8 +94,8 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
 
     std.log.info("discovery: broadcasting on UDP port {d}...", .{discovery_port});
 
-    var elapsed: u32 = 0;
-    while (elapsed < discovery_timeout_ms) {
+    const start_ms = monoMilli();
+    while (monoMilli() - start_ms < discovery_timeout_ms) {
         // Broadcast beacon
         _ = c.sendto(sock, beacon_msg.ptr, beacon_msg.len, 0, @ptrCast(&bcast_addr), @sizeOf(@TypeOf(bcast_addr)));
 
@@ -94,8 +112,6 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
                 return peer_ip;
             }
         }
-
-        elapsed += beacon_interval_ms;
     }
 
     std.log.warn("discovery: timeout after {d}ms, no peers found", .{discovery_timeout_ms});
@@ -120,6 +136,15 @@ test "discovery, protocol constants" {
     try @import("std").testing.expectEqualStrings("AGAVE-DISCOVER:", beacon_prefix);
     try @import("std").testing.expectEqualStrings("AGAVE-JOIN:", join_prefix);
     try @import("std").testing.expectEqual(@as(usize, 64), max_msg_len);
+}
+
+test "msToTimeval splits seconds and microseconds" {
+    const half = msToTimeval(beacon_interval_ms);
+    try std.testing.expectEqual(@as(@TypeOf(half.sec), 0), half.sec);
+    try std.testing.expectEqual(@as(@TypeOf(half.usec), 500_000), half.usec);
+    const thirty = msToTimeval(discovery_timeout_ms);
+    try std.testing.expectEqual(@as(@TypeOf(thirty.sec), 30), thirty.sec);
+    try std.testing.expectEqual(@as(@TypeOf(thirty.usec), 0), thirty.usec);
 }
 
 test "discovery, world_size < 2 returns null" {
@@ -256,8 +281,7 @@ fn discoverAsWorker(sock: c_int, rank: u32, port: u16) ?[4]u8 {
     };
     if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
 
-    // Set receive timeout
-    const tv = posix.system.timeval{ .sec = @intCast(discovery_timeout_ms / 1000), .usec = 0 };
+    const tv = msToTimeval(discovery_timeout_ms);
     _ = c.setsockopt(sock, posix.SOL.SOCKET, posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
 
     std.log.info("discovery: listening for rank 0 beacon on UDP port {d}...", .{discovery_port + 1});

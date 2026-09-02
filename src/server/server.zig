@@ -197,6 +197,16 @@ fn timestamp() i64 {
     return @divTrunc(sim_clock.milliNow(), 1000);
 }
 
+/// Process uptime in whole seconds from two monotonic-ms stamps.
+///
+/// `/health` `uptime_s` is elapsed process time, not a wall-clock difference:
+/// an NTP step backward would otherwise report 0 (already clamped) and a
+/// step forward would inflate uptime, which load balancers read as "this
+/// process has been up a long time."
+fn uptimeSeconds(start_mono_ms: i64, now_mono_ms: i64) i64 {
+    return @divFloor(@max(0, now_mono_ms - start_mono_ms), std.time.ms_per_s);
+}
+
 /// Background sleep monitor: checks idle time every 10s.
 /// Sets g_server.sleeping=true after sleep_after_s seconds of inactivity.
 /// Flag-only signal for orchestrators via /health (docs/ARCHITECTURE.md,
@@ -489,6 +499,9 @@ const Server = struct {
     request_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Server start time (unix timestamp, set once in run()).
     start_time: i64 = 0,
+    /// Monotonic milliseconds at process start, for `/health` `uptime_s`.
+    /// Not comparable to `start_time` (epoch seconds) or to other machines.
+    start_mono_ms: i64 = 0,
     /// Continuous batching scheduler (null = single-request mode).
     request_manager: ?*scheduler.RequestManager = null,
     /// Global rate limiter (null = no rate limiting).
@@ -1548,9 +1561,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // Health check endpoint, lightweight, no mutex, no inference
     if (is_get and std.mem.eql(u8, path, "/health")) {
         var buf: [health_buf_size]u8 = undefined;
-        // Clamp: both reads are wall clock, so an NTP step backward must not
-        // report negative uptime in /health.
-        const uptime: i64 = if (g_server.start_time > 0) @max(0, timestamp() - g_server.start_time) else 0;
+        const uptime: i64 = uptimeSeconds(g_server.start_mono_ms, milliTimestamp());
         const queue = g_server.metrics.queue_depth.load(.monotonic);
         const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
         const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
@@ -6565,6 +6576,7 @@ pub fn run(config: ServerConfig) !void {
     };
     server.api_key = api_key;
     server.start_time = timestamp();
+    server.start_mono_ms = milliTimestamp();
     server.metrics.process_start_time.store(server.start_time, .monotonic);
 
     // Optional token-bucket rate limiter (null when both limits are 0).
@@ -6761,6 +6773,15 @@ pub fn run(config: ServerConfig) !void {
 }
 
 // ── Tests ───────────────────────────────────────────────────────
+
+test "uptimeSeconds is monotonic elapsed and never negative" {
+    try std.testing.expectEqual(@as(i64, 0), uptimeSeconds(1000, 1000));
+    try std.testing.expectEqual(@as(i64, 0), uptimeSeconds(1000, 1999));
+    try std.testing.expectEqual(@as(i64, 5), uptimeSeconds(1000, 6000));
+    // NTP/manual step backward on a wall clock would look like this; monotonic
+    // duration must clamp rather than go negative.
+    try std.testing.expectEqual(@as(i64, 0), uptimeSeconds(5000, 1000));
+}
 
 test "parseContentLength normal" {
     try std.testing.expectEqual(@as(?usize, 42), parseContentLength("Content-Length: 42\r\nHost: localhost"));
