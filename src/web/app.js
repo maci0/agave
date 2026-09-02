@@ -47,24 +47,86 @@ let pendingStreamRender = null;
 let msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 let backendName = '';
+let hasVision = false;
+let visionKnown = false;
+let pendingImage = null;
 let streamTokenCount = 0;
 let streamStartTime = 0;
 // The tok/s counter is a role="status" live region; rewriting it on every token
 // Floods screen readers with announcements. Refresh at most once per second.
 const TOKS_UPDATE_INTERVAL_MS = 1000;
 let lastToksUpdate = 0;
+/** Apply model metadata from /v1/models to the header, context badge, and image attach. */
+function applyModelInfo(modelData) {
+    modelName = modelData.id;
+    backendName = modelData.backend ?? '';
+    const badge = qs('#model-name');
+    badge.textContent = modelName;
+    badge.title = modelName;
+    updateCtxBadge(modelData);
+    setVisionUi(modelData.vision === true);
+}
+/** Show image attach only when the loaded model has a vision encoder. */
+function setVisionUi(on) {
+    visionKnown = true;
+    hasVision = on;
+    const imgBtn = document.getElementById('img-btn');
+    if (imgBtn) {
+        imgBtn.hidden = !on;
+    }
+    if (!on && pendingImage) {
+        removeImage();
+        showToast('This model cannot view images.');
+    }
+    syncVisionHints();
+}
+/** Keep the empty-state image hint in sync with whether this model can see images. */
+function syncVisionHints() {
+    const hints = document.querySelector('#empty .hints');
+    if (!hints) {
+        return;
+    }
+    const existing = hints.querySelector('.hint-image');
+    if (hasVision) {
+        if (!existing) {
+            const s = document.createElement('span');
+            s.className = 'hint hint-image';
+            s.textContent = 'Paste or drop an image';
+            hints.append(s);
+        }
+    }
+    else if (existing) {
+        existing.remove();
+    }
+}
+/** Map fetch/network failures to short, actionable copy (not the engine's exception text). */
+function userFacingError(error) {
+    if (error instanceof Error) {
+        const lower = error.message.toLowerCase();
+        if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
+            return 'Could not reach the server. Check that it is still running.';
+        }
+        if (lower === 'empty response body') {
+            return 'The server sent an empty reply. Try again.';
+        }
+        return error.message;
+    }
+    return String(error);
+}
 // oxlint-disable-next-line unicorn/prefer-top-level-await, promise/prefer-await-to-then -- classic script: top-level await requires module semantics
 fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
     if (d.data?.[0]) {
-        modelName = d.data[0].id;
-        backendName = d.data[0].backend ?? '';
-        const badge = qs('#model-name');
-        badge.textContent = modelName;
-        badge.title = modelName;
-        updateCtxBadge(d.data[0]);
+        applyModelInfo(d.data[0]);
+    }
+    else {
+        setOfflineBadge();
     }
 }).catch(function () { setOfflineBadge(); });
 function setOfflineBadge() {
+    const imgBtn = document.getElementById('img-btn');
+    if (imgBtn && !hasVision) {
+        imgBtn.hidden = true;
+    }
     const badge = qs('#model-name');
     // Prefer a native button over role="button" on a live region span (4.1.2)
     let btn = badge;
@@ -87,13 +149,8 @@ function setOfflineBadge() {
         loading.textContent = 'Loading…';
         btn.replaceWith(loading);
         fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
-            const el = qs('#model-name');
             if (d.data?.[0]) {
-                modelName = d.data[0].id;
-                backendName = d.data[0].backend ?? '';
-                el.textContent = modelName;
-                el.title = modelName;
-                updateCtxBadge(d.data[0]);
+                applyModelInfo(d.data[0]);
             }
             else {
                 setOfflineBadge();
@@ -202,7 +259,6 @@ maxTokEl.addEventListener('blur', function () {
 if (localStorage.getItem('agave_show_stats') === '1') {
     document.body.classList.add('show-stats');
 }
-let pendingImage = null;
 function showToast(text, type) {
     const isError = type !== 'info';
     const toast = document.createElement('div');
@@ -249,6 +305,10 @@ function showToast(text, type) {
 }
 const MAX_IMAGE_BYTES = 10_485_760;
 function loadImageFile(file, label) {
+    if (visionKnown && !hasVision) {
+        showToast('This model cannot view images.');
+        return false;
+    }
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
         showToast('Unsupported image format. Use JPEG, PNG, GIF, or WebP.');
@@ -329,7 +389,12 @@ inp.addEventListener('paste', function (e) {
     }
 });
 const chatForm = qs('#chat-form');
-chatForm.addEventListener('dragover', function (e) { e.preventDefault(); chatForm.classList.add('drag-over'); });
+chatForm.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    if (!visionKnown || hasVision) {
+        chatForm.classList.add('drag-over');
+    }
+});
 chatForm.addEventListener('dragleave', function (e) {
     e.preventDefault();
     // Ignore leave events that stay inside the form (child → child flicker).
@@ -839,7 +904,7 @@ async function streamResponse(body, errLabel, url) {
             return;
         }
         finalized = true;
-        renderContent(el, content || '*(no response)*', true);
+        renderContent(el, content || 'No response.', true);
         addRegenBtn(el);
         loadConvs();
         refreshCtxBadge();
@@ -896,11 +961,11 @@ async function streamResponse(body, errLabel, url) {
     }
     catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- errors are surfaced to the user as an alert region with a Retry action
         if (error instanceof Error && error.name === 'AbortError') {
-            renderContent(el, content || '*Stopped*', true);
+            renderContent(el, content || 'Stopped.', true);
             addRegenBtn(el);
         }
         else {
-            const errMsg = `${errLabel}: ${error instanceof Error ? error.message : String(error)}`;
+            const errMsg = `${errLabel}: ${userFacingError(error)}`;
             const err = document.createElement('div');
             err.className = 'error-msg';
             err.setAttribute('role', 'alert');
@@ -1055,6 +1120,12 @@ function showEmpty() {
             s.addEventListener('click', function () { runCommand('/help'); });
         }
         hintsEl.append(s);
+    }
+    if (hasVision) {
+        const imgHint = document.createElement('span');
+        imgHint.className = 'hint hint-image';
+        imgHint.textContent = 'Paste or drop an image';
+        hintsEl.append(imgHint);
     }
     empty.append(icon);
     empty.append(h2);
@@ -1297,8 +1368,11 @@ function selectConv(id) {
     selectSeq += 1;
     const mySeq = selectSeq;
     chat.replaceChildren();
-    const loadEl = addAssistant();
+    const loadEl = document.createElement('div');
+    loadEl.className = 'info-msg';
+    loadEl.setAttribute('role', 'status');
     loadEl.textContent = 'Loading conversation\u2026';
+    chat.append(loadEl);
     announceToSR('Loading conversation…');
     fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `action=select&id=${encodeURIComponent(id)}` })
         .then(function (r) { return r.json(); }).then(function (data) {
@@ -1363,14 +1437,7 @@ function deleteConv(id) {
         inp.focus();
         announceToSR('Conversation deleted');
     }).catch(function () {
-        const errMsg = 'Failed to delete conversation.';
-        const err = document.createElement('div');
-        err.className = 'error-msg';
-        err.setAttribute('role', 'alert');
-        err.textContent = errMsg;
-        chat.append(err);
-        scrollBottom();
-        announceToSR(errMsg);
+        showToast('Could not delete that conversation. Check that the server is running.');
     });
 }
 function setDialogBackdropInert(on) {

@@ -30,9 +30,12 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
         body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
-        header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+        header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
         header h1 { font-size: 1.2rem; color: var(--accent); font-family: var(--mono); letter-spacing: -0.5px; }
         header small { color: var(--text-3); }
+        #clear-btn { flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text-3); font-weight: 500; }
+        #clear-btn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+        #clear-btn[hidden] { display: none !important; }
         main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
         #chat { flex: 1; overflow-y: auto; padding: 1rem 2rem; outline: none; }
         #chat:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
@@ -87,7 +90,7 @@
             .msg.user, .msg.assistant { border: 1px solid CanvasText; }
         }
         @media (max-width: 600px) {
-            header { padding: 0.75rem 1rem; }
+            header { padding: 0.75rem 1rem; flex-wrap: wrap; }
             #model-input { padding: 0.75rem 1rem; flex-direction: column; align-items: stretch; }
             #model-input input[type="url"] { min-width: unset; width: 100%; }
             #chat { padding: 0.75rem 1rem; }
@@ -105,8 +108,11 @@
     <noscript><p style="padding:2rem;color:var(--red-text);text-align:center">JavaScript is required to run Agave in the browser.</p></noscript>
     <a href="#prompt" class="skip-link">Skip to message input</a>
     <header>
-        <h1>agave</h1>
-        <small>LLM inference in the browser via WebAssembly</small>
+        <div>
+            <h1>agave</h1>
+            <small>LLM inference in the browser via WebAssembly</small>
+        </div>
+        <button type="button" id="clear-btn" onclick="clearChat()" hidden title="Clear conversation">Clear</button>
     </header>
     <div id="model-input" role="region" aria-label="Model loading">
         <label for="model-url">Model URL</label>

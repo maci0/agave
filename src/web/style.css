@@ -575,6 +575,7 @@ body.show-stats .stats { display: flex; }
 .img-remove::before { content: ''; position: absolute; inset: -6px; }
 .img-remove:hover { background: var(--red-text); }
 .img-btn { font-size: 16px; padding: 12px 8px; min-width: 48px; min-height: 48px; display: inline-flex; align-items: center; justify-content: center; }
+.img-btn[hidden] { display: none !important; }
 .img-btn:disabled { opacity: .4; cursor: not-allowed; }
 .msg .msg-img { max-width: 200px; border-radius: var(--r); border: 1px solid var(--border); margin-bottom: 8px; display: block; }
 
@@ -700,14 +701,15 @@ button.hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
   .sidebar.open { transform: translateX(0); visibility: visible; transition: transform .2s, visibility 0s; }
   .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, .4); z-index: 40; cursor: pointer; }
   .sidebar-overlay.show { display: block; }
-  header { padding: 12px 16px; }
+  header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+  .hdr-btns { flex-wrap: wrap; justify-content: flex-end; margin-inline-start: auto; }
   .model-badge { max-width: min(160px, 42vw); }
   .ctx-badge { margin-inline-start: 4px; }
   #chat { padding: 16px 16px 8px; }
   #chat-form { padding: 12px 16px 16px; }
   #msg { font-size: 16px; }
   .btn-text { display: none; }
-  .btn-text-keep { display: inline; }
+  .btn-text-keep { display: none; }
   .msg { padding: 12px 14px; }
   #empty h2 { font-size: 24px; }
   .input-hint { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
