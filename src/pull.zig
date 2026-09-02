@@ -16,6 +16,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const display_mod = @import("display.zig");
+const durable = @import("durable_file.zig");
 const version = display_mod.version;
 
 // ── Named constants ──────────────────────────────────────────────────────────
@@ -1243,6 +1244,13 @@ fn downloadFileOnce(
         return PullError.DownloadFailed;
     }
 
+    // fsync before advertising the blob as complete: close() is not durable,
+    // and the snapshot symlink is created immediately after this returns.
+    durable.syncFd(file.handle) catch |err| {
+        eprint("Error: fsync failed for '{s}': {}\n", .{ blob_path, err });
+        return PullError.DownloadFailed;
+    };
+
     if (std.c.close(file.handle) != 0) {
         eprint("Error: failed to close '{s}' after download (flush may have failed)\n", .{blob_path});
         return PullError.DownloadFailed;
@@ -1603,14 +1611,9 @@ fn writeRefsMain(pa: Allocator, refs_dir: []const u8, commit_sha: []const u8) vo
         eprint("Warning: could not allocate refs/main path: {}\n", .{err});
         return;
     };
-    if (Io.Dir.cwd().createFile(mod_io, refs_main, .{})) |f| {
-        defer f.close(mod_io);
-        f.writePositionalAll(mod_io, commit_sha, 0) catch |err| {
-            eprint("Warning: could not write refs/main: {}\n", .{err});
-        };
-    } else |err| {
+    durable.replace(refs_main, commit_sha) catch |err| {
         eprint("Warning: could not write refs/main: {}\n", .{err});
-    }
+    };
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

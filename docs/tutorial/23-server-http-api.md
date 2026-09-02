@@ -93,6 +93,8 @@ Server-related flags from [`src/main.zig`](../../src/main.zig):
 | `--max-batch-size N` | | `8` | Max requests batched per scheduler cycle; takes effect once per-request paged KV is wired (admission is one-at-a-time today) |
 | `--rate-limit-rpm N` | | `0` (unlimited) | Max requests per minute; enables token-bucket rate limiting |
 | `--rate-limit-tpm N` | | `0` (unlimited) | Max prompt tokens per minute; enables token-bucket rate limiting |
+| `--conv-store PATH` | | `~/.cache/agave/conversations.json` | Persist web-UI conversations as JSON (atomic replace) |
+| `--no-conv-store` | | | Do not persist or restore conversations (in-memory only) |
 | `--no-kv-cache` | | | Prefill-only / embedding server (no decode-phase KV cache) |
 
 ```bash
@@ -113,6 +115,9 @@ agave model.gguf --serve --rate-limit-rpm 60 --rate-limit-tpm 100000
 
 # Prefill-only / embedding server
 agave model.gguf --serve --no-kv-cache
+
+# Persist conversations somewhere other than ~/.cache/agave/conversations.json
+agave model.gguf --serve --conv-store /var/lib/agave/conversations.json
 ```
 
 ## Gotchas
@@ -121,6 +126,7 @@ agave model.gguf --serve --no-kv-cache
 - **Default sampling is deterministic, not "no config = random."** `temperature` defaults to `0` in `json.zig`, and the server's own `use_sampling` check treats `0` as "off," meaning greedy argmax. A request with no sampling fields set will reproduce the same output for the same prompt and KV state; that's the documented default in API.md, not an accidental lack of randomness.
 - **Buffered and streaming responses aren't the same JSON shape with different pacing.** The buffered response is one object with a complete `choices[0].message`; the streaming response is a sequence of partial `delta` objects ending in `data: [DONE]`. Code written against one shape will not parse the other; see API.md's streaming section for the exact chunk formats per endpoint.
 - **Prefix reuse depends on the client resending an unmodified prefix.** The radix-tree cache (section 5) matches on exact token-ID equality from the start of the sequence. Editing an earlier message, not just appending a new one, changes every token from that point forward, so the cached prefix stops at the edit and everything after it reprefills from scratch, even though most of the conversation "looks" unchanged to a human reading it.
+- **Web-UI conversations are written to disk by default.** `~/.cache/agave/conversations.json` (or `--conv-store`) holds message text. A process restart restores the list; the KV cache is not in that file, so the next request re-prefills. Use `--no-conv-store` when the host must not retain prompts.
 
 **In the code:** [`server` request handling](../../src/server/server.zig), [`json` parsing](../../src/server/json.zig), [`scheduler` continuous batching](../../src/server/scheduler.zig)
 

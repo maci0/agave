@@ -11,6 +11,18 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Added
+- Server: persist web-UI conversations to `~/.cache/agave/conversations.json`
+  (override `--conv-store`, disable `--no-conv-store`). Atomic tmp+fsync+rename;
+  corrupt files are quarantined to `{path}.corrupt` on load.
+
+### Fixed
+- Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
+  `refs/main` now publish via atomic replace; Hub blob downloads `fsync` before
+  the snapshot is advertised complete.
+- Docker Compose: named volume `agave-cache` (or `AGAVE_CACHE_DIR`) at
+  `/home/agave/.cache` so conversations and caches survive container replace.
+
 ## [0.2.0] - 2026-08-26
 
 ### Breaking

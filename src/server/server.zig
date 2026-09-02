@@ -28,6 +28,7 @@ const metrics_mod = @import("metrics.zig");
 const Metrics = metrics_mod.Metrics;
 const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 const json = @import("json.zig");
+const conv_store = @import("conv_store.zig");
 const tools_mod = @import("tools.zig");
 const SamplingParams = json.SamplingParams;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -475,10 +476,12 @@ const Server = struct {
     /// End-of-generation token IDs (primary EOS + any additional EOG/EOT tokens).
     eog_ids: [max_eog_ids]u32 = undefined,
     eog_len: usize = 0,
-    /// Runtime-only conversation storage for the web UI.
+    /// Conversation storage for the web UI. Persisted to `conv_store_path` when set.
     conversations: std.ArrayList(Conversation) = .empty,
     active_id: u32 = 0,
     next_id: u32 = 1,
+    /// JSON conversation store path. Null disables persist/restore.
+    conv_store_path: ?[]const u8 = null,
     /// Whether the KV cache matches the active conversation's state.
     kv_valid: bool = false,
     /// Cached prompt token IDs from the last API generation (for prefix reuse).
@@ -594,6 +597,7 @@ const Server = struct {
         var title_buf: [24]u8 = undefined;
         const title = std.fmt.bufPrint(&title_buf, "Chat {d}", .{id}) catch "Chat";
         conv.setTitle(title);
+        self.persistConversationsLocked();
         return conv;
     }
 
@@ -621,6 +625,7 @@ const Server = struct {
             self.clearCachedPromptIds();
             if (ngram_mod.global_pool) |*pool| pool.clear();
         }
+        self.persistConversationsLocked();
     }
 
     /// Select a conversation by ID. Caller must hold self.mutex.
@@ -628,7 +633,70 @@ const Server = struct {
         if (self.active_id != id) {
             self.active_id = id;
             self.kv_valid = false;
+            self.persistConversationsLocked();
         }
+    }
+
+    /// Write conversations to `conv_store_path`. Caller must hold self.mutex.
+    fn persistConversationsLocked(self: *Server) void {
+        const path = self.conv_store_path orelse return;
+        var views_buf: [max_conversations]conv_store.ConvView = undefined;
+        const n = @min(self.conversations.items.len, max_conversations);
+        for (self.conversations.items[0..n], 0..) |*conv, i| {
+            views_buf[i] = .{
+                .id = conv.id,
+                .title = conv.titleSlice(),
+                .messages = conv.messages.items,
+            };
+        }
+        conv_store.save(self.allocator, path, self.active_id, self.next_id, views_buf[0..n]) catch |err| {
+            std.log.warn("conversation store save failed ({s}): {}", .{ path, err });
+        };
+    }
+
+    /// Restore conversations from `conv_store_path`. Caller must hold self.mutex
+    /// (or be the only thread during startup). Missing file is a no-op.
+    fn loadConversationsLocked(self: *Server) void {
+        const path = self.conv_store_path orelse return;
+        var snap = conv_store.load(self.allocator, path) catch |err| {
+            if (err == error.FileNotFound) {
+                std.log.info("conversation store: {s} (new)", .{path});
+                return;
+            }
+            std.log.warn("conversation store load failed ({s}): {}", .{ path, err });
+            return;
+        };
+        defer snap.deinit();
+
+        for (snap.conversations) |*lc| {
+            var conv = Conversation{ .id = lc.id };
+            conv.setTitle(lc.title);
+            conv.messages.items = lc.messages;
+            conv.messages.capacity = lc.messages.len;
+            lc.messages = &.{};
+            self.conversations.append(self.allocator, conv) catch {
+                conv.freeMessages(self.allocator);
+                std.log.warn("conversation store: dropped remaining conversations (OOM)", .{});
+                break;
+            };
+        }
+        self.next_id = snap.next_id;
+        var max_id: u32 = 0;
+        for (self.conversations.items) |c| {
+            if (c.id > max_id) max_id = c.id;
+        }
+        if (self.next_id <= max_id) self.next_id = max_id +% 1;
+        if (self.next_id == 0) self.next_id = 1;
+        self.active_id = snap.active_id;
+        if (self.getConvById(self.active_id) == null) {
+            self.active_id = if (self.conversations.items.len > 0)
+                self.conversations.items[self.conversations.items.len - 1].id
+            else
+                0;
+        }
+        std.log.info("conversation store: loaded {d} conversation(s) from {s}", .{
+            self.conversations.items.len, path,
+        });
     }
 
     fn isEog(self: *const Server, token: u32) bool {
@@ -2783,6 +2851,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 if (last_msg.role == .assistant) {
                     wipeFree(g_server.allocator, @constCast(last_msg.content));
                     _ = regen_conv.messages.pop();
+                    g_server.persistConversationsLocked();
                 }
             }
 
@@ -2990,6 +3059,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 500, elapsedMs(request_start));
                 break :blk null;
             };
+            g_server.persistConversationsLocked();
 
             // Title is set at createConv time (opaque "Chat {id}"); never store message text.
 
@@ -3134,6 +3204,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             // onto empty slots and skip re-prefilling (garbled output).
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
+            g_server.persistConversationsLocked();
         }
         if (ngram_mod.global_pool) |*pool| pool.clear();
         slog("  [command] /clear\n", .{});
@@ -3149,6 +3220,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             g_server.kv_valid = false;
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
+            g_server.persistConversationsLocked();
         }
         if (ngram_mod.global_pool) |*pool| pool.clear();
         slog("  [command] /reset\n", .{});
@@ -3330,7 +3402,9 @@ fn storeConversationResponse(result_data: []const u8, stats: Stats) void {
         std.log.warn("req={d} OOM appending response to conversation", .{log_request_id});
         @memset(duped, 0);
         g_server.allocator.free(duped);
+        return;
     };
+    g_server.persistConversationsLocked();
 }
 
 fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GeneratedEscaped {
@@ -6513,6 +6587,10 @@ pub const ServerConfig = struct {
     rate_limit_rpm: u32 = 0,
     /// Max prompt tokens per minute (0 = no token-rate limit).
     rate_limit_tpm: u32 = 0,
+    /// Explicit conversation store path. Ignored when `no_conv_store` is set.
+    conv_store_path: ?[]const u8 = null,
+    /// Disable conversation persist/restore (in-memory only).
+    no_conv_store: bool = false,
 };
 
 /// Start the HTTP server with OpenAI-compatible API endpoints.
@@ -6582,6 +6660,19 @@ pub fn run(config: ServerConfig) !void {
     server.api_key = api_key;
     server.start_time = timestamp();
     server.start_mono_ms = milliTimestamp();
+
+    var conv_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (config.no_conv_store) {
+        server.conv_store_path = null;
+    } else if (config.conv_store_path) |p| {
+        server.conv_store_path = p;
+    } else {
+        server.conv_store_path = conv_store.defaultPath(&conv_path_buf);
+        if (server.conv_store_path == null) {
+            std.log.warn("conversation store disabled: HOME is unset (pass --conv-store PATH)", .{});
+        }
+    }
+    server.loadConversationsLocked();
     server.metrics.process_start_time.store(server.start_time, .monotonic);
 
     // Optional token-bucket rate limiter (null when both limits are 0).
@@ -6770,6 +6861,7 @@ pub fn run(config: ServerConfig) !void {
     {
         server.mutex.lockUncancelable(server.io);
         defer server.mutex.unlock(server.io);
+        server.persistConversationsLocked();
         if (server.cached_prompt_ids.len > 0) {
             server.clearCachedPromptIds();
         }

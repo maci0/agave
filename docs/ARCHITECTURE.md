@@ -34,8 +34,10 @@ agave/
 │   ├── cli.zig            # Self-contained CLI argument parser (zero deps)
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
 │   ├── pull.zig           # Model download from HuggingFace Hub (agave pull <org/repo>)
+│   ├── durable_file.zig   # Atomic tmp+fsync+rename for operator-facing artifacts
 │   ├── server/
 │   │   ├── server.zig     # HTTP server (OpenAI + Anthropic API + chat UI)
+│   │   ├── conv_store.zig # Web-UI conversation JSON persist/restore
 │   │   ├── scheduler.zig  # Continuous batching request scheduler
 │   │   ├── tools.zig      # Process-level tool registry (register / dispose)
 │   │   ├── metrics.zig    # Prometheus metrics collector
@@ -288,7 +290,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/messages` | POST | Anthropic Messages API format |
 | `/v1/models` | GET | List available models |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
-| `/v1/conversations` | GET/POST | List or create conversations |
+| `/v1/conversations` | GET/POST | List or create conversations (persisted to `--conv-store`) |
 | `/v1/tokenize` | POST | Count tokens in text |
 | `/v1/detokenize` | POST | Detokenize token IDs to text |
 | `/v1/chat` | POST | Built-in chat web UI endpoint |

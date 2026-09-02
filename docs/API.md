@@ -254,10 +254,21 @@ curl -X POST http://localhost:49453/v1/conversations -d 'action=delete&id=1'
 ```
 
 Limits: maximum 100 concurrent conversations, 1000 messages per conversation.
-Conversations are process-local (in RAM only): not written to disk, wiped on
-server shutdown, and message text is zeroed on delete/clear. Titles are opaque
-(`Chat {id}`), never derived from user message content. The OpenAI `user`
-request field is ignored (often an email or username).
+Titles are opaque (`Chat {id}`), never derived from user message content. The
+OpenAI `user` request field is ignored (often an email or username). Message
+text is zeroed in RAM on delete/clear.
+
+**Durability:** the web-UI conversation list is written to
+`~/.cache/agave/conversations.json` (override with `--conv-store PATH`, disable
+with `--no-conv-store`). Saves use a sibling `.tmp` file, `fsync`, and rename, so
+a crash cannot truncate the live file. On startup the server loads that file;
+a corrupt file is renamed to `{path}.corrupt` and the server starts empty
+rather than overwriting the only copy. Instance restart RPO is the last
+completed mutation (create/select/delete, user message, assistant reply, clear).
+KV cache and prefix cache are not in this file: after restore, the next request
+re-prefills. Docker Compose mounts `/home/agave/.cache` on a named volume
+(`agave-cache`, or `AGAVE_CACHE_DIR`) so container replace does not drop the
+store. `docker compose down -v` deletes that volume.
 
 ### POST /v1/embeddings
 

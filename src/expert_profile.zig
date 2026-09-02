@@ -125,15 +125,7 @@ pub const ExpertProfile = struct {
 
         try buf.appendSlice(allocator, "  ]\n}\n");
 
-        const open_flags: u32 = if (comptime @import("builtin").os.tag == .linux) (1 | 64 | 512) else (1 | 0x200 | 0x400);
-        const fd = std.posix.openat(std.posix.AT.FDCWD, path, @bitCast(open_flags), 0o644) catch |e| return e;
-        defer _ = std.posix.system.close(fd);
-        var off: usize = 0;
-        while (off < buf.items.len) {
-            const n = std.posix.system.write(fd, buf.items[off..].ptr, buf.items.len - off);
-            if (n <= 0) break;
-            off += @intCast(n);
-        }
+        try @import("durable_file.zig").replace(path, buf.items);
     }
 
     /// Load a profile written by writeJson. Minimal hand-rolled parser

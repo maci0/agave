@@ -403,6 +403,8 @@ agave [OPTIONS] <model> [prompt]
       --max-batch-size <N> Server concurrent batch size [default: 8] (admission is one-at-a-time until per-request paged KV is wired)
       --rate-limit-rpm <N> Server max requests/min (0=unlimited)
       --rate-limit-tpm <N> Server max prompt tokens/min (0=unlimited)
+      --conv-store <PATH>  Persist web-UI conversations [default: ~/.cache/agave/conversations.json]
+      --no-conv-store      Do not persist or restore web-UI conversations
       --no-kv-cache        Prefill-only / embedding server mode
       --list-devices       List available compute devices and exit
       --device <N>         GPU device index for CUDA/ROCm/Vulkan [default: 0]
@@ -499,7 +501,7 @@ and `research/kernels/` prototypes that are not part of the build.
 
 ## Docker
 
-Preferred local server path: copy `.env.example` to `.env`, set `AGAVE_API_KEY` and model paths, then `docker compose up --build`. Compose publishes on `127.0.0.1` by default (override with `AGAVE_HOST_BIND`).
+Preferred local server path: copy `.env.example` to `.env`, set `AGAVE_API_KEY` and model paths, then `docker compose up --build`. Compose publishes on `127.0.0.1` by default (override with `AGAVE_HOST_BIND`). Conversations, the Vulkan pipeline cache, and Hub downloads live in a named volume `agave-cache` at `/home/agave/.cache` (override with `AGAVE_CACHE_DIR`). `docker compose down -v` deletes that volume.
 
 Build multi-platform images (x86_64 + aarch64) using `docker buildx`:
 

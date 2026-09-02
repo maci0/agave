@@ -532,19 +532,8 @@ fn saveVkCacheFile(data: []const u8) void {
     if (std.fmt.bufPrintZ(&dir_buf, "{s}", .{std.fs.path.dirname(path) orelse return}) catch null) |dir| {
         _ = std.c.mkdir(dir, 0o755);
     }
-    const P = std.posix;
-    // Platform-correct O_WRONLY|O_CREAT|O_TRUNC:
-    //   Linux:  O_WRONLY=1, O_CREAT=64(0o100), O_TRUNC=512(0o1000) → 577
-    //   macOS:  O_WRONLY=1, O_CREAT=512(0x200), O_TRUNC=1024(0x400) → 1537
-    const open_flags: u32 = if (comptime builtin.os.tag == .linux) (1 | 64 | 512) else (1 | 0x200 | 0x400);
-    const fd = P.openat(P.AT.FDCWD, path, @bitCast(open_flags), 0o644) catch return;
-    defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
-    var off: usize = 0;
-    while (off < data.len) {
-        const n = std.posix.system.write(fd, data[off..].ptr, data.len - off);
-        if (n <= 0) break;
-        off += @intCast(n);
-    }
+    // Atomic replace: a crash mid-write must not truncate a previously good cache.
+    @import("../durable_file.zig").replace(path, data) catch {};
 }
 
 const FnCmdBindPipeline = *const fn (VkCommandBuffer, c_int, VkPipeline) callconv(.c) void;
