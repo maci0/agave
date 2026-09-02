@@ -17,8 +17,8 @@
 //!
 //! The override is process-global (not thread-local). Tests that set it must
 //! `defer setOverrideMs(null)` and must not run concurrently with other tests
-//! that also override the clock. Storage is atomic so concurrent milliNow
-//! readers never tear a partially-updated override value.
+//! that also override the clock. Storage is atomic on every threaded target so
+//! concurrent milliNow readers never tear a partially-updated override value.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -27,27 +27,60 @@ const is_freestanding = builtin.os.tag == .freestanding;
 /// Sentinel: no override installed (milliNow falls through to the wall clock).
 const no_override: i64 = std.math.minInt(i64);
 
-/// When not `no_override`, milliNow/nanoNow return this logical millisecond time.
-var override_ms: std.atomic.Value(i64) = .init(no_override);
+/// Storage for the override, holding `no_override` when unset.
+///
+/// wasm32-freestanding has no threads and its baseline CPU has no 64-bit
+/// atomics (`@atomicLoad` on an i64 is a compile error there), so that target
+/// keeps a plain variable. Every other target stores the value atomically so
+/// concurrent milliNow readers never see a torn update.
+const override_ms = if (is_freestanding) struct {
+    var v: i64 = no_override;
+
+    fn load() i64 {
+        return v;
+    }
+    fn store(next: i64) void {
+        v = next;
+    }
+    /// Returns null when the swap succeeded, else the value observed instead.
+    fn cmpxchg(expected: i64, next: i64) ?i64 {
+        if (v != expected) return v;
+        v = next;
+        return null;
+    }
+} else struct {
+    var v: std.atomic.Value(i64) = .init(no_override);
+
+    fn load() i64 {
+        return v.load(.acquire);
+    }
+    fn store(next: i64) void {
+        v.store(next, .release);
+    }
+    /// Returns null when the swap succeeded, else the value observed instead.
+    fn cmpxchg(expected: i64, next: i64) ?i64 {
+        return v.cmpxchgWeak(expected, next, .acq_rel, .acquire);
+    }
+};
 
 /// Install (or clear) a simulated millisecond clock. Pass null to restore wall time.
 pub fn setOverrideMs(ms: ?i64) void {
-    override_ms.store(ms orelse no_override, .release);
+    override_ms.store(ms orelse no_override);
 }
 
 /// True when milliNow/nanoNow/sleepNs are driven by the override (not the OS clock).
 pub fn isOverridden() bool {
-    return override_ms.load(.acquire) != no_override;
+    return override_ms.load() != no_override;
 }
 
 /// Advance the simulated clock by `delta` ms. If no override is set, seeds it
 /// from the current wall clock first so subsequent reads stay virtual.
 pub fn advanceMs(delta: i64) void {
     while (true) {
-        const cur = override_ms.load(.acquire);
+        const cur = override_ms.load();
         const base = if (cur != no_override) cur else milliNowWall();
         const next = base + delta;
-        if (override_ms.cmpxchgWeak(cur, next, .acq_rel, .acquire) == null) return;
+        if (override_ms.cmpxchg(cur, next) == null) return;
         // Lost the race (concurrent advanceMs/setOverrideMs); retry with fresh base.
     }
 }
@@ -61,7 +94,7 @@ fn milliNowWall() i64 {
 
 /// Milliseconds since epoch (simulated when override is set).
 pub fn milliNow() i64 {
-    const t = override_ms.load(.acquire);
+    const t = override_ms.load();
     if (t != no_override) return t;
     return milliNowWall();
 }
@@ -81,7 +114,7 @@ fn monoNowWall() i64 {
 /// simulated timeline with milliNow() under override so tests drive both
 /// readers from one virtual clock.
 pub fn monoMilli() i64 {
-    const t = override_ms.load(.acquire);
+    const t = override_ms.load();
     if (t != no_override) return t;
     return monoNowWall();
 }
@@ -89,7 +122,7 @@ pub fn monoMilli() i64 {
 /// Nanoseconds since epoch (simulated when override is set).
 /// Simulated values are override_ms * 1e6 so seed derivation stays tied to the same clock.
 pub fn nanoNow() i96 {
-    const t = override_ms.load(.acquire);
+    const t = override_ms.load();
     if (t != no_override) return @as(i96, t) * 1_000_000;
     if (comptime is_freestanding) return 0;
     var ts: std.posix.timespec = undefined;

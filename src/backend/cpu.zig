@@ -288,6 +288,9 @@ fn markSiblingList(data: []const u8, out: *CpuBitSet) void {
 pub fn physicalCoreIds(out: []u32) usize {
     if (comptime builtin.os.tag != .linux) return 0;
     const linux = std.os.linux;
+    // The scan below indexes `allowed` by bit, so the cap must fit the mask on
+    // every word size (cpu_set_t is CPU_SETSIZE bytes, i.e. 1024 bits).
+    comptime std.debug.assert(max_logical_cpus <= @bitSizeOf(linux.cpu_set_t));
 
     var allowed: linux.cpu_set_t = @splat(0);
     if (linux.sched_getaffinity(0, @sizeOf(linux.cpu_set_t), &allowed) != 0) return 0;

@@ -208,6 +208,9 @@ jobs:
           - x86_64-linux-gnu
           - aarch64-linux-gnu
           - aarch64-macos
+          # README documents both static musl builds; keep them compiling.
+          - x86_64-linux-musl
+          - aarch64-linux-musl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,7 +238,44 @@ jobs:
           if [[ "$TARGET" == *"-macos" ]]; then
             args+=(-Denable-metal=false)
           fi
+          # Static musl builds are CPU-only: the dlopen backends load
+          # glibc-linked .so files (README "Static musl builds").
+          if [[ "$TARGET" == *"-musl" ]]; then
+            args+=(-Denable-metal=false -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false)
+          fi
           zig build "${args[@]}"
+
+  # wasm32-freestanding is a separate build step, so the cross-compile matrix
+  # (which only varies -Dtarget) never touches it. Untested it rots: the
+  # baseline wasm32 CPU has no 64-bit atomics, and a plain
+  # std.atomic.Value(i64) anywhere in the graph is a compile error there.
+  wasm-build:
+    name: Build WASM module
+    needs: fmt-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-zig
+        id: zig
+
+      - name: Cache Zig build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-${{ steps.zig.outputs.version }}-wasm-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-wasm-
+
+      - name: Build agave.wasm
+        run: |
+          set -euo pipefail
+          zig build wasm
+          test -s zig-out/web/agave.wasm
 
   # Rebuild-and-compare check for committed kernel binaries (CUDA PTX).
   # These artifacts are @embedFile'd but NOT rebuilt by `zig build`, so a
@@ -293,7 +333,7 @@ jobs:
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, fuzz-smoke, kernel-artifacts]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -307,6 +347,7 @@ jobs:
             "test-macos:${{ needs.test-macos.result }}" \
             "docker-build:${{ needs.docker-build.result }}" \
             "cross-compile-check:${{ needs.cross-compile-check.result }}" \
+            "wasm-build:${{ needs.wasm-build.result }}" \
             "fuzz-smoke:${{ needs.fuzz-smoke.result }}" \
             "kernel-artifacts:${{ needs.kernel-artifacts.result }}"
           do
