@@ -13,7 +13,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build check` (format check + docs hygiene + unit tests). That is the default CI gate on Linux and macOS. Extra jobs fire on specific surfaces:
+Before a PR, run `zig build check` (format check + docs hygiene + unit tests). That is the Zig CI gate on Linux and macOS. TypeScript under `src/web/` and `web/` is a separate required gate (`lint-web`). Extra jobs fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -21,6 +21,7 @@ Before a PR, run `zig build check` (format check + docs hygiene + unit tests). T
 | WASM / `src/wasm_entry.zig` / `web/` | `zig build wasm` |
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs `bun`) |
+| `src/web/` / `web/` TypeScript | `bun run lint` and `bun run typecheck` (blocking CI job `lint-web`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
 
@@ -330,6 +331,10 @@ Notes:
 ```bash
 # Local CI gate (format + docs hygiene + unit tests). Run this before pushing.
 zig build check
+
+# Web TypeScript (blocking CI job lint-web). Needs bun + `bun install`.
+bun run lint
+bun run typecheck
 
 # Format check only (same paths as .github/workflows/ci.yml fmt-check)
 zig build fmt-check

@@ -371,10 +371,36 @@ jobs:
         # Focus on untrusted-input surfaces (JSON, GGUF, image, grammar, CLI).
         run: zig build test --fuzz=1000 --summary all
 
+  # oxlint + tsc are configured in-tree but never ran on GitHub: the chat UI
+  # and WASM shell could regress without a red check. Blocking. IgnorePatterns
+  # in .oxlintrc.json still exclude src/web/app.ts and web/shell.ts until those
+  # files are migrated; tsc --noEmit covers both regardless.
+  lint-web:
+    name: Lint and typecheck TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: oxlint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web]
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -390,7 +416,8 @@ jobs:
             "cross-compile-check:${{ needs.cross-compile-check.result }}" \
             "wasm-build:${{ needs.wasm-build.result }}" \
             "fuzz-smoke:${{ needs.fuzz-smoke.result }}" \
-            "kernel-artifacts:${{ needs.kernel-artifacts.result }}"
+            "kernel-artifacts:${{ needs.kernel-artifacts.result }}" \
+            "lint-web:${{ needs.lint-web.result }}"
           do
             name="${pair%%:*}"
             result="${pair#*:}"

@@ -1,5 +1,6 @@
 "use strict";
-/* oxlint-disable @rikalabs/no-standalone-classes -- stateful engine class; public API is constructor-based per web/index.html */
+/* oxlint-disable @rikalabs/no-standalone-classes -- public constructor API per web/index.html */
+/* oxlint-disable eslint/max-classes-per-file -- AgaveError and AgaveEngine are the WASM API */
 /**
  * Agave WASM browser inference glue (`web/`), not the HTTP chat UI.
  *
@@ -61,6 +62,26 @@ const required_exports = [
     'agave_last_error',
     'agave_free',
 ];
+const fetchBuffer = async (url, code, label) => {
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new AgaveError(code, `Failed to download ${label} (HTTP ${String(response.status)})`, response.status);
+    }
+    return response.arrayBuffer();
+};
+const instantiateModule = async (bytes, importObject) => {
+    try {
+        const { instance } = await WebAssembly.instantiate(bytes, importObject);
+        return instance;
+    }
+    catch (error) {
+        if (error instanceof AgaveError) {
+            throw error;
+        }
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new AgaveError('wasm_invalid', `Failed to instantiate agave.wasm: ${msg}`);
+    }
+};
 /**
  * Narrow a freshly instantiated module's exports to the shape this file calls.
  *
@@ -105,16 +126,21 @@ const readCtxOutput = (exp, ctx) => {
 };
 const initErrorCode = (wasm_code) => {
     switch (wasm_code) {
-        case wasm_err.gguf_parse:
+        case wasm_err.gguf_parse: {
             return 'gguf_parse';
-        case wasm_err.unsupported_arch:
+        }
+        case wasm_err.unsupported_arch: {
             return 'unsupported_arch';
-        case wasm_err.no_vocab:
+        }
+        case wasm_err.no_vocab: {
             return 'no_vocab';
-        case wasm_err.tokenizer:
+        }
+        case wasm_err.tokenizer: {
             return 'tokenizer';
-        default:
+        }
+        default: {
             return 'init_failed';
+        }
     }
 };
 const generateErrorCode = (wasm_code) => {
@@ -133,18 +159,10 @@ class AgaveEngine {
      * skip the default same-origin fetch (tests, custom hosting).
      */
     async init(source = default_wasm_url) {
-        let bytes;
         // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|ArrayBuffer union
-        if (typeof source === 'string') {
-            const response = await fetch(source);
-            if (!response.ok) {
-                throw new AgaveError('wasm_fetch_failed', `Failed to download agave.wasm (HTTP ${String(response.status)})`, response.status);
-            }
-            bytes = await response.arrayBuffer();
-        }
-        else {
-            bytes = source;
-        }
+        const bytes = typeof source === 'string'
+            ? await fetchBuffer(source, 'wasm_fetch_failed', 'agave.wasm')
+            : source;
         let wasmMemory = null;
         const importObject = {
             env: {
@@ -170,18 +188,7 @@ class AgaveEngine {
                 },
             },
         };
-        let instance;
-        try {
-            const result = await WebAssembly.instantiate(bytes, importObject);
-            instance = result.instance;
-        }
-        catch (e) {
-            if (e instanceof AgaveError) {
-                throw e;
-            }
-            const msg = e instanceof Error ? e.message : String(e);
-            throw new AgaveError('wasm_invalid', `Failed to instantiate agave.wasm: ${msg}`);
-        }
+        const instance = await instantiateModule(bytes, importObject);
         wasmMemory = wasmExports(instance).memory;
         this.wasm = instance;
         this.ready = true;
@@ -196,18 +203,10 @@ class AgaveEngine {
             throw new AgaveError('not_initialized', 'Engine not initialized');
         }
         const exp = wasmExports(this.wasm);
-        let data;
         // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|buffer union; no schema parser to delegate to
-        if (typeof source === 'string') {
-            const response = await fetch(source);
-            if (!response.ok) {
-                throw new AgaveError('download_failed', `Failed to download model (HTTP ${String(response.status)})`, response.status);
-            }
-            data = new Uint8Array(await response.arrayBuffer());
-        }
-        else {
-            data = bytesFromBuffer(source);
-        }
+        const data = typeof source === 'string'
+            ? new Uint8Array(await fetchBuffer(source, 'download_failed', 'model'))
+            : bytesFromBuffer(source);
         // Allocate WASM memory and copy model data
         const ptr = exp.agave_alloc(data.byteLength);
         if (ptr === 0) {
@@ -215,26 +214,27 @@ class AgaveEngine {
         }
         const wasmMem = new Uint8Array(exp.memory.buffer, ptr, data.byteLength);
         wasmMem.set(data);
-        // Initialize a new context first; keep the previous one until this succeeds
-        // so a failed reload does not leave the chat with no model.
+        /* Initialize a new context first; keep the previous one until this succeeds
+           so a failed reload does not leave the chat with no model. */
         const newCtx = exp.agave_init(ptr, data.byteLength);
-        // Model buffer is borrowed by GGUF and freed by agave_free. If init could
-        // not allocate a context, the host still owns `ptr` and must dealloc it.
+        /* Model buffer is borrowed by GGUF and freed by agave_free. If init could
+           not allocate a context, the host still owns `ptr` and must dealloc it. */
         if (newCtx === 0) {
             exp.agave_dealloc(ptr, data.byteLength);
             throw new AgaveError('init_failed', 'Failed to initialize model');
         }
-        let initMessage;
-        try {
-            initMessage = readCtxOutput(exp, newCtx);
-        }
-        catch (e) {
-            exp.agave_free(newCtx);
-            throw e;
-        }
+        const initMessage = (() => {
+            try {
+                return readCtxOutput(exp, newCtx);
+            }
+            catch (error) {
+                exp.agave_free(newCtx);
+                throw error;
+            }
+        })();
         const wasm_code = exp.agave_last_error(newCtx);
-        // agave_init returns a context on parse/init errors too, with a diagnostic
-        // instead of the "Loaded:" banner. Do not treat that as a successful load.
+        /* The agave_init export returns a context on parse/init errors too, with a
+           diagnostic instead of the "Loaded:" banner. Do not treat that as a successful load. */
         if (wasm_code !== wasm_err.ok || !initMessage.startsWith('Loaded:')) {
             exp.agave_free(newCtx);
             throw new AgaveError(initErrorCode(wasm_code), initMessage || 'Failed to initialize model');
