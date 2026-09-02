@@ -25,6 +25,8 @@ const max_ngram: usize = 10;
 /// recent half to make room (amortized O(1) push). Shared by NgramState,
 /// SharedNgramPool, and SuffixState, which all compact identically.
 fn historyPush(history: []u32, len: *usize, token: u32) void {
+    std.debug.assert(history.len > 0);
+    std.debug.assert(len.* <= history.len);
     if (len.* < history.len) {
         history[len.*] = token;
         len.* += 1;
@@ -35,6 +37,34 @@ fn historyPush(history: []u32, len: *usize, token: u32) void {
         history[len.*] = token;
         len.* += 1;
     }
+    std.debug.assert(len.* > 0);
+    std.debug.assert(len.* <= history.len);
+}
+
+/// Latest earlier occurrence of `pattern` in `hist` that leaves at least one
+/// continuation token. Returns the index where that continuation begins, or null.
+///
+/// Searches `hist[0 .. hist.len - pattern.len]` from the right so recency wins.
+/// Bounded: `pos` walks from `hist.len - pattern.len - 1` down to 0.
+fn findLatestContinuation(hist: []const u32, pattern: []const u32) ?usize {
+    const n = pattern.len;
+    if (n == 0) return null;
+    if (hist.len < n + 1) return null;
+    var pos: usize = hist.len - n;
+    while (pos > 0) {
+        pos -= 1;
+        if (std.mem.eql(u32, hist[pos .. pos + n], pattern)) return pos + n;
+    }
+    return null;
+}
+
+/// Copy up to `max_draft` tokens from `hist[cont_pos..]` into `out`.
+fn copyContinuation(hist: []const u32, cont_pos: usize, max_draft: usize, out: []u32) usize {
+    std.debug.assert(cont_pos < hist.len);
+    const avail = hist.len - cont_pos;
+    const n_out = @min(@min(avail, max_draft), out.len);
+    @memcpy(out[0..n_out], hist[cont_pos..][0..n_out]);
+    return n_out;
 }
 
 /// N-gram proposal state. Maintains a ring buffer of generated tokens.
@@ -51,41 +81,19 @@ pub const NgramState = struct {
     /// Returns the number of proposed tokens written to `out`.
     pub fn propose(self: *const NgramState, max_draft: usize, out: []u32) usize {
         if (self.len < min_ngram + 1 or max_draft == 0) return 0;
+        std.debug.assert(self.len <= self.history.len);
 
         const hist = self.history[0..self.len];
-        var best_match_pos: usize = 0;
-        var best_match_len: usize = 0;
-
         // Try longest n-gram first (greedy, longer match = better prediction)
         const max_n = @min(max_ngram, self.len - 1);
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
-            // Pattern = last n tokens
             const pattern = hist[self.len - n ..];
-
-            // Search backward, most recent occurrence is a better predictor.
-            // max_n <= len - 1 leaves at least one earlier alignment to try.
-            const search_end = self.len - n;
-            var pos: usize = search_end - 1;
-            while (true) {
-                if (std.mem.eql(u32, hist[pos .. pos + n], pattern[0..n])) {
-                    best_match_pos = pos + n;
-                    best_match_len = n;
-                    break;
-                }
-                if (pos == 0) break;
-                pos -= 1;
+            if (findLatestContinuation(hist, pattern)) |cont_pos| {
+                return copyContinuation(hist, cont_pos, max_draft, out);
             }
-            if (best_match_len > 0) break;
         }
-
-        if (best_match_len == 0) return 0;
-
-        // Copy continuation tokens after the match
-        const avail = self.len - best_match_pos;
-        const n_propose = @min(@min(avail, max_draft), out.len);
-        @memcpy(out[0..n_propose], hist[best_match_pos..][0..n_propose]);
-        return n_propose;
+        return 0;
     }
 };
 
@@ -151,35 +159,19 @@ pub const SharedNgramPool = struct {
 
         if (snap_len < min_ngram + 1) return 0;
 
-        var best_pos: usize = 0;
-        var best_len: usize = 0;
+        const hist = hist_snap[0..snap_len];
         // snap_len - 1: need ≥1 token after a match to draft from.
         const max_n = @min(max_ngram, @min(tail.len, snap_len - 1));
         var n: usize = max_n;
         while (n >= min_ngram) : (n -= 1) {
             const pat = tail[tail.len - n ..];
-            // Search backward so the most recent occurrence wins, recency is a
-            // better predictor than position for cross-request shared history.
-            // Tail is an external query, so every alignment with ≥1 continuation
+            // Tail is an external query; every alignment with ≥1 continuation
             // token is a valid match (no self-match exclusion needed here).
-            if (snap_len < n + 1) continue;
-            var pos: usize = snap_len - n - 1;
-            while (true) {
-                if (std.mem.eql(u32, hist_snap[pos .. pos + n], pat)) {
-                    best_pos = pos + n;
-                    best_len = n;
-                    break;
-                }
-                if (pos == 0) break;
-                pos -= 1;
+            if (findLatestContinuation(hist, pat)) |cont_pos| {
+                return copyContinuation(hist, cont_pos, max_draft, out);
             }
-            if (best_len > 0) break;
         }
-        if (best_len == 0) return 0;
-        const avail = snap_len - best_pos;
-        const n_out = @min(@min(avail, max_draft), out.len);
-        @memcpy(out[0..n_out], hist_snap[best_pos..][0..n_out]);
-        return n_out;
+        return 0;
     }
 };
 
@@ -233,6 +225,7 @@ pub const SuffixState = struct {
     /// (used to compute dynamic k: longer match → more draft tokens).
     pub fn proposeWithDepth(self: *const SuffixState, max_draft: usize, out: []u32) struct { n: usize, match_len: usize } {
         if (self.len < min_suffix + 1 or max_draft == 0) return .{ .n = 0, .match_len = 0 };
+        std.debug.assert(self.len <= self.history.len);
 
         const hist = self.history[0..self.len];
 
@@ -241,22 +234,8 @@ pub const SuffixState = struct {
         var n: usize = max_n;
         while (n >= min_suffix) : (n -= 1) {
             const suffix = hist[self.len - n ..];
-            const search_end = self.len - n;
-
-            // Search backward, most recent occurrence is a better predictor,
-            // mirroring the NgramState approach.
-            if (search_end >= n) {
-                var pos: usize = search_end - n;
-                while (true) {
-                    if (std.mem.eql(u32, hist[pos .. pos + n], suffix)) {
-                        const avail = self.len - (pos + n);
-                        const n_out = @min(@min(avail, max_draft), out.len);
-                        @memcpy(out[0..n_out], hist[pos + n ..][0..n_out]);
-                        return .{ .n = n_out, .match_len = n };
-                    }
-                    if (pos == 0) break;
-                    pos -= 1;
-                }
+            if (findLatestContinuation(hist, suffix)) |cont_pos| {
+                return .{ .n = copyContinuation(hist, cont_pos, max_draft, out), .match_len = n };
             }
         }
         return .{ .n = 0, .match_len = 0 };
@@ -302,6 +281,29 @@ test "suffix no match" {
     var draft: [4]u32 = undefined;
     const n = s.propose(&draft);
     try std.testing.expect(n == 0);
+}
+
+test "suffix propose finds late overlapping alignment" {
+    var s = try SuffixState.init(std.testing.allocator);
+    defer s.deinit();
+
+    // [9,8,7,5,5,5]: suffix "5 5" matches at index 3. Starting the scan at
+    // search_end - n skipped that slot and reported no match.
+    const tokens = [_]u32{ 9, 8, 7, 5, 5, 5 };
+    for (tokens) |t| s.push(t);
+    var draft: [8]u32 = undefined;
+    const result = s.proposeWithDepth(8, &draft);
+    try std.testing.expectEqual(@as(usize, 1), result.n);
+    try std.testing.expectEqual(@as(u32, 5), draft[0]);
+    try std.testing.expectEqual(@as(usize, 2), result.match_len);
+}
+
+test "findLatestContinuation late overlapping alignment" {
+    const hist = [_]u32{ 9, 8, 7, 5, 5, 5 };
+    const pattern = [_]u32{ 5, 5 };
+    const cont = findLatestContinuation(&hist, &pattern) orelse return error.NoMatch;
+    try std.testing.expectEqual(@as(usize, 5), cont);
+    try std.testing.expectEqual(@as(u32, 5), hist[cont]);
 }
 
 test "shared pool clear resets len" {
@@ -457,6 +459,7 @@ pub const LookaheadState = struct {
     /// Seed branches with continuations from an initial token set.
     /// Called after prefill; branches start from the last `n_branches` distinct tokens.
     pub fn seed(self: *LookaheadState, history: []const u32) void {
+        std.debug.assert(self.n_branches <= max_branches);
         const n = @min(self.n_branches, history.len);
         for (0..n) |i| {
             self.branches[i][0] = history[history.len - n + i];
@@ -466,6 +469,7 @@ pub const LookaheadState = struct {
 
     /// Advance all branches by one token (caller provides next tokens per branch).
     pub fn advance(self: *LookaheadState, next_tokens: []const u32) void {
+        std.debug.assert(self.n_branches <= max_branches);
         const n = @min(next_tokens.len, self.n_branches);
         for (0..n) |i| {
             const bl = self.branch_len[i];
@@ -483,6 +487,7 @@ pub const LookaheadState = struct {
     /// Try to find an n-gram match between any branch and the current context tail.
     /// Returns the matched branch index and match length, or null if no match.
     pub fn findMatch(self: *const LookaheadState, context_tail: []const u32) ?struct { branch: usize, match_len: usize } {
+        std.debug.assert(self.n_branches <= max_branches);
         if (context_tail.len < lookahead_min_match) return null;
         var best_branch: usize = 0;
         var best_len: usize = 0;
@@ -509,6 +514,8 @@ pub const LookaheadState = struct {
     /// Copy continuation tokens from a matched branch into the draft buffer.
     /// Returns number of tokens copied (tokens AFTER the matched prefix).
     pub fn proposeContinuation(self: *const LookaheadState, branch: usize, match_len: usize, max_draft: usize, out: []u32) usize {
+        std.debug.assert(branch < self.n_branches);
+        std.debug.assert(branch < max_branches);
         const br = self.branches[branch][0..self.branch_len[branch]];
         if (match_len >= br.len) return 0;
         const start = match_len;
