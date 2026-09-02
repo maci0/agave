@@ -41,6 +41,12 @@ must still appear under **Changed** or **Breaking** below. See
 - Linux/macOS release binaries are linked as PIE. Docker's runtime stage
   freezes `SOURCE_DATE_EPOCH` to the same calendar day as the build stage.
 - `-Denable-bench=false` skips installing `agave-bench` (Docker image default).
+- Empty/whitespace `AGAVE_API_KEY`, `AGAVE_PORT`, `AGAVE_HOST`, `HF_TOKEN`,
+  `HF_HOME`, `XDG_CACHE_HOME`, `HOME`, and `TMPDIR` are treated as unset.
+  A sourced `.env.example` (`AGAVE_API_KEY=`) no longer overrides `--api-key`
+  or fails loopback `--serve`. Invalid `AGAVE_PORT` errors name the env var.
+- `AGAVE_DF2_DEBUG=1` is read once at startup (not per speculation round) and
+  documented alongside `AGAVE_VISION_DEBUG`.
 - Docker image pin: `DEBIAN_SNAPSHOT` / `SOURCE_DATE_EPOCH` now match the
   `debian:bookworm-20260824-slim` FROM tag (CI already required the calendar day).
 - Docker "CPU + Gemma 3 only" image (CI `docker-build` and README minimal

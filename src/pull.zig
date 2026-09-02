@@ -233,14 +233,33 @@ fn fileWrite(file: Io.File, bytes: []const u8) void {
     _ = std.posix.system.write(file.handle, bytes.ptr, bytes.len);
 }
 
+/// Treat missing, empty, and whitespace-only values as unset.
+///
+/// Docker Compose forwards optional vars as empty strings (`${VAR:-}`), and
+/// sourcing `.env.example` leaves `AGAVE_API_KEY=` until the operator fills it.
+/// Callers must not treat those as configured secrets or paths.
+pub fn nonemptyEnv(val: ?[]const u8) ?[]const u8 {
+    const v = val orelse return null;
+    const trimmed = std.mem.trim(u8, v, " \t\r\n");
+    return if (trimmed.len == 0) null else trimmed;
+}
+
+/// True when a debug/feature env var is exactly `1` after trim.
+/// Docs promise `=1`; `0`, empty, and other values stay off.
+pub fn envFlagIsOne(val: ?[]const u8) bool {
+    const v = nonemptyEnv(val) orelse return false;
+    return std.mem.eql(u8, v, "1");
+}
+
 /// Get an environment variable (Zig 0.16 idiom via C getenv).
+/// Empty and whitespace-only values are unset (see `nonemptyEnv`).
 pub fn getenv(name: []const u8) ?[]const u8 {
     var buf: [256]u8 = undefined;
     if (name.len >= buf.len) return null;
     @memcpy(buf[0..name.len], name);
     buf[name.len] = 0;
     const result = std.c.getenv(@ptrCast(buf[0..name.len :0])) orelse return null;
-    return std.mem.span(result);
+    return nonemptyEnv(std.mem.span(result));
 }
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
@@ -267,6 +286,7 @@ pub fn printUsage() void {
         \\
         \\ENVIRONMENT:
         \\  HF_TOKEN             HuggingFace API token for private repos
+        \\                         Empty/whitespace is unset
         \\  HF_HOME              Custom HuggingFace cache directory
         \\  XDG_CACHE_HOME       XDG cache base (fallback: ~/.cache)
         \\
@@ -303,13 +323,9 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
     };
     var have_repo = false;
 
+    // Empty/whitespace HF_TOKEN would send `Authorization: Bearer ` and fail
+    // auth with a confusing 401; getenv treats those as unset.
     result.token = getenv("HF_TOKEN");
-    if (result.token) |t| {
-        // Empty/whitespace HF_TOKEN would send `Authorization: Bearer ` and fail
-        // auth with a confusing 401 instead of treating the token as unset.
-        const trimmed = std.mem.trim(u8, t, " \t\r\n");
-        result.token = if (trimmed.len == 0) null else trimmed;
-    }
 
     var past_options = false;
 
@@ -1718,6 +1734,25 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+test "nonemptyEnv treats empty and whitespace as unset" {
+    try std.testing.expect(nonemptyEnv(null) == null);
+    try std.testing.expect(nonemptyEnv("") == null);
+    try std.testing.expect(nonemptyEnv("   ") == null);
+    try std.testing.expect(nonemptyEnv("\t\n") == null);
+    try std.testing.expectEqualStrings("abc", nonemptyEnv("abc").?);
+    try std.testing.expectEqualStrings("abc", nonemptyEnv("  abc  ").?);
+}
+
+test "envFlagIsOne requires trimmed 1" {
+    try std.testing.expect(!envFlagIsOne(null));
+    try std.testing.expect(!envFlagIsOne(""));
+    try std.testing.expect(!envFlagIsOne("0"));
+    try std.testing.expect(!envFlagIsOne("true"));
+    try std.testing.expect(!envFlagIsOne("yes"));
+    try std.testing.expect(envFlagIsOne("1"));
+    try std.testing.expect(envFlagIsOne(" 1 "));
+}
+
 test "replaceSlashes basic" {
     const allocator = std.testing.allocator;
     const result = try replaceSlashes(allocator, "org/repo");
@@ -2203,6 +2238,9 @@ test "fuzz: pull helper functions" {
             smith.bytesWithHash(&buf, 0);
             const len = buf[0];
             const input = buf[1..@min(@as(usize, len) + 1, buf.len)];
+
+            _ = nonemptyEnv(if (input.len == 0) null else input);
+            _ = envFlagIsOne(if (input.len == 0) null else input);
 
             // isSafeFilename: must not crash on any input.
             const safe = isSafeFilename(input);

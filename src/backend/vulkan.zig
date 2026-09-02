@@ -498,8 +498,8 @@ fn formatVkCachePath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
 }
 
 fn vkCachePath(buf: *[512]u8) ?[]u8 {
-    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.span(c) else null;
-    const home = if (std.c.getenv("HOME")) |c| std.mem.span(c) else null;
+    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
+    const home = if (std.c.getenv("HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
     return formatVkCachePath(buf, xdg, home);
 }
 
