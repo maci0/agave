@@ -141,12 +141,20 @@ pub const SafeTensorsModel = struct {
     total_size: u64,
     /// Whether `model.safetensors.index.json` exists (multi-shard model).
     has_index: bool,
+    /// Size of `model.safetensors.index.json` in bytes (0 if missing or unknown).
+    index_size: u64 = 0,
     /// Whether `config.json` exists in the repo.
     has_config: bool,
+    /// Size of `config.json` in bytes (0 if missing or unknown).
+    config_size: u64 = 0,
     /// Whether `tokenizer.json` exists in the repo.
     has_tokenizer: bool,
+    /// Size of `tokenizer.json` in bytes (0 if missing or unknown).
+    tokenizer_size: u64 = 0,
     /// Whether `tokenizer_config.json` exists in the repo.
     has_tokenizer_config: bool,
+    /// Size of `tokenizer_config.json` in bytes (0 if missing or unknown).
+    tokenizer_config_size: u64 = 0,
 };
 
 /// Auxiliary files that should be downloaded alongside SafeTensors shards.
@@ -393,6 +401,18 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
 
 // ── HuggingFace API client ───────────────────────────────────────────────────
 
+/// File size from a HuggingFace `siblings[]` entry. Missing or non-integer
+/// `size` is 0 (unknown), which keeps the legacy "any non-empty local file
+/// is complete" rule for that blob.
+fn siblingSize(sibling: std.json.Value) u64 {
+    if (sibling != .object) return 0;
+    const size_val = sibling.object.get("size") orelse return 0;
+    return switch (size_val) {
+        .integer => |i| if (i >= 0) @intCast(i) else 0,
+        else => 0,
+    };
+}
+
 /// Fetch the list of model files available in a HuggingFace repository.
 ///
 /// Makes a GET request to the HuggingFace API and parses the JSON response
@@ -458,13 +478,17 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
         else => &[_]std.json.Value{},
     } else &[_]std.json.Value{};
 
-    // First pass: count GGUF and SafeTensors files.
+    // First pass: count GGUF and SafeTensors files, capture sidecar sizes.
     var gguf_count: usize = 0;
     var st_count: usize = 0;
     var has_st_index = false;
     var has_config = false;
     var has_tokenizer = false;
     var has_tokenizer_config = false;
+    var index_size: u64 = 0;
+    var config_size: u64 = 0;
+    var tokenizer_size: u64 = 0;
+    var tokenizer_config_size: u64 = 0;
     for (siblings) |sibling| {
         if (sibling != .object) continue;
         const rfilename = sibling.object.get("rfilename") orelse continue;
@@ -476,12 +500,16 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             st_count += 1;
         } else if (std.mem.eql(u8, name, "model.safetensors.index.json")) {
             has_st_index = true;
+            index_size = siblingSize(sibling);
         } else if (std.mem.eql(u8, name, "config.json")) {
             has_config = true;
+            config_size = siblingSize(sibling);
         } else if (std.mem.eql(u8, name, "tokenizer.json")) {
             has_tokenizer = true;
+            tokenizer_size = siblingSize(sibling);
         } else if (std.mem.eql(u8, name, "tokenizer_config.json")) {
             has_tokenizer_config = true;
+            tokenizer_config_size = siblingSize(sibling);
         }
     }
 
@@ -501,15 +529,9 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             if (rfilename != .string) continue;
             if (!std.mem.endsWith(u8, rfilename.string, ".gguf") or !isSafeFilename(rfilename.string)) continue;
 
-            const size_val = sibling.object.get("size");
-            const size: u64 = if (size_val) |sv| switch (sv) {
-                .integer => |i| if (i >= 0) @intCast(i) else 0,
-                else => 0,
-            } else 0;
-
             gguf_files[idx] = .{
                 .filename = rfilename.string,
-                .size = size,
+                .size = siblingSize(sibling),
             };
             idx += 1;
         }
@@ -529,12 +551,7 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             if (rfilename != .string) continue;
             if (!std.mem.endsWith(u8, rfilename.string, ".safetensors") or !isSafeFilename(rfilename.string)) continue;
 
-            const size_val = sibling.object.get("size");
-            const size: u64 = if (size_val) |sv| switch (sv) {
-                .integer => |i| if (i >= 0) @intCast(i) else 0,
-                else => 0,
-            } else 0;
-
+            const size = siblingSize(sibling);
             shards[st_idx] = rfilename.string;
             shard_sizes[st_idx] = size;
             total_size = std.math.add(u64, total_size, size) catch total_size;
@@ -546,9 +563,13 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             .shard_sizes = shard_sizes[0..st_idx],
             .total_size = total_size,
             .has_index = has_st_index,
+            .index_size = index_size,
             .has_config = has_config,
+            .config_size = config_size,
             .has_tokenizer = has_tokenizer,
+            .tokenizer_size = tokenizer_size,
             .has_tokenizer_config = has_tokenizer_config,
+            .tokenizer_config_size = tokenizer_config_size,
         };
     }
 
@@ -926,6 +947,35 @@ fn classifyRangeNotSatisfiable(existing_size: u64, expected_size: u64) RangeNotS
     return .complete;
 }
 
+/// True when a local blob is already the repository's current file.
+///
+/// Known `expected_size` must match exactly: a truncated leftover from a
+/// failed attempt, or a leftover from an older (larger or smaller) revision,
+/// is not complete. Unknown size (`0`) keeps the legacy rule that any
+/// non-empty local file is treated as complete.
+fn localSizeIsComplete(local_size: u64, expected_size: u64) bool {
+    if (expected_size > 0) return local_size == expected_size;
+    return local_size > 0;
+}
+
+/// Stat `path` and apply `localSizeIsComplete`. Missing files are incomplete.
+fn isLocalBlobComplete(path: []const u8, expected_size: u64) bool {
+    const stat = Io.Dir.cwd().statFile(mod_io, path, .{}) catch return false;
+    return localSizeIsComplete(stat.size, expected_size);
+}
+
+/// True when the HTTP-advertised total matches the repository listing.
+///
+/// `expected_size` 0 (listing omitted the size) cannot contradict the
+/// response. `content_length_present` false means the server omitted
+/// Content-Length; the byte-count check after the body is the remaining
+/// guard. Used before opening the local file so a 200 of the wrong length
+/// does not truncate a valid resume prefix.
+fn advertisedSizeAgrees(total_size: u64, expected_size: u64, content_length_present: bool) bool {
+    if (expected_size == 0 or !content_length_present) return true;
+    return total_size == expected_size;
+}
+
 /// Build a progress bar string for a given percentage.
 ///
 /// Returns a slice like `[===============>               ]` representing
@@ -1112,7 +1162,9 @@ fn downloadFileOnce(
     }
 
     // Determine total size (checked arithmetic prevents overflow from crafted Content-Length).
-    const content_length = response.head.content_length orelse blk: {
+    const maybe_len = response.head.content_length;
+    const content_length_present = maybe_len != null;
+    const content_length = maybe_len orelse blk: {
         eprint("Warning: server omitted Content-Length; size-based integrity check disabled\n", .{});
         break :blk @as(u64, 0);
     };
@@ -1120,6 +1172,15 @@ fn downloadFileOnce(
         std.math.add(u64, existing_size, content_length) catch return PullError.DownloadFailed
     else
         content_length;
+
+    // Refuse a body whose advertised length disagrees with the listing
+    // *before* opening the file: a 200 of the wrong size must not truncate
+    // a valid resume prefix. The retry then Range-resumes (or starts over
+    // after a 416 stale-delete) instead of appending to a short 200 body.
+    if (!advertisedSizeAgrees(total_size, expected_size, content_length_present)) {
+        eprint("Error: download size {d} does not match repository file {d}\n", .{ total_size, expected_size });
+        return PullError.DownloadFailed;
+    }
 
     // If server returned 200 (not 206), we're starting from scratch.
     const start_offset: u64 = if (status == .partial_content) existing_size else 0;
@@ -1239,8 +1300,15 @@ fn downloadFileOnce(
     if (is_tty) eprint("\n", .{}); // Newline after progress bar.
 
     // Verify downloaded size matches expected size (catches silent truncation).
-    if (total_size > 0 and downloaded != total_size) {
+    // Skip the Content-Length comparison when the header was omitted: a 206
+    // with no length would otherwise treat the resume offset as the total
+    // and fail a successful remainder download.
+    if (content_length_present and total_size > 0 and downloaded != total_size) {
         eprint("Error: downloaded {d} bytes but expected {d}, file may be truncated\n", .{ downloaded, total_size });
+        return PullError.DownloadFailed;
+    }
+    if (expected_size > 0 and downloaded != expected_size) {
+        eprint("Error: downloaded {d} bytes but repository lists {d}\n", .{ downloaded, expected_size });
         return PullError.DownloadFailed;
     }
 
@@ -1391,16 +1459,10 @@ fn pullGgufModel(
     // Check if already downloaded.
     const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, selected.filename }) catch return error.OutOfMemory;
 
-    var already_complete = false;
-    if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
-        if (selected.size > 0 and stat.size == selected.size) {
-            eprint("File already downloaded: {s}\n", .{blob_path});
-            already_complete = true;
-        } else if (selected.size == 0 and stat.size > 0) {
-            eprint("File already exists: {s}\n", .{blob_path});
-            already_complete = true;
-        }
-    } else |_| {}
+    const already_complete = isLocalBlobComplete(blob_path, selected.size);
+    if (already_complete) {
+        eprint("File already downloaded: {s}\n", .{blob_path});
+    }
 
     // Download shard 1 (or the only shard) if needed.
     if (!already_complete) {
@@ -1431,13 +1493,10 @@ fn pullGgufModel(
             const shard_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard_name }) catch return error.OutOfMemory;
             const shard_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, shard_name }) catch return error.OutOfMemory;
 
-            var shard_done = false;
-            if (Io.Dir.cwd().statFile(mod_io, shard_blob, .{})) |stat| {
-                if ((shard_size > 0 and stat.size == shard_size) or (shard_size == 0 and stat.size > 0)) {
-                    eprint("  shard {d}/{d} already downloaded: {s}\n", .{ shard_idx, total_shards, shard_name });
-                    shard_done = true;
-                }
-            } else |_| {}
+            const shard_done = isLocalBlobComplete(shard_blob, shard_size);
+            if (shard_done) {
+                eprint("  shard {d}/{d} already downloaded: {s}\n", .{ shard_idx, total_shards, shard_name });
+            }
 
             if (!shard_done) {
                 eprint("  shard {d}/{d}: {s} ({d:.1} GB)\n", .{ shard_idx, total_shards, shard_name, shard_gb });
@@ -1501,16 +1560,10 @@ fn pullSafeTensorsModel(
     for (st.shards, st.shard_sizes, 0..) |shard, expected_size, i| {
         const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard }) catch return error.OutOfMemory;
 
-        var already_complete = false;
-        if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
-            if (expected_size > 0 and stat.size == expected_size) {
-                eprint("[{d}/{d}] Already downloaded: {s}\n", .{ i + 1, st.shards.len, shard });
-                already_complete = true;
-            } else if (expected_size == 0 and stat.size > 0) {
-                eprint("[{d}/{d}] Already exists: {s}\n", .{ i + 1, st.shards.len, shard });
-                already_complete = true;
-            }
-        } else |_| {}
+        const already_complete = isLocalBlobComplete(blob_path, expected_size);
+        if (already_complete) {
+            eprint("[{d}/{d}] Already downloaded: {s}\n", .{ i + 1, st.shards.len, shard });
+        }
 
         if (!already_complete) {
             eprint("[{d}/{d}] Downloading {s}...\n", .{ i + 1, st.shards.len, shard });
@@ -1531,46 +1584,15 @@ fn pullSafeTensorsModel(
 
     // Download index file if present.
     if (st.has_index) {
-        const index_filename = "model.safetensors.index.json";
-        const index_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, index_filename }) catch return error.OutOfMemory;
-        if (Io.Dir.cwd().statFile(mod_io, index_blob, .{})) |_| {
-            eprint("Already downloaded: {s}\n", .{index_filename});
-        } else |_| {
-            eprint("Downloading {s}...\n", .{index_filename});
-            downloadFile(allocator, args.repo, index_filename, index_blob, args.token, 0) catch |err| {
-                eprint("Warning: could not download {s}: {}\n", .{ index_filename, err });
-            };
-        }
-        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, index_filename }) catch return error.OutOfMemory;
-        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{index_filename}) catch return error.OutOfMemory;
-        atomicSymlink(pa, relative_blob, snapshot_link);
+        pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, "model.safetensors.index.json", st.index_size);
     }
 
     // Download auxiliary files (config.json, tokenizer.json, tokenizer_config.json).
     const aux_flags = [_]bool{ st.has_config, st.has_tokenizer, st.has_tokenizer_config };
-    for (&safetensors_aux_files, aux_flags) |aux_name, has_file| {
+    const aux_sizes = [_]u64{ st.config_size, st.tokenizer_size, st.tokenizer_config_size };
+    for (&safetensors_aux_files, aux_flags, aux_sizes) |aux_name, has_file, aux_size| {
         if (!has_file) continue;
-        const aux_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, aux_name }) catch {
-            eprint("Warning: OOM creating path for {s}\n", .{aux_name});
-            continue;
-        };
-        if (Io.Dir.cwd().statFile(mod_io, aux_blob, .{})) |_| {
-            eprint("Already downloaded: {s}\n", .{aux_name});
-        } else |_| {
-            eprint("Downloading {s}...\n", .{aux_name});
-            downloadFile(allocator, args.repo, aux_name, aux_blob, args.token, 0) catch |err| {
-                eprint("Warning: could not download {s}: {}\n", .{ aux_name, err });
-            };
-        }
-        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, aux_name }) catch {
-            eprint("Warning: OOM creating symlink for {s}\n", .{aux_name});
-            continue;
-        };
-        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{aux_name}) catch {
-            eprint("Warning: OOM creating symlink for {s}\n", .{aux_name});
-            continue;
-        };
-        atomicSymlink(pa, relative_blob, snapshot_link);
+        pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, aux_name, aux_size);
     }
 
     eprint("Download complete.\n", .{});
@@ -1584,6 +1606,42 @@ fn pullSafeTensorsModel(
     fileWrite(Io.File.stdout(), "\n");
     eprint("\nModel ready at:\n  {s}\n", .{snapshots_dir});
     eprint("Run:\n  agave {s} \"your prompt\"\n", .{snapshots_dir});
+}
+
+/// Download one SafeTensors sidecar (index or tokenizer/config) with the same
+/// size-based skip used for shards. A leftover from a failed attempt whose
+/// length does not match the listing is re-fetched instead of being treated
+/// as complete, so a second `agave pull` converges on the repository file.
+fn pullSidecarFile(
+    allocator: Allocator,
+    pa: Allocator,
+    args: PullArgs,
+    blobs_dir: []const u8,
+    snapshots_dir: []const u8,
+    filename: []const u8,
+    expected_size: u64,
+) void {
+    const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, filename }) catch {
+        eprint("Warning: OOM creating path for {s}\n", .{filename});
+        return;
+    };
+    if (isLocalBlobComplete(blob_path, expected_size)) {
+        eprint("Already downloaded: {s}\n", .{filename});
+    } else {
+        eprint("Downloading {s}...\n", .{filename});
+        downloadFile(allocator, args.repo, filename, blob_path, args.token, expected_size) catch |err| {
+            eprint("Warning: could not download {s}: {}\n", .{ filename, err });
+        };
+    }
+    const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, filename }) catch {
+        eprint("Warning: OOM creating symlink for {s}\n", .{filename});
+        return;
+    };
+    const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{filename}) catch {
+        eprint("Warning: OOM creating symlink for {s}\n", .{filename});
+        return;
+    };
+    atomicSymlink(pa, relative_blob, snapshot_link);
 }
 
 /// Create an atomic symlink replacement (temp + rename) to prevent TOCTOU races.
@@ -1852,6 +1910,76 @@ test "classifyRangeNotSatisfiable stale undersized local file is rejected" {
 test "classifyRangeNotSatisfiable unknown expected size keeps legacy behavior" {
     // API listing without size metadata cannot contradict the local file.
     try std.testing.expectEqual(RangeNotSatisfiable.complete, classifyRangeNotSatisfiable(7000, 0));
+}
+
+test "localSizeIsComplete matching size is complete" {
+    try std.testing.expect(localSizeIsComplete(5000, 5000));
+}
+
+test "localSizeIsComplete truncated leftover is not complete" {
+    // Second `agave pull` after a failed sidecar/shard download: the leftover
+    // must not be skipped as "already downloaded".
+    try std.testing.expect(!localSizeIsComplete(12, 5000));
+    try std.testing.expect(!localSizeIsComplete(0, 5000));
+}
+
+test "localSizeIsComplete oversized leftover is not complete" {
+    try std.testing.expect(!localSizeIsComplete(7000, 5000));
+}
+
+test "localSizeIsComplete unknown size treats non-empty as complete" {
+    try std.testing.expect(localSizeIsComplete(1, 0));
+    try std.testing.expect(localSizeIsComplete(7000, 0));
+    try std.testing.expect(!localSizeIsComplete(0, 0));
+}
+
+test "advertisedSizeAgrees rejects listing mismatch when Content-Length is present" {
+    try std.testing.expect(advertisedSizeAgrees(5000, 5000, true));
+    try std.testing.expect(!advertisedSizeAgrees(3000, 5000, true));
+    try std.testing.expect(!advertisedSizeAgrees(7000, 5000, true));
+}
+
+test "advertisedSizeAgrees cannot contradict when size or Content-Length is unknown" {
+    try std.testing.expect(advertisedSizeAgrees(3000, 0, true));
+    try std.testing.expect(advertisedSizeAgrees(3000, 5000, false));
+    try std.testing.expect(advertisedSizeAgrees(0, 0, false));
+}
+
+test "siblingSize reads integer size and treats missing as unknown" {
+    const allocator = std.testing.allocator;
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"size\":42}", .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 42), siblingSize(parsed.value));
+    }
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"rfilename\":\"x\"}", .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 0), siblingSize(parsed.value));
+    }
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"size\":-1}", .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 0), siblingSize(parsed.value));
+    }
+}
+
+test "isLocalBlobComplete rejects truncated sidecar so rerun re-downloads" {
+    const io = std.testing.io;
+    mod_io = io;
+    var path_buf: [80]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "test_pull_sidecar_{d}.json", .{std.c.getpid()});
+    defer Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var f = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
+        defer f.close(io);
+        try f.writePositionalAll(io, "{", 0);
+    }
+    try std.testing.expect(!isLocalBlobComplete(path, 20));
+    try std.testing.expect(isLocalBlobComplete(path, 1));
+    try std.testing.expect(isLocalBlobComplete(path, 0));
+    try std.testing.expect(!isLocalBlobComplete("test_pull_no_such_sidecar.json", 20));
 }
 
 // ── Rerun safety (corrupt blob removal) ─────────────────────────────────────
