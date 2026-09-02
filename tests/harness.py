@@ -7,7 +7,7 @@ quantization formats. Supports correctness validation via golden references,
 performance benchmarking with repeat runs, regression detection, and
 structured output (JSON, Markdown, CSV).
 
-Requirements: pip install rich (or use tests/.venv)
+Requirements: uv sync --directory tests  (rich==15.0.0; or use tests/.venv)
 
 Usage:
     # Run all tests with auto-detected models and backends

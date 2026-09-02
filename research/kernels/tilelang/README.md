@@ -24,7 +24,7 @@ mirroring how Triton/CUTLASS prototypes are treated today.
 ```bash
 cd research/kernels/tilelang
 uv venv --python 3.12 .venv
-VIRTUAL_ENV=$PWD/.venv uv pip install tilelang numpy
+VIRTUAL_ENV=$PWD/.venv uv pip install .
 # ROCm execution needs a ROCm torch build (CUDA torch cannot allocate HIP tensors):
 VIRTUAL_ENV=$PWD/.venv uv pip install "torch==2.8.0+rocm6.4" --index-url https://download.pytorch.org/whl/rocm6.4
 ```

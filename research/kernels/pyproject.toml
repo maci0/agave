@@ -4,11 +4,11 @@ version = "0.1.0"
 description = "Reference kernels, golden test generation, and benchmark harness for Agave"
 requires-python = ">=3.11"
 dependencies = [
-    "torch",
-    "numpy",
-    "gguf>=0.18.0",
+    "torch==2.10.0",
+    "numpy==2.4.3",
+    "gguf==0.18.0",
 ]
 
 [project.optional-dependencies]
 # Optuna-backed Bayesian search in autotune.py (lazy import)
-bayesian = ["optuna"]
+bayesian = ["optuna==4.8.0"]

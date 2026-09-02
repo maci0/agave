@@ -22,13 +22,12 @@ import argparse
 import json
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-try:
-    import requests
-except ImportError:
-    print("Error: pip install requests", file=sys.stderr)
-    sys.exit(1)
+# Seconds; hosted APIs can be slow for long greedy continuations.
+HTTP_TIMEOUT_SEC = 120
 
 
 def collect_one(endpoint, model, prompt, api_key, max_tokens):
@@ -45,9 +44,18 @@ def collect_one(endpoint, model, prompt, api_key, max_tokens):
         "logprobs": True,
         "top_logprobs": 5,
     }
-    resp = requests.post(endpoint, headers=headers, json=body, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from e
 
     choice = data["choices"][0]
     continuation = choice["message"]["content"]
