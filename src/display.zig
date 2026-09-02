@@ -523,7 +523,7 @@ pub const Display = struct {
             }
         }.f;
 
-        // ╭─ 🌵 agave v0.2.0 ──────╮
+        // ╭─ 🌵 agave v0.3.0 ──────╮
         const green = comptime std.fmt.comptimePrint(ctl.fg_base, .{2});
         // cactus emoji from module-level constant
         const title = " agave v" ++ version ++ " ";

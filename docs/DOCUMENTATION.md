@@ -55,4 +55,4 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 - **[Test Matrix](TEST_MATRIX.md)**: model × backend test status and known issues
 - **[Parallelism](PARALLELISM.md)**: distributed inference: TP, PP, NCCL, transports
 - **[TODO & Roadmap](TODO.md)**: bugs, roadmap, design notes
-- **[Changelog](../CHANGELOG.md)**: user-facing release history (product version 0.2.0)
+- **[Changelog](../CHANGELOG.md)**: user-facing release history (product version 0.3.0)

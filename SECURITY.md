@@ -8,7 +8,7 @@ tag that matches `build.zig.zon` `.version`. Older tags are not maintained.
 Backports are not the default. See
 [Support and lifecycle (0.x)](docs/CONTRIBUTING.md#support-and-lifecycle-0x).
 
-Product version is **0.2.0** (0.x SemVer: breaking HTTP/CLI changes may land
+Product version is **0.3.0** (0.x SemVer: breaking HTTP/CLI changes may land
 without a major bump; they must appear in [CHANGELOG.md](CHANGELOG.md)).
 
 ## Reporting a vulnerability
