@@ -1015,7 +1015,10 @@ fn parseRequestLine(req_line: []const u8) ?struct { method: []const u8, path: []
     return .{ .method = method, .path = pq.path, .query = pq.query };
 }
 
-/// Parse `{"tokens":[1,2,3]}`-style body into `out`. Returns count written (0 if missing/empty).
+/// Parse `{"tokens":[1,2,3]}`-style body into `out`.
+/// Returns the number of IDs written, 0 if the field is missing or empty, or
+/// `out.len + 1` when the array has more entries than `out` can hold (overflow
+/// sentinel used by `/v1/detokenize` to return 400 instead of truncating).
 fn parseDetokenizeTokens(body: []const u8, out: []u32) usize {
     var n_toks: usize = 0;
     if (std.mem.indexOf(u8, body, "\"tokens\"")) |ti| {
@@ -1023,12 +1026,13 @@ fn parseDetokenizeTokens(body: []const u8, out: []u32) usize {
         while (di < body.len and (body[di] == ' ' or body[di] == ':')) : (di += 1) {}
         if (di < body.len and body[di] == '[') {
             di += 1;
-            while (di < body.len and n_toks < out.len) {
+            while (di < body.len) {
                 while (di < body.len and (body[di] == ' ' or body[di] == ',' or body[di] == '\n')) : (di += 1) {}
                 if (di >= body.len or body[di] == ']') break;
                 const num_start = di;
                 while (di < body.len and body[di] >= '0' and body[di] <= '9') : (di += 1) {}
                 if (di > num_start) {
+                    if (n_toks >= out.len) return out.len + 1;
                     out[n_toks] = std.fmt.parseInt(u32, body[num_start..di], 10) catch break;
                     n_toks += 1;
                 } else break;
@@ -1050,6 +1054,39 @@ fn extractQueryParam(query: []const u8, key: []const u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+/// Result of parsing a required positive integer query parameter.
+const PositiveQueryParam = union(enum) {
+    missing,
+    invalid,
+    value: usize,
+};
+
+/// Parse `key` from a query string as a required positive integer.
+/// Empty, zero, and non-numeric values are `.invalid` (not `.missing`).
+fn parsePositiveQueryParam(query: []const u8, key: []const u8) PositiveQueryParam {
+    const raw = extractQueryParam(query, key) orelse return .missing;
+    const n = std.fmt.parseInt(usize, raw, 10) catch return .invalid;
+    if (n == 0) return .invalid;
+    return .{ .value = n };
+}
+
+/// Result of parsing a conversation `id` form field.
+const FormConversationId = union(enum) {
+    missing,
+    invalid,
+    value: u32,
+};
+
+/// Parse form-encoded `id` for `/v1/conversations` select/delete.
+/// Conversation IDs start at 1; 0, empty, and non-numeric values are `.invalid`.
+fn parseFormConversationId(body: []const u8) FormConversationId {
+    const raw = json.extractFormField(body, "id") orelse return .missing;
+    if (raw.len == 0) return .invalid;
+    const id = std.fmt.parseInt(u32, raw, 10) catch return .invalid;
+    if (id == 0) return .invalid;
+    return .{ .value = id };
 }
 
 /// Result of reading an HTTP request, distinguishes malformed requests from
@@ -1693,7 +1730,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const failed_r = g_server.metrics.requests_failed.load(.monotonic);
         const total_settled_r = completed_r + failed_r;
         const high_error_rate_r = total_settled_r >= error_rate_min_requests and failed_r * 100 / total_settled_r >= error_rate_degradation_pct;
-        // When API key is configured and auth missing, return only status to prevent fingerprinting.
+        // Unauthenticated probes omit queue/KV details; degraded still includes `reason`.
         const authed = g_server.api_key == null or validateAuth(g_server, req.headers);
         if (is_shutting_down_r) {
             if (authed) {
@@ -1706,15 +1743,19 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 sendResponse(stream, "503 Service Unavailable", "application/json", "{\"status\":\"shutting_down\"}");
             }
         } else if (kv_pressure_r or high_error_rate_r) {
+            const ready_reason: []const u8 = if (kv_pressure_r and high_error_rate_r) "kv_pressure,high_error_rate" else if (kv_pressure_r) "kv_pressure" else "high_error_rate";
             if (authed) {
-                const ready_reason: []const u8 = if (kv_pressure_r and high_error_rate_r) "kv_pressure,high_error_rate" else if (kv_pressure_r) "kv_pressure" else "high_error_rate";
                 var rbuf: [health_buf_size]u8 = undefined;
                 const rjson = std.fmt.bufPrint(&rbuf,
                     \\{{"status":"degraded","reason":"{s}","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
                 , .{ ready_reason, queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"degraded\"}";
                 sendResponse(stream, "503 Service Unavailable", "application/json", rjson);
             } else {
-                sendResponse(stream, "503 Service Unavailable", "application/json", "{\"status\":\"degraded\"}");
+                var rbuf: [health_buf_size]u8 = undefined;
+                const rjson = std.fmt.bufPrint(&rbuf,
+                    \\{{"status":"degraded","reason":"{s}"}}
+                , .{ready_reason}) catch "{\"status\":\"degraded\"}";
+                sendResponse(stream, "503 Service Unavailable", "application/json", rjson);
             }
         } else {
             if (authed) {
@@ -2259,14 +2300,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 }
             }
         }
-        const info_json = std.fmt.allocPrint(g_server.allocator,
+        var info_buf: [health_buf_size]u8 = undefined;
+        const info_json = std.fmt.bufPrint(&info_buf,
             \\{{"seq_len":{d},"cached_prefix_len":{d},"prefix_hash":"{x}","kv_used":{d},"kv_total":{d}}}
         , .{ seq_len, cached_prefix_len, hash, kv_used, kv_total }) catch {
-            sendJson(stream, "{}");
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
-        defer g_server.allocator.free(info_json);
         sendJson(stream, info_json);
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
@@ -2283,20 +2324,25 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         // Parse n_tokens from query string: ?n_tokens=<N>
-        const n_tokens: usize = blk: {
-            const raw = extractQueryParam(req.query, "n_tokens") orelse break :blk 0;
-            break :blk std.fmt.parseInt(usize, raw, 10) catch 0;
+        const n_tokens: usize = switch (parsePositiveQueryParam(req.query, "n_tokens")) {
+            .missing => {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens query parameter required (positive integer)", "n_tokens", "missing_required_parameter");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            },
+            .invalid => {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens must be a positive integer", "n_tokens", "invalid_value");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            },
+            .value => |n| n,
         };
-        if (n_tokens == 0) {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens query parameter required (positive integer)", "n_tokens", "missing_required_parameter");
-            g_server.metrics.recordClientError();
-            logRequestDone(method, path, 400, elapsedMs(request_start));
-            return;
-        }
         if (is_get) {
             // Export under inference mutex (not stdout_mutex): KV must not race generate.
             // Copy under lock, then release before network I/O so slow clients do not stall inference.
-            const ExportOutcome = enum { ok, oom, unsupported };
+            const ExportOutcome = enum { ok, oom, unsupported, too_many };
             var export_buf: []u8 = &.{};
             var export_n: usize = 0;
             const outcome: ExportOutcome = blk: {
@@ -2308,6 +2354,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 // the KV cache mid-forward and hands out a torn prefix blob.
                 lockModelWithScheduler();
                 defer unlockModelWithScheduler();
+                if (n_tokens > g_server.model.kvSeqLen()) break :blk .too_many;
                 var buf_len = estimateKvExportBytes(g_server.model.*, n_tokens);
                 var buf = g_server.allocator.alloc(u8, buf_len) catch break :blk .oom;
                 var n_written = g_server.model.exportKvPrefix(buf, n_tokens);
@@ -2331,6 +2378,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     sendJsonError(stream, "500 Internal Server Error", "server_error", "OOM");
                     g_server.metrics.recordFailure();
                     logRequestDone(method, path, 500, elapsedMs(request_start));
+                    return;
+                },
+                .too_many => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens exceeds current KV cache length", "n_tokens", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
                     return;
                 },
                 .unsupported => {
@@ -2367,12 +2420,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 400, elapsedMs(request_start));
                 return;
             }
-            if (std.fmt.allocPrint(g_server.allocator, "{{\"imported\":{d}}}", .{n_tokens})) |import_resp| {
-                defer g_server.allocator.free(import_resp);
-                sendJson(stream, import_resp);
-            } else |_| {
-                sendJson(stream, "{}");
-            }
+            var import_buf: [clear_response_buf_size]u8 = undefined;
+            const import_resp = std.fmt.bufPrint(&import_buf, "{{\"imported\":{d}}}", .{n_tokens}) catch "{\"ok\":true}";
+            sendJson(stream, import_resp);
             logRequestDone(method, path, 200, elapsedMs(request_start));
         }
         return;
@@ -2723,8 +2773,21 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "select")) {
-            const id_str = json.extractFormField(body, "id") orelse "0";
-            const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
+            const id: u32 = switch (parseFormConversationId(body)) {
+                .missing => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .invalid => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .value => |v| v,
+            };
             var mbuf: [conv_msgs_buf_size]u8 = undefined;
             var mfbs = FixedBufStream.init(&mbuf);
             const select_result: enum { not_found, format_ok, format_fail } = blk: {
@@ -2770,8 +2833,21 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 },
             }
         } else if (std.mem.eql(u8, action, "delete")) {
-            const id_str = json.extractFormField(body, "id") orelse "0";
-            const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
+            const id: u32 = switch (parseFormConversationId(body)) {
+                .missing => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .invalid => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .value => |v| v,
+            };
             const delete_result: ?bool = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
@@ -2986,7 +3062,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     slog("  Image attached and encoded ({d} visual tokens)\n", .{if (ve.patch_size > 0) ve.image_size / ve.patch_size * (ve.image_size / ve.patch_size) else 0});
                 } else {
                     std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
-                    sendHtml(stream, "<div class=\"msg assistant\">Error: failed to process attached image</div>");
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
                     g_server.metrics.recordClientError();
                     logRequestDone(method, path, 400, elapsedMs(request_start));
                     return;
@@ -7164,7 +7240,35 @@ test "parseDetokenizeTokens reads token id array" {
     try std.testing.expectEqual(@as(u32, 3), out[2]);
     try std.testing.expectEqual(@as(usize, 0), parseDetokenizeTokens("{}", &out));
     try std.testing.expectEqual(@as(usize, 0), parseDetokenizeTokens("{\"tokens\":[]}", &out));
-    try std.testing.expectEqual(@as(usize, 2), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..2]));
+    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..3]));
+    // Overflow: more entries than `out` can hold returns out.len + 1.
+    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..2]));
+    try std.testing.expectEqual(@as(usize, 9), parseDetokenizeTokens("{\"tokens\":[1,2,3,4,5,6,7,8,9]}", &out));
+}
+
+test "parsePositiveQueryParam distinguishes missing and invalid" {
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("foo=1", "n_tokens")) == .missing);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=0", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=abc", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=-1", "n_tokens")) == .invalid);
+    const a = parsePositiveQueryParam("n_tokens=512", "n_tokens");
+    try std.testing.expectEqual(@as(usize, 512), a.value);
+    const b = parsePositiveQueryParam("foo=1&n_tokens=64&bar=2", "n_tokens");
+    try std.testing.expectEqual(@as(usize, 64), b.value);
+}
+
+test "parseFormConversationId rejects missing zero and non-numeric" {
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select")) == .missing);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=0")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=abc")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=-1")) == .invalid);
+    const a = parseFormConversationId("action=select&id=1");
+    try std.testing.expectEqual(@as(u32, 1), a.value);
+    const b = parseFormConversationId("id=42");
+    try std.testing.expectEqual(@as(u32, 42), b.value);
 }
 
 test "known_endpoints include kv_cache routes" {
@@ -7503,6 +7607,11 @@ test "fuzz: all server functions" {
                 // First match wins, must not crash on duplicate keys
                 const ntok = extractQueryParam(qn, "n_tokens");
                 std.debug.assert(ntok != null);
+                _ = parsePositiveQueryParam(qn, "n_tokens");
+                _ = parsePositiveQueryParam(path_buf[0..path_len], "n_tokens");
+                std.debug.assert(std.meta.activeTag(parsePositiveQueryParam("foo=1", "n_tokens")) == .missing);
+                std.debug.assert(std.meta.activeTag(parsePositiveQueryParam("n_tokens=0", "n_tokens")) == .invalid);
+                std.debug.assert(std.meta.activeTag(parsePositiveQueryParam("n_tokens=512", "n_tokens")) == .value);
             }
 
             // parseRequestLine, untrusted HTTP request-line bytes
@@ -7534,7 +7643,7 @@ test "fuzz: all server functions" {
                 const body_len = smith.indexWithHash(body_buf.len + 1, 0x71);
                 var out_ids: [64]u32 = undefined;
                 const n_rand = parseDetokenizeTokens(body_buf[0..body_len], &out_ids);
-                std.debug.assert(n_rand <= out_ids.len);
+                std.debug.assert(n_rand <= out_ids.len + 1);
 
                 var good_body: [128]u8 = undefined;
                 const bn = std.fmt.bufPrint(&good_body, "{{\"tokens\":[{d},{d},9999999999]}}", .{
@@ -7548,7 +7657,13 @@ test "fuzz: all server functions" {
 
                 std.debug.assert(parseDetokenizeTokens("{}", &out_ids) == 0);
                 std.debug.assert(parseDetokenizeTokens("{\"tokens\":[]}", &out_ids) == 0);
-                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[1,2,3]}", out_ids[0..2]) == 2); // out cap
+                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[1,2,3]}", out_ids[0..2]) == 3); // overflow sentinel
+
+                _ = parseFormConversationId(body_buf[0..body_len]);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("action=select")) == .missing);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("id=")) == .invalid);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("id=0")) == .invalid);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("id=1")) == .value);
             }
 
             // KnownEndpoint: verify at comptime

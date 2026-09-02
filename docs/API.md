@@ -214,7 +214,7 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
 
 ### POST /v1/chat
 
-Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Returns HTML fragments for the web UI.
+Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`).
 
 ### POST /v1/chat/regenerate
 
@@ -252,6 +252,11 @@ curl -X POST http://localhost:49453/v1/conversations -d 'action=select&id=1'
 curl -X POST http://localhost:49453/v1/conversations -d 'action=delete&id=1'
 # {"ok":true,"cleared":false}
 ```
+
+Select and delete require a positive integer `id`. Missing `id` returns `400`
+(`code: missing_required_parameter`); `id=0` or a non-numeric value returns
+`400` (`code: invalid_value`). Unknown `id` returns `404`
+(`code: conversation_not_found`).
 
 Limits: maximum 100 concurrent conversations, 1000 messages per conversation.
 Titles are opaque (`Chat {id}`), never derived from user message content. The
@@ -517,10 +522,10 @@ Content-Type: application/octet-stream
 → 200 OK  {"imported":512}
 ```
 
-Missing or non-positive `n_tokens` returns `400` with `invalid_request_error`
-(same `type` string as other OpenAI-style 400s; was briefly `invalid_request` on
-this route only). Exporting more tokens than the cache currently holds
-(`n_tokens` > current `kv_seq_len`) also returns `400` (`code: invalid_value`).
+Missing `n_tokens` returns `400` (`code: missing_required_parameter`). Present
+but non-positive or non-numeric `n_tokens` returns `400` (`code: invalid_value`).
+Exporting more tokens than the cache currently holds (`n_tokens` > current
+`kv_seq_len`) also returns `400` (`code: invalid_value`).
 
 `/v1/kv_cache` and `/v1/kv_cache/info` require authentication if `--api-key` or
 `AGAVE_API_KEY` is configured. Use case: compute system-prompt KV on one instance,
