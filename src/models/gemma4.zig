@@ -1766,7 +1766,7 @@ pub const Gemma4Model = struct {
 
     /// Get flat f32 view of KV cache for a layer (resolves shared KV mapping).
     /// Returns the per-layer KV buffers with correct per-layer kvd stride.
-    fn getLayerKvView(self: *Gemma4Model, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *Gemma4Model, layer: usize) kvcache.KvF32View {
         const src_layer = self.kv_source[layer];
         return .{
             .keys = self.layer_keys[src_layer],

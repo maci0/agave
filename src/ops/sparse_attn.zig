@@ -283,7 +283,7 @@ test "sdpaHeadSparse matches dense for small seq" {
     sdpaHeadsSparse(&q, &keys, &values, &out_sparse, nh, nkv, hd, sl, scale, &mask);
 
     // Dense reference
-    const sdpa = @import("../backend/kernels/cpu/sdpa.zig");
+    const sdpa = @import("../backend/backend.zig").CpuSdpa;
     sdpa.sdpaHeads(&q, &keys, &values, &out_dense, nh, nkv, hd, sl, scale);
 
     for (0..nh * hd) |i| {

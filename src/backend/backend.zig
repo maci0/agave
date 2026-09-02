@@ -228,7 +228,42 @@ pub const CpuSdpa = struct {
     pub const sdpaQuantHeadWithStats = kernel.sdpaQuantHeadWithStats;
     /// Multi-head dispatch: splits heads across thread pool workers.
     pub const sdpaQuantHeads = kernel.sdpaQuantHeads;
+    /// Dense f32 multi-head SDPA (no KV quant). Used by sparse-attention tests
+    /// as the dense reference; models should call `Backend.sdpa` instead.
+    pub const sdpaHeads = kernel.sdpaHeads;
 };
+
+/// CPU GEMV kernels that take a companion scale tensor (no matching `DType` on
+/// `Backend.gemv`). Re-exported so models do not import `kernels/cpu/*.zig`.
+pub const CpuGemv = struct {
+    pub const gemvMXFP8 = @import("kernels/cpu/gemv.zig").gemvMXFP8;
+};
+
+/// Apple Accelerate SGEMM/SGEMV. Empty on non-macOS so Linux does not link
+/// `cblas`. Callers must still comptime-guard with `os.tag == .macos` and
+/// `enable_metal` (Accelerate is linked with Metal).
+pub const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal)
+    @import("accelerate.zig")
+else
+    struct {};
+
+/// Probe-only Metal GPU listing for `--list-devices`. Does not open a compute context.
+/// `objc` types stay inside the Metal backend; discovery maps these to `DeviceInfo`.
+pub const metal_list_name_buf_size: usize = 64;
+
+pub const MetalDeviceListEntry = struct {
+    name: [metal_list_name_buf_size]u8 = .{0} ** metal_list_name_buf_size,
+    name_len: usize = 0,
+    total_mem: usize = 0,
+};
+
+/// Fill `out` with Metal devices. Returns the number of entries written.
+pub fn listMetalDevices(out: []MetalDeviceListEntry) usize {
+    if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
+        return @import("metal.zig").listDevices(out);
+    }
+    return 0;
+}
 
 /// Pre-allocated capacity for GPU buffer caches (weights + activations + KV).
 /// Used by Metal, CUDA, Vulkan, and ROCm backends to avoid OOM during hot-path cache puts.
@@ -1624,6 +1659,12 @@ test "hostPrefault, tolerates zero length and unmapped-tail ranges" {
     var buf: [4096]u8 align(std.heap.page_size_min) = undefined;
     hostPrefault(@ptrCast(&buf), 0);
     hostPrefault(@ptrCast(&buf), buf.len);
+}
+
+test "listMetalDevices, no Metal import off macOS" {
+    if (comptime builtin.os.tag == .macos) return error.SkipZigTest;
+    var buf: [4]MetalDeviceListEntry = undefined;
+    try std.testing.expectEqual(@as(usize, 0), listMetalDevices(&buf));
 }
 
 test "DType, gemvRowBytes for F32" {

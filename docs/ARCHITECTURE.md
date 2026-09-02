@@ -134,7 +134,7 @@ agave/
 │   │   ├── dspark.zig     # DSpark confidence-scheduled verification (trim + SPS)
 │   │   └── dflash2.zig    # DFlash2 pure algorithm kernels (block draft + path selector)
 │   ├── devices/
-│   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; not peer discovery)
+│   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; Metal via backend.listMetalDevices)
 │   ├── kvcache/
 │   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache

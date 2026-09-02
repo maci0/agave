@@ -707,7 +707,7 @@ pub const Gemma3Model = struct {
 
     /// Helper: get flat f32 view of KV cache for a layer (assembled from paged blocks).
     /// Returns slices pointing into paged or tiered cache blocks.
-    fn getLayerKvView(self: *Gemma3Model, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *Gemma3Model, layer: usize) kvcache.KvF32View {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 

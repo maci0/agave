@@ -103,53 +103,19 @@ fn enumerateCpu(list: *DeviceList) void {
 
 fn enumerateMetal(list: *DeviceList) void {
     if (comptime builtin.os.tag != .macos) return;
-    const objc = @import("../backend/objc.zig");
-
-    // MTLCopyAllDevices() returns NSArray of MTLDevice
-    const NSArray = objc.getClass("NSArray") orelse return;
-    _ = NSArray;
-    const devices_arr: ?objc.id = MTLCopyAllDevices();
-    if (devices_arr == null) {
-        // Fallback: single default device
-        const default_dev = objc.MTLCreateSystemDefaultDevice() orelse return;
-        addMetalDevice(list, default_dev, 0);
-        return;
-    }
-    const arr = devices_arr.?;
-    defer objc.msgSend(void, arr, objc.sel("release"), .{});
-    const count: u64 = objc.msgSend(u64, arr, objc.sel("count"), .{});
-    if (count == 0) return;
-    var i: u64 = 0;
-    while (i < count and i < max_devices) : (i += 1) {
-        const dev: objc.id = objc.msgSend(objc.id, arr, objc.sel("objectAtIndex:"), .{i});
-        addMetalDevice(list, dev, @intCast(i));
-    }
-}
-
-extern "c" fn MTLCopyAllDevices() ?@import("../backend/objc.zig").id;
-
-fn addMetalDevice(list: *DeviceList, mtl_dev: @import("../backend/objc.zig").id, idx: u32) void {
-    const objc = @import("../backend/objc.zig");
-    var dev = DeviceInfo{ .backend = .metal, .device_id = idx, .is_uma = true };
-
-    // Device name via ObjC: [device name] → NSString → UTF8String
-    const name_ns: objc.id = objc.msgSend(objc.id, mtl_dev, objc.sel("name"), .{});
-    const name_cstr: ?[*:0]const u8 = objc.msgSend(?[*:0]const u8, name_ns, objc.sel("UTF8String"), .{});
-    if (name_cstr) |cstr| {
-        const name_slice = std.mem.sliceTo(cstr, 0);
-        const copy_len = @min(name_slice.len, name_buf_size);
-        @memcpy(dev.name[0..copy_len], name_slice[0..copy_len]);
+    const backend_mod = @import("../backend/backend.zig");
+    var buf: [max_devices]backend_mod.MetalDeviceListEntry = undefined;
+    const n = backend_mod.listMetalDevices(&buf);
+    for (buf[0..n], 0..) |src, idx| {
+        var dev = DeviceInfo{ .backend = .metal, .device_id = @intCast(idx), .is_uma = true };
+        const copy_len = @min(src.name_len, name_buf_size);
+        @memcpy(dev.name[0..copy_len], src.name[0..copy_len]);
         dev.name_len = copy_len;
+        dev.total_mem = src.total_mem;
+        const cc = std.fmt.bufPrint(&dev.compute_cap, "Metal", .{}) catch "";
+        dev.cc_len = cc.len;
+        list.add(dev);
     }
-
-    // Recommended max working set size (approximate VRAM)
-    dev.total_mem = objc.msgSend(u64, mtl_dev, objc.sel("recommendedMaxWorkingSetSize"), .{});
-
-    // Metal GPU family for compute cap string
-    const cc = std.fmt.bufPrint(&dev.compute_cap, "Metal", .{}) catch "";
-    dev.cc_len = cc.len;
-
-    list.add(dev);
 }
 
 // ── CUDA ─────────────────────────────────────────────────────────────
