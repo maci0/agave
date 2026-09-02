@@ -927,6 +927,67 @@ fn originMatchesHost(origin: []const u8, host: []const u8) bool {
     return std.ascii.eqlIgnoreCase(rest, host);
 }
 
+/// Hostname from a Host header: strip `:port` or `[ipv6]:port`.
+fn hostnameFromHost(host: []const u8) []const u8 {
+    if (host.len == 0) return host;
+    if (host[0] == '[') {
+        if (std.mem.indexOfScalar(u8, host, ']')) |end| {
+            if (end > 1) return host[1..end];
+        }
+        return host;
+    }
+    if (std.mem.lastIndexOfScalar(u8, host, ':')) |colon| {
+        const port = host[colon + 1 ..];
+        if (port.len > 0) {
+            for (port) |c| {
+                if (c < '0' or c > '9') return host;
+            }
+            return host[0..colon];
+        }
+    }
+    return host;
+}
+
+/// True when Host is loopback (`localhost`, `::1`, `127.0.0.0/8`).
+/// DNS rebinding points a public name at 127.0.0.1 so Origin equals Host and
+/// the same-origin check would allow the request (CWE-350).
+fn isLoopbackHttpHost(host: []const u8) bool {
+    var name = hostnameFromHost(host);
+    if (name.len > 0 and name[name.len - 1] == '.') name = name[0 .. name.len - 1];
+    if (name.len == 0) return false;
+    if (std.ascii.eqlIgnoreCase(name, "localhost")) return true;
+    if (std.mem.eql(u8, name, "::1")) return true;
+    if (name.len < 5 or !std.mem.startsWith(u8, name, "127.")) return false;
+    // Remaining three octets of 127.0.0.0/8.
+    var octets: u32 = 1;
+    var acc: u32 = 0;
+    var saw_digit = false;
+    for (name["127.".len..]) |c| {
+        if (c == '.') {
+            if (!saw_digit or acc > 255 or octets >= 4) return false;
+            octets += 1;
+            acc = 0;
+            saw_digit = false;
+        } else if (c >= '0' and c <= '9') {
+            acc = std.math.mul(u32, acc, 10) catch return false;
+            acc = std.math.add(u32, acc, c - '0') catch return false;
+            if (acc > 255) return false;
+            saw_digit = true;
+        } else {
+            return false;
+        }
+    }
+    return saw_digit and octets == 3 and acc <= 255;
+}
+
+/// Unauthenticated `--serve`: reject missing or non-loopback Host so a
+/// DNS-rebound public hostname cannot drive the API (CWE-350).
+fn isRebindHostUnauthenticated(headers: []const u8) bool {
+    if (g_server.api_key != null) return false;
+    const host = getHeaderValue(headers, "host") orelse return true;
+    return !isLoopbackHttpHost(host);
+}
+
 /// Browser cross-origin call with no API key (CSRF / data theft via localhost).
 /// Missing Origin (curl, probes) is allowed. Authenticated mode skips this
 /// check (clients already present a secret).
@@ -1786,6 +1847,16 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const method = req.method;
     const is_get = std.mem.eql(u8, method, "GET");
     const is_post = std.mem.eql(u8, method, "POST");
+
+    // Unauthenticated servers only accept loopback Host. A public name that
+    // DNS-rebinds to 127.0.0.1 would pass Origin==Host and skip the CSRF check.
+    if (isRebindHostUnauthenticated(req.headers)) {
+        g_server.metrics.recordRequest();
+        g_server.metrics.recordClientError();
+        std.log.warn("req={d} non-loopback Host rejected (no API key)", .{log_request_id});
+        sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Host not allowed", null, "host_forbidden");
+        return;
+    }
 
     // Block browser cross-origin calls when running without an API key so a
     // malicious page cannot drive inference or read conversation state on a
@@ -7235,6 +7306,29 @@ test "originMatchesHost rejects path userinfo and cross-origin" {
     try std.testing.expect(!originMatchesHost("http://user@127.0.0.1:49453", "127.0.0.1:49453"));
 }
 
+test "isLoopbackHttpHost accepts loopback Host values" {
+    try std.testing.expect(isLoopbackHttpHost("127.0.0.1"));
+    try std.testing.expect(isLoopbackHttpHost("127.0.0.1:49453"));
+    try std.testing.expect(isLoopbackHttpHost("127.1.2.3:80"));
+    try std.testing.expect(isLoopbackHttpHost("localhost"));
+    try std.testing.expect(isLoopbackHttpHost("LocalHost:49453"));
+    try std.testing.expect(isLoopbackHttpHost("localhost."));
+    try std.testing.expect(isLoopbackHttpHost("[::1]"));
+    try std.testing.expect(isLoopbackHttpHost("[::1]:49453"));
+}
+
+test "isLoopbackHttpHost rejects DNS-rebind and LAN Host values" {
+    try std.testing.expect(!isLoopbackHttpHost("evil.com"));
+    try std.testing.expect(!isLoopbackHttpHost("evil.com:49453"));
+    try std.testing.expect(!isLoopbackHttpHost("127.0.0.1.nip.io"));
+    try std.testing.expect(!isLoopbackHttpHost("localhost.evil.com"));
+    try std.testing.expect(!isLoopbackHttpHost("0.0.0.0"));
+    try std.testing.expect(!isLoopbackHttpHost("192.168.1.1:49453"));
+    try std.testing.expect(!isLoopbackHttpHost(""));
+    try std.testing.expect(!isLoopbackHttpHost("127.1"));
+    try std.testing.expect(!isLoopbackHttpHost("127.0.0.1.2"));
+}
+
 test "getHeaderValue trims and rejects duplicates" {
     try std.testing.expectEqualStrings("127.0.0.1:49453", getHeaderValue("Host: 127.0.0.1:49453\r\n", "host").?);
     try std.testing.expect(getHeaderValue("Host: a\r\nHost: b\r\n", "host") == null);
@@ -7977,6 +8071,18 @@ test "fuzz: HTTP header and request-line helpers" {
             const n = sanitizeClientRequestId(headers, &out);
             try std.testing.expect(n == 0 or n == headers.len);
             if (n > 0) try std.testing.expectEqualStrings(headers, out[0..n]);
+
+            // isLoopbackHttpHost: a positive verdict is localhost, ::1, or 127/8.
+            _ = isLoopbackHttpHost(host);
+            _ = isLoopbackHttpHost(origin);
+            if (isLoopbackHttpHost(host)) {
+                const hn = hostnameFromHost(host);
+                const name = if (hn.len > 0 and hn[hn.len - 1] == '.') hn[0 .. hn.len - 1] else hn;
+                const loop = std.ascii.eqlIgnoreCase(name, "localhost") or
+                    std.mem.eql(u8, name, "::1") or
+                    (name.len >= 5 and std.mem.startsWith(u8, name, "127."));
+                try std.testing.expect(loop);
+            }
         }
     }.f, .{});
 }
