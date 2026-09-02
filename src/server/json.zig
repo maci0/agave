@@ -1620,6 +1620,61 @@ test "parseToolsAnthropic absent or malformed" {
     try std.testing.expectEqualStrings("ok", unnamed.tools[0].?.name);
 }
 
+test "fuzz: parseToolsAnthropic" {
+    try std.testing.fuzz({}, struct {
+        fn slicesLiveIn(tp: ToolParams, body: []const u8) !void {
+            try std.testing.expect(tp.tool_count <= max_tools);
+            var i: u32 = 0;
+            while (i < tp.tool_count) : (i += 1) {
+                const t = tp.tools[i] orelse return error.TestUnexpectedResult;
+                try std.testing.expect(std.mem.indexOf(u8, body, t.name) != null);
+                if (t.description.len > 0)
+                    try std.testing.expect(std.mem.indexOf(u8, body, t.description) != null);
+                // Default "{}" is a static literal; otherwise it is a body subslice.
+                if (!std.mem.eql(u8, t.parameters_json, "{}"))
+                    try std.testing.expect(std.mem.indexOf(u8, body, t.parameters_json) != null);
+            }
+            if (!std.mem.eql(u8, tp.tool_choice, "auto"))
+                try std.testing.expect(std.mem.indexOf(u8, body, tp.tool_choice) != null);
+        }
+
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [512]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const raw_len = smith.indexWithHash(buf.len + 1, 1);
+            const random_tp = parseToolsAnthropic(buf[0..raw_len]);
+            try slicesLiveIn(random_tp, buf[0..raw_len]);
+
+            // Structure-aware Anthropic Messages tools array so findObjectStart
+            // and input_schema extraction run on nested objects, not only junk.
+            var inner: [96]u8 = undefined;
+            smith.bytesWithHash(&inner, 2);
+            const inner_len = smith.indexWithHash(inner.len + 1, 3);
+            for (inner[0..inner_len]) |*b| {
+                var c: u8 = 0x20 + (b.* % 0x5f);
+                if (c == '"' or c == '\\') c = 'x';
+                b.* = c;
+            }
+            const name = inner[0..@min(inner_len, 24)];
+            const desc = inner[0..@min(inner_len, 40)];
+            var body: [384]u8 = undefined;
+            const n = std.fmt.bufPrint(&body,
+                \\{{"tools":[{{"name":"{s}","description":"{s}","input_schema":{{"type":"object","properties":{{"q":{{"type":"string"}}}}}}}},{{"description":"skip"}},{{"name":"{s}"}}],"tool_choice":"any"}}
+            , .{ name, desc, name }) catch return;
+            const tp = parseToolsAnthropic(body[0..n.len]);
+            try slicesLiveIn(tp, body[0..n.len]);
+            if (name.len > 0) {
+                try std.testing.expectEqual(@as(u32, 2), tp.tool_count);
+                try std.testing.expectEqualStrings(name, tp.tools[0].?.name);
+                try std.testing.expectEqualStrings(desc, tp.tools[0].?.description);
+                try std.testing.expect(std.mem.indexOf(u8, tp.tools[0].?.parameters_json, "properties") != null);
+                try std.testing.expectEqualStrings(name, tp.tools[1].?.name);
+                try std.testing.expectEqualStrings("any", tp.tool_choice);
+            }
+        }
+    }.f, .{});
+}
+
 test "extractTextFromContentArray" {
     const obj =
         \\{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
@@ -2031,6 +2086,10 @@ test "fuzz: all json functions" {
             // 9. parseTools, always returns valid ToolParams
             const tp = parseTools(input);
             std.debug.assert(tp.tool_count <= max_tools);
+
+            // 9b. parseToolsAnthropic (flat tools array, untrusted HTTP body)
+            const tp_a = parseToolsAnthropic(input);
+            std.debug.assert(tp_a.tool_count <= max_tools);
 
             // 10. extractMessages, may allocate, must clean up
             if (extractMessages(input, allocator)) |em| {
