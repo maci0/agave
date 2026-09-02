@@ -174,6 +174,13 @@ pub const Request = struct {
     sampling_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     /// Logit interceptors for this request. Built by `rebuildSampler`.
     sampler: sampler_stack.Stack = .{},
+    /// Borrowed vision embeddings for this request (null = text-only).
+    /// Handler publishes these before `sampling_ready`; the scheduler copies
+    /// them onto the model under `model_mutex` so handler threads never race
+    /// `forward()` on `Model.image_embeddings`.
+    image_embeddings: ?[]const f32 = null,
+    n_visual_tokens: u32 = 0,
+    image_pad_token_id: u32 = 0,
 
     /// Fill `sampler` from current sampling fields. Call after configuring
     /// temperature/bias/penalties, not on the token loop.
@@ -240,6 +247,17 @@ fn requestTimedOut(enqueued_at: i64, now: i64, timeout_sec: u32) bool {
     const elapsed_ms = now - enqueued_at;
     const timeout_ms = @as(i64, timeout_sec) * std.time.ms_per_s;
     return elapsed_ms > timeout_ms;
+}
+
+/// Mark `req` cancelled when it has exceeded `timeout_sec` since enqueue.
+fn timeoutRequest(req: *Request, now: i64, timeout_sec: u32, metrics: *Metrics) void {
+    if (req.is_cancelled.load(.acquire)) return;
+    if (!requestTimedOut(req.enqueued_at, now, timeout_sec)) return;
+    const elapsed = req.elapsedSeconds(now);
+    std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, elapsed, timeout_sec });
+    req.is_timed_out.store(true, .release);
+    req.is_cancelled.store(true, .release);
+    metrics.recordTimeout();
 }
 
 /// Calculate cache-aware priority for a request.
@@ -481,16 +499,14 @@ pub const RequestManager = struct {
                 }
             }
 
-            // 2. Check timeout on running requests
+            // 2. Check timeout on running and waiting requests. Waiting
+            // requests used to sit past timeout_sec until admitted, so a
+            // long queue blocked handlers far past the advertised limit.
             for (self.running.items) |req| {
-                if (req.is_cancelled.load(.acquire)) continue;
-                if (requestTimedOut(req.enqueued_at, now, self.timeout_sec)) {
-                    const elapsed = req.elapsedSeconds(now);
-                    std.log.warn("req={d} timed out after {d}s (limit {d}s), cancelling", .{ req.id, elapsed, self.timeout_sec });
-                    req.is_timed_out.store(true, .release);
-                    req.is_cancelled.store(true, .release);
-                    self.metrics.recordTimeout();
-                }
+                timeoutRequest(req, now, self.timeout_sec, self.metrics);
+            }
+            for (self.waiting.items) |req| {
+                timeoutRequest(req, now, self.timeout_sec, self.metrics);
             }
 
             // 3. Sort waiting queue by cache-aware priority before filling batch.
@@ -517,6 +533,7 @@ pub const RequestManager = struct {
                     idx -= 1;
                     const candidate = self.waiting.items[idx];
                     if (!candidate.sampling_ready.load(.acquire)) continue;
+                    if (candidate.is_cancelled.load(.acquire)) continue;
                     _ = self.waiting.orderedRemove(idx);
                     self.running.append(self.allocator, candidate) catch |err| {
                         // Re-queue to prevent request loss on allocation failure.
@@ -595,6 +612,16 @@ pub const RequestManager = struct {
         {
             self.model_mutex.lockUncancelable(self.io);
             defer self.model_mutex.unlock(self.io);
+
+            // Handler threads must not write Model.image_embeddings: they race
+            // this forward loop. Copy from the admitted request (single-sequence
+            // admission: at most one running) or clear leftover vision state.
+            if (self.running.items.len > 0) {
+                const vis = self.running.items[0];
+                model.setImageEmbeddings(vis.image_embeddings, vis.n_visual_tokens, vis.image_pad_token_id);
+            } else {
+                model.setImageEmbeddings(null, 0, 0);
+            }
 
             if (self.running.items.len > 1) {
                 std.mem.sort(*Request, self.running.items, {}, struct {
@@ -983,6 +1010,53 @@ test "step cancels timed-out requests" {
     try std.testing.expectEqual(@as(u32, 0), manager.getStats().running_count);
     try std.testing.expectEqual(@as(u32, 1), manager.getStats().cancelled_total);
     try std.testing.expect(req.scheduler_done.load(.acquire));
+}
+
+test "step cancels timed-out waiting requests without admitting them" {
+    const allocator = std.testing.allocator;
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(10_000);
+
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 2, 1, null, testIo());
+    defer manager.deinit();
+
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const running_req = try manager.enqueue(&dummy_tokens, 1);
+    markSamplingReady(running_req);
+    defer {
+        running_req.deinit();
+        allocator.destroy(running_req);
+    }
+    const waiting_req = try manager.enqueue(&dummy_tokens, 2);
+    markSamplingReady(waiting_req);
+    defer {
+        waiting_req.deinit();
+        allocator.destroy(waiting_req);
+    }
+
+    var mock_model = MockModel{};
+    var model = Model.from(MockModel, &mock_model);
+
+    try manager.step(&model, &[_]u32{});
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().running_count);
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().waiting_count);
+
+    sim_clock.advanceMs(1001);
+    try manager.step(&model, &[_]u32{});
+    try std.testing.expect(waiting_req.is_cancelled.load(.acquire));
+    try std.testing.expect(waiting_req.is_timed_out.load(.acquire));
+    try std.testing.expect(running_req.is_cancelled.load(.acquire));
+    // Fill must not promote the timed-out waiter into running.
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().running_count);
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().waiting_count);
+    try std.testing.expectEqual(@as(u64, 2), metrics.requests_timeout.load(.monotonic));
+
+    try manager.step(&model, &[_]u32{});
+    try std.testing.expectEqual(@as(u32, 0), manager.getStats().running_count);
+    try std.testing.expectEqual(@as(u32, 0), manager.getStats().waiting_count);
+    try std.testing.expect(waiting_req.scheduler_done.load(.acquire));
+    try std.testing.expect(running_req.scheduler_done.load(.acquire));
 }
 
 test "step does not admit until sampling_ready" {
