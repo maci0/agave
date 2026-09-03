@@ -21,8 +21,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const posix = std.posix;
 const builtin = @import("builtin");
+const backend_mod = @import("backend/backend.zig");
 
 /// One cache slot tracking a resident expert.
 const CacheSlot = struct {
@@ -186,15 +186,7 @@ pub const ExpertCache = struct {
     pub fn prefetch(self: *ExpertCache, layer: u32, expert_id: u32, base_ptr: [*]const u8, expert_bytes: usize) void {
         _ = self.admit(layer, expert_id);
 
-        // madvise(WILLNEED) to trigger background page-in
-        if (comptime builtin.os.tag == .linux or builtin.os.tag == .macos) {
-            const page_size: usize = std.heap.page_size_min;
-            const addr = @intFromPtr(base_ptr);
-            const aligned_addr = addr & ~(page_size - 1);
-            const offset = addr - aligned_addr;
-            const total_len = offset + expert_bytes;
-            _ = posix.madvise(@ptrFromInt(aligned_addr), total_len, posix.system.MADV.WILLNEED);
-        }
+        backend_mod.hostPrefault(base_ptr, expert_bytes);
     }
 
     /// Pre-pin top-K experts for a layer (startup hotlist, no madvise).
@@ -210,8 +202,16 @@ pub const ExpertCache = struct {
         return admitted;
     }
 
-    /// Pin an expert's weight bytes in physical RAM via mlock.
-    /// The raw pointer and length are page-aligned internally.
+    /// Pin an expert's weight bytes in physical RAM via mlock, prefaulting the
+    /// range first. The raw pointer and length are page-aligned internally.
+    ///
+    /// Prefault-then-lock, not lock-alone: `mlock` on a cold file mapping makes
+    /// the kernel fault the range in one page at a time with no readahead, and
+    /// registering the 155 GB DS4 checkpoint that way ran at ~19 MB/s (see
+    /// `cuda.zig` `uma_regions`). `MADV_WILLNEED` issues the same reads through
+    /// the readahead window, so the `mlock` that follows finds resident pages
+    /// and only wires them.
+    ///
     /// Returns true if successfully pinned, false if the wire limit would
     /// be exceeded, the pin table is full, or the mlock syscall fails.
     /// Startup-only, never call on the hot path.
@@ -221,24 +221,22 @@ pub const ExpertCache = struct {
         if (self.total_pinned_bytes + len > max_pinned_bytes) return false;
         if (len == 0) return false;
 
-        const page_size: usize = std.heap.page_size_min;
-        const addr = @intFromPtr(ptr);
-        const aligned = addr & ~(page_size - 1);
-        const total = len + (addr - aligned);
-        const aligned_ptr: [*]align(std.heap.page_size_min) const u8 = @ptrFromInt(aligned);
-        const memory = aligned_ptr[0..total];
+        const r = backend_mod.pageAlignRange(ptr, len);
+        const aligned_ptr: [*]align(std.heap.page_size_min) const u8 = @ptrFromInt(r.base);
+        const memory = aligned_ptr[0..r.size];
 
+        backend_mod.hostPrefault(ptr, len);
         std.process.lockMemory(memory, .{}) catch return false;
 
-        self.pinned_ranges[self.n_pinned] = .{ .ptr = aligned_ptr, .len = total };
+        self.pinned_ranges[self.n_pinned] = .{ .ptr = aligned_ptr, .len = r.size };
         self.n_pinned += 1;
-        self.total_pinned_bytes += total;
+        self.total_pinned_bytes += r.size;
         return true;
     }
 
     /// Unpin all previously mlocked expert ranges via munlock.
     /// Called from `deinit` before freeing allocations.
-    pub fn unpinAll(self: *ExpertCache) void {
+    fn unpinAll(self: *ExpertCache) void {
         if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
         for (self.pinned_ranges[0..self.n_pinned]) |range| {
             std.process.unlockMemory(range.ptr[0..range.len]) catch {};
@@ -267,20 +265,11 @@ pub const ExpertCache = struct {
         const found = self.getTopResidents(layer, out);
         for (0..found) |i| {
             const offset = @as(usize, out[i]) * expert_bytes;
-            prefetchRegion(base_ptr + offset, expert_bytes);
+            backend_mod.hostPrefault(base_ptr + offset, expert_bytes);
         }
     }
 
     const max_prefetch_k = 8;
-
-    fn prefetchRegion(ptr: [*]const u8, len: usize) void {
-        if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
-        const page_size: usize = std.heap.page_size_min;
-        const addr = @intFromPtr(ptr);
-        const aligned = addr & ~(page_size - 1);
-        const total = len + (addr - aligned);
-        posix.madvise(@ptrFromInt(aligned), total, posix.system.MADV.WILLNEED) catch {};
-    }
 
     /// Return the top-k most recently used expert IDs for a given layer.
     /// Does NOT issue any madvise/prefetch, just returns the IDs.

@@ -4,9 +4,12 @@ version = "0.1.0"
 description = "TileLang kernel-generation experiment for Agave backends (research-only)"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "tilelang",
-    "numpy",
+    "tilelang==0.1.13",
+    "numpy==2.4.3",
+    "gguf==0.18.0",
 ]
+# torch is installed from a hardware-specific index (see README). Listing it
+# here would pull the PyPI CUDA/CPU wheel and break ROCm hosts.
 
 [tool.uv]
 # Isolated experiment; nothing here ships in the binary.

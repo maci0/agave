@@ -19,6 +19,34 @@ const qwen_default_bos_id: u32 = 151643;
 const max_word_cache_seg_bytes: usize = 4096;
 /// Cap on word_cache entries to bound memory in long-lived --serve processes.
 const max_word_cache_entries: usize = 8192;
+/// Linked-list node index sentinel used by the heap-based BPE merger.
+const bpe_none: u32 = std.math.maxInt(u32);
+/// UTF-8 start bytes that registered special tokens may begin with.
+const special_scan_needles = [_]u8{ '<', '[' };
+
+/// One special token for longest-match scans (sorted longest-first after load).
+const SpecialTok = struct {
+    text: []const u8,
+    id: u32,
+};
+
+/// Lazy-invalidated BPE merge candidate. `left_gen`/`right_gen` detect stale
+/// heap entries after a neighbor merge rewrites a node's piece.
+const BpeHeapItem = struct {
+    pri: u32,
+    left: u32,
+    right: u32,
+    left_gen: u32,
+    right_gen: u32,
+};
+
+fn bpeHeapOrder(_: void, a: BpeHeapItem, b: BpeHeapItem) std.math.Order {
+    // Match findBestMerge: lower numeric priority wins; leftmost pair on ties.
+    if (a.pri != b.pri) return std.math.order(a.pri, b.pri);
+    return std.math.order(a.left, b.left);
+}
+
+const BpeHeap = std.PriorityQueue(BpeHeapItem, void, bpeHeapOrder);
 
 // ── GPT-2 byte-to-unicode mapping ranges (OpenAI BPE specification) ──
 /// First printable ASCII codepoint (maps 1:1 in GPT-2 byte encoder).
@@ -37,6 +65,9 @@ pub const BpeTokenizer = struct {
     token_to_id: std.StringHashMap(u32),
     id_to_token: std.ArrayList([]const u8) = .empty,
     special_tokens: std.StringHashMap(u32),
+    /// Dense longest-first copy of `special_tokens` for encode scans. Avoids
+    /// hashing and iterator overhead at every `'<'` / `'['` in the prompt.
+    special_list: std.ArrayList(SpecialTok) = .empty,
     merge_map: std.StringHashMap(u32),
     byte_to_unicode: [256][]const u8 = [_][]const u8{&.{}} ** 256,
     unicode_to_byte: std.StringHashMap(u8),
@@ -97,9 +128,8 @@ pub const BpeTokenizer = struct {
     /// <start_of_turn> sits at 105). Init-path cost only: linear scan over the
     /// special-token set.
     pub fn isSpecialId(self: *const BpeTokenizer, id: u32) bool {
-        var it = self.special_tokens.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == id) return true;
+        for (self.special_list.items) |st| {
+            if (st.id == id) return true;
         }
         return false;
     }
@@ -125,6 +155,20 @@ pub const BpeTokenizer = struct {
         self.word_cache_lock.store(0, .release);
     }
 
+    /// Drop one arbitrary word_cache entry. Called under `word_cache_lock`
+    /// when the map is at `max_word_cache_entries` so a long-lived --serve
+    /// process can still admit newly hot segments instead of freezing on
+    /// the first 8192 unique pretokens.
+    fn evictOneWordCacheEntry(self: *BpeTokenizer) void {
+        var it = self.word_cache.iterator();
+        const entry = it.next() orelse return;
+        const old_key = entry.key_ptr.*;
+        const old_val = entry.value_ptr.*;
+        _ = self.word_cache.remove(old_key);
+        self.allocator.free(old_key);
+        self.allocator.free(old_val);
+    }
+
     /// Free all owned memory (vocab, merges, byte mappings).
     pub fn deinit(self: *BpeTokenizer) void {
         // Free byte_to_unicode mappings allocated by initByteMappings
@@ -137,6 +181,7 @@ pub const BpeTokenizer = struct {
         self.token_to_id.deinit();
         self.id_to_token.deinit(self.allocator);
         self.special_tokens.deinit();
+        self.special_list.deinit(self.allocator);
         self.merge_map.deinit();
         self.unicode_to_byte.deinit();
         for (self.owned_strings.items) |s| self.allocator.free(s);
@@ -158,6 +203,50 @@ pub const BpeTokenizer = struct {
         errdefer self.allocator.free(d);
         try self.owned_strings.append(self.allocator, d);
         return d;
+    }
+
+    /// Record a special token in both the lookup map and the scan list.
+    fn registerSpecial(self: *BpeTokenizer, tok: []const u8, id: u32) !void {
+        try self.special_tokens.put(tok, id);
+        try self.special_list.append(self.allocator, .{ .text = tok, .id = id });
+    }
+
+    /// Longest-first order so the first match at a position is the longest.
+    fn sortSpecialList(self: *BpeTokenizer) void {
+        std.mem.sort(SpecialTok, self.special_list.items, {}, struct {
+            fn less(_: void, a: SpecialTok, b: SpecialTok) bool {
+                return a.text.len > b.text.len;
+            }
+        }.less);
+    }
+
+    /// Longest special token starting at `pos`, or null. `special_list` is
+    /// longest-first, so the first match wins.
+    fn matchSpecialAt(self: *const BpeTokenizer, text: []const u8, pos: usize) ?SpecialTok {
+        const remain = text.len - pos;
+        if (remain == 0) return null;
+        for (self.special_list.items) |st| {
+            if (st.text.len > remain) continue;
+            if (std.mem.eql(u8, text[pos..][0..st.text.len], st.text)) return st;
+        }
+        return null;
+    }
+
+    /// Merge-rule priority for adjacent pieces `a`,`b`, or null if none.
+    fn mergePriority(self: *const BpeTokenizer, a: []const u8, b: []const u8) ?u32 {
+        var key_buf: [merge_key_buf_size]u8 = undefined;
+        const kl = std.math.add(usize, std.math.add(usize, a.len, 1) catch return null, b.len) catch return null;
+        if (kl > key_buf.len) return null;
+        @memcpy(key_buf[0..a.len], a);
+        key_buf[a.len] = 0;
+        @memcpy(key_buf[a.len + 1 ..][0..b.len], b);
+        return self.merge_map.get(key_buf[0..kl]);
+    }
+
+    /// True when `s` points into the original `chars` buffer range.
+    fn pieceIsOrig(s: []const u8, orig_lo: usize, orig_hi: usize) bool {
+        const p = @intFromPtr(s.ptr);
+        return p >= orig_lo and p < orig_hi;
     }
 
     /// Build the GPT-2 byte↔unicode lookup tables (`byte_to_unicode` / `unicode_to_byte`).
@@ -210,18 +299,25 @@ pub const BpeTokenizer = struct {
     /// Map raw bytes to their GPT-2 unicode representations.
     /// Returns a caller-owned UTF-8 slice that must be freed with `self.allocator`.
     fn bytesToUnicode(self: *const BpeTokenizer, text: []const u8) ![]u8 {
-        var result = std.ArrayList(u8).empty;
+        var total: usize = 0;
+        for (text) |byte| total += self.byte_to_unicode[byte].len;
+        const result = try self.allocator.alloc(u8, total);
+        var pos: usize = 0;
         for (text) |byte| {
-            try result.appendSlice(self.allocator, self.byte_to_unicode[byte]);
+            const m = self.byte_to_unicode[byte];
+            @memcpy(result[pos..][0..m.len], m);
+            pos += m.len;
         }
-        return result.toOwnedSlice(self.allocator);
+        return result;
     }
 
     /// Reverse the GPT-2 unicode mapping: convert unicode-encoded token text back
     /// to raw bytes. Unmapped multi-byte sequences are replaced with `'?'`.
     /// Returns a caller-owned slice that must be freed with `self.allocator`.
     fn unicodeToBytes(self: *const BpeTokenizer, text: []const u8) ![]u8 {
+        // Each unicode-mapped unit decodes to one byte, so output ≤ input len.
         var result = std.ArrayList(u8).empty;
+        try result.ensureTotalCapacity(self.allocator, text.len);
         var i: usize = 0;
         while (i < text.len) {
             var char_len: usize = 1;
@@ -237,11 +333,11 @@ pub const BpeTokenizer = struct {
             if (i + char_len > text.len) char_len = 1;
             const uc = text[i .. i + char_len];
             if (self.unicode_to_byte.get(uc)) |byte| {
-                try result.append(self.allocator, byte);
+                result.appendAssumeCapacity(byte);
             } else if (uc.len == 1 and uc[0] < 128) {
-                try result.append(self.allocator, uc[0]);
+                result.appendAssumeCapacity(uc[0]);
             } else {
-                try result.append(self.allocator, '?');
+                result.appendAssumeCapacity('?');
             }
             i += char_len;
         }
@@ -252,11 +348,12 @@ pub const BpeTokenizer = struct {
     /// Invalid lead bytes are treated as single-byte sequences.
     fn splitUtfChars(self: *const BpeTokenizer, text: []const u8) !std.ArrayList([]const u8) {
         var chars: std.ArrayList([]const u8) = .empty;
+        try chars.ensureTotalCapacity(self.allocator, text.len);
         var i: usize = 0;
         while (i < text.len) {
             const raw_cl: usize = std.unicode.utf8ByteSequenceLength(text[i]) catch 1;
             const cl: usize = if (i + raw_cl > text.len) 1 else raw_cl;
-            try chars.append(self.allocator, text[i .. i + cl]);
+            chars.appendAssumeCapacity(text[i .. i + cl]);
             i += cl;
         }
         return chars;
@@ -269,14 +366,8 @@ pub const BpeTokenizer = struct {
         var best_pos: i32 = -1;
         var best_pri: u32 = std.math.maxInt(u32);
         if (tokens.len < 2) return .{ .pos = -1, .priority = best_pri };
-        var key_buf: [merge_key_buf_size]u8 = undefined;
         for (0..tokens.len - 1) |i| {
-            const kl = std.math.add(usize, std.math.add(usize, tokens[i].len, 1) catch continue, tokens[i + 1].len) catch continue;
-            if (kl > key_buf.len) continue;
-            @memcpy(key_buf[0..tokens[i].len], tokens[i]);
-            key_buf[tokens[i].len] = 0;
-            @memcpy(key_buf[tokens[i].len + 1 ..][0..tokens[i + 1].len], tokens[i + 1]);
-            if (self.merge_map.get(key_buf[0..kl])) |pri| {
+            if (self.mergePriority(tokens[i], tokens[i + 1])) |pri| {
                 if (pri < best_pri) {
                     best_pri = pri;
                     best_pos = @intCast(i);
@@ -289,41 +380,127 @@ pub const BpeTokenizer = struct {
     /// Iteratively apply BPE merges to a list of unicode character slices until
     /// no more merges are possible. Returns the merged token list; intermediate
     /// allocations that are not part of the final result are freed before return.
+    ///
+    /// Uses a linked list of pieces plus a min-heap of adjacent pairs so each
+    /// merge is O(log n) rather than a full O(n) rescan. Same merge order as
+    /// `findBestMerge` (lowest priority, leftmost on ties).
     fn applyBpe(self: *const BpeTokenizer, chars: []const []const u8) !std.ArrayList([]const u8) {
         var current: std.ArrayList([]const u8) = .empty;
         errdefer current.deinit(self.allocator);
-        var allocated: std.ArrayList([]const u8) = .empty;
-        errdefer {
-            for (allocated.items) |s| self.allocator.free(s);
-            allocated.deinit(self.allocator);
+        if (chars.len <= 1) {
+            try current.appendSlice(self.allocator, chars);
+            return current;
         }
-        try current.appendSlice(self.allocator, chars);
-        while (current.items.len > 1) {
-            const m = self.findBestMerge(current.items);
-            if (m.pos < 0) break;
-            const pos: usize = @intCast(m.pos);
-            const a = current.items[pos];
-            const b = current.items[pos + 1];
+
+        const Node = struct {
+            piece: []const u8,
+            prev: u32,
+            next: u32,
+            live: bool,
+            gen: u32,
+        };
+        const nodes = try self.allocator.alloc(Node, chars.len);
+        defer self.allocator.free(nodes);
+
+        const orig_lo = @intFromPtr(chars[0].ptr);
+        const last_ch = chars[chars.len - 1];
+        const orig_hi = @intFromPtr(last_ch.ptr) + last_ch.len;
+
+        for (chars, 0..) |ch, i| {
+            const idx: u32 = @intCast(i);
+            nodes[i] = .{
+                .piece = ch,
+                .prev = if (i == 0) bpe_none else idx - 1,
+                .next = if (i + 1 == chars.len) bpe_none else idx + 1,
+                .live = true,
+                .gen = 0,
+            };
+        }
+
+        var pieces_in_nodes = true;
+        errdefer if (pieces_in_nodes) {
+            for (nodes) |nd| {
+                if (nd.live and !pieceIsOrig(nd.piece, orig_lo, orig_hi)) {
+                    self.allocator.free(nd.piece);
+                }
+            }
+        };
+
+        var heap = BpeHeap.initContext({});
+        defer heap.deinit(self.allocator);
+        try heap.ensureTotalCapacity(self.allocator, chars.len);
+
+        var pair_i: usize = 0;
+        while (pair_i + 1 < chars.len) : (pair_i += 1) {
+            if (self.mergePriority(chars[pair_i], chars[pair_i + 1])) |pri| {
+                try heap.push(self.allocator, .{
+                    .pri = pri,
+                    .left = @intCast(pair_i),
+                    .right = @intCast(pair_i + 1),
+                    .left_gen = 0,
+                    .right_gen = 0,
+                });
+            }
+        }
+
+        while (heap.pop()) |item| {
+            if (item.left >= nodes.len or item.right >= nodes.len) continue;
+            const left = &nodes[item.left];
+            const right = &nodes[item.right];
+            if (!left.live or !right.live) continue;
+            if (left.next != item.right) continue;
+            if (left.gen != item.left_gen or right.gen != item.right_gen) continue;
+
+            const a = left.piece;
+            const b = right.piece;
             const merged_len = std.math.add(usize, a.len, b.len) catch break;
             const merged = try self.allocator.alloc(u8, merged_len);
             @memcpy(merged[0..a.len], a);
             @memcpy(merged[a.len..], b);
-            try allocated.append(self.allocator, merged);
-            current.items[pos] = merged;
-            _ = current.orderedRemove(pos + 1);
-        }
-        // Free intermediate merged strings that aren't in the final result
-        for (allocated.items) |s| {
-            var still_used = false;
-            for (current.items) |t| {
-                if (s.ptr == t.ptr) {
-                    still_used = true;
-                    break;
+
+            if (!pieceIsOrig(a, orig_lo, orig_hi)) self.allocator.free(a);
+            if (!pieceIsOrig(b, orig_lo, orig_hi)) self.allocator.free(b);
+
+            left.piece = merged;
+            left.gen += 1;
+            right.live = false;
+            const new_next = right.next;
+            left.next = new_next;
+            if (new_next != bpe_none) nodes[new_next].prev = item.left;
+
+            if (left.prev != bpe_none) {
+                const p = &nodes[left.prev];
+                if (self.mergePriority(p.piece, merged)) |pri| {
+                    try heap.push(self.allocator, .{
+                        .pri = pri,
+                        .left = left.prev,
+                        .right = item.left,
+                        .left_gen = p.gen,
+                        .right_gen = left.gen,
+                    });
                 }
             }
-            if (!still_used) self.allocator.free(s);
+            if (new_next != bpe_none) {
+                const nxt = &nodes[new_next];
+                if (self.mergePriority(merged, nxt.piece)) |pri| {
+                    try heap.push(self.allocator, .{
+                        .pri = pri,
+                        .left = item.left,
+                        .right = new_next,
+                        .left_gen = left.gen,
+                        .right_gen = nxt.gen,
+                    });
+                }
+            }
         }
-        allocated.deinit(self.allocator);
+
+        try current.ensureTotalCapacity(self.allocator, chars.len);
+        var nidx: u32 = 0;
+        while (nidx != bpe_none) {
+            if (nodes[nidx].live) current.appendAssumeCapacity(nodes[nidx].piece);
+            nidx = nodes[nidx].next;
+        }
+        pieces_in_nodes = false;
         return current;
     }
 
@@ -333,6 +510,7 @@ pub const BpeTokenizer = struct {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
         var result: std.ArrayList(u32) = .empty;
         errdefer result.deinit(self.allocator);
+        try result.ensureTotalCapacity(self.allocator, text.len);
 
         // Split by special tokens first
         var segments: std.ArrayList([]const u8) = .empty;
@@ -345,26 +523,19 @@ pub const BpeTokenizer = struct {
             var best_pos: usize = text.len;
             var best_len: usize = 0;
             var best_tok: ?[]const u8 = null;
-            // All special tokens start with '<' (enforced at load time).
-            // Scan for '<' positions and check special tokens only there,
-            // avoiding O(n_special × text_len) substring searches.
+            // Specials start with '<' or '['. Jump via indexOfAny (SIMD)
+            // and match the dense longest-first list at each candidate.
             {
                 var scan = start;
                 while (scan < text.len) {
-                    const rel = std.mem.indexOfScalar(u8, text[scan..], '<') orelse break;
+                    const rel = std.mem.indexOfAny(u8, text[scan..], &special_scan_needles) orelse break;
                     scan += rel;
-                    var it = self.special_tokens.iterator();
-                    while (it.next()) |entry| {
-                        const st = entry.key_ptr.*;
-                        if (st.len > best_len and scan + st.len <= text.len and
-                            std.mem.eql(u8, text[scan..][0..st.len], st))
-                        {
-                            best_pos = scan;
-                            best_len = st.len;
-                            best_tok = st;
-                        }
+                    if (self.matchSpecialAt(text, scan)) |st| {
+                        best_pos = scan;
+                        best_len = st.text.len;
+                        best_tok = st.text;
+                        break;
                     }
-                    if (best_tok != null) break;
                     scan += 1;
                 }
             }
@@ -447,7 +618,10 @@ pub const BpeTokenizer = struct {
                     if (seg_ids.len > 0 and seg.len <= max_word_cache_seg_bytes) {
                         self.lockWordCache();
                         defer self.unlockWordCache();
-                        if (self.word_cache.count() < max_word_cache_entries and !self.word_cache.contains(seg)) {
+                        if (!self.word_cache.contains(seg)) {
+                            if (self.word_cache.count() >= max_word_cache_entries) {
+                                self.evictOneWordCacheEntry();
+                            }
                             const owned_key = try self.allocator.dupe(u8, seg);
                             errdefer self.allocator.free(owned_key);
                             const owned_val = try self.allocator.dupe(u32, seg_ids);
@@ -465,10 +639,15 @@ pub const BpeTokenizer = struct {
     /// Decode token IDs back to text using byte-level BPE mappings.
     pub fn decode(self: *const BpeTokenizer, tokens: []const u32) ![]u8 {
         var unicode_result = std.ArrayList(u8).empty;
+        var total: usize = 0;
+        for (tokens) |id| {
+            if (id < self.id_to_token.items.len) total += self.id_to_token.items[id].len;
+        }
+        try unicode_result.ensureTotalCapacity(self.allocator, total);
         for (tokens) |id| {
             if (id >= self.id_to_token.items.len) continue;
             const tok = self.id_to_token.items[id];
-            try unicode_result.appendSlice(self.allocator, tok);
+            unicode_result.appendSliceAssumeCapacity(tok);
         }
         const unicode_str = try unicode_result.toOwnedSlice(self.allocator);
         defer self.allocator.free(unicode_str);
@@ -577,9 +756,10 @@ pub const BpeTokenizer = struct {
                 if (std.mem.indexOf(u8, tok, "im_start") != null or std.mem.indexOf(u8, tok, "im_end") != null) {
                     std.log.info("[bpe] Found ChatML special token: '{s}' = {}", .{ tok, i });
                 }
-                try self.special_tokens.put(owned_tok, id);
+                try self.registerSpecial(owned_tok, id);
             }
         }
+        self.sortSpecialList();
         self.vocab_size = vocab_len;
         std.log.info("[bpe] Loaded {} special tokens from GGUF vocab. Token 10='{s}', Token 11='{s}'", .{ special_count, if (10 < self.id_to_token.items.len) self.id_to_token.items[10] else "", if (11 < self.id_to_token.items.len) self.id_to_token.items[11] else "" });
         var priority: u32 = 0;
@@ -623,9 +803,10 @@ pub const BpeTokenizer = struct {
                 (tok[0] == '[' and tok[tok.len - 1] == ']')))
             {
                 special_count += 1;
-                try self.special_tokens.put(owned_tok, id);
+                try self.registerSpecial(owned_tok, id);
             }
         }
+        self.sortSpecialList();
         self.vocab_size = vocab_len;
         std.log.info("[bpe] Loaded {} special tokens from GGUF vocab (SPM mode)", .{special_count});
         // No merges for SPM, encode uses greedy longest match
@@ -650,6 +831,7 @@ pub const BpeTokenizer = struct {
         if (text.len == 0) return try self.allocator.alloc(u32, 0);
         var result: std.ArrayList(u32) = .empty;
         errdefer result.deinit(self.allocator);
+        try result.ensureTotalCapacity(self.allocator, text.len);
 
         // When add_dummy_prefix is true (traditional SPM), the first word and
         // every word after whitespace/special tokens/newlines gets a ▁ prefix.
@@ -659,19 +841,12 @@ pub const BpeTokenizer = struct {
         var start: usize = 0;
         while (start < text.len) {
             // Try to match special tokens first (longest match wins).
-            // All special tokens start with '<', skip scan otherwise.
             var best_sp_len: usize = 0;
             var best_sp_id: u32 = 0;
-            if (text[start] == '<') {
-                var sp_it = self.special_tokens.iterator();
-                while (sp_it.next()) |entry| {
-                    const st = entry.key_ptr.*;
-                    if (st.len > best_sp_len and start + st.len <= text.len and
-                        std.mem.eql(u8, text[start..][0..st.len], st))
-                    {
-                        best_sp_len = st.len;
-                        best_sp_id = entry.value_ptr.*;
-                    }
+            if (text[start] == '<' or text[start] == '[') {
+                if (self.matchSpecialAt(text, start)) |st| {
+                    best_sp_len = st.text.len;
+                    best_sp_id = st.id;
                 }
             }
             if (best_sp_len > 0) {
@@ -690,25 +865,18 @@ pub const BpeTokenizer = struct {
             }
 
             // Limit greedy match to not cross a special token boundary.
-            // Jump to each '<' via indexOfScalar (SIMD-accelerated) instead of byte-by-byte.
+            // Jump to each '<' / '[' via indexOfAny (SIMD-accelerated).
             var max_reach: usize = text.len - start;
             {
                 var scan: usize = start + 1;
                 const scan_end = start + max_reach;
                 while (scan < scan_end) {
-                    const rel = std.mem.indexOfScalar(u8, text[scan..scan_end], '<') orelse break;
+                    const rel = std.mem.indexOfAny(u8, text[scan..scan_end], &special_scan_needles) orelse break;
                     scan += rel;
-                    var sp2 = self.special_tokens.iterator();
-                    while (sp2.next()) |entry| {
-                        const st = entry.key_ptr.*;
-                        if (scan + st.len <= text.len and
-                            std.mem.eql(u8, text[scan..][0..st.len], st))
-                        {
-                            max_reach = scan - start;
-                            break;
-                        }
+                    if (self.matchSpecialAt(text, scan)) |_| {
+                        max_reach = scan - start;
+                        break;
                     }
-                    if (max_reach == scan - start) break;
                     scan += 1;
                 }
             }
@@ -785,6 +953,11 @@ pub const BpeTokenizer = struct {
     /// Decode for SPM tokenizer, tokens are raw UTF-8, ▁ maps to space
     pub fn decodeSpm(self: *const BpeTokenizer, tokens: []const u32) ![]u8 {
         var result = std.ArrayList(u8).empty;
+        var total: usize = 0;
+        for (tokens) |id| {
+            if (id < self.id_to_token.items.len) total += self.id_to_token.items[id].len;
+        }
+        try result.ensureTotalCapacity(self.allocator, total);
         for (tokens) |id| {
             if (id >= self.id_to_token.items.len) continue;
             const tok = self.id_to_token.items[id];
@@ -930,6 +1103,24 @@ test "BpeTokenizer interface via VTable" {
     try std.testing.expectEqual(@as(u32, 2), iface.vocabSize());
 }
 
+test "BPE encode matches bracket special tokens" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const vocab = [_][]const u8{ "a", "[INST]", "[/INST]" };
+    var vocab_slice: [vocab.len][]const u8 = undefined;
+    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+    try tok.loadFromGGUF(&vocab_slice, &.{}, 0);
+
+    const ids = try tok.encode("[INST]a[/INST]");
+    defer allocator.free(ids);
+    try std.testing.expectEqual(@as(usize, 3), ids.len);
+    try std.testing.expectEqual(@as(u32, 1), ids[0]);
+    try std.testing.expectEqual(@as(u32, 0), ids[1]);
+    try std.testing.expectEqual(@as(u32, 2), ids[2]);
+}
+
 test "isSpecialId uses loaded special-token table, not id range" {
     const allocator = std.testing.allocator;
     var tok = BpeTokenizer.init(allocator);
@@ -1015,6 +1206,92 @@ test "BPE decode reverses encode" {
     const decoded = try tok.decode(&.{ 3, 2 });
     defer allocator.free(decoded);
     try std.testing.expectEqualStrings("abc", decoded);
+}
+
+test "BPE heap merge order matches naive findBestMerge" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const vocab = [_][]const u8{ "a", "b", "ab" };
+    var vocab_slice: [vocab.len][]const u8 = undefined;
+    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
+    const merges = [_][]const u8{"a b"};
+    var merges_slice: [merges.len][]const u8 = undefined;
+    for (&merges, 0..) |m, i| merges_slice[i] = m;
+    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+
+    // 128 repeats of "ab": heap and naive must both collapse to 128 "ab" tokens.
+    const n_pairs: usize = 128;
+    const text = "ab" ** n_pairs;
+    const ids = try tok.encode(text);
+    defer allocator.free(ids);
+    try std.testing.expectEqual(n_pairs, ids.len);
+    for (ids) |id| try std.testing.expectEqual(@as(u32, 2), id);
+
+    // Oracle: naive leftmost-lowest scan on the same unicode chars.
+    const unicode = try tok.bytesToUnicode(text);
+    defer allocator.free(unicode);
+    var chars = try tok.splitUtfChars(unicode);
+    defer chars.deinit(allocator);
+    var naive: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (naive.items) |s| {
+            if (@intFromPtr(s.ptr) < @intFromPtr(unicode.ptr) or
+                @intFromPtr(s.ptr) >= @intFromPtr(unicode.ptr) + unicode.len)
+            {
+                allocator.free(s);
+            }
+        }
+        naive.deinit(allocator);
+    }
+    try naive.appendSlice(allocator, chars.items);
+    while (naive.items.len > 1) {
+        const m = tok.findBestMerge(naive.items);
+        if (m.pos < 0) break;
+        const pos: usize = @intCast(m.pos);
+        const a = naive.items[pos];
+        const b = naive.items[pos + 1];
+        const merged = try allocator.alloc(u8, a.len + b.len);
+        @memcpy(merged[0..a.len], a);
+        @memcpy(merged[a.len..], b);
+        naive.items[pos] = merged;
+        _ = naive.orderedRemove(pos + 1);
+        if (@intFromPtr(a.ptr) < @intFromPtr(unicode.ptr) or
+            @intFromPtr(a.ptr) >= @intFromPtr(unicode.ptr) + unicode.len)
+        {
+            allocator.free(a);
+        }
+        if (@intFromPtr(b.ptr) < @intFromPtr(unicode.ptr) or
+            @intFromPtr(b.ptr) >= @intFromPtr(unicode.ptr) + unicode.len)
+        {
+            allocator.free(b);
+        }
+    }
+    try std.testing.expectEqual(ids.len, naive.items.len);
+}
+
+test "word_cache evicts an entry so a new segment can be admitted" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const k1 = try allocator.dupe(u8, "alpha");
+    const v1 = try allocator.dupe(u32, &.{1});
+    try tok.word_cache.put(allocator, k1, v1);
+    const k2 = try allocator.dupe(u8, "beta");
+    const v2 = try allocator.dupe(u32, &.{2});
+    try tok.word_cache.put(allocator, k2, v2);
+    try std.testing.expectEqual(@as(usize, 2), tok.word_cache.count());
+
+    tok.evictOneWordCacheEntry();
+    try std.testing.expectEqual(@as(usize, 1), tok.word_cache.count());
+
+    const k3 = try allocator.dupe(u8, "gamma");
+    const v3 = try allocator.dupe(u32, &.{3});
+    try tok.word_cache.put(allocator, k3, v3);
+    try std.testing.expectEqual(@as(usize, 2), tok.word_cache.count());
+    try std.testing.expect(tok.word_cache.contains("gamma"));
 }
 
 test "decodeOne matches single-token decode in all modes" {

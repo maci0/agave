@@ -21,7 +21,7 @@ By the end of this tutorial, you'll understand:
 - **State space models**: Linear-time alternatives to quadratic attention (DeltaNet, Mamba-2)
 - **Sampling strategies**: Temperature, top-k, top-p, min-p, XTC, DRY, Mirostat, logit bias, grammar-constrained decoding
 - **Compute backends**: How CPU, GPU (CUDA, Metal, Vulkan, ROCm, WebGPU) backends execute kernels and manage memory
-- **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping, n-gram, EAGLE, DSpark confidence-scheduled verification, adaptive K
+- **Speculative decoding**: Draft models, DDTree tree construction, self-speculative layer skipping, n-gram, EAGLE, DSpark, DFlash2 block-diffusion drafting, adaptive K
 - **Multi-Token Prediction**: MTP heads, +1 offset norm, built-in draft tokens, 70-85% acceptance rates
 - **PFlash / block sparse**: Scorer-driven prefill compression for long contexts
 - **Diffusion LMs**: Block diffusion (DiffusionGemma), bidirectional canvas, confidence acceptance

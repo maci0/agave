@@ -24,7 +24,7 @@ import sys
 def main() -> None:
     if len(sys.argv) != 2:
         raise SystemExit(f"Usage: {sys.argv[0]} <input.ptx>")
-    with open(sys.argv[1]) as f:
+    with open(sys.argv[1], encoding="utf-8") as f:
         ptx = f.read()
     for clean, mangled in re.findall(r'\.alias (\w+_kernel), ([^;]+);', ptx):
         ptx = ptx.replace(f'.func {mangled}(', f'.entry {clean}(')

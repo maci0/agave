@@ -383,7 +383,7 @@ This is why inference speed matters, generating 100 tokens requires 100 sequenti
 
 ## Tokenizer Performance: Word-Level BPE Cache
 
-The `applyBpe` function runs a merge loop that can iterate many times per pretoken, for a word like `" transformer"`, it starts with individual bytes and merges pairs until no merge rule applies. This is expensive.
+The `applyBpe` function runs a merge loop that can iterate many times per pretoken, for a word like `" transformer"`, it starts with individual bytes and merges pairs until no merge rule applies. Adjacent pairs sit in a min-heap so each merge is O(log n) rather than a full rescan of the piece list. This is still expensive for a unique long segment.
 
 The key insight: the same pretokens appear repeatedly. In any English prompt, words like `" the"`, `" is"`, `" model"`, and code keywords appear constantly. After the first encode, the merge result for each word is already known.
 

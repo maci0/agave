@@ -1,5 +1,9 @@
 # DS V4 Flash MTP Implementation Design
 
+**Status**: implemented (shared-expert FFN only). Weights load from a caller-supplied safetensors file via `--mtp-model`; they are not bundled in GGUF. Canonical CLI: `src/main.zig` (`--mtp-model`), loader: `src/models/ds4_mtp.zig`, forward: `Ds4Model.mtpForward`.
+
+**Implementation note:** `mtpForward` currently runs MTP layers 0–2 on every call and does not use `depth` to select a single layer. The per-depth sketch below is the intended v1 shape; do not treat the loop-all-layers path as a superseding decision.
+
 ## Architecture
 
 The DS V4 Flash model has 3 MTP (Multi-Token Prediction) layers that predict
@@ -29,8 +33,8 @@ Output:
 
 ### Weight Loading
 
-MTP weights are in `/tmp/ds4_mtp_weights.safetensors` (595MB).
-Loaded separately from the main GGUF model via `--mtp-model` flag.
+MTP weights live in a separate safetensors file (on the order of 595MB for Flash 0731).
+Pass the path with `--mtp-model`; the loader mmaps the file. GGUF checkpoints omit these tensors.
 
 ### Tensor Name Mapping (HF → Internal)
 

@@ -26,6 +26,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const quant = @import("../ops/quant.zig");
@@ -88,7 +89,7 @@ pub const Qwen4ExpModel = struct {
     rope_dim: u32 = 64,
     rms_eps: f32 = 1e-6,
     full_attn_interval: u32 = 4,
-    eos_token_id: u32 = 248046,
+    eos_token_id: u32 = arch_mod.qwen_fallback_eos,
     max_seq_len: usize = 4096,
 
     ssm_d_conv: u32 = 4,
@@ -317,7 +318,9 @@ pub const Qwen4ExpModel = struct {
             if (f.getMetaU32("num_attention_heads")) |v| self.n_head = v;
             if (f.getMetaU32("num_key_value_heads")) |v| self.n_head_kv = v;
             if (f.getMetaU32("head_dim")) |v| self.head_dim = v;
-            if (f.getMetaU32("vocab_size")) |v| { if (v > self.vocab_size) self.vocab_size = v; }
+            if (f.getMetaU32("vocab_size")) |v| {
+                if (v > self.vocab_size) self.vocab_size = v;
+            }
         }
         // Qwen3.8-27B: n_embd=5120, n_head=24, head_dim=256 (5120 is not 24*256).
         // Never infer head_dim from n_embd/n_head when they do not divide.
@@ -924,9 +927,10 @@ pub const Qwen4ExpModel = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         const keys_f32 = self.paged_cache.blocks[block_id].keys;
@@ -2482,7 +2486,6 @@ pub const Qwen4ExpModel = struct {
         }
         return null;
     }
-
 };
 
 const expertWeightStride = model_mod.expertWeightStride;

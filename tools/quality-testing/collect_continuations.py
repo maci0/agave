@@ -2,8 +2,8 @@
 """Collect official API continuations for NLL quality testing.
 
 Sends prompts to a hosted model API and records the greedy continuations
-with token-level logprobs. The output JSONL can be scored locally with
-`agave eval --continuations FILE model.gguf`.
+with token-level logprobs. The output JSONL is consumed by `src/eval.zig`
+(library API; there is no `agave eval` subcommand yet).
 
 Usage:
     export API_KEY=...
@@ -22,13 +22,12 @@ import argparse
 import json
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
-try:
-    import requests
-except ImportError:
-    print("Error: pip install requests", file=sys.stderr)
-    sys.exit(1)
+# Seconds; hosted APIs can be slow for long greedy continuations.
+HTTP_TIMEOUT_SEC = 120
 
 
 def collect_one(endpoint, model, prompt, api_key, max_tokens):
@@ -45,9 +44,18 @@ def collect_one(endpoint, model, prompt, api_key, max_tokens):
         "logprobs": True,
         "top_logprobs": 5,
     }
-    resp = requests.post(endpoint, headers=headers, json=body, timeout=120)
-    resp.raise_for_status()
-    data = resp.json()
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode(),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from e
 
     choice = data["choices"][0]
     continuation = choice["message"]["content"]
@@ -80,7 +88,7 @@ def main():
     api_key = args.api_key or os.environ.get("API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
     if not api_key:
         print("Error: set --api-key or API_KEY env var", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
     prompts = Path(args.prompts).read_text().strip().split("\n")
     print(f"Collecting {len(prompts)} continuations from {args.model}")
@@ -92,7 +100,7 @@ def main():
             result = collect_one(args.endpoint, args.model, prompt, api_key, args.max_tokens)
             results.append(result)
         except Exception as e:
-            print(f"    ERROR: {e}")
+            print(f"    ERROR: {e}", file=sys.stderr)
             results.append({"prompt": prompt, "error": str(e)})
         if i < len(prompts) - 1:
             time.sleep(args.delay)

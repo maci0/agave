@@ -1,6 +1,6 @@
 # Agave: Distributed Inference
 
-**Status**: PP implemented; TP FFN/expert-parallel all-reduce implemented for 2-rank pairs (`--tp 2`, `--pp 2`)  
+**Status**: PP implemented; TP FFN/expert-parallel all-reduce implemented for 2-rank pairs (`--tp 2`, `--pp 2`). Hybrid TP+PP does not launch (TP transport is skipped when `--pp > 1`). RCCL is declared, not implemented.  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
 **Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU

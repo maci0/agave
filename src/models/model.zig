@@ -4,7 +4,7 @@
 //!
 //! Implementations: gemma3.zig, gemma4.zig, deepseek4.zig, diffusion_gemma.zig,
 //! qwen35.zig, qwen4exp.zig, qwen4_exp.zig, gpt_oss.zig, nemotron_h.zig, nemotron_nano.zig, glm4.zig,
-//! llama4.zig, vision.zig
+//! llama4.zig, dflash2.zig, vision.zig
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -20,6 +20,15 @@ const Transport = @import("../parallel/transport.zig").Transport;
 
 /// Vision encoder for multimodal models (SigLIP-2, CLIP-like image embedding).
 pub const VisionEncoder = @import("vision.zig").VisionEncoder;
+
+/// DFlash2 block-diffusion drafter. Spec/CLI bind this through `ModelStorage`;
+/// import the type from this dispatcher, not `dflash2.zig`. `void` when
+/// `-Denable-dflash2=false` so wasm/tiny builds do not compile the drafter.
+pub const DFlash2Model = if (build_options.enable_dflash2) @import("dflash2.zig").DFlash2Model else void;
+
+/// DeepSeek V4 MTP heads loaded from a separate safetensors file.
+/// Import from this dispatcher, not `ds4_mtp.zig`.
+pub const MtpWeights = @import("ds4_mtp.zig").MtpWeights;
 
 /// Buffer size for constructing companion tensor names (e.g., ".scales", ".biases").
 pub const tensor_name_buf_size: usize = 256;
@@ -133,12 +142,15 @@ pub const Model = struct {
         /// Sets kv_seq_len to n_tokens on success. Returns false if unsupported.
         /// Soft stub returns false when the concrete model omits `importKvPrefix`.
         import_kv_prefix: *const fn (self: *anyopaque, src: []const u8, n_tokens: usize) bool,
+        /// Block-diffusion canvas pass (DiffusionGemma). Soft stub returns
+        /// `error.MissingTensor` when the concrete model omits `forwardCanvas`.
+        forward_canvas: *const fn (self: *anyopaque, canvas: []const u32, logits_out: []f32) ForwardError!void,
     };
 
     /// Create a polymorphic Model from a concrete model type.
     /// Required methods: forward, prefill, resetCache, cancel, getBlockTable.
     /// Required fields: eos_token_id, vocab_size, n_layers, n_embd, n_head, n_head_kv, kv_seq_len, logits_buf, be.
-    /// Optional methods (via @hasDecl): forwardTree, treeLogits, saveSsmState, restoreSsmState, mtpForward, resetMtpCache.
+    /// Optional methods (via @hasDecl): forwardTree, treeLogits, saveSsmState, restoreSsmState, mtpForward, resetMtpCache, forwardCanvas.
     /// Optional fields (via @hasField): layer_skip_start, image_embeddings, image_pad_token_id, visual_token_idx, n_mtp_layers, mtp_logits_buf.
     pub fn from(comptime T: type, ptr: *T) Model {
         const vtable = comptime genVTable(T);
@@ -364,6 +376,13 @@ pub const Model = struct {
                     return false;
                 }
             }.call),
+            .forward_canvas = @ptrCast(&struct {
+                fn call(self: *T, canvas: []const u32, logits_out: []f32) ForwardError!void {
+                    if (comptime @hasDecl(T, "forwardCanvas"))
+                        return self.forwardCanvas(canvas, logits_out);
+                    return error.MissingTensor;
+                }
+            }.call),
         };
     }
 
@@ -473,6 +492,13 @@ pub const Model = struct {
     /// Returns true on success. Enables warm-start generation from shared prefix.
     pub fn importKvPrefix(self: Model, src: []const u8, n_tokens: usize) bool {
         return self.vtable.import_kv_prefix(self.ptr, src, n_tokens);
+    }
+
+    /// Block-diffusion canvas denoising pass. Writes per-position logits into
+    /// `logits_out` (shape [canvas.len, vocab_size]). Soft stub returns
+    /// `error.MissingTensor` on architectures that are not block-diffusion.
+    pub fn forwardCanvas(self: Model, canvas: []const u32, logits_out: []f32) ForwardError!void {
+        return self.vtable.forward_canvas(self.ptr, canvas, logits_out);
     }
 
     /// Signal the model to cancel the current forward pass.
@@ -950,7 +976,7 @@ pub const ModelStorage = union(enum) {
     }
 
     /// Set MTP (multi-token prediction) weights from a separate safetensors file.
-    pub fn setMtpWeights(self: *ModelStorage, mtp: *@import("ds4_mtp.zig").MtpWeights) void {
+    pub fn setMtpWeights(self: *ModelStorage, mtp: *MtpWeights) void {
         switch (self.*) {
             inline else => |*m| {
                 if (@TypeOf(m.*) != void) {
@@ -1141,6 +1167,16 @@ pub const ModelStorage = union(enum) {
         }
     };
 
+    /// Pointer to the DFlash2 drafter when this storage holds one and the
+    /// arch is compiled in. Null for every other payload (and when
+    /// `-Denable-dflash2=false`, in which case the return type is `@TypeOf(null)`
+    /// so wasm/tiny builds never form `*void`).
+    pub fn dflash2Drafter(self: *ModelStorage) if (build_options.enable_dflash2) ?*DFlash2Model else @TypeOf(null) {
+        if (comptime !build_options.enable_dflash2) return null;
+        if (self.* != .dflash2) return null;
+        return &self.dflash2;
+    }
+
     /// Feature-capture surface for models that implement it (Qwen3.5/3.8
     /// feeding a DFlash2 drafter). Returns null when unsupported.
     pub fn featureReader(self: *ModelStorage) ?FeatureReader {
@@ -1211,7 +1247,6 @@ const Glm4Model = if (build_options.enable_glm4) @import("glm4.zig").Glm4Model e
 const Ds4Model = if (build_options.enable_deepseek4) @import("deepseek4.zig").Ds4Model else void;
 const NemotronNanoModel = if (build_options.enable_nemotron_nano) @import("nemotron_nano.zig").NemotronNanoModel else void;
 const Llama4Model = if (build_options.enable_llama4) @import("llama4.zig").Llama4Model else void;
-const DFlash2Model = if (build_options.enable_dflash2) @import("dflash2.zig").DFlash2Model else void;
 
 // ── Tests ─────────────────────────────────────────────────────────
 
@@ -1668,6 +1703,13 @@ test "Model.from and vtable dispatch, forwardTree returns MissingTensor for mock
     const m = Model.from(MockModel, &mock);
     // MockModel has no forwardTree → vtable returns error.MissingTensor
     try std.testing.expectError(error.MissingTensor, m.forwardTree(&.{}, &.{}, @ptrFromInt(0x1000), 0));
+}
+
+test "Model.from and vtable dispatch, forwardCanvas returns MissingTensor for mock" {
+    var mock = MockModel{};
+    const m = Model.from(MockModel, &mock);
+    var logits: [1]f32 = .{0};
+    try std.testing.expectError(error.MissingTensor, m.forwardCanvas(&.{1}, &logits));
 }
 
 test "Model.from and vtable dispatch, treeLogits returns 0 for mock" {
@@ -2337,6 +2379,10 @@ test "fuzz: all model functions" {
 
                 // forwardTree (MockModel has none -> MissingTensor)
                 _ = m.forwardTree(&.{}, &.{}, @ptrFromInt(0x1000), 0) catch {};
+
+                // forwardCanvas (MockModel has none -> MissingTensor)
+                var canvas_logits: [1]f32 = .{0};
+                _ = m.forwardCanvas(&.{1}, &canvas_logits) catch {};
 
                 // treeLogits
                 std.debug.assert(m.treeLogits(smith.valueWithHash(u32, 21)) == 0);

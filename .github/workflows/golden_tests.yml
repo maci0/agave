@@ -12,6 +12,10 @@ concurrency:
   group: golden-tests-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LC_ALL: C
+  TZ: UTC
+
 jobs:
   golden-tests:
     name: Golden Tests - ${{ matrix.backend }}
@@ -22,16 +26,16 @@ jobs:
       matrix:
         include:
           - backend: CPU
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-suffix: linux
           - backend: Metal
-            runner: macos-latest
+            runner: macos-15
             cache-suffix: macos
           - backend: Vulkan
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             cache-suffix: vulkan
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -59,7 +63,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends vulkan-sdk
 
       - name: Cache Zig build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .zig-cache

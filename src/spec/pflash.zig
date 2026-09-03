@@ -16,7 +16,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Model = @import("../models/model.zig").Model;
-const sparse_attn = @import("../ops/sparse_attn.zig");
 
 /// PFlash configuration, tunable at the CLI level.
 pub const PFlashConfig = struct {
@@ -27,14 +26,6 @@ pub const PFlashConfig = struct {
     block_size: u32 = 64,
     /// Hard cap on kept token fraction (prevents runaway selection at low alpha).
     max_kept_ratio: f32 = 0.20,
-    /// Number of tail query positions used for scoring (like Luce's tail window).
-    score_tail: u32 = 16,
-    /// Block sparse pattern for the drafter's attention during scoring.
-    drafter_pattern: sparse_attn.BlockSparsePattern = .{
-        .block_size = 64,
-        .n_global = 2,
-        .window = 1,
-    },
 };
 
 /// Per-block importance scores and selection state.
@@ -86,51 +77,6 @@ pub const PFlashState = struct {
         self.selected_len = 0;
     }
 };
-
-/// Score KV blocks by running the draft model's forward pass and extracting
-/// per-block max attention weight from the last `score_tail` positions.
-///
-/// In practice: run draft prefill normally, then call scoreFromKvCache() to
-/// compute scores from the stored KV cache (proxy for attention weights).
-///
-/// The Luce PFlash approach: score[b] = mean over (layers, heads) of
-///   max over (tail positions) of (Q[-tail:] @ K[b*bs:(b+1)*bs]^T / sqrt(hd))
-///
-/// Since we can't easily extract per-layer attention matrices post-hoc without
-/// modifying model kernels, we use a proxy: the magnitude of stored K-vectors
-/// in each block, weighted by the Q vector at the last position. This is a
-/// single-pass approximation that avoids kernel surgery.
-pub fn scoreFromLastQ(
-    state: *PFlashState,
-    draft_model: *const Model,
-    kv_keys: []const u8,
-    last_q: []const f32,
-    seq_len: usize,
-    hd: usize,
-    nkv: usize,
-    kv_type: @import("../ops/kv_quant.zig").KvQuantType,
-) void {
-    const bs = @as(usize, state.config.block_size);
-    const n_blocks = (seq_len + bs - 1) / bs;
-    const kvd = nkv * hd;
-    const kv_quant = @import("../ops/kv_quant.zig");
-    _ = draft_model;
-
-    // Score each block: max dot product of last Q with any K in the block.
-    for (0..n_blocks) |bi| {
-        const t_start = bi * bs;
-        const t_end = @min(t_start + bs, seq_len);
-        var block_max: f32 = 0;
-        for (t_start..t_end) |t| {
-            // Dot product with KV head 0 as proxy (fast, avoids full GQA expansion)
-            const k_off = kv_quant.kvByteOffset(kv_type, t * kvd);
-            const dot = @abs(kv_quant.kvDot(last_q.ptr, kv_keys.ptr + k_off, hd, kv_type));
-            if (dot > block_max) block_max = dot;
-        }
-        state.block_scores[bi] = block_max;
-    }
-    state.orig_len = seq_len;
-}
 
 /// Select blocks above alpha × mean_score, respecting max_kept_ratio.
 pub fn selectBlocks(state: *PFlashState) void {
@@ -273,7 +219,7 @@ test "PFlashState init and deinit" {
 }
 
 test "selectBlocks alpha threshold" {
-    const cfg = PFlashConfig{ .block_size = 8, .alpha = 0.5, .max_kept_ratio = 1.0, .score_tail = 1 };
+    const cfg = PFlashConfig{ .block_size = 8, .alpha = 0.5, .max_kept_ratio = 1.0 };
     var state = try PFlashState.init(std.testing.allocator, cfg, 64);
     defer state.deinit(std.testing.allocator);
     state.orig_len = 64;
@@ -290,7 +236,7 @@ test "selectBlocks alpha threshold" {
 }
 
 test "buildCompressedPrompt always includes last block" {
-    const cfg = PFlashConfig{ .block_size = 4, .alpha = 100.0, .max_kept_ratio = 1.0, .score_tail = 1 }; // alpha=100 selects nothing
+    const cfg = PFlashConfig{ .block_size = 4, .alpha = 100.0, .max_kept_ratio = 1.0 }; // alpha=100 selects nothing
     var state = try PFlashState.init(std.testing.allocator, cfg, 16);
     defer state.deinit(std.testing.allocator);
     state.orig_len = 16;
@@ -306,7 +252,7 @@ test "buildCompressedPrompt always includes last block" {
 }
 
 test "compressionRatio" {
-    const cfg = PFlashConfig{ .block_size = 8, .alpha = 0.5, .max_kept_ratio = 1.0, .score_tail = 1 };
+    const cfg = PFlashConfig{ .block_size = 8, .alpha = 0.5, .max_kept_ratio = 1.0 };
     var state = try PFlashState.init(std.testing.allocator, cfg, 64);
     defer state.deinit(std.testing.allocator);
     state.orig_len = 64;
@@ -315,7 +261,7 @@ test "compressionRatio" {
 }
 
 test "selectBlocks max_kept_ratio cap" {
-    const cfg = PFlashConfig{ .block_size = 8, .alpha = 0.0, .max_kept_ratio = 0.25, .score_tail = 1 }; // alpha=0 → all selected initially
+    const cfg = PFlashConfig{ .block_size = 8, .alpha = 0.0, .max_kept_ratio = 0.25 }; // alpha=0 → all selected initially
     var state = try PFlashState.init(std.testing.allocator, cfg, 128);
     defer state.deinit(std.testing.allocator);
     state.orig_len = 128;
@@ -339,7 +285,6 @@ test "fuzz: all pflash functions" {
                 .alpha = alpha,
                 .block_size = block_size,
                 .max_kept_ratio = @as(f32, @floatFromInt(smith.valueWithHash(u8, 2))) / 255.0 + 0.01,
-                .score_tail = 1,
             };
             const n_tokens: usize = @as(usize, smith.valueWithHash(u6, 3)) * @as(usize, block_size) + @as(usize, block_size);
 

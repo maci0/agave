@@ -36,13 +36,49 @@ fn writeStdout(text: []const u8) void {
     _ = posix.system.write(stdout_file.handle, text.ptr, text.len);
 }
 
-/// Print version to stdout, with cactus emoji on TTY.
-pub fn printVersion() void {
-    const text = if (isTty(stdout_file.handle))
+/// True when `val` is the literal terminal type `dumb` (no ANSI, no emoji).
+/// Unset, empty, and any other TERM value are not dumb.
+pub fn termIsDumbValue(val: ?[]const u8) bool {
+    const v = val orelse return false;
+    return std.mem.eql(u8, v, "dumb");
+}
+
+/// True when NO_COLOR is present and non-empty (https://no-color.org).
+/// `NO_COLOR=` (empty) keeps auto behavior.
+pub fn noColorValue(val: ?[]const u8) bool {
+    const v = val orelse return false;
+    return v.len > 0;
+}
+
+/// Whether `--version` should include the cactus emoji.
+/// TTY + a non-dumb TERM, unless NO_COLOR is set.
+pub fn versionDecorate(tty: bool, term_val: ?[]const u8, no_color: ?[]const u8) bool {
+    return tty and !termIsDumbValue(term_val) and !noColorValue(no_color);
+}
+
+fn getenvTerm() ?[]const u8 {
+    const result = std.c.getenv("TERM") orelse return null;
+    return std.mem.span(result);
+}
+
+fn getenvNoColor() ?[]const u8 {
+    const result = std.c.getenv("NO_COLOR") orelse return null;
+    return std.mem.span(result);
+}
+
+/// Print version to stdout. Cactus emoji only when `decorate` is true.
+pub fn printVersionWith(decorate: bool) void {
+    const text = if (decorate)
         cactus ++ " agave " ++ version ++ "\n"
     else
         "agave " ++ version ++ "\n";
     writeStdout(text);
+}
+
+/// Print version to stdout. Cactus emoji only on a TTY whose TERM is not dumb
+/// and NO_COLOR is unset.
+pub fn printVersion() void {
+    printVersionWith(versionDecorate(isTty(stdout_file.handle), getenvTerm(), getenvNoColor()));
 }
 
 /// Bits per byte, used for bits-per-weight (bpw) calculation.
@@ -252,11 +288,11 @@ fn truncateToWidth(s: []const u8, max_cols: usize) []const u8 {
 /// Replaces bytes 0x00-0x1F and 0x7F with '?' to prevent terminal injection
 /// via crafted GGUF model metadata (CWE-150).
 fn sanitizeMetadata(buf: *[max_meta_len]u8, s: []const u8) []const u8 {
-    const len = @min(s.len, buf.len);
-    for (s[0..len], 0..) |c, i| {
+    const prefix = term.utf8BytePrefix(s, buf.len);
+    for (prefix, 0..) |c, i| {
         buf[i] = if (c < 0x20 or c == 0x7F) '?' else c;
     }
-    return buf[0..len];
+    return buf[0..prefix.len];
 }
 
 // ── Display Struct ───────────────────────────────────────────────
@@ -487,7 +523,7 @@ pub const Display = struct {
             }
         }.f;
 
-        // ╭─ 🌵 agave v0.2.0 ──────╮
+        // ╭─ 🌵 agave v0.3.0 ──────╮
         const green = comptime std.fmt.comptimePrint(ctl.fg_base, .{2});
         // cactus emoji from module-level constant
         const title = " agave v" ++ version ++ " ";
@@ -1008,6 +1044,15 @@ test "sanitizeMetadata strips control characters" {
     try std.testing.expectEqual(@as(u8, 'h'), result[0]);
 }
 
+test "sanitizeMetadata does not split a trailing UTF-8 character" {
+    var buf: [max_meta_len]u8 = undefined;
+    // 86 CJK chars = 258 bytes; max_meta_len is 256, which splits the last 世.
+    const input = "\xe4\xb8\x96" ** 86;
+    const result = sanitizeMetadata(&buf, input);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(result));
+    try std.testing.expectEqual(@as(usize, 255), result.len);
+}
+
 test "version is non-empty semver-shaped product string" {
     try std.testing.expect(version.len >= 5);
     try std.testing.expect(std.mem.indexOfScalar(u8, version, '.') != null);
@@ -1034,6 +1079,30 @@ test "formatSize zero" {
     try std.testing.expectEqualStrings("KB", result.unit);
 }
 
+test "termIsDumbValue only matches dumb" {
+    try std.testing.expect(!termIsDumbValue(null));
+    try std.testing.expect(!termIsDumbValue(""));
+    try std.testing.expect(!termIsDumbValue("xterm-256color"));
+    try std.testing.expect(!termIsDumbValue("vt100"));
+    try std.testing.expect(termIsDumbValue("dumb"));
+}
+
+test "noColorValue follows no-color.org" {
+    try std.testing.expect(!noColorValue(null));
+    try std.testing.expect(!noColorValue(""));
+    try std.testing.expect(noColorValue("1"));
+    try std.testing.expect(noColorValue("true"));
+}
+
+test "versionDecorate respects TTY, TERM=dumb, and NO_COLOR" {
+    try std.testing.expect(versionDecorate(true, "xterm", null));
+    try std.testing.expect(versionDecorate(true, "xterm", ""));
+    try std.testing.expect(!versionDecorate(false, "xterm", null));
+    try std.testing.expect(!versionDecorate(true, "dumb", null));
+    try std.testing.expect(!versionDecorate(true, "xterm", "1"));
+    try std.testing.expect(!versionDecorate(true, "xterm", "true"));
+}
+
 test "fuzz: all display functions" {
     const test_stdout = @import("test_stdout.zig");
     try std.testing.fuzz({}, struct {
@@ -1047,6 +1116,12 @@ test "fuzz: all display functions" {
             // ── pub constants ──
             _ = version;
             _ = cactus;
+            _ = termIsDumbValue(null);
+            _ = termIsDumbValue("dumb");
+            _ = noColorValue(null);
+            _ = noColorValue("1");
+            _ = versionDecorate(true, "xterm", null);
+            _ = versionDecorate(false, "dumb", "1");
 
             // ── pub fn formatSize ──
             const size_val = smith.valueWithHash(usize, 0);
@@ -1054,9 +1129,11 @@ test "fuzz: all display functions" {
             try std.testing.expect(std.math.isFinite(fs.val));
             try std.testing.expect(fs.unit.len > 0);
 
-            // ── pub fn printVersion ──
+            // ── pub fn printVersion / printVersionWith ──
             // Writes to stdout (silenced above); verify it does not crash.
             printVersion();
+            printVersionWith(false);
+            printVersionWith(true);
 
             // ── ModelInfo.bitsPerWeight ──
             const n_params = smith.valueWithHash(u64, 1);

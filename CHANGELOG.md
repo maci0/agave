@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.2.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.3.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,134 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-09-02
+
+### Breaking
+- HTTP tool calling: parsed `<tool_call>` payloads whose `name` is not in the
+  request `tools` list or the process-level registry are dropped. If nothing
+  remains, the response is plain text instead of `finish_reason: "tool_calls"`.
+  Previously any parseable name was returned. Declare (or register) every tool
+  the model may call.
+
+### Added
+- Browser WASM (`web/agave.ts`): `init()` accepts `ArrayBufferView` (same as
+  `loadModel`); `init()` and `loadModel()` take an optional `AbortSignal` as
+  the last argument. `AgaveError.code` `invalid_argument` for a `maxTokens`
+  that is not a non-negative 32-bit integer (0 still means the default).
+- Server: persist web-UI conversations to `~/.cache/agave/conversations.json`
+  (override `--conv-store`, disable `--no-conv-store`). Atomic tmp+fsync+rename;
+  corrupt files are quarantined to `{path}.corrupt` on load.
+- CLI: `--vram-budget` (GiB, or `auto`) caps GPU memory held by cached weights
+  so a model larger than VRAM can run; weights past the cap are evicted and
+  re-uploaded on demand. `--vram-budget-policy mru|lru` selects eviction order
+  (default `mru`: a dense layer loop with LRU evicts the next layer's weights).
+  `auto` sizes the cap from free device memory (75%).
+- **Qwen4-Exp / Qwen3.8-Flash-Next** (`qwen4_exp`, `-Denable-qwen4-exp`): Gated
+  DeltaNet + QSA, PLE ngram SSD streaming (`--ssd-streaming`), NVFP4.
+- Browser WASM engine (`web/agave.ts`): `AgaveError` with a stable `code` (and
+  optional `httpStatus`) so callers can handle init, download, and generate
+  failures without matching `Error.message`.
+- WASM export `agave_last_error(ctx)`: integer `WasmError` for the last
+  init/generate on that context (`0` = ok).
+
+### Fixed
+- Browser WASM (`web/agave.ts`): `fetch` network, CORS, and abort failures
+  throw `AgaveError` (`wasm_fetch_failed` / `download_failed`) instead of a
+  raw `TypeError`. Re-`init()` frees the previous model against the old
+  module before swapping, so a stale `ctx` is not used in new linear memory.
+  `generate()` releases the prompt buffer if the WASM call throws. `destroy()`
+  clears `initMessage`. Empty-prompt `agave_generate` no longer slices a null
+  host pointer.
+- HTTP: image parts on a model without a vision encoder return `400`
+  (`code: vision_not_supported`) instead of being dropped. Non-data-URI
+  `image_url` values return `400` (`code: image_decode_failed`).
+- HTTP: `/v1/responses` honors OpenAI `max_output_tokens` (and
+  `max_completion_tokens`). Non-string `input`/`prompt` return `400`
+  (`code: invalid_value`) instead of `missing_required_parameter`.
+- HTTP: `/v1/embeddings` and unsupported KV export `501` responses no longer
+  count toward `/ready` error-rate degradation.
+- Linux/macOS release binaries are linked as PIE. Docker's runtime stage
+  freezes `SOURCE_DATE_EPOCH` to the same calendar day as the build stage.
+- `-Denable-bench=false` skips installing `agave-bench` (Docker image default).
+- Empty/whitespace `AGAVE_API_KEY`, `AGAVE_PORT`, `AGAVE_HOST`, `HF_TOKEN`,
+  `HF_HOME`, `XDG_CACHE_HOME`, `HOME`, and `TMPDIR` are treated as unset.
+  A sourced `.env.example` (`AGAVE_API_KEY=`) no longer overrides `--api-key`
+  or fails loopback `--serve`. Invalid `AGAVE_PORT` errors name the env var.
+- `AGAVE_DF2_DEBUG=1` is read once at startup (not per speculation round) and
+  documented alongside `AGAVE_VISION_DEBUG`.
+- Docker image pin: `DEBIAN_SNAPSHOT` / `SOURCE_DATE_EPOCH` now match the
+  `debian:bookworm-20260824-slim` FROM tag (CI already required the calendar day).
+- Docker "CPU + Gemma 3 only" image (CI `docker-build` and README minimal
+  `docker buildx`) compiled Qwen4-Exp, DeepSeek V4, and DFlash2 because those
+  `ENABLE_*` build-args were omitted and default on. Flags now match Compose.
+- Docker Compose forwards `HF_TOKEN`, `NO_COLOR`, and `AGAVE_VISION_DEBUG` from
+  `.env` (empty is unset). Hub cache for compose stays on the `agave-cache` volume.
+- Docker image ships `LICENSE` at `/usr/share/doc/agave/copyright`; the OCI
+  `org.opencontainers.image.licenses` label is `GPL-3.0-or-later` (was
+  `GPL-3.0-only`, which contradicted the repo license).
+- Docker image sets `HOME=/home/agave` so Hub pulls and `~/.cache` work on
+  runtimes that do not copy passwd HOME (Kubernetes, some Podman setups).
+- Conversations and the Vulkan pipeline cache honor `XDG_CACHE_HOME` (same
+  fallback as `agave pull`: `$HOME/.cache`). GPU backends also search Fedora
+  `/usr/lib64`, Alpine `/lib`, and Homebrew for dlopen libraries.
+- ReleaseFast build: reconstruct tiered KV slices in Gemma 3, GLM-4, GPT-OSS,
+  and Llama 4 so anonymous structs from `keysValues` type-check.
+- Calibration `.cal` files, Vulkan pipeline cache, expert-profile JSON, and Hub
+  `refs/main` now publish via atomic replace; Hub blob downloads `fsync` before
+  the snapshot is advertised complete.
+- Docker Compose: named volume `agave-cache` (or `AGAVE_CACHE_DIR`) at
+  `/home/agave/.cache` so conversations and caches survive container replace.
+- HTTP: `GET /v1/kv_cache` returns `400` (`code: invalid_value`) when `n_tokens`
+  exceeds current `kv_seq_len` (was `501`). Present-but-invalid `n_tokens` uses
+  `invalid_value`; missing still uses `missing_required_parameter`.
+- HTTP: `/v1/detokenize` returns `400` when `tokens` has more than 4096 entries
+  instead of silently truncating.
+- HTTP: `POST /v1/conversations` select/delete with missing or invalid `id`
+  returns `400` instead of coercing to `0` and `404`.
+- HTTP: unauthenticated `/ready` degraded responses include `reason`, matching
+  `/health` and the documented probe contract.
+- HTTP: `/v1/chat` image decode failures return JSON `400`
+  (`code: image_decode_failed`) like `/v1/chat/completions` (was HTML `200`).
+- HTTP: `/v1/kv_cache/info` format failure returns `500` instead of `200` `{}`.
+- Q3_K GEMV produced wrong output on CPU, Vulkan, and WebGPU (truncating block
+  counts). Workloads on those backends with Q3_K checkpoints were garbled.
+- Vulkan and ROCm multi-token prefill produced wrong results.
+- CUDA: blocking copies and a NULL-scale guard so fresh-boot drivers do not
+  return stale or empty GEMV results.
+- Vulkan `embLookup` could read past the embedding table.
+- MoE: the shared-expert tensor is optional. Checkpoints without
+  `ffn_gate_shexp` load instead of failing with `MissingTensor`.
+- HTTP: `response_format.json_schema` is taken from the `response_format`
+  object, not a sibling `schema` field on the request body.
+- Browser WASM (`web/agave.ts`): a model URL that is not HTTP 2xx no longer
+  initializes from the error page; `agave_init` results that do not start with
+  `Loaded:` are load failures. A failed reload keeps the previous model.
+- Docker CPU+Gemma3-only image (`docker compose` and CI `docker-build`) compiled
+  DeepSeek V4, Qwen4-Exp, and DFlash2 anyway (`-Denable-deepseek4` /
+  `-Denable-qwen4-exp` / `-Denable-dflash2` were never passed in the Dockerfile,
+  so they defaulted on). Those flags are now wired and the Compose override
+  turns them off.
+- WASM: `agave_free` now releases the model buffer passed to `agave_init`, so
+  reloading a GGUF no longer leaks the previous file in linear memory.
+- WASM glue: `init()` fails with `AgaveError` when `agave.wasm` is missing or
+  not a valid module, instead of a generic `WebAssembly.CompileError`.
+- WASM glue: `generate()` throws `AgaveError` on engine failures instead of
+  returning the diagnostic string as if it were model output.
+- WASM glue: empty-prompt and failed `agave_alloc` no longer treat a null
+  pointer as a writable buffer.
+
+### Changed
+- `zig build ptx` defaults to `-Dcuda-sm=sm_120` (was `sm_90`) so a bare PTX
+  rebuild matches committed kernels and CI `kernel-artifacts`.
+- Chat UI (`GET /`): gzip the embedded page when the client accepts it, send
+  `ETag`/`304` and `Cache-Control: private, no-cache` for the document, `defer`
+  marked/DOMPurify, and load highlight.js only when a code block is rendered.
+- `--allow-cpu-fallback` help and README now state the flag is unimplemented
+  (GPU backends fail closed on missing kernels). Behavior is unchanged: the
+  flag only warns.
+- Linux CPU thread pool pins workers to physical cores (SMT siblings no longer
+  share a spin-wait core). Outputs are unchanged; tok/s may change.
 
 ## [0.2.0] - 2026-08-26
 
@@ -172,7 +300,7 @@ must still appear under **Changed** or **Breaking** below. See
   instantiation. A mismatched `agave.wasm` now fails at load naming the missing
   export instead of throwing "not a function" partway through a generate call.
 - Changelog entries are consumer-oriented; date-stamped sections below remain the
-  historical log until the next tagged product release bumps `0.1.0`
+  historical log until they are folded into a later tagged product release
 - `--diffusion-confidence` docs/help now report default `0.5` (runtime default was
   already `0.5`; help/README previously said `0.9`)
 - `--max-batch-size` help no longer claims default `1`; runtime default remains `8`

@@ -103,53 +103,19 @@ fn enumerateCpu(list: *DeviceList) void {
 
 fn enumerateMetal(list: *DeviceList) void {
     if (comptime builtin.os.tag != .macos) return;
-    const objc = @import("../backend/objc.zig");
-
-    // MTLCopyAllDevices() returns NSArray of MTLDevice
-    const NSArray = objc.getClass("NSArray") orelse return;
-    _ = NSArray;
-    const devices_arr: ?objc.id = MTLCopyAllDevices();
-    if (devices_arr == null) {
-        // Fallback: single default device
-        const default_dev = objc.MTLCreateSystemDefaultDevice() orelse return;
-        addMetalDevice(list, default_dev, 0);
-        return;
-    }
-    const arr = devices_arr.?;
-    defer objc.msgSend(void, arr, objc.sel("release"), .{});
-    const count: u64 = objc.msgSend(u64, arr, objc.sel("count"), .{});
-    if (count == 0) return;
-    var i: u64 = 0;
-    while (i < count and i < max_devices) : (i += 1) {
-        const dev: objc.id = objc.msgSend(objc.id, arr, objc.sel("objectAtIndex:"), .{i});
-        addMetalDevice(list, dev, @intCast(i));
-    }
-}
-
-extern "c" fn MTLCopyAllDevices() ?@import("../backend/objc.zig").id;
-
-fn addMetalDevice(list: *DeviceList, mtl_dev: @import("../backend/objc.zig").id, idx: u32) void {
-    const objc = @import("../backend/objc.zig");
-    var dev = DeviceInfo{ .backend = .metal, .device_id = idx, .is_uma = true };
-
-    // Device name via ObjC: [device name] → NSString → UTF8String
-    const name_ns: objc.id = objc.msgSend(objc.id, mtl_dev, objc.sel("name"), .{});
-    const name_cstr: ?[*:0]const u8 = objc.msgSend(?[*:0]const u8, name_ns, objc.sel("UTF8String"), .{});
-    if (name_cstr) |cstr| {
-        const name_slice = std.mem.sliceTo(cstr, 0);
-        const copy_len = @min(name_slice.len, name_buf_size);
-        @memcpy(dev.name[0..copy_len], name_slice[0..copy_len]);
+    const backend_mod = @import("../backend/backend.zig");
+    var buf: [max_devices]backend_mod.MetalDeviceListEntry = undefined;
+    const n = backend_mod.listMetalDevices(&buf);
+    for (buf[0..n], 0..) |src, idx| {
+        var dev = DeviceInfo{ .backend = .metal, .device_id = @intCast(idx), .is_uma = true };
+        const copy_len = @min(src.name_len, name_buf_size);
+        @memcpy(dev.name[0..copy_len], src.name[0..copy_len]);
         dev.name_len = copy_len;
+        dev.total_mem = src.total_mem;
+        const cc = std.fmt.bufPrint(&dev.compute_cap, "Metal", .{}) catch "";
+        dev.cc_len = cc.len;
+        list.add(dev);
     }
-
-    // Recommended max working set size (approximate VRAM)
-    dev.total_mem = objc.msgSend(u64, mtl_dev, objc.sel("recommendedMaxWorkingSetSize"), .{});
-
-    // Metal GPU family for compute cap string
-    const cc = std.fmt.bufPrint(&dev.compute_cap, "Metal", .{}) catch "";
-    dev.cc_len = cc.len;
-
-    list.add(dev);
 }
 
 // ── CUDA ─────────────────────────────────────────────────────────────
@@ -168,11 +134,7 @@ fn enumerateCuda(list: *DeviceList) void {
     const FnCtxDestroy = *const fn (?*anyopaque) callconv(.c) CUresult;
 
     const cuda_lib_name = if (builtin.os.tag == .linux) "libcuda.so.1" else "libcuda.dylib";
-    var lib = std.DynLib.open(cuda_lib_name) catch
-        std.DynLib.open("/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-        std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-        std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ cuda_lib_name) catch
-        return;
+    var lib = @import("../dynlib.zig").open(cuda_lib_name) orelse return;
     defer lib.close();
 
     const cuInit = lib.lookup(FnInit, "cuInit") orelse return;
@@ -252,11 +214,7 @@ fn enumerateRocm(list: *DeviceList) void {
     const FnGetCount = *const fn (*c_int) callconv(.c) HipResult;
 
     const lib_name = "libamdhip64.so";
-    var lib = std.DynLib.open(lib_name) catch
-        std.DynLib.open("/opt/rocm/lib/" ++ lib_name) catch
-        std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ lib_name) catch
-        std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ lib_name) catch
-        return;
+    var lib = @import("../dynlib.zig").open(lib_name) orelse return;
     defer lib.close();
 
     const hipInit = lib.lookup(FnInit, "hipInit") orelse return;
@@ -355,10 +313,7 @@ fn enumerateVulkan(list: *DeviceList) void {
     const FnGetPhysDevMemProps = *const fn (VkPhysicalDevice, *VkPhysicalDeviceMemoryProperties) callconv(.c) void;
 
     const vk_lib_name = if (builtin.os.tag == .macos) "libvulkan.1.dylib" else "libvulkan.so.1";
-    var lib = std.DynLib.open(vk_lib_name) catch
-        std.DynLib.open("/usr/lib/x86_64-linux-gnu/libvulkan.so.1") catch
-        std.DynLib.open("/usr/lib/aarch64-linux-gnu/libvulkan.so.1") catch
-        return;
+    var lib = @import("../dynlib.zig").open(vk_lib_name) orelse return;
     defer lib.close();
 
     const vkCreateInstance = lib.lookup(FnCreateInstance, "vkCreateInstance") orelse return;
@@ -481,8 +436,12 @@ test "DeviceInfo, name buffer size" {
 }
 
 test "BackendKind, all variants" {
-    const kinds = [_]BackendKind{ .cpu, .metal, .cuda, .rocm, .vulkan };
-    try @import("std").testing.expectEqual(@as(usize, 5), kinds.len);
+    const fields = @typeInfo(BackendKind).@"enum".fields;
+    const expected = [_][]const u8{ "cpu", "metal", "cuda", "rocm", "vulkan" };
+    try std.testing.expectEqual(expected.len, fields.len);
+    inline for (expected, 0..) |name, i| {
+        try std.testing.expectEqualStrings(name, fields[i].name);
+    }
 }
 
 test "enumerate, always includes CPU" {
@@ -560,11 +519,34 @@ test "enumerate, returns DeviceList with at least one device" {
     try std.testing.expect(std.mem.indexOf(u8, cpu_name, "threads") != null);
 }
 
-test "printDeviceTable, function signature comptime check" {
-    comptime {
-        const T = @TypeOf(printDeviceTable);
-        _ = T;
-    }
+test "printDeviceTable writes a table for mixed devices" {
+    const test_stdout = @import("../test_stdout.zig");
+    const silencer = try test_stdout.Silencer.init();
+    defer silencer.release();
+
+    var list = DeviceList{};
+    var cpu = DeviceInfo{ .backend = .cpu, .device_id = 0 };
+    const cpu_name = "12 threads";
+    @memcpy(cpu.name[0..cpu_name.len], cpu_name);
+    cpu.name_len = cpu_name.len;
+    list.add(cpu);
+
+    var gpu = DeviceInfo{
+        .backend = .cuda,
+        .device_id = 1,
+        .is_uma = true,
+        .total_mem = 16 * 1024 * 1024 * 1024,
+    };
+    const gpu_name = "NVIDIA GB10";
+    @memcpy(gpu.name[0..gpu_name.len], gpu_name);
+    gpu.name_len = gpu_name.len;
+    const cc = "sm_121";
+    @memcpy(gpu.compute_cap[0..cc.len], cc);
+    gpu.cc_len = cc.len;
+    list.add(gpu);
+
+    printDeviceTable(&list);
+    try std.testing.expectEqual(@as(usize, 2), list.count);
 }
 
 /// Formats and writes a human-readable device table to stdout.

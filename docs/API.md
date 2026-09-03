@@ -2,7 +2,7 @@
 
 **Tutorial:** [Server / HTTP API](tutorial/23-server-http-api.md)
 
-Product version **0.2.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
+Product version **0.3.0** (0.x SemVer: breaking HTTP/CLI changes may land without a
 major bump; see [CHANGELOG](../CHANGELOG.md) and
 [Versioning & Releases](CONTRIBUTING.md#versioning--releases)).
 `system_fingerprint` and `/health` `version` report this string.
@@ -28,13 +28,14 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 
 | Variable | Description |
 |----------|-------------|
-| `AGAVE_API_KEY` | API key for authentication (preferred over `--api-key` to avoid process-list exposure) |
-| `AGAVE_HOST` | Bind address (default: `127.0.0.1`) |
-| `AGAVE_PORT` | Listen port (default: `49453`) |
-| `HF_TOKEN` | Hugging Face token for private model downloads (`agave pull`) |
+| `AGAVE_API_KEY` | API key for authentication (preferred over `--api-key` to avoid process-list exposure). Empty/whitespace is unset and does not override `--api-key`. |
+| `AGAVE_HOST` | Bind address (default: `127.0.0.1`). Empty/whitespace is unset. |
+| `AGAVE_PORT` | Listen port (default: `49453`). Empty/whitespace is unset. |
+| `HF_TOKEN` | Hugging Face token for private model downloads (`agave pull`). Empty/whitespace is unset. |
 | `HF_HOME` | Hugging Face cache directory (default: `~/.cache/huggingface`) |
 | `XDG_CACHE_HOME` | Base cache directory when `HF_HOME` is not set |
-| `AGAVE_VISION_DEBUG` | Enable vision encoder debug output |
+| `AGAVE_VISION_DEBUG` | Dump vision encoder intermediate buffers when set to `1` |
+| `AGAVE_DF2_DEBUG` | Dump DFlash2 speculation-round traces when set to `1` |
 | `NO_COLOR` | Disable colored terminal output (respects [no-color.org](https://no-color.org) convention) |
 
 ---
@@ -44,6 +45,8 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 ### GET /
 
 Serves the built-in web chat UI (single-page HTML). Requires authentication when `--api-key` is set. The UI communicates with the server via `POST /v1/chat` (streaming HTML responses).
+
+The document is gzip-compressed when `Accept-Encoding` includes `gzip` (`Vary: Accept-Encoding`). `ETag` is a content hash (`-gzip` suffix when encoded); a matching `If-None-Match` returns `304`. `Cache-Control` is `private, no-cache` so browsers revalidate instead of keeping a stale UI across binary upgrades. API JSON responses still send `Cache-Control: no-store`.
 
 ### POST /v1/chat/completions
 
@@ -70,7 +73,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | frequency_penalty | float | 0 | Penalize by token frequency in output [-2, 2] |
 | presence_penalty | float | 0 | Penalize tokens that appeared at all [-2, 2] |
 | repetition_penalty | float | 1.0 | Multiplicative penalty for repeated tokens (>1 = penalize) |
-| seed | int | random | PRNG seed for reproducible output |
+| seed | int | random | PRNG seed for reproducible output. When omitted, the server derives a seed from the injectable clock and logs `req=N seed=S (auto; pass seed to reproduce)` so a sampled run can be replayed |
 | stop | string/array | null | Stop sequence(s): `"stop": "\n"` or `"stop": ["\n", "END"]` |
 | xtc_probability | float | 0 | XTC sampling: probability of excluding top tokens [0, 1] |
 | xtc_threshold | float | 0.1 | XTC sampling: probability threshold for exclusion [0, 1] |
@@ -100,7 +103,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
   "object": "chat.completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.2.0",
+  "system_fingerprint": "agave-v0.3.0",
   "choices": [{
     "index": 0,
     "message": {"role": "assistant", "content": "..."},
@@ -126,6 +129,7 @@ curl http://localhost:49453/v1/completions -d '{
 ```
 
 Same sampling parameters as chat completions. Prompt is raw text (no chat template).
+`prompt` must be a string; an array or object returns `400` (`code: invalid_value`).
 
 **Response:**
 ```json
@@ -134,7 +138,7 @@ Same sampling parameters as chat completions. Prompt is raw text (no chat templa
   "object": "text_completion",
   "created": 1700000000,
   "model": "model-name",
-  "system_fingerprint": "agave-v0.2.0",
+  "system_fingerprint": "agave-v0.3.0",
   "choices": [{"text": "Paris.", "index": 0, "finish_reason": "stop"}],
   "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9}
 }
@@ -147,11 +151,13 @@ OpenAI Responses API format.
 ```bash
 curl http://localhost:49453/v1/responses -d '{
   "input": "Explain quantum computing",
-  "max_tokens": 200
+  "max_output_tokens": 200
 }'
 ```
 
-Same sampling parameters as chat completions.
+Same sampling parameters as chat completions. Token limit accepts OpenAI
+`max_output_tokens`, then `max_tokens`, then `max_completion_tokens`. `input`
+must be a string; an array or object returns `400` (`code: invalid_value`).
 
 **Response:**
 ```json
@@ -214,7 +220,7 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
 
 ### POST /v1/chat
 
-Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Returns HTML fragments for the web UI.
+Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode, image on a non-vision model) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`, `vision_not_supported`).
 
 ### POST /v1/chat/regenerate
 
@@ -253,11 +259,28 @@ curl -X POST http://localhost:49453/v1/conversations -d 'action=delete&id=1'
 # {"ok":true,"cleared":false}
 ```
 
+Select and delete require a positive integer `id`. Missing `id` returns `400`
+(`code: missing_required_parameter`); `id=0` or a non-numeric value returns
+`400` (`code: invalid_value`). Unknown `id` returns `404`
+(`code: conversation_not_found`).
+
 Limits: maximum 100 concurrent conversations, 1000 messages per conversation.
-Conversations are process-local (in RAM only): not written to disk, wiped on
-server shutdown, and message text is zeroed on delete/clear. Titles are opaque
-(`Chat {id}`), never derived from user message content. The OpenAI `user`
-request field is ignored (often an email or username).
+Titles are opaque (`Chat {id}`), never derived from user message content. The
+OpenAI `user` request field is ignored (often an email or username). Message
+text is zeroed in RAM on delete/clear.
+
+**Durability:** the web-UI conversation list is written to
+`$XDG_CACHE_HOME/agave/conversations.json` (fallback `~/.cache/agave/conversations.json`;
+override with `--conv-store PATH`, disable with `--no-conv-store`). Saves use a sibling
+`.tmp` file, `fsync`, and rename, so
+a crash cannot truncate the live file. On startup the server loads that file;
+a corrupt file is renamed to `{path}.corrupt` and the server starts empty
+rather than overwriting the only copy. Instance restart RPO is the last
+completed mutation (create/select/delete, user message, assistant reply, clear).
+KV cache and prefix cache are not in this file: after restore, the next request
+re-prefills. Docker Compose mounts `/home/agave/.cache` on a named volume
+(`agave-cache`, or `AGAVE_CACHE_DIR`) so container replace does not drop the
+store. `docker compose down -v` deletes that volume.
 
 ### POST /v1/embeddings
 
@@ -307,12 +330,12 @@ Additional fields beyond OpenAI spec: `backend` (compute backend), `kv_seq_len` 
 
 Liveness probe (no auth required). Returns HTTP 200 for `"ok"` and `"degraded"` states, HTTP 503 only when `"shutting_down"`. Use `/ready` instead if your load balancer should stop routing traffic on degraded state.
 
-Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
+Returns status, uptime, active connections, KV cache utilization, and request counters. Status is `"ok"`, `"degraded"` (KV pressure or high error rate), or `"shutting_down"`. `uptime_s` is elapsed process time from a monotonic clock, not a wall-clock difference, so an NTP step cannot zero or inflate it. When `--api-key` is configured and no valid auth header is provided, returns only `{"status":"...", "reason":"..."}` (no model/version/backend details) to prevent fingerprinting.
 
 The `sleeping` field is `true` when the server has been idle longer than `--sleep-after`; it auto-clears on the next request.
 
 ```json
-{"status":"ok","reason":"none","version":"0.2.0","model":"model-name","backend":"metal",
+{"status":"ok","reason":"none","version":"0.3.0","model":"model-name","backend":"metal",
  "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
  "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
  "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096,
@@ -342,6 +365,8 @@ Shutdown response (503):
 ### GET /metrics
 
 Prometheus-format metrics: request count, latency, throughput, TTFT, token counts.
+
+`agave_up` is liveness (the process answered the scrape). `agave_ready` is 1 when `GET /ready` would return 200 and 0 when the server is degraded (KV pressure or high server-fault error rate) or shutting down.
 
 Requires authentication when `--api-key` or `AGAVE_API_KEY` is set (returns 401 otherwise). No auth when neither is configured.
 
@@ -404,13 +429,15 @@ curl http://localhost:49453/v1/chat/completions -d '{
 
 The `content` field can be either a string (text only) or an array of content parts. Text parts (`"type": "text"`) provide the prompt; image parts (`"type": "image_url"`) provide the image as a base64 data URI. Only one image per request is supported. The image is processed by the vision encoder (SigLIP-2) and injected as visual tokens at the appropriate position in the prompt.
 
+HTTP(S) image URLs are not fetched. A request that includes an `image_url` or Anthropic image `source` that is not a base64 data URI returns `400` (`code: image_decode_failed`). A request that includes an image when the loaded model has no vision encoder returns `400` (`code: vision_not_supported`) rather than dropping the image.
+
 Supported image formats over HTTP: PNG only (JPEG is rejected; convert to PNG first). The CLI `--image` path also accepts PPM P6. Maximum resolution depends on the model (Gemma 4 E2B/E4B: 224×224, Gemma 4 26B: 768×768, Gemma 3: 896×896, Qwen VL: model metadata / native).
 
 ---
 
 ## Tool Calling
 
-OpenAI-compatible function/tool calling. Tools are injected into the system prompt; the model decides when to call them.
+OpenAI-compatible function/tool calling. Tools are injected into the system prompt; the model decides when to call them. Parsed `<tool_call>` payloads whose `name` is not in the request `tools` list or the process-level registry are dropped (the response falls back to plain text if nothing remains). Tool-result messages are capped at 16 KiB and chat-template control tokens in user/tool content are stripped so they cannot close a role turn.
 
 **Request with tools:**
 ```bash
@@ -506,10 +533,10 @@ Content-Type: application/octet-stream
 → 200 OK  {"imported":512}
 ```
 
-Missing or non-positive `n_tokens` returns `400` with `invalid_request_error`
-(same `type` string as other OpenAI-style 400s; was briefly `invalid_request` on
-this route only). Exporting more tokens than the cache currently holds
-(`n_tokens` > current `kv_seq_len`) also returns `400` (`code: invalid_value`).
+Missing `n_tokens` returns `400` (`code: missing_required_parameter`). Present
+but non-positive or non-numeric `n_tokens` returns `400` (`code: invalid_value`).
+Exporting more tokens than the cache currently holds (`n_tokens` > current
+`kv_seq_len`) also returns `400` (`code: invalid_value`).
 
 `/v1/kv_cache` and `/v1/kv_cache/info` require authentication if `--api-key` or
 `AGAVE_API_KEY` is configured. Use case: compute system-prompt KV on one instance,
@@ -590,7 +617,7 @@ All endpoints return JSON error bodies on failure.
 ```
 
 `param` names the offending field or query key when known; otherwise `null`.
-`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `message_too_long`, `image_decode_failed`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
+`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `host_forbidden`, `message_too_long`, `image_decode_failed`, `vision_not_supported`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
 
 **Anthropic format** (`/v1/messages` only):
 ```json
@@ -601,7 +628,7 @@ All endpoints return JSON error bodies on failure.
 |--------|------|
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
 | `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` or `X-API-Key` when `--api-key` is set |
-| `403 Forbidden` | Cross-origin browser request rejected when no `--api-key` is configured (CSRF protection) |
+| `403 Forbidden` | Cross-origin request, or non-loopback `Host`, when no `--api-key` is configured |
 | `404 Not Found` | Unknown endpoint or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |
@@ -637,18 +664,18 @@ All responses include these headers:
 
 | Header | Description |
 |--------|-------------|
-| `X-Request-Id` | Monotonic request counter for log correlation (matches server-side `req=N` logs) |
+| `X-Request-Id` | Server monotonic request counter for log correlation (matches `req=N` in handler and scheduler logs). Inbound `X-Request-Id` is not reused as this value; a sanitized copy is logged as `xid=` so proxy/client IDs still grep. |
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `DENY` |
 | `Referrer-Policy` | `no-referrer` |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
 | `Permissions-Policy` | Disables geolocation, microphone, camera, accelerometer, gyroscope |
 | `Content-Security-Policy` | Restrictive CSP: `default-src 'none'`, allows inline scripts/styles and CDN resources for the web UI |
-| `Cache-Control` | `no-store` |
+| `Cache-Control` | `no-store` on API, SSE, and error responses. `GET /` (chat UI) uses `private, no-cache` plus `ETag` / `Vary: Accept-Encoding`. |
 | `Connection` | `close` (non-streaming) or `keep-alive` (SSE streaming) |
 
 Rate-limited responses (429) and connection-capacity responses (503 with
 `code` `server_overloaded`) include `Retry-After` with seconds until the next
 request is allowed.
 
-When no `--api-key` is configured, cross-origin browser requests (mismatched `Origin` vs `Host`) are rejected with 403 to prevent CSRF against a local `--serve`. Same-origin use of the embedded UI is unchanged. CORS `Access-Control-Allow-Origin` is not emitted; use a reverse proxy if a separate web origin must call the API.
+When no `--api-key` is configured, the server rejects (403) requests whose `Host` is not loopback (`localhost`, `127.0.0.0/8`, `::1`) so a public name that DNS-rebinds to the process cannot drive the API. Cross-origin browser requests (mismatched `Origin` vs `Host`) are also rejected to prevent CSRF against a local `--serve`. Same-origin use of the embedded UI on `http://127.0.0.1` or `http://localhost` is unchanged. CORS `Access-Control-Allow-Origin` is not emitted; use a reverse proxy if a separate web origin must call the API.

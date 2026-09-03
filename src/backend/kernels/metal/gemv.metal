@@ -77,7 +77,7 @@ kernel void gemv_q8_0(
 {
     uint row_base = tgid * q8_0_nr;
     if (row_base >= n) return;
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     uint nr_active = min(q8_0_nr, n - row_base);
 
     float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
@@ -175,7 +175,7 @@ kernel void gemv_q4_0(
 {
     uint row_base = tgid * q4_0_nr;
     if (row_base >= n) return;
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     uint nr_active = min(q4_0_nr, n - row_base);
 
     float sum0 = 0.0f, sum1 = 0.0f, sum2 = 0.0f, sum3 = 0.0f;
@@ -255,7 +255,7 @@ kernel void gemv_q4_1(
     uint tg_size  [[threads_per_threadgroup]])
 {
     if (tgid >= n) return;
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     float sum = 0.0f;
     for (uint b = tid; b < nb; b += tg_size) {
         device const block_q4_1& blk = W[tgid * nb + b];
@@ -822,7 +822,7 @@ kernel void gemv_q5_0(
 
     const uint bpb = 22;
     const uint qk = 32;
-    uint nb = k / qk;
+    uint nb = (k + qk - 1) / qk;  // round up: nb is also the row stride
     float sum = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
@@ -1601,7 +1601,7 @@ kernel void gemv_iq4_nl(
     uint tg_size  [[threads_per_threadgroup]])
 {
     if (tgid >= n) return;
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     float sum = 0.0f;
 
     for (uint b = tid; b < nb; b += tg_size) {
@@ -2114,7 +2114,7 @@ kernel void gemv_hqq(
     uint row = tgid;
     if (row >= n) return;
 
-    uint n_groups = k / group_size;
+    uint n_groups = (k + group_size - 1) / group_size;  // round up: also the row stride
     float acc = 0.0f;
 
     for (uint ki = tid; ki < k; ki += tg_size) {

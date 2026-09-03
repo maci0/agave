@@ -7,6 +7,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const mlx_ops = @import("../ops/mlx.zig");
@@ -192,7 +193,7 @@ pub const Gemma3Model = struct {
                 f.getMetaU32("sliding_window_pattern") orelse
                 if (f.getArchU32(arch, "attention.sliding_window")) |_| default_sliding_window_pattern else 0,
             .rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse default_rms_eps,
-            .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1,
+            .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse arch_mod.gemma_fallback_eos,
             .attn_scale = blk: {
                 // Gemma uses query_pre_attn_scalar (config) or head_dim as the scaling denominator
                 const scalar = f.getMetaU32("query_pre_attn_scalar") orelse head_dim;
@@ -707,16 +708,14 @@ pub const Gemma3Model = struct {
 
     /// Helper: get flat f32 view of KV cache for a layer (assembled from paged blocks).
     /// Returns slices pointing into paged or tiered cache blocks.
-    fn getLayerKvView(self: *Gemma3Model, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *Gemma3Model, layer: usize) kvcache.KvF32View {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            const kv = tc.keysValues(block_id);
+            return .{ .keys = kv.keys, .values = kv.values };
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,
@@ -812,10 +811,9 @@ pub const Gemma3Model = struct {
         // Tiered cache path: partition blocks by tier, run split-attention
         // when KV spans both GPU and CPU memory.
         if (self.tiered_cache) |tc| {
-            const partition = split_attn.partitionBlocks(
+            const partition = split_attn.partitionBlocksLocked(
+                tc,
                 self.seq_table.block_table[li],
-                tc.blocks,
-                tc.block_size,
                 self.kv_seq_len + 1,
             );
             // Extract thread pool from CPU backend for parallel CPU SDPA heads

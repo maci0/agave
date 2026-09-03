@@ -123,8 +123,27 @@ pub const Parser = struct {
                 if (key != 0) return .{ .n = 3, .event = .{ .key_press = .{ .codepoint = key } } };
                 return .{ .n = 3 };
             }
-            // Alt+key
+            // Alt+key (ESC + character). Multi-byte UTF-8 after ESC must be
+            // consumed as one event: ESC+C3 A9 (Alt+é) is 3 bytes, not Alt
+            // of the lead byte leaving a dangling continuation.
             if (buf[1] >= 0x20) {
+                if (buf[1] >= 0x80) {
+                    const seq_len = std.unicode.utf8ByteSequenceLength(buf[1]) catch
+                        return .{ .n = 2, .event = .{ .key_press = .{
+                            .codepoint = buf[1],
+                            .mods = .{ .alt = true },
+                        } } };
+                    if (buf.len < 1 + seq_len) return .{}; // need more data
+                    const cp = std.unicode.utf8Decode(buf[1..][0..seq_len]) catch
+                        return .{ .n = 2, .event = .{ .key_press = .{
+                            .codepoint = buf[1],
+                            .mods = .{ .alt = true },
+                        } } };
+                    return .{ .n = 1 + seq_len, .event = .{ .key_press = .{
+                        .codepoint = cp,
+                        .mods = .{ .alt = true },
+                    } } };
+                }
                 return .{ .n = 2, .event = .{ .key_press = .{
                     .codepoint = buf[1],
                     .mods = .{ .alt = true },
@@ -244,6 +263,32 @@ pub fn displayWidth(s: []const u8) usize {
     return w;
 }
 
+/// Longest prefix of `s` with byte length ≤ `max_bytes` that does not split a
+/// UTF-8 sequence. Invalid trailing bytes that cannot complete a character are
+/// dropped. Used by display truncation and metadata sanitization.
+pub fn utf8BytePrefix(s: []const u8, max_bytes: usize) []const u8 {
+    const cap = @min(s.len, max_bytes);
+    var len: usize = cap;
+    while (len > 0) {
+        const b = s[len - 1];
+        if (b & 0x80 == 0) break; // ASCII, clean cut
+        if (b & 0xC0 == 0xC0) {
+            // Lead byte: keep the sequence only if every byte fits in `cap`.
+            const seq_len = std.unicode.utf8ByteSequenceLength(b) catch 1;
+            const start = len - 1;
+            if (start + seq_len > cap) {
+                len = start;
+            } else {
+                len = start + seq_len;
+            }
+            break;
+        }
+        // Continuation byte (10xxxxxx): walk back to the lead.
+        len -= 1;
+    }
+    return s[0..len];
+}
+
 /// Also expose via the name used by vaxis: gwidth.gwidth(slice, .unicode).
 /// This enables minimal changes at call sites.
 pub const gwidth = struct {
@@ -253,6 +298,16 @@ pub const gwidth = struct {
         return @intCast(displayWidth(s));
     }
 };
+
+/// Fitzpatrick emoji skin-tone modifiers (👋🏻..👋🏿). Combine with the preceding emoji.
+const cp_emoji_skin_tone_lo: u21 = 0x1F3FB;
+const cp_emoji_skin_tone_hi: u21 = 0x1F3FF;
+/// Hangul Jungseong (medial vowels) through Jongseong (finals). Combining in NFD syllables.
+const cp_hangul_jungseong_lo: u21 = 0x1160;
+const cp_hangul_jamo_hi: u21 = 0x11FF;
+/// Hangul Jamo Extended-B (additional jungseong/jongseong). Combining, width 0.
+const cp_hangul_jamo_ext_b_lo: u21 = 0xD7B0;
+const cp_hangul_jamo_ext_b_hi: u21 = 0xD7FF;
 
 /// Width of a single codepoint. CJK fullwidth = 2, combining = 0, most = 1.
 fn codepointWidth(cp: u21) usize {
@@ -265,6 +320,9 @@ fn codepointWidth(cp: u21) usize {
     if (cp >= 0xFE20 and cp <= 0xFE2F) return 0; // Combining Half Marks
     if (cp == 0x200B or cp == 0x200C or cp == 0x200D or cp == 0xFEFF) return 0; // ZW spaces
     if (cp >= 0xE0100 and cp <= 0xE01EF) return 0; // Variation Selectors Supplement
+    if (cp >= cp_emoji_skin_tone_lo and cp <= cp_emoji_skin_tone_hi) return 0;
+    if (cp >= cp_hangul_jungseong_lo and cp <= cp_hangul_jamo_hi) return 0;
+    if (cp >= cp_hangul_jamo_ext_b_lo and cp <= cp_hangul_jamo_ext_b_hi) return 0;
 
     // Fullwidth: CJK Unified, CJK Compatibility, Hangul, fullwidth forms
     if (cp >= 0x1100 and cp <= 0x115F) return 2; // Hangul Jamo
@@ -593,6 +651,19 @@ test "parser: utf8 multi-byte" {
     try std.testing.expectEqual(@as(u21, 0xe9), result.event.?.key_press.codepoint);
 }
 
+test "parser: alt+utf8 consumes the full character" {
+    var parser: Parser = .{};
+    // ESC + é (U+00E9, UTF-8 C3 A9). Must consume all 3 bytes.
+    const result = try parser.parse("\x1b\xc3\xa9", null);
+    try std.testing.expectEqual(@as(usize, 3), result.n);
+    try std.testing.expectEqual(@as(u21, 0xe9), result.event.?.key_press.codepoint);
+    try std.testing.expect(result.event.?.key_press.mods.alt);
+
+    // Incomplete: ESC + lead byte only, wait for continuation.
+    const incomplete = try parser.parse("\x1b\xc3", null);
+    try std.testing.expectEqual(@as(usize, 0), incomplete.n);
+}
+
 test "parser: incomplete escape returns zero" {
     var parser: Parser = .{};
     const result = try parser.parse("\x1b", null);
@@ -667,6 +738,36 @@ test "codepointWidth zero-width joiner" {
 test "codepointWidth variation selectors" {
     try std.testing.expectEqual(@as(usize, 0), codepointWidth(0xFE00));
     try std.testing.expectEqual(@as(usize, 0), codepointWidth(0xFE0F));
+}
+
+test "codepointWidth emoji skin tone modifier is zero" {
+    // U+1F3FB..U+1F3FF must not add columns; 👋🏻 is one emoji, width 2, not 4.
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x1F3FB));
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x1F3FF));
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xf0\x9f\x91\x8b\xf0\x9f\x8f\xbb")); // 👋🏻
+}
+
+test "codepointWidth NFD Hangul jamo combines to syllable width" {
+    // NFC 가 (U+AC00) is width 2; NFD 가 (U+1100 + U+1161) must match, not 2+1.
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xea\xb0\x80")); // 가
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xe1\x84\x80\xe1\x85\xa1")); // 가
+    try std.testing.expectEqual(@as(usize, 0), codepointWidth(0x1161));
+}
+
+test "utf8BytePrefix does not split multi-byte characters" {
+    const cafe = "caf\xc3\xa9"; // café
+    try std.testing.expectEqualStrings("caf", utf8BytePrefix(cafe, 4));
+    try std.testing.expectEqualStrings(cafe, utf8BytePrefix(cafe, 5));
+    try std.testing.expectEqualStrings(cafe, utf8BytePrefix(cafe, 64));
+
+    // 16 CJK chars = 48 bytes; a 47-byte cap must drop the split last char.
+    const cjk = "\xe4\xb8\x96" ** 16;
+    const clipped = utf8BytePrefix(cjk, 47);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(clipped));
+    try std.testing.expectEqual(@as(usize, 45), clipped.len);
+
+    try std.testing.expectEqualStrings("", utf8BytePrefix("\xc3\xa9", 1));
+    try std.testing.expectEqualStrings("", utf8BytePrefix("", 8));
 }
 
 test "parser: backspace" {
@@ -744,6 +845,14 @@ test "fuzz: all term functions" {
             const dw_slice = dw_buf[0..dw_len];
             const w = displayWidth(dw_slice);
             try std.testing.expect(w <= dw_slice.len * 2); // max 2 columns per byte
+
+            // utf8BytePrefix: never longer than cap, never splits a sequence
+            const cap = smith.valueWithHash(u4, 51);
+            const prefix = utf8BytePrefix(dw_slice, cap);
+            try std.testing.expect(prefix.len <= @min(dw_slice.len, cap));
+            if (std.unicode.utf8ValidateSlice(dw_slice)) {
+                try std.testing.expect(std.unicode.utf8ValidateSlice(prefix));
+            }
 
             // ── 4. gwidth.gwidth ──
             const gw = gwidth.gwidth(dw_slice, .unicode);

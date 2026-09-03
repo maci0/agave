@@ -2,6 +2,31 @@
 
 Templates and step-by-step guides for extending the inference engine.
 
+## Development setup
+
+Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). `zig build` exits if the running compiler does not match that pin. GPU backends `dlopen` drivers at runtime; no GPU SDK is needed to compile.
+
+`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`) and `bun install --frozen-lockfile`.
+
+```bash
+zig version          # must print 0.16.0
+zig build            # agave (ReleaseFast) + agave-debug (ReleaseSafe)
+zig build test       # unit tests
+zig build --help     # all steps
+```
+
+Before a PR, run `zig build check` (format check + docs hygiene + unit tests) and `zig build lint-web` (oxlint + tsc). `check` covers the Zig jobs (fmt-check, unit tests, and docs-check). `lint-web` is the blocking TypeScript job. Extra jobs fire on specific surfaces:
+
+| You changed | Also run |
+|---|---|
+| CUDA kernel sources under `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` (then regenerate with `zig build ptx -Dcuda-sm=sm_120` if it drifts) |
+| WASM / `src/wasm_entry.zig` / `web/` | `zig build wasm` |
+| Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
+| Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
+| `src/web/` / `web/` TypeScript | `zig build lint-web` (blocking CI job `lint-web`) |
+
+Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
+
 ## Where New Code Goes
 
 | Kind of change | Put it in |
@@ -13,7 +38,7 @@ Templates and step-by-step guides for extending the inference engine.
 | KV cache policy | `src/kvcache/` |
 | Speculative decoding | `src/spec/` |
 | HTTP API / scheduler / metrics | `src/server/` |
-| Built-in `--serve` chat UI | `src/web/` (TypeScript in `app.ts`; run `scripts/build-web.sh` to refresh `app.js`) |
+| Built-in `--serve` chat UI | `src/web/` (TypeScript in `app.ts`; `scripts/build-web.sh` refreshes `app.js`, needs `bun`) |
 | Browser WASM shell | `web/` (not `src/web/`; TypeScript in `agave.ts` / `shell.ts`, same compile script) |
 | Tokenizer | `src/tokenizer/` |
 | Distributed TP/PP transport | `src/parallel/` |
@@ -68,6 +93,8 @@ pub const YourBackend = struct {
 6. Add to `initAndRun` switch in `src/main.zig`
 7. Add weight loading in your model's `init()` using the `Format` interface (`getTensor`, `layerTensor`, `getMetaU32`, etc.)
 8. Add golden test against reference implementation
+9. Add `ARG ENABLE_YOURMODEL=true` to the Dockerfile and pass `-Denable-yourmodel` in the image `zig build` (defaults are on; omitting this makes the flag undisableable)
+10. Turn it off in the Gemma3-only local image: `docker-compose.yml`, CI `docker-build` (`ENABLE_YOURMODEL=false`), and the README "Minimal build" `--build-arg` list (`scripts/check-docs.py` enforces this)
 
 **Required interface** (see `src/models/model.zig` for the vtable contract):
 ```zig
@@ -297,15 +324,24 @@ The GPU kernel binaries under `src/backend/kernels/` are **generated artifacts c
 | WebGPU | `src/backend/kernels/webgpu/*.wgsl` | none, WGSL is the source of truth | n/a |
 
 Notes:
-- The committed PTX targets `sm_120` (see docs/KERNELS.md); a plain `zig build ptx` defaults to `sm_90` and will not match.
+- The committed PTX targets `sm_120` (see docs/KERNELS.md). `zig build ptx` defaults to `sm_120` so a bare run matches CI (`scripts/check-shader-artifacts.sh --ptx-only`).
 - CI enforces the PTX comparison as a blocking job (`kernel-artifacts`, part of `ci-pass`); regenerate committed PTX whenever kernel sources change.
 - SPIR-V byte-compares are only exact for the glslang release that produced the commit; treat cross-version diffs as suspect.
 
 ## How to Run Tests
 
 ```bash
-# Format check (CI enforces this: run before pushing)
-zig fmt --check src/ tests/ build.zig build.zig.zon
+# Local CI gate (format + docs hygiene + unit tests). Run this before pushing.
+zig build check
+
+# Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
+zig build lint-web
+# equivalent: bun run lint && bun run typecheck
+
+# Format check only (same paths as .github/workflows/ci.yml fmt-check)
+zig build fmt-check
+# Apply formatting
+zig build fmt
 
 # Run all tests (includes leak detection via std.testing.allocator)
 zig build test
@@ -319,23 +355,28 @@ zig build test -Dtest-filter=wht32
 # Run with a specific backend (tests that need GPU use target guards)
 zig build test -Denable-webgpu=false    # skip WebGPU tests
 
-# Golden tests (require model files, manual trigger only)
-./zig-out/bin/agave model.gguf --backend cpu -n 10 -t 0 "What is 2+2?"
-# Compare output against reference (llama.cpp or HuggingFace)
+# Fuzz smoke (CI fuzz-smoke job)
+zig build test --fuzz=1000 --summary all
+
+# Golden tests (need ./zig-out/bin/agave and weights under ./models; skipped if missing)
+zig build
+zig test tests/models/test_gemma3.zig --test-filter CPU
+# Workflow: zig test tests/models/test_*.zig --test-filter CPU|Metal|CUDA|Vulkan|ROCm
 ```
 
 **Test categories:**
 - **Unit tests**: `test` blocks at the bottom of each source file (run via `zig build test`)
 - **Leak detection**: All tests use `std.testing.allocator`, any unfreed allocation fails the test
-- **Golden tests**: Manual comparison against reference implementations (llama.cpp, HuggingFace)
+- **Golden tests**: `zig test tests/models/test_*.zig` (skipped without weights under `./models`)
 - **Model × Backend matrix**: See [TEST_MATRIX.md](TEST_MATRIX.md)
 
 ### End-to-End Test Harness
 
-`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires Python 3.8+ and [`rich`](https://github.com/Textualize/rich) for console output (`uv pip install rich` or `pip install rich`).
+`tests/harness.py` runs end-to-end correctness tests against real model files: golden reference comparison, architecture detection, multi-backend validation, and regression detection. Requires Python 3.11+ and [`rich`](https://github.com/Textualize/rich) `15.0.0`.
 
 ```bash
-python tests/harness.py --models-dir /path/to/models
+uv sync --directory tests
+tests/.venv/bin/python tests/harness.py --model-dir ./models
 ```
 
 ---
@@ -464,8 +505,8 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
 
 ### SemVer (0.x)
 
-- Product version: **0.2.0**, reported by `agave --version`, `/health` `version`,
-  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.2.0`).
+- Product version: **0.3.0**, reported by `agave --version`, `/health` `version`,
+  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.3.0`).
 - On **0.x**, breaking changes are allowed without bumping the major digit, but
   they must be called out in `CHANGELOG.md` under **Breaking** (or **Changed**
   with an explicit compatibility note) before merge.
@@ -474,7 +515,7 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
   features as minor; fixes as patch.
 - Git tag `v1.0` (2026-03-22) is a **milestone name only**. It is not product
   SemVer `1.0.0`. Prefer tags that match the product version (for example
-  `v0.2.0`) for future releases.
+  `v0.3.0`) for future releases.
 
 ### Single sources of truth
 
@@ -510,7 +551,10 @@ maintainers (avoid commit hashes as the only description).
 5. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
    builders).
 6. Run `python3 scripts/check-docs.py` (SemVer string must match across
-   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, and `docs/CONTRIBUTING.md`).
+   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, and `docs/CONTRIBUTING.md`;
+   every `cli_specs` flag must appear in the README CLI Options block; every
+   model `-Denable-*` must appear in README, `Dockerfile`, and the Gemma3-only
+   Compose override).
 
 ### Deprecation
 

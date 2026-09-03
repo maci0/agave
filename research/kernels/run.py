@@ -39,8 +39,8 @@ def cmd_info(args: list[str]):
     for query in args:
         kernels = find_kernels(query)
         if not kernels:
-            print(f"No kernels matching {query!r}")
-            continue
+            print(f"No kernels matching {query!r}", file=sys.stderr)
+            sys.exit(1)
 
         for k in kernels:
             print(f"\n  {k.name}")
@@ -182,11 +182,11 @@ def main():
     elif cmd == "coverage":
         cmd_coverage(rest)
     elif cmd == "optimize":
-        print("The 'optimize' command has been replaced:")
-        print("  Single cycle:  run.py tune <kernel> ...")
-        print("  Grid search:   run.py grid <kernel> ...")
-        print("  Autonomous:    run.py auto <kernel> ...")
-        sys.exit(1)
+        print("The 'optimize' command has been replaced:", file=sys.stderr)
+        print("  Single cycle:  run.py tune <kernel> ...", file=sys.stderr)
+        print("  Grid search:   run.py grid <kernel> ...", file=sys.stderr)
+        print("  Autonomous:    run.py auto <kernel> ...", file=sys.stderr)
+        sys.exit(2)
     else:
         # Maybe it's a kernel name, show info
         from registry import find_kernels
@@ -195,7 +195,7 @@ def main():
         else:
             print(f"Unknown command: {cmd!r}", file=sys.stderr)
             print("Run with --help for usage.", file=sys.stderr)
-            sys.exit(1)
+            sys.exit(2)
 
 
 if __name__ == "__main__":

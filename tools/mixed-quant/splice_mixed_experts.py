@@ -89,7 +89,7 @@ def main():
     print(f"Donor: {args.donor} ({Path(args.donor).stat().st_size / 1e9:.1f} GB)")
 
     if not args.force and not args.dry_run and Path(args.out).exists():
-        print(f"Error: {args.out} exists (use --force to overwrite)")
+        print(f"Error: {args.out} exists (use --force to overwrite)", file=sys.stderr)
         sys.exit(1)
 
     print("\nTensors that would be spliced from donor:")

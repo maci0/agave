@@ -106,7 +106,7 @@ kernel void gemv_tiled_q8_0(
     uint tid      [[thread_index_in_threadgroup]],
     uint tg_size  [[threads_per_threadgroup]])
 {
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     uint row_base = tgid * TILE_N_Q8;
     if (row_base >= n) return;
     uint nr_active = min(TILE_N_Q8, n - row_base);

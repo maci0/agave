@@ -43,6 +43,47 @@ const msl_source = @embedFile("kernels/metal/common.metal") ++
 
 const page_size = std.heap.page_size_min;
 
+/// Enumerate Metal GPUs without creating a compute context.
+/// Used by `devices/discovery.zig` via `backend.listMetalDevices` so ObjC types
+/// stay inside this file.
+pub fn listDevices(out: []backend_mod.MetalDeviceListEntry) usize {
+    if (out.len == 0) return 0;
+    // Foundation missing (very early boot / broken runtime): no devices to list.
+    _ = objc.getClass("NSArray") orelse return 0;
+
+    const devices_arr: ?objc.id = objc.MTLCopyAllDevices();
+    if (devices_arr == null) {
+        const default_dev = objc.MTLCreateSystemDefaultDevice() orelse return 0;
+        fillListedDevice(&out[0], default_dev);
+        return 1;
+    }
+    const arr = devices_arr.?;
+    defer objc.msgSend(void, arr, objc.sel("release"), .{});
+    const count: u64 = objc.msgSend(u64, arr, objc.sel("count"), .{});
+    if (count == 0) return 0;
+    var n: usize = 0;
+    var i: u64 = 0;
+    while (i < count and n < out.len) : (i += 1) {
+        const dev: objc.id = objc.msgSend(objc.id, arr, objc.sel("objectAtIndex:"), .{i});
+        fillListedDevice(&out[n], dev);
+        n += 1;
+    }
+    return n;
+}
+
+fn fillListedDevice(entry: *backend_mod.MetalDeviceListEntry, mtl_dev: objc.id) void {
+    entry.* = .{};
+    const name_ns: objc.id = objc.msgSend(objc.id, mtl_dev, objc.sel("name"), .{});
+    const name_cstr: ?[*:0]const u8 = objc.msgSend(?[*:0]const u8, name_ns, objc.sel("UTF8String"), .{});
+    if (name_cstr) |cstr| {
+        const name_slice = std.mem.sliceTo(cstr, 0);
+        const copy_len = @min(name_slice.len, backend_mod.metal_list_name_buf_size);
+        @memcpy(entry.name[0..copy_len], name_slice[0..copy_len]);
+        entry.name_len = copy_len;
+    }
+    entry.total_mem = objc.msgSend(u64, mtl_dev, objc.sel("recommendedMaxWorkingSetSize"), .{});
+}
+
 // ── Tuning constants ────────────────────────────────────────────
 // These thresholds control when the Metal backend falls back to CPU
 // or caps kernel dispatch sizes. Tuned for Apple Silicon M-series.
@@ -669,6 +710,45 @@ pub const MetalBackend = struct {
         );
     }
 
+    /// Queue `buf` for release after the next GPU sync. If the queue cannot grow,
+    /// log and leak: releasing before sync is a use-after-free on the GPU.
+    fn queueRelease(self: *MetalBackend, buf: objc.id) void {
+        self.pending_release.append(self.allocator, buf) catch |err| {
+            std.log.warn("Metal pending_release append failed: {}", .{err});
+        };
+    }
+
+    /// Move a cached buffer onto pending_release. False means the queue could not
+    /// grow; the caller must leave the cache entry in place so deinit still frees it.
+    fn deferCachedRelease(self: *MetalBackend, buf: objc.id) bool {
+        self.pending_release.append(self.allocator, buf) catch |err| {
+            std.log.warn("Metal pending_release append failed: {}", .{err});
+            return false;
+        };
+        return true;
+    }
+
+    /// Copy `len` bytes for this dispatch only and release the copy after sync.
+    fn oneShotCopy(self: *MetalBackend, ptr: *const anyopaque, len: usize) BufRef {
+        const copy = self.makeBuffer(ptr, len);
+        self.queueRelease(copy);
+        return .{ .buf = copy, .offset = 0 };
+    }
+
+    /// Cache `buf`, or queue it for post-sync release if the map cannot grow.
+    fn cacheOrDefer(
+        self: *MetalBackend,
+        cache: *std.AutoHashMap(usize, BufferInfo),
+        key: usize,
+        buf: objc.id,
+        len: usize,
+    ) void {
+        cache.put(key, .{ .metal_buf = buf, .len = len }) catch |err| {
+            std.log.warn("Metal buffer cache put failed: {}", .{err});
+            self.queueRelease(buf);
+        };
+    }
+
     /// Release all cached buffers, pipeline states, the scratch buffer, and free the cache map.
     /// Call this when the MetalBackend is no longer needed.
     pub fn deinit(self: *MetalBackend) void {
@@ -685,6 +765,8 @@ pub const MetalBackend = struct {
         release(self.scratch_buf);
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
+        for (self.pending_release.items) |buf| release(buf);
+        self.pending_release.deinit(self.allocator);
         var it = self.buf_cache.valueIterator();
         while (it.next()) |info| release(info.metal_buf);
         self.buf_cache.deinit();
@@ -724,13 +806,15 @@ pub const MetalBackend = struct {
         if (self.volatile_weights and needed >= volatile_weight_threshold) {
             if (self.stable_cache.get(aligned_base)) |cached| {
                 if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-                self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+                if (!self.deferCachedRelease(cached.metal_buf)) {
+                    return self.oneShotCopy(ptr, len);
+                }
                 _ = self.stable_cache.remove(aligned_base);
             }
             const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
             const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
             const buf = self.makeBuffer(aligned_ptr, aligned_len);
-            self.stable_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
+            self.cacheOrDefer(&self.stable_cache, aligned_base, buf, aligned_len);
             return .{ .buf = buf, .offset = offset };
         }
 
@@ -738,7 +822,9 @@ pub const MetalBackend = struct {
         if (self.buf_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
             // Buffer too small (e.g. KV cache grew), release old, recreate below
-            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+            if (!self.deferCachedRelease(cached.metal_buf)) {
+                return self.oneShotCopy(ptr, len);
+            }
             _ = self.buf_cache.remove(aligned_base);
         }
 
@@ -746,18 +832,16 @@ pub const MetalBackend = struct {
         const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
         if (self.wrapBuffer(aligned_ptr, aligned_len)) |buf| {
             self.buf_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch |err| {
-                // Cache full, release wrap buffer to avoid leak, fall through to copy path
+                // Wrap buffer was never submitted; safe to release now.
                 std.log.warn("Metal buf_cache put failed: {}", .{err});
                 release(buf);
-                return .{ .buf = self.makeBuffer(ptr, len), .offset = 0 };
+                return self.oneShotCopy(ptr, len);
             };
             return .{ .buf = buf, .offset = offset };
         }
         // Fallback: copy the data into a Metal-managed buffer (extremely rare)
         const copy_buf = self.makeBuffer(ptr, len);
-        self.buf_cache.put(addr, .{ .metal_buf = copy_buf, .len = len }) catch |err| {
-            std.log.warn("Metal buf_cache put failed: {}", .{err});
-        };
+        self.cacheOrDefer(&self.buf_cache, addr, copy_buf, len);
         return .{ .buf = copy_buf, .offset = 0 };
     }
 
@@ -775,7 +859,9 @@ pub const MetalBackend = struct {
         // Check stable_cache first (persists across sync)
         if (self.stable_cache.get(aligned_base)) |cached| {
             if (cached.len >= needed) return .{ .buf = cached.metal_buf, .offset = offset };
-            self.pending_release.append(self.allocator, cached.metal_buf) catch {};
+            if (!self.deferCachedRelease(cached.metal_buf)) {
+                return self.oneShotCopy(ptr, len);
+            }
             _ = self.stable_cache.remove(aligned_base);
         }
         // Also check buf_cache (from getBufRef calls for same data)
@@ -787,7 +873,7 @@ pub const MetalBackend = struct {
         const aligned_len = (needed + page_size - 1) & ~(@as(usize, page_size - 1));
         const aligned_ptr: *const anyopaque = @ptrFromInt(aligned_base);
         const buf = self.makeBuffer(aligned_ptr, aligned_len);
-        self.stable_cache.put(aligned_base, .{ .metal_buf = buf, .len = aligned_len }) catch {};
+        self.cacheOrDefer(&self.stable_cache, aligned_base, buf, aligned_len);
         return .{ .buf = buf, .offset = offset };
     }
 
@@ -796,14 +882,6 @@ pub const MetalBackend = struct {
         objc.msgSend(void, enc, objc.sel("setBuffer:offset:atIndex:"), .{
             ref.buf, @as(objc.NSUInteger, ref.offset), @as(objc.NSUInteger, index),
         });
-    }
-
-    /// Read `count` f32 values back from a Metal buffer's contents pointer.
-    fn readBuffer(buf: objc.id, dst: [*]f32, count: usize) void {
-        const contents: [*]const f32 = @ptrCast(@alignCast(
-            objc.msgSend(*anyopaque, buf, objc.sel("contents"), .{}),
-        ));
-        @memcpy(dst[0..count], contents[0..count]);
     }
 
     /// Release an ObjC object (decrements retain count).
@@ -974,6 +1052,16 @@ pub const MetalBackend = struct {
         const aligned_bytes = std.mem.alignForward(usize, byte_len, page_size);
         std.heap.page_allocator.free(@as([*]align(std.heap.pageSize()) u8, @ptrCast(@alignCast(slice.ptr)))[0..aligned_bytes]);
     }
+
+    /// Unified memory: the GPU reads host pages directly through
+    /// `newBufferWithBytesNoCopy`, so there is no host-to-device transfer to
+    /// accelerate and nothing to page-lock. Returning false is the correct
+    /// answer here, not a missing feature.
+    pub fn hostRegister(_: *MetalBackend, _: [*]const u8, _: usize) bool {
+        return false;
+    }
+
+    pub fn hostUnregister(_: *MetalBackend, _: [*]const u8, _: usize) void {}
 
     // ── Weight size helper ────────────────────────────────────
 

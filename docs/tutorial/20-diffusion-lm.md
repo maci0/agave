@@ -155,7 +155,7 @@ flowchart TD
    e. Stop if canvas contains EOS, or total_generated >= max_tokens
 ```
 
-**Implementation:** [`src/main.zig`](../../src/main.zig) (`generateDiffusion`), [`src/models/diffusion_gemma.zig`](../../src/models/diffusion_gemma.zig) (`forwardCanvas`)
+**Implementation:** [`src/main.zig`](../../src/main.zig) (`generateDiffusion` via `Model.forwardCanvas`), [`src/models/model.zig`](../../src/models/model.zig) (vtable), [`src/models/diffusion_gemma.zig`](../../src/models/diffusion_gemma.zig) (`forwardCanvas`)
 
 ---
 

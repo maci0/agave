@@ -34,10 +34,6 @@ const n_sync_slots: u32 = 32;
 // All dispatched workgroups must be co-resident for this to work.
 // On AMDGCN, this requires occupancy guarantee from the runtime.
 
-/// Read grid dimension from the implicit kernel argument.
-/// On AMDGCN the grid size is passed as an implicit argument, but
-/// for the megakernel we pass n_blocks explicitly as a kernel parameter
-/// instead. This function is not used, we pass grid_dim directly.
 /// Atomic grid sync: all workgroups arrive before any proceed.
 /// Uses a global atomic counter; thread 0 of each workgroup increments,
 /// then spins until all workgroups have arrived. syncthreads() ensures

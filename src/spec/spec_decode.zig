@@ -1,12 +1,16 @@
 //! Speculative decoding orchestrator.
 //!
-//! Verification modes (selected via --spec-mode):
-//! - Standard greedy: single-path draft → sequential argmax verification
-//! - Rejection sampling: stochastic acceptance with temperature (Leviathan et al. 2023)
-//! - DDTree: tree-structured draft → greedy tree walk (Ringel & Romano, 2026)
-//! - Self-speculative: layer-skip self-drafting (no separate draft model)
-//! - N-gram: history-based n-gram prediction (no draft model)
-//! - MTP: multi-token prediction heads
+//! `--spec-mode` values (CLI also accepts `auto`, and `medusa` as an alias of `mtp`):
+//! - Standard: single-path draft, then sequential argmax verification.
+//! - DDTree: tree-structured draft, then a greedy tree walk (Ringel & Romano, 2026).
+//! - Self: layer-skip self-drafting (no separate draft model).
+//! - N-gram / suffix / lookahead: history-based; no draft model.
+//! - MTP: multi-token prediction heads (`waiting for mtp` if the target has none).
+//! - EAGLE / EAGLE-3 / MLP / PFlash / DFlash2: require `--draft-model`.
+//! - DSpark: confidence-scheduled trim on top of any drafter.
+//!
+//! Rejection sampling (Leviathan et al. 2023) is the stochastic accept path
+//! inside standard/ddtree verify, not a separate `--spec-mode`.
 
 const std = @import("std");
 const Model = @import("../models/model.zig").Model;
@@ -14,7 +18,6 @@ const math_ops = @import("../ops/math.zig");
 const ddtree = @import("ddtree.zig");
 const dspark = @import("dspark.zig");
 const ngram_mod = @import("ngram.zig");
-const DFlash2Model = @import("../models/dflash2.zig").DFlash2Model;
 
 pub const max_draft_tokens: usize = 32;
 const log_softmax_eps: f32 = 1e-10;
@@ -200,7 +203,6 @@ pub fn dsparkTrimDraft(state: *SpecState) void {
             0.75; // prior until we have data
         survival *= c;
         // Stop if expected marginal gain < 0.15 (single-request threshold).
-        // In production, the hardware-aware scheduler would compute this dynamically.
         if (survival < 0.15) {
             state.n_draft = @intCast(k + 1);
             return;
@@ -209,7 +211,7 @@ pub fn dsparkTrimDraft(state: *SpecState) void {
 }
 
 /// Generate draft tokens using MTP (Multi-Token Prediction) heads.
-/// Each depth produces one draft token from a lightweight single-layer forward pass.
+/// Each depth produces one draft token from the target's MTP decoder.
 pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     const max_depth = model.getMtpDepth();
     if (max_depth == 0) return 0;
@@ -219,7 +221,6 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
     while (n < effective_k and n < max_draft_tokens) {
         const tok = model.mtpForward(prev_tok, n) catch break;
         state.draft_tokens[n] = tok;
-        std.log.info("MTP draft[{d}]: token {d} (prev={d})", .{ n, tok, prev_tok });
         prev_tok = tok; // Chain: each draft uses the previous draft token
         n += 1;
     }
@@ -240,7 +241,7 @@ pub fn draftMtp(state: *SpecState, model: *Model, last_token: u32) u32 {
 /// unchanged.
 pub fn draftDFlash2(
     state: *SpecState,
-    drafter: *DFlash2Model,
+    drafter: anytype,
     anchor: u32,
     anchor_pos: usize,
     temperature: f32,
@@ -1399,69 +1400,4 @@ test "adaptive K V2 sliding window adjusts current_k" {
         s.recordRound(s.current_k); // 100% accepted > 80% threshold
     }
     try std.testing.expect(s.current_k >= low_k);
-}
-
-/// Batched greedy verification: verify ALL draft tokens in one batched forward pass.
-/// Falls back to sequential verification if the model doesn't support forwardTree.
-/// Uses forwardTree with a causal (linear chain) mask: each position sees all previous.
-pub fn verifyBatched(
-    state: *SpecState,
-    target_model: *Model,
-    draft_model: *Model,
-    last_accepted_token: u32,
-    pre_draft_pos: usize,
-) SpecResult {
-    if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
-
-    // Build the verification token sequence: [last_accepted, draft0, draft1, ..., draftN-1]
-    const n = state.n_draft;
-    var verify_tokens: [max_draft_tokens + 1]u32 = undefined;
-    verify_tokens[0] = last_accepted_token;
-    for (0..n) |i| verify_tokens[i + 1] = state.draft_tokens[i];
-
-    // Position IDs: [pre_draft_pos, pre_draft_pos+1, ...]
-    var positions: [max_draft_tokens + 1]u32 = undefined;
-    for (0..n + 1) |i| positions[i] = @intCast(pre_draft_pos + i);
-
-    // Causal (linear chain) ancestor masks: position i sees positions 0..i
-    var masks: [max_draft_tokens + 1][8]u64 = undefined;
-    for (0..n + 1) |i| {
-        var mask: [8]u64 = .{ 0, 0, 0, 0, 0, 0, 0, 0 };
-        // Set bits 0..i in the mask (causal: see all previous + self)
-        const n_bits = i + 1;
-        const full_words = n_bits / 64;
-        for (0..full_words) |w| mask[w] = ~@as(u64, 0);
-        if (n_bits % 64 != 0) mask[full_words] = (@as(u64, 1) << @intCast(n_bits % 64)) - 1;
-        masks[i] = mask;
-    }
-
-    // Reset KV position for verification
-    target_model.setKvSeqLen(pre_draft_pos);
-
-    // Try batched forward (forwardTree with causal masks)
-    target_model.forwardTree(
-        verify_tokens[0 .. n + 1],
-        positions[0 .. n + 1],
-        &masks,
-        @intCast(n + 1),
-    ) catch {
-        // Fall back to sequential verification
-        return verifySequential(state, target_model, draft_model, last_accepted_token, pre_draft_pos);
-    };
-
-    // Check each position: treeLogits(i) returns argmax at position i
-    // Position 0 predicts draft_tokens[0], position 1 predicts draft_tokens[1], etc.
-    var accepted: u32 = 0;
-    for (0..n) |i| {
-        const target_next = target_model.treeLogits(@intCast(i));
-        if (target_next == state.draft_tokens[i]) {
-            accepted += 1;
-        } else {
-            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, target_next);
-        }
-    }
-
-    // All accepted, bonus token (last position's prediction)
-    const bonus = target_model.treeLogits(@intCast(n));
-    return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
 }

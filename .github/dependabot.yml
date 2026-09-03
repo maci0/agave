@@ -13,3 +13,29 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      oxlint:
+        patterns:
+          - "oxlint*"
+          - "@oxlint/*"
+          - "@rikalabs/oxlint-standards"
+
+  - package-ecosystem: "uv"
+    directory: "/research/kernels"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "pip"
+    directory: "/research/kernels/tilelang"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "pip"
+    directory: "/tests"
+    schedule:
+      interval: "weekly"

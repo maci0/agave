@@ -21,6 +21,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const gguf = @import("format/gguf.zig");
 const quant = @import("ops/quant.zig");
+const backend_mod = @import("backend/backend.zig");
 
 /// Revertible LoRA apply. `dispose` restores tensors this apply changed.
 pub const Handle = struct {
@@ -225,8 +226,7 @@ fn addLoraMatrix(
     if (comptime builtin.os.tag == .macos) {
         const build_options = @import("build_options");
         if (comptime build_options.enable_metal) {
-            const accel = @import("backend/accelerate.zig");
-            accel.sgemmAdd(n, k, rank, scale, b.ptr, a.ptr, merged.ptr);
+            backend_mod.accelerate.sgemmAdd(n, k, rank, scale, b.ptr, a.ptr, merged.ptr);
             return;
         }
     }

@@ -16,6 +16,7 @@
 const std = @import("std");
 const c = std.c;
 const posix = std.posix;
+const sim_clock = @import("../sim_clock.zig");
 
 const discovery_port: u16 = 49460;
 const beacon_interval_ms: u32 = 500;
@@ -23,6 +24,23 @@ const discovery_timeout_ms: u32 = 30000;
 const beacon_prefix = "AGAVE-DISCOVER:";
 const join_prefix = "AGAVE-JOIN:";
 const max_msg_len: usize = 64;
+const usec_per_ms: u32 = 1000;
+
+/// Monotonic milliseconds for the discovery deadline. Counting assumed
+/// `beacon_interval_ms` after a 1s `SO_RCVTIMEO` made a 30s timeout take ~60s.
+/// Routes through sim_clock so a clock override can expire the 30s window
+/// without waiting on wall-clock time (and without hanging a replay).
+fn monoMilli() u64 {
+    return @intCast(@max(@as(i64, 0), sim_clock.monoMilli()));
+}
+
+/// Split a millisecond interval into `timeval` seconds + microseconds.
+fn msToTimeval(interval_ms: u32) posix.system.timeval {
+    return .{
+        .sec = @intCast(interval_ms / std.time.ms_per_s),
+        .usec = @intCast((interval_ms % std.time.ms_per_s) * usec_per_ms),
+    };
+}
 
 /// A peer node discovered via UDP broadcast, identified by IPv4 address and rank.
 pub const DiscoveredPeer = struct {
@@ -35,6 +53,13 @@ pub const DiscoveredPeer = struct {
 /// Returns null on timeout or failure.
 pub fn discoverPeer(rank: u32, world_size: u32, port: u16) ?[4]u8 {
     if (world_size < 2) return null;
+    // Under a clock override there is no network model: expire the deadline
+    // in virtual time and return immediately so SO_RCVTIMEO cannot block a
+    // simulated run for 30s of wall-clock time.
+    if (sim_clock.isOverridden()) {
+        sim_clock.advanceMs(discovery_timeout_ms);
+        return null;
+    }
 
     const sock = c.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
     if (sock < 0) return null;
@@ -60,8 +85,9 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
     };
     if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
 
-    // Set receive timeout
-    const tv = posix.system.timeval{ .sec = 1, .usec = 0 };
+    // Recv timeout matches the beacon interval so each empty poll waits ~500ms,
+    // not 1s (which previously doubled the advertised 30s discovery window).
+    const tv = msToTimeval(beacon_interval_ms);
     _ = c.setsockopt(sock, posix.SOL.SOCKET, posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
 
     // Broadcast address
@@ -76,8 +102,8 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
 
     std.log.info("discovery: broadcasting on UDP port {d}...", .{discovery_port});
 
-    var elapsed: u32 = 0;
-    while (elapsed < discovery_timeout_ms) {
+    const start_ms = monoMilli();
+    while (monoMilli() - start_ms < discovery_timeout_ms) {
         // Broadcast beacon
         _ = c.sendto(sock, beacon_msg.ptr, beacon_msg.len, 0, @ptrCast(&bcast_addr), @sizeOf(@TypeOf(bcast_addr)));
 
@@ -94,8 +120,6 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
                 return peer_ip;
             }
         }
-
-        elapsed += beacon_interval_ms;
     }
 
     std.log.warn("discovery: timeout after {d}ms, no peers found", .{discovery_timeout_ms});
@@ -122,10 +146,29 @@ test "discovery, protocol constants" {
     try @import("std").testing.expectEqual(@as(usize, 64), max_msg_len);
 }
 
+test "msToTimeval splits seconds and microseconds" {
+    const half = msToTimeval(beacon_interval_ms);
+    try std.testing.expectEqual(@as(@TypeOf(half.sec), 0), half.sec);
+    try std.testing.expectEqual(@as(@TypeOf(half.usec), 500_000), half.usec);
+    const thirty = msToTimeval(discovery_timeout_ms);
+    try std.testing.expectEqual(@as(@TypeOf(thirty.sec), 30), thirty.sec);
+    try std.testing.expectEqual(@as(@TypeOf(thirty.usec), 0), thirty.usec);
+}
+
 test "discovery, world_size < 2 returns null" {
     // Single-node (world_size=1) should return null immediately.
     const result = discoverPeer(0, 1, 8080);
     try @import("std").testing.expectEqual(@as(?[4]u8, null), result);
+}
+
+test "discovery times out in virtual time under sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+    // world_size >= 2 would otherwise bind UDP and block on SO_RCVTIMEO.
+    const result = discoverPeer(0, 2, 8080);
+    try std.testing.expectEqual(@as(?[4]u8, null), result);
+    try std.testing.expectEqual(@as(i64, 1_000 + discovery_timeout_ms), sim_clock.milliNow());
+    try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 2, 8080));
 }
 
 test "discovery, beacon message format" {
@@ -231,18 +274,15 @@ test "fuzz: all discovery functions" {
             try std.testing.expectEqual(rank_val, peer.rank);
 
             // ── discoverPeer (pub fn) ──
+            // Clock override expires the deadline in virtual time so fuzz
+            // inputs with world_size >= 2 cannot block on SO_RCVTIMEO.
+            defer sim_clock.setOverrideMs(null);
+            sim_clock.setOverrideMs(1_000);
             const fuzz_rank = smith.valueWithHash(u32, 5);
             const fuzz_world = smith.valueWithHash(u32, 6);
             const fuzz_port = smith.valueWithHash(u16, 7);
             const result = discoverPeer(fuzz_rank, fuzz_world, fuzz_port);
-            // world_size < 2 must always return null
-            if (fuzz_world < 2) {
-                try std.testing.expectEqual(@as(?[4]u8, null), result);
-            }
-            // If non-null, addr must be 4 bytes (type guarantees this)
-            if (result) |ip| {
-                try std.testing.expect(ip.len == 4);
-            }
+            try std.testing.expectEqual(@as(?[4]u8, null), result);
         }
     }.f, .{});
 }
@@ -256,8 +296,7 @@ fn discoverAsWorker(sock: c_int, rank: u32, port: u16) ?[4]u8 {
     };
     if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
 
-    // Set receive timeout
-    const tv = posix.system.timeval{ .sec = @intCast(discovery_timeout_ms / 1000), .usec = 0 };
+    const tv = msToTimeval(discovery_timeout_ms);
     _ = c.setsockopt(sock, posix.SOL.SOCKET, posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
 
     std.log.info("discovery: listening for rank 0 beacon on UDP port {d}...", .{discovery_port + 1});
