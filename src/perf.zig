@@ -10,6 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const is_freestanding = builtin.os.tag == .freestanding;
 const Io = if (is_freestanding) void else std.Io;
+const sim_clock = @import("sim_clock.zig");
 
 const us_per_ms: f64 = 1000.0;
 const percent_scale: f64 = 100.0;
@@ -17,14 +18,12 @@ const percent_scale: f64 = 100.0;
 /// Stderr file handle via std.Io.File (Zig 0.16 idiom).
 const stderr_file = if (is_freestanding) {} else Io.File.stderr();
 
-/// Nanosecond timestamp via CLOCK_MONOTONIC.
+/// Nanosecond timestamp via sim_clock's MONOTONIC timeline.
 /// Interval timing must not use REALTIME (NTP/step adjustments corrupt deltas).
-/// Raw posix syscall avoids Io virtual dispatch on the profiling hot path.
+/// Under a clock override, profile deltas follow virtual time so a replay
+/// does not inherit host execution speed into --profile output.
 fn nanoTimestamp() i128 {
-    if (comptime is_freestanding) return 0;
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+    return sim_clock.monoNano();
 }
 
 /// Operation categories for profiling.
@@ -171,6 +170,22 @@ test "PerfCounters multiple ops accumulate independently" {
     try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.sdpa)]);
     // Other ops should be zero
     try std.testing.expectEqual(@as(u64, 0), pc.counts[@intFromEnum(Op.gemv_qkv)]);
+}
+
+test "PerfCounters follows sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000_000);
+    var pc = PerfCounters{ .enabled = true };
+    const t0 = pc.start();
+    try std.testing.expectEqual(@as(i128, 1_000_000) * 1_000_000, t0);
+    pc.end(.rope, t0);
+    // Frozen virtual clock: zero elapsed, still counted.
+    try std.testing.expectEqual(@as(u64, 1), pc.counts[@intFromEnum(Op.rope)]);
+    try std.testing.expectEqual(@as(u64, 0), pc.times_us[@intFromEnum(Op.rope)]);
+    const t1 = pc.start();
+    sim_clock.advanceMs(3);
+    pc.end(.sdpa, t1);
+    try std.testing.expectEqual(@as(u64, 3_000), pc.times_us[@intFromEnum(Op.sdpa)]);
 }
 
 test "PerfCounters Op enum has expected fields" {

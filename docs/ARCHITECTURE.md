@@ -34,8 +34,10 @@ agave/
 │   ├── cli.zig            # Self-contained CLI argument parser (zero deps)
 │   ├── arch.zig           # Architecture enum, detection, chat template mapping
 │   ├── pull.zig           # Model download from HuggingFace Hub (agave pull <org/repo>)
+│   ├── durable_file.zig   # Atomic tmp+fsync+rename for operator-facing artifacts
 │   ├── server/
 │   │   ├── server.zig     # HTTP server (OpenAI + Anthropic API + chat UI)
+│   │   ├── conv_store.zig # Web-UI conversation JSON persist/restore
 │   │   ├── scheduler.zig  # Continuous batching request scheduler
 │   │   ├── tools.zig      # Process-level tool registry (register / dispose)
 │   │   ├── metrics.zig    # Prometheus metrics collector
@@ -51,11 +53,11 @@ agave/
 │   ├── eval.zig           # Token NLL scoring library (scoreCase; no --eval CLI yet)
 │   ├── expert_profile.zig # MoE expert activation profiler (library; no CLI yet)
 │   ├── expert_cache.zig   # SSD expert LRU streaming cache (--ssd-streaming CLI)
-│   ├── ngram_cache.zig    # PLE ngram shard LRU for qwen4_exp (--ssd-streaming)
+│   ├── ngram_cache.zig    # PLE ngram shard LRU (qwen4exp mmap + qwen4_exp --ssd-streaming)
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
-│   ├── thread_pool.zig    # Futex-based work-stealing thread pool
-│   ├── sim_clock.zig      # Injectable wall clock (deterministic tests / future sim harness)
+│   ├── thread_pool.zig    # Futex-based work-stealing thread pool (one worker per physical core, pinned)
+│   ├── sim_clock.zig      # Injectable wall/monotonic clock (deterministic tests / future sim harness)
 │   ├── perf.zig           # Performance timer utilities
 │   ├── readline.zig       # Line editor for interactive REPL
 │   ├── term.zig           # Terminal I/O: key parser, ANSI sequences, display width (pure Zig, no libc)
@@ -82,6 +84,8 @@ agave/
 │   │   ├── nemotron_nano.zig # Nemotron Nano (SSM + MoE + attention, NVFP4)
 │   │   ├── deepseek4.zig    # DeepSeek V4 Flash (HC, MLA, CSA/HCA, LID; Vulkan/WebGPU GEMV shaders; CpuBackend for rms/SDPA/HC)
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
+│   │   ├── dflash2.zig      # DFlash2 block-diffusion drafter (binds target embeddings/LM head)
+│   │   ├── ds4_mtp.zig      # DeepSeek V4 MTP heads loaded from a separate safetensors file
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
@@ -105,6 +109,8 @@ agave/
 │   │   ├── cuda.zig       # CUDA: PTX kernels from Zig, deferred execution, Driver API
 │   │   ├── rocm.zig       # ROCm: HIP Runtime API, HSACO kernels, deferred execution
 │   │   ├── webgpu.zig     # WebGPU: WGSL shaders, browser + native (wgpu/Dawn)
+│   │   ├── weight_budget.zig # Byte-budgeted weight cache (--vram-budget; default MRU eviction)
+│   │   ├── buffer_pool.zig # Exact-size free list recycling device buffers across evictions
 │   │   ├── megakernel.zig # Weight offset computation for fused FFN megakernels
 │   │   ├── mega_compose.zig # Composable megakernel generator (ModelDesc → MSL at runtime)
 │   │   ├── accelerate.zig # Apple Accelerate.framework BLAS bindings (AMX-accelerated SGEMM)
@@ -126,11 +132,13 @@ agave/
 │   │   ├── ddtree.zig     # DDTree tree construction (best-first heap, compile, walk)
 │   │   ├── ngram.zig      # N-gram / suffix / lookahead (history-based, no draft model)
 │   │   ├── pflash.zig     # PFlash speculative prefill (block scoring, alpha threshold)
-│   │   └── dspark.zig     # DSpark confidence-scheduled verification (trim + SPS)
+│   │   ├── dspark.zig     # DSpark confidence-scheduled verification (trim + SPS)
+│   │   └── dflash2.zig    # DFlash2 pure algorithm kernels (block draft + path selector)
 │   ├── devices/
-│   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; not peer discovery)
+│   │   └── discovery.zig  # Local GPU/CPU enumeration (--list-devices, --device N; Metal via backend.listMetalDevices)
 │   ├── kvcache/
-│   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree
+│   │   ├── view.zig       # Leaf CacheBlock + PagedKvView (SDPA kernels import this, not manager)
+│   │   ├── manager.zig    # KV cache alloc/free, PagedKvCache, RadixTree (re-exports view types)
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
@@ -139,7 +147,7 @@ agave/
 │   │   ├── app.ts         # Chat UI TypeScript (SSE streaming, conversation management)
 │   │   ├── app.js         # Generated classic script; embedded by server.zig
 │   │   ├── body.html      # Chat UI HTML body
-│   │   ├── head.html      # Chat UI HTML head (meta, styles)
+│   │   ├── head.html      # Chat UI HTML head (meta, deferred markdown CDN)
 │   │   └── style.css      # Chat UI stylesheet
 │   └── tokenizer/
 │       ├── tokenizer.zig  # Tokenizer interface
@@ -154,6 +162,8 @@ agave/
 
 ## Design Decisions
 
+**Status**: accepted (current). This table is the decision log; there is no separate `docs/adr/` set. Supersede a row in place and point at the replacement.
+
 Irreversible or high-cost choices. Rationale lives here so they are not re-litigated casually.
 
 | Decision | Choice | Why | Revisit when |
@@ -167,7 +177,7 @@ Irreversible or high-cost choices. Rationale lives here so they are not re-litig
 | HTTP surface | OpenAI + Anthropic shapes on one server | Clients already speak those protocols; one binary | A third incompatible protocol becomes a first-class requirement |
 | Scheduling | Continuous batching scheduler; admission serialized to one request at a time until per-request paged KV is wired | The model layer exposes a single shared KV sequence (scalar `kv_seq_len`, one `seq_table` row); interleaving requests corrupts attention state silently. Serialization matches vLLM-class *interfaces* while keeping output correct | `Request.block_table` is plumbed through the model vtable as a per-request sequence row (raise `scheduler.max_running_requests_single_sequence`) |
 | Spec CLI aliases | Normalize at parse (`medusa` → `mtp`); domain enum has no synonyms | Call sites must not re-branch on marketing names | A “alias” gains a divergent inference path |
-| Wall clock | `sim_clock` for server/scheduler/rate-limiter/tiered KV; MONOTONIC for interval timers (`perf`, `pull`, benches) | One injectable clock for deterministic timeout/refill tests; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks |
+| Wall clock | `sim_clock` for interval math (`monoMilli`/`monoNano`: scheduler, rate-limiter, tiered KV, peer-discovery, power-throttle, `--profile`, `agave pull` progress/retry, CLI benches) and REALTIME fields (`milliNow`/`nanoNow`: logs, seeds) | One injectable clock so a seed replay does not inherit host time; MONOTONIC avoids NTP skew in elapsed timing | Multi-threaded tests need per-thread virtual clocks; `micro_bench` keeps a raw MONOTONIC timer to measure real hardware |
 | Device discovery `BackendKind` | `cpu/metal/cuda/rocm/vulkan` only (no `webgpu`) | `--list-devices` / TP-PP target discrete GPUs; WebGPU is a single logical adapter (browser or wgpu), not multi-device topology | WebGPU multi-adapter or peer groups become real |
 | Parallel transport topology | Fixed 2-rank pair (`rank 0 ↔ 1`); CLI rejects `--tp > 2` and `--pp > 2` | SHM region names, `tcp_fds[0]`, and `sendBuf` peer encoding are pair-shaped; multi-rank ring/tree not built | Ring/tree all-reduce and multi-stage PP ship |
 | Server sleep mode | Flag in `/health` only; weights stay resident | Orchestrators need an idle signal without cold-start latency | Memory pressure requires actual weight unload / sleep-to-disk |
@@ -288,7 +298,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/messages` | POST | Anthropic Messages API format |
 | `/v1/models` | GET | List available models |
 | `/v1/chat/regenerate` | POST | Regenerate last assistant response |
-| `/v1/conversations` | GET/POST | List or create conversations |
+| `/v1/conversations` | GET/POST | List or create conversations (persisted to `--conv-store`) |
 | `/v1/tokenize` | POST | Count tokens in text |
 | `/v1/detokenize` | POST | Detokenize token IDs to text |
 | `/v1/chat` | POST | Built-in chat web UI endpoint |
@@ -297,7 +307,7 @@ HTTP server activated via `--serve` (default port 49453, override with `--port`)
 | `/v1/kv_cache/info` | GET | KV cache metadata |
 | `/health` | GET | Health check |
 | `/ready` | GET | Readiness check (model loaded) |
-| `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth) |
+| `/metrics` | GET | Prometheus metrics (tokens/s, latency, queue depth, `agave_ready`) |
 
 **Sampling parameters** (accepted in chat/completions request body):
 - `temperature` -- sampling temperature (0 = greedy)
@@ -354,20 +364,21 @@ Activated via `--grammar <file.gbnf>` or `--json-schema <schema>` CLI flags, or 
 
 ### WASM (`src/wasm_entry.zig`)
 
-Browser inference entry point for running Agave in WebAssembly environments. Provides GGUF parsing from an in-memory buffer and connects to the WebGPU backend for GPU-accelerated inference in the browser.
+Browser inference entry point for running Agave in WebAssembly environments. Provides GGUF parsing from an in-memory buffer. CPU backend only (no GPU in wasm32 freestanding). The JS glue (`web/agave.ts`) exposes `AgaveEngine` and typed `AgaveError` codes; `agave_free` owns the model buffer passed to `agave_init`. Full forward-pass inference is blocked by a Zig 0.16 + LLVM 21 wasm32 codegen bug; init, parse, and tokenize work.
 
 ### Speculative Decoding (`src/spec/`)
 
-Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`):
+Agave supports 15 speculative decoding modes via `--spec-mode` (including `auto` and the `medusa` alias for `mtp`):
 
 | Module | Description |
 |--------|-------------|
-| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting, DSpark confidence trim |
+| `spec_decode.zig` | Orchestrator: all draft/verify modes, adaptive K, FR-Spec masking, EAGLE/MLP/Lookahead drafting, DSpark confidence trim, DFlash2 ingest |
 | `caps.zig` | Per-mode provider requirements; missing provider is a named wait, not a crash in `forward_tree` |
 | `ddtree.zig` | DDTree tree construction: best-first heap, compile, acceptance walk |
 | `ngram.zig` | N-gram, SharedNgramPool (server cross-request), SuffixState (10k cache), LookaheadState (Jacobi) |
 | `pflash.zig` | PFlash speculative prefill: block scoring, alpha-threshold selection, compressed prefill |
 | `dspark.zig` | DSpark: confidence-scheduled verification, hardware-aware prefix scheduler, Markov/RNN sequential head, SPS profiling |
+| `dflash2.zig` | DFlash2 block-diffusion draft kernels (parallel block + candidate path selector); model wrapper is `src/models/dflash2.zig` |
 
 | Backend Kernel | Description |
 |----------------|-------------|
@@ -391,6 +402,7 @@ Agave supports 14 speculative decoding modes via `--spec-mode` (including `auto`
 | `mlp` | Hidden-state conditioned draft (frozen) | Yes (`waiting for draft`) |
 | `pflash` | Block-scored speculative prefill | Yes (`waiting for draft`) |
 | `dspark` | Confidence-scheduled verification (any drafter) | Optional |
+| `dflash2` | Block-diffusion parallel drafter (`dflash` alias) | Yes (`waiting for draft`) |
 
 EAGLE uses `get_hidden_state` + `eagle_forward` vtable methods on the target model to extract last residual hidden state and feed it to the draft model. FR-Spec (`--spec-token-map`) restricts draft logits to a frequency-ranked token subset.
 
@@ -466,7 +478,7 @@ DDTree speculative decode -> output tokens
 |--------|-------------|
 | `transport.zig` | Transport layer: TCP (cross-node), POSIX shm (same-node zero-copy), NCCL (GPU-optimized RoCE RDMA) |
 
-**Modes**: Tensor Parallelism (`--tp N`), Pipeline Parallelism (`--pp N`), Hybrid TP+PP, Disaggregated Prefill/Decode (`--disagg`). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")`, no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device. See [PARALLELISM.md](PARALLELISM.md).
+**Modes**: Tensor Parallelism (`--tp 2`) and Pipeline Parallelism (`--pp 2`) on a 2-rank pair; Disaggregated Prefill/Decode (`--disagg`). Hybrid TP+PP (`--tp 2 --pp 2`) does not launch: TP transport is skipped when `pp_degree > 1` (see [PARALLELISM.md](PARALLELISM.md)). Transport auto-selects shm for localhost, tcp otherwise; NCCL via `--transport nccl`. NCCL loaded at runtime via `dlopen("libnccl.so.2")`, no compile-time dependencies. Device pointer allReduceAdd passes GPU activation cache pointers directly to NCCL when data is dirty on device.
 
 ### Quantization Types
 
@@ -533,9 +545,9 @@ DDTree speculative decode -> output tokens
 - **Mixed path**: GPU SDPA with softmax statistics runs concurrently with CPU SDPA on the thread pool, then partial outputs are merged via [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) online softmax correction (exact, no approximation).
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
 
-**Paged KV cache and paged SDPA** (`src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
+**Paged KV cache and paged SDPA** (`src/kvcache/view.zig`, `src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
 - KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.
-- `PagedKvView` provides block table indirection, translating logical token positions to physical block locations.
+- `PagedKvView` (in `view.zig`) provides block table indirection, translating logical token positions to physical block locations. Kernels and `backend.zig` import the leaf types; `manager.zig` re-exports them.
 - `sdpaPagedHeads` computes attention over paged blocks with thread-pool parallelism across heads.
 - Every backend implements `sdpaPaged()` natively. GPU paths gather scattered host blocks into a flat staging buffer, then run a GPU paged SDPA kernel (no silent CPU compute fallback). Staging gather is host-side by design: the paged pool lives in CPU-visible memory for prefix sharing and tier demotion.
 

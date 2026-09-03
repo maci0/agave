@@ -48,13 +48,6 @@ const CUdeviceptr = u64;
 
 const CUDA_SUCCESS: CUresult = 0;
 
-/// Monotonic milliseconds (CLOCK_MONOTONIC, interval timing only).
-fn perfMonoMs() u64 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
-}
-
 // ── Tuning constants ─────────────────────────────────────────────
 
 /// Block size for elementwise and reduction kernels.
@@ -76,7 +69,6 @@ const PendingSync = struct {
 /// CudaBackend.restoreMmapHints). 48 safetensors shards + headroom.
 const max_shard_ranges: usize = 64;
 const ShardRange = struct { base: usize = 0, size: usize = 0 };
-
 
 /// Shared memory for block reductions (8 warps × 4 bytes).
 const reduction_smem: u32 = 32;
@@ -159,6 +151,10 @@ const FnMemHostGetDevicePointer = *const fn (*CUdeviceptr, *const anyopaque, c_u
 const FnMemHostUnregister = *const fn (*const anyopaque) callconv(.c) CUresult;
 /// CU_MEMHOSTREGISTER_DEVICEMAP: maps host memory into device address space.
 const CU_MEMHOSTREGISTER_DEVICEMAP: c_uint = 0x02;
+/// CU_MEMHOSTREGISTER_PORTABLE: the page lock is visible to every CUDA context.
+/// hostRegister only needs a DMA-capable source, not a device mapping, so it
+/// registers PORTABLE and leaves DEVICEMAP to the UMA zero-copy path.
+const CU_MEMHOSTREGISTER_PORTABLE: c_uint = 0x01;
 const FnLaunchKernel = *const fn (
     CUfunction,
     c_uint,
@@ -202,7 +198,6 @@ pub const CudaBackend = struct {
     launch_total_ms: u64 = 0,
     /// TEMP PERF: drain sampling.
     drain_count: u64 = 0,
-
 
     /// Dedicated compute stream. All kernel launches and copy-backs go here
     /// (never the legacy null stream): blocking copies on the null stream
@@ -357,6 +352,18 @@ pub const CudaBackend = struct {
     batch_sync_count: u32 = 0,
     batch_syncs: [max_batch_syncs]PendingSync = undefined,
 
+    /// Byte cap on `buf_cache` plus the scratch its eviction list is written
+    /// into. Null until `setWeightBudget`; unbounded until then. Entries in
+    /// `resident_map` are deliberately permanent and are never budgeted.
+    weight_budget: ?backend_mod.WeightBudget = null,
+    /// Freed weight buffers, kept for the next admit of the same size. Only
+    /// live alongside a budget: without eviction nothing is ever released.
+    /// Holds device allocations only; UMA zero-copy entries own a host
+    /// registration instead and are never pooled.
+    buffer_pool: ?backend_mod.BufferPool(CUdeviceptr) = null,
+    evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
+    budget_allocator: std.mem.Allocator = undefined,
+
     /// Registered UMA host memory regions (mmap'd weight files).
     /// Disabled (max = 0): cuMemHostRegister pins every page of the mapping,
     /// which faulted the 155GB DS4 checkpoint at ~19MB/s on a cold load
@@ -434,6 +441,7 @@ pub const CudaBackend = struct {
     pub fn init(allocator: std.mem.Allocator, device_id: u32) !CudaBackend {
         var self = CudaBackend{};
         self.allocator = allocator;
+        self.budget_allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
@@ -444,12 +452,7 @@ pub const CudaBackend = struct {
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
         errdefer self.kv_dev_cache.deinit();
 
-        // Dynamically load libcuda (try standard name, then platform-specific paths)
-        self.lib = std.DynLib.open(cuda_lib_name) catch
-            std.DynLib.open("/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ cuda_lib_name) catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ cuda_lib_name) catch
-            return error.CudaNotAvailable;
+        self.lib = @import("../dynlib.zig").open(cuda_lib_name) orelse return error.CudaNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -632,11 +635,11 @@ pub const CudaBackend = struct {
 
         // Detect GPUDirect Storage (cuFile) for NVMe→VRAM direct transfer
         if (!self.is_uma) {
-            if (std.DynLib.open("libcufile.so")) |lib| {
+            if (@import("../dynlib.zig").open("libcufile.so")) |lib| {
                 self.cufile_lib = lib;
                 self.has_gds = true;
                 std.log.info("GPUDirect Storage available (libcufile.so)", .{});
-            } else |_| {}
+            }
         }
 
         return self;
@@ -664,6 +667,12 @@ pub const CudaBackend = struct {
             }
         }
         self.buf_cache.deinit();
+        if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
+        if (self.buffer_pool) |*bp| {
+            var drain_buf: [backend_mod.buffer_pool_capacity]CUdeviceptr = undefined;
+            for (bp.drain(&drain_buf)) |d| _ = self.cuMemFree(d);
+            bp.deinit(self.budget_allocator);
+        }
 
         // Free the permanent resident weight chunks (DS4 EP-local experts).
         for (self.resident_chunks[0..self.resident_chunk_count]) |dptr| _ = self.cuMemFree(dptr);
@@ -747,10 +756,9 @@ pub const CudaBackend = struct {
     /// restoreMmapHints can reset the madvise advice after the resident copy.
     pub fn registerHostRegion(self: *CudaBackend, base: [*]const u8, size: usize) void {
         if (!self.is_uma) return;
-        const addr = @intFromPtr(base);
-        const page = std.heap.page_size_min;
-        const aligned_base = addr & ~@as(usize, page - 1);
-        const aligned_size = ((addr + size + page - 1) & ~@as(usize, page - 1)) - aligned_base;
+        const r = backend_mod.pageAlignRange(base, size);
+        const aligned_base = r.base;
+        const aligned_size = r.size;
         if (self.shard_range_count < max_shard_ranges) {
             self.shard_ranges[self.shard_range_count] = .{ .base = aligned_base, .size = aligned_size };
             self.shard_range_count += 1;
@@ -846,12 +854,15 @@ pub const CudaBackend = struct {
         }
         const dptr = self.resident_chunks[self.resident_chunk_count - 1] + self.resident_buf_used;
         if (!cuCheck(self.cuMemcpyHtoD(dptr, @ptrCast(ptr), len), "cuMemcpyHtoD(resident)")) return;
+        self.resident_map.put(addr, dptr) catch |err| {
+            std.log.warn("CUDA resident_map put failed (size={d}): {}", .{ len, err });
+            return;
+        };
         const page_size: usize = std.heap.page_size_min;
         const aligned = addr & ~@as(usize, page_size - 1);
         const warm_len = (addr - aligned) + len;
         std.posix.madvise(@ptrFromInt(aligned), warm_len, std.posix.system.MADV.DONTNEED) catch {};
         self.resident_buf_used += len;
-        self.resident_map.put(addr, dptr) catch {};
     }
 
     /// madvise WILLNEED on an aligned range (prefault into the page cache).
@@ -871,14 +882,18 @@ pub const CudaBackend = struct {
         // Resident weights (DS4 EP-local experts): device copy is permanent.
         if (self.resident_map.get(addr)) |dptr| return dptr;
         if (self.buf_cache.get(addr)) |cached| {
-            if (cached.size >= size) return cached.dptr;
-            // Size mismatch, evict old entry
-            if (cached.is_registered) {
-                if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
-            } else {
-                _ = self.cuMemFree(cached.dptr);
+            if (cached.size >= size) {
+                if (self.weight_budget) |*wb| _ = wb.touch(addr);
+                return cached.dptr;
             }
-            _ = self.buf_cache.remove(addr);
+            self.dropWeight(addr, cached); // size mismatch
+        }
+
+        if (self.weight_budget) |*wb| {
+            const adm = wb.admit(addr, size, &self.evict_scratch);
+            for (adm.evicted) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c);
+            }
         }
 
         if (self.is_uma and self.isInUmaRegion(addr)) {
@@ -893,11 +908,93 @@ pub const CudaBackend = struct {
             }
         }
 
-        const dptr = self.uploadToDevice(@ptrCast(ptr), size);
+        const dptr = if (self.acquireWeightBuffer(size)) |reused| blk: {
+            // Recycled allocation: copy into it rather than making a new one.
+            const rc = self.cuMemcpyHtoD(reused, @ptrCast(ptr), size);
+            if (rc != CUDA_SUCCESS) {
+                std.log.err("CUDA weight re-upload: size={d} rc={d}", .{ size, rc });
+                @panic("cuMemcpyHtoD failed, device memory left uninitialized");
+            }
+            break :blk reused;
+        } else self.uploadToDevice(@ptrCast(ptr), size);
         self.buf_cache.put(addr, .{ .dptr = dptr, .size = size, .is_registered = false }) catch |err| {
             std.log.warn("weight cache put failed (upload, size={d}): {}", .{ size, err });
         };
         return dptr;
+    }
+
+    /// Release one cached weight and drop every record of it. A UMA zero-copy
+    /// entry owns a host registration rather than a device allocation, so the
+    /// two release paths are not interchangeable.
+    fn dropWeight(self: *CudaBackend, addr: usize, cached: CachedBuf) void {
+        if (cached.is_registered) {
+            if (self.cuMemHostUnregister) |unreg| _ = unreg(@ptrFromInt(addr));
+        } else {
+            self.releaseWeightBuffer(cached.dptr, cached.size);
+        }
+        _ = self.buf_cache.remove(addr);
+        if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// Take a weight buffer of `size`, reusing a recycled one when the pool has
+    /// it. cuMemAlloc/cuMemFree per eviction costs far more than the transfer it
+    /// brackets (see buffer_pool.zig), and a transformer frees a buffer of
+    /// exactly the size the next layer's same-role weight needs.
+    fn acquireWeightBuffer(self: *CudaBackend, size: usize) ?CUdeviceptr {
+        if (self.buffer_pool) |*bp| return bp.acquire(size);
+        return null;
+    }
+
+    /// Return a weight buffer to the pool, or free it when there is no pool or
+    /// the pool is full.
+    fn releaseWeightBuffer(self: *CudaBackend, dptr: CUdeviceptr, size: usize) void {
+        if (size > 0) {
+            if (self.buffer_pool) |*bp| {
+                if (bp.release(dptr, size) == null) return;
+            }
+        }
+        _ = self.cuMemFree(dptr);
+    }
+
+    /// See `Backend.setWeightBudget`. Does not cover `resident_map`: those copies
+    /// are permanent by construction (DS4 EP-local experts), and evicting one
+    /// would re-fault the mmap pages the resident copy exists to avoid.
+    pub fn setWeightBudget(self: *CudaBackend, bytes: usize, policy: backend_mod.WeightPolicy) void {
+        if (self.weight_budget) |*wb| {
+            for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c);
+            }
+            // Shrinking means giving memory back, so a pool holding idle buffers
+            // works against the request. Free them for real.
+            if (self.buffer_pool) |*bp| {
+                var drain_buf: [backend_mod.buffer_pool_capacity]CUdeviceptr = undefined;
+                for (bp.drain(&drain_buf)) |d| _ = self.cuMemFree(d);
+            }
+            return;
+        }
+        if (bytes == 0) return;
+        self.weight_budget = backend_mod.WeightBudget.init(
+            self.budget_allocator,
+            backend_mod.weight_budget_capacity,
+            bytes,
+        ) catch |err| {
+            std.log.warn("CUDA weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+        self.weight_budget.?.policy = policy;
+        // Only useful with a budget: without eviction no buffer is ever freed.
+        self.buffer_pool = backend_mod.BufferPool(CUdeviceptr).init(
+            self.budget_allocator,
+            backend_mod.buffer_pool_capacity,
+        ) catch |err| {
+            std.log.warn("CUDA buffer pool disabled ({s}); every eviction re-allocates", .{@errorName(err)});
+            return;
+        };
+    }
+
+    pub fn weightResidency(self: *CudaBackend) backend_mod.WeightResidency {
+        if (self.weight_budget) |*wb| return .{ .resident = wb.used_bytes, .evictions = wb.evictions };
+        return .{};
     }
 
     // ── Activation cache (deferred sync) ────────────────────────
@@ -935,9 +1032,14 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer, and
+                    // a caller asking for a prefix (a batched op's first token) would
+                    // otherwise refresh only that prefix and then mark everything
+                    // clean, leaving tokens 1..n-1 reading stale device bytes. Correct
+                    // at n_tok == 1, silently wrong above it.
                     // Blocking: async H2D from unpinned host memory is
                     // rejected by the fresh-boot driver (719/700) on GB10.
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(act upload)");
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), act.size), "cuMemcpyHtoD(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
@@ -991,7 +1093,10 @@ pub const CudaBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), size), "cuMemcpyHtoD(weight upload)");
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer.
+                    // A prefix refresh (batched first token) would leave the rest
+                    // stale on device, same contract as getInputBuf.
+                    _ = cuCheck(self.cuMemcpyHtoD(act.dptr, @ptrCast(ptr), act.size), "cuMemcpyHtoD(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -1106,14 +1211,7 @@ pub const CudaBackend = struct {
     }
 
     fn launch(self: *CudaBackend, func: CUfunction, grid: u32, block: u32, smem: u32, params: [*]?*anyopaque) void {
-        // TEMP PERF: sample kernel launch latency.
-        const t_l = perfMonoMs();
         _ = cuCheck(self.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, smem, self.stream, params, null), "cuLaunchKernel");
-        self.launch_total_ms += perfMonoMs() - t_l;
-        self.launch_count += 1;
-        if (self.launch_count % 300 == 0) {
-            std.log.info("CUDA: {d} launches, avg {d}µs (last {d}ms)", .{ self.launch_count, @as(u64, self.launch_total_ms * 1000) / self.launch_count, perfMonoMs() - t_l });
-        }
     }
 
     // ── Weight size helper ──────────────────────────────────────
@@ -1973,8 +2071,8 @@ pub const CudaBackend = struct {
             .fp8_e4m3 => 0,
         };
         var params = [_]?*anyopaque{
-            @ptrCast(&d_x), @ptrCast(&d_w),   @ptrCast(&d_s),
-            @ptrCast(&d_y), @ptrCast(&n_u32), @ptrCast(&k_u32),
+            @ptrCast(&d_x),    @ptrCast(&d_w),        @ptrCast(&d_s),
+            @ptrCast(&d_y),    @ptrCast(&n_u32),      @ptrCast(&k_u32),
             @ptrCast(&gs_u32), @ptrCast(&scale_mode),
         };
         self.launch(self.fn_gemv_mxfp4_st, @intCast(n), block_size, reduction_smem, &params);
@@ -2056,10 +2154,10 @@ pub const CudaBackend = struct {
         var t_s = tab + 32 * @sizeOf(u64);
         var t_y = tab + 48 * @sizeOf(u64);
         var params = [_]?*anyopaque{
-            @ptrCast(&t_x),  @ptrCast(&t_w),
-            @ptrCast(&t_s),  @ptrCast(&t_y),
-            @ptrCast(&n_u32), @ptrCast(&k_u32),
-            @ptrCast(&gs_u32), @ptrCast(&scale_mode),
+            @ptrCast(&t_x),         @ptrCast(&t_w),
+            @ptrCast(&t_s),         @ptrCast(&t_y),
+            @ptrCast(&n_u32),       @ptrCast(&k_u32),
+            @ptrCast(&gs_u32),      @ptrCast(&scale_mode),
             @ptrCast(&n_slots_u32),
         };
         self.launch(self.fn_gemv_mxfp4_st_batched, @intCast(n), block_size, reduction_smem, &params);
@@ -2194,6 +2292,26 @@ pub const CudaBackend = struct {
         allocator.free(slice);
     }
 
+    /// Page-lock a resident host range so `cuMemcpyHtoDAsync` can DMA from it.
+    /// See `Backend.hostRegister` for the residency precondition, which is not
+    /// advice here: this is the same driver call that ran at ~19 MB/s when
+    /// `registerHostRegion` pointed it at cold mmap pages.
+    pub fn hostRegister(self: *CudaBackend, ptr: [*]const u8, len: usize) bool {
+        if (len == 0) return false;
+        const reg = self.cuMemHostRegister orelse return false;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        return reg(@ptrFromInt(r.base), r.size, CU_MEMHOSTREGISTER_PORTABLE) == CUDA_SUCCESS;
+    }
+
+    /// Unregister a range page-locked by `hostRegister`. The driver keys on the
+    /// base address, so the length only matters for computing the same
+    /// page-aligned base `hostRegister` used.
+    pub fn hostUnregister(self: *CudaBackend, ptr: [*]const u8, len: usize) void {
+        const unreg = self.cuMemHostUnregister orelse return;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        _ = unreg(@ptrFromInt(r.base));
+    }
+
     /// Register RAM-tier KV block in act_cache without upload.
     /// On UMA platforms (GB10 Blackwell), host memory is GPU-accessible via
     /// unified addressing, the host pointer is used directly as the device
@@ -2242,13 +2360,17 @@ pub const CudaBackend = struct {
 
     // ── KV device cache (incremental upload) ───────────────────
 
-    /// Get or allocate device KV cache buffer. Returns device pointer.
-    /// Allocates full capacity on first use. Does NOT upload from host.
     /// Get or allocate a GPU KV cache buffer for the given host pointer.
-    /// On first allocation, uploads the existing host data so that accumulated
-    /// positions (pre-filled in host memory) are visible to GPU kernels.
+    /// On first allocation (or when the cached capacity is too small), uploads
+    /// the existing host data so pre-filled / imported positions are visible
+    /// to GPU kernels. A later host rewrite at the same address must call
+    /// `invalidateDeviceKv` or this returns the previous device contents.
     fn getOrAllocKvBuf(self: *CudaBackend, addr: usize, capacity: usize) CUdeviceptr {
-        if (self.kv_dev_cache.getPtr(addr)) |kv| return kv.dptr;
+        if (self.kv_dev_cache.getPtr(addr)) |kv| {
+            if (kv.capacity >= capacity) return kv.dptr;
+            _ = self.cuMemFree(kv.dptr);
+            _ = self.kv_dev_cache.remove(addr);
+        }
 
         var dptr: CUdeviceptr = 0;
         _ = cuCheck(self.cuMemAlloc(&dptr, @max(capacity, 4)), "cuMemAlloc(KV)");
@@ -2264,6 +2386,14 @@ pub const CudaBackend = struct {
             std.log.warn("cache put failed: {}", .{err});
         };
         return dptr;
+    }
+
+    /// Free every device KV mirror. Next `getOrAllocKvBuf` re-allocates and
+    /// re-uploads from host. Call after `importKvPrefix` and similar host writes.
+    pub fn invalidateDeviceKv(self: *CudaBackend) void {
+        var kv_it = self.kv_dev_cache.valueIterator();
+        while (kv_it.next()) |kv| _ = self.cuMemFree(kv.dptr);
+        self.kv_dev_cache.clearRetainingCapacity();
     }
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
@@ -2391,6 +2521,18 @@ pub const CudaBackend = struct {
             head_max[h] = 0.0;
             head_sum[h] = 1.0;
         }
+    }
+
+    /// See `Backend.reserveActivation`. Routes to the same helpers the ops use,
+    /// so the entry it leaves behind is exactly what a later sub-range lookup
+    /// resolves through.
+    pub fn reserveActivation(self: *CudaBackend, ptr: *const anyopaque, bytes: usize, mode: backend_mod.Backend.ActReserve) void {
+        if (bytes == 0) return;
+        _ = switch (mode) {
+            .read => self.getInputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .write => self.getOutputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .read_write => self.getInPlaceBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+        };
     }
 
     // ── Batched prefill ops ─────────────────────────────────────
@@ -2920,6 +3062,7 @@ test "CUDA backend public function signatures compile" {
         _ = @TypeOf(CudaBackend.backendInfo);
         _ = @TypeOf(CudaBackend.flushActivations);
         _ = @TypeOf(CudaBackend.invalidateAct);
+        _ = @TypeOf(CudaBackend.invalidateDeviceKv);
         _ = @TypeOf(CudaBackend.invalidateWeight);
         _ = @TypeOf(CudaBackend.setThreadContext);
         _ = @TypeOf(CudaBackend.registerHostRegion);
@@ -3092,6 +3235,11 @@ test "CudaBackend.getDevicePtr" {
 test "CudaBackend.invalidateWeight" {
     comptime {
         _ = &CudaBackend.invalidateWeight;
+    }
+}
+test "CudaBackend.invalidateDeviceKv" {
+    comptime {
+        _ = &CudaBackend.invalidateDeviceKv;
     }
 }
 test "CudaBackend.gemv" {
@@ -3351,6 +3499,7 @@ test "fuzz: all cuda functions" {
                 _ = &CudaBackend.registerHostRegion;
                 _ = &CudaBackend.flushActivations;
                 _ = &CudaBackend.invalidateAct;
+                _ = &CudaBackend.invalidateDeviceKv;
                 _ = &CudaBackend.getDevicePtrOpaque;
                 _ = &CudaBackend.getDevicePtr;
                 _ = &CudaBackend.invalidateWeight;

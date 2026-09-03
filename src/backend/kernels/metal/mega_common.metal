@@ -203,7 +203,7 @@ inline void mega_gemv_q8(
     uint tg_size
 ) {
     if (tgid >= n_out) return;
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     float sum = 0.0f;
     for (uint b = tid; b < nb; b += tg_size) {
         device const float* x_block = x + b * 32;
@@ -251,7 +251,7 @@ inline void mega_gemv_q4_0(
     uint tg_size
 ) {
     if (tgid >= n_out) return;
-    uint nb = k / 32;
+    uint nb = (k + 31) / 32;  // round up: nb is also the row stride
     float sum = 0.0f;
     for (uint b = tid; b < nb; b += tg_size) {
         uint bk = b * 32;

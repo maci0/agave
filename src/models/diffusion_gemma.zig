@@ -23,6 +23,7 @@ const build_options = @import("build_options");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const kvcache = @import("../kvcache/manager.zig");
@@ -121,7 +122,7 @@ pub const DiffusionGemmaModel = struct {
     // Model vtable compatibility aliases.
     n_head: u32 = default_sl_n_head,
     n_head_kv: u32 = default_sl_n_kv_head,
-    eos_token_id: u32 = 1,
+    eos_token_id: u32 = arch_mod.gemma_fallback_eos,
 
     // ── Working buffers ───────────────────────────────────────────
     hidden: []f32 = &.{},
@@ -251,7 +252,7 @@ pub const DiffusionGemmaModel = struct {
         // Vtable aliases.
         self.n_head = self.sl_n_head;
         self.n_head_kv = self.sl_n_kv_head;
-        self.eos_token_id = f.getMetaU32("eos_token_id") orelse 1;
+        self.eos_token_id = f.getMetaU32("eos_token_id") orelse arch_mod.gemma_fallback_eos;
 
         const max_sl_hd = @max(self.sl_head_dim, self.gl_head_dim);
         const max_sl_nkv = @max(self.sl_n_kv_head, self.gl_n_kv_head);
@@ -546,9 +547,10 @@ pub const DiffusionGemmaModel = struct {
         if (self.seq_table.block_table[layer].len == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         return .{

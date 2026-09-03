@@ -503,7 +503,8 @@ test "mulAccumF32 basic" {
 
 // ── Paged SDPA (block-table-indexed) ────────────────────────────
 
-const PagedKvView = @import("../../../kvcache/manager.zig").PagedKvView;
+const PagedKvView = @import("../../../kvcache/view.zig").PagedKvView;
+const CacheBlock = @import("../../../kvcache/view.zig").CacheBlock;
 
 /// Paged SDPA: append k_new/v_new, then compute attention over block-table-indexed KV cache.
 /// Uses PagedKvView for non-contiguous blocks. f32 path only.
@@ -684,11 +685,11 @@ test "fuzz: all sdpa functions" {
             // 11-12. sdpaPagedHeads / sdpaPagedHead, paged KV path
             var block_keys: [kvd]f32 = .{0} ** kvd;
             var block_values: [kvd]f32 = .{0} ** kvd;
-            const block = @import("../../../kvcache/manager.zig").CacheBlock{
+            const block = CacheBlock{
                 .keys = &block_keys,
                 .values = &block_values,
             };
-            var blocks = [_]@import("../../../kvcache/manager.zig").CacheBlock{block};
+            var blocks = [_]CacheBlock{block};
             var block_table = [_]u32{0};
             const kv_view = PagedKvView.initView(&block_table, &blocks, 1, kvd, 0);
 

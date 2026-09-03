@@ -1,7 +1,6 @@
 "use strict";
 // Server chat UI (embedded by src/server/server.zig). Not the WASM browser shell in web/.
 // Source of truth: compile with `scripts/build-web.sh` (tsc) to refresh app.js.
-marked.setOptions({ breaks: true, gfm: true });
 /** Required document query; throws if the chat shell markup is missing a node. */
 function qs(sel) {
     const el = document.querySelector(sel);
@@ -26,6 +25,14 @@ function fmtNum(n, digits) {
 function fmtInt(n) {
     return Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
+/** Local calendar date as YYYY-MM-DD. `toISOString().slice(0, 10)` is UTC, so
+ * a US-evening export would be stamped with tomorrow's date. */
+function localDateYmd(now = new Date()) {
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
 function lastFocusable(list) {
     if (list.length === 0) {
         return undefined;
@@ -47,24 +54,86 @@ let pendingStreamRender = null;
 let msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 let backendName = '';
+let hasVision = false;
+let visionKnown = false;
+let pendingImage = null;
 let streamTokenCount = 0;
 let streamStartTime = 0;
 // The tok/s counter is a role="status" live region; rewriting it on every token
 // Floods screen readers with announcements. Refresh at most once per second.
 const TOKS_UPDATE_INTERVAL_MS = 1000;
 let lastToksUpdate = 0;
+/** Apply model metadata from /v1/models to the header, context badge, and image attach. */
+function applyModelInfo(modelData) {
+    modelName = modelData.id;
+    backendName = modelData.backend ?? '';
+    const badge = qs('#model-name');
+    badge.textContent = modelName;
+    badge.title = modelName;
+    updateCtxBadge(modelData);
+    setVisionUi(modelData.vision === true);
+}
+/** Show image attach only when the loaded model has a vision encoder. */
+function setVisionUi(on) {
+    visionKnown = true;
+    hasVision = on;
+    const imgBtn = document.getElementById('img-btn');
+    if (imgBtn) {
+        imgBtn.hidden = !on;
+    }
+    if (!on && pendingImage) {
+        removeImage();
+        showToast('This model cannot view images.');
+    }
+    syncVisionHints();
+}
+/** Keep the empty-state image hint in sync with whether this model can see images. */
+function syncVisionHints() {
+    const hints = document.querySelector('#empty .hints');
+    if (!hints) {
+        return;
+    }
+    const existing = hints.querySelector('.hint-image');
+    if (hasVision) {
+        if (!existing) {
+            const s = document.createElement('span');
+            s.className = 'hint hint-image';
+            s.textContent = 'Paste or drop an image';
+            hints.append(s);
+        }
+    }
+    else if (existing) {
+        existing.remove();
+    }
+}
+/** Map fetch/network failures to short, actionable copy (not the engine's exception text). */
+function userFacingError(error) {
+    if (error instanceof Error) {
+        const lower = error.message.toLowerCase();
+        if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
+            return 'Could not reach the server. Check that it is still running.';
+        }
+        if (lower === 'empty response body') {
+            return 'The server sent an empty reply. Try again.';
+        }
+        return error.message;
+    }
+    return String(error);
+}
 // oxlint-disable-next-line unicorn/prefer-top-level-await, promise/prefer-await-to-then -- classic script: top-level await requires module semantics
 fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
     if (d.data?.[0]) {
-        modelName = d.data[0].id;
-        backendName = d.data[0].backend ?? '';
-        const badge = qs('#model-name');
-        badge.textContent = modelName;
-        badge.title = modelName;
-        updateCtxBadge(d.data[0]);
+        applyModelInfo(d.data[0]);
+    }
+    else {
+        setOfflineBadge();
     }
 }).catch(function () { setOfflineBadge(); });
 function setOfflineBadge() {
+    const imgBtn = document.getElementById('img-btn');
+    if (imgBtn && !hasVision) {
+        imgBtn.hidden = true;
+    }
     const badge = qs('#model-name');
     // Prefer a native button over role="button" on a live region span (4.1.2)
     let btn = badge;
@@ -87,13 +156,8 @@ function setOfflineBadge() {
         loading.textContent = 'Loading…';
         btn.replaceWith(loading);
         fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
-            const el = qs('#model-name');
             if (d.data?.[0]) {
-                modelName = d.data[0].id;
-                backendName = d.data[0].backend ?? '';
-                el.textContent = modelName;
-                el.title = modelName;
-                updateCtxBadge(d.data[0]);
+                applyModelInfo(d.data[0]);
             }
             else {
                 setOfflineBadge();
@@ -202,7 +266,6 @@ maxTokEl.addEventListener('blur', function () {
 if (localStorage.getItem('agave_show_stats') === '1') {
     document.body.classList.add('show-stats');
 }
-let pendingImage = null;
 function showToast(text, type) {
     const isError = type !== 'info';
     const toast = document.createElement('div');
@@ -249,6 +312,10 @@ function showToast(text, type) {
 }
 const MAX_IMAGE_BYTES = 10_485_760;
 function loadImageFile(file, label) {
+    if (visionKnown && !hasVision) {
+        showToast('This model cannot view images.');
+        return false;
+    }
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
         showToast('Unsupported image format. Use JPEG, PNG, GIF, or WebP.');
@@ -329,7 +396,12 @@ inp.addEventListener('paste', function (e) {
     }
 });
 const chatForm = qs('#chat-form');
-chatForm.addEventListener('dragover', function (e) { e.preventDefault(); chatForm.classList.add('drag-over'); });
+chatForm.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    if (!visionKnown || hasVision) {
+        chatForm.classList.add('drag-over');
+    }
+});
 chatForm.addEventListener('dragleave', function (e) {
     e.preventDefault();
     // Ignore leave events that stay inside the form (child → child flicker).
@@ -527,7 +599,7 @@ function exportConv() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `agave-chat-${new Date().toISOString().slice(0, 10)}.md`;
+    a.download = `agave-chat-${localDateYmd()}.md`;
     document.body.append(a);
     a.click();
     a.remove();
@@ -593,33 +665,95 @@ function addAssistant() {
     scrollBottom();
     return m;
 }
-function highlightCodeBlocks(el) {
-    for (const b of el.querySelectorAll('pre code')) {
-        hljs?.highlightElement(b);
-        const pre = b.parentElement;
-        const lang = (b.className.match(/language-(\w+)/) ?? [])[1] ?? '';
-        if (lang) {
-            const l = document.createElement('span');
-            l.className = 'code-lang';
-            l.textContent = lang;
-            pre?.append(l);
-        }
-        const c = document.createElement('button');
-        c.type = 'button';
-        c.className = 'copy-btn';
-        c.textContent = 'Copy';
-        c.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
-        c.addEventListener('click', function () {
-            navigator.clipboard.writeText(b.textContent ?? '').then(function () {
-                c.textContent = 'Copied!';
-                announceToSR('Code copied to clipboard');
-                setTimeout(function () { c.textContent = 'Copy'; }, 2000);
-            }).catch(function () { c.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function () { c.textContent = 'Copy'; }, 2000); });
-        });
-        pre?.append(c);
+const hljs_script_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js';
+const hljs_script_integrity = 'sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp';
+const hljs_style_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/kimbie-dark.min.css';
+const hljs_style_integrity = 'sha384-o5F1vUaMNOmou1sQrsWiFo4/QUGSV0svqNZW+EesmKxWC8MpFJcveBhAyfvTHbGb';
+let hljsLoad = null;
+/** Fetch highlight.js and its theme on first code block. Copy/lang chrome does not wait. */
+function loadHighlightJs() {
+    if (hljs) {
+        return Promise.resolve(true);
     }
+    if (hljsLoad) {
+        return hljsLoad;
+    }
+    hljsLoad = new Promise(function (resolve) {
+        if (!document.querySelector('link[data-agave-hljs]')) {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = hljs_style_url;
+            link.integrity = hljs_style_integrity;
+            link.crossOrigin = 'anonymous';
+            link.referrerPolicy = 'no-referrer';
+            link.dataset.agaveHljs = '1';
+            document.head.append(link);
+        }
+        const s = document.createElement('script');
+        s.src = hljs_script_url;
+        s.integrity = hljs_script_integrity;
+        s.crossOrigin = 'anonymous';
+        s.referrerPolicy = 'no-referrer';
+        s.addEventListener('load', function () { resolve(Boolean(hljs)); });
+        s.addEventListener('error', function () { resolve(false); });
+        document.head.append(s);
+    });
+    return hljsLoad;
 }
-// NOTE: All HTML rendered via innerHTML is sanitized through DOMPurify (loaded in index.html).
+function decorateCodeBlock(b) {
+    const pre = b.parentElement;
+    if (pre?.querySelector('.copy-btn')) {
+        return;
+    }
+    const lang = (b.className.match(/language-(\w+)/) ?? [])[1] ?? '';
+    if (lang) {
+        const l = document.createElement('span');
+        l.className = 'code-lang';
+        l.textContent = lang;
+        pre?.append(l);
+    }
+    const c = document.createElement('button');
+    c.type = 'button';
+    c.className = 'copy-btn';
+    c.textContent = 'Copy';
+    c.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
+    c.addEventListener('click', function () {
+        navigator.clipboard.writeText(b.textContent ?? '').then(function () {
+            c.textContent = 'Copied!';
+            announceToSR('Code copied to clipboard');
+            setTimeout(function () { c.textContent = 'Copy'; }, 2000);
+        }).catch(function () { c.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function () { c.textContent = 'Copy'; }, 2000); });
+    });
+    pre?.append(c);
+}
+function highlightCodeBlocks(el) {
+    const blocks = el.querySelectorAll('pre code');
+    if (blocks.length === 0) {
+        return;
+    }
+    for (const b of blocks) {
+        decorateCodeBlock(b);
+    }
+    const apply = function () {
+        if (!hljs || !el.isConnected) {
+            return;
+        }
+        for (const b of el.querySelectorAll('pre code')) {
+            if (b.classList.contains('hljs')) {
+                continue;
+            }
+            hljs.highlightElement(b);
+        }
+    };
+    if (hljs) {
+        apply();
+        return;
+    }
+    loadHighlightJs().then(function (ok) { if (ok) {
+        apply();
+    } });
+}
+// NOTE: All HTML rendered via innerHTML is sanitized through DOMPurify (deferred CDN in head.html).
 // The DOMPurify.sanitize() call strips any script injection from marked.parse() output.
 // This is safe because: (1) user input goes through marked.parse() which escapes HTML,
 // (2) the result is then passed through DOMPurify.sanitize() before DOM insertion,
@@ -640,10 +774,14 @@ function escapeHtmlEntities(text) {
 function escapeHtmlText(text) {
     return escapeHtmlEntities(text).replaceAll('\n', '<br>');
 }
+let markedConfigured = false;
 function markdownToHtml(dc) {
-    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- optional CDN dependency feature detection
-    if (typeof marked === 'undefined') {
+    if (!marked) {
         return escapeHtmlText(dc);
+    }
+    if (!markedConfigured) {
+        marked.setOptions({ breaks: true, gfm: true });
+        markedConfigured = true;
     }
     try {
         return marked.parse(dc);
@@ -839,7 +977,7 @@ async function streamResponse(body, errLabel, url) {
             return;
         }
         finalized = true;
-        renderContent(el, content || '*(no response)*', true);
+        renderContent(el, content || 'No response.', true);
         addRegenBtn(el);
         loadConvs();
         refreshCtxBadge();
@@ -896,11 +1034,11 @@ async function streamResponse(body, errLabel, url) {
     }
     catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- errors are surfaced to the user as an alert region with a Retry action
         if (error instanceof Error && error.name === 'AbortError') {
-            renderContent(el, content || '*Stopped*', true);
+            renderContent(el, content || 'Stopped.', true);
             addRegenBtn(el);
         }
         else {
-            const errMsg = `${errLabel}: ${error instanceof Error ? error.message : String(error)}`;
+            const errMsg = `${errLabel}: ${userFacingError(error)}`;
             const err = document.createElement('div');
             err.className = 'error-msg';
             err.setAttribute('role', 'alert');
@@ -1033,18 +1171,16 @@ function showEmpty() {
     chat.replaceChildren();
     const empty = document.createElement('div');
     empty.id = 'empty';
-    // Hardcoded HTML constant, no user input, safe without sanitization
-    const icon = document.createElement('div');
-    icon.className = 'icon';
+    const icon = document.createElement('span');
+    icon.className = 'mark mark-lg';
     icon.setAttribute('aria-hidden', 'true');
-    icon.textContent = '\uD83C\uDF35';
     const h2 = document.createElement('h2');
-    h2.textContent = 'Start a conversation';
+    h2.textContent = 'Prompt the model';
     const p = document.createElement('p');
-    p.textContent = 'Type a message below to chat with the model.';
+    p.textContent = 'Runs locally. Conversations stay on this machine.';
     const hintsEl = document.createElement('div');
     hintsEl.className = 'hints';
-    // Skip "type a message" filler: the paragraph above already says it.
+    // Skip prompt filler: the heading and paragraph already say it.
     for (const t of ['/help for commands', 'Enter to send']) {
         const isHelp = t === '/help for commands';
         const s = document.createElement(isHelp ? 'button' : 'span');
@@ -1055,6 +1191,12 @@ function showEmpty() {
             s.addEventListener('click', function () { runCommand('/help'); });
         }
         hintsEl.append(s);
+    }
+    if (hasVision) {
+        const imgHint = document.createElement('span');
+        imgHint.className = 'hint hint-image';
+        imgHint.textContent = 'Paste or drop an image';
+        hintsEl.append(imgHint);
     }
     empty.append(icon);
     empty.append(h2);
@@ -1297,8 +1439,11 @@ function selectConv(id) {
     selectSeq += 1;
     const mySeq = selectSeq;
     chat.replaceChildren();
-    const loadEl = addAssistant();
+    const loadEl = document.createElement('div');
+    loadEl.className = 'info-msg';
+    loadEl.setAttribute('role', 'status');
     loadEl.textContent = 'Loading conversation\u2026';
+    chat.append(loadEl);
     announceToSR('Loading conversation…');
     fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `action=select&id=${encodeURIComponent(id)}` })
         .then(function (r) { return r.json(); }).then(function (data) {
@@ -1363,14 +1508,7 @@ function deleteConv(id) {
         inp.focus();
         announceToSR('Conversation deleted');
     }).catch(function () {
-        const errMsg = 'Failed to delete conversation.';
-        const err = document.createElement('div');
-        err.className = 'error-msg';
-        err.setAttribute('role', 'alert');
-        err.textContent = errMsg;
-        chat.append(err);
-        scrollBottom();
-        announceToSR(errMsg);
+        showToast('Could not delete that conversation. Check that the server is running.');
     });
 }
 function setDialogBackdropInert(on) {
@@ -1409,6 +1547,9 @@ function showInfo() {
         if (cb instanceof HTMLElement) {
             cb.focus();
         }
+    }
+    if (m._trapFocus) {
+        m.removeEventListener('keydown', m._trapFocus);
     }
     m._trapFocus = function (e) {
         if (e.key !== 'Tab') {

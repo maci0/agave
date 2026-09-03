@@ -15,6 +15,7 @@ const std = @import("std");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const kvcache = @import("../kvcache/manager.zig");
 const block_alloc_mod = @import("../kvcache/block_allocator.zig");
@@ -90,7 +91,7 @@ pub const GptOssModel = struct {
     /// MLX quantization bit width (4, 6, or 8). 0 = not MLX format.
     mlx_bits: u32 = 0,
     /// End-of-sequence token identifier.
-    eos_token_id: u32 = 200002,
+    eos_token_id: u32 = arch_mod.gpt_oss_fallback_eos,
     /// Maximum sequence length for the pre-allocated KV cache.
     max_seq_len: usize = 4096,
 
@@ -567,16 +568,14 @@ pub const GptOssModel = struct {
     // ── Layer implementations ─────────────────────────────────────
 
     /// Helper: get flat f32 view of KV cache for a layer (assembled from paged or tiered blocks).
-    fn getLayerKvView(self: *GptOssModel, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *GptOssModel, layer: usize) kvcache.KvF32View {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            const kv = tc.keysValues(block_id);
+            return .{ .keys = kv.keys, .values = kv.values };
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,

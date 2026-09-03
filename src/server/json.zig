@@ -56,6 +56,17 @@ pub const ToolParams = struct {
     tools: [max_tools]?ToolDef = .{null} ** max_tools,
     tool_count: u32 = 0,
     tool_choice: []const u8 = "auto",
+
+    /// True when `name` matches a tool declared in this request.
+    pub fn hasTool(self: *const ToolParams, name: []const u8) bool {
+        var i: u32 = 0;
+        while (i < self.tool_count) : (i += 1) {
+            if (self.tools[i]) |t| {
+                if (std.mem.eql(u8, t.name, name)) return true;
+            }
+        }
+        return false;
+    }
 };
 
 /// Per-request sampling parameters. Defaults match greedy decoding.
@@ -152,18 +163,42 @@ pub fn extractBoolField(json: []const u8, field: []const u8) bool {
     return i + 4 <= json.len and std.mem.eql(u8, json[i..][0..4], "true");
 }
 
+/// Max characters consumed for a JSON number token (ints, floats, scientific).
+const max_json_number_chars: usize = 32;
+/// Largest integer exactly representable in f64 (2^53 - 1). Float fallback
+/// for `extractIntField` stops here; larger digit strings still go through parseInt.
+const max_exact_f64_int: f64 = @floatFromInt((@as(u64, 1) << 53) - 1);
+
+/// True if `c` can appear in a JSON number (`-1.5e+2`).
+fn isJsonNumberChar(c: u8) bool {
+    return (c >= '0' and c <= '9') or c == '.' or c == '-' or c == '+' or c == 'e' or c == 'E';
+}
+
+/// Index just past a JSON number starting at `start`, capped at `max_json_number_chars`.
+fn scanJsonNumberEnd(json: []const u8, start: usize) usize {
+    var end = start;
+    while (end < json.len and end - start < max_json_number_chars and isJsonNumberChar(json[end])) : (end += 1) {}
+    return end;
+}
+
 /// Extract an integer field value from a JSON body (e.g., `"max_tokens": 128`).
-/// Scans at most 20 digits (max decimal length of u64) to bound parsing cost.
+/// Accepts whole-number JSON values including `128.0` and `1e3`. Rejects
+/// negatives, non-integers (`1.5`), and overflow (`1e999` → Inf). Digit-only
+/// strings parse exactly via `parseInt` so values above 2^53 stay intact.
 pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
-    const max_int_digits = 20;
     var search_start: usize = 0;
     while (findFieldValuePos(json, needle, &search_start)) |val_pos| {
-        var end = val_pos;
-        while (end < json.len and end - val_pos < max_int_digits and json[end] >= '0' and json[end] <= '9') : (end += 1) {}
+        const end = scanJsonNumberEnd(json, val_pos);
         if (end == val_pos) continue;
-        return std.fmt.parseInt(usize, json[val_pos..end], 10) catch continue;
+        const raw = json[val_pos..end];
+        if (std.fmt.parseInt(usize, raw, 10)) |v| return v else |_| {}
+        const v = std.fmt.parseFloat(f64, raw) catch continue;
+        if (!std.math.isFinite(v) or v < 0 or v > max_exact_f64_int) continue;
+        const truncated = @floor(v);
+        if (truncated != v) continue;
+        return @intFromFloat(truncated);
     }
     return null;
 }
@@ -174,17 +209,22 @@ pub fn extractIntField(json: []const u8, field: []const u8) ?usize {
 pub fn extractFloatField(json: []const u8, field: []const u8) ?f32 {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
-    const max_float_chars = 32;
     var search_start: usize = 0;
     while (findFieldValuePos(json, needle, &search_start)) |val_pos| {
-        var end = val_pos;
-        while (end < json.len and end - val_pos < max_float_chars and (json[end] == '.' or (json[end] >= '0' and json[end] <= '9') or json[end] == '-' or json[end] == 'e' or json[end] == 'E' or json[end] == '+')) : (end += 1) {}
+        const end = scanJsonNumberEnd(json, val_pos);
         if (end == val_pos) continue;
         const v = std.fmt.parseFloat(f32, json[val_pos..end]) catch continue;
         if (!std.math.isFinite(v)) continue;
         return v;
     }
     return null;
+}
+
+/// Format `v` as a JSON number. Non-finite values become `null` because JSON
+/// has no Inf/NaN; callers must not emit `{d}` of a computed float into JSON.
+pub fn formatFiniteF32(buf: []u8, v: f32) []const u8 {
+    if (!std.math.isFinite(v)) return "null";
+    return std.fmt.bufPrint(buf, "{d:.6}", .{v}) catch "null";
 }
 
 /// Scan past a JSON string value starting at `start` (just after the opening `"`).
@@ -231,8 +271,10 @@ fn findFieldValuePos(json_buf: []const u8, needle: []const u8, search_start: *us
 }
 
 /// Extract the string value of a JSON field by key name.
-/// Returns the unescaped content between quotes, or null if the field is missing.
-/// Handles false matches inside string values by requiring a colon after the key.
+/// Returns the raw quoted-string contents with JSON escapes intact (callers
+/// that need decoded text must run `jsonUnescape` / `jsonUnescapeOwned`), or
+/// null if the field is missing. Handles false matches inside string values
+/// by requiring a colon after the key.
 pub fn extractField(json: []const u8, field: []const u8) ?[]const u8 {
     var buf: [extract_field_buf_size]u8 = undefined;
     const needle = quoteFieldKey(&buf, field) orelse return null;
@@ -314,17 +356,19 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
     const raw_freq_pen = extractFloatField(body, "frequency_penalty") orelse 0;
     const raw_pres_pen = extractFloatField(body, "presence_penalty") orelse 0;
     // OpenAI response_format: {"type": "json_object"} or {"type": "json_schema", ...}
-    // Extract the response_format object using structural parsing (extractObjectField)
-    // to avoid false matches inside string values.
+    // Read the `type` field (not a substring of the whole object) so a schema
+    // description that mentions "json_object" cannot flip json_mode on. Nested
+    // `schema` is taken from the response_format object, not the full body.
     var json_mode = false;
     var schema_from_rf: ?[]const u8 = null;
     if (extractObjectField(body, "response_format")) |rf_obj| {
-        // Search within the extracted object only, not the full body.
-        if (std.mem.indexOf(u8, rf_obj, "json_object") != null) {
-            json_mode = true;
-        } else if (std.mem.indexOf(u8, rf_obj, "json_schema") != null) {
-            if (extractObjectField(body, "schema")) |s| {
-                schema_from_rf = s;
+        if (extractField(rf_obj, "type")) |rf_type| {
+            if (std.mem.eql(u8, rf_type, "json_object")) {
+                json_mode = true;
+            } else if (std.mem.eql(u8, rf_type, "json_schema")) {
+                if (extractObjectField(rf_obj, "schema")) |s| {
+                    schema_from_rf = s;
+                }
             }
         }
     }
@@ -447,7 +491,7 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
                         while (vi < lb_str.len and lb_str[vi] == ' ') vi += 1;
                         // Find end of number
                         var ve = vi;
-                        while (ve < lb_str.len and (lb_str[ve] == '-' or lb_str[ve] == '.' or (lb_str[ve] >= '0' and lb_str[ve] <= '9'))) ve += 1;
+                        while (ve < lb_str.len and isJsonNumberChar(lb_str[ve])) ve += 1;
                         if (ve > vi) {
                             const bias = std.fmt.parseFloat(f32, lb_str[vi..ve]) catch {
                                 i = ve;
@@ -771,26 +815,38 @@ pub fn extractFormImage(body: []const u8) ?[]const u8 {
 
 /// Extract text from an OpenAI-format content array.
 /// Handles `"content": [{"type":"text","text":"What's in this image?"}, ...]`
-/// Returns the "text" field from the first text-type content part, or null.
+/// Returns the "text" field from the first text-type part (key order inside
+/// the part does not matter). Returns `""` when `content` is an array with no
+/// text part (image-only turns) so callers keep the message. Returns null when
+/// `content` is missing or not an array.
 fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
     const arr = extractObjectField(obj, "content") orelse return null;
     if (arr.len == 0 or arr[0] != '[') return null;
     var pos: usize = 0;
-    while (pos < arr.len) {
-        const type_pos = std.mem.indexOfPos(u8, arr, pos, "\"type\"") orelse break;
-        pos = type_pos + 6;
-        // Check if this part is type "text"
-        const val_start = skipToJsonValue(arr, pos) orelse continue;
-        const val_end = findJsonStringEnd(arr, val_start);
-        const type_val = arr[val_start..val_end];
-        if (std.mem.eql(u8, type_val, "text")) {
-            // Found text type, extract its "text" field
-            const remaining = arr[val_end..];
-            return extractField(remaining, "text");
+    while (findObjectStart(arr, &pos)) |obj_pos| {
+        var depth: usize = 1;
+        var obj_end: usize = obj_pos + 1;
+        while (obj_end < arr.len and depth > 0) : (obj_end += 1) {
+            if (arr[obj_end] == '{') {
+                depth += 1;
+            } else if (arr[obj_end] == '}') {
+                depth -= 1;
+            } else if (arr[obj_end] == '"') {
+                obj_end += 1;
+                while (obj_end < arr.len and arr[obj_end] != '"') : (obj_end += 1) {
+                    if (arr[obj_end] == '\\' and obj_end + 1 < arr.len) obj_end += 1;
+                }
+            }
         }
-        pos = val_end;
+        const part = arr[obj_pos..obj_end];
+        pos = obj_end;
+        const type_val = extractField(part, "type") orelse continue;
+        if (std.mem.eql(u8, type_val, "text")) {
+            return extractField(part, "text") orelse "";
+        }
     }
-    return null;
+    // Content is a part array (vision, etc.) but none of the parts is text.
+    return "";
 }
 
 /// Extract base64 image data from a JSON body.
@@ -820,6 +876,47 @@ pub fn extractJsonImage(body: []const u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+/// True when `field` is present as a JSON key with a following colon (any value
+/// type). Distinguishes "missing" from "present but not a string" for 400s.
+pub fn hasField(body: []const u8, field: []const u8) bool {
+    var buf: [extract_field_buf_size]u8 = undefined;
+    const needle = quoteFieldKey(&buf, field) orelse return false;
+    var search_start: usize = 0;
+    return findFieldValuePos(body, needle, &search_start) != null;
+}
+
+/// True when any `"type"` string value equals `want` (scans every occurrence so
+/// a leading `"type":"text"` part does not hide a later image part).
+fn jsonHasTypeValue(body: []const u8, want: []const u8) bool {
+    var buf: [extract_field_buf_size]u8 = undefined;
+    const needle = quoteFieldKey(&buf, "type") orelse return false;
+    var search_start: usize = 0;
+    while (search_start < body.len) {
+        const rel = std.mem.indexOf(u8, body[search_start..], needle) orelse return false;
+        const after = search_start + rel + needle.len;
+        const start = skipToJsonValue(body, after) orelse {
+            search_start = after;
+            continue;
+        };
+        const end = findJsonStringEnd(body, start);
+        if (std.mem.eql(u8, body[start..end], want)) return true;
+        search_start = after;
+    }
+    return false;
+}
+
+/// True when the JSON body includes an OpenAI `image_url` part or an Anthropic
+/// image `source` block, even if the payload is not a data URI we can decode.
+/// Used to 400 instead of silently dropping HTTP(S) URLs or unknown shapes.
+pub fn hasJsonImagePart(body: []const u8) bool {
+    if (extractJsonImage(body) != null) return true;
+    if (jsonHasTypeValue(body, "image_url")) return true;
+    if (extractObjectField(body, "image_url") != null) return true;
+    if (extractField(body, "image_url") != null) return true;
+    if (jsonHasTypeValue(body, "image") and extractObjectField(body, "source") != null) return true;
+    return false;
 }
 
 // ── URL decoding ────────────────────────────────────────────────
@@ -902,6 +999,24 @@ fn escapeWith(allocator: Allocator, input: []const u8, comptime escape_fn: fn (u
     return buf;
 }
 
+/// U+FFFD as UTF-8. Substituted for invalid byte sequences so JSON stays well-formed.
+const utf8_replacement = "\xef\xbf\xbd";
+
+/// One JSON-escape step at `src[i]`: the bytes to emit and how many source bytes
+/// were consumed. Invalid UTF-8 is replaced with U+FFFD rather than copied raw
+/// (raw invalid bytes make the whole JSON document illegal).
+fn jsonEscapeStep(src: []const u8, i: usize) struct { out: []const u8, n: usize } {
+    const c = src[i];
+    if (jsonEscapeChar(c)) |rep| return .{ .out = rep, .n = 1 };
+    const seq_len = std.unicode.utf8ByteSequenceLength(c) catch
+        return .{ .out = utf8_replacement, .n = 1 };
+    if (i + seq_len > src.len)
+        return .{ .out = utf8_replacement, .n = 1 };
+    _ = std.unicode.utf8Decode(src[i..][0..seq_len]) catch
+        return .{ .out = utf8_replacement, .n = 1 };
+    return .{ .out = src[i .. i + seq_len], .n = seq_len };
+}
+
 fn jsonEscapeChar(c: u8) ?[]const u8 {
     return switch (c) {
         '"' => "\\\"",
@@ -955,10 +1070,31 @@ fn htmlEscapeChar(c: u8) ?[]const u8 {
 }
 
 /// Escape a string for safe embedding in JSON (quotes, backslashes, control chars).
+/// Invalid UTF-8 is replaced with U+FFFD so the result is always well-formed JSON.
 /// Returns the input pointer unchanged (no allocation) when no escaping is needed.
 /// Callers must compare `result.ptr != input.ptr` before freeing the result.
 pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
-    return escapeWith(allocator, input, jsonEscapeChar);
+    var out_len: usize = 0;
+    var i: usize = 0;
+    while (i < input.len) {
+        const step = jsonEscapeStep(input, i);
+        out_len += step.out.len;
+        i += step.n;
+    }
+    // Escapes and U+FFFD replacement always expand, so equal length means a
+    // byte-identical copy of valid UTF-8 with no JSON specials.
+    if (out_len == input.len) return @constCast(input);
+
+    const buf = try allocator.alloc(u8, out_len);
+    var pos: usize = 0;
+    i = 0;
+    while (i < input.len) {
+        const step = jsonEscapeStep(input, i);
+        @memcpy(buf[pos..][0..step.out.len], step.out);
+        pos += step.out.len;
+        i += step.n;
+    }
+    return buf;
 }
 
 /// Escape `src` for safe embedding in JSON into `dst` without allocating.
@@ -966,16 +1102,13 @@ pub fn jsonEscape(allocator: Allocator, input: []const u8) ![]u8 {
 /// (escaped output can be up to 6× the input length for control chars).
 pub fn jsonEscapeInto(dst: []u8, src: []const u8) ?[]const u8 {
     var pos: usize = 0;
-    for (src) |c| {
-        const replacement = jsonEscapeChar(c) orelse {
-            if (pos + 1 > dst.len) return null;
-            dst[pos] = c;
-            pos += 1;
-            continue;
-        };
-        if (pos + replacement.len > dst.len) return null;
-        @memcpy(dst[pos..][0..replacement.len], replacement);
-        pos += replacement.len;
+    var i: usize = 0;
+    while (i < src.len) {
+        const step = jsonEscapeStep(src, i);
+        if (pos + step.out.len > dst.len) return null;
+        @memcpy(dst[pos..][0..step.out.len], step.out);
+        pos += step.out.len;
+        i += step.n;
     }
     return dst[0..pos];
 }
@@ -1261,6 +1394,20 @@ test "jsonUnescape \\uXXXX" {
     try std.testing.expectEqualStrings("世界", cjk);
 }
 
+test "jsonUnescape surrogate pair and lone surrogate" {
+    const allocator = std.testing.allocator;
+
+    // 😀 is U+1F600 = high D83D + low DE00
+    const emoji = try jsonUnescape(allocator, "\\uD83D\\uDE00");
+    defer allocator.free(emoji);
+    try std.testing.expectEqualStrings("\xf0\x9f\x98\x80", emoji);
+
+    // Lone high surrogate becomes U+FFFD
+    const lone = try jsonUnescape(allocator, "\\uD83Dhello");
+    defer allocator.free(lone);
+    try std.testing.expectEqualStrings("\xef\xbf\xbdhello", lone);
+}
+
 test "jsonUnescapeOwned always allocates" {
     const allocator = std.testing.allocator;
 
@@ -1410,6 +1557,21 @@ test "extractIntField handles negative and zero" {
     try std.testing.expect(extractIntField("{\"n\": -1}", "n") == null);
 }
 
+test "extractIntField accepts whole JSON numbers including scientific" {
+    try std.testing.expectEqual(@as(usize, 1000), extractIntField("{\"n\": 1e3}", "n").?);
+    try std.testing.expectEqual(@as(usize, 128), extractIntField("{\"n\": 128.0}", "n").?);
+    // Fractional values must not truncate ({\"n\": 1.5} used to parse as 1)
+    try std.testing.expect(extractIntField("{\"n\": 1.5}", "n") == null);
+    try std.testing.expect(extractIntField("{\"n\": 1e999}", "n") == null);
+}
+
+test "formatFiniteF32 rejects Inf and NaN" {
+    var buf: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("1.500000", formatFiniteF32(&buf, 1.5));
+    try std.testing.expectEqualStrings("null", formatFiniteF32(&buf, std.math.inf(f32)));
+    try std.testing.expectEqualStrings("null", formatFiniteF32(&buf, std.math.nan(f32)));
+}
+
 test "extractFloatField handles edge values" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0), extractFloatField("{\"t\": 0.0}", "t").?, 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, -1.5), extractFloatField("{\"t\": -1.5}", "t").?, 0.001);
@@ -1428,6 +1590,33 @@ test "extractJsonImage handles truncated base64 marker" {
         \\{"content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,"}}]}
     ;
     try std.testing.expect(extractJsonImage(body) == null);
+}
+
+test "hasField distinguishes missing from non-string values" {
+    try std.testing.expect(!hasField("{}", "prompt"));
+    try std.testing.expect(hasField("{\"prompt\":\"hi\"}", "prompt"));
+    try std.testing.expect(hasField("{\"prompt\":[\"hi\"]}", "prompt"));
+    try std.testing.expect(hasField("{\"prompt\":null}", "prompt"));
+    try std.testing.expect(hasField("{\"input\":{\"text\":\"x\"}}", "input"));
+    try std.testing.expect(!hasField("{\"content\":\"prompt: yes\"}", "prompt"));
+}
+
+test "hasJsonImagePart detects OpenAI and Anthropic image blocks" {
+    try std.testing.expect(!hasJsonImagePart("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"));
+    try std.testing.expect(hasJsonImagePart(
+        \\{"messages":[{"role":"user","content":[{"type":"text","text":"What?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo"}}]}]}
+    ));
+    // HTTP(S) URL: not a data URI, still an image part the server must reject.
+    try std.testing.expect(hasJsonImagePart(
+        \\{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}
+    ));
+    try std.testing.expect(hasJsonImagePart(
+        \\{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}]}]}
+    ));
+    // Text part first must not hide a later image part.
+    try std.testing.expect(hasJsonImagePart(
+        \\{"content":[{"type":"text","text":"hi"},{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}
+    ));
 }
 
 test "extractFormFloat handles boundary values" {
@@ -1477,6 +1666,13 @@ test "parseSampling min_p and seed" {
     parseSampling(&s, "{\"min_p\": 0.05, \"seed\": 42}");
     try std.testing.expectApproxEqAbs(@as(f32, 0.05), s.min_p, 0.001);
     try std.testing.expectEqual(@as(u64, 42), s.seed.?);
+}
+
+test "parseSampling does not ingest OpenAI user field" {
+    var s = SamplingParams{};
+    parseSampling(&s, "{\"user\": \"user@example.com\", \"temperature\": 0.2}");
+    try std.testing.expect(s.user == null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), s.temperature, 0.001);
 }
 
 test "parseSampling json_schema" {
@@ -1606,6 +1802,61 @@ test "parseToolsAnthropic absent or malformed" {
     try std.testing.expectEqualStrings("ok", unnamed.tools[0].?.name);
 }
 
+test "fuzz: parseToolsAnthropic" {
+    try std.testing.fuzz({}, struct {
+        fn slicesLiveIn(tp: ToolParams, body: []const u8) !void {
+            try std.testing.expect(tp.tool_count <= max_tools);
+            var i: u32 = 0;
+            while (i < tp.tool_count) : (i += 1) {
+                const t = tp.tools[i] orelse return error.TestUnexpectedResult;
+                try std.testing.expect(std.mem.indexOf(u8, body, t.name) != null);
+                if (t.description.len > 0)
+                    try std.testing.expect(std.mem.indexOf(u8, body, t.description) != null);
+                // Default "{}" is a static literal; otherwise it is a body subslice.
+                if (!std.mem.eql(u8, t.parameters_json, "{}"))
+                    try std.testing.expect(std.mem.indexOf(u8, body, t.parameters_json) != null);
+            }
+            if (!std.mem.eql(u8, tp.tool_choice, "auto"))
+                try std.testing.expect(std.mem.indexOf(u8, body, tp.tool_choice) != null);
+        }
+
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            var buf: [512]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const raw_len = smith.indexWithHash(buf.len + 1, 1);
+            const random_tp = parseToolsAnthropic(buf[0..raw_len]);
+            try slicesLiveIn(random_tp, buf[0..raw_len]);
+
+            // Structure-aware Anthropic Messages tools array so findObjectStart
+            // and input_schema extraction run on nested objects, not only junk.
+            var inner: [96]u8 = undefined;
+            smith.bytesWithHash(&inner, 2);
+            const inner_len = smith.indexWithHash(inner.len + 1, 3);
+            for (inner[0..inner_len]) |*b| {
+                var c: u8 = 0x20 + (b.* % 0x5f);
+                if (c == '"' or c == '\\') c = 'x';
+                b.* = c;
+            }
+            const name = inner[0..@min(inner_len, 24)];
+            const desc = inner[0..@min(inner_len, 40)];
+            var body: [384]u8 = undefined;
+            const n = std.fmt.bufPrint(&body,
+                \\{{"tools":[{{"name":"{s}","description":"{s}","input_schema":{{"type":"object","properties":{{"q":{{"type":"string"}}}}}}}},{{"description":"skip"}},{{"name":"{s}"}}],"tool_choice":"any"}}
+            , .{ name, desc, name }) catch return;
+            const tp = parseToolsAnthropic(body[0..n.len]);
+            try slicesLiveIn(tp, body[0..n.len]);
+            if (name.len > 0) {
+                try std.testing.expectEqual(@as(u32, 2), tp.tool_count);
+                try std.testing.expectEqualStrings(name, tp.tools[0].?.name);
+                try std.testing.expectEqualStrings(desc, tp.tools[0].?.description);
+                try std.testing.expect(std.mem.indexOf(u8, tp.tools[0].?.parameters_json, "properties") != null);
+                try std.testing.expectEqualStrings(name, tp.tools[1].?.name);
+                try std.testing.expectEqualStrings("any", tp.tool_choice);
+            }
+        }
+    }.f, .{});
+}
+
 test "extractTextFromContentArray" {
     const obj =
         \\{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
@@ -1614,11 +1865,39 @@ test "extractTextFromContentArray" {
     try std.testing.expectEqualStrings("What is in this image?", text);
 }
 
+test "extractTextFromContentArray text key before type" {
+    const obj =
+        \\{"role":"user","content":[{"text":"What is in this image?","type":"text"}]}
+    ;
+    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("What is in this image?", text);
+}
+
+test "extractTextFromContentArray image-only returns empty string" {
+    const obj =
+        \\{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
+    ;
+    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("", text);
+}
+
 test "extractTextFromContentArray string content" {
     const obj =
         \\{"role":"user","content":"hello"}
     ;
     try std.testing.expect(extractTextFromContentArray(obj) == null);
+}
+
+test "extractMessages keeps image-only user turns" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}]}
+    ;
+    const extracted = extractMessages(json, allocator) orelse return error.TestUnexpectedResult;
+    defer extracted.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), extracted.messages.len);
+    try std.testing.expectEqual(Role.user, extracted.messages[0].role);
+    try std.testing.expectEqualStrings("", extracted.messages[0].content);
 }
 
 test "parseSampling logit_bias object" {
@@ -1631,6 +1910,19 @@ test "parseSampling logit_bias object" {
     try std.testing.expectApproxEqAbs(@as(f32, 5.0), s.logit_bias_vals[0], 0.01);
     try std.testing.expectEqual(@as(u32, 456), s.logit_bias_ids[1]);
     try std.testing.expectApproxEqAbs(@as(f32, -2.0), s.logit_bias_vals[1], 0.01);
+}
+
+test "parseSampling logit_bias scientific notation" {
+    // Digit-only scan used to stop at 'e', turning 1e2 into bias 1.
+    var s = SamplingParams{};
+    parseSampling(&s,
+        \\{"logit_bias": {"7": 1e2, "8": -2.5e-1}}
+    );
+    try std.testing.expectEqual(@as(u32, 2), s.logit_bias_count);
+    try std.testing.expectEqual(@as(u32, 7), s.logit_bias_ids[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), s.logit_bias_vals[0], 0.01);
+    try std.testing.expectEqual(@as(u32, 8), s.logit_bias_ids[1]);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.25), s.logit_bias_vals[1], 0.01);
 }
 
 test "parseSampling logit_bias rejects non-finite values" {
@@ -1680,6 +1972,26 @@ test "parseSampling response_format json_schema with nested schema" {
     );
     try std.testing.expect(s.json_schema != null);
     try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "object") != null);
+    try std.testing.expect(!s.json_mode);
+}
+
+test "parseSampling json_schema type is not confused by json_object in schema" {
+    var s = SamplingParams{};
+    parseSampling(&s,
+        \\{"response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object", "description": "json_object"}}}}
+    );
+    try std.testing.expect(!s.json_mode);
+    try std.testing.expect(s.json_schema != null);
+}
+
+test "parseSampling json_schema is taken from response_format not a sibling schema" {
+    var s = SamplingParams{};
+    parseSampling(&s,
+        \\{"schema": {"type": "string"}, "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object"}}}}
+    );
+    try std.testing.expect(s.json_schema != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "object") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.json_schema.?, "string") == null);
 }
 
 test "extractLastMessage returns last content" {
@@ -1766,6 +2078,8 @@ test "jsonEscapeInto matches jsonEscape output" {
         "with \"quotes\" and \\ backslash",
         "line1\nline2\ttabbed\r",
         "\x00\x01\x1f control",
+        "café 世界",
+        "\xff\xfe incomplete",
         "",
     };
     for (inputs) |input| {
@@ -1775,6 +2089,21 @@ test "jsonEscapeInto matches jsonEscape output" {
         const into_escaped = jsonEscapeInto(&buf, input).?;
         try std.testing.expectEqualStrings(heap_escaped, into_escaped);
     }
+}
+
+test "jsonEscape replaces invalid UTF-8 with U+FFFD" {
+    const allocator = std.testing.allocator;
+    const input = "ok\xffmore";
+    const escaped = try jsonEscape(allocator, input);
+    defer allocator.free(escaped);
+    try std.testing.expectEqualStrings("ok\xef\xbf\xbdmore", escaped);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(escaped));
+
+    // Valid non-ASCII is passed through unchanged (no allocation).
+    const cafe = "café";
+    const cafe_esc = try jsonEscape(allocator, cafe);
+    try std.testing.expect(cafe_esc.ptr == cafe.ptr);
+    try std.testing.expectEqualStrings(cafe, cafe_esc);
 }
 
 test "extractFormField basic" {
@@ -1818,6 +2147,10 @@ test "parseTools multiple tools" {
     try std.testing.expectEqualStrings("add", t0.name);
     const t1 = tp.tools[1].?;
     try std.testing.expectEqualStrings("sub", t1.name);
+    try std.testing.expect(tp.hasTool("add"));
+    try std.testing.expect(tp.hasTool("sub"));
+    try std.testing.expect(!tp.hasTool("mul"));
+    try std.testing.expect(!tp.hasTool(""));
 }
 
 test "extractField grammar from API request body" {
@@ -1970,6 +2303,10 @@ test "fuzz: all json functions" {
             const tp = parseTools(input);
             std.debug.assert(tp.tool_count <= max_tools);
 
+            // 9b. parseToolsAnthropic (flat tools array, untrusted HTTP body)
+            const tp_a = parseToolsAnthropic(input);
+            std.debug.assert(tp_a.tool_count <= max_tools);
+
             // 10. extractMessages, may allocate, must clean up
             if (extractMessages(input, allocator)) |em| {
                 std.debug.assert(em.messages.len > 0);
@@ -2007,6 +2344,10 @@ test "fuzz: all json functions" {
             if (extractJsonImage(input)) |s| {
                 std.debug.assert(s.len <= input.len);
             }
+
+            // 17b. hasField / hasJsonImagePart, always return bool
+            _ = hasField(input, field);
+            _ = hasJsonImagePart(input);
 
             // 18. urlDecode, allocates, must free
             const decoded = urlDecode(allocator, input) catch return;

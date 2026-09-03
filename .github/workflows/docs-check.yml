@@ -11,10 +11,17 @@ on:
       - 'build.zig.zon'
       - '.zigversion'
       - 'scripts/check-docs.py'
+      - 'src/main.zig'
       - 'src/backend/metal.zig'
       - 'src/backend/cuda.zig'
       - 'src/backend/rocm.zig'
       - 'src/backend/vulkan.zig'
+      - 'build.zig'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/ci.yml'
+      - '.dockerignore'
+      - 'LICENSE'
   pull_request:
     branches: [ main ]
     paths:
@@ -25,10 +32,17 @@ on:
       - 'build.zig.zon'
       - '.zigversion'
       - 'scripts/check-docs.py'
+      - 'src/main.zig'
       - 'src/backend/metal.zig'
       - 'src/backend/cuda.zig'
       - 'src/backend/rocm.zig'
       - 'src/backend/vulkan.zig'
+      - 'build.zig'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - '.github/workflows/ci.yml'
+      - '.dockerignore'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
@@ -38,13 +52,17 @@ concurrency:
   group: docs-check-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  LC_ALL: C
+  TZ: UTC
+
 jobs:
   check-docs:
     name: Link and count hygiene
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 

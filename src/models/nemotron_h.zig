@@ -15,6 +15,7 @@ const std = @import("std");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const ssm_ops = @import("../ops/ssm.zig");
@@ -74,7 +75,7 @@ pub const NemotronHModel = struct {
     /// RMS-norm epsilon.
     rms_eps: f32 = 1e-5,
     /// End-of-sequence token identifier.
-    eos_token_id: u32 = 11,
+    eos_token_id: u32 = arch_mod.nemotron_h_fallback_eos,
     /// Maximum sequence length for the pre-allocated KV cache.
     max_seq_len: usize = 4096,
 
@@ -546,9 +547,10 @@ pub const NemotronHModel = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         const keys_f32 = self.paged_cache.blocks[block_id].keys;

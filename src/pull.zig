@@ -16,6 +16,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const display_mod = @import("display.zig");
+const durable = @import("durable_file.zig");
+const sim_clock = @import("sim_clock.zig");
 const version = display_mod.version;
 
 // ── Named constants ──────────────────────────────────────────────────────────
@@ -39,26 +41,33 @@ const stderr_file = Io.File.stderr();
 /// Module-level Io instance, set by run() from caller.
 var mod_io: Io = undefined;
 
-/// Nanosecond timestamp via CLOCK_MONOTONIC (progress-interval deltas).
-/// REALTIME can jump under NTP and make the progress bar stutter or stall.
+/// Nanosecond timestamp via sim_clock's MONOTONIC timeline (progress-interval
+/// deltas). REALTIME can jump under NTP and make the progress bar stutter
+/// or stall. Under override, progress intervals follow virtual time so a
+/// replay does not inherit host download speed into the bar.
 fn nanoTimestamp() i128 {
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts);
-    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+    return sim_clock.monoNano();
+}
+
+/// Backoff before download retry `attempt` (1-based in the retry loop).
+/// Routes through sim_clock so a clock override advances virtual time
+/// instead of blocking wall-clock time between attempts.
+fn sleepRetry(attempt: u32) void {
+    sim_clock.sleepNs(retry_base_delay_ns << @intCast(attempt));
 }
 
 /// Validate that a filename from the API has no path traversal components
 /// and no URL-special characters that could inject query/fragment into
 /// download URLs (CWE-74).
-/// Rejects embedded '..', '/', '\', null bytes, and URL metacharacters.
+/// Allowlist: ASCII alphanumerics, `-`, `_`, `.`. Rejects `..`, `%` (encoding
+/// bypass), spaces, quotes, and other URL/JSON metacharacters.
 fn isSafeFilename(name: []const u8) bool {
     if (name.len == 0 or name.len > 255) return false;
     if (std.mem.indexOf(u8, name, "..") != null) return false;
     for (name) |c| {
         switch (c) {
-            '/', '\\', '?', '#', '@' => return false,
-            0...31, 127 => return false, // control characters
-            else => {},
+            'a'...'z', 'A'...'Z', '0'...'9', '-', '_', '.' => {},
+            else => return false,
         }
     }
     return true;
@@ -140,12 +149,20 @@ pub const SafeTensorsModel = struct {
     total_size: u64,
     /// Whether `model.safetensors.index.json` exists (multi-shard model).
     has_index: bool,
+    /// Size of `model.safetensors.index.json` in bytes (0 if missing or unknown).
+    index_size: u64 = 0,
     /// Whether `config.json` exists in the repo.
     has_config: bool,
+    /// Size of `config.json` in bytes (0 if missing or unknown).
+    config_size: u64 = 0,
     /// Whether `tokenizer.json` exists in the repo.
     has_tokenizer: bool,
+    /// Size of `tokenizer.json` in bytes (0 if missing or unknown).
+    tokenizer_size: u64 = 0,
     /// Whether `tokenizer_config.json` exists in the repo.
     has_tokenizer_config: bool,
+    /// Size of `tokenizer_config.json` in bytes (0 if missing or unknown).
+    tokenizer_config_size: u64 = 0,
 };
 
 /// Auxiliary files that should be downloaded alongside SafeTensors shards.
@@ -224,14 +241,33 @@ fn fileWrite(file: Io.File, bytes: []const u8) void {
     _ = std.posix.system.write(file.handle, bytes.ptr, bytes.len);
 }
 
+/// Treat missing, empty, and whitespace-only values as unset.
+///
+/// Docker Compose forwards optional vars as empty strings (`${VAR:-}`), and
+/// sourcing `.env.example` leaves `AGAVE_API_KEY=` until the operator fills it.
+/// Callers must not treat those as configured secrets or paths.
+pub fn nonemptyEnv(val: ?[]const u8) ?[]const u8 {
+    const v = val orelse return null;
+    const trimmed = std.mem.trim(u8, v, " \t\r\n");
+    return if (trimmed.len == 0) null else trimmed;
+}
+
+/// True when a debug/feature env var is exactly `1` after trim.
+/// Docs promise `=1`; `0`, empty, and other values stay off.
+pub fn envFlagIsOne(val: ?[]const u8) bool {
+    const v = nonemptyEnv(val) orelse return false;
+    return std.mem.eql(u8, v, "1");
+}
+
 /// Get an environment variable (Zig 0.16 idiom via C getenv).
+/// Empty and whitespace-only values are unset (see `nonemptyEnv`).
 pub fn getenv(name: []const u8) ?[]const u8 {
     var buf: [256]u8 = undefined;
     if (name.len >= buf.len) return null;
     @memcpy(buf[0..name.len], name);
     buf[name.len] = 0;
     const result = std.c.getenv(@ptrCast(buf[0..name.len :0])) orelse return null;
-    return std.mem.span(result);
+    return nonemptyEnv(std.mem.span(result));
 }
 
 // ── Argument parsing ─────────────────────────────────────────────────────────
@@ -258,6 +294,7 @@ pub fn printUsage() void {
         \\
         \\ENVIRONMENT:
         \\  HF_TOKEN             HuggingFace API token for private repos
+        \\                         Empty/whitespace is unset
         \\  HF_HOME              Custom HuggingFace cache directory
         \\  XDG_CACHE_HOME       XDG cache base (fallback: ~/.cache)
         \\
@@ -294,13 +331,9 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
     };
     var have_repo = false;
 
+    // Empty/whitespace HF_TOKEN would send `Authorization: Bearer ` and fail
+    // auth with a confusing 401; getenv treats those as unset.
     result.token = getenv("HF_TOKEN");
-    if (result.token) |t| {
-        // Empty/whitespace HF_TOKEN would send `Authorization: Bearer ` and fail
-        // auth with a confusing 401 instead of treating the token as unset.
-        const trimmed = std.mem.trim(u8, t, " \t\r\n");
-        result.token = if (trimmed.len == 0) null else trimmed;
-    }
 
     var past_options = false;
 
@@ -392,6 +425,18 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
 
 // ── HuggingFace API client ───────────────────────────────────────────────────
 
+/// File size from a HuggingFace `siblings[]` entry. Missing or non-integer
+/// `size` is 0 (unknown), which keeps the legacy "any non-empty local file
+/// is complete" rule for that blob.
+fn siblingSize(sibling: std.json.Value) u64 {
+    if (sibling != .object) return 0;
+    const size_val = sibling.object.get("size") orelse return 0;
+    return switch (size_val) {
+        .integer => |i| if (i >= 0) @intCast(i) else 0,
+        else => 0,
+    };
+}
+
 /// Fetch the list of model files available in a HuggingFace repository.
 ///
 /// Makes a GET request to the HuggingFace API and parses the JSON response
@@ -429,16 +474,15 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             },
         }
     };
-    defer allocator.free(body);
+    defer {
+        @memset(body, 0);
+        allocator.free(body);
+    }
 
-    // Parse JSON response.
+    // Parse JSON response. Do not echo the body: Hub model-card JSON includes
+    // publisher identity fields (author/username) and may include account data.
     const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, body, .{}) catch {
-        const preview_len = @min(body.len, 200);
-        var sanitized_preview: [200]u8 = undefined;
-        for (body[0..preview_len], 0..) |c, i| {
-            sanitized_preview[i] = if (c < 0x20 or c == 0x7F) '?' else c;
-        }
-        eprint("Error: failed to parse API response (first {d} bytes: {s})\n", .{ preview_len, sanitized_preview[0..preview_len] });
+        eprint("Error: failed to parse API response ({d} bytes)\n", .{body.len});
         return PullError.ApiResponseInvalid;
     };
     const root = parsed.value;
@@ -457,13 +501,17 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
         else => &[_]std.json.Value{},
     } else &[_]std.json.Value{};
 
-    // First pass: count GGUF and SafeTensors files.
+    // First pass: count GGUF and SafeTensors files, capture sidecar sizes.
     var gguf_count: usize = 0;
     var st_count: usize = 0;
     var has_st_index = false;
     var has_config = false;
     var has_tokenizer = false;
     var has_tokenizer_config = false;
+    var index_size: u64 = 0;
+    var config_size: u64 = 0;
+    var tokenizer_size: u64 = 0;
+    var tokenizer_config_size: u64 = 0;
     for (siblings) |sibling| {
         if (sibling != .object) continue;
         const rfilename = sibling.object.get("rfilename") orelse continue;
@@ -475,12 +523,16 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             st_count += 1;
         } else if (std.mem.eql(u8, name, "model.safetensors.index.json")) {
             has_st_index = true;
+            index_size = siblingSize(sibling);
         } else if (std.mem.eql(u8, name, "config.json")) {
             has_config = true;
+            config_size = siblingSize(sibling);
         } else if (std.mem.eql(u8, name, "tokenizer.json")) {
             has_tokenizer = true;
+            tokenizer_size = siblingSize(sibling);
         } else if (std.mem.eql(u8, name, "tokenizer_config.json")) {
             has_tokenizer_config = true;
+            tokenizer_config_size = siblingSize(sibling);
         }
     }
 
@@ -500,15 +552,9 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             if (rfilename != .string) continue;
             if (!std.mem.endsWith(u8, rfilename.string, ".gguf") or !isSafeFilename(rfilename.string)) continue;
 
-            const size_val = sibling.object.get("size");
-            const size: u64 = if (size_val) |sv| switch (sv) {
-                .integer => |i| if (i >= 0) @intCast(i) else 0,
-                else => 0,
-            } else 0;
-
             gguf_files[idx] = .{
                 .filename = rfilename.string,
-                .size = size,
+                .size = siblingSize(sibling),
             };
             idx += 1;
         }
@@ -528,12 +574,7 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             if (rfilename != .string) continue;
             if (!std.mem.endsWith(u8, rfilename.string, ".safetensors") or !isSafeFilename(rfilename.string)) continue;
 
-            const size_val = sibling.object.get("size");
-            const size: u64 = if (size_val) |sv| switch (sv) {
-                .integer => |i| if (i >= 0) @intCast(i) else 0,
-                else => 0,
-            } else 0;
-
+            const size = siblingSize(sibling);
             shards[st_idx] = rfilename.string;
             shard_sizes[st_idx] = size;
             total_size = std.math.add(u64, total_size, size) catch total_size;
@@ -545,9 +586,13 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             .shard_sizes = shard_sizes[0..st_idx],
             .total_size = total_size,
             .has_index = has_st_index,
+            .index_size = index_size,
             .has_config = has_config,
+            .config_size = config_size,
             .has_tokenizer = has_tokenizer,
+            .tokenizer_size = tokenizer_size,
             .has_tokenizer_config = has_tokenizer_config,
+            .tokenizer_config_size = tokenizer_config_size,
         };
     }
 
@@ -726,18 +771,26 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
         break :blk priv_headers_buf[0..1];
     } else &.{};
 
-    // Use allocating writer for response body.
-    var aw: std.Io.Writer.Allocating = .init(allocator);
-    defer aw.deinit();
+    // Cap the listing body while reading. Checking length after
+    // `toOwnedSlice` still allocated the full payload (CWE-400).
+    const cap = max_api_response_size + 1;
+    const buf = try allocator.alloc(u8, cap);
+    defer allocator.free(buf);
+    var writer: std.Io.Writer = .fixed(buf);
 
     const result = client.fetch(.{
         .location = .{ .url = url },
         .privileged_headers = priv_headers,
-        .response_writer = &aw.writer,
+        .response_writer = &writer,
     }) catch |err| {
         eprint("Error: HTTP request failed: {}\n", .{err});
         return PullError.HttpRequestFailed;
     };
+
+    if (writer.end > max_api_response_size) {
+        eprint("Error: API response exceeds {d} bytes\n", .{max_api_response_size});
+        return PullError.HttpRequestFailed;
+    }
 
     switch (result.status) {
         .ok => {},
@@ -749,12 +802,7 @@ fn httpGet(allocator: Allocator, url: []const u8, token: ?[]const u8) (PullError
         },
     }
 
-    const body = aw.toOwnedSlice() catch return error.OutOfMemory;
-    if (body.len > max_api_response_size) {
-        allocator.free(body);
-        return PullError.HttpRequestFailed;
-    }
-    return body;
+    return allocator.dupe(u8, buf[0..writer.end]);
 }
 
 // ── Cache layout & file system helpers ───────────────────────────────────────
@@ -925,6 +973,35 @@ fn classifyRangeNotSatisfiable(existing_size: u64, expected_size: u64) RangeNotS
     return .complete;
 }
 
+/// True when a local blob is already the repository's current file.
+///
+/// Known `expected_size` must match exactly: a truncated leftover from a
+/// failed attempt, or a leftover from an older (larger or smaller) revision,
+/// is not complete. Unknown size (`0`) keeps the legacy rule that any
+/// non-empty local file is treated as complete.
+fn localSizeIsComplete(local_size: u64, expected_size: u64) bool {
+    if (expected_size > 0) return local_size == expected_size;
+    return local_size > 0;
+}
+
+/// Stat `path` and apply `localSizeIsComplete`. Missing files are incomplete.
+fn isLocalBlobComplete(path: []const u8, expected_size: u64) bool {
+    const stat = Io.Dir.cwd().statFile(mod_io, path, .{}) catch return false;
+    return localSizeIsComplete(stat.size, expected_size);
+}
+
+/// True when the HTTP-advertised total matches the repository listing.
+///
+/// `expected_size` 0 (listing omitted the size) cannot contradict the
+/// response. `content_length_present` false means the server omitted
+/// Content-Length; the byte-count check after the body is the remaining
+/// guard. Used before opening the local file so a 200 of the wrong length
+/// does not truncate a valid resume prefix.
+fn advertisedSizeAgrees(total_size: u64, expected_size: u64, content_length_present: bool) bool {
+    if (expected_size == 0 or !content_length_present) return true;
+    return total_size == expected_size;
+}
+
 /// Build a progress bar string for a given percentage.
 ///
 /// Returns a slice like `[===============>               ]` representing
@@ -985,9 +1062,7 @@ fn downloadFile(
             } else {
                 eprint("Retrying download (attempt {d}/{d})...\n", .{ attempt + 1, max_retries });
             }
-            mod_io.sleep(Io.Duration.fromNanoseconds(@intCast(retry_base_delay_ns << @intCast(attempt))), .awake) catch |err| {
-                std.log.warn("retry sleep failed: {s}", .{@errorName(err)});
-            };
+            sleepRetry(attempt);
         }
 
         downloadFileOnce(allocator, url, blob_path, token, is_tty, expected_size) catch |err| {
@@ -1111,7 +1186,9 @@ fn downloadFileOnce(
     }
 
     // Determine total size (checked arithmetic prevents overflow from crafted Content-Length).
-    const content_length = response.head.content_length orelse blk: {
+    const maybe_len = response.head.content_length;
+    const content_length_present = maybe_len != null;
+    const content_length = maybe_len orelse blk: {
         eprint("Warning: server omitted Content-Length; size-based integrity check disabled\n", .{});
         break :blk @as(u64, 0);
     };
@@ -1119,6 +1196,15 @@ fn downloadFileOnce(
         std.math.add(u64, existing_size, content_length) catch return PullError.DownloadFailed
     else
         content_length;
+
+    // Refuse a body whose advertised length disagrees with the listing
+    // *before* opening the file: a 200 of the wrong size must not truncate
+    // a valid resume prefix. The retry then Range-resumes (or starts over
+    // after a 416 stale-delete) instead of appending to a short 200 body.
+    if (!advertisedSizeAgrees(total_size, expected_size, content_length_present)) {
+        eprint("Error: download size {d} does not match repository file {d}\n", .{ total_size, expected_size });
+        return PullError.DownloadFailed;
+    }
 
     // If server returned 200 (not 206), we're starting from scratch.
     const start_offset: u64 = if (status == .partial_content) existing_size else 0;
@@ -1238,10 +1324,24 @@ fn downloadFileOnce(
     if (is_tty) eprint("\n", .{}); // Newline after progress bar.
 
     // Verify downloaded size matches expected size (catches silent truncation).
-    if (total_size > 0 and downloaded != total_size) {
+    // Skip the Content-Length comparison when the header was omitted: a 206
+    // with no length would otherwise treat the resume offset as the total
+    // and fail a successful remainder download.
+    if (content_length_present and total_size > 0 and downloaded != total_size) {
         eprint("Error: downloaded {d} bytes but expected {d}, file may be truncated\n", .{ downloaded, total_size });
         return PullError.DownloadFailed;
     }
+    if (expected_size > 0 and downloaded != expected_size) {
+        eprint("Error: downloaded {d} bytes but repository lists {d}\n", .{ downloaded, expected_size });
+        return PullError.DownloadFailed;
+    }
+
+    // fsync before advertising the blob as complete: close() is not durable,
+    // and the snapshot symlink is created immediately after this returns.
+    durable.syncFd(file.handle) catch |err| {
+        eprint("Error: fsync failed for '{s}': {}\n", .{ blob_path, err });
+        return PullError.DownloadFailed;
+    };
 
     if (std.c.close(file.handle) != 0) {
         eprint("Error: failed to close '{s}' after download (flush may have failed)\n", .{blob_path});
@@ -1383,16 +1483,10 @@ fn pullGgufModel(
     // Check if already downloaded.
     const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, selected.filename }) catch return error.OutOfMemory;
 
-    var already_complete = false;
-    if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
-        if (selected.size > 0 and stat.size == selected.size) {
-            eprint("File already downloaded: {s}\n", .{blob_path});
-            already_complete = true;
-        } else if (selected.size == 0 and stat.size > 0) {
-            eprint("File already exists: {s}\n", .{blob_path});
-            already_complete = true;
-        }
-    } else |_| {}
+    const already_complete = isLocalBlobComplete(blob_path, selected.size);
+    if (already_complete) {
+        eprint("File already downloaded: {s}\n", .{blob_path});
+    }
 
     // Download shard 1 (or the only shard) if needed.
     if (!already_complete) {
@@ -1423,13 +1517,10 @@ fn pullGgufModel(
             const shard_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard_name }) catch return error.OutOfMemory;
             const shard_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, shard_name }) catch return error.OutOfMemory;
 
-            var shard_done = false;
-            if (Io.Dir.cwd().statFile(mod_io, shard_blob, .{})) |stat| {
-                if ((shard_size > 0 and stat.size == shard_size) or (shard_size == 0 and stat.size > 0)) {
-                    eprint("  shard {d}/{d} already downloaded: {s}\n", .{ shard_idx, total_shards, shard_name });
-                    shard_done = true;
-                }
-            } else |_| {}
+            const shard_done = isLocalBlobComplete(shard_blob, shard_size);
+            if (shard_done) {
+                eprint("  shard {d}/{d} already downloaded: {s}\n", .{ shard_idx, total_shards, shard_name });
+            }
 
             if (!shard_done) {
                 eprint("  shard {d}/{d}: {s} ({d:.1} GB)\n", .{ shard_idx, total_shards, shard_name, shard_gb });
@@ -1493,16 +1584,10 @@ fn pullSafeTensorsModel(
     for (st.shards, st.shard_sizes, 0..) |shard, expected_size, i| {
         const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, shard }) catch return error.OutOfMemory;
 
-        var already_complete = false;
-        if (Io.Dir.cwd().statFile(mod_io, blob_path, .{})) |stat| {
-            if (expected_size > 0 and stat.size == expected_size) {
-                eprint("[{d}/{d}] Already downloaded: {s}\n", .{ i + 1, st.shards.len, shard });
-                already_complete = true;
-            } else if (expected_size == 0 and stat.size > 0) {
-                eprint("[{d}/{d}] Already exists: {s}\n", .{ i + 1, st.shards.len, shard });
-                already_complete = true;
-            }
-        } else |_| {}
+        const already_complete = isLocalBlobComplete(blob_path, expected_size);
+        if (already_complete) {
+            eprint("[{d}/{d}] Already downloaded: {s}\n", .{ i + 1, st.shards.len, shard });
+        }
 
         if (!already_complete) {
             eprint("[{d}/{d}] Downloading {s}...\n", .{ i + 1, st.shards.len, shard });
@@ -1523,46 +1608,15 @@ fn pullSafeTensorsModel(
 
     // Download index file if present.
     if (st.has_index) {
-        const index_filename = "model.safetensors.index.json";
-        const index_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, index_filename }) catch return error.OutOfMemory;
-        if (Io.Dir.cwd().statFile(mod_io, index_blob, .{})) |_| {
-            eprint("Already downloaded: {s}\n", .{index_filename});
-        } else |_| {
-            eprint("Downloading {s}...\n", .{index_filename});
-            downloadFile(allocator, args.repo, index_filename, index_blob, args.token, 0) catch |err| {
-                eprint("Warning: could not download {s}: {}\n", .{ index_filename, err });
-            };
-        }
-        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, index_filename }) catch return error.OutOfMemory;
-        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{index_filename}) catch return error.OutOfMemory;
-        atomicSymlink(pa, relative_blob, snapshot_link);
+        pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, "model.safetensors.index.json", st.index_size);
     }
 
     // Download auxiliary files (config.json, tokenizer.json, tokenizer_config.json).
     const aux_flags = [_]bool{ st.has_config, st.has_tokenizer, st.has_tokenizer_config };
-    for (&safetensors_aux_files, aux_flags) |aux_name, has_file| {
+    const aux_sizes = [_]u64{ st.config_size, st.tokenizer_size, st.tokenizer_config_size };
+    for (&safetensors_aux_files, aux_flags, aux_sizes) |aux_name, has_file, aux_size| {
         if (!has_file) continue;
-        const aux_blob = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, aux_name }) catch {
-            eprint("Warning: OOM creating path for {s}\n", .{aux_name});
-            continue;
-        };
-        if (Io.Dir.cwd().statFile(mod_io, aux_blob, .{})) |_| {
-            eprint("Already downloaded: {s}\n", .{aux_name});
-        } else |_| {
-            eprint("Downloading {s}...\n", .{aux_name});
-            downloadFile(allocator, args.repo, aux_name, aux_blob, args.token, 0) catch |err| {
-                eprint("Warning: could not download {s}: {}\n", .{ aux_name, err });
-            };
-        }
-        const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, aux_name }) catch {
-            eprint("Warning: OOM creating symlink for {s}\n", .{aux_name});
-            continue;
-        };
-        const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{aux_name}) catch {
-            eprint("Warning: OOM creating symlink for {s}\n", .{aux_name});
-            continue;
-        };
-        atomicSymlink(pa, relative_blob, snapshot_link);
+        pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, aux_name, aux_size);
     }
 
     eprint("Download complete.\n", .{});
@@ -1576,6 +1630,42 @@ fn pullSafeTensorsModel(
     fileWrite(Io.File.stdout(), "\n");
     eprint("\nModel ready at:\n  {s}\n", .{snapshots_dir});
     eprint("Run:\n  agave {s} \"your prompt\"\n", .{snapshots_dir});
+}
+
+/// Download one SafeTensors sidecar (index or tokenizer/config) with the same
+/// size-based skip used for shards. A leftover from a failed attempt whose
+/// length does not match the listing is re-fetched instead of being treated
+/// as complete, so a second `agave pull` converges on the repository file.
+fn pullSidecarFile(
+    allocator: Allocator,
+    pa: Allocator,
+    args: PullArgs,
+    blobs_dir: []const u8,
+    snapshots_dir: []const u8,
+    filename: []const u8,
+    expected_size: u64,
+) void {
+    const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, filename }) catch {
+        eprint("Warning: OOM creating path for {s}\n", .{filename});
+        return;
+    };
+    if (isLocalBlobComplete(blob_path, expected_size)) {
+        eprint("Already downloaded: {s}\n", .{filename});
+    } else {
+        eprint("Downloading {s}...\n", .{filename});
+        downloadFile(allocator, args.repo, filename, blob_path, args.token, expected_size) catch |err| {
+            eprint("Warning: could not download {s}: {}\n", .{ filename, err });
+        };
+    }
+    const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, filename }) catch {
+        eprint("Warning: OOM creating symlink for {s}\n", .{filename});
+        return;
+    };
+    const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{filename}) catch {
+        eprint("Warning: OOM creating symlink for {s}\n", .{filename});
+        return;
+    };
+    atomicSymlink(pa, relative_blob, snapshot_link);
 }
 
 /// Create an atomic symlink replacement (temp + rename) to prevent TOCTOU races.
@@ -1603,14 +1693,9 @@ fn writeRefsMain(pa: Allocator, refs_dir: []const u8, commit_sha: []const u8) vo
         eprint("Warning: could not allocate refs/main path: {}\n", .{err});
         return;
     };
-    if (Io.Dir.cwd().createFile(mod_io, refs_main, .{})) |f| {
-        defer f.close(mod_io);
-        f.writePositionalAll(mod_io, commit_sha, 0) catch |err| {
-            eprint("Warning: could not write refs/main: {}\n", .{err});
-        };
-    } else |err| {
+    durable.replace(refs_main, commit_sha) catch |err| {
         eprint("Warning: could not write refs/main: {}\n", .{err});
-    }
+    };
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -1654,6 +1739,40 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
+
+test "nanoTimestamp follows sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(2_000);
+    try std.testing.expectEqual(@as(i128, 2_000) * 1_000_000, nanoTimestamp());
+    sim_clock.advanceMs(5);
+    try std.testing.expectEqual(@as(i128, 2_005) * 1_000_000, nanoTimestamp());
+}
+
+test "sleepRetry advances virtual clock" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(0);
+    sleepRetry(1); // 1s << 1 = 2s
+    try std.testing.expectEqual(@as(i64, 2_000), sim_clock.milliNow());
+}
+
+test "nonemptyEnv treats empty and whitespace as unset" {
+    try std.testing.expect(nonemptyEnv(null) == null);
+    try std.testing.expect(nonemptyEnv("") == null);
+    try std.testing.expect(nonemptyEnv("   ") == null);
+    try std.testing.expect(nonemptyEnv("\t\n") == null);
+    try std.testing.expectEqualStrings("abc", nonemptyEnv("abc").?);
+    try std.testing.expectEqualStrings("abc", nonemptyEnv("  abc  ").?);
+}
+
+test "envFlagIsOne requires trimmed 1" {
+    try std.testing.expect(!envFlagIsOne(null));
+    try std.testing.expect(!envFlagIsOne(""));
+    try std.testing.expect(!envFlagIsOne("0"));
+    try std.testing.expect(!envFlagIsOne("true"));
+    try std.testing.expect(!envFlagIsOne("yes"));
+    try std.testing.expect(envFlagIsOne("1"));
+    try std.testing.expect(envFlagIsOne(" 1 "));
+}
 
 test "replaceSlashes basic" {
     const allocator = std.testing.allocator;
@@ -1803,6 +1922,10 @@ test "isSafeFilename rejects traversal" {
     try std.testing.expect(!isSafeFilename("model.gguf?q=1"));
     try std.testing.expect(!isSafeFilename("model.gguf#frag"));
     try std.testing.expect(!isSafeFilename("user@host"));
+    try std.testing.expect(!isSafeFilename("evil%2e%2e%2fpasswd.gguf"));
+    try std.testing.expect(!isSafeFilename("model\".gguf"));
+    try std.testing.expect(!isSafeFilename("model name.gguf"));
+    try std.testing.expect(!isSafeFilename("model&x=1.gguf"));
     try std.testing.expect(isSafeFilename("model-Q4_K_M.gguf"));
     try std.testing.expect(isSafeFilename("weights.safetensors"));
 }
@@ -1849,6 +1972,76 @@ test "classifyRangeNotSatisfiable stale undersized local file is rejected" {
 test "classifyRangeNotSatisfiable unknown expected size keeps legacy behavior" {
     // API listing without size metadata cannot contradict the local file.
     try std.testing.expectEqual(RangeNotSatisfiable.complete, classifyRangeNotSatisfiable(7000, 0));
+}
+
+test "localSizeIsComplete matching size is complete" {
+    try std.testing.expect(localSizeIsComplete(5000, 5000));
+}
+
+test "localSizeIsComplete truncated leftover is not complete" {
+    // Second `agave pull` after a failed sidecar/shard download: the leftover
+    // must not be skipped as "already downloaded".
+    try std.testing.expect(!localSizeIsComplete(12, 5000));
+    try std.testing.expect(!localSizeIsComplete(0, 5000));
+}
+
+test "localSizeIsComplete oversized leftover is not complete" {
+    try std.testing.expect(!localSizeIsComplete(7000, 5000));
+}
+
+test "localSizeIsComplete unknown size treats non-empty as complete" {
+    try std.testing.expect(localSizeIsComplete(1, 0));
+    try std.testing.expect(localSizeIsComplete(7000, 0));
+    try std.testing.expect(!localSizeIsComplete(0, 0));
+}
+
+test "advertisedSizeAgrees rejects listing mismatch when Content-Length is present" {
+    try std.testing.expect(advertisedSizeAgrees(5000, 5000, true));
+    try std.testing.expect(!advertisedSizeAgrees(3000, 5000, true));
+    try std.testing.expect(!advertisedSizeAgrees(7000, 5000, true));
+}
+
+test "advertisedSizeAgrees cannot contradict when size or Content-Length is unknown" {
+    try std.testing.expect(advertisedSizeAgrees(3000, 0, true));
+    try std.testing.expect(advertisedSizeAgrees(3000, 5000, false));
+    try std.testing.expect(advertisedSizeAgrees(0, 0, false));
+}
+
+test "siblingSize reads integer size and treats missing as unknown" {
+    const allocator = std.testing.allocator;
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"size\":42}", .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 42), siblingSize(parsed.value));
+    }
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"rfilename\":\"x\"}", .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 0), siblingSize(parsed.value));
+    }
+    {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, "{\"size\":-1}", .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(u64, 0), siblingSize(parsed.value));
+    }
+}
+
+test "isLocalBlobComplete rejects truncated sidecar so rerun re-downloads" {
+    const io = std.testing.io;
+    mod_io = io;
+    var path_buf: [80]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "test_pull_sidecar_{d}.json", .{std.c.getpid()});
+    defer Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    {
+        var f = try Io.Dir.cwd().createFile(io, path, .{ .read = true });
+        defer f.close(io);
+        try f.writePositionalAll(io, "{", 0);
+    }
+    try std.testing.expect(!isLocalBlobComplete(path, 20));
+    try std.testing.expect(isLocalBlobComplete(path, 1));
+    try std.testing.expect(isLocalBlobComplete(path, 0));
+    try std.testing.expect(!isLocalBlobComplete("test_pull_no_such_sidecar.json", 20));
 }
 
 // ── Rerun safety (corrupt blob removal) ─────────────────────────────────────
@@ -2067,12 +2260,22 @@ test "fuzz: pull helper functions" {
             const len = buf[0];
             const input = buf[1..@min(@as(usize, len) + 1, buf.len)];
 
+            _ = nonemptyEnv(if (input.len == 0) null else input);
+            _ = envFlagIsOne(if (input.len == 0) null else input);
+
             // isSafeFilename: must not crash on any input.
             const safe = isSafeFilename(input);
-            // If safe, must not contain ".." or control chars.
+            // If safe, only allowlisted characters and no "..".
             if (safe) {
                 try std.testing.expect(std.mem.indexOf(u8, input, "..") == null);
                 try std.testing.expect(input.len <= 255);
+                for (input) |c| {
+                    const ok = (c >= 'a' and c <= 'z') or
+                        (c >= 'A' and c <= 'Z') or
+                        (c >= '0' and c <= '9') or
+                        c == '-' or c == '_' or c == '.';
+                    try std.testing.expect(ok);
+                }
             }
 
             // isValidRepoName: must not crash on any input.

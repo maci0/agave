@@ -10,6 +10,17 @@ const std = @import("std");
 pub const default_sink_size: usize = 4;
 /// Number of trailing positions always preserved (recent working context).
 pub const default_recent_window: usize = 128;
+/// Default eviction budget as a fraction of context: 4/5 = 80%.
+const default_budget_num: u64 = 4;
+const default_budget_den: u64 = 5;
+
+/// Default KV eviction budget (80% of `ctx_size`).
+///
+/// Computed in u64 so `ctx_size * 4` does not wrap for contexts above
+/// `2^30 - 1` (u32 multiply of `1 << 30` wraps to 0, yielding budget 0).
+pub fn defaultBudget(ctx_size: u32) u32 {
+    return @intCast(@as(u64, ctx_size) * default_budget_num / default_budget_den);
+}
 
 /// SIMD vector width for f32 accumulation.
 const simd_width: usize = 8;
@@ -450,6 +461,14 @@ test "ropeFrequencies produces decreasing values" {
     for (1..freqs.len) |i| {
         try std.testing.expect(freqs[i] < freqs[i - 1]);
     }
+}
+
+test "defaultBudget 80 percent without u32 wrap" {
+    try std.testing.expectEqual(@as(u32, 819), defaultBudget(1024));
+    // 2^30 * 4 overflows u32; the widened path must not collapse to 0.
+    const big: u32 = 1 << 30;
+    try std.testing.expectEqual(@as(u32, @intCast(@as(u64, big) * 4 / 5)), defaultBudget(big));
+    try std.testing.expect(defaultBudget(big) > 0);
 }
 
 test "selectVictims budget covers all positions" {

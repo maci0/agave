@@ -19,6 +19,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const mlx_ops = @import("../ops/mlx.zig");
@@ -325,7 +326,7 @@ pub const Gemma4Model = struct {
     image_batch_end: usize = 0,
 
     // ── Public fields required by Model vtable ───────────────────
-    eos_token_id: u32 = 1,
+    eos_token_id: u32 = arch_mod.gemma_fallback_eos,
     /// Exposed for Model vtable, uses sliding-window head count (dominant layer type).
     n_head: u32 = default_sl_n_head,
     /// Exposed for Model vtable, uses sliding-window KV head count.
@@ -502,7 +503,7 @@ pub const Gemma4Model = struct {
         const rms_eps = getArchAny.f32_(f, arch, "attention.layer_norm_rms_epsilon") orelse
             f.getMetaF32("rms_norm_eps") orelse default_rms_eps;
 
-        const eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 1;
+        const eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse arch_mod.gemma_fallback_eos;
 
         var max_sl: usize = default_max_seq_len;
         if (getArchAny.u32_(f, arch, "context_length")) |cl| max_sl = cl;
@@ -1665,6 +1666,10 @@ pub const Gemma4Model = struct {
             offset += v_bytes;
         }
         self.kv_seq_len = n_tokens;
+        // Host KV is now the source of truth. Discrete GPU backends cache a
+        // device mirror keyed by host address and would otherwise keep the
+        // previous contents on the next SDPA.
+        self.be.invalidateDeviceKv();
         return true;
     }
 
@@ -1766,7 +1771,7 @@ pub const Gemma4Model = struct {
 
     /// Get flat f32 view of KV cache for a layer (resolves shared KV mapping).
     /// Returns the per-layer KV buffers with correct per-layer kvd stride.
-    fn getLayerKvView(self: *Gemma4Model, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *Gemma4Model, layer: usize) kvcache.KvF32View {
         const src_layer = self.kv_source[layer];
         return .{
             .keys = self.layer_keys[src_layer],
@@ -2461,57 +2466,6 @@ pub const Gemma4Model = struct {
         );
     }
 
-    /// Batched GEMV dispatch: multiple ops sharing the same input vector.
-    /// Dispatches all ops in a single batch without barriers, enabling concurrent
-    /// GPU execution (e.g., fused Q+K+V or gate+up projections).
-    const GemvSpec = struct { t: TensorInfo, y: [*]f32, n: usize };
-
-    fn doGemvMulti(self: *Gemma4Model, x: [*]const f32, k: usize, specs: []const GemvSpec) void {
-        const GemvOp = backend_mod.GemvOp;
-        var ops: [4]GemvOp = undefined; // max 4 ops (Q+K+V+output or gate+up+down+...)
-        std.debug.assert(specs.len <= ops.len);
-
-        for (specs, 0..) |spec, i| {
-            if (spec.t.dtype == .mlx_q) {
-                // MLX-Q: resolve companion pointers
-                const key = @intFromPtr(spec.t.data_ptr);
-                const slot = key % mlx_companion_cache_size;
-                var companion: MlxCompanion = undefined;
-                if (self.mlx_cc_keys[slot] == key) {
-                    companion = self.mlx_cc_vals[slot];
-                } else {
-                    const base = spec.t.name;
-                    const plen = if (std.mem.endsWith(u8, base, ".weight")) base.len - 7 else base.len;
-                    var sb: [model_mod.tensor_name_buf_size]u8 = undefined;
-                    var bb: [model_mod.tensor_name_buf_size]u8 = undefined;
-                    const sn = std.fmt.bufPrint(&sb, "{s}.scales", .{base[0..plen]}) catch return;
-                    const bn = std.fmt.bufPrint(&bb, "{s}.biases", .{base[0..plen]}) catch return;
-                    const st = self.fmt.getTensor(sn) orelse return;
-                    const bt = self.fmt.getTensor(bn) orelse return;
-                    companion = .{ .scales = st.data_ptr, .biases = bt.data_ptr, .group_size = model_mod.inferMlxGroupSize(st, k) };
-                    self.mlx_cc_keys[slot] = key;
-                    self.mlx_cc_vals[slot] = companion;
-                }
-                ops[i] = .{
-                    .w = .{ .data = spec.t.data_ptr, .dtype = spec.t.dtype },
-                    .y = spec.y,
-                    .n = spec.n,
-                    .mlx_scales = companion.scales,
-                    .mlx_biases = companion.biases,
-                    .mlx_bits = self.mlx_bits,
-                    .mlx_group_size = companion.group_size,
-                };
-            } else {
-                ops[i] = .{
-                    .w = .{ .data = spec.t.data_ptr, .dtype = spec.t.dtype },
-                    .y = spec.y,
-                    .n = spec.n,
-                };
-            }
-        }
-        self.be.gemvMulti(x, ops[0..specs.len], k);
-    }
-
     /// Dispatch GEMV for a single expert slice from a packed expert tensor.
     fn doGemvExpert(self: *Gemma4Model, x: [*]const f32, exp_t: TensorInfo, ei: usize, stride: usize, y: [*]f32, n: usize, k: usize) void {
         const data = exp_t.data_ptr + ei * stride;
@@ -3013,8 +2967,8 @@ test "Gemma4 model vtable compiles" {
 /// Minimal KV-only model for export/import tests: capacity 4 tokens,
 /// one layer with kvd=2. Only fields touched by exportKvPrefix/importKvPrefix
 /// are initialized; deinit is never called (buffers freed by the caller).
-/// `layer_tables` must outlive every use of the returned model.
-fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32) Gemma4Model {
+/// `layer_tables` and `cpu_be` must outlive every use of the returned model.
+fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32, cpu_be: *backend_mod.CpuBackend) Gemma4Model {
     var m: Gemma4Model = .{
         .n_layers = 1,
         .n_embd = 0,
@@ -3040,7 +2994,7 @@ fn kvOnlyModel(keys: []f32, vals: []f32, layer_tables: *[2][1][]f32) Gemma4Model
         .dense_ff_dim = 0,
         .global_layer_interval = 0,
         .fmt = undefined,
-        .be = undefined,
+        .be = .{ .cpu = cpu_be },
         .allocator = std.testing.allocator,
         .norm_add_one = false,
     };
@@ -3064,7 +3018,8 @@ test "Gemma4 importKvPrefix round-trips an exported prefix" {
     for (keys, 0..) |*k, i| k.* = @floatFromInt(i);
     for (vals, 0..) |*v, i| v.* = @floatFromInt(100 + i);
     var layer_tables: [2][1][]f32 = undefined;
-    var m = kvOnlyModel(keys, vals, &layer_tables);
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
 
     var blob: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;
     m.kv_seq_len = 3;
@@ -3079,7 +3034,8 @@ test "Gemma4 importKvPrefix round-trips an exported prefix" {
     @memset(keys2, 0);
     @memset(vals2, 0);
     var layer_tables2: [2][1][]f32 = undefined;
-    var m2 = kvOnlyModel(keys2, vals2, &layer_tables2);
+    var cpu_be2: backend_mod.CpuBackend = .{};
+    var m2 = kvOnlyModel(keys2, vals2, &layer_tables2, &cpu_be2);
 
     try std.testing.expect(m2.importKvPrefix(blob[0..n], 3));
     try std.testing.expectEqual(@as(usize, 3), m2.kv_seq_len);
@@ -3098,7 +3054,8 @@ test "Gemma4 importKvPrefix rejects oversized or short inputs" {
     @memset(keys, 0);
     @memset(vals, 0);
     var layer_tables: [2][1][]f32 = undefined;
-    var m = kvOnlyModel(keys, vals, &layer_tables);
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
 
     const full_bytes = cap * kvd * @sizeOf(f32) * 2;
 
@@ -3144,7 +3101,8 @@ test "Gemma4 exportKvPrefix rejects positions beyond capacity" {
     @memset(keys, 0);
     @memset(vals, 0);
     var layer_tables: [2][1][]f32 = undefined;
-    var m = kvOnlyModel(keys, vals, &layer_tables);
+    var cpu_be: backend_mod.CpuBackend = .{};
+    var m = kvOnlyModel(keys, vals, &layer_tables, &cpu_be);
     m.kv_seq_len = cap;
 
     var dst: [cap * kvd * @sizeOf(f32) * 2]u8 = undefined;

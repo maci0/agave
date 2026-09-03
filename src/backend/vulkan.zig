@@ -485,12 +485,38 @@ const FnBindBufferMemory = *const fn (VkDevice, VkBuffer, VkDeviceMemory, VkDevi
 const FnMapMemory = *const fn (VkDevice, VkDeviceMemory, VkDeviceSize, VkDeviceSize, VkFlags, *?*anyopaque) callconv(.c) VkResult;
 const FnUnmapMemory = *const fn (VkDevice, VkDeviceMemory) callconv(.c) void;
 
-// Pipeline cache helpers: load/save ~/.cache/agave/vk_pipeline_cache.bin via POSIX
-fn vkCachePath(buf: *[512]u8) ?[]u8 {
-    const home_c = std.c.getenv("HOME") orelse return null;
-    const home = std.mem.span(home_c);
-    return std.fmt.bufPrint(buf, "{s}/.cache/agave/vk_pipeline_cache.bin", .{home}) catch null;
+// Pipeline cache helpers: load/save $XDG_CACHE_HOME/agave/vk_pipeline_cache.bin
+// (fallback: ~/.cache/agave/vk_pipeline_cache.bin) via POSIX.
+fn formatVkCachePath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
+    if (xdg) |dir| {
+        if (dir.len > 0)
+            return std.fmt.bufPrint(buf, "{s}/agave/vk_pipeline_cache.bin", .{dir}) catch null;
+    }
+    const h = home orelse return null;
+    if (h.len == 0) return null;
+    return std.fmt.bufPrint(buf, "{s}/.cache/agave/vk_pipeline_cache.bin", .{h}) catch null;
 }
+
+fn vkCachePath(buf: *[512]u8) ?[]u8 {
+    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
+    const home = if (std.c.getenv("HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
+    return formatVkCachePath(buf, xdg, home);
+}
+
+fn mkdirParents(path: []const u8) void {
+    var buf: [512:0]u8 = undefined;
+    if (path.len == 0 or path.len >= buf.len) return;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    var i: usize = if (path[0] == '/') 1 else 0;
+    while (i <= path.len) : (i += 1) {
+        if (i != path.len and path[i] != '/') continue;
+        buf[i] = 0;
+        _ = std.c.mkdir(@ptrCast(buf[0..i :0]), 0o755);
+        if (i < path.len) buf[i] = '/';
+    }
+}
+
 fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
     var path_buf: [512]u8 = undefined;
     const path = vkCachePath(&path_buf) orelse return null;
@@ -527,24 +553,11 @@ fn loadVkCacheFile(allocator: std.mem.Allocator) ?[]u8 {
 fn saveVkCacheFile(data: []const u8) void {
     var path_buf: [512]u8 = undefined;
     const path = vkCachePath(&path_buf) orelse return;
-    // ensure ~/.cache/agave exists
-    var dir_buf: [512:0]u8 = undefined;
-    if (std.fmt.bufPrintZ(&dir_buf, "{s}", .{std.fs.path.dirname(path) orelse return}) catch null) |dir| {
-        _ = std.c.mkdir(dir, 0o755);
-    }
-    const P = std.posix;
-    // Platform-correct O_WRONLY|O_CREAT|O_TRUNC:
-    //   Linux:  O_WRONLY=1, O_CREAT=64(0o100), O_TRUNC=512(0o1000) → 577
-    //   macOS:  O_WRONLY=1, O_CREAT=512(0x200), O_TRUNC=1024(0x400) → 1537
-    const open_flags: u32 = if (comptime builtin.os.tag == .linux) (1 | 64 | 512) else (1 | 0x200 | 0x400);
-    const fd = P.openat(P.AT.FDCWD, path, @bitCast(open_flags), 0o644) catch return;
-    defer _ = if (comptime builtin.os.tag == .linux) P.system.close(fd) else std.c.close(fd);
-    var off: usize = 0;
-    while (off < data.len) {
-        const n = std.posix.system.write(fd, data[off..].ptr, data.len - off);
-        if (n <= 0) break;
-        off += @intCast(n);
-    }
+    mkdirParents(std.fs.path.dirname(path) orelse return);
+    // Atomic replace: a crash mid-write must not truncate a previously good cache.
+    @import("../durable_file.zig").replace(path, data) catch |err| {
+        std.log.warn("Vulkan pipeline cache save failed ({s}): {}", .{ path, err });
+    };
 }
 
 const FnCmdBindPipeline = *const fn (VkCommandBuffer, c_int, VkPipeline) callconv(.c) void;
@@ -779,6 +792,14 @@ pub const VulkanBackend = struct {
     /// created and uploaded once on first use, then reused on subsequent calls.
     /// This eliminates re-uploading gigabytes of weight data per token.
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
+    /// Byte cap on `buf_cache` plus the scratch its eviction list is written
+    /// into. Null until `setWeightBudget`; unbounded until then.
+    weight_budget: ?backend_mod.WeightBudget = null,
+    /// Freed weight buffers, kept for the next admit of the same size. Only
+    /// live alongside a budget: without eviction nothing is ever released.
+    buffer_pool: ?backend_mod.BufferPool(VkBuf) = null,
+    evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
+    budget_allocator: std.mem.Allocator = undefined,
 
     // Dynamic library handle
     lib: std.DynLib = undefined,
@@ -923,6 +944,7 @@ pub const VulkanBackend = struct {
     pub fn init(allocator: std.mem.Allocator, device_id: u32) !VulkanBackend {
         var self = VulkanBackend{};
         self.allocator = allocator;
+        self.budget_allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         self.act_cache = std.AutoHashMap(usize, ActBuf).init(allocator);
@@ -930,12 +952,7 @@ pub const VulkanBackend = struct {
         errdefer self.buf_cache.deinit();
         errdefer self.deinitCachedBuffers();
 
-        // Dynamically load Vulkan library (try standard name, then platform-specific paths)
-        self.lib = std.DynLib.open(vk_lib_name) catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/" ++ vk_lib_name) catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/" ++ vk_lib_name) catch
-            std.DynLib.open("/opt/homebrew/lib/" ++ vk_lib_name) catch
-            return error.VulkanNotAvailable;
+        self.lib = @import("../dynlib.zig").open(vk_lib_name) orelse return error.VulkanNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -1305,13 +1322,46 @@ pub const VulkanBackend = struct {
         self.buf_cache.clearRetainingCapacity();
     }
 
+    /// Resolve `addr[0..size]` inside an already-cached activation buffer.
+    ///
+    /// This is what lets a batched op's per-token `ptr + t * stride` share the
+    /// parent allocation instead of uploading its own copy from host memory,
+    /// which would miss whatever the GPU has written to the parent and not yet
+    /// flushed. Returns null when the range is not contained, or when its byte
+    /// offset is not descriptor-aligned; the caller then falls back to a private
+    /// buffer, which is correct, just slower.
+    fn findContainingAct(self: *VulkanBackend, addr: usize, size: usize, comptime mark_dirty: bool, comptime refresh_stale: bool) ?VkBuf {
+        var it = self.act_cache.iterator();
+        while (it.next()) |entry| {
+            const base = entry.key_ptr.*;
+            const act = entry.value_ptr;
+            if (addr < base or addr + size > base + act.size) continue;
+            const off = addr - base;
+            if (off % storage_buffer_offset_align != 0) return null;
+            if (refresh_stale and act.state == .stale) {
+                // Refresh the WHOLE parent: `stale` describes all of it, and a
+                // sibling sub-range will read the rest.
+                self.uploadBuffer(act.vk_buf.mem, @as([*]const u8, @ptrFromInt(base)), act.size);
+                act.state = .clean;
+            }
+            if (mark_dirty) act.state = .dirty;
+            return .{ .buf = act.vk_buf.buf, .mem = act.vk_buf.mem, .offset = act.vk_buf.offset + off };
+        }
+        return null;
+    }
+
     /// Get GPU buffer for a read-only input. Re-uploads from host if stale.
     fn getInputBuf(self: *VulkanBackend, ptr: anytype, size: usize) VkBuf {
         const addr = @intFromPtr(ptr);
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), size);
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer, and
+                    // a caller asking for a prefix (a batched op's first token) would
+                    // otherwise refresh only that prefix and then mark everything
+                    // clean, leaving tokens 1..n-1 reading stale device bytes. Correct
+                    // at n_tok == 1, silently wrong above it.
+                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), act.size);
                     act.state = .clean;
                 }
                 return act.vk_buf;
@@ -1319,6 +1369,7 @@ pub const VulkanBackend = struct {
             self.destroyBuffer(act.vk_buf);
             _ = self.act_cache.remove(addr);
         }
+        if (self.findContainingAct(addr, size, false, true)) |sub| return sub;
         if (self.buf_cache.get(addr)) |cached| {
             if (cached.size >= size) return cached.vk_buf;
         }
@@ -1338,7 +1389,9 @@ pub const VulkanBackend = struct {
                 return act.vk_buf;
             }
             self.destroyBuffer(act.vk_buf);
+            _ = self.act_cache.remove(addr);
         }
+        if (self.findContainingAct(addr, size, true, false)) |sub| return sub;
         const buf = self.createBuffer(size);
         self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch |err|
             std.log.warn("Vulkan activation cache insert failed: {}", .{err});
@@ -1350,13 +1403,18 @@ pub const VulkanBackend = struct {
         const addr = @intFromPtr(ptr);
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
-                if (act.state == .stale)
-                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), size);
+                if (act.state == .stale) {
+                    // act.size, not size: `stale` describes the whole buffer, so
+                    // refreshing only a prefix leaves the rest stale on device.
+                    self.uploadBuffer(act.vk_buf.mem, @ptrCast(ptr), act.size);
+                }
                 act.state = .dirty;
                 return act.vk_buf;
             }
             self.destroyBuffer(act.vk_buf);
+            _ = self.act_cache.remove(addr);
         }
+        if (self.findContainingAct(addr, size, true, true)) |sub| return sub;
         const buf = self.createBuffer(size);
         self.uploadBuffer(buf.mem, @ptrCast(ptr), size);
         self.act_cache.put(addr, .{ .vk_buf = buf, .size = size, .state = .dirty }) catch |err|
@@ -1423,6 +1481,15 @@ pub const VulkanBackend = struct {
         // Release all cached weight buffers
         self.deinitCachedBuffers();
         self.buf_cache.deinit();
+        if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
+        if (self.buffer_pool) |*bp| {
+            var drain_buf: [backend_mod.buffer_pool_capacity]VkBuf = undefined;
+            for (bp.drain(&drain_buf)) |b| {
+                self.vkDestroyBuffer(self.device, b.buf, null);
+                self.vkFreeMemory(self.device, b.mem, null);
+            }
+            bp.deinit(self.budget_allocator);
+        }
 
         const pipelines = [_]*PipelineInfo{
             // Elementwise
@@ -1573,7 +1640,19 @@ pub const VulkanBackend = struct {
 
     // ── Buffer helpers ───────────────────────────────────────────
 
-    const VkBuf = struct { buf: VkBuffer, mem: VkDeviceMemory };
+    /// A storage buffer, optionally a sub-range of one.
+    ///
+    /// `offset` lets a batched op bind token `t`'s slice of a parent allocation
+    /// instead of uploading its own copy. Shaders index from 0, so the descriptor
+    /// carries the offset and the shader is unchanged. Only the owning entry
+    /// (offset 0) may be destroyed or memory-mapped; a sub-range view borrows.
+    const VkBuf = struct { buf: VkBuffer, mem: VkDeviceMemory, offset: usize = 0 };
+
+    /// Vulkan's required limits cap `minStorageBufferOffsetAlignment` at 256, so a
+    /// 256-aligned descriptor offset is legal on every implementation without
+    /// querying the device. A sub-range that is not 256-aligned falls back to its
+    /// own buffer rather than risking a validation error.
+    const storage_buffer_offset_align: usize = 256;
 
     fn createBuffer(self: *VulkanBackend, size: usize) VkBuf {
         const buf_ci = VkBufferCreateInfo{
@@ -1623,17 +1702,98 @@ pub const VulkanBackend = struct {
     fn getOrUpload(self: *VulkanBackend, ptr: [*]const u8, size: usize) VkBuf {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.get(addr)) |cached| {
-            if (cached.size >= size) return cached.vk_buf;
-            // destroyBuffer submits pending commands first if needed.
-            self.destroyBuffer(cached.vk_buf);
-            _ = self.buf_cache.remove(addr);
+            if (cached.size >= size) {
+                if (self.weight_budget) |*wb| _ = wb.touch(addr);
+                return cached.vk_buf;
+            }
+            self.dropWeight(addr, cached.vk_buf);
         }
-        const buf = self.createBuffer(size);
+        if (self.weight_budget) |*wb| {
+            const adm = wb.admit(addr, size, &self.evict_scratch);
+            for (adm.evicted) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.vk_buf);
+            }
+        }
+        const buf = self.acquireWeightBuffer(size);
         self.uploadBuffer(buf.mem, ptr, size);
         self.buf_cache.put(addr, .{ .vk_buf = buf, .size = size }) catch |err| {
             std.log.warn("cache put failed: {}", .{err});
         };
         return buf;
+    }
+
+    /// Take a weight buffer of `size`, reusing a recycled one when the pool has
+    /// it. Creating and destroying a VkBuffer per eviction costs far more than
+    /// the transfer it brackets (see buffer_pool.zig), and a transformer frees a
+    /// buffer of exactly the size the next layer's same-role weight needs.
+    fn acquireWeightBuffer(self: *VulkanBackend, size: usize) VkBuf {
+        if (self.buffer_pool) |*bp| {
+            if (bp.acquire(size)) |buf| return buf;
+        }
+        return self.createBuffer(size);
+    }
+
+    /// Free one cached weight's buffer and drop every record of it. The buffer
+    /// goes to the pool when one is active; `destroyBuffer` submits pending
+    /// commands first, so the fallback is safe mid-recording.
+    fn dropWeight(self: *VulkanBackend, addr: usize, buf: VkBuf) void {
+        self.releaseWeightBuffer(buf, if (self.buf_cache.get(addr)) |c| c.size else 0);
+        _ = self.buf_cache.remove(addr);
+        if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// Return a weight buffer to the pool, or destroy it when there is no pool
+    /// or the pool is full.
+    fn releaseWeightBuffer(self: *VulkanBackend, buf: VkBuf, size: usize) void {
+        if (size > 0) {
+            if (self.buffer_pool) |*bp| {
+                // A pooled buffer may still be referenced by commands recorded
+                // but not yet submitted, and a later acquire hands it straight
+                // back out. Flush first so the recycled buffer is genuinely idle.
+                if (self.cmd_recording) self.submitPending();
+                if (bp.release(buf, size) == null) return;
+            }
+        }
+        self.destroyBuffer(buf);
+    }
+
+    /// See `Backend.setWeightBudget`.
+    pub fn setWeightBudget(self: *VulkanBackend, bytes: usize, policy: backend_mod.WeightPolicy) void {
+        if (self.weight_budget) |*wb| {
+            for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.vk_buf);
+            }
+            // Shrinking means giving memory back, so a pool holding idle buffers
+            // works against the request. Destroy them for real.
+            if (self.buffer_pool) |*bp| {
+                var drain_buf: [backend_mod.buffer_pool_capacity]VkBuf = undefined;
+                for (bp.drain(&drain_buf)) |b| self.destroyBuffer(b);
+            }
+            return;
+        }
+        if (bytes == 0) return;
+        self.weight_budget = backend_mod.WeightBudget.init(
+            self.budget_allocator,
+            backend_mod.weight_budget_capacity,
+            bytes,
+        ) catch |err| {
+            std.log.warn("Vulkan weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+        self.weight_budget.?.policy = policy;
+        // Only useful with a budget: without eviction no buffer is ever freed.
+        self.buffer_pool = backend_mod.BufferPool(VkBuf).init(
+            self.budget_allocator,
+            backend_mod.buffer_pool_capacity,
+        ) catch |err| {
+            std.log.warn("Vulkan buffer pool disabled ({s}); every eviction re-creates its buffer", .{@errorName(err)});
+            return;
+        };
+    }
+
+    pub fn weightResidency(self: *VulkanBackend) backend_mod.WeightResidency {
+        if (self.weight_budget) |*wb| return .{ .resident = wb.used_bytes, .evictions = wb.evictions };
+        return .{};
     }
 
     fn uploadBuffer(self: *VulkanBackend, mem: VkDeviceMemory, data: [*]const u8, size: usize) void {
@@ -1670,13 +1830,13 @@ pub const VulkanBackend = struct {
         self.vkCmdDispatch(self.cmd_buf, gx, gy, 1);
     }
 
-    fn dispatch(self: *VulkanBackend, pipe: PipelineInfo, bufs: []const VkBuffer, buf_sizes: []const usize, push_data: [*]const u8, push_size: u32, n_groups: u32) void {
+    fn dispatch(self: *VulkanBackend, pipe: PipelineInfo, bufs: []const VkBuf, buf_sizes: []const usize, push_data: [*]const u8, push_size: u32, n_groups: u32) void {
         var buf_infos: [16]VkDescriptorBufferInfo = undefined;
         var writes: [16]VkWriteDescriptorSet = undefined;
         for (0..bufs.len) |i| {
             buf_infos[i] = .{
-                .buffer = bufs[i],
-                .offset = 0,
+                .buffer = bufs[i].buf,
+                .offset = bufs[i].offset,
                 .range = @max(buf_sizes[i], 4),
             };
             writes[i] = .{
@@ -1826,7 +1986,7 @@ pub const VulkanBackend = struct {
         const y_buf = self.getOutputBuf(y, y_sz);
 
         const params = [2]u32{ @intCast(n), @intCast(k) };
-        const bufs = [_]VkBuffer{ x_buf.buf, w_vk.buf, y_buf.buf };
+        const bufs = [_]VkBuf{ x_buf, w_vk, y_buf };
         const sizes = [_]usize{ x_sz, w_sz, y_sz };
         self.dispatch(pipe, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
     }
@@ -1839,7 +1999,7 @@ pub const VulkanBackend = struct {
         const o_buf = self.getOutputBuf(output, sz);
 
         const params = extern struct { n_val: u32, eps_val: f32 }{ .n_val = @intCast(n), .eps_val = eps };
-        const bufs = [_]VkBuffer{ in_buf.buf, w_vk.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ in_buf, w_vk, o_buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_rms_norm, &bufs, &sizes, @ptrCast(&params), 8, 1);
     }
@@ -1851,7 +2011,7 @@ pub const VulkanBackend = struct {
         const o_buf = self.getOutputBuf(output, sz);
 
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ a_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, o_buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_silu, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -1863,7 +2023,7 @@ pub const VulkanBackend = struct {
         const o_buf = self.getOutputBuf(output, sz);
 
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ a_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, o_buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_gelu, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -1876,7 +2036,7 @@ pub const VulkanBackend = struct {
         const o_buf = self.getOutputBuf(out, sz);
 
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, b_buf, o_buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_add, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -1901,7 +2061,7 @@ pub const VulkanBackend = struct {
         self.uploadBuffer(x_buf.mem, @ptrCast(x), x_sz);
 
         const params = [2]u32{ @intCast(out_dim), @intCast(in_dim) };
-        const bufs = [_]VkBuffer{ x_buf.buf, w_vk.buf, y_buf.buf };
+        const bufs = [_]VkBuf{ x_buf, w_vk, y_buf };
         const sizes = [_]usize{ x_sz, w_sz, y_sz };
         self.dispatch(self.pipe_gemv_t_q8_0, &bufs, &sizes, @ptrCast(&params), 8, @intCast(out_dim));
         self.downloadF32(y_buf.mem, y, out_dim);
@@ -1914,7 +2074,7 @@ pub const VulkanBackend = struct {
         const d_buf = self.getInPlaceBuf(dst, sz);
         const Params = extern struct { n: u32, scale: f32 };
         const params = Params{ .n = @intCast(n), .scale = scale };
-        const bufs = [_]VkBuffer{ s_buf.buf, d_buf.buf };
+        const bufs = [_]VkBuf{ s_buf, d_buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_add_scaled, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -1927,7 +2087,7 @@ pub const VulkanBackend = struct {
         const b_buf = self.getInPlaceBuf(b, sz);
         const Params = extern struct { n: u32, eps: f32 };
         const params = Params{ .n = @intCast(n), .eps = eps };
-        const bufs = [_]VkBuffer{ a_buf.buf, w_vk.buf, b_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, w_vk, b_buf };
         const buf_sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_rms_norm_add, &bufs, &buf_sizes, @ptrCast(&params), @sizeOf(Params), 1);
     }
@@ -1941,7 +2101,7 @@ pub const VulkanBackend = struct {
         const o_buf = self.getOutputBuf(output, sz);
         const Params = extern struct { n: u32, eps: f32 };
         const params = Params{ .n = @intCast(n), .eps = eps };
-        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, w_vk.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, b_buf, w_vk, o_buf };
         const buf_sizes = [_]usize{ sz, sz, sz, sz };
         self.dispatch(self.pipe_add_rms_norm, &bufs, &buf_sizes, @ptrCast(&params), @sizeOf(Params), 1);
     }
@@ -1954,7 +2114,7 @@ pub const VulkanBackend = struct {
         const o_buf = self.getOutputBuf(out, sz);
 
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, b_buf, o_buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -1965,7 +2125,7 @@ pub const VulkanBackend = struct {
         const d_buf = self.getInPlaceBuf(data, sz);
 
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{d_buf.buf};
+        const bufs = [_]VkBuf{d_buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_softmax, &bufs, &sizes, @ptrCast(&params), 4, 1);
     }
@@ -1984,7 +2144,7 @@ pub const VulkanBackend = struct {
             .theta = theta,
         };
         const grid = (n_heads * rope_dim / 2 + workgroup_size - 1) / workgroup_size;
-        const bufs = [_]VkBuffer{x_buf.buf};
+        const bufs = [_]VkBuf{x_buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_rope, &bufs, &sizes, @ptrCast(&params), 20, @intCast(grid));
     }
@@ -2014,7 +2174,13 @@ pub const VulkanBackend = struct {
             .bf16, .f16 => 2,
             else => 4,
         };
-        const table_sz = dim * bytes_per_elem * emb_max_vocab_size;
+        // Upload only through the row being indexed, never a fixed maximum vocab.
+        // The embLookup contract carries no row count, so a table smaller than
+        // that maximum was being read far past its end: a 512-row fixture asked
+        // for 256000 rows and segfaulted, and a real checkpoint quietly uploaded
+        // whatever followed the tensor in the mapping. getOrUpload grows its
+        // cached buffer, so this settles at the largest token id actually seen.
+        const table_sz = dim * bytes_per_elem * (@as(usize, token_id) + 1);
         const table_buf = self.getOrUpload(table.data, table_sz);
 
         const token_id_sz = @sizeOf(u32);
@@ -2029,7 +2195,7 @@ pub const VulkanBackend = struct {
         const Params = extern struct { vocab_size_val: u32, n_embd_val: u32, dtype_val: u32 };
         const params = Params{ .vocab_size_val = 0, .n_embd_val = @intCast(dim), .dtype_val = dtype_id };
 
-        const bufs = [_]VkBuffer{ token_id_buf.buf, table_buf.buf, output_buf.buf };
+        const bufs = [_]VkBuf{ token_id_buf, table_buf, output_buf };
         const sizes = [_]usize{ token_id_sz, table_sz, output_sz };
         const n_groups = (dim + workgroup_size - 1) / workgroup_size;
 
@@ -2075,7 +2241,7 @@ pub const VulkanBackend = struct {
             .has_bias = if (conv_b != null) 1 else 0,
         };
 
-        const bufs = [_]VkBuffer{ input_buf.buf, state_buf.buf, conv_w_buf.buf, output_buf.buf, bias_vk.buf };
+        const bufs = [_]VkBuf{ input_buf, state_buf, conv_w_buf, output_buf, bias_vk };
         const sizes = [_]usize{ conv_ch_sz, state_sz, conv_w_sz, conv_ch_sz, if (conv_b != null) conv_ch_sz else @sizeOf(f32) };
         const n_groups = (conv_ch + workgroup_size - 1) / workgroup_size;
 
@@ -2099,7 +2265,7 @@ pub const VulkanBackend = struct {
         const x_buf = self.getInPlaceBuf(x, sz);
 
         const params = extern struct { n_val: u32, eps_val: f32 }{ .n_val = @intCast(n), .eps_val = eps };
-        const bufs = [_]VkBuffer{x_buf.buf};
+        const bufs = [_]VkBuf{x_buf};
         const sizes = [_]usize{sz};
         self.dispatch(self.pipe_l2_norm, &bufs, &sizes, @ptrCast(&params), 8, 1);
     }
@@ -2119,7 +2285,7 @@ pub const VulkanBackend = struct {
         defer self.releasePooledBuf(y_pool);
         self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
         const params = [2]u32{ @intCast(n), @intCast(k) };
-        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, y_pool.buf };
+        const bufs = [_]VkBuf{ x_pool, w_vk, s_vk, y_pool };
         const sizes = [_]usize{ x_sz, w_sz, s_sz, y_sz };
         self.dispatch(self.pipe_gemv_nvfp4_st, &bufs, &sizes, @ptrCast(&params), 8, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
@@ -2144,7 +2310,7 @@ pub const VulkanBackend = struct {
         defer self.releasePooledBuf(y_pool);
         self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
         const params = [2]u32{ @intCast(n), @intCast(k) };
-        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, b_vk.buf, y_pool.buf };
+        const bufs = [_]VkBuf{ x_pool, w_vk, s_vk, b_vk, y_pool };
         const buf_sizes = [_]usize{ x_sz, w_sz, s_sz, b_sz, y_sz };
         self.dispatch(self.pipe_gemv_mlx_q4, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
@@ -2177,7 +2343,7 @@ pub const VulkanBackend = struct {
         self.uploadBuffer(s_pool.mem, w_scale, s_sz);
         const scale_fmt: u32 = if (sf == .e8m0) mxfp4_scale_e8m0 else mxfp4_scale_e4m3;
         const params = [4]u32{ @intCast(n), @intCast(k), group_size, scale_fmt };
-        const bufs = [_]VkBuffer{ x_pool.buf, w_pool.buf, s_pool.buf, y_pool.buf };
+        const bufs = [_]VkBuf{ x_pool, w_pool, s_pool, y_pool };
         const sizes = [_]usize{ x_sz, w_sz, s_sz, y_sz };
         self.dispatch(self.pipe_gemv_mxfp4_st, &bufs, &sizes, @ptrCast(&params), mxfp4_push_bytes, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
@@ -2206,7 +2372,7 @@ pub const VulkanBackend = struct {
         self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
 
         const params = [3]u32{ @intCast(n), @intCast(k), group_size };
-        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, z_vk.buf, y_pool.buf };
+        const bufs = [_]VkBuf{ x_pool, w_vk, s_vk, z_vk, y_pool };
         const sizes = [_]usize{ x_sz, w_sz, s_sz, z_sz, y_sz };
         self.dispatch(self.pipe_gemv_gptq, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
@@ -2231,7 +2397,7 @@ pub const VulkanBackend = struct {
         self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
 
         const params = [3]u32{ @intCast(n), @intCast(k), group_size };
-        const bufs = [_]VkBuffer{ x_pool.buf, w_vk.buf, s_vk.buf, z_vk.buf, y_pool.buf };
+        const bufs = [_]VkBuf{ x_pool, w_vk, s_vk, z_vk, y_pool };
         const sizes = [_]usize{ x_sz, w_sz, s_sz, z_sz, y_sz };
         self.dispatch(self.pipe_gemv_awq, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
@@ -2257,7 +2423,7 @@ pub const VulkanBackend = struct {
         self.uploadBuffer(x_pool.mem, @ptrCast(x), x_sz);
 
         const params = [3]u32{ @intCast(n), @intCast(k), group_size };
-        const bufs = [_]VkBuffer{ x_pool.buf, wq_vk.buf, sc_vk.buf, zr_vk.buf, y_pool.buf };
+        const bufs = [_]VkBuf{ x_pool, wq_vk, sc_vk, zr_vk, y_pool };
         const sizes = [_]usize{ x_sz, wq_sz, sq_sz, zr_sz, y_sz };
         self.dispatch(self.pipe_gemv_hqq, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n));
         self.downloadF32(y_pool.mem, y, n);
@@ -2269,7 +2435,7 @@ pub const VulkanBackend = struct {
         const d_buf = self.getInPlaceBuf(data, sz);
         const g_buf = self.getInputBuf(gate, sz);
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ d_buf.buf, g_buf.buf };
+        const bufs = [_]VkBuf{ d_buf, g_buf };
         const sizes = [_]usize{ sz, sz };
         self.dispatch(self.pipe_sigmoid_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -2281,7 +2447,7 @@ pub const VulkanBackend = struct {
         const b_buf = self.getInputBuf(b, sz);
         const o_buf = self.getOutputBuf(out, sz);
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, b_buf, o_buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_silu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -2301,7 +2467,7 @@ pub const VulkanBackend = struct {
         const b_buf = self.getInputBuf(b, sz);
         const o_buf = self.getOutputBuf(out, sz);
         const params = [1]u32{@intCast(n)};
-        const bufs = [_]VkBuffer{ a_buf.buf, b_buf.buf, o_buf.buf };
+        const bufs = [_]VkBuf{ a_buf, b_buf, o_buf };
         const sizes = [_]usize{ sz, sz, sz };
         self.dispatch(self.pipe_gelu_mul, &bufs, &sizes, @ptrCast(&params), 4, @intCast((n + workgroup_size - 1) / workgroup_size));
     }
@@ -2322,7 +2488,7 @@ pub const VulkanBackend = struct {
             .head_dim = @intCast(head_dim),
             .eps = eps,
         };
-        const bufs = [_]VkBuffer{ d_buf.buf, w_buf.buf };
+        const bufs = [_]VkBuf{ d_buf, w_buf };
         const sizes = [_]usize{ sz, wsz };
         self.dispatch(self.pipe_rms_norm_multi, &bufs, &sizes, @ptrCast(&params), 12, @intCast(n_heads));
         self.downloadF32(d_buf.mem, data, total);
@@ -2336,7 +2502,7 @@ pub const VulkanBackend = struct {
         const a_buf = self.getOutputBuf(out_a, sz);
         const b_buf = self.getOutputBuf(out_b, sz);
         const params = [2]u32{ @intCast(stride), @intCast(n_pairs) };
-        const bufs = [_]VkBuffer{ in_buf.buf, a_buf.buf, b_buf.buf };
+        const bufs = [_]VkBuf{ in_buf, a_buf, b_buf };
         const buf_sizes = [_]usize{ sz * 2, sz, sz };
         self.dispatch(self.pipe_deinterleave, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
     }
@@ -2349,7 +2515,7 @@ pub const VulkanBackend = struct {
         const q_buf = self.getOutputBuf(q_out, sz);
         const g_buf = self.getOutputBuf(g_out, sz);
         const params = [2]u32{ @intCast(head_dim), @intCast(n_heads) };
-        const bufs = [_]VkBuffer{ qg_buf.buf, q_buf.buf, g_buf.buf };
+        const bufs = [_]VkBuf{ qg_buf, q_buf, g_buf };
         const buf_sizes = [_]usize{ sz * 2, sz, sz };
         self.dispatch(self.pipe_split_qgate, &bufs, &buf_sizes, @ptrCast(&params), 8, @intCast((total + workgroup_size - 1) / workgroup_size));
     }
@@ -2375,23 +2541,63 @@ pub const VulkanBackend = struct {
         allocator.free(slice);
     }
 
+    /// Vulkan cannot page-lock an arbitrary host pointer: importing existing
+    /// host memory needs VK_EXT_external_memory_host, whose allocation must be
+    /// imported as a VkDeviceMemory before use rather than registered in place.
+    /// Uploads keep going through the driver's host-visible staging buffer.
+    pub fn hostRegister(_: *VulkanBackend, _: [*]const u8, _: usize) bool {
+        return false;
+    }
+
+    pub fn hostUnregister(_: *VulkanBackend, _: [*]const u8, _: usize) void {}
+
     /// Create Vulkan buffer wrapping RAM-tier KV block with zero copy.
+    /// See `Backend.reserveActivation`. Now that descriptors carry an offset and
+    /// `findContainingAct` resolves sub-ranges, this works the same way it does on
+    /// the pointer-based backends: establish the parent, and every per-token
+    /// lookup binds a slice of it.
+    ///
+    /// It is also why batched prefill is slower than one token at a time here.
+    /// Measured on a 7900 XTX, Qwen2.5 1.5B: 2586 ms at chunk size 1, 5405 ms
+    /// batched, and 2858 ms batched with these reserves stubbed out. So the whole
+    /// range establishment is the cost, not the sub-range lookup (a one-entry memo
+    /// over that lookup measured no change at all and was dropped). Stubbing them
+    /// is not an option: without the parent, per-token slices upload from host and
+    /// miss whatever the GPU wrote. Correct and slower wins, and the prefill chunk
+    /// size defaults to 1 on this backend for that reason.
+    pub fn reserveActivation(self: *VulkanBackend, ptr: *const anyopaque, bytes: usize, mode: backend_mod.Backend.ActReserve) void {
+        if (bytes == 0) return;
+        _ = switch (mode) {
+            .read => self.getInputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .write => self.getOutputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .read_write => self.getInPlaceBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+        };
+    }
+
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
     /// Sequential loop-of-GEMV fallback, no native Vulkan GEMM kernel yet.
     pub fn gemm(self: *VulkanBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        // Reserve both ranges whole before the per-token loop; see
+        // `Backend.reserveActivation` for why a loop of sub-range ops otherwise
+        // leaves device state a later whole-range op cannot see.
+        self.reserveActivation(x, n_tok * n_in * @sizeOf(f32), .read);
+        self.reserveActivation(y, n_tok * n_out * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
     /// Batched RMS normalization, each of n_tok rows normalized independently.
     pub fn rmsNormBatched(self: *VulkanBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        self.reserveActivation(input, n_tok * dim * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * dim * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
     }
 
     /// Batched RoPE, each of n_tok vectors at positions[0..n_tok].
     pub fn ropeBatched(self: *VulkanBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const stride = n_heads * head_dim;
+        self.reserveActivation(x, n_tok * stride * @sizeOf(f32), .read_write);
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
@@ -2431,7 +2637,7 @@ pub const VulkanBackend = struct {
             self.uploadBuffer(m_pool.mem, @ptrCast(ancestor_masks), mask_sz);
             const Params = extern struct { nh_v: u32, nkv_v: u32, hd_v: u32, prefix_len_v: u32, n_nodes_v: u32, scale_v: f32 };
             const params = Params{ .nh_v = @intCast(nh), .nkv_v = @intCast(nkv), .hd_v = @intCast(hd), .prefix_len_v = @intCast(prefix_len), .n_nodes_v = n_nodes, .scale_v = scale };
-            const bufs = [_]VkBuffer{ q_pool.buf, pk_pool.buf, pv_pool.buf, tk_pool.buf, tv_pool.buf, o_pool.buf, m_pool.buf };
+            const bufs = [_]VkBuf{ q_pool, pk_pool, pv_pool, tk_pool, tv_pool, o_pool, m_pool };
             const sizes = [_]usize{ q_sz, kv_sz, kv_sz, tk_sz, tk_sz, q_sz, mask_sz };
             self.dispatch(self.pipe_sdpa_tree, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(n_nodes * nh));
             self.downloadF32(o_pool.mem, output, n_nodes * nh * hd);
@@ -2443,6 +2649,10 @@ pub const VulkanBackend = struct {
     /// Prefill SDPA, sequential loop over tokens, calling single-token sdpa.
     pub fn sdpaPrefill(self: *VulkanBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
+        self.reserveActivation(q, n_tok * nh * hd * @sizeOf(f32), .read);
+        self.reserveActivation(k, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(v, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * nh * hd * @sizeOf(f32), .write);
         for (0..n_tok) |t| {
             self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type_k, kv_type_v);
         }
@@ -2514,7 +2724,7 @@ pub const VulkanBackend = struct {
 
         const Params = extern struct { nvh: u32, nkh: u32, hkd_v: u32, hvd_v: u32, q_scale: f32, rms_eps: f32 };
         const params = Params{ .nvh = @intCast(num_v), .nkh = @intCast(num_k), .hkd_v = @intCast(hkd), .hvd_v = @intCast(hvd), .q_scale = p.q_scale, .rms_eps = p.rms_eps };
-        const bufs = [_]VkBuffer{ q_pool.buf, k_pool.buf, v_pool.buf, gate_pool.buf, beta_pool.buf, z_pool.buf, norm_vk.buf, state_pool.buf, out_buf.buf };
+        const bufs = [_]VkBuf{ q_pool, k_pool, v_pool, gate_pool, beta_pool, z_pool, norm_vk, state_pool, out_buf };
         const sizes = [_]usize{ q_sz, q_sz, v_sz, gate_sz, gate_sz, v_sz, norm_sz, state_sz, v_sz };
         self.dispatch(self.pipe_deltanet, &bufs, &sizes, @ptrCast(&params), @sizeOf(Params), @intCast(num_v));
         self.downloadF32(out_buf.mem, output, num_v * hvd);
@@ -2609,7 +2819,7 @@ pub const VulkanBackend = struct {
                 .sl_v = @intCast(sl),
                 .scale_v = scale,
             };
-            const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
+            const bufs = [_]VkBuf{ q_buf, k_buf, v_buf, o_buf };
             const sizes = [_]usize{ q_sz, k_sz, v_sz, o_sz };
             self.dispatch(self.pipe_sdpa, &bufs, &sizes, @ptrCast(&params), 20, @intCast(nh));
         } else {
@@ -2659,7 +2869,7 @@ pub const VulkanBackend = struct {
                 .block_bytes_k_v = kv_type_k.turboBlockByteSize(),
                 .block_bytes_v_v = kv_type_v.turboBlockByteSize(),
             };
-            const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf };
+            const bufs = [_]VkBuf{ q_buf, k_buf, v_buf, o_buf };
             const sizes = [_]usize{ q_sz, k_cache_bytes, v_cache_bytes, o_sz };
             self.dispatch(self.pipe_sdpa_turbo, &bufs, &sizes, @ptrCast(&params), 36, @intCast(nh));
             self.downloadF32(o_buf.mem, output, nh * hd);
@@ -2744,7 +2954,7 @@ pub const VulkanBackend = struct {
             .scale_v = scale,
             .paged_bs_v = kv_view.block_size,
         };
-        const bufs = [_]VkBuffer{ q_buf.buf, k_buf.buf, v_buf.buf, o_buf.buf, bt_buf.buf };
+        const bufs = [_]VkBuf{ q_buf, k_buf, v_buf, o_buf, bt_buf };
         const sizes = [_]usize{ q_sz, flat_bytes, flat_bytes, o_sz, bt_sz };
         self.dispatch(self.pipe_sdpa_paged, &bufs, &sizes, @ptrCast(&params), 24, @intCast(nh));
     }
@@ -2910,6 +3120,23 @@ test "Vulkan VK_API_VERSION_1_1 encoding" {
     const minor = (VK_API_VERSION_1_1 >> 12) & 0x3FF;
     try testing.expectEqual(@as(u32, 1), major);
     try testing.expectEqual(@as(u32, 1), minor);
+}
+
+test "vkCachePath prefers XDG_CACHE_HOME then HOME/.cache" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "/custom/cache/agave/vk_pipeline_cache.bin",
+        formatVkCachePath(&buf, "/custom/cache", "/home/user").?,
+    );
+    try std.testing.expectEqualStrings(
+        "/home/user/.cache/agave/vk_pipeline_cache.bin",
+        formatVkCachePath(&buf, null, "/home/user").?,
+    );
+    try std.testing.expectEqualStrings(
+        "/Users/me/.cache/agave/vk_pipeline_cache.bin",
+        formatVkCachePath(&buf, "", "/Users/me").?,
+    );
+    try std.testing.expect(formatVkCachePath(&buf, null, null) == null);
 }
 
 test "Vulkan n_pipelines and lib_name" {

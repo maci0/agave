@@ -81,6 +81,13 @@ const FnDeviceSynchronize = *const fn () callconv(.c) HipError;
 const FnMalloc = *const fn (*?*anyopaque, usize) callconv(.c) HipError;
 const FnFree = *const fn (?*anyopaque) callconv(.c) HipError;
 const FnMemcpy = *const fn (?*anyopaque, ?*const anyopaque, usize, c_int) callconv(.c) HipError;
+/// hipHostRegister / hipHostUnregister: page-lock host memory for DMA. Optional
+/// (older libamdhip64 builds omit them), so both are looked up as nullable.
+const FnMemGetInfo = *const fn (*usize, *usize) callconv(.c) HipError;
+const FnHostRegister = *const fn (*const anyopaque, usize, c_uint) callconv(.c) HipError;
+const FnHostUnregister = *const fn (*const anyopaque) callconv(.c) HipError;
+/// hipHostRegisterPortable: the page lock is visible to every HIP context.
+const HIP_HOSTREGISTER_PORTABLE: c_uint = 0x01;
 const FnModuleLoadData = *const fn (*HipModule, [*]const u8) callconv(.c) HipError;
 const FnModuleUnload = *const fn (HipModule) callconv(.c) HipError;
 const FnModuleGetFunction = *const fn (*HipFunction, HipModule, [*:0]const u8) callconv(.c) HipError;
@@ -118,6 +125,9 @@ pub const RocmBackend = struct {
     hipMalloc: FnMalloc = undefined,
     hipFree: FnFree = undefined,
     hipMemcpy: FnMemcpy = undefined,
+    hipMemGetInfo: ?FnMemGetInfo = null,
+    hipHostRegister: ?FnHostRegister = null,
+    hipHostUnregister: ?FnHostUnregister = null,
     hipLaunchKernel: FnLaunchKernel = undefined,
 
     // Kernel function handles
@@ -193,6 +203,15 @@ pub const RocmBackend = struct {
 
     /// Permanent cache: weight buffers uploaded once and reused forever.
     buf_cache: std.AutoHashMap(usize, CachedBuf) = undefined,
+    /// Byte cap on `buf_cache`, and the scratch the eviction list is written
+    /// into. Null until `setWeightBudget`; the cache grows without limit until
+    /// then, which is right whenever the model fits in VRAM.
+    weight_budget: ?backend_mod.WeightBudget = null,
+    /// Freed weight buffers, kept for the next admit of the same size. Only
+    /// live alongside a budget: without eviction nothing is ever released.
+    buffer_pool: ?backend_mod.BufferPool(DevicePtr) = null,
+    evict_scratch: [backend_mod.max_weight_evictions]usize = undefined,
+    budget_allocator: std.mem.Allocator = undefined,
 
     /// Activation cache: device mirrors of host activation buffers.
     act_cache: std.AutoHashMap(usize, ActBuf) = undefined,
@@ -232,6 +251,7 @@ pub const RocmBackend = struct {
     pub fn init(allocator: std.mem.Allocator, device_id: u32) !RocmBackend {
         var self = RocmBackend{};
         self.allocator = allocator;
+        self.budget_allocator = allocator;
         self.buf_cache = std.AutoHashMap(usize, CachedBuf).init(allocator);
         try self.buf_cache.ensureTotalCapacity(backend_mod.buf_cache_initial_capacity);
         errdefer self.buf_cache.deinit();
@@ -240,12 +260,7 @@ pub const RocmBackend = struct {
         self.kv_dev_cache = std.AutoHashMap(usize, KvDevCache).init(allocator);
         errdefer self.kv_dev_cache.deinit();
 
-        // Dynamically load HIP runtime (try standard name, then platform-specific paths)
-        self.lib = std.DynLib.open("libamdhip64.so") catch
-            std.DynLib.open("/opt/rocm/lib/libamdhip64.so") catch
-            std.DynLib.open("/usr/lib/x86_64-linux-gnu/libamdhip64.so") catch
-            std.DynLib.open("/usr/lib/aarch64-linux-gnu/libamdhip64.so") catch
-            return error.RocmNotAvailable;
+        self.lib = @import("../dynlib.zig").open("libamdhip64.so") orelse return error.RocmNotAvailable;
         errdefer self.lib.close();
 
         // Resolve all function pointers
@@ -253,6 +268,9 @@ pub const RocmBackend = struct {
         const hipSetDevice = self.lookup(FnSetDevice, "hipSetDevice") orelse return error.RocmNotAvailable;
         const hipDeviceGetName = self.lookup(FnDeviceGetName, "hipDeviceGetName") orelse return error.RocmNotAvailable;
         self.hipDeviceSynchronize = self.lookup(FnDeviceSynchronize, "hipDeviceSynchronize") orelse return error.RocmNotAvailable;
+        self.hipMemGetInfo = self.lookup(FnMemGetInfo, "hipMemGetInfo");
+        self.hipHostRegister = self.lookup(FnHostRegister, "hipHostRegister");
+        self.hipHostUnregister = self.lookup(FnHostUnregister, "hipHostUnregister");
         const hipModuleLoadData = self.lookup(FnModuleLoadData, "hipModuleLoadData") orelse return error.RocmNotAvailable;
         self.hipModuleUnload = self.lookup(FnModuleUnload, "hipModuleUnload") orelse return error.RocmNotAvailable;
         const hipModuleGetFunction = self.lookup(FnModuleGetFunction, "hipModuleGetFunction") orelse return error.RocmNotAvailable;
@@ -366,6 +384,12 @@ pub const RocmBackend = struct {
         var wt_it = self.buf_cache.valueIterator();
         while (wt_it.next()) |cached| _ = self.hipFree(@ptrFromInt(cached.dptr));
         self.buf_cache.deinit();
+        if (self.weight_budget) |*wb| wb.deinit(self.budget_allocator);
+        if (self.buffer_pool) |*bp| {
+            var drain_buf: [backend_mod.buffer_pool_capacity]DevicePtr = undefined;
+            for (bp.drain(&drain_buf)) |d| _ = self.hipFree(@ptrFromInt(d));
+            bp.deinit(self.budget_allocator);
+        }
 
         if (self.sdpa_flat_keys) |buf| self.allocator.free(buf);
         if (self.sdpa_flat_vals) |buf| self.allocator.free(buf);
@@ -398,7 +422,7 @@ pub const RocmBackend = struct {
     }
 
     fn uploadToDevice(self: *RocmBackend, host_ptr: *const anyopaque, size: usize) DevicePtr {
-        const dptr = self.deviceAlloc(size);
+        const dptr = self.acquireWeightBuffer(size);
         if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), host_ptr, size, hipMemcpyHostToDevice), "hipMemcpy(HtoD)"))
             @panic("hipMemcpy(HtoD) failed, device memory left uninitialized");
         return dptr;
@@ -419,15 +443,96 @@ pub const RocmBackend = struct {
     fn getOrUpload(self: *RocmBackend, ptr: [*]const u8, size: usize) DevicePtr {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.get(addr)) |cached| {
-            if (cached.size >= size) return cached.dptr;
-            _ = self.hipFree(@ptrFromInt(cached.dptr));
-            _ = self.buf_cache.remove(addr);
+            if (cached.size >= size) {
+                if (self.weight_budget) |*wb| _ = wb.touch(addr);
+                return cached.dptr;
+            }
+            self.dropWeight(addr, cached.dptr);
+        }
+        if (self.weight_budget) |*wb| {
+            const adm = wb.admit(addr, size, &self.evict_scratch);
+            for (adm.evicted) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.dptr);
+            }
         }
         const dptr = self.uploadToDevice(ptr, size);
         self.buf_cache.put(addr, .{ .dptr = dptr, .size = size }) catch |err| {
             std.log.warn("ROCm buf_cache put failed: {}", .{err});
         };
         return dptr;
+    }
+
+    /// Take a weight buffer of `size`, reusing a recycled one when the pool has
+    /// it. hipMalloc/hipFree per eviction costs far more than the transfer it
+    /// brackets (see buffer_pool.zig), and a transformer frees a buffer of
+    /// exactly the size the next layer's same-role weight needs.
+    fn acquireWeightBuffer(self: *RocmBackend, size: usize) DevicePtr {
+        if (self.buffer_pool) |*bp| {
+            if (bp.acquire(size)) |dptr| return dptr;
+        }
+        return self.deviceAlloc(size);
+    }
+
+    /// Free one cached weight's device buffer and drop every record of it.
+    /// The buffer goes to the pool when one is active. The budget entry goes
+    /// too, so a later re-upload is charged afresh.
+    fn dropWeight(self: *RocmBackend, addr: usize, dptr: DevicePtr) void {
+        const size = if (self.buf_cache.get(addr)) |c| c.size else 0;
+        self.releaseWeightBuffer(dptr, size);
+        _ = self.buf_cache.remove(addr);
+        if (self.weight_budget) |*wb| _ = wb.remove(addr);
+    }
+
+    /// Return a weight buffer to the pool, or free it when there is no pool or
+    /// the pool is full.
+    fn releaseWeightBuffer(self: *RocmBackend, dptr: DevicePtr, size: usize) void {
+        if (size > 0) {
+            if (self.buffer_pool) |*bp| {
+                if (bp.release(dptr, size) == null) return;
+            }
+        }
+        _ = self.hipFree(@ptrFromInt(dptr));
+    }
+
+    /// See `Backend.setWeightBudget`. Allocating the tracker can fail; the
+    /// warning matters because the caller asked for a cap and silently not
+    /// having one turns an out-of-VRAM into a driver failure much later.
+    pub fn setWeightBudget(self: *RocmBackend, bytes: usize, policy: backend_mod.WeightPolicy) void {
+        if (self.weight_budget) |*wb| {
+            for (wb.setBudget(bytes, &self.evict_scratch)) |victim| {
+                if (self.buf_cache.get(victim)) |c| self.dropWeight(victim, c.dptr);
+            }
+            // Shrinking means giving memory back, so a pool holding idle buffers
+            // works against the request. Release them for real.
+            if (self.buffer_pool) |*bp| {
+                var drain_buf: [backend_mod.buffer_pool_capacity]DevicePtr = undefined;
+                for (bp.drain(&drain_buf)) |d| _ = self.hipFree(@ptrFromInt(d));
+            }
+            return;
+        }
+        if (bytes == 0) return;
+        self.weight_budget = backend_mod.WeightBudget.init(
+            self.budget_allocator,
+            backend_mod.weight_budget_capacity,
+            bytes,
+        ) catch |err| {
+            std.log.warn("ROCm weight budget disabled ({s}); weights stay resident", .{@errorName(err)});
+            return;
+        };
+        self.weight_budget.?.policy = policy;
+        // Only useful with a budget: without eviction no buffer is ever freed.
+        self.buffer_pool = backend_mod.BufferPool(DevicePtr).init(
+            self.budget_allocator,
+            backend_mod.buffer_pool_capacity,
+        ) catch |err| {
+            std.log.warn("ROCm buffer pool disabled ({s}); every eviction re-allocates", .{@errorName(err)});
+            return;
+        };
+    }
+
+    pub fn weightResidency(self: *RocmBackend) backend_mod.WeightResidency {
+        if (self.weight_budget) |*wb| return .{ .resident = wb.used_bytes, .evictions = wb.evictions };
+        return .{};
     }
 
     // ── Activation cache (deferred sync) ────────────────────────
@@ -456,7 +561,12 @@ pub const RocmBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice), "hipMemcpy(act upload)");
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer, and
+                    // a caller asking for a prefix (a batched op's first token) would
+                    // otherwise refresh only that prefix and then mark everything
+                    // clean, leaving tokens 1..n-1 reading stale device bytes. Correct
+                    // at n_tok == 1, silently wrong above it.
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), act.size, hipMemcpyHostToDevice), "hipMemcpy(act upload)");
                     act.state = .clean;
                 }
                 return act.dptr;
@@ -500,7 +610,10 @@ pub const RocmBackend = struct {
         if (self.act_cache.getPtr(addr)) |act| {
             if (act.size >= size) {
                 if (act.state == .stale) {
-                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), size, hipMemcpyHostToDevice), "hipMemcpy(weight upload)");
+                    // Upload act.size, not size: `stale` marks the WHOLE buffer.
+                    // A prefix refresh (batched first token) would leave the rest
+                    // stale on device, same contract as getInputBuf.
+                    _ = hipCheck(self.hipMemcpy(@ptrFromInt(act.dptr), @as(?*const anyopaque, @ptrCast(ptr)), act.size, hipMemcpyHostToDevice), "hipMemcpy(weight upload)");
                 }
                 act.state = .dirty;
                 return act.dptr;
@@ -1227,6 +1340,14 @@ pub const RocmBackend = struct {
 
     /// Returns backend startup information for display.
     pub fn backendInfo(self: *const RocmBackend) backend_mod.BackendInfo {
+        var free_mem: usize = 0;
+        var total_mem: usize = 0;
+        if (self.hipMemGetInfo) |memInfo| {
+            if (memInfo(&free_mem, &total_mem) != HIP_SUCCESS) {
+                free_mem = 0;
+                total_mem = 0;
+            }
+        }
         return .{
             .name = "ROCm",
             .device_name = self.device_name[0..self.device_name_len],
@@ -1235,6 +1356,8 @@ pub const RocmBackend = struct {
             .kernel_type = "HSACO",
             .compute_cap = std.mem.sliceTo(&self.gcn_arch_str, 0),
             .driver_version = std.mem.sliceTo(&self.hip_ver_str, 0),
+            .total_mem = total_mem,
+            .avail_mem = free_mem,
         };
     }
 
@@ -1250,8 +1373,31 @@ pub const RocmBackend = struct {
         allocator.free(slice);
     }
 
+    /// Page-lock a resident host range for DMA. See `Backend.hostRegister`:
+    /// the range must already be resident, or the driver faults it in one page
+    /// at a time. Returns false where libamdhip64 does not export the call.
+    pub fn hostRegister(self: *RocmBackend, ptr: [*]const u8, len: usize) bool {
+        if (len == 0) return false;
+        const reg = self.hipHostRegister orelse return false;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        return reg(@ptrFromInt(r.base), r.size, HIP_HOSTREGISTER_PORTABLE) == HIP_SUCCESS;
+    }
+
+    /// Unregister a range page-locked by `hostRegister`.
+    pub fn hostUnregister(self: *RocmBackend, ptr: [*]const u8, len: usize) void {
+        const unreg = self.hipHostUnregister orelse return;
+        const r = backend_mod.pageAlignRange(ptr, len);
+        _ = unreg(@ptrFromInt(r.base));
+    }
+
     /// Get or grow device KV cache buffer for the given required size.
     /// Starts small and doubles when needed, copying existing data.
+    /// On first allocation, uploads existing host data so positions already
+    /// written on the CPU (prefix-cache hits, CPU prefill, KV import) are
+    /// visible to GPU kernels. Without that upload the device buffer is
+    /// uninitialized and SDPA attends over garbage when `seq_len > 0`.
+    /// A later host rewrite at the same address must call
+    /// `invalidateDeviceKv` or this returns the previous device contents.
     fn getOrAllocKvBuf(self: *RocmBackend, addr: usize, required: usize, max_capacity: usize) DevicePtr {
         if (self.kv_dev_cache.getPtr(addr)) |kv| {
             if (kv.capacity >= required) return kv.dptr;
@@ -1268,6 +1414,10 @@ pub const RocmBackend = struct {
         // First allocation: allocate full capacity to avoid repeated growth.
         const cap = max_capacity;
         const dptr = self.deviceAlloc(cap);
+        if (addr != 0 and cap > 0) {
+            if (!hipCheck(self.hipMemcpy(@ptrFromInt(dptr), @as(?*const anyopaque, @ptrFromInt(addr)), cap, hipMemcpyHostToDevice), "hipMemcpy(KV HtoD)"))
+                @panic("hipMemcpy(HtoD) failed, device KV left uninitialized");
+        }
         self.kv_dev_cache.put(addr, .{
             .dptr = dptr,
             .capacity = cap,
@@ -1275,6 +1425,14 @@ pub const RocmBackend = struct {
             std.log.warn("ROCm kv_dev_cache put failed: {}", .{err});
         };
         return dptr;
+    }
+
+    /// Free every device KV mirror. Next `getOrAllocKvBuf` re-allocates and
+    /// re-uploads from host. Call after `importKvPrefix` and similar host writes.
+    pub fn invalidateDeviceKv(self: *RocmBackend) void {
+        var kv_it = self.kv_dev_cache.valueIterator();
+        while (kv_it.next()) |kv| _ = self.hipFree(@ptrFromInt(kv.dptr));
+        self.kv_dev_cache.clearRetainingCapacity();
     }
 
     /// Fused scaled dot-product attention on GPU with KV cache append.
@@ -1514,22 +1672,42 @@ pub const RocmBackend = struct {
         _ = self.hipFree(@ptrFromInt(d_bt));
     }
 
+    /// See `Backend.reserveActivation`. Routes to the same helpers the ops use,
+    /// so the entry it leaves behind is exactly what a later sub-range lookup
+    /// resolves through.
+    pub fn reserveActivation(self: *RocmBackend, ptr: *const anyopaque, bytes: usize, mode: backend_mod.Backend.ActReserve) void {
+        if (bytes == 0) return;
+        _ = switch (mode) {
+            .read => self.getInputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .write => self.getOutputBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+            .read_write => self.getInPlaceBuf(@as([*]const u8, @ptrCast(ptr)), bytes),
+        };
+    }
+
     // ── Batched prefill ops (loop-of-single fallback) ──────────
 
     /// GEMM: Y[n_tok × n_out] = X[n_tok × n_in] @ W[n_out × n_in]^T.
     /// Sequential loop-of-GEMV fallback, no native ROCm GEMM kernel yet.
     pub fn gemm(self: *RocmBackend, x: [*]const f32, w: TensorData, y: [*]f32, n_tok: usize, n_out: usize, n_in: usize) void {
+        // Reserve both ranges whole before the per-token loop; see
+        // `Backend.reserveActivation` for why a loop of sub-range ops otherwise
+        // leaves device state a later whole-range op cannot see.
+        self.reserveActivation(x, n_tok * n_in * @sizeOf(f32), .read);
+        self.reserveActivation(y, n_tok * n_out * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.gemv(x + t * n_in, w, y + t * n_out, n_out, n_in);
     }
 
     /// Batched RMS normalization, each of n_tok rows normalized independently.
     pub fn rmsNormBatched(self: *RocmBackend, input: [*]const f32, weight: [*]const f32, output: [*]f32, n_tok: usize, dim: usize, eps: f32) void {
+        self.reserveActivation(input, n_tok * dim * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * dim * @sizeOf(f32), .write);
         for (0..n_tok) |t| self.rmsNorm(input + t * dim, weight, output + t * dim, dim, eps);
     }
 
     /// Batched RoPE, each of n_tok vectors at positions[0..n_tok].
     pub fn ropeBatched(self: *RocmBackend, x: [*]f32, positions: [*]const u32, n_tok: usize, n_heads: usize, head_dim: usize, rope_dim: usize, theta: f32) void {
         const stride = n_heads * head_dim;
+        self.reserveActivation(x, n_tok * stride * @sizeOf(f32), .read_write);
         for (0..n_tok) |t| self.rope(x + t * stride, positions[t], n_heads, head_dim, rope_dim, theta);
     }
 
@@ -1572,6 +1750,10 @@ pub const RocmBackend = struct {
     /// Prefill SDPA, sequential loop over tokens, calling single-token sdpa.
     pub fn sdpaPrefill(self: *RocmBackend, q: [*]const f32, k: [*]const f32, v: [*]const f32, kv_keys: []u8, kv_values: []u8, output: [*]f32, nh: usize, nkv: usize, hd: usize, prev_len: usize, n_tok: usize, scale: f32, kv_type_k: KvQuantType, kv_type_v: KvQuantType) void {
         const kvd = nkv * hd;
+        self.reserveActivation(q, n_tok * nh * hd * @sizeOf(f32), .read);
+        self.reserveActivation(k, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(v, n_tok * kvd * @sizeOf(f32), .read);
+        self.reserveActivation(output, n_tok * nh * hd * @sizeOf(f32), .write);
         for (0..n_tok) |t| {
             self.sdpa(q + t * nh * hd, kv_keys, kv_values, k + t * kvd, v + t * kvd, output + t * nh * hd, nh, nkv, hd, prev_len + t, scale, kv_type_k, kv_type_v);
         }
@@ -1742,6 +1924,7 @@ test "ROCm backend public function signatures compile" {
         _ = @TypeOf(RocmBackend.backendInfo);
         _ = @TypeOf(RocmBackend.flushActivations);
         _ = @TypeOf(RocmBackend.invalidateAct);
+        _ = @TypeOf(RocmBackend.invalidateDeviceKv);
         _ = @TypeOf(RocmBackend.invalidateWeight);
 
         // KV cache
@@ -1855,6 +2038,11 @@ test "RocmBackend.invalidateAct" {
 test "RocmBackend.invalidateWeight" {
     comptime {
         _ = &RocmBackend.invalidateWeight;
+    }
+}
+test "RocmBackend.invalidateDeviceKv" {
+    comptime {
+        _ = &RocmBackend.invalidateDeviceKv;
     }
 }
 test "RocmBackend.gemv" {
@@ -2082,6 +2270,7 @@ test "fuzz: all rocm functions" {
                 _ = &RocmBackend.deinit;
                 _ = &RocmBackend.flushActivations;
                 _ = &RocmBackend.invalidateAct;
+                _ = &RocmBackend.invalidateDeviceKv;
                 _ = &RocmBackend.invalidateWeight;
                 _ = &RocmBackend.gemv;
                 _ = &RocmBackend.gemvGptq;

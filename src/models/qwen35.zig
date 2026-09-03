@@ -8,6 +8,7 @@ const math = std.math;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const quant = @import("../ops/quant.zig");
@@ -69,7 +70,7 @@ pub const Qwen35Model = struct {
     rope_dim: u32 = 64,
     rms_eps: f32 = 1e-6,
     full_attn_interval: u32 = 4,
-    eos_token_id: u32 = 248046,
+    eos_token_id: u32 = arch_mod.qwen_fallback_eos,
     max_seq_len: usize = 4096,
 
     ssm_d_conv: u32 = 4,
@@ -873,9 +874,10 @@ pub const Qwen35Model = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         const keys_f32 = self.paged_cache.blocks[block_id].keys;
@@ -1557,30 +1559,36 @@ pub const Qwen35Model = struct {
             self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, mix_weight, e);
         }
 
-        // 6. Shared expert
-        t = self.perf.start();
-        const sg = self.fmt.layerTensor(li, "ffn_gate_shexp.weight") orelse return error.MissingTensor;
-        const su = self.fmt.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
-        const shared_ff: usize = self.shared_expert_ff_dim;
-        self.doGemvBatch2(self.hidden2.ptr, sg, self.ff_buf1.ptr, shared_ff, su, self.ff_buf2.ptr, shared_ff, e);
-        self.perf.end(.gemv_ffn, t);
+        // 6. Shared expert, when the architecture has one.
+        //
+        // Not every MoE does. Qwen3.5-A3B and Nex-N2-Pro carry a shared expert
+        // evaluated for every token; Mixtral, Qwen3-30B-A3B and OLMoE route
+        // purely and have no shexp tensors at all. Requiring them made those
+        // architectures fail to run with a bare MissingTensor.
+        if (self.fmt.layerTensor(li, "ffn_gate_shexp.weight")) |sg| {
+            const su = self.fmt.layerTensor(li, "ffn_up_shexp.weight") orelse return error.MissingTensor;
+            const sd = self.fmt.layerTensor(li, "ffn_down_shexp.weight") orelse return error.MissingTensor;
+            t = self.perf.start();
+            const shared_ff: usize = self.shared_expert_ff_dim;
+            self.doGemvBatch2(self.hidden2.ptr, sg, self.ff_buf1.ptr, shared_ff, su, self.ff_buf2.ptr, shared_ff, e);
+            self.perf.end(.gemv_ffn, t);
 
-        // SwiGLU for shared expert, GPU-accelerated, chains with gemvMulti
-        t = self.perf.start();
-        self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, shared_ff);
+            // SwiGLU for shared expert, GPU-accelerated, chains with gemvMulti
+            t = self.perf.start();
+            self.be.siluMul(self.ff_buf1.ptr, self.ff_buf2.ptr, self.ff_buf1.ptr, shared_ff);
 
-        const sd = self.fmt.layerTensor(li, "ffn_down_shexp.weight") orelse return error.MissingTensor;
-        self.doGemv(self.ff_buf1.ptr, sd, self.attn_out.ptr, e, shared_ff);
-        self.be.sync();
-        self.perf.end(.gemv_ffn, t);
+            self.doGemv(self.ff_buf1.ptr, sd, self.attn_out.ptr, e, shared_ff);
+            self.be.sync();
+            self.perf.end(.gemv_ffn, t);
 
-        // Shared expert gate: sigmoid(dot(gate_weight, hidden2)) * shared_out
-        if (self.fmt.layerTensor(li, "ffn_gate_inp_shexp.weight")) |gw| {
-            const gate_ptr: [*]const f32 = @ptrCast(@alignCast(gw.data_ptr));
-            const gate_val = math_ops.sigmoid(math_ops.simdDotF32(gate_ptr, self.hidden2.ptr, e));
-            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, gate_val, e);
-        } else {
-            self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
+            // Shared expert gate: sigmoid(dot(gate_weight, hidden2)) * shared_out
+            if (self.fmt.layerTensor(li, "ffn_gate_inp_shexp.weight")) |gw| {
+                const gate_ptr: [*]const f32 = @ptrCast(@alignCast(gw.data_ptr));
+                const gate_val = math_ops.sigmoid(math_ops.simdDotF32(gate_ptr, self.hidden2.ptr, e));
+                self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, gate_val, e);
+            } else {
+                self.be.addScaled(self.attn_out.ptr, self.moe_out.ptr, 1.0, e);
+            }
         }
 
         // 7. Residual: hidden += moe_out
@@ -2095,6 +2103,12 @@ pub const Qwen35Model = struct {
             }
         }
 
+        // The embeddings above were written by the CPU. A GPU backend caches this
+        // buffer by host address and has no way to notice a host-side write, so a
+        // second chunk would otherwise run against the first chunk's device copy.
+        // Correct at one chunk, wrong from the second on.
+        self.be.invalidateActivation(self.pf_hidden.ptr);
+
         // Build position array
         for (0..n_tok) |t| {
             self.pf_positions[t] = base_pos + @as(u32, @intCast(t));
@@ -2107,6 +2121,11 @@ pub const Qwen35Model = struct {
             try self.prefillFeedForward(@intCast(li), n_tok);
         }
 
+        // Chunk boundary. The next chunk's attention reads the KV this one wrote,
+        // and its embeddings are written by the CPU, so both sides have to agree
+        // on where the current data lives before it starts. Once per chunk is
+        // negligible against a chunk's worth of GEMMs.
+        self.be.sync();
         self.kv_seq_len = base_pos + n_tok;
     }
 
@@ -2431,7 +2450,6 @@ pub const Qwen35Model = struct {
         }
         return null;
     }
-
 };
 
 const expertWeightStride = model_mod.expertWeightStride;

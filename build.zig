@@ -9,6 +9,20 @@ const builtin = @import("builtin");
 const package_version: []const u8 = @import("build.zig.zon").version;
 
 pub fn build(b: *std.Build) void {
+    // Exact pin (.zigversion), not only build.zig.zon minimum_zig_version.
+    // A newer compiler passes the minimum and then fails later with a parse error.
+    const pinned_zig = std.mem.trim(u8, @embedFile(".zigversion"), " \t\r\n");
+    const pinned_semver = std.SemanticVersion.parse(pinned_zig) catch std.debug.panic(
+        ".zigversion ({s}) is not a semantic version",
+        .{pinned_zig},
+    );
+    if (builtin.zig_version.order(pinned_semver) != .eq) {
+        std.debug.panic(
+            "Zig {s} does not match .zigversion pin {s}. Install {s} from https://ziglang.org/download/",
+            .{ builtin.zig_version_string, pinned_zig, pinned_zig },
+        );
+    }
+
     const target = b.standardTargetOptions(.{});
 
     // ── Backend enable/disable flags (all default to true) ────────
@@ -17,6 +31,7 @@ pub fn build(b: *std.Build) void {
     const enable_cuda = b.option(bool, "enable-cuda", "Enable CUDA backend (default: true)") orelse true;
     const enable_rocm = b.option(bool, "enable-rocm", "Enable ROCm backend (default: true)") orelse true;
     const enable_debug_binary = b.option(bool, "enable-debug", "Build agave-debug binary (default: true)") orelse true;
+    const enable_bench = b.option(bool, "enable-bench", "Install agave-bench binary (default: true)") orelse true;
 
     const enable_vulkan = b.option(bool, "enable-vulkan", "Enable Vulkan backend (default: true)") orelse true;
     const enable_webgpu = b.option(bool, "enable-webgpu", "Enable WebGPU backend via wgpu-native (default: true)") orelse true;
@@ -41,17 +56,32 @@ pub fn build(b: *std.Build) void {
     // via std.DynLib, no link-time dependency needed.
     const link_metal = enable_metal and target.result.os.tag == .macos;
     const link_platform = struct {
-        fn apply(mod: *std.Build.Module, _: *std.Build.Step.Compile, _: std.Build.ResolvedTarget) void {
+        fn apply(mod: *std.Build.Module, compile: *std.Build.Step.Compile, resolved: std.Build.ResolvedTarget) void {
             mod.link_libc = true;
+            // zig 0.16 ReleaseFast defaults to a non-PIE ET_EXEC on Linux.
+            switch (resolved.result.os.tag) {
+                .linux, .macos => compile.pie = true,
+                else => {},
+            }
+        }
+    }.apply;
+
+    const pin_spawned_python = struct {
+        fn apply(cmd: *std.Build.Step.Run) void {
+            cmd.setEnvironmentVariable("LC_ALL", "C");
+            cmd.setEnvironmentVariable("TZ", "UTC");
+            cmd.setEnvironmentVariable("PYTHONHASHSEED", "0");
+            cmd.setEnvironmentVariable("PYTHONIOENCODING", "utf-8");
         }
     }.apply;
 
     // ── CUDA PTX kernels (cross-compiled via nvptx64-cuda) ─────────
     // Compiles Zig CUDA kernels to PTX assembly. The resulting .s file
     // is placed in zig-out/ and can be embedded into cuda.zig via @embedFile.
-    // Build with: zig build ptx [-Dcuda-sm=sm_80]
+    // Build with: zig build ptx [-Dcuda-sm=sm_120]
+    // Default matches committed PTX and CI (`scripts/check-shader-artifacts.sh --ptx-only`).
     const CudaSm = enum { sm_50, sm_60, sm_70, sm_75, sm_80, sm_86, sm_89, sm_90, sm_100, sm_120, sm_121 };
-    const cuda_sm = b.option(CudaSm, "cuda-sm", "CUDA SM target (default: sm_90)") orelse .sm_90;
+    const cuda_sm = b.option(CudaSm, "cuda-sm", "CUDA SM target (default: sm_120)") orelse .sm_120;
     const sm_model: *const std.Target.Cpu.Model = switch (cuda_sm) {
         .sm_50 => &std.Target.nvptx.cpu.sm_50,
         .sm_60 => &std.Target.nvptx.cpu.sm_60,
@@ -85,33 +115,34 @@ pub fn build(b: *std.Build) void {
     {
         const kernel_files = [_][]const u8{
             // Core ops
-            "all",             "silu",          "gelu",           "add",            "mul",
-            "rms_norm",        "softmax",       "l2_norm",        "rope",           "add_scaled",
-            "silu_mul",        "gelu_mul",      "add_rms_norm",   "rms_norm_add",   "rms_norm_batched",
-            "rope_batched",    "sigmoid_mul",   "deinterleave",   "split_qgate",    "deltanet_recurrence",
+            "all",             "silu",           "gelu",          "add",            "mul",
+            "rms_norm",        "softmax",        "l2_norm",       "rope",           "add_scaled",
+            "silu_mul",        "gelu_mul",       "add_rms_norm",  "rms_norm_add",   "rms_norm_batched",
+            "rope_batched",    "sigmoid_mul",    "deinterleave",  "split_qgate",    "deltanet_recurrence",
             // SDPA
-            "sdpa",            "sdpa_turbo",    "sdpa_prefill",   "sdpa_tree",
+            "sdpa",            "sdpa_turbo",     "sdpa_prefill",  "sdpa_tree",
             // Dense GEMV
                  "gemv_f32",
-            "gemv_bf16",       "gemv_f16",      "gemv_t_q8_0",
+            "gemv_bf16",       "gemv_f16",       "gemv_t_q8_0",
             // Quantized GEMV, standard GGUF formats
-               "gemv_q8_0",      "gemv_q4_0",
-            "gemv_q4_0_batch", "gemv_q4_1",     "gemv_q5_0",      "gemv_q4_k",      "gemv_q5_k",
-            "gemv_q6_k",       "gemv_q2_k",     "gemv_q3_k",      "gemv_iq4_nl",    "gemv_iq4_xs",
+              "gemv_q8_0",      "gemv_q4_0",
+            "gemv_q4_0_batch", "gemv_q4_1",      "gemv_q5_0",     "gemv_q4_k",      "gemv_q5_k",
+            "gemv_q6_k",       "gemv_q2_k",      "gemv_q3_k",     "gemv_iq4_nl",    "gemv_iq4_xs",
             // FP8/FP4
-            "gemv_fp8_e4m3",   "gemv_fp8_e5m2", "gemv_nvfp4_st",  "gemv_mxfp4_st",  "gemv_mxfp4_st_batched", "gemv_fp4_tc",
+            "gemv_fp8_e4m3",   "gemv_fp8_e5m2",  "gemv_nvfp4_st", "gemv_mxfp4_st",  "gemv_mxfp4_st_batched",
+            "gemv_fp4_tc",
             // MLX / TQ
-            "gemv_mlx_q4",     "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",     "gemv_tq2_0",
+                "gemv_mlx_q4",    "gemv_mlx_q6",   "gemv_mlx_q8",    "gemv_tq1_0",
+            "gemv_tq2_0",
             // Specialist formats
-            "gemv_gptq",       "gemv_awq",      "gemv_hqq",
+                 "gemv_gptq",      "gemv_awq",      "gemv_hqq",
             // GEMM
                   "gemm_q8_0",
             // Megakernels
-                 "mega_qwen35_q8",
-            "mega_gemma_q4k",  "mega_gemma_q8",
+            "mega_qwen35_q8",  "mega_gemma_q4k", "mega_gemma_q8",
             // Fused FFN
-            "fused_ffn_q8_0", "fused_ffn_q4_k", "fused_ffn_q5_k",
-            "fused_ffn_q6_k",
+            "fused_ffn_q8_0", "fused_ffn_q4_k",
+            "fused_ffn_q5_k",  "fused_ffn_q6_k",
         };
 
         for (kernel_files) |name| {
@@ -138,6 +169,7 @@ pub fn build(b: *std.Build) void {
             // input (rebuilds when the script changes) and avoids configure-time getPath
             // absolute host paths (same pattern as the ROCm fixup below).
             const fixup = b.addSystemCommand(&.{"python3"});
+            pin_spawned_python(fixup);
             fixup.addFileArg(b.path("src/backend/kernels/cuda/fix_kernel_alias.py"));
             fixup.addFileArg(ptx.getEmittedAsm());
             const fixed_ptx = fixup.captureStdOut(.{});
@@ -191,6 +223,7 @@ pub fn build(b: *std.Build) void {
         // input (rebuilds when the script changes) and avoids configure-time getPath
         // absolute host paths.
         const fix_obj = b.addSystemCommand(&.{"python3"});
+        pin_spawned_python(fix_obj);
         fix_obj.addFileArg(b.path("src/backend/kernels/rocm/fix_kd_isa.py"));
         fix_obj.addFileArg(obj.getEmittedBin());
         const fixed_obj = fix_obj.addOutputFileArg("kernels_fixed.o");
@@ -507,12 +540,59 @@ pub fn build(b: *std.Build) void {
         mod_bench.linkFramework("Foundation", .{});
         mod_bench.linkFramework("Accelerate", .{});
     }
-    b.installArtifact(exe_bench);
+    if (enable_bench) b.installArtifact(exe_bench);
 
     const bench_run = b.addRunArtifact(exe_bench);
     bench_run.step.dependOn(b.getInstallStep());
     if (b.args) |args| bench_run.addArgs(args);
     b.step("bench", "Run micro-benchmarks (ReleaseFast)").dependOn(&bench_run.step);
+
+    // ── GPU kernel correctness sweep ────────────────────────────
+    // Every kernel the harness can build, run on the chosen backend and again on
+    // the CPU with byte-identical inputs; agave-bench exits non-zero past its
+    // relative tolerance, so this fails the build on a wrong kernel.
+    //
+    // Not part of `zig build test`: it needs a working GPU, which a CI runner or
+    // a cross-compile host does not have. Run it where the hardware is:
+    //     zig build validate -Dvalidate-backend=rocm
+    //
+    // Two values of k, one a multiple of the 32- and 256-element block sizes and
+    // one a multiple of neither, because a truncated block count is only visible
+    // at the second (it is what made Q4_K produce garbage at k=896).
+    const validate_backend = b.option([]const u8, "validate-backend", "Backend for `zig build validate` (default: rocm)") orelse "rocm";
+    const validate_step = b.step("validate", "Validate every GPU kernel against the CPU backend");
+    {
+        const kernels = [_][]const u8{
+            "gemv_f32",         "gemv_f16",      "gemv_bf16",      "gemv_q8_0",
+            "gemv_q4_0",        "gemv_q4_1",     "gemv_q5_0",      "gemv_q2_k",
+            "gemv_q3_k",        "gemv_q4_k",     "gemv_q5_k",      "gemv_q6_k",
+            "gemv_iq4_nl",      "gemv_iq4_xs",   "gemv_tq1_0",     "gemv_tq2_0",
+            "gemv_fp8_e4m3",    "gemv_fp8_e5m2", "gemm_q8_0",      "rms_norm_batched",
+            "rope_batched",     "sdpa_prefill",  "rms_norm_multi", "rms_norm",
+            "silu",             "gelu",          "softmax",        "l2_norm",
+            "add",              "mul",           "rope",           "add_aliased",
+            "silu_mul_aliased", "deinterleave",  "split_q_gate",   "add_rms_norm",
+            "rms_norm_add",     "sigmoid_mul",   "gelu_mul",       "clamped_silu_mul",
+            "add_scaled",       "gemv_multi",    "gemv_t",         "emb_lookup",
+        };
+        // Deliberately absent:
+        //   rope_mrope     - CPU and Metal only; it panics on ROCm and Vulkan by
+        //                    design, which is the documented contract for a
+        //                    missing GPU kernel rather than something to gate on.
+        //   all_reduce_add - no backend but CPU implements it and the dispatcher
+        //                    skips it silently, so a comparison would only measure
+        //                    that skip. Nothing calls Backend.allReduceAdd today;
+        //                    the models reduce through transport.allReduceAdd.
+        const k_values = [_][]const u8{ "896", "900" };
+        for (k_values) |kv| {
+            for (kernels) |kern| {
+                const run = b.addRunArtifact(exe_bench);
+                run.addArgs(&.{ kern, "--backend", validate_backend, "--n", "1024", "--k", kv, "--iters", "3", "--validate" });
+                run.expectExitCode(0);
+                validate_step.dependOn(&run.step);
+            }
+        }
+    }
 
     // ── WASM build (browser inference) ──────────────────────────
     const wasm_step = b.step("wasm", "Build WebAssembly module for browser inference");
@@ -546,6 +626,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/wasm_entry.zig"),
         .target = wasm_target,
         .optimize = .ReleaseSmall,
+        .strip = true,
     });
     wasm_mod.addImport("build_options", wasm_options.createModule());
     const wasm_lib = b.addExecutable(.{
@@ -558,4 +639,42 @@ pub fn build(b: *std.Build) void {
         .dest_dir = .{ .override = .{ .custom = "web" } },
     });
     wasm_step.dependOn(&install_wasm.step);
+
+    // Contributor gates. Paths must stay in lockstep with
+    // `.github/workflows/ci.yml` fmt-check (`zig fmt --check src/ tests/ build.zig build.zig.zon`).
+    const fmt_paths = [_][]const u8{ "src/", "tests/", "build.zig", "build.zig.zon" };
+    {
+        const fmt_apply = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt" });
+        fmt_apply.addArgs(&fmt_paths);
+        fmt_apply.has_side_effects = true;
+        b.step("fmt", "Apply zig fmt to the paths CI checks").dependOn(&fmt_apply.step);
+
+        const fmt_check_cmd = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", "--check" });
+        fmt_check_cmd.addArgs(&fmt_paths);
+        fmt_check_cmd.has_side_effects = true;
+        const fmt_check_step = b.step("fmt-check", "Check formatting (same paths as CI)");
+        fmt_check_step.dependOn(&fmt_check_cmd.step);
+
+        const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py)");
+        if (b.findProgram(&.{"python3"}, &.{}) catch null) |python3| {
+            const docs_check_cmd = b.addSystemCommand(&.{ python3, "scripts/check-docs.py" });
+            pin_spawned_python(docs_check_cmd);
+            docs_check_cmd.has_side_effects = true;
+            docs_check_step.dependOn(&docs_check_cmd.step);
+        } else {
+            docs_check_step.dependOn(&b.addFail(
+                "python3 not found; zig build check needs Python 3.11+ for scripts/check-docs.py",
+            ).step);
+        }
+
+        const lint_web_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-web.sh" });
+        lint_web_cmd.has_side_effects = true;
+        const lint_web_step = b.step("lint-web", "oxlint + tsc (CI lint-web job)");
+        lint_web_step.dependOn(&lint_web_cmd.step);
+
+        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
+        check_step.dependOn(fmt_check_step);
+        check_step.dependOn(docs_check_step);
+        check_step.dependOn(test_step);
+    }
 }

@@ -36,7 +36,11 @@ export fn gemv_q4_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
     const cp = tid / lanes;
     const ln = tid % lanes;
 
-    const nblk = k / elems_per_block;
+    // Round UP, matching the host row stride (backend.gemvRowBytes uses the
+    // rounded-up super-block count). Truncating here does not merely drop the
+    // tail: `nblk` is also the per-row block stride below, so at a k that is not
+    // a multiple of 256 every row past the first reads another row's bytes.
+    const nblk = (k + elems_per_block - 1) / elems_per_block;
     const spc = (nblk + copies - 1) / copies;
 
     // Whole tensor as u32: every super-block base is 144B-strided (4-aligned),
@@ -74,14 +78,32 @@ export fn gemv_q4_k_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u32, k
         const wbase = blk_u32 + 4 + g * 8;
         const xb = sb * elems_per_block + ln * 32;
 
+        // The final super-block is padded on disk but `x` is only k long, so a
+        // lane whose 32-element window runs past k must stop at it. The whole
+        // window is in range for every block but the last, so the common case
+        // keeps the unguarded four-at-a-time body.
         var j: u32 = 0;
-        while (j < 8) : (j += 1) {
-            const word = wu[wbase + j];
-            const eb = xb + j * 4;
-            acc += (d * scf * @as(f32, @floatFromInt((word >> sh) & 0xF)) - dmin * mnf) * x[eb];
-            acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 8)) & 0xF)) - dmin * mnf) * x[eb + 1];
-            acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 16)) & 0xF)) - dmin * mnf) * x[eb + 2];
-            acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 24)) & 0xF)) - dmin * mnf) * x[eb + 3];
+        if (xb + 32 <= k) {
+            while (j < 8) : (j += 1) {
+                const word = wu[wbase + j];
+                const eb = xb + j * 4;
+                acc += (d * scf * @as(f32, @floatFromInt((word >> sh) & 0xF)) - dmin * mnf) * x[eb];
+                acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 8)) & 0xF)) - dmin * mnf) * x[eb + 1];
+                acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 16)) & 0xF)) - dmin * mnf) * x[eb + 2];
+                acc += (d * scf * @as(f32, @floatFromInt((word >> (sh + 24)) & 0xF)) - dmin * mnf) * x[eb + 3];
+            }
+        } else {
+            while (j < 8) : (j += 1) {
+                const word = wu[wbase + j];
+                const eb = xb + j * 4;
+                var e: u32 = 0;
+                while (e < 4) : (e += 1) {
+                    const idx = eb + e;
+                    if (idx >= k) break;
+                    const shift: u5 = @intCast(sh + @as(u32, @intCast(e)) * 8);
+                    acc += (d * scf * @as(f32, @floatFromInt((word >> shift) & 0xF)) - dmin * mnf) * x[idx];
+                }
+            }
         }
     }
 

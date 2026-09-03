@@ -37,11 +37,11 @@ const GGUFFile = format_mod.GGUFFile;
 const SafeTensorsDir = format_mod.SafeTensorsDir;
 const Model = model_mod.Model;
 const ModelStorage = model_mod.ModelStorage;
-const DFlash2Model = @import("models/dflash2.zig").DFlash2Model;
 const BpeTokenizer = tok_mod.BpeTokenizer;
 const LineEditor = @import("readline.zig").LineEditor;
 const KvQuantType = @import("ops/kv_quant.zig").KvQuantType;
 const math_ops = @import("ops/math.zig");
+const kv_evict = @import("ops/kv_evict.zig");
 const grammar_mod = @import("grammar.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
@@ -89,6 +89,11 @@ fn nanoTimestamp(io: Io) i96 {
     return sim_clock.nanoNow();
 }
 
+/// Elapsed microseconds between two `sim_clock.monoNano()` samples.
+fn elapsedUs(t0_ns: i96, t1_ns: i96) i64 {
+    return @intCast(@divTrunc(t1_ns - t0_ns, 1000));
+}
+
 /// Read all piped stdin into an allocated buffer.
 fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
     var buf = std.ArrayList(u8).empty;
@@ -104,7 +109,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
         buf.appendSlice(allocator, read_buf[0..n]) catch {
             eprint("Error: out of memory reading piped input ({d} bytes read)\n", .{buf.items.len});
             buf.deinit(allocator);
-            return null;
+            std.process.exit(1);
         };
     }
     if (buf.items.len == 0) {
@@ -114,7 +119,7 @@ fn readStdinAll(allocator: std.mem.Allocator, max_size: usize) ?[]const u8 {
     return buf.toOwnedSlice(allocator) catch {
         eprint("Error: out of memory finalizing piped input ({d} bytes)\n", .{buf.items.len});
         buf.deinit(allocator);
-        return null;
+        std.process.exit(1);
     };
 }
 
@@ -222,11 +227,19 @@ fn dbg(comptime fmt: []const u8, args: anytype) void {
     eprint("[dbg] " ++ fmt ++ "\n", args);
 }
 
-/// Surface the effective sampling seed under --verbose. When --seed is
-/// omitted the seed derives from sim_clock, so echoing it is what makes a
-/// sampled run replayable byte-for-byte.
+/// True when the effective seed must be printed. Auto-derived seeds are
+/// always surfaced: they come from sim_clock and a failure is otherwise
+/// unreplayable. Explicit `--seed` is already in argv, so it is echoed
+/// only under --verbose.
+fn shouldNoteSeed(seed_explicit: bool, verbose: bool) bool {
+    return !seed_explicit or verbose;
+}
+
+/// Surface the effective sampling seed. When --seed is omitted the seed
+/// derives from sim_clock, so echoing it is what makes a sampled run
+/// replayable byte-for-byte.
 fn noteSeed(cli: *const CliArgs) void {
-    if (!g_verbose) return;
+    if (!shouldNoteSeed(cli.seed_explicit, g_verbose)) return;
     if (cli.seed_explicit) {
         eprint("[seed] {d}\n", .{cli.seed});
     } else {
@@ -429,7 +442,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "grammar", .kind = .option, .help = "GBNF grammar file for constrained decoding." },
     .{ .long = "grammar-string", .kind = .option, .help = "Inline GBNF grammar string." },
     .{ .long = "json-output", .help = "Constrain generation to valid JSON via grammar (not output format; see --json)." },
-    .{ .long = "json-schema", .kind = .option, .help = "JSON schema for structured output (converts to GBNF grammar)." },
+    .{ .long = "json-schema", .kind = .option, .help = "Inline JSON schema string (not a file) for constrained decoding (converts to GBNF grammar)." },
     .{ .long = "system", .kind = .option, .help = "System prompt for chat formatting." },
     // Backend & model
     .{ .long = "backend", .kind = .option, .help = "Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]." },
@@ -442,7 +455,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "rank", .kind = .option, .help = "This node's rank for TP/PP/disagg [default: 0]." },
     .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. rdma/udp/grpc are rejected until implemented." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit, whichever is smaller]." },
-    .{ .long = "allow-cpu-fallback", .help = "Allow GPU backends to fall back to CPU for unsupported ops." },
+    .{ .long = "allow-cpu-fallback", .help = "Accepted for compatibility; not implemented. GPU backends fail closed on missing kernels (the flag only warns)." },
     .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
     .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
     // KV cache
@@ -467,6 +480,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "max-batch-size", .kind = .option, .help = "Max concurrent requests to batch per scheduler cycle [default: 8]. Higher values increase throughput at the cost of latency per request." },
     .{ .long = "rate-limit-rpm", .kind = .option, .help = "Server max requests per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-tpm." },
     .{ .long = "rate-limit-tpm", .kind = .option, .help = "Server max prompt tokens per minute (0 = unlimited). Enables token-bucket rate limiting when set with or without --rate-limit-rpm." },
+    .{ .long = "conv-store", .kind = .option, .help = "Path to persist web-UI conversations as JSON [default: $XDG_CACHE_HOME/agave/conversations.json, else ~/.cache/agave/conversations.json]." },
+    .{ .long = "no-conv-store", .help = "Do not persist or restore web-UI conversations (in-memory only)." },
     // LoRA
     .{ .long = "lora", .kind = .option, .help = "Path to LoRA adapter GGUF file. Merged at load time into the base model weights." },
     // Multimodal
@@ -502,6 +517,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "benchmark", .help = "Run decode benchmark: prefill + decode, print stats (supports --json)." },
     // SSD expert streaming (MoE models)
     .{ .long = "ssd-streaming", .help = "Enable SSD expert streaming for large MoE models that don't fit in RAM/VRAM. Uses demand-paged LRU expert cache." },
+    .{ .long = "vram-budget-policy", .kind = .option, .help = "Eviction order when the weight budget is full: mru (default) or lru. A dense model scans its layers cyclically, where lru evicts exactly what the next layer needs; lru suits skewed reuse such as routed MoE experts." },
+    .{ .long = "vram-budget", .kind = .option, .help = "Cap GPU memory held by cached weights: GiB (e.g. 20, or 0.5), or 'auto' to size it from free VRAM. Weights beyond the cap are evicted according to --vram-budget-policy (default mru) and re-uploaded on demand, which is what lets a model larger than VRAM run [default: unlimited]." },
     .{ .long = "ssd-cache-slots", .kind = .option, .help = "Number of expert slots to keep resident in the SSD expert cache [default: 256]. Higher = fewer SSD reads, more RAM." },
     .{ .long = "expert-profile-out", .kind = .option, .help = "Write expert activation profile JSON to this path after inference (for hotlist pre-pinning on future runs)." },
     .{ .long = "expert-profile-in", .kind = .option, .help = "Load expert activation profile JSON and pre-pin top experts into the SSD cache before inference starts." },
@@ -563,14 +580,18 @@ const CliArgs = struct {
     kv_budget: u32 = 0,
     host: [4]u8 = .{ 127, 0, 0, 1 },
     api_key: ?[]const u8 = null,
-    allow_cpu_fallback: bool,
     debug: bool,
+    /// Dump DFlash2 speculation-round traces. Set from AGAVE_DF2_DEBUG=1 at parse
+    /// time (not getenv in the generate loop).
+    df2_debug: bool = false,
     json: bool,
     model_info: bool,
     benchmark: bool = false,
     profile: bool,
     use_mmap: bool,
     prefill_batch_size: u32,
+    /// True when the user passed --prefill-batch-size, so the per-backend default defers to them.
+    prefill_batch_size_explicit: bool = false,
     /// Path to LoRA adapter GGUF. Applied at load time (merged into base weights as F32).
     lora_path: ?[]const u8 = null,
     /// Path to vision projector GGUF (mmproj file) for multimodal inference.
@@ -598,6 +619,10 @@ const CliArgs = struct {
     rate_limit_rpm: u32 = 0,
     /// Server rate limit: max prompt tokens per minute (0 = unlimited / disabled).
     rate_limit_tpm: u32 = 0,
+    /// Explicit conversation store path (null = default ~/.cache/agave/conversations.json).
+    conv_store_path: ?[]const u8 = null,
+    /// Disable conversation persist/restore.
+    no_conv_store: bool = false,
     // Speculative decoding
     draft_model_path: ?[]const u8 = null,
     /// Path to MTP weight file (safetensors) for multi-token prediction.
@@ -628,6 +653,13 @@ const CliArgs = struct {
     ssd_streaming: bool = false,
     /// Number of expert slots to keep resident (default 256).
     ssd_cache_slots: u32 = 256,
+    /// Bytes of GPU memory cached weights may hold. 0 = unlimited (every weight
+    /// stays resident once uploaded), which is correct whenever the model fits.
+    /// `vram_budget_auto` derives it from the device's reported memory instead.
+    vram_budget_bytes: usize = 0,
+    vram_budget_auto: bool = false,
+    /// Eviction order for the weight budget. See --vram-budget-policy.
+    vram_budget_policy: backend_mod.WeightPolicy = .mru,
     /// Write expert activation profile JSON after inference.
     expert_profile_out: ?[]const u8 = null,
     /// Load expert profile JSON and pre-pin top experts before inference.
@@ -715,7 +747,19 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     if (res.flag("version")) {
-        display_mod.printVersion();
+        const decorate = blk: {
+            if (res.flag("no-color")) break :blk false;
+            if (res.option("color")) |cm| {
+                if (std.mem.eql(u8, cm, "never")) break :blk false;
+                if (std.mem.eql(u8, cm, "always")) break :blk true;
+            }
+            break :blk display_mod.versionDecorate(
+                stdout_file.isTty(g_io) catch false,
+                g_environ.get("TERM"),
+                g_environ.get("NO_COLOR"),
+            );
+        };
+        display_mod.printVersionWith(decorate);
         return null;
     }
 
@@ -763,6 +807,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (res.flag("no-color")) break :blk false;
         // NO_COLOR env var (https://no-color.org): present and non-empty
         if (noColorRequested(g_environ.get("NO_COLOR"))) break :blk false;
+        // TERM=dumb: no ANSI / TTY decorations even when stdout is a TTY
+        if (display_mod.termIsDumbValue(g_environ.get("TERM"))) break :blk false;
         // Auto: color only on TTY
         break :blk g_tty;
     };
@@ -995,14 +1041,19 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     }
 
     // Validate port range (1-65535, u16 parse already enforces upper bound).
-    // CLI --port wins over AGAVE_PORT; both are validated the same way.
-    const port_raw = res.option("port") orelse g_environ.get("AGAVE_PORT");
-    if (parseU16(port_raw, "port")) |p| {
+    // CLI --port wins over AGAVE_PORT. Empty AGAVE_PORT is unset (Compose `${VAR:-}`).
+    const port_cli = res.option("port");
+    const port_env = pull.nonemptyEnv(g_environ.get("AGAVE_PORT"));
+    const port_raw = port_cli orelse port_env;
+    const port_label: []const u8 = if (port_cli != null) "--port" else "AGAVE_PORT";
+    const parsed_port: u16 = blk: {
+        const p = parseUintLabel(u16, port_raw, port_label) orelse break :blk default_port;
         if (p == 0) {
-            eprint("Error: --port / AGAVE_PORT must be in range 1-65535\n", .{});
+            eprint("Error: {s} must be in range 1-65535\n", .{port_label});
             std.process.exit(2);
         }
-    }
+        break :blk p;
+    };
 
     // Validate max-batch-size (0 would silently fall back inside the server)
     if (parseU32(res.option("max-batch-size"), "max-batch-size")) |mbs| {
@@ -1039,21 +1090,24 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (!res.flag("serve")) {
         if (res.option("port") != null) {
             eprint("Warning: --port has no effect without --serve\n", .{});
-        } else if (g_environ.get("AGAVE_PORT") != null) {
+        } else if (port_env != null) {
             eprint("Warning: AGAVE_PORT has no effect without --serve\n", .{});
         }
         if (res.option("host") != null) {
             eprint("Warning: --host has no effect without --serve\n", .{});
-        } else if (g_environ.get("AGAVE_HOST") != null) {
+        } else if (pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) != null) {
             eprint("Warning: AGAVE_HOST has no effect without --serve\n", .{});
         }
         if (res.option("api-key") != null) {
             eprint("Warning: --api-key has no effect without --serve\n", .{});
-        } else if (g_environ.get("AGAVE_API_KEY") != null) {
+        } else if (pull.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
             eprint("Warning: AGAVE_API_KEY has no effect without --serve\n", .{});
         }
         if (res.option("rate-limit-rpm") != null or res.option("rate-limit-tpm") != null) {
             eprint("Warning: --rate-limit-rpm/--rate-limit-tpm have no effect without --serve\n", .{});
+        }
+        if (res.option("conv-store") != null or res.flag("no-conv-store")) {
+            eprint("Warning: --conv-store/--no-conv-store have no effect without --serve\n", .{});
         }
     } else {
         // Warn about flags ignored in server mode (early, before model loading)
@@ -1067,8 +1121,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: --benchmark exits before server starts; remove --serve or --benchmark\n", .{});
         if (res.flag("model-info"))
             eprint("Warning: --model-info exits before server starts; remove --serve or --model-info\n", .{});
-        // --api-key appears in `ps`/`/proc/*/cmdline`; AGAVE_API_KEY wins when both are set.
-        if (res.option("api-key") != null and g_environ.get("AGAVE_API_KEY") != null) {
+        // --api-key appears in `ps`/`/proc/*/cmdline`; nonempty AGAVE_API_KEY wins when both are set.
+        if (res.option("api-key") != null and pull.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
             eprint("Warning: both --api-key and AGAVE_API_KEY set; using AGAVE_API_KEY (CLI value ignored)\n", .{});
         } else if (res.option("api-key") != null) {
             eprint("Warning: --api-key is visible in process listings; prefer AGAVE_API_KEY\n", .{});
@@ -1183,43 +1237,51 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     if (res.option("dir-steering-file")) |p| validateFileExists(p, "--dir-steering-file");
     if (res.option("expert-profile-in")) |p| validateFileExists(p, "--expert-profile-in");
 
-    // JSON mode + interactive REPL would corrupt the JSON output stream
-    if (json_mode and !res.flag("model-info") and !res.flag("serve") and n_positionals < 2) {
+    // JSON mode + interactive REPL would corrupt the JSON output stream.
+    // --benchmark / --frontier-bench / --model-info / --serve don't need a prompt.
+    if (json_mode and jsonNeedsPrompt(
+        res.flag("model-info"),
+        res.flag("serve"),
+        res.flag("benchmark"),
+        res.flag("frontier-bench"),
+        n_positionals,
+    )) {
         if ((stdin_file.isTty(g_io) catch false)) {
-            eprint("Error: --json requires a prompt or --model-info\n", .{});
-            eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
-            eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
+            eprintJsonRequiresPrompt();
             std.process.exit(2);
         }
     }
 
     // Resolve bind address before auth checks so loopback uses the parsed octets
     // (entire 127.0.0.0/8), not only the string forms "127.0.0.1"/"localhost".
-    // CLI --host wins over AGAVE_HOST.
+    // CLI --host wins over AGAVE_HOST. Empty AGAVE_HOST is unset.
     const bind_host: [4]u8 = blk: {
-        const host_str = res.option("host") orelse g_environ.get("AGAVE_HOST") orelse break :blk [4]u8{ 127, 0, 0, 1 };
+        const host_str = res.option("host") orelse pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse break :blk [4]u8{ 127, 0, 0, 1 };
         if (std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0")) break :blk [4]u8{ 0, 0, 0, 0 };
         if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
         var parts: [4]u8 = undefined;
         if (!parseIpv4(host_str, &parts)) {
-            eprint("Error: invalid host address '{s}' (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{host_str});
+            const host_label: []const u8 = if (res.option("host") != null) "--host" else "AGAVE_HOST";
+            eprint("Error: invalid host address '{s}' from {s} (expected IPv4, 'localhost', '0.0.0.0', or '0')\n", .{ host_str, host_label });
             std.process.exit(2);
         }
         break :blk parts;
     };
     const api_key: ?[]const u8 = blk: {
-        // Prefer AGAVE_API_KEY over --api-key so the active secret is not taken from
-        // process listings when both are present (CLI value is still visible in ps).
-        const key = g_environ.get("AGAVE_API_KEY") orelse res.option("api-key");
+        // Prefer nonempty AGAVE_API_KEY over --api-key so the active secret is not
+        // taken from process listings when both are present. Empty env is unset so
+        // a sourced `.env.example` (`AGAVE_API_KEY=`) does not override --api-key
+        // or fail loopback --serve.
+        const key = preferredSecret(g_environ.get("AGAVE_API_KEY"), res.option("api-key"));
         // Non-loopback bind without a key exposes the full inference API.
         const is_loopback = bind_host[0] == 127;
         if (res.flag("serve") and !is_loopback and key == null) {
-            const host_str = res.option("host") orelse g_environ.get("AGAVE_HOST") orelse "127.0.0.1";
+            const host_str = res.option("host") orelse pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse "127.0.0.1";
             eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
             eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
             std.process.exit(2);
         }
-        // Empty/whitespace key would satisfy "key present" checks while accepting any empty header.
+        // Empty/whitespace --api-key would satisfy "key present" checks while accepting any empty header.
         if (key) |k| {
             const trimmed = std.mem.trim(u8, k, " \t\r\n");
             if (trimmed.len == 0) {
@@ -1235,7 +1297,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .model_path = res.positional(0).?,
         .prompt = res.positional(1),
         .serve = res.flag("serve"),
-        .port = parseU16(port_raw, "port") orelse default_port,
+        .port = parsed_port,
         .max_tokens = parseU32(res.option("max-tokens"), "max-tokens") orelse default_max_tokens,
         .temperature = temperature,
         .top_p = top_p,
@@ -1300,8 +1362,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .kv_budget = parseU32(res.option("kv-budget"), "kv-budget") orelse 0,
         .host = bind_host,
         .api_key = api_key,
-        .allow_cpu_fallback = res.flag("allow-cpu-fallback"),
         .debug = res.flag("debug"),
+        .df2_debug = pull.envFlagIsOne(g_environ.get("AGAVE_DF2_DEBUG")),
         .json = json_mode,
         .model_info = res.flag("model-info"),
         .benchmark = res.flag("benchmark"),
@@ -1326,6 +1388,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .disagg = res.flag("disagg"),
         .use_mmap = res.flag("mmap"),
         .prefill_batch_size = parseU32(res.option("prefill-batch-size"), "prefill-batch-size") orelse default_chunk_size,
+        .prefill_batch_size_explicit = res.option("prefill-batch-size") != null,
         .lora_path = res.option("lora"),
         .mmproj = res.option("mmproj"),
         .image = res.option("image"),
@@ -1335,6 +1398,8 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .max_batch_size = parseU32(res.option("max-batch-size"), "max-batch-size") orelse 8,
         .rate_limit_rpm = parseU32(res.option("rate-limit-rpm"), "rate-limit-rpm") orelse 0,
         .rate_limit_tpm = parseU32(res.option("rate-limit-tpm"), "rate-limit-tpm") orelse 0,
+        .conv_store_path = res.option("conv-store"),
+        .no_conv_store = res.flag("no-conv-store"),
         .video = res.option("video"),
         .video_fps = blk: {
             // Range already validated above; re-parse for the struct field.
@@ -1432,6 +1497,27 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             break :blk 0.5;
         },
         .ssd_streaming = res.flag("ssd-streaming"),
+        .vram_budget_auto = if (res.option("vram-budget")) |raw| std.mem.eql(u8, raw, "auto") else false,
+        .vram_budget_policy = blk: {
+            const raw = res.option("vram-budget-policy") orelse break :blk .mru;
+            if (std.mem.eql(u8, raw, "mru")) break :blk .mru;
+            if (std.mem.eql(u8, raw, "lru")) break :blk .lru;
+            eprint("Error: --vram-budget-policy must be 'mru' or 'lru', got '{s}'\n", .{raw});
+            std.process.exit(2);
+        },
+        .vram_budget_bytes = blk: {
+            const raw = res.option("vram-budget") orelse break :blk 0;
+            if (std.mem.eql(u8, raw, "auto")) break :blk 0;
+            const gib = std.fmt.parseFloat(f64, raw) catch {
+                eprint("Error: --vram-budget must be a number of GiB, got '{s}'\n", .{raw});
+                std.process.exit(2);
+            };
+            if (!(gib >= 0) or gib > 1024) { // NaN fails the >= test
+                eprint("Error: --vram-budget must be between 0 and 1024 GiB, got '{s}'\n", .{raw});
+                std.process.exit(2);
+            }
+            break :blk @as(usize, @intFromFloat(gib * 1024.0 * 1024.0 * 1024.0));
+        },
         .ssd_cache_slots = blk: {
             const v = parseU32(res.option("ssd-cache-slots"), "ssd-cache-slots") orelse 256;
             if (v == 0) {
@@ -1656,31 +1742,55 @@ fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
     const fd = t.tcp_fds[0];
     var ping: [4]u8 = .{ 'P', 'I', 'N', 'G' };
     var pong: [4]u8 = undefined;
-    var ts_start: std.posix.system.timespec = undefined;
-    var ts_end: std.posix.system.timespec = undefined;
+    const t0 = sim_clock.monoNano();
     if (rank == 0) {
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
         _ = std.posix.system.send(fd, &ping, 4, 0);
         _ = std.posix.system.recv(fd, &pong, 4, 0);
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     } else {
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
         _ = std.posix.system.recv(fd, &pong, 4, 0);
         _ = std.posix.system.send(fd, &ping, 4, 0);
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
     }
-    const start_us: u64 = @intCast(ts_start.sec * 1_000_000 + @divTrunc(ts_start.nsec, 1000));
-    const end_us: u64 = @intCast(ts_end.sec * 1_000_000 + @divTrunc(ts_end.nsec, 1000));
-    return end_us -| start_us;
+    const delta_us = elapsedUs(t0, sim_clock.monoNano());
+    return if (delta_us > 0) @intCast(delta_us) else 0;
 }
 
 fn parseUint(comptime T: type, s: ?[]const u8, comptime flag: []const u8) ?T {
+    return parseUintLabel(T, s, "--" ++ flag);
+}
+
+/// Parse an unsigned integer, naming `label` (`--port` or `AGAVE_PORT`) in errors.
+fn parseUintLabel(comptime T: type, s: ?[]const u8, label: []const u8) ?T {
     const str = s orelse return null;
     return std.fmt.parseInt(T, str, 10) catch {
-        eprint("Error: invalid value for --" ++ flag ++ ": '{s}' is not a valid integer\n", .{str});
+        eprint("Error: invalid value for {s}: '{s}' is not a valid integer\n", .{ label, str });
         eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     };
+}
+
+/// Env wins when nonempty; empty/whitespace env is unset so a CLI value still applies.
+fn preferredSecret(env_val: ?[]const u8, cli_val: ?[]const u8) ?[]const u8 {
+    return pull.nonemptyEnv(env_val) orelse cli_val;
+}
+
+/// Trimmed prompt, or null when absent/whitespace-only (empty piped stdin is not a prompt).
+fn nonemptyPrompt(s: ?[]const u8) ?[]const u8 {
+    const v = s orelse return null;
+    const t = std.mem.trim(u8, v, " \t\r\n");
+    return if (t.len == 0) null else t;
+}
+
+/// True when `--json` without a positional prompt would start a REPL.
+/// `--model-info`, `--serve`, `--benchmark`, and `--frontier-bench` don't need one.
+fn jsonNeedsPrompt(model_info: bool, serve: bool, benchmark: bool, frontier_bench: bool, n_positionals: usize) bool {
+    if (model_info or serve or benchmark or frontier_bench) return false;
+    return n_positionals < 2;
+}
+
+fn eprintJsonRequiresPrompt() void {
+    eprint("Error: --json requires a prompt, --model-info, --benchmark, or --frontier-bench\n", .{});
+    eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
+    eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
 }
 
 fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
@@ -1883,14 +1993,12 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
     const n_gen = cli.max_tokens;
 
     // Prefill (batched when model supports it, sequential fallback)
-    var ts_start: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_start);
+    const ts_start = sim_clock.monoNano();
     _ = model.prefill(token_ids) catch {
         eprint("Benchmark: prefill failed\n", .{});
         return;
     };
-    var ts_prefill: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_prefill);
+    const ts_prefill = sim_clock.monoNano();
 
     // Decode
     var last: u32 = math_ops.argmax(model.getLogits());
@@ -1904,11 +2012,10 @@ fn runBenchmark(model: *Model, tok_state: anytype, allocator: std.mem.Allocator,
         last = math_ops.argmax(model.getLogits());
         gen_count += 1;
     }
-    var ts_end: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_end);
+    const ts_end = sim_clock.monoNano();
 
-    const prefill_us = (@as(i64, ts_prefill.sec) - @as(i64, ts_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_prefill.nsec) - @as(i64, ts_start.nsec), 1000);
-    const decode_us = (@as(i64, ts_end.sec) - @as(i64, ts_prefill.sec)) * 1_000_000 + @divTrunc(@as(i64, ts_end.nsec) - @as(i64, ts_prefill.nsec), 1000);
+    const prefill_us = elapsedUs(ts_start, ts_prefill);
+    const decode_us = elapsedUs(ts_prefill, ts_end);
     const prefill_tps: f64 = if (prefill_us > 0) @as(f64, @floatFromInt(n_prompt)) / (@as(f64, @floatFromInt(prefill_us)) / 1e6) else 0;
     const decode_tps: f64 = if (decode_us > 0) @as(f64, @floatFromInt(gen_count)) / (@as(f64, @floatFromInt(decode_us)) / 1e6) else 0;
     const prefill_ms = @as(f64, @floatFromInt(prefill_us)) / 1000.0;
@@ -1987,14 +2094,12 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         const slice = if (ctx_len <= prompt.len) prompt[cursor..ctx_len] else prompt[cursor..];
         if (slice.len == 0) continue;
 
-        var ts0: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts0);
+        const ts0 = sim_clock.monoNano();
         _ = model.prefill(slice) catch {
             eprint("frontier-bench: prefill failed at ctx={d}\n", .{ctx_len});
             break;
         };
-        var ts1: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts1);
+        const ts1 = sim_clock.monoNano();
         cursor = @min(ctx_len, prompt.len);
 
         // Export KV snapshot before probe (64 MB should cover most models at frontier sizes).
@@ -2006,8 +2111,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         // Greedy probe starting from the last prefill logits.
         var last = math_ops.argmax(model.getLogits());
         var gen: u32 = 0;
-        var ts_dec_start: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts_dec_start);
+        const ts_dec_start = sim_clock.monoNano();
         while (gen < probe_tokens) : (gen += 1) {
             if (isEogToken(last, eog)) break;
             last = model.forward(last) catch |err| {
@@ -2016,16 +2120,15 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
             };
             last = math_ops.argmax(model.getLogits());
         }
-        var ts2: std.posix.system.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &ts2);
+        const ts2 = sim_clock.monoNano();
 
         // Restore KV state to the snapshot so the next frontier continues cleanly.
         if (kv_snapshot_buf) |s| {
             if (kv_snap_len > 0) _ = model.importKvPrefix(s[0..kv_snap_len], cursor);
         }
 
-        const pf_us: i64 = (@as(i64, ts1.sec) - @as(i64, ts0.sec)) * 1_000_000 + @divTrunc(@as(i64, ts1.nsec) - @as(i64, ts0.nsec), 1000);
-        const dec_us: i64 = (@as(i64, ts2.sec) - @as(i64, ts_dec_start.sec)) * 1_000_000 + @divTrunc(@as(i64, ts2.nsec) - @as(i64, ts_dec_start.nsec), 1000);
+        const pf_us: i64 = elapsedUs(ts0, ts1);
+        const dec_us: i64 = elapsedUs(ts_dec_start, ts2);
         const pf_tps: f64 = if (pf_us > 0) @as(f64, @floatFromInt(slice.len)) / (@as(f64, @floatFromInt(pf_us)) / 1e6) else 0;
         const dec_tps: f64 = if (dec_us > 0 and gen > 0) @as(f64, @floatFromInt(gen)) / (@as(f64, @floatFromInt(dec_us)) / 1e6) else 0;
 
@@ -2042,190 +2145,226 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
     if (cli.json) _ = std.posix.system.write(stdout_file.handle, "]\n", 2);
 }
 
+/// Target architectures listed in `--help`. DFlash2 is a drafter (`--draft-model`), not a target.
+const supported_arch_help = blk: {
+    const order = [_]Arch{
+        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4exp, .qwen4_exp,
+        .gpt_oss, .nemotron_h, .nemotron_nano,   .glm4,   .deepseek4,
+        .llama4,
+    };
+    var acc: []const u8 = "";
+    for (order) |a| {
+        if (acc.len > 0) acc = acc ++ ", ";
+        acc = acc ++ a.buildFlag();
+    }
+    for (@typeInfo(Arch).@"enum".fields) |f| {
+        const a: Arch = @field(Arch, f.name);
+        if (a == .dflash2) continue;
+        var found = false;
+        for (order) |o| {
+            if (o == a) found = true;
+        }
+        if (!found) @compileError("supported_arch_help missing " ++ f.name);
+    }
+    break :blk acc;
+};
+
+const usage_text =
+    \\agave: Zig LLM inference engine
+    \\
+    \\USAGE:
+    \\  agave [OPTIONS] <model.gguf|model-dir/> [prompt]
+    \\  agave [OPTIONS] -- <model.gguf|model-dir/> [prompt]
+    \\  echo "prompt" | agave model.gguf
+    \\
+    \\ARGUMENTS:
+    \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
+    \\  [prompt]                 Text prompt (omit for interactive REPL)
+    \\
+    \\GENERAL:
+    \\  -h, --help             Show this help message and exit
+    \\  -v, --version          Print version and exit
+    \\  -q, --quiet            Suppress banner and stats (raw output only)
+    \\                         Short boolean flags may be clustered (e.g. -qV)
+    \\      --color <MODE>     Color mode: auto, always, never [default: auto]
+    \\      --no-color         Disable colored output (same as --color=never; do not combine with --color)
+    \\
+    \\GENERATION:
+    \\  -n, --max-tokens <N>      Maximum tokens to generate [default: 512]
+    \\  -t, --temperature <T>     Sampling temperature, 0 = greedy [default: 0]
+    \\      --top-p <P>           Nucleus sampling threshold [default: 1.0]
+    \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
+    \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
+    \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
+    \\      --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
+    \\      --dry-length <N>      DRY minimum n-gram length [default: 2]
+    \\      --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
+    \\      --xtc-threshold <T>   XTC probability threshold [default: 0.1]
+    \\      --mirostat-mode <N>   Mirostat sampling: 0=off, 2=Mirostat 2.0 [default: 0]
+    \\      --mirostat-tau <T>    Mirostat target entropy [default: 5.0]
+    \\      --mirostat-eta <E>    Mirostat learning rate [default: 0.1]
+    \\      --seed <N>            Random seed for sampling [default: random]
+    \\      --system <TEXT>       System prompt for chat formatting
+    \\      --grammar <FILE>      GBNF grammar file for constrained decoding
+    \\      --grammar-string <G>  Inline GBNF grammar string
+    \\      --json-output         Constrain generation to valid JSON via grammar (not output format; see --json)
+    \\      --json-schema <JSON>  Inline JSON schema string (not a file) for constrained decoding
+    \\
+    \\BACKEND & MODEL:
+    \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
+    \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
+    \\      --list-devices        List available compute devices and exit
+    \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
+    \\      --allow-cpu-fallback  Not implemented; GPU backends fail closed (flag only warns)
+    \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
+    \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
+    \\
+    \\KV CACHE:
+    \\      --kv-type <TYPE>      KV cache quantization [default: f16]
+    \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla,
+    \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3,
+    \\                                   planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, rotor2/rq2,
+    \\                                   rotor3/rq3, rotor4/rq4
+    \\                            Preset: turbo (K=q8_0, V=turbo4)
+    \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
+    \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
+    \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
+    \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
+    \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
+    \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
+    \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
+    \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
+    \\      --no-kv-cache         Disable KV cache (prefill-only / embedding; no decode)
+    \\
+    \\SERVER:
+    \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
+    \\  -p, --port <PORT>      Server port [default: 49453] (falls back to AGAVE_PORT)
+    \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
+    \\                         Non-loopback binds require --api-key (or AGAVE_API_KEY)
+    \\                         Falls back to AGAVE_HOST when --host is omitted
+    \\      --api-key <KEY>    API key for server auth (prefer AGAVE_API_KEY; CLI arg is visible in ps)
+    \\                         When both are set, AGAVE_API_KEY wins
+    \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
+    \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
+    \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
+    \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
+    \\      --conv-store <PATH> Persist web-UI conversations to JSON [default: $XDG_CACHE_HOME/agave/conversations.json]
+    \\      --no-conv-store    Do not persist or restore web-UI conversations
+    \\
+    \\PARALLELISM:
+    \\      --tp <N>              Tensor parallelism degree [default: 1; 1 or 2 (2-rank pair)]
+    \\      --pp <N>              Pipeline parallelism stages [default: 1; 1 or 2]
+    \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
+    \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
+    \\      --transport <TYPE>    IPC transport: auto, tcp, shm, nccl [default: auto]
+    \\      --disagg              Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
+    \\
+    \\SPECULATIVE DECODING:
+    \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
+    \\      --mtp-model <PATH>    MTP weight file (safetensors) for multi-token prediction
+    \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
+    \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
+    \\      --tree-budget <N>     DDTree node budget [default: 64]
+    \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
+    \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
+    \\      --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
+    \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
+    \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
+    \\
+    \\ADAPTERS & DIFFUSION:
+    \\      --lora <PATH>         Merge LoRA adapter GGUF at load time into base weights
+    \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
+    \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
+    \\      --diffusion-confidence <F>  Diffusion acceptance confidence (0.0-1.0) [default: 0.5]
+    \\      --dir-steering-file <PATH>  Directional steering f32 vector (n_layers × n_embd floats)
+    \\      --dir-steering-ffn <F>      Steering scale for FFN outputs [default: 1.0 with file]
+    \\      --dir-steering-attn <F>     Steering scale for attention outputs [default: 0]
+    \\
+    \\OPTIMIZATION:
+    \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
+    \\      --power <N>                  Target GPU utilisation percent (1-100)
+    \\
+    \\EXPERT STREAMING:
+    \\      --vram-budget <GIB>          Cap GPU memory for cached weights in GiB (e.g. 20, 0.5, or auto)
+    \\      --vram-budget-policy <P>     Eviction order when full: mru (default) or lru
+    \\      --ssd-streaming              Stream MoE experts from SSD
+    \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
+    \\      --expert-profile-out <FILE>  Save expert activation profile
+    \\      --expert-profile-in <FILE>   Load expert activation profile for cache warming
+    \\
+    \\MULTIMODAL:
+    \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
+    \\      --image <PATH>     Path to image file (PNG or PPM P6)
+    \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
+    \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
+    \\
+    \\DIAGNOSTICS:
+    \\  -V, --verbose          Show technical details (params, load times, EOG)
+    \\  -d, --debug            Enable debug logging (token IDs, layer timing); implies --verbose
+    \\      --json             Output results as JSON (implies --quiet)
+    \\      --model-info       Print model metadata and exit (supports --json)
+    \\      --profile          Profile per-op timing (halves throughput)
+    \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
+    \\      --frontier-bench             Frontier benchmark (snapshot KV at each context)
+    \\      --frontier-ctx <LIST>        Comma-separated context lengths for frontier bench
+    \\
+    \\ENVIRONMENT:
+    \\  NO_COLOR             Disable colored output when set (https://no-color.org)
+    \\  TERM                 Set to dumb to disable color and TTY decorations
+    \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
+    \\                         Empty/whitespace is unset (does not override --api-key)
+    \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
+    \\                         Empty/whitespace is unset
+    \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
+    \\                         Empty/whitespace is unset
+    \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
+    \\  AGAVE_DF2_DEBUG      Dump DFlash2 speculation-round traces when set to 1
+    \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
+    \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
+    \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
+    \\  XDG_CACHE_HOME       Cache base for pull, conversations, Vulkan pipeline cache (fallback: ~/.cache)
+    \\
+    \\EXAMPLES:
+    \\  agave model.gguf                          Interactive REPL
+    \\  agave model.gguf "What is 2+2?"           Single prompt
+    \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
+    \\  agave model.gguf --serve --port 3000      HTTP server on port 3000
+    \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
+    \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
+    \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
+    \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
+    \\  echo "Explain TCP" | agave model.gguf     Pipe prompt from stdin
+    \\  agave model.gguf --json "Hello"           JSON output with stats
+    \\  agave model.gguf --json --model-info      Model metadata as JSON
+    \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
+    \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
+    \\  agave model.gguf --ctx-size auto "Hello"  Auto-fit context to available memory
+    \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
+    \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
+    \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
+    \\  agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
+    \\  agave target.gguf --draft-model draft.gguf "Hello"    Speculative decoding (DDTree)
+    \\  agave model.gguf --spec-mode self --draft-layers 9 "Hello"  Self-speculative
+    \\  agave model.gguf --megakernel "Hello"                 Fused FFN megakernel
+    \\  agave model.gguf --benchmark --json                   Benchmark with JSON output
+    \\
+    \\SUBCOMMANDS:
+    \\  agave pull <org/repo>                    Download model from HuggingFace
+    \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
+    \\  agave pull <org/repo> --list             List available model files
+    \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
+    \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
+    \\
+    \\SUPPORTED ARCHITECTURES:
+    \\  
+++ supported_arch_help ++
+    \\
+    \\
+    \\REPL COMMANDS:
+++ repl_help;
+
 fn printUsage() void {
-    const usage =
-        \\agave: Zig LLM inference engine
-        \\
-        \\USAGE:
-        \\  agave [OPTIONS] <model.gguf|model-dir/> [prompt]
-        \\  agave [OPTIONS] -- <model.gguf|model-dir/> [prompt]
-        \\  echo "prompt" | agave model.gguf
-        \\
-        \\ARGUMENTS:
-        \\  <model.gguf|model-dir/>  Path to GGUF model file or SafeTensors directory
-        \\  [prompt]                 Text prompt (omit for interactive REPL)
-        \\
-        \\GENERAL:
-        \\  -h, --help             Show this help message and exit
-        \\  -v, --version          Print version and exit
-        \\  -q, --quiet            Suppress banner and stats (raw output only)
-        \\                         Short boolean flags may be clustered (e.g. -qV)
-        \\      --color <MODE>     Color mode: auto, always, never [default: auto]
-        \\      --no-color         Disable colored output (same as --color=never; do not combine with --color)
-        \\
-        \\GENERATION:
-        \\  -n, --max-tokens <N>      Maximum tokens to generate [default: 512]
-        \\  -t, --temperature <T>     Sampling temperature, 0 = greedy [default: 0]
-        \\      --top-p <P>           Nucleus sampling threshold [default: 1.0]
-        \\      --top-k <K>           Top-k sampling, 0 = disabled [default: 0]
-        \\      --repeat-penalty <R>  Repetition penalty [default: 1.0]
-        \\      --min-p <P>           Min-p sampling: keep tokens with prob >= P * max_prob [default: 0]
-        \\      --dry-multiplier <M>  DRY n-gram repetition penalty [default: 0 = disabled]
-        \\      --dry-length <N>      DRY minimum n-gram length [default: 2]
-        \\      --xtc-probability <P> XTC exclude-top-choices probability [default: 0]
-        \\      --xtc-threshold <T>   XTC probability threshold [default: 0.1]
-        \\      --mirostat-mode <N>   Mirostat sampling: 0=off, 2=Mirostat 2.0 [default: 0]
-        \\      --mirostat-tau <T>    Mirostat target entropy [default: 5.0]
-        \\      --mirostat-eta <E>    Mirostat learning rate [default: 0.1]
-        \\      --seed <N>            Random seed for sampling [default: random]
-        \\      --system <TEXT>       System prompt for chat formatting
-        \\      --grammar <FILE>      GBNF grammar file for constrained decoding
-        \\      --grammar-string <G>  Inline GBNF grammar string
-        \\      --json-output         Constrain generation to valid JSON via grammar (not output format; see --json)
-        \\      --json-schema <JSON>  JSON schema for structured output
-        \\
-        \\BACKEND & MODEL:
-        \\      --backend <BE>        Compute backend: auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
-        \\      --device <N>          GPU device index for CUDA/ROCm/Vulkan [default: 0]
-        \\      --list-devices        List available compute devices and exit
-        \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
-        \\      --allow-cpu-fallback  Allow GPU backends to fall back to CPU for unsupported ops
-        \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
-        \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
-        \\
-        \\KV CACHE:
-        \\      --kv-type <TYPE>      KV cache quantization [default: f16]
-        \\                            Types: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla,
-        \\                                   turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2, planar3/pq3,
-        \\                                   planar4/pq4, iso2/iq2, iso3/iq3, iso4/iq4, rotor2/rq2,
-        \\                                   rotor3/rq3, rotor4/rq4
-        \\                            Preset: turbo (K=q8_0, V=turbo4)
-        \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
-        \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
-        \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
-        \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
-        \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
-        \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
-        \\      --kv-eviction <POL>   KV eviction policy: none, norm, tri [default: none]
-        \\      --kv-budget <N>       Max KV positions to keep during eviction [default: 80% of ctx-size]
-        \\
-        \\SERVER:
-        \\  -s, --serve            Start HTTP server (OpenAI + Anthropic API)
-        \\  -p, --port <PORT>      Server port [default: 49453] (falls back to AGAVE_PORT)
-        \\      --host <ADDR>      Bind address: IPv4, localhost, 0.0.0.0, or 0 [default: 127.0.0.1]
-        \\                         Non-loopback binds require --api-key (or AGAVE_API_KEY)
-        \\                         Falls back to AGAVE_HOST when --host is omitted
-        \\      --api-key <KEY>    API key for server auth (prefer AGAVE_API_KEY; CLI arg is visible in ps)
-        \\                         When both are set, AGAVE_API_KEY wins
-        \\      --sleep-after <N>  Enter sleep mode after N seconds idle (0 = disabled)
-        \\      --max-batch-size <N>  Max concurrent batched requests [default: 8]
-        \\      --rate-limit-rpm <N>  Max requests/min (0 = unlimited; enables rate limiting)
-        \\      --rate-limit-tpm <N>  Max prompt tokens/min (0 = unlimited; enables rate limiting)
-        \\      --no-kv-cache      Prefill-only / embedding server (no decode KV)
-        \\
-        \\PARALLELISM:
-        \\      --tp <N>              Tensor parallelism degree [default: 1; 1 or 2 (2-rank pair)]
-        \\      --pp <N>              Pipeline parallelism stages [default: 1; 1 or 2]
-        \\      --peers <ADDR>        Peer address (e.g. 192.168.0.2 or localhost for same-node)
-        \\      --rank <N>            This node's rank for TP/PP/disagg [default: 0]
-        \\      --transport <TYPE>    IPC transport: auto, tcp, shm, nccl [default: auto]
-        \\      --disagg              Disaggregated prefill/decode (rank 0 prefills, rank 1 decodes)
-        \\
-        \\SPECULATIVE DECODING:
-        \\      --draft-model <PATH>  Draft model GGUF for speculative decoding
-        \\      --mtp-model <PATH>    MTP weight file (safetensors) for multi-token prediction
-        \\      --spec-mode <MODE>    Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
-        \\  -K, --spec-tokens <N>     Draft tokens per speculation round [default: 5]
-        \\      --tree-budget <N>     DDTree node budget [default: 64]
-        \\      --draft-layers <N>    Layers for self-speculative draft [default: auto]
-        \\      --spec-token-map <F>  FR-Spec token frequency map for vocab truncation
-        \\      --pflash-alpha <F>    PFlash block selection threshold (0.0-2.0) [default: 0.85]
-        \\      --pflash-block-size <N>  PFlash scoring block size in tokens [default: 64]
-        \\      --pflash-scorer <PATH>  Separate model for PFlash block scoring (defaults to --draft-model)
-        \\
-        \\ADAPTERS & DIFFUSION:
-        \\      --lora <PATH>         Merge LoRA adapter GGUF at load time into base weights
-        \\      --diffusion-steps <N> DiffusionGemma denoising steps [default: 16]
-        \\      --diffusion-canvas <N> DiffusionGemma canvas length [default: 256]
-        \\      --diffusion-confidence <F>  Diffusion acceptance confidence (0.0-1.0) [default: 0.5]
-        \\      --dir-steering-file <PATH>  Directional steering f32 vector (n_layers × n_embd floats)
-        \\      --dir-steering-ffn <F>      Steering scale for FFN outputs [default: 1.0 with file]
-        \\      --dir-steering-attn <F>     Steering scale for attention outputs [default: 0]
-        \\
-        \\OPTIMIZATION:
-        \\      --megakernel          Enable fused FFN megakernels (3→1 dispatch per layer)
-        \\      --power <N>                  Target GPU utilisation percent (1-100)
-        \\
-        \\EXPERT STREAMING:
-        \\      --ssd-streaming              Stream MoE experts from SSD
-        \\      --ssd-cache-slots <N>        LRU expert cache size [default: 256]
-        \\      --expert-profile-out <FILE>  Save expert activation profile
-        \\      --expert-profile-in <FILE>   Load expert activation profile for cache warming
-        \\
-        \\MULTIMODAL:
-        \\      --mmproj <PATH>    Path to vision projector GGUF (mmproj file)
-        \\      --image <PATH>     Path to image file (PNG or PPM P6)
-        \\      --video <PATH>     Path to video file (frames extracted via ffmpeg)
-        \\      --video-fps <N>    Video frame sampling rate (default: 1 fps)
-        \\
-        \\DIAGNOSTICS:
-        \\  -V, --verbose          Show technical details (params, load times, EOG)
-        \\  -d, --debug            Enable debug logging (token IDs, layer timing); implies --verbose
-        \\      --json             Output results as JSON (implies --quiet)
-        \\      --model-info       Print model metadata and exit (supports --json)
-        \\      --profile          Profile per-op timing (halves throughput)
-        \\      --benchmark        Run decode benchmark: prefill + decode, print stats (supports --json)
-        \\      --frontier-bench             Frontier benchmark (snapshot KV at each context)
-        \\      --frontier-ctx <LIST>        Comma-separated context lengths for frontier bench
-        \\
-        \\ENVIRONMENT:
-        \\  NO_COLOR             Disable colored output when set (https://no-color.org)
-        \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
-        \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
-        \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
-        \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
-        \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
-        \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
-        \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
-        \\  XDG_CACHE_HOME       XDG cache base for pull (fallback: ~/.cache)
-        \\
-        \\EXAMPLES:
-        \\  agave model.gguf                          Interactive REPL
-        \\  agave model.gguf "What is 2+2?"           Single prompt
-        \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
-        \\  agave model.gguf --serve --port 3000      HTTP server on port 3000
-        \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
-        \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
-        \\  agave model.gguf --backend cpu "Hello"    Force CPU backend
-        \\  agave ./glm-4-9b/ "Hello"                 Load SafeTensors directory
-        \\  echo "Explain TCP" | agave model.gguf     Pipe prompt from stdin
-        \\  agave model.gguf --json "Hello"           JSON output with stats
-        \\  agave model.gguf --json --model-info      Model metadata as JSON
-        \\  agave model.gguf --kv-type tq4 "Hello"   TurboQuant KV cache (saves VRAM)
-        \\  agave model.gguf --ctx-size 0 "Hello"    Use full model context window
-        \\  agave model.gguf --ctx-size auto "Hello"  Auto-fit context to available memory
-        \\  agave model.gguf --image pic.png "What's this?"  Vision (auto-detects mmproj)
-        \\  agave model.gguf --json-output "Generate a user profile"  Force JSON output
-        \\  agave model.gguf --grammar-string 'root ::= "yes" | "no"' "Is sky blue?"
-        \\  agave model.gguf --json-schema '{"type":"object","properties":{"name":{"type":"string"}}}' "User info"
-        \\  agave target.gguf --draft-model draft.gguf "Hello"    Speculative decoding (DDTree)
-        \\  agave model.gguf --spec-mode self --draft-layers 9 "Hello"  Self-speculative
-        \\  agave model.gguf --megakernel "Hello"                 Fused FFN megakernel
-        \\  agave model.gguf --benchmark --json                   Benchmark with JSON output
-        \\
-        \\SUBCOMMANDS:
-        \\  agave pull <org/repo>                    Download model from HuggingFace
-        \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
-        \\  agave pull <org/repo> --list             List available model files
-        \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
-        \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
-        \\
-        \\SUPPORTED ARCHITECTURES:
-        \\  gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4
-        \\
-        \\REPL COMMANDS:
-    ++ repl_help;
-    _ = std.posix.system.write(stdout_file.handle, usage.ptr, usage.len);
+    _ = std.posix.system.write(stdout_file.handle, usage_text.ptr, usage_text.len);
 }
 
 // ── Formatting helpers ───────────────────────────────────────────
@@ -2387,6 +2526,25 @@ pub fn main(init: std.process.Init) !void {
     const be = bs.be;
     const be_name = bs.name;
 
+    // Bound cached weight uploads before any weight is touched, so the very
+    // first prefill already streams instead of allocating past VRAM.
+    const vram_budget = resolveVramBudget(&cli, be);
+    if (vram_budget > 0) {
+        be.setWeightBudget(vram_budget, cli.vram_budget_policy);
+        if (!g_quiet) eprint("vram-budget: {d} MB for cached weights, {s} eviction beyond that\n", .{
+            vram_budget / (1024 * 1024),
+            if (cli.vram_budget_policy == .mru) "MRU" else "LRU",
+        });
+    }
+    // Function scope, not the block above: this must report after inference, not
+    // after the setup. Evictions are the cost side of the budget, one re-upload
+    // each on the next touch, so a large count means the budget sits below the
+    // working set and decode is paying per layer.
+    defer if (vram_budget > 0 and !g_quiet) {
+        const r = be.weightResidency();
+        eprint("vram-budget: {d} MB resident, {d} evictions\n", .{ r.resident / (1024 * 1024), r.evictions });
+    };
+
     // Register mmap'd weight regions for UMA zero-copy GPU access
     if (gguf_file) |g| {
         if (g.mapped_data.len > 0) be.registerHostRegion(g.mapped_data.ptr, g.mapped_data.len);
@@ -2411,6 +2569,7 @@ pub fn main(init: std.process.Init) !void {
 
     // ── Compute file size (needed for banner and progress) ────────
     const file_size_bytes: usize = if (gguf_file) |g| g.file_size else if (st_dir) |s| s.totalBytes() else 0;
+    warnIfBudgetForcesEviction(be, vram_budget, file_size_bytes);
 
     // ── Banner (printed before loading so user sees info immediately) ─
     const meta_n_embed = fmt.getArchU32(arch_str, "embedding_length") orelse fmt.getMetaU32("hidden_size") orelse 0;
@@ -2524,7 +2683,7 @@ pub fn main(init: std.process.Init) !void {
     if (!g_quiet) {
         display.printBanner(disp_info);
         var be_info = bs.be.backendInfo();
-        be_info.n_threads = @intCast(std.Thread.getCpuCount() catch 1);
+        be_info.n_threads = bs.computeThreads();
         if (be_info.system_mem == 0) be_info.system_mem = backend_mod.detectSystemMem();
         if (be_info.system_avail == 0) be_info.system_avail = backend_mod.detectAvailMem();
         if (be_info.l2_cache == 0) {
@@ -2586,8 +2745,9 @@ pub fn main(init: std.process.Init) !void {
         fmt.getMetaU32("eos_token_id") orelse
         arch.defaultEos();
     const bos_id: u32 = blk: {
-        // GLM-4: template includes [gMASK]<sop>, don't also prepend metadata BOS
-        if (arch == .glm4) break :blk 0;
+        // Chat template already emits BOS (GLM-4 `[gMASK]<sop>`, DeepSeek V4
+        // `<｜begin▁of▁sentence｜>`). Don't also prepend a numeric BOS.
+        if (arch.templateIncludesBos()) break :blk 0;
         if (fmt.getMetaU32("tokenizer.ggml.bos_token_id")) |id| break :blk id;
         if (fmt.getMetaU32("bos_token_id")) |id| break :blk id;
         // GPT-2 based tokenizers (Qwen, etc.) don't use BOS by default.
@@ -2645,16 +2805,28 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // ── Init model ───────────────────────────────────────────────
-    const effective_prompt = cli.prompt orelse if (piped_prompt) |p|
-        std.mem.trim(u8, p, " \t\r\n")
-    else
-        null;
+    const effective_prompt = nonemptyPrompt(cli.prompt) orelse nonemptyPrompt(piped_prompt);
 
     // Warn about piped stdin in server mode (positional prompt and --system
     // are already warned in parseCli before model loading).
     // Note: piped_prompt is only read when !cli.serve, so check isatty directly.
     if (cli.serve and cli.prompt == null and !(stdin_file.isTty(g_io) catch false)) {
         eprint("Warning: piped stdin ignored in server mode (--serve)\n", .{});
+    }
+
+    // Don't start a REPL (or emit non-JSON stdout) when the invocation is non-interactive.
+    if (effective_prompt == null and !cli.serve and !cli.benchmark and !cli.frontier_bench) {
+        const stdin_tty = stdin_file.isTty(g_io) catch false;
+        if (cli.json) {
+            eprintJsonRequiresPrompt();
+            std.process.exit(2);
+        }
+        if (!stdin_tty) {
+            eprint("Error: missing prompt (stdin is not a TTY)\n", .{});
+            eprint("Usage: agave <model.gguf|model-dir/> [prompt]\n", .{});
+            eprint("Run 'agave --help' for more information.\n", .{});
+            std.process.exit(2);
+        }
     }
 
     // ── Construct load info ────────────────────────────────────────
@@ -2727,6 +2899,104 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
 }
 
 /// Initialize the model and run inference/server/REPL. Returns false on failure.
+/// Fraction of a checkpoint's bytes that end up as cached weight uploads. The
+/// rest is metadata, the tokenizer, and tensors the GPU never sees.
+///
+/// Measured resident-over-file across the checkpoints on hand: 0.776 (644 MB),
+/// 0.797 (468 MB), 0.877 (1065 MB). Set above all of them, because the two error
+/// directions are not symmetric here: over-estimating the requirement warns when
+/// the budget would in fact have held, which costs the reader a moment;
+/// under-estimating stays silent through a ~4x slowdown, which is the failure
+/// this check exists to prevent.
+const weight_fraction_of_file: f64 = 0.90;
+
+/// Warn when the weight budget cannot hold the model.
+///
+/// Decode throughput against `--vram-budget` on a 7900 XTX, Qwen2.5 1.5B Q4_K
+/// (934 MB of cached weights), CPU at 38.4 tok/s and an unbudgeted GPU at 38.9:
+///
+///     budget      mru        lru
+///     0.85 GiB    32.3       10.3
+///     0.75 GiB    25.8       10.3
+///     0.50 GiB    16.9       10.3
+///     0.25 GiB    12.5       10.3
+///
+/// Under MRU it degrades in proportion to how much of the working set fits, so
+/// the budget is usable rather than a cliff. It still never beats the CPU on this
+/// model once anything is evicted, which is the placement question worth
+/// surfacing: not "this will be slower" but "the CPU is the faster device now".
+fn warnIfBudgetForcesEviction(be: Backend, budget_bytes: usize, file_bytes: usize) void {
+    if (budget_bytes == 0 or file_bytes == 0) return;
+    if (!be.hasWeightBudget()) return;
+    const need: usize = @intFromFloat(@as(f64, @floatFromInt(file_bytes)) * weight_fraction_of_file);
+    if (need <= budget_bytes) return;
+    eprint(
+        "Warning: --vram-budget {d} MB is below this model's ~{d} MB of weights, so decode " ++
+            "will evict and re-upload. Throughput falls in proportion to how much does not " ++
+            "fit, and on this class of hardware stays below --backend cpu once it does; " ++
+            "raise the budget or decode on the CPU.\n",
+        .{ budget_bytes / (1024 * 1024), need / (1024 * 1024) },
+    );
+}
+
+/// Prefill chunk size for this backend.
+///
+/// Multi-token prefill is correct everywhere now; this is purely a speed choice.
+/// Batched prefill is a large win on ROCm (1150ms -> 456ms on Qwen2.5 1.5B) and a
+/// loss on Vulkan (2516ms -> 5366ms), where each per-token op inside the batched
+/// fallback pays a linear scan of the activation cache to resolve its slice of
+/// the reserved parent. Until that lookup is indexed rather than scanned, one
+/// token at a time is Vulkan's faster path.
+///
+/// An explicit `--prefill-batch-size` always wins: both paths produce identical
+/// output, so this is only a default.
+fn chunkSizeFor(be: Backend, cli: *const CliArgs) u32 {
+    if (cli.prefill_batch_size_explicit) return cli.prefill_batch_size;
+    return switch (be) {
+        .vulkan => 1,
+        else => cli.prefill_batch_size,
+    };
+}
+
+/// Fraction of reported device memory `--vram-budget auto` gives to weights.
+/// The rest covers the KV cache, activations and the driver's own allocations,
+/// which are not tracked by the weight budget and would otherwise be squeezed
+/// out by it.
+const vram_budget_auto_fraction: f64 = 0.75;
+
+/// Resolve `--vram-budget` to bytes. 0 means unbounded.
+///
+/// `auto` sizes from the device's free memory when the backend reports it (only
+/// CUDA does today) and from total memory otherwise, which is the honest
+/// fallback: the alternative is guessing at what else is resident.
+///
+/// Returns 0 on a unified-memory device regardless of the request. There the
+/// "device" memory IS system RAM, so evicting a weight buys nothing back and
+/// costs a re-copy on the next touch.
+fn resolveVramBudget(cli: *const CliArgs, be: Backend) usize {
+    const requested = cli.vram_budget_auto or cli.vram_budget_bytes > 0;
+    if (requested and !be.hasWeightBudget()) {
+        eprint("Warning: --vram-budget has no effect on this backend (no device-side weight cache)\n", .{});
+        return 0;
+    }
+    if (!cli.vram_budget_auto) return cli.vram_budget_bytes;
+
+    const info = be.backendInfo();
+    if (info.is_uma) {
+        if (!g_quiet) eprint("vram-budget auto: unified memory, leaving weights resident\n", .{});
+        return 0;
+    }
+    const pool = if (info.avail_mem > 0) info.avail_mem else info.total_mem;
+    if (pool == 0) {
+        eprint("Warning: --vram-budget auto: backend reports no device memory; leaving weights unbounded\n", .{});
+        return 0;
+    }
+    if (!g_quiet and info.avail_mem == 0) {
+        eprint("vram-budget auto: backend reports no free-memory figure, sizing from {d} MB total\n", .{pool / (1024 * 1024)});
+    }
+    return @intFromFloat(@as(f64, @floatFromInt(pool)) * vram_budget_auto_fraction);
+}
+
 fn initAndRun(
     arch: Arch,
     allocator: std.mem.Allocator,
@@ -2820,7 +3090,7 @@ fn initAndRun(
     // Use ModelStorage to initialize the model without exposing concrete types.
     const init_start = milliTimestamp(g_io);
     const eviction_budget: u32 = if (cli.kv_eviction != .none)
-        (if (cli.kv_budget > 0) cli.kv_budget else @as(u32, @intCast(cli.ctx_size * 4 / 5)))
+        (if (cli.kv_budget > 0) cli.kv_budget else kv_evict.defaultBudget(cli.ctx_size))
     else
         0;
     var mdl = ModelStorage.initFromArch(arch, allocator, fmt, be, cli.ctx_size, cli.kv_type_k, cli.kv_type_v, cli.kv_boundary_v, eviction_budget, tiered_ptr, cli.tp_rank, cli.tp_degree) catch |e| {
@@ -2834,7 +3104,7 @@ fn initAndRun(
     defer mdl.deinit();
     mdl.setPool(pool);
     mdl.fixBlockAllocator();
-    mdl.setChunkSize(cli.prefill_batch_size);
+    mdl.setChunkSize(chunkSizeFor(be, cli));
 
     // Directional steering: load direction vectors and attach to model
     var dir_steering: ?DirectionalSteering = null;
@@ -3055,6 +3325,7 @@ fn initAndRun(
                 // mlock the hot experts' weight ranges so the OS cannot evict them.
                 if (cli.ssd_streaming) {
                     var pin_count: u32 = 0;
+                    var dma_count: u32 = 0;
                     var pin_buf: [128]u8 = undefined;
                     for (0..@min(n_lay, p.n_layers)) |li| {
                         const k_pinned = p.topExperts(@intCast(li), 6, &top_ids);
@@ -3064,15 +3335,22 @@ fn initAndRun(
                                 const name = std.fmt.bufPrint(&pin_buf, "blk.{d}.{s}", .{ li, suffix }) catch continue;
                                 if (fmt.getTensor(name)) |t| {
                                     const stride = t.dataByteLen() / @as(usize, n_exp);
-                                    if (ec.pinExpert(t.data_ptr + eid * stride, stride))
-                                        pin_count += 1;
+                                    const range = t.data_ptr + eid * stride;
+                                    if (!ec.pinExpert(range, stride)) continue;
+                                    pin_count += 1;
+                                    // Only AFTER pinExpert has prefaulted and wired the
+                                    // range: registering a cold mapping makes the driver
+                                    // fault it in page-at-a-time (~19 MB/s measured).
+                                    if (be.hostRegister(range, stride)) dma_count += 1;
                                 }
                             }
                         }
                     }
                     if (pin_count > 0) {
-                        eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB)\n", .{
-                            pin_count, ec.total_pinned_bytes / (1024 * 1024),
+                        eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB){s}\n", .{
+                            pin_count,
+                            ec.total_pinned_bytes / (1024 * 1024),
+                            if (dma_count > 0) ", DMA-registered" else "",
                         });
                     }
                 }
@@ -3142,13 +3420,19 @@ fn initAndRun(
             for (0..4) |i| { // probe 4 shard names — if any present, model has PLE
                 var buf: [128]u8 = undefined;
                 const name = std.fmt.bufPrint(&buf, "ple_ngram_{d}.weight", .{i}) catch continue;
-                if (fmt.getTensor(name) != null) { has_ple = true; break; }
+                if (fmt.getTensor(name) != null) {
+                    has_ple = true;
+                    break;
+                }
             }
             if (!has_ple) {
                 for (0..2) |i| {
                     var buf: [256]u8 = undefined;
                     const name = std.fmt.bufPrint(&buf, "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_{d}.weight", .{i}) catch continue;
-                    if (fmt.getTensor(name) != null) { has_ple = true; break; }
+                    if (fmt.getTensor(name) != null) {
+                        has_ple = true;
+                        break;
+                    }
                 }
             }
             if (has_ple) {
@@ -3169,7 +3453,7 @@ fn initAndRun(
     }
 
     // ── MTP weight loading ──────────────────────────────────────
-    const MtpWeights = @import("models/ds4_mtp.zig").MtpWeights;
+    const MtpWeights = model_mod.MtpWeights;
     var mtp_weights: ?MtpWeights = null;
     defer if (mtp_weights) |*mw| mw.deinit(allocator);
 
@@ -3505,24 +3789,26 @@ fn initAndRun(
         // The checkpoint ships no embeddings or LM head; bind the target's.
         // Target-side feature capture feeds the drafter's context injection,
         // and --spec-mode defaults to dflash2 when this drafter is loaded.
-        if (draft_mdl_storage.? == .dflash2) {
-            if (cli.tp_degree > 1 or cli.pp_degree > 1) {
-                eprint("Error: DFlash2 speculative decoding requires tp=1 and pp=1\n", .{});
-                return false;
+        if (comptime build_options.enable_dflash2) {
+            if (draft_mdl_storage.?.dflash2Drafter()) |df2| {
+                if (cli.tp_degree > 1 or cli.pp_degree > 1) {
+                    eprint("Error: DFlash2 speculative decoding requires tp=1 and pp=1\n", .{});
+                    return false;
+                }
+                const emb_t = fmt.getTensor("token_embd.weight") orelse {
+                    eprint("Error: target model lacks token_embd.weight for DFlash2 binding\n", .{});
+                    return false;
+                };
+                const head_t = fmt.getTensor("output.weight") orelse fmt.getTensor("token_embd.weight") orelse {
+                    eprint("Error: target model lacks output.weight for DFlash2 binding\n", .{});
+                    return false;
+                };
+                df2.bindTarget(emb_t, head_t, fmt);
+                mdl.setCaptureLayers(df2.target_layer_ids, df2.cap) catch |e| {
+                    eprint("Error: failed to enable DFlash2 feature capture on target: {}\n", .{e});
+                    return false;
+                };
             }
-            const emb_t = fmt.getTensor("token_embd.weight") orelse {
-                eprint("Error: target model lacks token_embd.weight for DFlash2 binding\n", .{});
-                return false;
-            };
-            const head_t = fmt.getTensor("output.weight") orelse fmt.getTensor("token_embd.weight") orelse {
-                eprint("Error: target model lacks output.weight for DFlash2 binding\n", .{});
-                return false;
-            };
-            draft_mdl_storage.?.dflash2.bindTarget(emb_t, head_t, fmt);
-            mdl.setCaptureLayers(draft_mdl_storage.?.dflash2.target_layer_ids, draft_mdl_storage.?.dflash2.cap) catch |e| {
-                eprint("Error: failed to enable DFlash2 feature capture on target: {}\n", .{e});
-                return false;
-            };
         }
     } else if (cli.spec_mode != .none) {
         draft_ptr = &model_if;
@@ -3627,6 +3913,8 @@ fn initAndRun(
             .max_batch_size = cli.max_batch_size,
             .rate_limit_rpm = cli.rate_limit_rpm,
             .rate_limit_tpm = cli.rate_limit_tpm,
+            .conv_store_path = cli.conv_store_path,
+            .no_conv_store = cli.no_conv_store,
         }) catch |e| {
             // Listen failures already print a specific message inside
             // server.run(); re-printing the raw error name would just add noise.
@@ -3737,7 +4025,10 @@ fn initAndRun(
             generateDiffusion(allocator, &model_if, tok, cli, tok_kind, arch, prompt, !g_quiet);
         } else {
             // DFlash2 drafter + feature reader, resolved once where storage lives.
-            const df2_ptr: ?*DFlash2Model = if (draft_mdl_storage != null and draft_mdl_storage.? == .dflash2) &draft_mdl_storage.?.dflash2 else null;
+            const df2_ptr = if (comptime build_options.enable_dflash2)
+                if (draft_mdl_storage) |*ds| ds.dflash2Drafter() else null
+            else
+                null;
             const feat_reader: ?ModelStorage.FeatureReader = if (df2_ptr != null) mdl.featureReader() else null;
             generateAndPrint(allocator, &model_if, df2_ptr, feat_reader, tok, cli, tok_kind, eog, arch, prompt, !g_quiet, minfo, display, img_tokens, n_visual_tokens, draft_ptr, scorer_ptr);
         }
@@ -3792,7 +4083,9 @@ fn runRepl(
     var system_prompt_owned: ?[]const u8 = null;
     defer if (system_prompt_owned) |sp| allocator.free(sp);
 
-    // Conversation history for multi-turn support
+    // Conversation history for multi-turn support. Cap so a long REPL session
+    // cannot grow without bound; drop the oldest message when full.
+    const max_repl_history_messages: usize = 100;
     var history: std.ArrayList(Message) = .empty;
     defer {
         for (history.items) |msg| allocator.free(@constCast(msg.content));
@@ -3896,6 +4189,10 @@ fn runRepl(
             eprint("Error: out of memory\n", .{});
             continue;
         };
+        if (history.items.len >= max_repl_history_messages) {
+            const old = history.orderedRemove(0);
+            allocator.free(@constCast(old.content));
+        }
         history.append(allocator, .{ .role = .user, .content = user_content }) catch {
             allocator.free(user_content);
             continue;
@@ -3934,6 +4231,10 @@ fn runRepl(
                     allocator.free(text);
                     continue;
                 };
+                if (history.items.len >= max_repl_history_messages) {
+                    const old = history.orderedRemove(0);
+                    allocator.free(@constCast(old.content));
+                }
                 history.append(allocator, .{ .role = .assistant, .content = resp_content }) catch {
                     allocator.free(resp_content);
                 };
@@ -3986,9 +4287,6 @@ fn generateDiffusion(
     const canvas_len = cli.diffusion_canvas;
     const confidence_threshold = cli.diffusion_confidence;
 
-    // Use DiffusionGemmaModel directly for forwardCanvas.
-    const DiffusionModel = @import("models/diffusion_gemma.zig").DiffusionGemmaModel;
-
     var total_generated: u32 = 0;
     var block_count: u32 = 0;
     const max_blocks = (cli.max_tokens + canvas_len - 1) / canvas_len;
@@ -4025,19 +4323,10 @@ fn generateDiffusion(
 
         var n_locked: u32 = 0;
 
-        // Retrieve DiffusionGemmaModel pointer for forwardCanvas.
-        // The model vtable wraps DiffusionGemmaModel; we access it via downcasting.
-        // Since we know the arch, the storage is DiffusionGemmaModel.
-        // We can't call forwardCanvas through the vtable (it's not there), so we
-        // look up the concrete model through the ModelStorage union.
-        // NOTE: We pass the model ptr and rely on the vtable's ptr field being
-        // the DiffusionGemmaModel directly (Model.from stores m as ptr).
-        const concrete: *DiffusionModel = @ptrCast(@alignCast(model.ptr));
-
         // Denoising loop.
         for (0..max_steps) |step| {
             // Forward pass over canvas with bidirectional attention.
-            concrete.forwardCanvas(canvas, canvas_logits) catch |e| {
+            model.forwardCanvas(canvas, canvas_logits) catch |e| {
                 eprint("Error: forwardCanvas failed: {}\n", .{e});
                 return;
             };
@@ -4119,7 +4408,7 @@ fn generateDiffusion(
 /// cursor resyncs to the ring start, matching the drafter's sliding window.
 fn dflash2Ingest(
     reader: ModelStorage.FeatureReader,
-    drafter: *DFlash2Model,
+    drafter: anytype,
     ingested: *usize,
     stage: []f32,
 ) void {
@@ -4152,7 +4441,7 @@ fn dflash2Ingest(
 fn generateAndPrint(
     allocator: std.mem.Allocator,
     mdl: *Model,
-    df2: ?*DFlash2Model,
+    df2: anytype,
     feat_reader: ?ModelStorage.FeatureReader,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
@@ -4184,7 +4473,7 @@ fn generateSpeculative(
     target: *Model,
     draft_model: *Model,
     pflash_scorer: ?*Model,
-    df2: ?*DFlash2Model,
+    df2: anytype,
     feat_reader: ?ModelStorage.FeatureReader,
     tok: *BpeTokenizer,
     cli: *const CliArgs,
@@ -4238,7 +4527,6 @@ fn generateSpeculative(
             .alpha = cli.pflash_alpha,
             .block_size = cli.pflash_block_size,
             .max_kept_ratio = 0.20,
-            .score_tail = 16,
         };
         var pflash_state = pflash.PFlashState.init(allocator, pflash_cfg, prefill_toks.len) catch |e| {
             eprint("Error: PFlash state init failed: {}\n", .{e});
@@ -4276,14 +4564,16 @@ fn generateSpeculative(
     var ctx_ingested: usize = 0;
     var df2_stage: []f32 = &.{};
     defer if (df2_stage.len > 0) allocator.free(df2_stage);
-    if (df2 != null and feat_reader != null) {
-        const concat_dim: usize = df2.?.target_layer_ids.len * df2.?.n_embd;
-        const ingest_chunk: usize = 32;
-        df2_stage = allocator.alloc(f32, ingest_chunk * concat_dim) catch |e| {
-            eprint("Error: DFlash2 ingest staging failed: {}\n", .{e});
-            return;
-        };
-        dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+    if (comptime build_options.enable_dflash2) {
+        if (df2 != null and feat_reader != null) {
+            const concat_dim: usize = df2.?.target_layer_ids.len * df2.?.n_embd;
+            const ingest_chunk: usize = 32;
+            df2_stage = allocator.alloc(f32, ingest_chunk * concat_dim) catch |e| {
+                eprint("Error: DFlash2 ingest staging failed: {}\n", .{e});
+                return;
+            };
+            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+        }
     }
 
     // Sampling setup. Distributed pairs stay greedy so draft tokens match.
@@ -4396,8 +4686,10 @@ fn generateSpeculative(
         // DFlash2: ingest any newly captured features before drafting so the
         // drafter's context counter always matches the target's KV position
         // (covers cooldown/fallback single-token decodes too).
-        if (use_dflash2 and feat_reader != null and df2 != null) {
-            dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+        if (comptime build_options.enable_dflash2) {
+            if (use_dflash2 and feat_reader != null and df2 != null) {
+                dflash2Ingest(feat_reader.?, df2.?, &ctx_ingested, df2_stage);
+            }
         }
         const pre_draft_pos = target.kvSeqLen();
         // Set when the cooldown branch produced pure n-gram drafts; skips the
@@ -4522,19 +4814,22 @@ fn generateSpeculative(
         } else if (use_dflash2) blk: {
             // DFlash2 block-diffusion drafting: one parallel pass proposes the
             // whole block; the candidate selector picks a coherent chain.
-            if (df2 == null) break :blk 0;
-            const drafter = df2.?;
-            const k_df2 = @min(spec_state.optimalK(), drafter.block_size -| 1);
-            // Selector samples at the generation temperature; greedy walks at T=0.
-            const sel_temp: f32 = if (use_sampling) cli.temperature else 0;
-            var n = spec_decode.draftDFlash2(&spec_state, drafter, last, drafter.contextLen(), sel_temp, prng.random());
-            // Hybrid n-gram composition (greedy only): confirm/extend the block
-            // with exact-match history continuations.
-            if (n > 0 and !use_sampling) {
-                spec_decode.dflash2HybridNgram(&spec_state, &ngram_state, if (ngram_mod.global_pool) |*pl| pl else null, k_df2);
-                n = spec_state.n_draft;
+            if (comptime build_options.enable_dflash2) {
+                if (df2 == null) break :blk 0;
+                const drafter = df2.?;
+                const k_df2 = @min(spec_state.optimalK(), drafter.block_size -| 1);
+                // Selector samples at the generation temperature; greedy walks at T=0.
+                const sel_temp: f32 = if (use_sampling) cli.temperature else 0;
+                var n = spec_decode.draftDFlash2(&spec_state, drafter, last, drafter.contextLen(), sel_temp, prng.random());
+                // Hybrid n-gram composition (greedy only): confirm/extend the block
+                // with exact-match history continuations.
+                if (n > 0 and !use_sampling) {
+                    spec_decode.dflash2HybridNgram(&spec_state, &ngram_state, if (ngram_mod.global_pool) |*pl| pl else null, k_df2);
+                    n = spec_state.n_draft;
+                }
+                break :blk @as(u32, @intCast(n));
             }
-            break :blk @as(u32, @intCast(n));
+            break :blk 0;
         } else if (is_self_draft and !use_sampling)
             spec_decode.draft(&spec_state, draft_model, last)
         else
@@ -4571,16 +4866,11 @@ fn generateSpeculative(
             target.prefetchAllLayers();
             // MoE-Spec (arXiv 2602.16052): reduce expert count during verification.
             target.setExpertBudget(4);
-            // forwardTree has no HC state, so skipping early layers is safe (unlike forward()).
-            // Colibri-inspired: freeze expert cache during verification.
-            // Prevents eviction of cached experts across sequential verify forwards.
-            // target.freezeExpertCache(); // disabled: hurts hit rate
         }
 
-        // Trust-mode threshold: after this many tokens, skip verification for suffix.
-        // With greedy decoding (t=0.0), suffix matches from model's own history are
-        // provably correct. Skipping verification eliminates ALL forwardTree cost.
-
+        // Suffix without --draft-model is is_self_draft: accept all drafts and
+        // run one forward() for the bonus token. forwardTree has no HC/experts
+        // and would give 0% acceptance on DS4, so it is not used here.
         const result = if (is_self_draft) blk: {
             // Self-draft: draft == target, 100% acceptance. Get bonus token.
             spec_state.recordRound(spec_state.n_draft);
@@ -4591,15 +4881,10 @@ fn generateSpeculative(
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
             spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
-        else if (use_suffix)
-            // Note: verifyBatched uses forwardTree which has no HC/experts and gives 0% acceptance.
-            // Suffix mode actually goes through is_self_draft (full forward) which gives 100% acceptance.
-            // This path is dead code, kept for reference.
-            spec_decode.verifyBatched(&spec_state, target, draft_model, last, pre_draft_pos)
         else
             spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
 
-        // Reset expert budget and layer skip after verification.
+        // Reset expert budget after verification.
         if (use_suffix) {
             target.setExpertBudget(0);
         }
@@ -4686,9 +4971,9 @@ fn generateSpeculative(
         // DFlash2: maintain hybrid history (features are ingested at the top
         // of the next iteration).
         if (use_dflash2) {
-            if (pull.getenv("AGAVE_DF2_DEBUG") != null) {
+            if (cli.df2_debug) {
                 std.debug.print("df2 round {d}: pos={d} drafted={d} accepted={d} next={d} drafts={any}\n", .{
-                    spec_state.total_rounds, pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
+                    spec_state.total_rounds,                                 pre_draft_pos, spec_state.n_draft, result.accepted, result.next_token,
                     spec_state.draft_tokens[0..@min(spec_state.n_draft, 8)],
                 });
             }
@@ -4962,15 +5247,11 @@ fn generateAndPrintInner(
         } else if (grammar_state != null or json_mode_active) {
             first_gen_token = math_ops.argmax(first_logits);
         }
-        // Update grammar state with first accepted token
+        // Update grammar state with first accepted token.
+        // Raw vocab text (not decode()) so getEffectiveText matches maskLogits.
         if (grammar_state) |*gs| {
-            const tok_slice = [1]u32{first_gen_token};
-            const text = tok.decode(&tok_slice) catch |err| blk: {
-                eprint("Warning: grammar token decode failed (id={d}): {}\n", .{ first_gen_token, err });
-                break :blk null;
-            };
-            defer if (text) |t| allocator.free(t);
-            gs.acceptToken(text orelse "");
+            const raw_text = if (first_gen_token < tok.id_to_token.items.len) tok.id_to_token.items[first_gen_token] else "";
+            gs.acceptToken(raw_text);
         }
         // Track JSON brace depth (scan raw token text, avoids allocation)
         if (json_mode_active and first_gen_token < tok.id_to_token.items.len) {
@@ -5050,16 +5331,15 @@ fn generateAndPrintInner(
             // of blocking wall-clock time in simulation runs.
             if (idle_ns > 0) sim_clock.sleepNs(idle_ns);
         }
-        var power_ts0: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts0);
+        // Measure forward duration on the injectable monotonic clock so a
+        // seed replay does not inherit host execution speed into idle_ns.
+        const power_ts0 = sim_clock.monoNano();
         var next = mdl.forward(last) catch |e| {
             eprint("Error: generation failed at token {d}: {}\n", .{ gi + 1, e });
             break;
         };
-        var power_ts1: std.posix.timespec = undefined;
-        _ = std.posix.system.clock_gettime(.MONOTONIC, &power_ts1);
-        const power_delta_ns: i64 = (@as(i64, power_ts1.sec) - @as(i64, power_ts0.sec)) * 1_000_000_000 + (@as(i64, power_ts1.nsec) - @as(i64, power_ts0.nsec));
-        power_last_forward_ns = @intCast(@max(0, power_delta_ns));
+        const power_ts1 = sim_clock.monoNano();
+        power_last_forward_ns = @intCast(@max(@as(i96, 0), power_ts1 - power_ts0));
         // Apply repeat penalty to logits for recently generated tokens
         const logits = mdl.getLogits();
         if (use_repeat_penalty and token_count > 0) {
@@ -5147,7 +5427,7 @@ fn generateAndPrintInner(
     if (emitGeneratedTokens(cli) and !g_tty and display.mode != .json and started_output) {
         _ = std.posix.system.write(stdout_file.handle, "\n", 1);
     }
-    if (hit_eog and g_verbose) print("\n[EOG]\n", .{});
+    if (hit_eog and g_verbose) eprint("[EOG]\n", .{});
     const gen_ms = elapsedMs(gen_start);
 
     // Decode full response text for return value (skip if caller doesn't need it)
@@ -5231,6 +5511,9 @@ test {
     _ = @import("eval.zig");
     _ = @import("expert_profile.zig");
     _ = @import("expert_cache.zig");
+    _ = @import("durable_file.zig");
+    _ = @import("dynlib.zig");
+    _ = @import("server/conv_store.zig");
     _ = @import("term.zig");
     _ = @import("thread_pool.zig");
     _ = @import("ops/kv_quant.zig");
@@ -5255,6 +5538,7 @@ test {
     _ = @import("server/scheduler.zig");
     _ = @import("sim_clock.zig");
     _ = @import("kvcache/block_allocator.zig");
+    _ = @import("kvcache/view.zig");
     _ = @import("kvcache/manager.zig");
     _ = @import("kvcache/tiered.zig");
     _ = @import("kvcache/checkpoint.zig");
@@ -5536,6 +5820,68 @@ test "parseUint valid input" {
     try std.testing.expectEqual(@as(?u16, 0), parseUint(u16, "0", "port"));
 }
 
+test "noColorRequested follows no-color.org" {
+    try std.testing.expect(!noColorRequested(null));
+    try std.testing.expect(!noColorRequested(""));
+    try std.testing.expect(noColorRequested("1"));
+    try std.testing.expect(noColorRequested("true"));
+}
+
+test "preferredSecret empty env does not override CLI" {
+    try std.testing.expectEqualStrings("cli", preferredSecret("", "cli").?);
+    try std.testing.expectEqualStrings("cli", preferredSecret("  ", "cli").?);
+    try std.testing.expectEqualStrings("env", preferredSecret("env", "cli").?);
+    try std.testing.expect(preferredSecret("", null) == null);
+    try std.testing.expect(preferredSecret(null, null) == null);
+    try std.testing.expectEqualStrings("", preferredSecret(null, "").?);
+    try std.testing.expectEqualStrings("key", preferredSecret("  key  ", "cli").?);
+}
+
+test "nonemptyPrompt treats whitespace as absent" {
+    try std.testing.expect(nonemptyPrompt(null) == null);
+    try std.testing.expect(nonemptyPrompt("") == null);
+    try std.testing.expect(nonemptyPrompt("  \n\t") == null);
+    try std.testing.expectEqualStrings("hi", nonemptyPrompt("  hi  ").?);
+}
+
+test "jsonNeedsPrompt skips exit-early flags" {
+    try std.testing.expect(jsonNeedsPrompt(false, false, false, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, false, false, false, 2));
+    try std.testing.expect(!jsonNeedsPrompt(true, false, false, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, true, false, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, false, true, false, 1));
+    try std.testing.expect(!jsonNeedsPrompt(false, false, false, true, 1));
+}
+
+test "usage_text documents every cli_spec" {
+    for (cli_specs) |spec| {
+        var needle_buf: [80]u8 = undefined;
+        const needle = std.fmt.bufPrint(&needle_buf, "--{s}", .{spec.long}) catch unreachable;
+        try std.testing.expect(std.mem.indexOf(u8, usage_text, needle) != null);
+    }
+}
+
+test "usage_text lists qwen4-exp" {
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, "qwen4-exp") != null);
+    try std.testing.expectEqualStrings(supported_arch_help, "gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4");
+}
+
+test "shouldNoteSeed always surfaces auto-derived seeds" {
+    try std.testing.expect(shouldNoteSeed(false, false));
+    try std.testing.expect(shouldNoteSeed(false, true));
+    try std.testing.expect(!shouldNoteSeed(true, false));
+    try std.testing.expect(shouldNoteSeed(true, true));
+}
+
+test "elapsedUs follows sim_clock override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+    const t0 = sim_clock.monoNano();
+    try std.testing.expectEqual(@as(i64, 0), elapsedUs(t0, sim_clock.monoNano()));
+    sim_clock.advanceMs(2);
+    try std.testing.expectEqual(@as(i64, 2_000), elapsedUs(t0, sim_clock.monoNano()));
+}
+
 test "fuzz: main.zig pure functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -5543,6 +5889,9 @@ test "fuzz: main.zig pure functions" {
             comptime {
                 _ = &milliTimestamp;
                 _ = &nanoTimestamp;
+                _ = &elapsedUs;
+                _ = &shouldNoteSeed;
+                _ = &noteSeed;
                 _ = &readStdinAll;
                 _ = &kvTypeOrExit;
                 _ = &detectFreeRam;
@@ -5557,7 +5906,13 @@ test "fuzz: main.zig pure functions" {
                 _ = &parseU32;
                 _ = &parseU64;
                 _ = &parseU16;
+                _ = &parseUintLabel;
+                _ = &preferredSecret;
+                _ = &nonemptyPrompt;
+                _ = &jsonNeedsPrompt;
+                _ = &eprintJsonRequiresPrompt;
                 _ = &parseF32;
+                _ = &noColorRequested;
                 _ = &rejectEqualsOnFlag;
                 _ = &rejectUnknownOptions;
                 _ = &rejectFlagAsValue;

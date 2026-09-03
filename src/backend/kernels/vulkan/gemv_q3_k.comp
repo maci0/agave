@@ -62,8 +62,11 @@ void main() {
             // Extract 6-bit scale: low 4 bits from bytes 0-7, high 2 bits from bytes 8-11
             uint scale_byte = readByte(bp + 96 + (g < 8 ? g : g - 8));
             uint lo4 = g < 8 ? (scale_byte & 0xFu) : (scale_byte >> 4);
-            uint hi_byte = readByte(bp + 96 + 8 + g / 4);
-            uint hi2 = (hi_byte >> ((g % 4) * 2)) & 0x3u;
+            // ggml takes the BYTE index from g % 4 and the SHIFT from g / 4 (its
+            // aux[] shuffle in dequantize_row_q3_K). Swapping them permutes the
+            // 16 group scales, which is invisible whenever the scales are uniform.
+            uint hi_byte = readByte(bp + 96 + 8 + g % 4);
+            uint hi2 = (hi_byte >> ((g / 4) * 2)) & 0x3u;
             float d_sc = d * float(int(lo4 | (hi2 << 4)) - 32);
 
             for (uint l = 0; l < 16 && base + l < k; l++) {

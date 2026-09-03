@@ -61,6 +61,16 @@ pub const Registry = struct {
         return n;
     }
 
+    /// True when `name` is registered.
+    pub fn hasName(self: *const Registry, name: []const u8) bool {
+        for (self.slots) |s| {
+            if (s) |t| {
+                if (std.mem.eql(u8, t.name, name)) return true;
+            }
+        }
+        return false;
+    }
+
     /// Write occupied tools into `out` (registry first). Returns number written.
     /// Request tools with the same name replace the registry entry.
     pub fn mergeInto(self: *const Registry, request: []const ?Tool, out: []?Tool) u32 {
@@ -137,6 +147,14 @@ test "request tool wins on name clash" {
     const n = reg.mergeInto(&req, &out);
     try std.testing.expectEqual(@as(u32, 1), n);
     try std.testing.expectEqualStrings("request", out[0].?.description);
+}
+
+test "hasName matches registered tools only" {
+    var reg = Registry{};
+    try std.testing.expect(!reg.hasName("greet"));
+    _ = try reg.register(.{ .name = "greet", .description = "", .parameters_json = "{}" });
+    try std.testing.expect(reg.hasName("greet"));
+    try std.testing.expect(!reg.hasName("other"));
 }
 
 test "merge appends distinct request tools" {

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # DS4 Benchmark Suite, speed + coherence across quants and KV types
 set -euo pipefail
 

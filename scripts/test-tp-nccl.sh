@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Test TP=2 (expert-parallel) over NCCL between two GB10 (DGX Spark) nodes.
 # Usage: ./scripts/test-tp-nccl.sh <rank> <peer_ip> <model_path> [n_tokens]
 # Example:

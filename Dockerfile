@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Pin to a dated Debian tag for reproducible builds (bump with dependabot/docker).
-FROM --platform=$BUILDPLATFORM debian:bookworm-20260713-slim AS build
+FROM --platform=$BUILDPLATFORM debian:bookworm-20260824-slim AS build
 
 # Empty default: install the version pinned in .zigversion (single source of truth).
 # Override with --build-arg ZIG_VERSION=x.y.z and matching ZIG_SHA256_* args.
@@ -10,9 +10,9 @@ ARG TARGETARCH
 # Freeze apt to the same calendar day as the FROM tag. A dated image alone is not
 # enough: `apt-get update` against deb.debian.org still floats package versions.
 # Bump this when bumping debian:bookworm-YYYYMMDD-slim (CI checks they match).
-ARG DEBIAN_SNAPSHOT=20260713T000000Z
-# 2026-07-13 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
-ARG SOURCE_DATE_EPOCH=1783900800
+ARG DEBIAN_SNAPSHOT=20260824T000000Z
+# 2026-08-24 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
+ARG SOURCE_DATE_EPOCH=1787529600
 
 # Backend enable flags. Metal disabled by default (macOS-only, not usable in Docker).
 ARG ENABLE_CPU=true
@@ -21,19 +21,23 @@ ARG ENABLE_VULKAN=true
 ARG ENABLE_CUDA=true
 ARG ENABLE_ROCM=true
 ARG ENABLE_WEBGPU=true
-# Debug binary is not copied into the runtime image; skip compiling it.
+# Debug and bench binaries are not copied into the runtime image; skip compiling them.
 ARG ENABLE_DEBUG=false
+ARG ENABLE_BENCH=false
 
 # Model enable flags (all enabled by default). Disable to reduce binary size.
 ARG ENABLE_GEMMA3=true
 ARG ENABLE_QWEN35=true
+ARG ENABLE_QWEN4_EXP=true
 ARG ENABLE_GPT_OSS=true
 ARG ENABLE_NEMOTRON_H=true
 ARG ENABLE_NEMOTRON_NANO=true
 ARG ENABLE_GLM4=true
 ARG ENABLE_GEMMA4=true
 ARG ENABLE_DIFFUSION_GEMMA=true
+ARG ENABLE_DEEPSEEK4=true
 ARG ENABLE_LLAMA4=true
+ARG ENABLE_DFLASH2=true
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C \
@@ -67,10 +71,10 @@ RUN ZIG_VER="${ZIG_VERSION:-$(tr -d '[:space:]' </tmp/agave.zigversion)}" && \
     elif [ "$ARCH" = "aarch64" ]; then EXPECTED_SHA256="$ZIG_SHA256_AARCH64"; \
     else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
     echo "Installing Zig ${ZIG_VER} (${ARCH})" && \
-    curl -fsSL "$ZIG_URL" -o /tmp/zig.tar.xz && \
+    curl -fsSL --retry 3 --retry-all-errors "$ZIG_URL" -o /tmp/zig.tar.xz && \
     echo "${EXPECTED_SHA256}  /tmp/zig.tar.xz" | sha256sum -c - && \
     mkdir -p /usr/local/zig && \
-    tar -xJf /tmp/zig.tar.xz -C /usr/local/zig --strip-components=1 && \
+    tar -xJf /tmp/zig.tar.xz -C /usr/local/zig --strip-components=1 --no-same-owner && \
     ln -s /usr/local/zig/zig /usr/local/bin/zig && \
     rm /tmp/zig.tar.xz
 
@@ -129,25 +133,30 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         -Denable-rocm="$ENABLE_ROCM" \
         -Denable-webgpu="$ENABLE_WEBGPU" \
         -Denable-debug="$ENABLE_DEBUG" \
+        -Denable-bench="$ENABLE_BENCH" \
         -Denable-gemma3="$ENABLE_GEMMA3" \
         -Denable-qwen35="$ENABLE_QWEN35" \
+        -Denable-qwen4-exp="$ENABLE_QWEN4_EXP" \
         -Denable-gpt-oss="$ENABLE_GPT_OSS" \
         -Denable-nemotron-h="$ENABLE_NEMOTRON_H" \
         -Denable-nemotron-nano="$ENABLE_NEMOTRON_NANO" \
         -Denable-glm4="$ENABLE_GLM4" \
         -Denable-gemma4="$ENABLE_GEMMA4" \
         -Denable-diffusion-gemma="$ENABLE_DIFFUSION_GEMMA" \
+        -Denable-deepseek4="$ENABLE_DEEPSEEK4" \
         -Denable-llama4="$ENABLE_LLAMA4" \
+        -Denable-dflash2="$ENABLE_DFLASH2" \
         --prefix /out
 
 # Runtime image: Debian for glibc dlopen compatibility.
 # Musl static binaries also run fine on Debian.
 # No --platform needed: under BuildKit each stage defaults to its own
 # TARGETPLATFORM, regardless of the build stage's BUILDPLATFORM pin above.
-FROM debian:bookworm-20260713-slim
+FROM debian:bookworm-20260824-slim
 
 # Keep in sync with the build stage (same FROM day / snapshot).
-ARG DEBIAN_SNAPSHOT=20260713T000000Z
+ARG DEBIAN_SNAPSHOT=20260824T000000Z
+ARG SOURCE_DATE_EPOCH=1787529600
 
 # Version label: build-arg validated against build.zig.zon in the build stage.
 # LABEL cannot read files, so plain builds fall back to "dev"; the authoritative
@@ -157,13 +166,16 @@ ARG AGAVE_VERSION=dev
 
 LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.description="High-performance LLM inference engine" \
+      org.opencontainers.image.url="https://github.com/maci0/agave" \
       org.opencontainers.image.source="https://github.com/maci0/agave" \
+      org.opencontainers.image.documentation="https://github.com/maci0/agave/blob/main/README.md" \
       org.opencontainers.image.version="${AGAVE_VERSION}" \
-      org.opencontainers.image.licenses="GPL-3.0-only"
+      org.opencontainers.image.licenses="GPL-3.0-or-later"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C \
-    TZ=UTC
+    TZ=UTC \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 # curl is only used by HEALTHCHECK (not on the inference hot path).
 # Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
@@ -176,11 +188,15 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     rm -rf /var/lib/apt/lists/*; \
     groupadd -r -g 10001 agave; \
-    useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave
+    useradd -r -u 10001 -g agave -d /home/agave -m -s /sbin/nologin agave; \
+    mkdir -p /home/agave/.cache; \
+    chown agave:agave /home/agave/.cache
 
 COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 # Authoritative product version parsed from build.zig.zon (see build-stage check).
 COPY --link --from=build /agave-version /usr/share/agave/version
+# GPL-3.0-or-later: the notice must accompany the binary (keep LICENSE in context).
+COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
 
 # Writable workdir for non-root runtime (logs, temp files, bind-mount targets).
 WORKDIR /home/agave
@@ -190,7 +206,10 @@ EXPOSE 49453
 STOPSIGNAL SIGTERM
 
 # Keep in sync with the process listen port (CLI --port or AGAVE_PORT).
-ENV AGAVE_PORT=49453
+# HOME: Hub pulls, Vulkan pipeline cache, and conversation store use ~/.cache.
+# Set explicitly so Kubernetes/Podman (which do not copy passwd HOME) still work.
+ENV AGAVE_PORT=49453 \
+    HOME=/home/agave
 
 # Shell form + $$ so AGAVE_PORT expands at container runtime (not image build).
 # Use /ready (not /health): Docker HEALTHCHECK gates routing/depends_on, and

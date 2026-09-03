@@ -16,13 +16,16 @@ services:
         ENABLE_WEBGPU: "false"
         ENABLE_DEBUG: "false"
         ENABLE_QWEN35: "false"
+        ENABLE_QWEN4_EXP: "false"
         ENABLE_GPT_OSS: "false"
         ENABLE_NEMOTRON_H: "false"
         ENABLE_NEMOTRON_NANO: "false"
         ENABLE_GLM4: "false"
         ENABLE_GEMMA4: "false"
         ENABLE_DIFFUSION_GEMMA: "false"
+        ENABLE_DEEPSEEK4: "false"
         ENABLE_LLAMA4: "false"
+        ENABLE_DFLASH2: "false"
     image: agave:local
     # Match Dockerfile USER agave (uid/gid 10001); keeps tmpfs mounts consistent.
     user: "10001:10001"
@@ -34,8 +37,17 @@ services:
     environment:
       AGAVE_PORT: ${AGAVE_PORT:-49453}
       AGAVE_API_KEY: ${AGAVE_API_KEY:?Set AGAVE_API_KEY in .env (see .env.example)}
+      # Optional; empty is treated as unset (HF_TOKEN, NO_COLOR, AGAVE_VISION_DEBUG).
+      HF_TOKEN: ${HF_TOKEN:-}
+      NO_COLOR: ${NO_COLOR:-}
+      AGAVE_VISION_DEBUG: ${AGAVE_VISION_DEBUG:-}
+      # Match image ENV HOME (Hub pulls, Vulkan cache, conversation store).
+      HOME: /home/agave
     volumes:
       - ${AGAVE_MODELS_DIR:-./models}:/models:ro
+      # Survives container replace: conversation store, Vulkan pipeline cache,
+      # HuggingFace / agave pull blobs (HOME is otherwise tmpfs).
+      - ${AGAVE_CACHE_DIR:-agave-cache}:/home/agave/.cache
     # ENTRYPOINT is already: agave --host 0.0.0.0
     command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]
     restart: unless-stopped
@@ -67,3 +79,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
+
+volumes:
+  agave-cache:

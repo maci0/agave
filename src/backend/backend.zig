@@ -55,7 +55,9 @@ pub const DType = @import("../format/format.zig").DType;
 pub const KvQuantType = @import("../ops/kv_quant.zig").KvQuantType;
 
 /// Paged KV cache view for block-table-indexed SDPA.
-pub const PagedKvView = @import("../kvcache/manager.zig").PagedKvView;
+/// Imported from the leaf layout module, not the cache manager, so the
+/// dispatcher does not pull RadixTree / PagedKvCache into every backend.
+pub const PagedKvView = @import("../kvcache/view.zig").PagedKvView;
 
 /// Parameters for DeltaNet SSM recurrence (Qwen3.5 hybrid model).
 /// Passed to `Backend.deltaNet()` to keep the function signature manageable.
@@ -149,6 +151,66 @@ pub const detectCacheSizes = @import("cpu.zig").detectCacheSizes;
 /// Detect available (free) system memory in bytes. Re-exported from cpu.zig.
 pub const detectAvailMem = @import("cpu.zig").detectAvailMem;
 
+/// Physical (non-SMT) core count usable by this process. See `cpu.zig`.
+pub const detectPhysicalCores = @import("cpu.zig").detectPhysicalCores;
+
+/// One logical CPU id per physical core, for thread-pool affinity. See `cpu.zig`.
+pub const physicalCoreIds = @import("cpu.zig").physicalCoreIds;
+
+/// Core ids collected for pool affinity. The pool caps at 31 workers plus the
+/// main thread, so listing more cores than this cannot change the pool size.
+const max_pinned_core_ids: usize = 64;
+
+/// Byte-budgeted LRU over the GPU backends' cached weight uploads.
+pub const WeightBudget = @import("weight_budget.zig").WeightBudget;
+pub const WeightPolicy = @import("weight_budget.zig").Policy;
+
+/// Free list of device buffers, recycled across weight-cache evictions.
+pub const BufferPool = @import("buffer_pool.zig").BufferPool;
+pub const buffer_pool_capacity = @import("buffer_pool.zig").default_capacity;
+
+/// What a backend's weight budget currently holds. `resident` is 0 on a backend
+/// with no device-side weight cache.
+pub const WeightResidency = struct { resident: usize = 0, evictions: u64 = 0 };
+
+/// Distinct weights a budgeted backend tracks. A DeepSeek-V4-scale checkpoint
+/// reaches tens of thousands of expert tensors, and an untracked weight falls
+/// back to the unbounded path rather than failing.
+pub const weight_budget_capacity: usize = 65536;
+
+/// Evictions one admission may report. Beyond this the admission degrades to
+/// untracked (the buffer is still uploaded), which needs a weight hundreds of
+/// times the running average to reach.
+pub const max_weight_evictions: usize = 256;
+
+/// A page-aligned byte range covering an arbitrary host pointer and length.
+pub const PageRange = struct { base: usize, size: usize };
+
+/// Widen `ptr[0..len]` to whole pages. Every host-memory syscall that takes a
+/// range (mlock, madvise, cuMemHostRegister, hipHostRegister) requires this, and
+/// they must all round the SAME way or an unregister misses its base address.
+pub fn pageAlignRange(ptr: [*]const u8, len: usize) PageRange {
+    const page = std.heap.page_size_min;
+    const addr = @intFromPtr(ptr);
+    const base = addr & ~@as(usize, page - 1);
+    return .{ .base = base, .size = std.mem.alignForward(usize, addr + len, page) - base };
+}
+
+/// Fault a host range into physical memory, so a later `hostRegister` (or
+/// mlock) is pure page locking instead of a page-at-a-time synchronous read.
+///
+/// `MADV_WILLNEED` starts the read asynchronously with the kernel's readahead
+/// window, which is what makes this fast; the driver's own faulting is
+/// page-at-a-time and is not. Best effort: an unsupported platform or a range
+/// the kernel declines to prefault just means the register pays the fault cost.
+pub fn hostPrefault(ptr: [*]const u8, len: usize) void {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return;
+    if (len == 0) return;
+    const r = pageAlignRange(ptr, len);
+    const aligned: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(r.base);
+    std.posix.madvise(aligned, r.size, std.posix.system.MADV.WILLNEED) catch {};
+}
+
 /// Detect OS version string (e.g., "macOS 14.2.1", "Linux 6.5.0"). Re-exported from cpu.zig.
 pub const detectOsVersion = @import("cpu.zig").detectOsVersion;
 
@@ -171,7 +233,42 @@ pub const CpuSdpa = struct {
     pub const sdpaQuantHeadWithStats = kernel.sdpaQuantHeadWithStats;
     /// Multi-head dispatch: splits heads across thread pool workers.
     pub const sdpaQuantHeads = kernel.sdpaQuantHeads;
+    /// Dense f32 multi-head SDPA (no KV quant). Used by sparse-attention tests
+    /// as the dense reference; models should call `Backend.sdpa` instead.
+    pub const sdpaHeads = kernel.sdpaHeads;
 };
+
+/// CPU GEMV kernels that take a companion scale tensor (no matching `DType` on
+/// `Backend.gemv`). Re-exported so models do not import `kernels/cpu/*.zig`.
+pub const CpuGemv = struct {
+    pub const gemvMXFP8 = @import("kernels/cpu/gemv.zig").gemvMXFP8;
+};
+
+/// Apple Accelerate SGEMM/SGEMV. Empty on non-macOS so Linux does not link
+/// `cblas`. Callers must still comptime-guard with `os.tag == .macos` and
+/// `enable_metal` (Accelerate is linked with Metal).
+pub const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal)
+    @import("accelerate.zig")
+else
+    struct {};
+
+/// Probe-only Metal GPU listing for `--list-devices`. Does not open a compute context.
+/// `objc` types stay inside the Metal backend; discovery maps these to `DeviceInfo`.
+pub const metal_list_name_buf_size: usize = 64;
+
+pub const MetalDeviceListEntry = struct {
+    name: [metal_list_name_buf_size]u8 = .{0} ** metal_list_name_buf_size,
+    name_len: usize = 0,
+    total_mem: usize = 0,
+};
+
+/// Fill `out` with Metal devices. Returns the number of entries written.
+pub fn listMetalDevices(out: []MetalDeviceListEntry) usize {
+    if (comptime build_options.enable_metal and builtin.os.tag == .macos) {
+        return @import("metal.zig").listDevices(out);
+    }
+    return 0;
+}
 
 /// Pre-allocated capacity for GPU buffer caches (weights + activations + KV).
 /// Used by Metal, CUDA, Vulkan, and ROCm backends to avoid OOM during hot-path cache puts.
@@ -330,6 +427,14 @@ pub const NullBackend = struct {
     }
 
     pub fn freeKvSlice(_: *NullBackend, _: std.mem.Allocator, _: []u8) void {
+        unreachable;
+    }
+
+    pub fn hostRegister(_: *NullBackend, _: [*]const u8, _: usize) bool {
+        unreachable;
+    }
+
+    pub fn hostUnregister(_: *NullBackend, _: [*]const u8, _: usize) void {
         unreachable;
     }
 
@@ -608,6 +713,103 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// How a reserved activation range will be used.
+    pub const ActReserve = enum { read, write, read_write };
+
+    /// Establish ONE device buffer covering `bytes` at `ptr` before running a
+    /// loop of sub-range ops over it.
+    ///
+    /// The GPU backends cache activations by exact host address. A batched op
+    /// implemented as a loop over `ptr + t * stride` therefore creates a separate
+    /// device allocation per token, each sized for one slice. A later whole-range
+    /// op on the same buffer finds no entry big enough, evicts them, and uploads
+    /// from HOST memory, which never saw those device-only per-token writes. The
+    /// result is correct at one token and wrong above it.
+    ///
+    /// Reserving the full range first makes every `ptr + t * stride` lookup
+    /// resolve into that one buffer, so the sub-range and whole-range views stay
+    /// the same memory. No-op on backends with no device-side activation cache.
+    pub inline fn reserveActivation(self: Backend, ptr: *const anyopaque, bytes: usize, mode: ActReserve) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "reserveActivation")) {
+                    be.reserveActivation(ptr, bytes, mode);
+                }
+            },
+        }
+    }
+
+    /// Page-lock a host byte range so the backend can DMA out of it directly,
+    /// without staging through a driver bounce buffer. Required for async H2D:
+    /// `cuMemcpyHtoDAsync` rejects pageable source memory.
+    ///
+    /// PRECONDITION: the range must already be RESIDENT. Registering a cold
+    /// file-backed mapping makes the driver fault every page in one at a time.
+    /// Measured on this codebase: registering the 155 GB DS4 checkpoint ran at
+    /// ~19 MB/s, 23 minutes for the first 8 shards. Fill or prefault the range
+    /// first (`hostPrefault`), then register, so registration is pure page
+    /// locking with no I/O behind it.
+    ///
+    /// Returns false when the backend needs no registration (unified memory) or
+    /// the driver refused. Never fatal: an unregistered range still works, it
+    /// just goes over the slower pageable copy path.
+    pub inline fn hostRegister(self: Backend, ptr: [*]const u8, len: usize) bool {
+        switch (self) {
+            inline else => |be| return be.hostRegister(ptr, len),
+        }
+    }
+
+    /// Release a range page-locked by `hostRegister`. Safe on a range that was
+    /// never registered (the backend ignores the driver's error).
+    pub inline fn hostUnregister(self: Backend, ptr: [*]const u8, len: usize) void {
+        switch (self) {
+            inline else => |be| be.hostUnregister(ptr, len),
+        }
+    }
+
+    /// Cap device memory held by cached weight uploads, evicting least-recently-
+    /// used weights until the cap holds. Zero (the default) keeps every uploaded
+    /// weight resident forever, which is the only correct choice when the model
+    /// fits: eviction costs a re-upload on the next touch.
+    ///
+    /// A budget is what lets a model larger than VRAM run at all, and it can be
+    /// lowered at runtime to hand memory back without reloading weights. No-op on
+    /// backends with no device-side weight cache (CPU, and Metal's unified memory).
+    pub inline fn setWeightBudget(self: Backend, bytes: usize, policy: WeightPolicy) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "setWeightBudget")) {
+                    be.setWeightBudget(bytes, policy);
+                }
+            },
+        }
+    }
+
+    /// Whether this backend has a device-side weight cache a budget can bound.
+    /// False on CPU (no device), Metal and WebGPU (unified or driver-owned
+    /// memory, where evicting buys nothing back). Callers use it to avoid
+    /// reporting a budget the backend cannot honor.
+    pub inline fn hasWeightBudget(self: Backend) bool {
+        switch (self) {
+            inline else => |be| return comptime @hasDecl(@TypeOf(be.*), "setWeightBudget"),
+        }
+    }
+
+    /// Bytes of weights resident on the device, and how many evictions the budget
+    /// has forced. `resident` is 0 on a backend that does not budget. A large and
+    /// growing `evictions` means the budget is below the model's working set and
+    /// decode is paying a re-upload per layer.
+    pub inline fn weightResidency(self: Backend) WeightResidency {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "weightResidency")) {
+                    return be.weightResidency();
+                }
+                return .{};
+            },
+        }
+    }
+
     /// Compute y[n] = W[n,k] @ x[k] with automatic dequantization.
     pub inline fn gemv(self: Backend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
         switch (self) {
@@ -809,52 +1011,6 @@ pub const Backend = union(enum) {
     /// synchronizes the context, downloads dirty activations, and marks
     /// all activation cache entries as stale (so subsequent CPU writes
     /// are re-uploaded on next GPU use).
-    /// CPU-only GEMV: bypasses Metal/GPU entirely. Used for SSD-streamed expert
-    /// weights that may be on evicted mmap pages (Metal can't handle page faults).
-    /// Uses the thread pool for parallelism when available.
-    pub inline fn cpuGemv(self: Backend, x: [*]const f32, w: TensorData, y: [*]f32, n: usize, k: usize) void {
-        // Flush any pending GPU work before CPU reads the input buffer
-        switch (self) {
-            .metal => {},
-            else => {},
-        }
-        // Get thread pool from the active backend
-        const pool: ?*@import("../thread_pool.zig").ThreadPool = switch (self) {
-            .metal => |be| be.pool,
-            .cpu => |be| be.pool,
-            inline else => |be| if (@hasField(@TypeOf(be.*), "pool")) be.pool else null,
-        };
-        // Dispatch through CPU GEMV kernel with parallelism
-        if (pool) |p| {
-            const rb = @import("kernels/cpu/gemv.zig").gemvRowBytes(w.dtype, k);
-            if (rb > 0 and n >= 32) {
-                var ctx = struct {
-                    x_ptr: [*]const f32,
-                    w_data: [*]const u8,
-                    y_ptr: [*]f32,
-                    k_val: usize,
-                    row_bytes: usize,
-                    dt: DType,
-
-                    fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
-                        const c: *const @This() = @ptrCast(@alignCast(ctx_ptr));
-                        @import("kernels/cpu/gemv.zig").gemvSeq(
-                            c.x_ptr,
-                            c.w_data + start * c.row_bytes,
-                            c.dt,
-                            c.y_ptr + start,
-                            end - start,
-                            c.k_val,
-                        );
-                    }
-                }{ .x_ptr = x, .w_data = w.data, .y_ptr = y, .k_val = k, .row_bytes = rb, .dt = w.dtype };
-                p.parallelFor(n, 16, @ptrCast(&ctx), @TypeOf(ctx).work);
-                return;
-            }
-        }
-        @import("kernels/cpu/gemv.zig").gemvSeq(x, w.data, w.dtype, y, n, k);
-    }
-
     pub inline fn sync(self: Backend) void {
         switch (self) {
             inline else => |be| be.sync(),
@@ -1124,6 +1280,19 @@ pub const Backend = union(enum) {
         }
     }
 
+    /// Drop device-side KV mirrors so the next SDPA re-uploads from host.
+    /// Required after host writes that bypass GPU append (KV import, prefix
+    /// restore). No-op on backends without a `kv_dev_cache`.
+    pub inline fn invalidateDeviceKv(self: Backend) void {
+        switch (self) {
+            inline else => |be| {
+                if (comptime @hasDecl(@TypeOf(be.*), "invalidateDeviceKv")) {
+                    be.invalidateDeviceKv();
+                }
+            },
+        }
+    }
+
     /// Copy a just-computed GEMV output back to host and mark it stale, so
     /// CPU code can read the result between GPU GEMVs (DS4's interleaved
     /// rmsNorm/pooling passes). No-op on backends without a device cache.
@@ -1132,18 +1301,6 @@ pub const Backend = union(enum) {
             inline else => |be| {
                 if (comptime @hasDecl(@TypeOf(be.*), "syncGemvOutput")) {
                     be.syncGemvOutput(y, n);
-                }
-            },
-        }
-    }
-
-    /// Make a weight range GPU-resident (prefault zero-copy regions, upload
-    /// and release host pages otherwise). No-op on backends without CUDA.
-    pub inline fn prefaultWeight(self: Backend, ptr: [*]const u8, len: usize) void {
-        switch (self) {
-            inline else => |be| {
-                if (comptime @hasDecl(@TypeOf(be.*), "prefaultWeight")) {
-                    be.prefaultWeight(ptr, len);
                 }
             },
         }
@@ -1242,6 +1399,15 @@ pub const BackendState = struct {
     be: Backend = undefined,
     name: []const u8 = "CPU",
 
+    /// Threads that actually run parallel CPU work: the pool's workers plus the
+    /// main thread, which participates in every `parallelFor`. Reported in the
+    /// banner, so it must be the real width, not the logical CPU count (the pool
+    /// is sized by PHYSICAL cores; see `init`).
+    pub fn computeThreads(self: *const BackendState) u32 {
+        const workers = if (self.pool) |*p| p.n_workers else 0;
+        return @intCast(workers + 1);
+    }
+
     /// Initialize the requested compute backend, with automatic fallback.
     /// Must be called on a stack-allocated `BackendState`, the `be` field
     /// stores pointers into the struct's own backend fields.
@@ -1250,10 +1416,19 @@ pub const BackendState = struct {
     ///   - allocator: Used for backend-internal allocations (pipeline caches, etc.).
     ///   - backend_choice: Which backend to initialize (or .auto for auto-detection).
     pub fn init(self: *BackendState, allocator: std.mem.Allocator, backend_choice: BackendChoice, io: std.Io, device_id: u32) void {
-        // n_workers = CPU count - 1 (main thread also participates).
-        const cpu_count = std.Thread.getCpuCount() catch 1;
+        // One thread per PHYSICAL core, minus one for the main thread (which
+        // also participates). SMT siblings add no memory bandwidth to a
+        // bandwidth-bound GEMV and make the spin-wait in parallelFor worse, so
+        // sizing by logical CPUs oversubscribes every core on an SMT machine.
+        //
+        // Workers are pinned to the core they were sized for. Core id 0 is left
+        // to the unpinned main thread, so a worker never shares a core with it.
+        var core_ids: [max_pinned_core_ids]u32 = undefined;
+        const n_cores_listed = physicalCoreIds(&core_ids);
+        const cpu_count = if (n_cores_listed > 0) n_cores_listed else detectPhysicalCores();
         const n_workers = if (cpu_count > 1) cpu_count - 1 else 0;
         self.pool = ThreadPool.init(n_workers);
+        if (n_cores_listed > 1) self.pool.?.setAffinity(core_ids[1..n_cores_listed]);
         self.pool.?.spawn(io);
         self.cpu_be.pool = &self.pool.?;
         self.be = blk: {
@@ -1454,6 +1629,49 @@ pub const BackendState = struct {
 };
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "pageAlignRange, covers the whole request and starts on a page" {
+    const page = std.heap.page_size_min;
+    var buf: [1]u8 align(std.heap.page_size_min) = undefined;
+    const base = @intFromPtr(&buf);
+
+    // Aligned start, exact page length: no widening.
+    const exact = pageAlignRange(@ptrCast(&buf), page);
+    try std.testing.expectEqual(base, exact.base);
+    try std.testing.expectEqual(page, exact.size);
+
+    // One byte past the page start still covers a full page.
+    const one = pageAlignRange(@ptrCast(&buf), 1);
+    try std.testing.expectEqual(base, one.base);
+    try std.testing.expectEqual(page, one.size);
+
+    // An unaligned pointer rounds the base DOWN, so the range still contains
+    // every byte the caller asked for; hostUnregister depends on this matching.
+    const off: [*]const u8 = @as([*]const u8, @ptrCast(&buf)) + 8;
+    const un = pageAlignRange(off, page);
+    try std.testing.expectEqual(base, un.base);
+    try std.testing.expectEqual(2 * page, un.size);
+    try std.testing.expect(un.base + un.size >= @intFromPtr(off) + page);
+}
+
+test "pageAlignRange, zero length collapses to the containing page start" {
+    var buf: [1]u8 align(std.heap.page_size_min) = undefined;
+    const r = pageAlignRange(@ptrCast(&buf), 0);
+    try std.testing.expectEqual(@intFromPtr(&buf), r.base);
+    try std.testing.expectEqual(@as(usize, 0), r.size);
+}
+
+test "hostPrefault, tolerates zero length and unmapped-tail ranges" {
+    var buf: [4096]u8 align(std.heap.page_size_min) = undefined;
+    hostPrefault(@ptrCast(&buf), 0);
+    hostPrefault(@ptrCast(&buf), buf.len);
+}
+
+test "listMetalDevices, no Metal import off macOS" {
+    if (comptime builtin.os.tag == .macos) return error.SkipZigTest;
+    var buf: [4]MetalDeviceListEntry = undefined;
+    try std.testing.expectEqual(@as(usize, 0), listMetalDevices(&buf));
+}
 
 test "DType, gemvRowBytes for F32" {
     // F32: 4 bytes per element, no quantization blocks.
@@ -1683,9 +1901,12 @@ test "quant block constants" {
 }
 
 test "BackendChoice, all variants exist" {
-    // Verify the enum has all expected variants.
-    const choices = [_]BackendChoice{ .auto, .cpu, .metal, .vulkan, .cuda, .rocm, .webgpu };
-    try std.testing.expectEqual(@as(usize, 7), choices.len);
+    const fields = @typeInfo(BackendChoice).@"enum".fields;
+    const expected = [_][]const u8{ "auto", "cpu", "metal", "vulkan", "cuda", "rocm", "webgpu" };
+    try std.testing.expectEqual(expected.len, fields.len);
+    inline for (expected, 0..) |name, i| {
+        try std.testing.expectEqualStrings(name, fields[i].name);
+    }
 }
 
 test "NullBackend, function signatures exist" {
@@ -2370,6 +2591,12 @@ test "Backend.invalidateWeight via CPU dispatch, no-op" {
     be.invalidateWeight(@as([*]const u8, &buf)); // CpuBackend has no invalidateWeight, no-op
 }
 
+test "Backend.invalidateDeviceKv via CPU dispatch, no-op" {
+    var cpu = CpuBackend{};
+    const be = Backend{ .cpu = &cpu };
+    be.invalidateDeviceKv(); // CpuBackend has no kv_dev_cache
+}
+
 test "Backend.allReduceAdd via CPU dispatch, no-op" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
@@ -2762,6 +2989,7 @@ test "fuzz: all backend functions" {
             be.invalidateActivation(&out);
             try std.testing.expectEqual(@as(u64, 0), be.getDevicePtr(@as([*]const f32, &out)));
             be.invalidateWeight(@as([*]const u8, @ptrCast(&out)));
+            be.invalidateDeviceKv();
             var ar_dst = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
             var ar_src = [_]f32{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
             be.allReduceAdd(&ar_dst, &ar_src, dim);
@@ -2900,6 +3128,7 @@ test "fuzz: all backend functions" {
                 _ = &Backend.backendInfo;
                 _ = &Backend.setThreadContext;
                 _ = &Backend.invalidateActivation;
+                _ = &Backend.invalidateDeviceKv;
                 _ = &Backend.getDevicePtr;
                 _ = &Backend.invalidateWeight;
                 _ = &Backend.allReduceAdd;

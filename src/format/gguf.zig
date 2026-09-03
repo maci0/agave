@@ -29,6 +29,14 @@ const max_alignment: u32 = 1 << 20;
 /// Buffer size for tensor/metadata name formatting (must fit longest GGUF key).
 const name_buf_size: usize = 256;
 
+fn closeFd(fd: posix.fd_t) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = posix.system.close(fd);
+    } else {
+        _ = std.c.close(fd);
+    }
+}
+
 /// GGML quantization type identifiers.
 pub const GGMLType = enum(u32) {
     f32 = 0,
@@ -286,13 +294,8 @@ pub const GGUFFile = struct {
     /// Opens and memory-maps a GGUF file, parsing headers, metadata, and tensor info.
     pub fn open(allocator: Allocator, path: []const u8) !GGUFFile {
         const fd = try posix.openat(posix.AT.FDCWD, path, .{}, 0);
-        errdefer {
-            if (comptime @import("builtin").os.tag == .linux) {
-                _ = posix.system.close(fd);
-            } else {
-                _ = std.c.close(fd);
-            }
-        }
+        var close_fd = true;
+        errdefer if (close_fd) closeFd(fd);
         const file_size: usize = blk: {
             if (comptime @import("builtin").os.tag == .linux) {
                 var buf: std.os.linux.Statx = undefined;
@@ -308,7 +311,8 @@ pub const GGUFFile = struct {
         if (file_size < gguf_min_header_size) return error.FileTooSmall;
 
         const mapped = try posix.mmap(null, file_size, .{ .READ = true }, .{ .TYPE = .SHARED }, fd, 0);
-        errdefer posix.munmap(mapped);
+        var unmap = true;
+        errdefer if (unmap) posix.munmap(mapped);
         // Hint sequential access for weight loading, enables OS readahead and reduces page faults.
         posix.madvise(mapped.ptr, mapped.len, posix.MADV.SEQUENTIAL) catch {};
 
@@ -320,6 +324,10 @@ pub const GGUFFile = struct {
             .tensors = std.StringHashMap(TensorInfo).init(allocator),
             .allocator = allocator,
         };
+        // parseHeader / loadSplitShards allocate into self; deinit owns fd + mmap.
+        close_fd = false;
+        unmap = false;
+        errdefer self.deinit();
         try self.parseHeader();
 
         // Auto-load sibling shards for split GGUFs (e.g. *-00001-of-00002.gguf).
@@ -376,28 +384,28 @@ pub const GGUFFile = struct {
                     var buf2: std.os.linux.Statx = undefined;
                     const rc = std.os.linux.statx(sfd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf2);
                     if (rc != 0) {
-                        _ = std.c.close(sfd);
+                        closeFd(sfd);
                         continue;
                     }
                     break :blk @intCast(buf2.size);
                 } else {
                     var ss: posix.Stat = undefined;
                     if (std.c.fstat(sfd, &ss) != 0) {
-                        _ = std.c.close(sfd);
+                        closeFd(sfd);
                         continue;
                     }
                     break :blk @intCast(ss.size);
                 }
             };
-            _ = std.c.close(sfd); // close the stat fd; re-open for mmap below
+            closeFd(sfd); // close the stat fd; re-open for mmap below
 
             // mmap the shard and parse its tensor table.
             const sfd2 = posix.openat(posix.AT.FDCWD, shard_name, .{}, 0) catch continue;
             const smapped = posix.mmap(null, sfsize, .{ .READ = true }, .{ .TYPE = .SHARED }, sfd2, 0) catch {
-                _ = std.c.close(sfd2);
+                closeFd(sfd2);
                 continue;
             };
-            _ = std.c.close(sfd2);
+            closeFd(sfd2);
             posix.madvise(smapped.ptr, smapped.len, posix.MADV.SEQUENTIAL) catch {};
 
             self.extra_shards.append(self.allocator, smapped) catch {
@@ -476,6 +484,7 @@ pub const GGUFFile = struct {
             .allocator = allocator,
             .is_buffer = true,
         };
+        errdefer self.deinit();
         try self.parseHeader();
         return self;
     }
@@ -640,13 +649,7 @@ pub const GGUFFile = struct {
         self.owned_u64_arrays.deinit(self.allocator);
         if (comptime @import("builtin").os.tag != .freestanding) {
             if (!self.is_buffer) posix.munmap(self.mapped_data);
-            if (self.file_fd >= 0) {
-                if (comptime @import("builtin").os.tag == .linux) {
-                    _ = posix.system.close(self.file_fd);
-                } else {
-                    _ = std.c.close(self.file_fd);
-                }
-            }
+            if (self.file_fd >= 0) closeFd(self.file_fd);
             for (self.extra_shards.items) |shard| posix.munmap(shard);
             self.extra_shards.deinit(self.allocator);
         }
@@ -1680,6 +1683,23 @@ test "GGUF fromBuffer minimal valid file" {
     try std.testing.expectEqual(@as(u64, 0), gguf.totalParams());
 }
 
+test "GGUF fromBuffer truncated metadata does not leak" {
+    const allocator = std.testing.allocator;
+    // One KV whose key is readable so `own()` allocates, then the value
+    // string length overruns the buffer so parseHeader errors.
+    var buf: [48]u8 = undefined;
+    @memset(&buf, 0);
+    std.mem.writeInt(u32, buf[0..4], gguf_magic, .little);
+    std.mem.writeInt(u32, buf[4..8], 3, .little);
+    std.mem.writeInt(u64, buf[8..16], 0, .little); // tensor_count
+    std.mem.writeInt(u64, buf[16..24], 1, .little); // metadata_kv_count
+    std.mem.writeInt(u64, buf[24..32], 1, .little); // key len
+    buf[32] = 'k';
+    std.mem.writeInt(u32, buf[33..37], @intFromEnum(MetaValueType.string), .little);
+    std.mem.writeInt(u64, buf[37..45], 1000, .little); // value length past EOF
+    try std.testing.expectError(error.OffsetOutOfBounds, GGUFFile.fromBuffer(allocator, &buf));
+}
+
 test "fuzz: all gguf functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
@@ -1742,6 +1762,10 @@ test "fuzz: all gguf functions" {
             const allocator = std.testing.allocator;
             if (GGUFFile.fromBuffer(allocator, &hdr_buf)) |*gguf_ptr| {
                 var gguf = gguf_ptr.*;
+                defer gguf.deinit();
+                try std.testing.expect(gguf.version == 2 or gguf.version == 3);
+                try std.testing.expect(gguf.tensors.count() <= gguf.tensor_count);
+                try std.testing.expect(gguf.metadata.count() <= max_metadata_kv_count);
                 // format (returns a Format vtable wrapper)
                 _ = gguf.format();
                 // totalParams
@@ -1756,8 +1780,10 @@ test "fuzz: all gguf functions" {
                 _ = gguf.getTokenizerMerges();
                 // tensorData, only safe if tensors exist
                 var it = gguf.tensors.valueIterator();
-                if (it.next()) |info| _ = gguf.tensorData(info);
-                gguf.deinit();
+                while (it.next()) |info| {
+                    try std.testing.expect(info.dataBytes() != std.math.maxInt(usize));
+                    _ = gguf.tensorData(info);
+                }
             } else |_| {}
 
             // --- GGUFFile.open, errors on non-existent path ---
@@ -1776,6 +1802,174 @@ test "fuzz: all gguf functions" {
             var q8_out: [32]f32 = undefined;
             GGUFFile.dequantQ8_0(&q8_block, &q8_out);
             for (q8_out) |v| if (!std.math.isFinite(v)) return;
+        }
+    }.f, .{});
+}
+
+test "fuzz: GGUF fromBuffer structured metadata and tensors" {
+    try std.testing.fuzz({}, struct {
+        fn writeStr(buf: []u8, pos: *usize, s: []const u8) bool {
+            if (buf.len - pos.* < 8 + s.len) return false;
+            std.mem.writeInt(u64, buf[pos.*..][0..8], s.len, .little);
+            pos.* += 8;
+            @memcpy(buf[pos.*..][0..s.len], s);
+            pos.* += s.len;
+            return true;
+        }
+
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            var buf: [1024]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+
+            // Random blob: must not crash or leak; parse may reject.
+            if (smith.valueWithHash(u8, 1) & 1 != 0) {
+                const len = smith.indexWithHash(buf.len + 1, 2);
+                var g = GGUFFile.fromBuffer(allocator, buf[0..len]) catch return;
+                defer g.deinit();
+                try std.testing.expect(g.version == 2 or g.version == 3);
+                try std.testing.expect(g.tensors.count() <= g.tensor_count);
+                try std.testing.expect(g.metadata.count() <= max_metadata_kv_count);
+                var it = g.tensors.valueIterator();
+                while (it.next()) |info| {
+                    try std.testing.expect(info.dataBytes() != std.math.maxInt(usize));
+                    _ = g.tensorData(info);
+                }
+                return;
+            }
+
+            // Structure-aware: well-formed header + typed KVs + f32 tensors so
+            // parseHeader reaches metadata arrays and tensor offset checks.
+            @memset(buf[0..24], 0);
+            std.mem.writeInt(u32, buf[0..4], gguf_magic, .little);
+            std.mem.writeInt(u32, buf[4..8], 3, .little);
+            const n_tensors: u64 = smith.valueWithHash(u8, 3) % 3; // 0..2
+            const n_kv: u64 = smith.valueWithHash(u8, 4) % 4; // 0..3
+            std.mem.writeInt(u64, buf[8..16], n_tensors, .little);
+            std.mem.writeInt(u64, buf[16..24], n_kv, .little);
+            var pos: usize = 24;
+
+            var kv_i: u64 = 0;
+            while (kv_i < n_kv) : (kv_i += 1) {
+                var key_buf: [8]u8 = undefined;
+                const key = std.fmt.bufPrint(&key_buf, "k{d}", .{kv_i}) catch return;
+                if (!writeStr(&buf, &pos, key)) return;
+                const vtype: u32 = switch (smith.valueWithHash(u8, @truncate(10 + kv_i)) % 6) {
+                    0 => @intFromEnum(MetaValueType.uint32),
+                    1 => @intFromEnum(MetaValueType.string),
+                    2 => @intFromEnum(MetaValueType.bool_type),
+                    3 => @intFromEnum(MetaValueType.float32),
+                    4 => @intFromEnum(MetaValueType.uint8),
+                    else => @intFromEnum(MetaValueType.array),
+                };
+                if (buf.len - pos < 4) return;
+                std.mem.writeInt(u32, buf[pos..][0..4], vtype, .little);
+                pos += 4;
+                switch (vtype) {
+                    @intFromEnum(MetaValueType.uint32), @intFromEnum(MetaValueType.float32) => {
+                        if (buf.len - pos < 4) return;
+                        std.mem.writeInt(u32, buf[pos..][0..4], smith.valueWithHash(u32, @truncate(20 + kv_i)), .little);
+                        pos += 4;
+                    },
+                    @intFromEnum(MetaValueType.string) => {
+                        if (!writeStr(&buf, &pos, "v")) return;
+                    },
+                    @intFromEnum(MetaValueType.bool_type), @intFromEnum(MetaValueType.uint8) => {
+                        if (pos >= buf.len) return;
+                        buf[pos] = smith.valueWithHash(u8, @truncate(30 + kv_i));
+                        pos += 1;
+                    },
+                    @intFromEnum(MetaValueType.array) => {
+                        const as_str = smith.valueWithHash(u8, @truncate(40 + kv_i)) & 1 == 0;
+                        const alen: u64 = 1 + (smith.valueWithHash(u8, @truncate(41 + kv_i)) % 2);
+                        if (buf.len - pos < 12) return;
+                        std.mem.writeInt(u32, buf[pos..][0..4], if (as_str)
+                            @intFromEnum(MetaValueType.string)
+                        else
+                            @intFromEnum(MetaValueType.uint32), .little);
+                        pos += 4;
+                        std.mem.writeInt(u64, buf[pos..][0..8], alen, .little);
+                        pos += 8;
+                        var a: u64 = 0;
+                        while (a < alen) : (a += 1) {
+                            if (as_str) {
+                                if (!writeStr(&buf, &pos, "tok")) return;
+                            } else {
+                                if (buf.len - pos < 4) return;
+                                std.mem.writeInt(u32, buf[pos..][0..4], smith.valueWithHash(u32, @truncate(50 + kv_i * 4 + a)), .little);
+                                pos += 4;
+                            }
+                        }
+                    },
+                    else => return,
+                }
+            }
+
+            const elems_per_tensor: u64 = 4;
+            const bytes_per_tensor: usize = 16; // 4 × f32
+            var t: u64 = 0;
+            while (t < n_tensors) : (t += 1) {
+                var name_buf: [8]u8 = undefined;
+                const name = std.fmt.bufPrint(&name_buf, "t{d}", .{t}) catch return;
+                if (!writeStr(&buf, &pos, name)) return;
+                if (buf.len - pos < 4 + 8 + 4 + 8) return;
+                std.mem.writeInt(u32, buf[pos..][0..4], 1, .little); // n_dims
+                pos += 4;
+                std.mem.writeInt(u64, buf[pos..][0..8], elems_per_tensor, .little);
+                pos += 8;
+                std.mem.writeInt(u32, buf[pos..][0..4], @intFromEnum(GGMLType.f32), .little);
+                pos += 4;
+                std.mem.writeInt(u64, buf[pos..][0..8], t * bytes_per_tensor, .little);
+                pos += 8;
+            }
+
+            const rem = pos % 32;
+            if (rem != 0) {
+                const pad = 32 - rem;
+                if (buf.len - pos < pad) return;
+                @memset(buf[pos .. pos + pad], 0);
+                pos += pad;
+            }
+            const data_bytes = std.math.mul(usize, @intCast(n_tensors), bytes_per_tensor) catch return;
+            if (buf.len - pos < data_bytes) return;
+            @memset(buf[pos .. pos + data_bytes], 0);
+            pos += data_bytes;
+
+            // Occasional single-byte corruption after a complete header so the
+            // error path runs after `own()` / array allocations.
+            const corrupt = smith.valueWithHash(u8, 90) > 200;
+            if (corrupt) buf[smith.indexWithHash(pos, 91)] ^= 0xff;
+
+            var g = GGUFFile.fromBuffer(allocator, buf[0..pos]) catch return;
+            defer g.deinit();
+            try std.testing.expect(g.tensors.count() <= g.tensor_count);
+            try std.testing.expect(g.metadata.count() <= max_metadata_kv_count);
+            if (!corrupt) {
+                try std.testing.expectEqual(@as(u32, 3), g.version);
+                try std.testing.expectEqual(n_kv, g.metadata.count());
+                try std.testing.expectEqual(n_tensors, g.tensors.count());
+                try std.testing.expectEqual(n_tensors, g.tensor_count);
+            }
+            var mit = g.metadata.iterator();
+            while (mit.next()) |e| {
+                _ = e.value_ptr.asU32();
+                _ = e.value_ptr.asF32();
+                _ = e.value_ptr.asStr();
+                _ = e.value_ptr.asBool();
+            }
+            var tit = g.tensors.valueIterator();
+            while (tit.next()) |info| {
+                try std.testing.expect(info.n_dims <= 4);
+                try std.testing.expect(info.dataBytes() != std.math.maxInt(usize));
+                _ = g.tensorData(info);
+            }
+            _ = g.totalParams();
+            _ = g.getTokenizerVocab();
+            _ = g.getTokenizerMerges();
+            _ = g.getMetaStr("k0");
+            _ = g.getMetaU32("k0");
+            _ = g.getMetaF32("k0");
+            _ = g.getMetaU32Array("k0");
         }
     }.f, .{});
 }

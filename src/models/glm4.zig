@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const mlx_ops = @import("../ops/mlx.zig");
 const kvcache = @import("../kvcache/manager.zig");
@@ -62,7 +63,7 @@ pub const Glm4Model = struct {
     first_k_dense_replace: u32 = 1,
     rope_theta: f32 = 1000000.0,
     rms_eps: f32 = 1e-5,
-    eos_token_id: u32 = 154820,
+    eos_token_id: u32 = arch_mod.glm4_fallback_eos,
     max_seq_len: usize = 4096,
     mlx_bits: u32 = 6,
 
@@ -423,16 +424,14 @@ pub const Glm4Model = struct {
     }
 
     /// Helper: get flat f32 view of KV cache for a layer (assembled from paged or tiered blocks).
-    fn getLayerKvView(self: *Glm4Model, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *Glm4Model, layer: usize) kvcache.KvF32View {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            const kv = tc.keysValues(block_id);
+            return .{ .keys = kv.keys, .values = kv.values };
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,
@@ -614,9 +613,10 @@ pub const Glm4Model = struct {
         if (num_blocks == 0) return .{ .keys = &[_]u8{}, .values = &[_]u8{} };
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         return .{

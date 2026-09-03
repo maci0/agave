@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const ssm_ops = @import("../ops/ssm.zig");
@@ -77,7 +78,7 @@ pub const NemotronNanoModel = struct {
     rope_theta: f32 = 10000.0,
     rope_dim: u32 = 128,
     rms_eps: f32 = 1e-5,
-    eos_token_id: u32 = 2,
+    eos_token_id: u32 = arch_mod.nemotron_nano_fallback_eos,
     max_seq_len: usize = 4096,
 
     // Mamba-2 SSM parameters
@@ -601,9 +602,10 @@ pub const NemotronNanoModel = struct {
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
+            const kv = tc.keysValues(block_id);
             return .{
-                .keys = std.mem.sliceAsBytes(tc.blocks[block_id].base.keys),
-                .values = std.mem.sliceAsBytes(tc.blocks[block_id].base.values),
+                .keys = std.mem.sliceAsBytes(kv.keys),
+                .values = std.mem.sliceAsBytes(kv.values),
             };
         }
         const keys_f32 = self.paged_cache.blocks[block_id].keys;
@@ -1114,11 +1116,6 @@ pub const NemotronNanoModel = struct {
     fn stLayerTensor(self: *NemotronNanoModel, li: u32, comptime suffix: []const u8) ?TensorInfo {
         var buf: [name_buf_size]u8 = undefined;
         const name = std.fmt.bufPrint(&buf, "backbone.layers.{d}.{s}", .{ li, suffix }) catch return null;
-        return self.fmt.getTensor(name);
-    }
-
-    /// Look up a SafeTensors tensor by full runtime name.
-    fn stTensor(self: *NemotronNanoModel, name: []const u8) ?TensorInfo {
         return self.fmt.getTensor(name);
     }
 

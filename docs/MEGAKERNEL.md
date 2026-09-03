@@ -1,11 +1,13 @@
 # Megakernel Implementation
 
+**Status**: Tier 1 (fused FFN) is what `--megakernel` enables. Tier 2/3 kernels and dispatch helpers exist; model forward paths do not call them.
+
 Fused GPU kernels that eliminate per-layer dispatch overhead. Three-tier system:
 1. **Fused FFN** (active): 3→1 dispatch per FFN layer. Up to +93% short decode.
-2. **True Megakernel** (hand-written): single dispatch for ALL layers. 5 Metal + 3 CUDA + 1 ROCm.
-3. **Composed Megakernel** (auto-generated): `mega_compose.zig` generates MSL from model metadata at runtime.
+2. **True Megakernel** (hand-written): single dispatch for ALL layers. 5 Metal + 3 CUDA + 1 ROCm. Dispatch functions exist; not wired through `--megakernel`.
+3. **Composed Megakernel** (auto-generated): `mega_compose.zig` generates MSL from model metadata at runtime. Not selected by `--megakernel`.
 
-Enable with `--megakernel` flag.
+Enable fused FFN with `--megakernel`.
 
 Inspired by [Luce Megakernel](https://github.com/Luce-Org/luce-megakernel) which achieved 3.4× prefill and 1.55× decode speedup on Qwen 3.5-0.8B.
 
@@ -16,13 +18,13 @@ agave model.gguf --megakernel "prompt"     # Fused FFN (active)
 agave model.gguf "prompt"                  # Standard dispatch (default)
 ```
 
-Supported: Qwen 3.5, Gemma 3/4, Nemotron-H, GLM-4 on Metal. Qwen 3.5, Gemma 3/4 on CUDA. Qwen 3.5 on ROCm.
+`--megakernel` CLI gate (`src/main.zig`): Qwen 3.5, Gemma 3/4, and GLM-4 on Metal; Qwen 3.5 on CUDA. Other arches/backends error out (including Nemotron-H and ROCm), even where Tier 2 kernel files exist.
 
 ## Tier 1: Fused FFN Kernels (Active)
 
 Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Saves 2 dispatches per layer (48-84 saved per token depending on model).
 
-### Metal: 11 kernels in `megakernel.metal`
+### Metal: 13 kernels in `megakernel.metal`
 
 | Kernel | Activation | Quant | Models |
 |--------|-----------|-------|--------|
@@ -37,6 +39,8 @@ Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Sav
 | `fused_ffn_gate_up_gelu_q5_k` | GELU | Q5_K | Gemma 3/4 |
 | `fused_ffn_gate_up_gelu_q6_k` | GELU | Q6_K | Gemma 3/4 |
 | `fused_ffn_gate_up_gelu_q4_0` | GELU | Q4_0 | Gemma 3/4 |
+| `fused_ffn_gate_up_clamped_silu_q2_k` | clamped SiLU | Q2_K | DeepSeek V4 |
+| `fused_ffn_gate_up_clamped_silu_mxfp4` | clamped SiLU | MXFP4 | DeepSeek V4 |
 
 ### CUDA: 4 kernel files (Q8_0, Q4_K, Q5_K, Q6_K)
 
@@ -58,7 +62,7 @@ The +93% short-decode result comes from Q4_K_M mixed quant, with Q5_K/Q6_K fused
 
 Single GPU dispatch for ALL layers. Uses composable building blocks with atomic grid sync between stages.
 
-### Composable Building Blocks (`mega_common.metal`, 730 lines)
+### Composable Building Blocks (`mega_common.metal`, 752 lines)
 
 | Block | Purpose |
 |-------|---------|
@@ -97,7 +101,7 @@ The `mega_sdpa_inline` block supports:
 
 ### Integration Status
 
-The true megakernels compile and dispatch correctly. SDPA inline is wired into the layer loops. `--megakernel` uses single-dispatch for the full forward pass (all layers in 1 GPU dispatch).
+True megakernel sources compile and `dispatchMegakernel*` helpers exist on Metal, CUDA, and ROCm (signature tests only). Model forward paths never call them: `--megakernel` sets `megakernel_enabled` and the FFN layer uses fused gate+up+activation (Tier 1). Paged KV, DeltaNet recurrence, and Qwen 3.5 Q+gate deinterleave still go through standard per-op dispatch.
 
 Known limitations of hand-written megakernels:
 - Qwen 3.5: Q+gate deinterleave, per-head QK norms, sigmoid gate not yet in megakernel
@@ -135,7 +139,7 @@ Model Metadata (GGUF/SafeTensors)
 | File | Role |
 |------|------|
 | `src/backend/mega_compose.zig` | `ModelDesc` struct, `composeMSL()` function, helper constructors |
-| `src/backend/kernels/metal/mega_common.metal` | 18 composable building blocks (730 lines) |
+| `src/backend/kernels/metal/mega_common.metal` | 18 composable building blocks (752 lines) |
 | `src/backend/metal.zig` | `compileComposedMegakernel()`, `dispatchMegakernelAuto()` |
 
 ### What the Composer Handles Automatically
@@ -235,8 +239,8 @@ Helper constructors simplify common patterns:
 
 | Backend | Pipelines/Kernels | Megakernel Files | Composed |
 |---------|:-----------------:|:----------------:|:--------:|
-| Metal | 88 | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
-| CUDA | 61 | 4 (3 true + fused FFN) | No |
+| Metal | 104 | 7 (5 true + megakernel.metal + mega_common.metal) | Yes (runtime MSL) |
+| CUDA | 61 | 7 (3 true + 4 fused FFN) | No |
 | ROCm | 49 | 1 (true Qwen Q8_0) | No |
 
 The composed megakernel (`mega_compose.zig`) generates an additional Metal pipeline at runtime via `compileComposedMegakernel()`. This pipeline is not counted in the static file totals above.
@@ -245,10 +249,10 @@ The composed megakernel (`mega_compose.zig`) generates an additional Metal pipel
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `src/backend/mega_compose.zig` | ~1,036 | Composable megakernel generator (ModelDesc, composeMSL) |
+| `src/backend/mega_compose.zig` | ~1,049 | Composable megakernel generator (ModelDesc, composeMSL) |
 | `src/backend/megakernel.zig` | n/a | Weight offset computation for fused FFN megakernels |
-| `src/backend/kernels/metal/mega_common.metal` | 732 | 18 composable building blocks |
-| `src/backend/kernels/metal/megakernel.metal` | n/a | 11 fused FFN kernels (Tier 1) |
+| `src/backend/kernels/metal/mega_common.metal` | 752 | 18 composable building blocks |
+| `src/backend/kernels/metal/megakernel.metal` | n/a | 13 fused FFN kernels (Tier 1) |
 | `src/backend/kernels/metal/mega_*.metal` | n/a | 5 hand-written true megakernels (Tier 2) |
 | `src/backend/metal.zig` | n/a | `compileComposedMegakernel()`, `dispatchMegakernelAuto()` |
 

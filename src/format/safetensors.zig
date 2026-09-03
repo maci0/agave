@@ -1669,7 +1669,10 @@ fn fuseOneProjection(
             if (tensors.get(gi_gs_name)) |gs_entry| {
                 if (gs_entry.shard_idx < shard_data.len and shard_data[gs_entry.shard_idx].data.len > 0) {
                     const shard = shard_data[gs_entry.shard_idx];
-                    const abs = std.math.add(usize, shard.tensor_base, gs_entry.data_start) catch { gs_array[gi] = 1.0; continue; };
+                    const abs = std.math.add(usize, shard.tensor_base, gs_entry.data_start) catch {
+                        gs_array[gi] = 1.0;
+                        continue;
+                    };
                     if (std.math.add(usize, abs, 4) catch shard.data.len + 1 <= shard.data.len) {
                         gs_array[gi] = std.mem.bytesToValue(f32, shard.data[abs..][0..4]);
                         continue;
@@ -1694,7 +1697,10 @@ fn fuseOneProjection(
             if (tensors.get(gi_is)) |is_e| {
                 if (is_e.shard_idx < shard_data.len and shard_data[is_e.shard_idx].data.len > 0) {
                     const sh2 = shard_data[is_e.shard_idx];
-                    const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch { is_array[gi] = 1.0; continue; };
+                    const a2 = std.math.add(usize, sh2.tensor_base, is_e.data_start) catch {
+                        is_array[gi] = 1.0;
+                        continue;
+                    };
                     if (std.math.add(usize, a2, 4) catch sh2.data.len + 1 <= sh2.data.len) {
                         is_array[gi] = std.mem.bytesToValue(f32, sh2.data[a2..][0..4]);
                         continue;
@@ -2671,11 +2677,13 @@ fn parseConfigJson(
     meta: *std.StringHashMap(MetaValue),
     owned: *std.ArrayList([]u8),
 ) !void {
-    _ = try parseConfigObject(allocator, json, 0, meta, owned, false);
+    _ = try parseConfigObject(allocator, json, 0, meta, owned, false, 0);
 }
 
 /// Parse a JSON object's scalar values into the meta map.
 /// If `is_override` is true, existing keys are overwritten (for nested text_config).
+/// `depth` counts nested `parseConfigObject` calls; exceeding `max_json_depth`
+/// is rejected so crafted `rope_parameters` nesting cannot blow the stack.
 fn parseConfigObject(
     allocator: Allocator,
     json: []const u8,
@@ -2683,12 +2691,15 @@ fn parseConfigObject(
     meta: *std.StringHashMap(MetaValue),
     owned: *std.ArrayList([]u8),
     is_override: bool,
+    depth: usize,
 ) !usize {
+    if (depth >= max_json_depth) return error.JsonUnexpected;
     var i: usize = try expect(json, start, '{');
 
     while (true) {
         i = skipWs(json, i);
         if (i >= json.len or json[i] == '}') break;
+        const field_start = i;
 
         const key_res = try parseString(json, i);
         i = key_res.next;
@@ -2706,7 +2717,7 @@ fn parseConfigObject(
                 std.mem.eql(u8, key_res.val, "quantization") or
                 std.mem.eql(u8, key_res.val, "quantization_config")));
         if (should_recurse and json[i] == '{') {
-            i = try parseConfigObject(allocator, json, i, meta, owned, true);
+            i = try parseConfigObject(allocator, json, i, meta, owned, true, depth + 1);
         } else if (!is_override and std.mem.eql(u8, key_res.val, "vision_config") and json[i] == '{') {
             // Keep vision keys under clip.vision.* so they never clobber text_config
             // (Qwen3.8-27B: text hidden_size=5120, vision hidden_size=1152).
@@ -2785,6 +2796,7 @@ fn parseConfigObject(
 
         i = skipWs(json, i);
         if (i < json.len and json[i] == ',') i += 1;
+        if (i <= field_start) return error.JsonUnexpected;
     }
     if (i < json.len and json[i] == '}') i += 1;
     return i;
@@ -3688,6 +3700,25 @@ test "parseConfigJson quantization_config nested" {
     try std.testing.expectEqualStrings("awq", qm.string);
     const bits = meta.get("bits") orelse return error.Missing;
     try std.testing.expectEqual(@as(u64, 4), bits.uint);
+}
+
+test "parseConfigJson nested rope_parameters hits max depth" {
+    const allocator = std.testing.allocator;
+    const n = max_json_depth + 1;
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(allocator);
+    for (0..n) |_| try json.appendSlice(allocator, "{\"rope_parameters\":");
+    try json.appendSlice(allocator, "{}");
+    for (0..n) |_| try json.append(allocator, '}');
+
+    var meta = std.StringHashMap(MetaValue).init(allocator);
+    defer meta.deinit();
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |s| allocator.free(s);
+        owned.deinit(allocator);
+    }
+    try std.testing.expectError(error.JsonUnexpected, parseConfigJson(allocator, json.items, &meta, &owned));
 }
 
 test "ggufToHfName top-level tensors" {

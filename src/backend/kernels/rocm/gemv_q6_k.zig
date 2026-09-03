@@ -25,47 +25,62 @@ const q6_k_dequant_bias: i32 = -32;
 /// Mask for extracting 2-bit high-order field from qh byte.
 const qh_2bit_mask: u8 = 0x03;
 
+/// Elements per half super-block: the layout interleaves in 128-element halves.
+const q6_k_half_elems: u32 = 128;
+/// ql bytes per half (128 elements, 4 bits each, but read as two nibble planes).
+const q6_k_ql_half_bytes: u32 = 64;
+/// qh bytes per half (128 elements, 2 bits each).
+const q6_k_qh_half_bytes: u32 = 32;
+/// scale bytes per half.
+const q6_k_sc_half_bytes: u32 = 8;
+
 /// Compute one super-block's dot product for a single row.
+///
+/// Q6_K is NOT a sequential nibble stream. GGML packs each 128-element half so
+/// that byte `ql[l]` carries elements `l` (low nibble) and `l + 64` (high
+/// nibble), byte `ql[l + 32]` carries `l + 32` and `l + 96`, and `qh[l]` carries
+/// the two high bits of all four at shifts 0/2/4/6. Scales are indexed
+/// `sc[l/16 + {0,2,4,6}]` for those four. Decoding it as consecutive nibbles
+/// reads the right bytes in the wrong order and produces plausible-looking
+/// garbage; see `kernels/cpu/gemv_q6_k.zig` for the same mapping.
 inline fn q6kBlockDot(x: [*]const f32, blk_addr: usize, k: u32, base_col: u32) f32 {
-    // Load block scale: d (f16) at end of block
     const d: f32 = @floatCast(@as(f16, @bitCast(@as(
         *align(1) const u16,
         @ptrFromInt(blk_addr + q6_k_d_offset),
     ).*)));
 
-    const ql = @as([*]const u8, @ptrFromInt(blk_addr + q6_k_ql_offset));
-    const qh = @as([*]const u8, @ptrFromInt(blk_addr + q6_k_qh_offset));
-    const scales = @as([*]const i8, @ptrFromInt(blk_addr + q6_k_sc_offset));
-
     var sum: f32 = 0.0;
+    var half: u32 = 0;
+    while (half < 2) : (half += 1) {
+        const ql = @as([*]const u8, @ptrFromInt(blk_addr + q6_k_ql_offset + half * q6_k_ql_half_bytes));
+        const qh = @as([*]const u8, @ptrFromInt(blk_addr + q6_k_qh_offset + half * q6_k_qh_half_bytes));
+        const sc = @as([*]const i8, @ptrFromInt(blk_addr + q6_k_sc_offset + half * q6_k_sc_half_bytes));
+        const base = base_col + half * q6_k_half_elems;
+        if (base >= k) break;
 
-    // Process 16 sub-blocks of 16 elements each
-    for (0..16) |sb| {
-        const sub_base = base_col + sb * 16;
-        if (sub_base >= k) break;
+        var l: u32 = 0;
+        while (l < 32) : (l += 1) {
+            const is = l / 16;
+            const h = qh[l];
+            const lo = ql[l];
+            const hi = ql[l + 32];
 
-        const scale: f32 = @floatFromInt(scales[sb]);
-        const d_sc = d * scale;
+            const q1: i32 = @as(i32, (lo & 0x0F) | ((h >> 0) & qh_2bit_mask) << 4) + q6_k_dequant_bias;
+            const q2: i32 = @as(i32, (hi & 0x0F) | ((h >> 2) & qh_2bit_mask) << 4) + q6_k_dequant_bias;
+            const q3: i32 = @as(i32, (lo >> 4) | ((h >> 4) & qh_2bit_mask) << 4) + q6_k_dequant_bias;
+            const q4: i32 = @as(i32, (hi >> 4) | ((h >> 6) & qh_2bit_mask) << 4) + q6_k_dequant_bias;
 
-        const ql_off = sb * 8;
-        const qh_off = sb * 4;
-
-        var sub_sum: f32 = 0.0;
-        const count = @min(16, k - sub_base);
-
-        for (0..count) |l| {
-            const lo = ql[ql_off + l / 2];
-            const lo_nibble: u8 = if (l % 2 == 0) (lo & 0x0F) else (lo >> 4);
-
-            const qh_idx = qh_off + l / 4;
-            const shift: u3 = @intCast((l % 4) * 2);
-            const hi_bits: u8 = (qh[qh_idx] >> shift) & qh_2bit_mask;
-
-            const qval: f32 = @floatFromInt(@as(i8, @intCast(lo_nibble | (hi_bits << 4))) + q6_k_dequant_bias);
-            sub_sum += x[sub_base + l] * qval;
+            // The final super-block of a k that is not a multiple of 256 is
+            // padded on disk but x stops at k, so each quarter is guarded.
+            const e1 = base + l;
+            if (e1 < k) sum += d * @as(f32, @floatFromInt(sc[is + 0])) * @as(f32, @floatFromInt(q1)) * x[e1];
+            const e2 = base + l + 32;
+            if (e2 < k) sum += d * @as(f32, @floatFromInt(sc[is + 2])) * @as(f32, @floatFromInt(q2)) * x[e2];
+            const e3 = base + l + 64;
+            if (e3 < k) sum += d * @as(f32, @floatFromInt(sc[is + 4])) * @as(f32, @floatFromInt(q3)) * x[e3];
+            const e4 = base + l + 96;
+            if (e4 < k) sum += d * @as(f32, @floatFromInt(sc[is + 6])) * @as(f32, @floatFromInt(q4)) * x[e4];
         }
-
-        sum += d_sc * sub_sum;
     }
     return sum;
 }

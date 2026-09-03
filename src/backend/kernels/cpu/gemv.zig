@@ -14,6 +14,9 @@ const DType = @import("../../backend.zig").DType;
 pub const sparse_threshold = @import("activation_sparsity.zig").sparse_threshold;
 pub const isBlockSparse = @import("activation_sparsity.zig").isBlockSparse;
 
+/// Weight/activation prefetch hints shared by the quantized kernels.
+pub const prefetch = @import("prefetch.zig");
+
 // ── Per-format kernel imports ────────────────────────────────────
 const gemv_q4_0 = @import("gemv_q4_0.zig");
 const gemv_q8_0 = @import("gemv_q8_0.zig");
@@ -41,6 +44,7 @@ pub const gemvF16 = gemv_f16.gemvF16;
 pub const gemvBF16 = gemv_bf16.gemvBF16;
 pub const gemvFP8_E4M3 = gemv_fp8.gemvFP8_E4M3;
 pub const gemvFP8_E5M2 = gemv_fp8.gemvFP8_E5M2;
+pub const gemvMXFP8 = gemv_fp8.gemvMXFP8;
 pub const gemvMXFP4 = gemv_fp4.gemvMXFP4_V;
 pub const gemvNVFP4 = gemv_fp4.gemvNVFP4;
 pub const gemvIQ4_NL = gemv_iq4.gemvIQ4_NL;
@@ -54,7 +58,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const backend_mod = @import("../../backend.zig");
 // Accelerate.framework only available when Metal is enabled (they're linked together).
-const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal) @import("../../../backend/accelerate.zig") else struct {};
+const accelerate = if (builtin.os.tag == .macos and build_options.enable_metal) @import("../../accelerate.zig") else struct {};
 
 /// Computes the byte stride of one GEMV row for a given dtype and column count.
 pub const gemvRowBytes = backend_mod.gemvRowBytes;

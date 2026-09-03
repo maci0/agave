@@ -1,12 +1,22 @@
 //! KV cache management: flat per-layer allocation (`allocKvCache`/`freeKvCache`),
 //! block-based paged caching (`PagedKvCache`), and prefix-aware radix tree
 //! sharing (`RadixTree`).
+//!
+//! Kernel-facing layout types (`CacheBlock`, `PagedKvView`) live in `view.zig`
+//! so SDPA kernels do not import this file.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // Block tier classification lives in tiered.zig; import it from there directly
 // (a convenience re-export here used to create a manager <-> tiered import cycle).
+
+/// Kernel-facing KV block layout. Re-exported so existing `manager.CacheBlock`
+/// / `manager.PagedKvView` paths keep working; new kernel/backend code should
+/// import `view.zig` directly.
+pub const CacheBlock = @import("view.zig").CacheBlock;
+/// Block-table view passed to paged SDPA. See `view.zig`.
+pub const PagedKvView = @import("view.zig").PagedKvView;
 
 /// Result of allocating a KV cache.
 /// Slices are byte arrays, the actual format (f32, f16, q8_0, etc.)
@@ -61,16 +71,12 @@ pub fn freeKvCache(allocator: Allocator, cache: KvCache) void {
 // Sequences reference blocks through a block table (indirection), allowing
 // fine-grained memory reclamation.
 
-/// A single cache block holds `block_size` positions of KV data.
-pub const CacheBlock = struct {
-    /// Key data: [block_size * kv_dim] f32.
+/// Flat f32 key/value slices for one layer or block.
+/// Named so `TieredKvCache.keysValues` and model `getLayerKvView` share one type;
+/// identical anonymous structs are distinct types in Zig and fail to coerce.
+pub const KvF32View = struct {
     keys: []f32,
-    /// Value data: [block_size * kv_dim] f32.
     values: []f32,
-    /// Number of positions currently filled in this block (0..block_size).
-    used: u16 = 0,
-    /// Reference count for prefix sharing.
-    ref_count: u16 = 1,
 };
 
 /// Per-sequence metadata: which blocks hold this sequence's KV data.
@@ -79,85 +85,6 @@ pub const SeqBlockTable = struct {
     block_table: [][]u32,
     /// Current sequence length (total positions written).
     seq_len: usize = 0,
-};
-
-/// View into paged KV cache for one layer, passed to SDPA kernels.
-/// Enables block-table indirection: kernel walks block_table to find
-/// physical blocks instead of assuming contiguous memory.
-pub const PagedKvView = struct {
-    block_table: []const u32,
-    blocks: []const CacheBlock,
-    block_size: u16,
-    block_shift: std.math.Log2Int(u16),
-    block_mask: u16,
-    kv_dim: usize,
-    seq_len: usize,
-
-    /// Construct a view into the paged KV cache for one layer. Uses bit-shift
-    /// addressing when `block_size` is a power of two, division otherwise.
-    pub inline fn initView(block_table: []const u32, blocks: []const CacheBlock, block_size: u16, kv_dim: usize, seq_len: usize) PagedKvView {
-        std.debug.assert(block_size > 0);
-        return .{
-            .block_table = block_table,
-            .blocks = blocks,
-            .block_size = block_size,
-            .block_shift = if (std.math.isPowerOfTwo(block_size)) @intCast(@ctz(block_size)) else 0,
-            .block_mask = if (std.math.isPowerOfTwo(block_size)) block_size - 1 else 0,
-            .kv_dim = kv_dim,
-            .seq_len = seq_len,
-        };
-    }
-
-    inline fn blockIdx(self: PagedKvView, position: usize) usize {
-        return if (self.block_mask != 0) position >> self.block_shift else position / self.block_size;
-    }
-
-    inline fn posInBlock(self: PagedKvView, position: usize) usize {
-        return if (self.block_mask != 0) position & self.block_mask else position % self.block_size;
-    }
-
-    /// Checked: bounds-validate position and block translation.
-    inline fn physIdFor(self: PagedKvView, position: usize) u32 {
-        // `seq_len` is the length before this step's append. `sdpaPagedHeads`
-        // writes the new K/V at index `seq_len` and then attends over
-        // `seq_len + 1` positions, so index `seq_len` itself is in contract.
-        // Physical bounds are enforced by the two asserts below.
-        std.debug.assert(position <= self.seq_len);
-        const li = self.blockIdx(position);
-        std.debug.assert(li < self.block_table.len);
-        const phys = self.block_table[li];
-        std.debug.assert(phys < self.blocks.len);
-        return phys;
-    }
-
-    inline fn physOffset(self: PagedKvView, position: usize) usize {
-        const off = std.math.mul(usize, self.posInBlock(position), self.kv_dim) catch @panic("phys offset overflow");
-        return off;
-    }
-
-    /// Get key pointer for a specific position within the paged cache.
-    pub inline fn keyPtr(self: PagedKvView, position: usize) [*]const f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].keys.ptr + self.physOffset(position);
-    }
-
-    /// Get value pointer for a specific position within the paged cache.
-    pub inline fn valuePtr(self: PagedKvView, position: usize) [*]const f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].values.ptr + self.physOffset(position);
-    }
-
-    /// Get mutable key pointer for writing (KV append).
-    pub inline fn keyPtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].keys.ptr + self.physOffset(position);
-    }
-
-    /// Get mutable value pointer for writing (KV append).
-    pub inline fn valuePtrMut(self: PagedKvView, position: usize) [*]f32 {
-        const phys_id = self.physIdFor(position);
-        return self.blocks[phys_id].values.ptr + self.physOffset(position);
-    }
 };
 
 /// Block-based paged KV cache allocator.
@@ -341,8 +268,12 @@ pub const RadixTree = struct {
     hash_cache: std.AutoHashMap(u64, HashCacheEntry) = undefined,
     hash_cache_inited: bool = false,
 
-    const HashCacheEntry = struct { matched: usize, node: *RadixNode, query_len: usize };
+    const HashCacheEntry = struct { matched: usize, node: *RadixNode, query_len: usize, verify_hash: u64 };
     const hash_cache_max_entries: usize = 64;
+    /// Independent xxHash seed used as a second fingerprint so a primary-hash
+    /// collision cannot return another query's prefix match.
+    const hash_seed_primary: u64 = 0;
+    const hash_seed_verify: u64 = 1;
 
     /// Create an empty radix tree with a root node.
     pub fn init(allocator: Allocator) !RadixTree {
@@ -377,8 +308,18 @@ pub const RadixTree = struct {
     }
 
     /// Hash a token sequence using xxHash64 for prefix cache lookup.
-    fn hashTokens(tokens: []const u32) u64 {
-        return std.hash.XxHash64.hash(0, std.mem.sliceAsBytes(tokens));
+    fn hashTokens(tokens: []const u32, seed: u64) u64 {
+        return std.hash.XxHash64.hash(seed, std.mem.sliceAsBytes(tokens));
+    }
+
+    /// Drop one arbitrary hash-cache entry so new prefixes can enter once
+    /// `hash_cache_max_entries` is reached (no LRU list; hash order is enough
+    /// to keep the map from freezing on the first 64 queries).
+    fn evictOneHashCacheEntry(self: *RadixTree) void {
+        var it = self.hash_cache.iterator();
+        const entry = it.next() orelse return;
+        const key = entry.key_ptr.*;
+        _ = self.hash_cache.remove(key);
     }
 
     /// Find the longest prefix of `tokens` that exists in the tree.
@@ -386,13 +327,14 @@ pub const RadixTree = struct {
     pub fn matchPrefix(self: *RadixTree, tokens: []const u32) PrefixMatch {
         // Fast path: check hash cache for exact prefix match
         if (self.hash_cache_inited and tokens.len > 0) {
-            const h = hashTokens(tokens);
+            const h = hashTokens(tokens, hash_seed_primary);
             if (self.hash_cache.get(h)) |entry| {
-                // Verify query length matches exactly to reduce xxHash64 collision risk.
-                // Note: a residual collision is still possible when two different token
-                // sequences of the same length produce the same hash, but this is
-                // astronomically unlikely with 64-bit hashes.
-                if (entry.query_len == tokens.len and entry.matched <= tokens.len) {
+                // Length plus a second independent hash: a single xxHash64
+                // collision of two same-length queries must not return the
+                // other query's node / block IDs.
+                if (entry.query_len == tokens.len and entry.matched <= tokens.len and
+                    entry.verify_hash == hashTokens(tokens, hash_seed_verify))
+                {
                     self.touchNode(entry.node);
                     return .{ .matched = entry.matched, .blocks = entry.node.block_ids };
                 }
@@ -431,12 +373,18 @@ pub const RadixTree = struct {
 
         // Cache result for future lookups
         if (self.hash_cache_inited and pos > 0 and tokens.len > 0) {
-            const h = hashTokens(tokens);
-            if (self.hash_cache.count() < hash_cache_max_entries) {
-                self.hash_cache.put(h, .{ .matched = pos, .node = node, .query_len = tokens.len }) catch |err| {
-                    std.log.debug("prefix cache hash insert failed: {s}", .{@errorName(err)});
-                };
+            const h = hashTokens(tokens, hash_seed_primary);
+            if (self.hash_cache.count() >= hash_cache_max_entries and self.hash_cache.get(h) == null) {
+                self.evictOneHashCacheEntry();
             }
+            self.hash_cache.put(h, .{
+                .matched = pos,
+                .node = node,
+                .query_len = tokens.len,
+                .verify_hash = hashTokens(tokens, hash_seed_verify),
+            }) catch |err| {
+                std.log.debug("prefix cache hash insert failed: {s}", .{@errorName(err)});
+            };
         }
 
         return .{ .matched = pos, .blocks = node.block_ids };
@@ -1086,6 +1034,48 @@ test "RadixTree multiple disjoint sequences" {
     // Neither should interfere with the other
     const m3 = tree.matchPrefix(&.{ 1, 200, 300 });
     try std.testing.expectEqual(@as(usize, 0), m3.matched);
+}
+
+test "RadixTree hash cache verify hash rejects a planted collision" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    try tree.insert(&.{ 1, 2, 3 }, &.{ 10, 11, 12 });
+    const genuine = [_]u32{ 1, 2, 3 };
+    const m1 = tree.matchPrefix(&genuine);
+    try std.testing.expectEqual(@as(usize, 3), m1.matched);
+
+    const h = RadixTree.hashTokens(&genuine, RadixTree.hash_seed_primary);
+    // Same primary hash key, same length, wrong verify fingerprint: the
+    // fast path must miss and the tree walk must not return the planted node.
+    const planted_verify: u64 = 0xdead_beef_dead_beef;
+    try tree.hash_cache.put(h, .{
+        .matched = 3,
+        .node = tree.root,
+        .query_len = genuine.len,
+        .verify_hash = planted_verify,
+    });
+
+    const m2 = tree.matchPrefix(&genuine);
+    try std.testing.expectEqual(@as(usize, 3), m2.matched);
+    try std.testing.expectEqual(@as(u32, 12), m2.blocks[m2.blocks.len - 1]);
+}
+
+test "RadixTree hash cache evicts when full so new prefixes can enter" {
+    const allocator = std.testing.allocator;
+    var tree = try RadixTree.init(allocator);
+    defer tree.deinit();
+
+    var i: u32 = 1;
+    while (i <= RadixTree.hash_cache_max_entries + 8) : (i += 1) {
+        const tokens = [_]u32{ i, i + 1 };
+        const blocks = [_]u32{ i * 10, i * 10 + 1 };
+        try tree.insert(&tokens, &blocks);
+        const m = tree.matchPrefix(&tokens);
+        try std.testing.expectEqual(@as(usize, 2), m.matched);
+    }
+    try std.testing.expect(tree.hash_cache.count() <= RadixTree.hash_cache_max_entries);
 }
 
 test "freeBlock double-free guard" {

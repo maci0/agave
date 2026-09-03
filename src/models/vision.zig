@@ -98,9 +98,10 @@ const gelu_sqrt_2_over_pi = math_ops.sqrt_2_over_pi;
 const gelu_cubic_coeff = math_ops.gelu_coeff;
 
 /// True when the AGAVE_VISION_DEBUG env var enables debug buffer dumping.
-/// Docs promise "=1", so the value must be exactly "1"; "0"/empty stay off.
+/// Docs promise "=1"; trim so `1` with surrounding whitespace still matches.
+/// "0"/empty/other values stay off.
 fn visionDebugEnabled(val: []const u8) bool {
-    return std.mem.eql(u8, val, "1");
+    return std.mem.eql(u8, std.mem.trim(u8, val, " \t\r\n"), "1");
 }
 
 /// Vision encoder architecture variant, auto-detected from available tensors.
@@ -1876,6 +1877,14 @@ fn applyQwenVisionRope(buf: []f32, np: usize, nh: usize, hd: usize, pps: usize, 
 
 // ── Tests ─────────────────────────────────────────────────────────
 
+test "visionDebugEnabled requires trimmed 1" {
+    try std.testing.expect(!visionDebugEnabled(""));
+    try std.testing.expect(!visionDebugEnabled("0"));
+    try std.testing.expect(!visionDebugEnabled("true"));
+    try std.testing.expect(visionDebugEnabled("1"));
+    try std.testing.expect(visionDebugEnabled(" 1 "));
+}
+
 test "VisionEncoder config defaults" {
     // Verify default SigLIP-2 configuration values
     try std.testing.expectEqual(@as(u32, 224), default_image_size);
@@ -2137,6 +2146,7 @@ test "fuzz: all vision functions" {
                 _ = &VisionEncoder.init;
                 _ = &VisionEncoder.deinit;
                 _ = &VisionEncoder.encode;
+                _ = &visionDebugEnabled;
             }
         }
     }.f, .{});

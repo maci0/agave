@@ -56,6 +56,11 @@ pub const Partition = struct {
 /// Partition a layer's block table into GPU and CPU position ranges by inspecting
 /// the tier of each physical block in `tiered_blocks`.
 ///
+/// `tier` is written by the prefetch worker under `tier_lock`. Callers that
+/// share the cache with a prefetcher must hold that lock (see
+/// `partitionBlocksLocked`). Tests that own the block array exclusively may
+/// call this unlocked.
+///
 /// Parameters:
 ///   - block_table: Per-layer mapping from logical block index to physical block ID.
 ///   - tiered_blocks: Full array of tiered blocks (indexed by physical block ID).
@@ -99,6 +104,14 @@ pub fn partitionBlocks(
         pos += block_size;
     }
     return result;
+}
+
+/// `partitionBlocks` with `cache.tier_lock` held so a concurrent prefetch
+/// promote cannot tear `tier` mid-scan.
+pub fn partitionBlocksLocked(cache: *tiered.TieredKvCache, block_table: []const u32, seq_len: usize) Partition {
+    cache.lockTier();
+    defer cache.unlockTier();
+    return partitionBlocks(block_table, cache.blocks, cache.block_size, seq_len);
 }
 
 /// Job context for parallelizing CPU-only SDPA across query heads (no stats needed).
@@ -367,6 +380,21 @@ test "splitSdpaMerge correctness" {
     for (0..hd) |i| {
         try std.testing.expectApproxEqAbs(expected[i], merged[i], 1e-3);
     }
+}
+
+test "partitionBlocksLocked matches unlocked scan" {
+    const allocator = std.testing.allocator;
+    var cache = try tiered.TieredKvCache.init(allocator, 1, 2, 2, 2, 0, 16, null);
+    defer cache.deinit();
+    const b0 = try cache.allocBlock();
+    const b1 = try cache.allocBlock();
+    const table = [_]u32{ b0, b1 };
+    const unlocked = partitionBlocks(&table, cache.blocks, cache.block_size, 32);
+    const locked = partitionBlocksLocked(&cache, &table, 32);
+    try std.testing.expectEqual(unlocked.gpu_count, locked.gpu_count);
+    try std.testing.expectEqual(unlocked.cpu_count, locked.cpu_count);
+    try std.testing.expectEqual(unlocked.total_gpu_positions, locked.total_gpu_positions);
+    try std.testing.expectEqual(@as(u32, 0), cache.tier_lock.load(.monotonic));
 }
 
 test "partitionBlocks mixed tiers" {

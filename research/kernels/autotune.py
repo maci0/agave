@@ -17,10 +17,7 @@ import time
 import json
 from pathlib import Path
 
-try:
-    import tomllib
-except ImportError:
-    import tomli as tomllib  # Python < 3.11 fallback
+import tomllib
 
 from registry import AGAVE_ROOT, KERNELS, Kernel, find_kernels, changed_kernels
 
@@ -779,7 +776,7 @@ def run_bayesian(kernel, parsed, params, dimensions, full_path,
     try:
         import optuna
     except ImportError:
-        print("Optuna not installed. Install with: uv pip install optuna", file=sys.stderr)
+        print("Optuna not installed. Install with: uv sync --extra bayesian", file=sys.stderr)
         print("Or use --strategy hill-climb", file=sys.stderr)
         sys.exit(1)
 

@@ -1550,6 +1550,13 @@ test "fuzz: GGUF fromBuffer no crash" {
             const effective_len = @min(len, buf.len);
             var g = gguf.GGUFFile.fromBuffer(std.testing.allocator, buf[0..effective_len]) catch return;
             defer g.deinit();
+            try std.testing.expect(g.version == 2 or g.version == 3);
+            try std.testing.expect(g.tensors.count() <= g.tensor_count);
+            var it = g.tensors.valueIterator();
+            while (it.next()) |info| {
+                try std.testing.expect(info.dataBytes() != std.math.maxInt(usize));
+                _ = g.tensorData(info);
+            }
         }
     }.f, .{});
 }

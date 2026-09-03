@@ -14,6 +14,7 @@ const std = @import("std");
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
 const model_mod = @import("model.zig");
+const arch_mod = @import("../arch.zig");
 const math_ops = @import("../ops/math.zig");
 const attn_ops = @import("../ops/attention.zig");
 const quant = @import("../ops/quant.zig");
@@ -205,7 +206,7 @@ pub const Llama4Model = struct {
             .vocab_size = vocab_size,
             .rope_theta = f.getArchF32(arch, "rope.freq_base") orelse default_rope_theta,
             .rms_eps = f.getArchF32(arch, "attention.layer_norm_rms_epsilon") orelse default_rms_eps,
-            .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse 128009,
+            .eos_token_id = f.getMetaU32("tokenizer.ggml.eos_token_id") orelse arch_mod.llama4_fallback_eos,
             .nope_interval = f.getArchU32(arch, "attention.sliding_window_pattern") orelse default_nope_interval,
             .chunk_size = f.getArchU32(arch, "attention.sliding_window") orelse default_chunk_size,
             .n_experts = n_experts,
@@ -1022,16 +1023,14 @@ pub const Llama4Model = struct {
     }
 
     /// Get flat f32 view of KV cache for a layer from paged/tiered blocks.
-    fn getLayerKvView(self: *Llama4Model, layer: usize) struct { keys: []f32, values: []f32 } {
+    fn getLayerKvView(self: *Llama4Model, layer: usize) kvcache.KvF32View {
         const num_blocks = self.seq_table.block_table[layer].len;
         if (num_blocks == 0) return .{ .keys = &[_]f32{}, .values = &[_]f32{} };
 
         const block_id = self.seq_table.block_table[layer][0];
         if (self.tiered_cache) |tc| {
-            return .{
-                .keys = tc.blocks[block_id].base.keys,
-                .values = tc.blocks[block_id].base.values,
-            };
+            const kv = tc.keysValues(block_id);
+            return .{ .keys = kv.keys, .values = kv.values };
         }
         return .{
             .keys = self.paged_cache.blocks[block_id].keys,

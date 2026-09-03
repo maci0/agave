@@ -1,7 +1,9 @@
 {
 	"$schema": "./node_modules/oxlint/configuration_schema.json",
 	"options": {
-		"typeAware": true
+		"typeAware": true,
+		"reportUnusedDisableDirectives": "error",
+		"denyWarnings": true
 	},
 	"env": {
 		"browser": true
@@ -78,6 +80,8 @@
 		"src/web/app.js",
 		"web/agave.js",
 		"web/shell.js",
+		// Chat UI and WASM shell: migrate off this list one file at a time (docs/TODO.md #13).
+		// tsc --noEmit still typechecks both. Count of ignored sources may fall, never rise.
 		"src/web/app.ts",
 		"web/shell.ts"
 	]

@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const Io = std.Io;
 
 /// Maximum bytes to capture from child process stdout/stderr.
 const max_child_output: usize = 1024 * 1024;
@@ -14,6 +15,9 @@ const golden_token_count = "32";
 
 /// Fixed RNG seed for reproducible output across runs.
 const golden_seed = "42";
+
+/// Built binary the golden tests spawn. Run `zig build` first.
+const agave_bin = "zig-out/bin/agave";
 
 /// Detect degenerate output: repeated characters, no alphabetic content,
 /// or excessive word repetition. These indicate a broken model producing
@@ -157,9 +161,10 @@ pub fn runGoldenTest(
     skip_rocm: bool,
 ) !void {
     const allocator = std.testing.allocator;
+    const io = std.testing.io;
 
     // Skip if model file not available
-    std.fs.cwd().access(model_path, .{}) catch {
+    _ = Io.Dir.cwd().statFile(io, model_path, .{}) catch {
         std.debug.print("SKIP: Model not found: {s}\n", .{model_path});
         return error.SkipZigTest;
     };
@@ -178,50 +183,55 @@ pub fn runGoldenTest(
         }
     }
 
-    // Run Agave with JSON output
-    var child = std.process.Child.init(&[_][]const u8{
-        "./zig-out/bin/agave",
-        model_path,
-        test_prompt,
-        "--backend",
-        backend,
-        "--json",
-        "-n",
-        golden_token_count,
-        "--seed",
-        golden_seed,
-        "-t",
-        "0.0", // Greedy sampling
-    }, allocator);
-
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-
-    try child.spawn();
-
-    const stdout = try child.stdout.?.readToEndAlloc(allocator, max_child_output);
-    defer allocator.free(stdout);
-
-    const stderr_out = try child.stderr.?.readToEndAlloc(allocator, max_child_output);
-    defer allocator.free(stderr_out);
-
-    const term = try child.wait();
-    if (term != .Exited or term.Exited != 0) {
-        std.debug.print("Agave failed:\n{s}\n", .{stderr_out});
+    _ = Io.Dir.cwd().statFile(io, agave_bin, .{}) catch {
+        std.debug.print("FAIL: {s} not found. Run zig build first.\n", .{agave_bin});
         return error.TestFailed;
+    };
+
+    const result = std.process.run(allocator, io, .{
+        .argv = &.{
+            agave_bin,
+            model_path,
+            test_prompt,
+            "--backend",
+            backend,
+            "--json",
+            "-n",
+            golden_token_count,
+            "--seed",
+            golden_seed,
+            "-t",
+            "0.0",
+        },
+        .stdout_limit = .limited(max_child_output),
+        .stderr_limit = .limited(max_child_output),
+    }) catch |err| {
+        std.debug.print("FAIL: could not run {s}: {s}\n", .{ agave_bin, @errorName(err) });
+        return error.TestFailed;
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    switch (result.term) {
+        .exited => |code| if (code != 0) {
+            std.debug.print("Agave failed:\n{s}\n", .{result.stderr});
+            return error.TestFailed;
+        },
+        else => {
+            std.debug.print("Agave failed:\n{s}\n", .{result.stderr});
+            return error.TestFailed;
+        },
     }
 
-    // Write output to temp file
-    // Include PID in temp filename to avoid collisions between parallel test runs
-    const pid = std.posix.getpid();
-    const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
-    const tmp_file = try std.fmt.allocPrint(allocator, "{s}/agave_{s}_{s}_{d}.json", .{ tmpdir, model_name, backend, pid });
+    const stdout = result.stdout;
+
+    // Write output under tests/golden_outputs (gitignored) so verify_output.py can read it.
+    Io.Dir.cwd().createDir(io, "tests/golden_outputs", .default_dir) catch {};
+    const tmp_file = try std.fmt.allocPrint(allocator, "tests/golden_outputs/{s}_{s}.json", .{ model_name, backend });
     defer allocator.free(tmp_file);
 
-    var file = try std.fs.cwd().createFile(tmp_file, .{});
-    defer file.close();
-    defer std.fs.cwd().deleteFile(tmp_file) catch {};
-    try file.writeAll(stdout);
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = tmp_file, .data = stdout });
+    defer Io.Dir.cwd().deleteFile(io, tmp_file) catch {};
 
     // Verify output is valid JSON with non-empty "output" field
     if (stdout.len == 0) {
@@ -260,27 +270,35 @@ pub fn runGoldenTest(
 
     std.debug.print("COHERENT [{s}/{s}]: \"{s}\"\n", .{ model_name, backend, output_str[0..@min(output_str.len, 80)] });
 
-    // If golden reference exists, verify against it
-    var verify_child = std.process.Child.init(&[_][]const u8{
-        "python3",
-        "tests/golden/verify_output.py",
-        model_name,
-        backend,
-        tmp_file,
-    }, allocator);
-    verify_child.stderr_behavior = .Pipe;
-    try verify_child.spawn();
-    const verify_stderr = try verify_child.stderr.?.readToEndAlloc(allocator, max_child_output);
-    defer allocator.free(verify_stderr);
-    const verify_term = try verify_child.wait();
-    if (verify_term != .Exited or verify_term.Exited != 0) {
-        if (std.mem.indexOf(u8, verify_stderr, "Reference not found") != null) {
+    const verify = std.process.run(allocator, io, .{
+        .argv = &.{
+            "python3",
+            "tests/golden/verify_output.py",
+            model_name,
+            backend,
+            tmp_file,
+        },
+        .stdout_limit = .limited(max_child_output),
+        .stderr_limit = .limited(max_child_output),
+    }) catch |err| {
+        std.debug.print("FAIL: python3 not found; golden verify needs python3 for tests/golden/verify_output.py ({s})\n", .{@errorName(err)});
+        return error.TestFailed;
+    };
+    defer allocator.free(verify.stdout);
+    defer allocator.free(verify.stderr);
+
+    const verify_failed = switch (verify.term) {
+        .exited => |code| code != 0,
+        else => true,
+    };
+    if (verify_failed) {
+        if (std.mem.indexOf(u8, verify.stderr, "Reference not found") != null) {
             // No golden reference: skip so CI shows this test as skipped, not passed.
             // A passing-without-comparison test gives false confidence.
             std.debug.print("SKIP: No golden reference for {s}/{s}\n", .{ model_name, backend });
             return error.SkipZigTest;
         } else {
-            std.debug.print("Golden verify failed:\n{s}\n", .{verify_stderr});
+            std.debug.print("Golden verify failed:\n{s}\n", .{verify.stderr});
             return error.GoldenTestFailed;
         }
     }

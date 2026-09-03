@@ -28,6 +28,7 @@ const metrics_mod = @import("metrics.zig");
 const Metrics = metrics_mod.Metrics;
 const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 const json = @import("json.zig");
+const conv_store = @import("conv_store.zig");
 const tools_mod = @import("tools.zig");
 const SamplingParams = json.SamplingParams;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -91,6 +92,15 @@ fn clampMaxTokens(raw: ?usize) usize {
     return @max(1, @min(raw orelse default_max_gen_tokens, max_gen_tokens_cap));
 }
 
+/// First present alias wins. Chat uses `max_tokens` / `max_completion_tokens`;
+/// `/v1/responses` prefers OpenAI's `max_output_tokens`.
+fn extractMaxGenTokens(body: []const u8, comptime names: []const []const u8) usize {
+    inline for (names) |name| {
+        if (json.extractIntField(body, name)) |v| return clampMaxTokens(v);
+    }
+    return clampMaxTokens(null);
+}
+
 /// Estimate bytes needed for `exportKvPrefix(n_tokens)`.
 /// Uses model dims with headroom for per-layer KV variation; capped at `kv_export_max_bytes`.
 fn estimateKvExportBytes(model: Model, n_tokens: usize) usize {
@@ -116,6 +126,8 @@ const hdr_buf_size: usize = 2048;
 const short_hdr_buf_size: usize = 512;
 const error_body_buf_size: usize = 512;
 const max_log_path_len: usize = 256;
+/// Max length of an inbound `X-Request-Id` copied into access logs as `xid=`.
+const max_client_request_id_len: usize = 64;
 const health_buf_size: usize = 768;
 const metrics_render_buf_size: usize = 65536;
 const stats_buf_size: usize = 512;
@@ -187,6 +199,18 @@ fn schedulerPrngSeed(req_id: u64, sampling: SamplingParams) u64 {
     return base ^ (req_id *% prng_seed_mix_golden);
 }
 
+/// True when a sampled request used a clock-derived seed that is not in
+/// the request body. Logging it is what makes the run replayable.
+fn shouldNoteAutoSeed(sampling: SamplingParams) bool {
+    return sampling.temperature > 0 and sampling.seed == null;
+}
+
+/// Log the effective PRNG seed when the client omitted `seed`.
+fn noteAutoSeed(sampling: SamplingParams, seed: u64) void {
+    if (!shouldNoteAutoSeed(sampling)) return;
+    std.log.info("req={d} seed={d} (auto; pass seed to reproduce)", .{ log_request_id, seed });
+}
+
 /// Sleep via sim_clock so virtual time advances under a clock override.
 fn sleepNs(ns: u64) void {
     sim_clock.sleepNs(ns);
@@ -195,6 +219,16 @@ fn sleepNs(ns: u64) void {
 /// Seconds since epoch for log timestamps (injectable via sim_clock).
 fn timestamp() i64 {
     return @divTrunc(sim_clock.milliNow(), 1000);
+}
+
+/// Process uptime in whole seconds from two monotonic-ms stamps.
+///
+/// `/health` `uptime_s` is elapsed process time, not a wall-clock difference:
+/// an NTP step backward would otherwise report 0 (already clamped) and a
+/// step forward would inflate uptime, which load balancers read as "this
+/// process has been up a long time."
+fn uptimeSeconds(start_mono_ms: i64, now_mono_ms: i64) i64 {
+    return @divFloor(@max(0, now_mono_ms - start_mono_ms), std.time.ms_per_s);
 }
 
 /// Background sleep monitor: checks idle time every 10s.
@@ -265,9 +299,31 @@ fn configureSchedulerSampling(req: *scheduler.Request, sampling: SamplingParams)
     @memcpy(req.logit_bias_vals[0..n_bias], sampling.logit_bias_vals[0..n_bias]);
     // Always re-seed: enqueue leaves a placeholder id-based PRNG; null seed must
     // follow prngSeedFromSampling (sim_clock) like the direct generation paths.
-    req.prng = std.Random.DefaultPrng.init(schedulerPrngSeed(req.id, sampling));
+    const sched_seed = schedulerPrngSeed(req.id, sampling);
+    noteAutoSeed(sampling, sched_seed);
+    req.prng = std.Random.DefaultPrng.init(sched_seed);
     req.rebuildSampler();
+    req.image_embeddings = pending_visual_embeddings;
+    req.n_visual_tokens = pending_visual_tokens;
+    req.image_pad_token_id = if (pending_visual_tokens > 0) g_server.image_pad_token_id else 0;
     req.sampling_ready.store(true, .release);
+}
+
+/// Install this handler's pending vision embeddings on the model.
+/// Caller must hold `model_mutex` (direct-path generate, after
+/// `lockModelWithScheduler`). Scheduler requests go through Request fields
+/// instead so this thread never races `forward()`.
+fn applyPendingVisionEmbeddings() void {
+    if (pending_visual_tokens > 0) {
+        g_server.model.setImageEmbeddings(pending_visual_embeddings, pending_visual_tokens, g_server.image_pad_token_id);
+    } else {
+        g_server.model.setImageEmbeddings(null, 0, 0);
+    }
+}
+
+fn clearPendingVision() void {
+    pending_visual_tokens = 0;
+    pending_visual_embeddings = null;
 }
 
 /// Architecture image placeholder IDs from the running server config.
@@ -376,6 +432,15 @@ const kv_cache_degradation_pct: u32 = 90;
 const error_rate_min_requests: u64 = 10;
 /// Error rate percentage (failed / (completed + failed)) above which `/health` reports "degraded".
 const error_rate_degradation_pct: u64 = 50;
+
+/// Compact `/health`/`/ready` state for transition logs and `agave_ready`.
+const HealthState = enum(u8) {
+    ok = 0,
+    kv_pressure = 1,
+    high_error_rate = 2,
+    kv_pressure_and_errors = 3,
+    shutting_down = 4,
+};
 /// Seconds per minute, used for UTC time decomposition in request logs.
 const seconds_per_minute: u64 = 60;
 /// Seconds per hour, used for UTC time decomposition in request logs.
@@ -427,12 +492,23 @@ const Conversation = struct {
         self.title_len = safe_len;
     }
 
+    /// Free one owned message: content and optional `tool_call_id`.
+    /// Matches `conv_store.Snapshot.deinit` so loaded tool messages cannot leak.
+    fn freeOwnedMessage(allocator: Allocator, msg: Message) void {
+        const content = @constCast(msg.content);
+        @memset(content, 0);
+        allocator.free(content);
+        if (msg.tool_call_id) |tcid| {
+            const t = @constCast(tcid);
+            @memset(t, 0);
+            allocator.free(t);
+        }
+    }
+
     fn freeMessageContents(self: *Conversation, allocator: Allocator) void {
         // Zero content before free so prompt/response text does not linger in the allocator freelist.
         for (self.messages.items) |msg| {
-            const content = @constCast(msg.content);
-            @memset(content, 0);
-            allocator.free(content);
+            freeOwnedMessage(allocator, msg);
         }
     }
 
@@ -465,10 +541,12 @@ const Server = struct {
     /// End-of-generation token IDs (primary EOS + any additional EOG/EOT tokens).
     eog_ids: [max_eog_ids]u32 = undefined,
     eog_len: usize = 0,
-    /// Runtime-only conversation storage for the web UI.
+    /// Conversation storage for the web UI. Persisted to `conv_store_path` when set.
     conversations: std.ArrayList(Conversation) = .empty,
     active_id: u32 = 0,
     next_id: u32 = 1,
+    /// JSON conversation store path. Null disables persist/restore.
+    conv_store_path: ?[]const u8 = null,
     /// Whether the KV cache matches the active conversation's state.
     kv_valid: bool = false,
     /// Cached prompt token IDs from the last API generation (for prefix reuse).
@@ -489,6 +567,9 @@ const Server = struct {
     request_counter: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Server start time (unix timestamp, set once in run()).
     start_time: i64 = 0,
+    /// Monotonic milliseconds at process start, for `/health` `uptime_s`.
+    /// Not comparable to `start_time` (epoch seconds) or to other machines.
+    start_mono_ms: i64 = 0,
     /// Continuous batching scheduler (null = single-request mode).
     request_manager: ?*scheduler.RequestManager = null,
     /// Global rate limiter (null = no rate limiting).
@@ -523,8 +604,12 @@ const Server = struct {
     last_request_ms: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     /// True when the server is in sleep mode (idle too long).
     sleeping: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Last published `/health` state (`HealthState`) for transition-only logs.
+    health_state: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(HealthState.ok)),
     /// Process-level tools (register/dispose). Request JSON tools overlay these.
     tool_registry: tools_mod.Registry = .{},
+    /// gzip of `html_page`, filled once in `run()`. Empty if compression failed.
+    html_gzip: []const u8 = &.{},
 
     fn getActiveConv(self: *Server) ?*Conversation {
         return self.getConvById(self.active_id);
@@ -545,7 +630,7 @@ const Server = struct {
         defer self.mutex.unlock(self.io);
         if (self.cached_user_prefix_ids) |ids| return ids;
         const ids = self.tokenizer.encode(self.chat_template.user_prefix) catch |err| {
-            std.log.warn("user_prefix tokenize failed: {}", .{err});
+            std.log.warn("req={d} user_prefix tokenize failed: {}", .{ log_request_id, err });
             return &.{};
         };
         self.cached_user_prefix_ids = ids;
@@ -581,20 +666,27 @@ const Server = struct {
         var title_buf: [24]u8 = undefined;
         const title = std.fmt.bufPrint(&title_buf, "Chat {d}", .{id}) catch "Chat";
         conv.setTitle(title);
+        self.persistConversationsLocked();
         return conv;
     }
 
     /// Delete a conversation by ID. Caller must hold self.mutex.
-    /// When the active conversation is deleted, immediately wipe KV / prefix
-    /// cache and n-gram history so prompt-derived state does not survive
-    /// an explicit erasure request (matches `/clear` / `/reset`).
+    /// Always wipe the shared n-gram pool: it mixes tokens from every
+    /// conversation, so one erasure cannot surgically remove its history.
+    /// When the active conversation is deleted, also wipe KV / prefix cache
+    /// so prompt-derived state does not survive (matches `/clear` / `/reset`).
     fn deleteConv(self: *Server, id: u32) void {
+        var removed = false;
         for (self.conversations.items, 0..) |*conv, i| {
             if (conv.id == id) {
                 conv.freeMessages(self.allocator);
                 _ = self.conversations.orderedRemove(i);
+                removed = true;
                 break;
             }
+        }
+        if (removed) {
+            if (ngram_mod.global_pool) |*pool| pool.clear();
         }
         if (self.active_id == id) {
             self.active_id = if (self.conversations.items.len > 0)
@@ -606,8 +698,8 @@ const Server = struct {
             self.model.resetCache();
             self.kv_valid = false;
             self.clearCachedPromptIds();
-            if (ngram_mod.global_pool) |*pool| pool.clear();
         }
+        self.persistConversationsLocked();
     }
 
     /// Select a conversation by ID. Caller must hold self.mutex.
@@ -615,7 +707,80 @@ const Server = struct {
         if (self.active_id != id) {
             self.active_id = id;
             self.kv_valid = false;
+            self.persistConversationsLocked();
         }
+    }
+
+    /// Write conversations to `conv_store_path`. Caller must hold self.mutex.
+    fn persistConversationsLocked(self: *Server) void {
+        const path = self.conv_store_path orelse return;
+        var views_buf: [max_conversations]conv_store.ConvView = undefined;
+        const n = @min(self.conversations.items.len, max_conversations);
+        for (self.conversations.items[0..n], 0..) |*conv, i| {
+            views_buf[i] = .{
+                .id = conv.id,
+                .title = conv.titleSlice(),
+                .messages = conv.messages.items,
+            };
+        }
+        conv_store.save(self.allocator, path, self.active_id, self.next_id, views_buf[0..n]) catch |err| {
+            std.log.warn("conversation store save failed ({s}): {}", .{ path, err });
+        };
+    }
+
+    /// Restore conversations from `conv_store_path`. Caller must hold self.mutex
+    /// (or be the only thread during startup). Missing file is a no-op.
+    fn loadConversationsLocked(self: *Server) void {
+        const path = self.conv_store_path orelse return;
+        var snap = conv_store.load(self.allocator, path) catch |err| {
+            if (err == error.FileNotFound) {
+                std.log.info("conversation store: {s} (new)", .{path});
+                return;
+            }
+            // Corrupt/unsupported files are quarantined before this error returns,
+            // so persisting a fresh store is safe. Any other failure left the live
+            // file in place: do not overwrite it with an empty in-memory list.
+            if (err == error.CorruptStore or err == error.UnsupportedVersion) {
+                std.log.warn("conversation store load failed ({s}): {}", .{ path, err });
+                return;
+            }
+            std.log.err("conversation store: disabling persist to avoid overwriting {s}: {}", .{
+                path, err,
+            });
+            self.conv_store_path = null;
+            return;
+        };
+        defer snap.deinit();
+
+        for (snap.conversations) |*lc| {
+            var conv = Conversation{ .id = lc.id };
+            conv.setTitle(lc.title);
+            conv.messages.items = lc.messages;
+            conv.messages.capacity = lc.messages.len;
+            lc.messages = &.{};
+            self.conversations.append(self.allocator, conv) catch {
+                conv.freeMessages(self.allocator);
+                std.log.warn("conversation store: dropped remaining conversations (OOM)", .{});
+                break;
+            };
+        }
+        self.next_id = snap.next_id;
+        var max_id: u32 = 0;
+        for (self.conversations.items) |c| {
+            if (c.id > max_id) max_id = c.id;
+        }
+        if (self.next_id <= max_id) self.next_id = max_id +% 1;
+        if (self.next_id == 0) self.next_id = 1;
+        self.active_id = snap.active_id;
+        if (self.getConvById(self.active_id) == null) {
+            self.active_id = if (self.conversations.items.len > 0)
+                self.conversations.items[self.conversations.items.len - 1].id
+            else
+                0;
+        }
+        std.log.info("conversation store: loaded {d} conversation(s) from {s}", .{
+            self.conversations.items.len, path,
+        });
     }
 
     fn isEog(self: *const Server, token: u32) bool {
@@ -655,84 +820,22 @@ fn unlockModelWithScheduler() void {
     if (g_server.request_manager) |rm| rm.model_mutex.unlock(g_server.io);
 }
 
-/// Tool call exact-replay map: maps tool_call_id (u64, XxHash64 of ID string)
-/// → raw generated output bytes containing the original <tool_call>…</tool_call> text.
-/// Lets the server reconstruct the exact token stream when a client resends
-/// tool call history, same approach as ds4's DSML replay map.
-/// Capped at tool_replay_max entries (LRU eviction via insertion-order counter).
-const tool_replay_max: usize = 10_000;
-const ToolReplayEntry = struct {
-    raw: []u8, // owned, allocated via g_tool_replay_allocator
-    seq: u64, // insertion sequence number (for LRU eviction)
-};
-var g_tool_replay: std.AutoHashMapUnmanaged(u64, ToolReplayEntry) = .{};
-var g_tool_replay_allocator: std.mem.Allocator = undefined;
-var g_tool_replay_seq: u64 = 0;
-/// Simple atomic spinlock for tool replay map (replaces std.Thread.Mutex which
-/// was removed in Zig 0.16 in favour of Io.Mutex; replay writes are rare so
-/// spinning is fine here).
-var g_tool_replay_lock: std.atomic.Value(u32) = .init(0);
-
-/// Store a tool call result keyed by its ID for later replay. Evicts the
-/// oldest entry when the cache is at capacity.
-fn toolReplayStore(id_str: []const u8, raw: []const u8) void {
-    if (id_str.len == 0) return;
-    const key = std.hash.XxHash64.hash(0, id_str);
-    const owned = g_tool_replay_allocator.dupe(u8, raw) catch return;
-
-    // Acquire spinlock, protects g_tool_replay and g_tool_replay_seq.
-    while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
-        std.atomic.spinLoopHint();
-    defer g_tool_replay_lock.store(0, .release);
-
-    // Evict oldest entry if at capacity.
-    if (g_tool_replay.count() >= tool_replay_max) {
-        var oldest_key: u64 = 0;
-        var oldest_seq: u64 = std.math.maxInt(u64);
-        var it = g_tool_replay.iterator();
-        while (it.next()) |e| {
-            if (e.value_ptr.seq < oldest_seq) {
-                oldest_seq = e.value_ptr.seq;
-                oldest_key = e.key_ptr.*;
-            }
-        }
-        if (g_tool_replay.fetchRemove(oldest_key)) |removed| g_tool_replay_allocator.free(removed.value.raw);
-    }
-    g_tool_replay_seq += 1;
-    const entry = ToolReplayEntry{ .raw = owned, .seq = g_tool_replay_seq };
-    const put_result = g_tool_replay.fetchPut(g_tool_replay_allocator, key, entry) catch {
-        g_tool_replay_allocator.free(owned);
-        return;
-    };
-    if (put_result) |old| g_tool_replay_allocator.free(old.value.raw);
-}
-
-/// Look up a cached tool call output by its ID. Returns a copy of the raw
-/// result bytes allocated with `allocator` (caller owns and frees), or null
-/// if the ID is empty, not found, or allocation fails.
-/// The copy is made under the spinlock on purpose: handing out the map-owned
-/// slice would race with toolReplayStore freeing it (same-key overwrite or
-/// LRU eviction) after this function releases the lock.
-fn toolReplayGet(allocator: Allocator, id_str: []const u8) ?[]u8 {
-    if (id_str.len == 0) return null;
-    const key = std.hash.XxHash64.hash(0, id_str);
-
-    while (g_tool_replay_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
-        std.atomic.spinLoopHint();
-    defer g_tool_replay_lock.store(0, .release);
-
-    const entry = g_tool_replay.get(key) orelse return null;
-    return allocator.dupe(u8, entry.raw) catch null;
-}
-
 /// Per-thread request ID for log correlation. Set at the start of each
 /// handleRequest() call so all log lines from the same request (including
 /// logGeneration calls deep in generate functions) share the same ID.
 threadlocal var log_request_id: u64 = 0;
+/// Sanitized inbound `X-Request-Id` (empty when the client omitted one).
+threadlocal var log_client_rid: [max_client_request_id_len]u8 = undefined;
+threadlocal var log_client_rid_len: usize = 0;
 /// Visual token count from processVisionImage for the current handler thread only.
 /// Must not live on Server: concurrent text requests would observe another
 /// connection's count and inject bogus image pad tokens into the prompt.
 threadlocal var pending_visual_tokens: u32 = 0;
+/// Borrowed encoder output for `pending_visual_tokens`. Valid while this
+/// handler holds `vision_mutex`. Copied onto the scheduler Request (or
+/// installed under `model_mutex` on the direct path); never written to
+/// `Model.image_embeddings` from the handler thread.
+threadlocal var pending_visual_embeddings: ?[]const f32 = null;
 
 /// Write a formatted log message to stderr under the server stdout mutex,
 /// ensuring concurrent handler threads do not interleave output.
@@ -761,7 +864,8 @@ fn elapsedBetween(start: i64, end: i64) u64 {
 /// fall back to byte-length estimate (1 byte = 1 token) to prevent rate
 /// limiter bypass on tokenizer failure.
 fn estimatePromptTokens(token_count: usize, text_len: usize) u32 {
-    return if (token_count > 0) @intCast(token_count) else @intCast(@max(1, text_len));
+    const n = if (token_count > 0) token_count else @max(1, text_len);
+    return std.math.cast(u32, n) orelse std.math.maxInt(u32);
 }
 
 /// Characters unsafe for direct embedding in JSON string values or HTML contexts.
@@ -792,6 +896,62 @@ fn getHeaderValue(headers: []const u8, name: []const u8) ?[]const u8 {
     return found;
 }
 
+/// True when `Accept-Encoding` lists `name` with q > 0.
+fn acceptsEncoding(headers: []const u8, name: []const u8) bool {
+    const ae = getHeaderValue(headers, "accept-encoding") orelse return false;
+    var tokens = std.mem.splitScalar(u8, ae, ',');
+    while (tokens.next()) |raw| {
+        const item = std.mem.trim(u8, raw, " \t");
+        if (item.len == 0) continue;
+        var parts = std.mem.splitScalar(u8, item, ';');
+        const coding = std.mem.trim(u8, parts.next() orelse continue, " \t");
+        var q: f32 = 1.0;
+        while (parts.next()) |param| {
+            const p = std.mem.trim(u8, param, " \t");
+            if (p.len >= 2 and std.ascii.eqlIgnoreCase(p[0..2], "q=")) {
+                q = std.fmt.parseFloat(f32, std.mem.trim(u8, p[2..], " \t")) catch 0;
+            }
+        }
+        if (std.ascii.eqlIgnoreCase(coding, name) and q > 0) return true;
+    }
+    return false;
+}
+
+/// True when `If-None-Match` is `*` or lists `etag` (strong or weak).
+fn ifNoneMatch(headers: []const u8, etag: []const u8) bool {
+    const inm = getHeaderValue(headers, "if-none-match") orelse return false;
+    const trimmed = std.mem.trim(u8, inm, " \t");
+    if (std.mem.eql(u8, trimmed, "*")) return true;
+    var iter = std.mem.splitScalar(u8, trimmed, ',');
+    while (iter.next()) |part| {
+        var tag = std.mem.trim(u8, part, " \t");
+        if (std.mem.startsWith(u8, tag, "W/")) {
+            tag = std.mem.trim(u8, tag[2..], " \t");
+        }
+        if (std.mem.eql(u8, tag, etag)) return true;
+    }
+    return false;
+}
+
+/// Copy `raw` into `buf` when it is a safe correlation token (alnum, `-`, `_`, `.`).
+/// Returns 0 (ignore) on empty, oversized, or illegal characters (CWE-117).
+fn sanitizeClientRequestId(raw: []const u8, buf: []u8) usize {
+    if (raw.len == 0 or raw.len > buf.len) return 0;
+    for (raw, 0..) |c, i| {
+        const ok = std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.';
+        if (!ok) return 0;
+        buf[i] = c;
+    }
+    return raw.len;
+}
+
+/// Capture inbound `X-Request-Id` for access-log correlation (`xid=`).
+fn captureClientRequestId(headers: []const u8) void {
+    log_client_rid_len = 0;
+    const raw = getHeaderValue(headers, "x-request-id") orelse return;
+    log_client_rid_len = sanitizeClientRequestId(raw, &log_client_rid);
+}
+
 /// True when `Origin` is `http(s)://` + Host (no path/userinfo). CWE-346.
 fn originMatchesHost(origin: []const u8, host: []const u8) bool {
     const rest = if (std.mem.startsWith(u8, origin, "https://"))
@@ -803,6 +963,67 @@ fn originMatchesHost(origin: []const u8, host: []const u8) bool {
     if (rest.len == 0) return false;
     if (std.mem.indexOfAny(u8, rest, "/@?#")) |_| return false;
     return std.ascii.eqlIgnoreCase(rest, host);
+}
+
+/// Hostname from a Host header: strip `:port` or `[ipv6]:port`.
+fn hostnameFromHost(host: []const u8) []const u8 {
+    if (host.len == 0) return host;
+    if (host[0] == '[') {
+        if (std.mem.indexOfScalar(u8, host, ']')) |end| {
+            if (end > 1) return host[1..end];
+        }
+        return host;
+    }
+    if (std.mem.lastIndexOfScalar(u8, host, ':')) |colon| {
+        const port = host[colon + 1 ..];
+        if (port.len > 0) {
+            for (port) |c| {
+                if (c < '0' or c > '9') return host;
+            }
+            return host[0..colon];
+        }
+    }
+    return host;
+}
+
+/// True when Host is loopback (`localhost`, `::1`, `127.0.0.0/8`).
+/// DNS rebinding points a public name at 127.0.0.1 so Origin equals Host and
+/// the same-origin check would allow the request (CWE-350).
+fn isLoopbackHttpHost(host: []const u8) bool {
+    var name = hostnameFromHost(host);
+    if (name.len > 0 and name[name.len - 1] == '.') name = name[0 .. name.len - 1];
+    if (name.len == 0) return false;
+    if (std.ascii.eqlIgnoreCase(name, "localhost")) return true;
+    if (std.mem.eql(u8, name, "::1")) return true;
+    if (name.len < 5 or !std.mem.startsWith(u8, name, "127.")) return false;
+    // Remaining three octets of 127.0.0.0/8.
+    var octets: u32 = 1;
+    var acc: u32 = 0;
+    var saw_digit = false;
+    for (name["127.".len..]) |c| {
+        if (c == '.') {
+            if (!saw_digit or acc > 255 or octets >= 4) return false;
+            octets += 1;
+            acc = 0;
+            saw_digit = false;
+        } else if (c >= '0' and c <= '9') {
+            acc = std.math.mul(u32, acc, 10) catch return false;
+            acc = std.math.add(u32, acc, c - '0') catch return false;
+            if (acc > 255) return false;
+            saw_digit = true;
+        } else {
+            return false;
+        }
+    }
+    return saw_digit and octets == 3 and acc <= 255;
+}
+
+/// Unauthenticated `--serve`: reject missing or non-loopback Host so a
+/// DNS-rebound public hostname cannot drive the API (CWE-350).
+fn isRebindHostUnauthenticated(headers: []const u8) bool {
+    if (g_server.api_key != null) return false;
+    const host = getHeaderValue(headers, "host") orelse return true;
+    return !isLoopbackHttpHost(host);
 }
 
 /// Browser cross-origin call with no API key (CSRF / data theft via localhost).
@@ -820,10 +1041,16 @@ const TimeComponents = struct { hours: u64, minutes: u64, seconds: u64 };
 
 fn getTimeComponents() TimeComponents {
     const now = timestamp();
+    // Floor division + Euclidean remainder so pre-epoch timestamps
+    // (now < 0) still wrap into 00..23 / 00..59 instead of truncating
+    // toward zero (`@divTrunc(-1, 3600) == 0` → 00:00:00 for 23:59:59 UTC).
+    const sph: i64 = @intCast(seconds_per_hour);
+    const spm: i64 = @intCast(seconds_per_minute);
+    const hpd: i64 = @intCast(hours_per_day);
     return .{
-        .hours = @intCast(@mod(@divTrunc(now, seconds_per_hour), hours_per_day)),
-        .minutes = @intCast(@mod(@divTrunc(now, seconds_per_minute), seconds_per_minute)),
-        .seconds = @intCast(@mod(now, seconds_per_minute)),
+        .hours = @intCast(@mod(@divFloor(now, sph), hpd)),
+        .minutes = @intCast(@mod(@divFloor(now, spm), spm)),
+        .seconds = @intCast(@mod(now, spm)),
     };
 }
 
@@ -858,7 +1085,11 @@ fn logRequest(method: []const u8, path: []const u8) void {
     const safe_method = sanitizeForLog(method, &method_buf);
     const safe_path = sanitizeForLog(path, &path_buf);
     const rid = log_request_id;
-    slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path });
+    if (log_client_rid_len > 0) {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} xid={s} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path });
+    } else {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path });
+    }
 }
 
 /// Log completion of a request with status code and duration.
@@ -869,7 +1100,11 @@ fn logRequestDone(method: []const u8, path: []const u8, status: u16, duration_ms
     const safe_method = sanitizeForLog(method, &method_buf);
     const safe_path = sanitizeForLog(path, &path_buf);
     const rid = log_request_id;
-    slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path, status, duration_ms });
+    if (log_client_rid_len > 0) {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} xid={s} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path, status, duration_ms });
+    } else {
+        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path, status, duration_ms });
+    }
 }
 
 fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
@@ -888,6 +1123,36 @@ const html_page = @embedFile("../web/head.html") ++
     @embedFile("../web/body.html") ++
     @embedFile("../web/app.js") ++
     "\n</script></body></html>\n";
+
+/// Wyhash walks the embedded page in 48-byte rounds; the default comptime
+/// branch quota (1000) is below ~96 KiB of head+css+body+app.js.
+const html_page_hash_eval_quota: u32 = 1_000_000;
+
+const html_page_hash = blk: {
+    @setEvalBranchQuota(html_page_hash_eval_quota);
+    break :blk std.hash.Wyhash.hash(0, html_page);
+};
+const html_etag = std.fmt.comptimePrint("\"{x}\"", .{html_page_hash});
+const html_etag_gzip = std.fmt.comptimePrint("\"{x}-gzip\"", .{html_page_hash});
+const gzip_id1: u8 = 0x1f;
+const gzip_id2: u8 = 0x8b;
+
+/// gzip `src` at best effort. Caller owns the slice.
+/// Returns `error.NoCompressionGain` when the result is not smaller than `src`.
+fn gzipAlloc(allocator: Allocator, src: []const u8) ![]u8 {
+    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, @max(src.len / 2, 16));
+    errdefer aw.deinit();
+    var window: [std.compress.flate.max_window_len]u8 = undefined;
+    var compressor = try std.compress.flate.Compress.init(&aw.writer, &window, .gzip, .best);
+    try compressor.writer.writeAll(src);
+    try compressor.finish();
+    const out = try aw.toOwnedSlice();
+    if (out.len >= src.len) {
+        allocator.free(out);
+        return error.NoCompressionGain;
+    }
+    return out;
+}
 
 /// Return the current thread's request ID (set at start of handleRequest).
 /// Used for API response IDs so they match log correlation IDs.
@@ -927,7 +1192,10 @@ fn parseRequestLine(req_line: []const u8) ?struct { method: []const u8, path: []
     return .{ .method = method, .path = pq.path, .query = pq.query };
 }
 
-/// Parse `{"tokens":[1,2,3]}`-style body into `out`. Returns count written (0 if missing/empty).
+/// Parse `{"tokens":[1,2,3]}`-style body into `out`.
+/// Returns the number of IDs written, 0 if the field is missing or empty, or
+/// `out.len + 1` when the array has more entries than `out` can hold (overflow
+/// sentinel used by `/v1/detokenize` to return 400 instead of truncating).
 fn parseDetokenizeTokens(body: []const u8, out: []u32) usize {
     var n_toks: usize = 0;
     if (std.mem.indexOf(u8, body, "\"tokens\"")) |ti| {
@@ -935,12 +1203,13 @@ fn parseDetokenizeTokens(body: []const u8, out: []u32) usize {
         while (di < body.len and (body[di] == ' ' or body[di] == ':')) : (di += 1) {}
         if (di < body.len and body[di] == '[') {
             di += 1;
-            while (di < body.len and n_toks < out.len) {
+            while (di < body.len) {
                 while (di < body.len and (body[di] == ' ' or body[di] == ',' or body[di] == '\n')) : (di += 1) {}
                 if (di >= body.len or body[di] == ']') break;
                 const num_start = di;
                 while (di < body.len and body[di] >= '0' and body[di] <= '9') : (di += 1) {}
                 if (di > num_start) {
+                    if (n_toks >= out.len) return out.len + 1;
                     out[n_toks] = std.fmt.parseInt(u32, body[num_start..di], 10) catch break;
                     n_toks += 1;
                 } else break;
@@ -962,6 +1231,39 @@ fn extractQueryParam(query: []const u8, key: []const u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+/// Result of parsing a required positive integer query parameter.
+const PositiveQueryParam = union(enum) {
+    missing,
+    invalid,
+    value: usize,
+};
+
+/// Parse `key` from a query string as a required positive integer.
+/// Empty, zero, and non-numeric values are `.invalid` (not `.missing`).
+fn parsePositiveQueryParam(query: []const u8, key: []const u8) PositiveQueryParam {
+    const raw = extractQueryParam(query, key) orelse return .missing;
+    const n = std.fmt.parseInt(usize, raw, 10) catch return .invalid;
+    if (n == 0) return .invalid;
+    return .{ .value = n };
+}
+
+/// Result of parsing a conversation `id` form field.
+const FormConversationId = union(enum) {
+    missing,
+    invalid,
+    value: u32,
+};
+
+/// Parse form-encoded `id` for `/v1/conversations` select/delete.
+/// Conversation IDs start at 1; 0, empty, and non-numeric values are `.invalid`.
+fn parseFormConversationId(body: []const u8) FormConversationId {
+    const raw = json.extractFormField(body, "id") orelse return .missing;
+    if (raw.len == 0) return .invalid;
+    const id = std.fmt.parseInt(u32, raw, 10) catch return .invalid;
+    if (id == 0) return .invalid;
+    return .{ .value = id };
 }
 
 /// Result of reading an HTTP request, distinguishes malformed requests from
@@ -1064,15 +1366,23 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = "" } };
 }
 
-/// Common security headers appended to every response.
-const security_headers =
+/// Security headers without Cache-Control. API/SSE/error responses append
+/// `Cache-Control: no-store` via `security_headers`. The chat UI document
+/// uses `private, no-cache` plus ETag instead (see `sendHtmlPage`).
+const security_headers_base =
     "X-Content-Type-Options: nosniff\r\n" ++
     "X-Frame-Options: DENY\r\n" ++
     "Referrer-Policy: no-referrer\r\n" ++
-    "Cache-Control: no-store\r\n" ++
     "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" ++
     "Permissions-Policy: geolocation=(), microphone=(), camera=(), accelerometer=(), gyroscope=()\r\n" ++
     "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
+
+/// Common security headers appended to every API/SSE/error response.
+const security_headers = security_headers_base ++ "Cache-Control: no-store\r\n";
+
+const document_cache_headers =
+    "Cache-Control: private, no-cache\r\n" ++
+    "Vary: Accept-Encoding\r\n";
 
 /// Validate Authorization header against configured API key.
 /// Supports both OpenAI-style `Authorization: Bearer <key>` and
@@ -1155,6 +1465,49 @@ fn sendHtml(stream: TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
 }
 
+fn sendDocumentNotModified(stream: TcpStream, etag: []const u8) void {
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
+        security_headers_base ++ document_cache_headers ++
+        "Content-Length: 0\r\nConnection: close\r\n\r\n", .{ etag, log_request_id, corsHeaders() }) catch {
+        std.log.warn("req={d} 304 header overflow", .{log_request_id});
+        return;
+    };
+    stream.writeAll(hdr) catch |err| {
+        std.log.warn("req={d} 304 write failed: {}", .{ log_request_id, err });
+    };
+}
+
+/// Serve the embedded chat UI. gzip when the client accepts it; 304 when ETag matches.
+/// API JSON still uses `security_headers` (`Cache-Control: no-store`).
+fn sendHtmlPage(stream: TcpStream, req_headers: []const u8) u16 {
+    const gzip_body = g_server.html_gzip;
+    const use_gzip = gzip_body.len > 0 and acceptsEncoding(req_headers, "gzip");
+    const etag: []const u8 = if (use_gzip) html_etag_gzip else html_etag;
+    if (ifNoneMatch(req_headers, etag)) {
+        sendDocumentNotModified(stream, etag);
+        return 304;
+    }
+    const body: []const u8 = if (use_gzip) gzip_body else html_page;
+    const encoding_hdr: []const u8 = if (use_gzip) "Content-Encoding: gzip\r\n" else "";
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\n{s}ETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
+        security_headers_base ++ document_cache_headers ++
+        "Connection: close\r\n\r\n", .{ body.len, encoding_hdr, etag, log_request_id, corsHeaders() }) catch {
+        sendHtml(stream, html_page);
+        return 200;
+    };
+    stream.writeAll(hdr) catch |err| {
+        std.log.warn("req={d} HTML write failed (headers): {}", .{ log_request_id, err });
+        return 200;
+    };
+    stream.writeAll(body) catch |err| {
+        std.log.warn("req={d} HTML write failed (body, {d} bytes): {}", .{ log_request_id, body.len, err });
+        return 200;
+    };
+    return 200;
+}
+
 /// True when this request should inject tools and parse <tool_call> output.
 fn toolsWanted(tp: *const json.ToolParams) bool {
     if (std.mem.eql(u8, tp.tool_choice, "none")) return false;
@@ -1162,7 +1515,7 @@ fn toolsWanted(tp: *const json.ToolParams) bool {
 }
 
 /// Build system prompt with tool definitions injected.
-fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, existing_system: ?[]const u8, registry: *const tools_mod.Registry) ![]u8 {
+fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const json.ToolParams, existing_system: ?[]const u8, registry: *const tools_mod.Registry) ![]u8 {
     var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     if (existing_system) |sys| {
@@ -1189,13 +1542,13 @@ fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, exist
     for (merged[0..n]) |maybe| {
         const tool = maybe orelse continue;
         try buf.appendSlice(allocator, "- ");
-        try buf.appendSlice(allocator, tool.name);
+        try tmpl.writeUntrusted(allocator, &buf, tool.name);
         if (tool.description.len > 0) {
             try buf.appendSlice(allocator, ": ");
-            try buf.appendSlice(allocator, tool.description);
+            try tmpl.writeUntrusted(allocator, &buf, tool.description);
         }
         try buf.appendSlice(allocator, "\n  Parameters: ");
-        try buf.appendSlice(allocator, tool.parameters_json);
+        try tmpl.writeUntrusted(allocator, &buf, tool.parameters_json);
         try buf.appendSlice(allocator, "\n");
     }
     try buf.appendSlice(allocator,
@@ -1216,6 +1569,34 @@ fn buildToolSystemPrompt(allocator: Allocator, tp: *const json.ToolParams, exist
 /// Returns true if tool calls found and writes response. Otherwise returns false.
 fn hasToolCalls(text: []const u8) bool {
     return std.mem.indexOf(u8, text, "<tool_call>") != null;
+}
+
+fn toolCallNameAllowed(name: []const u8, tp: *const json.ToolParams, registry: *const tools_mod.Registry) bool {
+    return tp.hasTool(name) or registry.hasName(name);
+}
+
+/// Advance `search_pos` through `text` to the next `<tool_call>` payload whose
+/// `name` is in the request tools or the process registry. Returns the JSON
+/// between the tags, or null when none remain. Undeclared names are skipped.
+fn nextAllowedToolCall(text: []const u8, search_pos: *usize, tp: *const json.ToolParams, registry: *const tools_mod.Registry) ?[]const u8 {
+    const tc_start_tag = "<tool_call>";
+    const tc_end_tag = "</tool_call>";
+    while (search_pos.* < text.len) {
+        const tc_start = std.mem.indexOfPos(u8, text, search_pos.*, tc_start_tag) orelse return null;
+        const json_start = tc_start + tc_start_tag.len;
+        const tc_end = std.mem.indexOfPos(u8, text, json_start, tc_end_tag) orelse return null;
+        const tc_json = text[json_start..tc_end];
+        search_pos.* = tc_end + tc_end_tag.len;
+        const name = json.extractField(tc_json, "name") orelse continue;
+        if (!toolCallNameAllowed(name, tp, registry)) {
+            if (!@import("builtin").is_test) {
+                std.log.warn("req={d} dropping tool call with undeclared name", .{log_request_id});
+            }
+            continue;
+        }
+        return tc_json;
+    }
+    return null;
 }
 
 /// Split generated text into (reasoning, content) parts.
@@ -1261,22 +1642,13 @@ fn splitThinkingContent(text: []const u8) ThinkingSplit {
 /// otherwise replaced with `{}` and logged, an invalid `input` would break
 /// spec-compliant clients. Returns "" when no <tool_call> payload parses;
 /// callers fall back to a plain text response.
-fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
-
+fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
     var blocks_buf: [4096]u8 = undefined;
     var blocks_pos: usize = 0;
     var search_pos: usize = 0;
     var call_idx: usize = 0;
 
-    while (search_pos < raw_text.len) {
-        const tc_start = std.mem.indexOfPos(u8, raw_text, search_pos, tc_start_tag) orelse break;
-        const json_start = tc_start + tc_start_tag.len;
-        const tc_end = std.mem.indexOfPos(u8, raw_text, json_start, tc_end_tag) orelse break;
-        const tc_json = raw_text[json_start..tc_end];
-        search_pos = tc_end + tc_end_tag.len;
-
+    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
         const name = json.extractField(tc_json, "name") orelse continue;
 
         // Resolve input as a JSON object text (see resolveAnthropicToolInput).
@@ -1311,9 +1683,7 @@ fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
 
 /// Build tool_calls JSON response from model output containing <tool_call> tags.
 /// Supports multiple tool calls. Arguments are JSON-escaped strings per OpenAI spec.
-fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32) []const u8 {
-    const tc_start_tag = "<tool_call>";
-    const tc_end_tag = "</tool_call>";
+fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
     const total = prompt_tokens + completion_tokens;
 
     // Build tool_calls array entries
@@ -1322,13 +1692,7 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
     var search_pos: usize = 0;
     var call_idx: usize = 0;
 
-    while (search_pos < raw_text.len) {
-        const tc_start = std.mem.indexOfPos(u8, raw_text, search_pos, tc_start_tag) orelse break;
-        const json_start = tc_start + tc_start_tag.len;
-        const tc_end = std.mem.indexOfPos(u8, raw_text, json_start, tc_end_tag) orelse break;
-        const tc_json = raw_text[json_start..tc_end];
-        search_pos = tc_end + tc_end_tag.len;
-
+    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
         const name = json.extractField(tc_json, "name") orelse continue;
         const args = json.extractObjectField(tc_json, "arguments") orelse
             (json.extractField(tc_json, "arguments") orelse "{}");
@@ -1485,12 +1849,155 @@ fn send503Retry(stream: TcpStream, body: []const u8, retry_after: u32) void {
 
 // ── Request handler ─────────────────────────────────────────────
 
+/// Snapshot of liveness/readiness inputs. Shared by `/health`, `/ready`,
+/// `/metrics` (`agave_ready`), and health-transition logs so the formula
+/// cannot drift across those surfaces.
+const HealthView = struct {
+    shutting_down: bool,
+    kv_pressure: bool,
+    high_error_rate: bool,
+    kv_used: u32,
+    kv_total: u32,
+    queue: u32,
+    completed: u64,
+    failed: u64,
+    cancelled: u64,
+    sched_errs: u64,
+    preemptions: u64,
+    sleeping: bool,
+
+    fn state(self: HealthView) HealthState {
+        if (self.shutting_down) return .shutting_down;
+        if (self.kv_pressure and self.high_error_rate) return .kv_pressure_and_errors;
+        if (self.kv_pressure) return .kv_pressure;
+        if (self.high_error_rate) return .high_error_rate;
+        return .ok;
+    }
+
+    fn ready(self: HealthView) bool {
+        return self.state() == .ok;
+    }
+
+    fn statusStr(self: HealthView) []const u8 {
+        return switch (self.state()) {
+            .ok => "ok",
+            .shutting_down => "shutting_down",
+            else => "degraded",
+        };
+    }
+
+    fn reasonStr(self: HealthView) []const u8 {
+        return switch (self.state()) {
+            .ok => "none",
+            .kv_pressure => "kv_pressure",
+            .high_error_rate => "high_error_rate",
+            .kv_pressure_and_errors => "kv_pressure,high_error_rate",
+            .shutting_down => "shutting_down",
+        };
+    }
+};
+
+fn loadHealthView() HealthView {
+    const m = &g_server.metrics;
+    const kv_used = m.kv_blocks_used.load(.monotonic);
+    const kv_total = m.kv_blocks_total.load(.monotonic);
+    const completed = m.requests_completed.load(.monotonic);
+    const failed = m.requests_failed.load(.monotonic);
+    const settled = completed + failed;
+    return .{
+        .shutting_down = g_server.shutdown_requested.load(.acquire),
+        .kv_pressure = kv_total > 0 and kv_used * 100 / kv_total >= kv_cache_degradation_pct,
+        .high_error_rate = settled >= error_rate_min_requests and failed * 100 / settled >= error_rate_degradation_pct,
+        .kv_used = kv_used,
+        .kv_total = kv_total,
+        .queue = m.queue_depth.load(.monotonic),
+        .completed = completed,
+        .failed = failed,
+        .cancelled = m.requests_cancelled.load(.monotonic),
+        .sched_errs = m.scheduler_errors.load(.monotonic),
+        .preemptions = m.preemptions_total.load(.monotonic),
+        .sleeping = g_server.sleeping.load(.acquire),
+    };
+}
+
+/// Log once when `/health`/`/ready` state changes (ok ↔ degraded/shutdown).
+fn noteHealthTransition(view: HealthView) void {
+    const next = @intFromEnum(view.state());
+    const prev = g_server.health_state.swap(next, .acq_rel);
+    if (prev == next) return;
+    const prev_state: HealthState = if (prev <= @intFromEnum(HealthState.shutting_down))
+        @enumFromInt(prev)
+    else
+        .ok;
+    if (view.state() == .ok) {
+        std.log.info("server: health recovered ({s} -> ok, kv={d}/{d} errors={d}/{d})", .{
+            @tagName(prev_state), view.kv_used, view.kv_total, view.failed, view.completed + view.failed,
+        });
+    } else {
+        std.log.warn("server: health {s} (was {s}, kv={d}/{d} errors={d}/{d} queue={d})", .{
+            @tagName(view.state()), @tagName(prev_state), view.kv_used, view.kv_total, view.failed, view.completed + view.failed, view.queue,
+        });
+    }
+}
+
+const ImageReject = enum { none, missing_vision, decode_failed };
+
+/// Cheap image-presence check used before generation. Decode still happens in
+/// `processVisionImage`; this only rejects requests that would otherwise drop
+/// the image on the floor (no encoder, or not a data URI).
+fn classifyRequestImage(body: []const u8, form: bool) ImageReject {
+    if (form) {
+        if (json.extractFormField(body, "image") == null) return .none;
+        if (g_server.vision_encoder == null) return .missing_vision;
+        if (json.extractFormImage(body) == null) return .decode_failed;
+        return .none;
+    }
+    if (!json.hasJsonImagePart(body)) return .none;
+    if (g_server.vision_encoder == null) return .missing_vision;
+    if (json.extractJsonImage(body) == null) return .decode_failed;
+    return .none;
+}
+
+/// Send 400 for an unusable image attachment. Returns true when the caller
+/// should return (response already written).
+fn rejectBadImage(
+    stream: TcpStream,
+    body: []const u8,
+    form: bool,
+    anthropic: bool,
+    request_start: i64,
+    method: []const u8,
+    path: []const u8,
+) bool {
+    const kind = classifyRequestImage(body, form);
+    if (kind == .none) return false;
+    const msg: []const u8 = switch (kind) {
+        .none => unreachable,
+        .missing_vision => "This model does not support vision",
+        .decode_failed => "Failed to decode or encode attached image",
+    };
+    const code: []const u8 = switch (kind) {
+        .none => unreachable,
+        .missing_vision => "vision_not_supported",
+        .decode_failed => "image_decode_failed",
+    };
+    if (anthropic) {
+        sendAnthropicError(stream, "400", "invalid_request_error", msg);
+    } else {
+        sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", msg, "image", code);
+    }
+    g_server.metrics.recordClientError();
+    logRequestDone(method, path, 400, elapsedMs(request_start));
+    return true;
+}
+
 /// Main HTTP request dispatcher. Wakes the server from sleep mode if needed,
 /// enforces CORS policy and authentication, then routes the request by method
 /// and path to the appropriate endpoint handler (health, chat completions,
 /// models, metrics, etc.).
 fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const request_start = milliTimestamp();
+    captureClientRequestId(req.headers);
     // Wake from sleep mode on any incoming request. Mutex serializes with
     // sleepMonitorLoop so a late sleep store cannot overwrite this wake.
     var woke_from_sleep = false;
@@ -1511,14 +2018,26 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     const is_get = std.mem.eql(u8, method, "GET");
     const is_post = std.mem.eql(u8, method, "POST");
 
+    // Unauthenticated servers only accept loopback Host. A public name that
+    // DNS-rebinds to 127.0.0.1 would pass Origin==Host and skip the CSRF check.
+    if (isRebindHostUnauthenticated(req.headers)) {
+        g_server.metrics.recordRequest();
+        g_server.metrics.recordClientError();
+        std.log.warn("req={d} non-loopback Host rejected (no API key)", .{log_request_id});
+        sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Host not allowed", null, "host_forbidden");
+        return;
+    }
+
     // Block browser cross-origin calls when running without an API key so a
     // malicious page cannot drive inference or read conversation state on a
     // loopback --serve (CWE-352 / CWE-942).
     if (isCrossOriginUnauthenticated(req.headers)) {
+        logRequest(method, path);
         g_server.metrics.recordRequest();
         g_server.metrics.recordClientError();
         std.log.warn("req={d} cross-origin request rejected (no API key)", .{log_request_id});
         sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Cross-origin request rejected", null, "cross_origin_forbidden");
+        logRequestDone(method, path, 403, elapsedMs(request_start));
         return;
     }
 
@@ -1548,22 +2067,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // Health check endpoint, lightweight, no mutex, no inference
     if (is_get and std.mem.eql(u8, path, "/health")) {
         var buf: [health_buf_size]u8 = undefined;
-        // Clamp: both reads are wall clock, so an NTP step backward must not
-        // report negative uptime in /health.
-        const uptime: i64 = if (g_server.start_time > 0) @max(0, timestamp() - g_server.start_time) else 0;
-        const queue = g_server.metrics.queue_depth.load(.monotonic);
-        const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
-        const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
-        const completed = g_server.metrics.requests_completed.load(.monotonic);
-        const failed = g_server.metrics.requests_failed.load(.monotonic);
-        const cancelled = g_server.metrics.requests_cancelled.load(.monotonic);
-        const is_shutting_down = g_server.shutdown_requested.load(.acquire);
-        const kv_pressure = kv_total > 0 and kv_used * 100 / kv_total >= kv_cache_degradation_pct;
-        const total_settled = completed + failed;
-        const high_error_rate = total_settled >= error_rate_min_requests and failed * 100 / total_settled >= error_rate_degradation_pct;
-        const status: []const u8 = if (is_shutting_down) "shutting_down" else if (kv_pressure or high_error_rate) "degraded" else "ok";
-        const reason: []const u8 = if (is_shutting_down) "shutting_down" else if (kv_pressure and high_error_rate) "kv_pressure,high_error_rate" else if (kv_pressure) "kv_pressure" else if (high_error_rate) "high_error_rate" else "none";
-        const http_status: []const u8 = if (is_shutting_down) "503 Service Unavailable" else "200 OK";
+        const uptime: i64 = uptimeSeconds(g_server.start_mono_ms, milliTimestamp());
+        const hv = loadHealthView();
+        noteHealthTransition(hv);
+        const status = hv.statusStr();
+        const reason = hv.reasonStr();
+        const http_status: []const u8 = if (hv.shutting_down) "503 Service Unavailable" else "200 OK";
         // When API key is configured and auth is not provided, return only
         // liveness status, omit model/version/backend to prevent fingerprinting.
         if (g_server.api_key != null and !validateAuth(g_server, req.headers)) {
@@ -1574,12 +2083,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const kv_seq_len = g_server.model.kvSeqLen();
-        const sched_errs = g_server.metrics.scheduler_errors.load(.monotonic);
-        const preemptions = g_server.metrics.preemptions_total.load(.monotonic);
-        const sleeping = g_server.sleeping.load(.acquire);
         const json_body = std.fmt.bufPrint(&buf,
             \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d},"sleeping":{s}}}
-        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), completed, failed, cancelled, queue, kv_used, kv_total, kv_seq_len, g_server.ctx_size, sched_errs, preemptions, if (sleeping) "true" else "false" }) catch
+        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), hv.completed, hv.failed, hv.cancelled, hv.queue, hv.kv_used, hv.kv_total, kv_seq_len, g_server.ctx_size, hv.sched_errs, hv.preemptions, if (hv.sleeping) "true" else "false" }) catch
             std.fmt.bufPrint(&buf, "{{\"status\":\"{s}\"}}", .{status}) catch return;
         sendResponse(stream, http_status, "application/json", json_body);
         return;
@@ -1587,44 +2093,40 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     // Readiness check endpoint, returns 503 if shutting down, under KV cache pressure, or high error rate
     if (is_get and std.mem.eql(u8, path, "/ready")) {
-        const kv_used_r = g_server.metrics.kv_blocks_used.load(.monotonic);
-        const kv_total_r = g_server.metrics.kv_blocks_total.load(.monotonic);
-        const queue_r = g_server.metrics.queue_depth.load(.monotonic);
-        const is_shutting_down_r = g_server.shutdown_requested.load(.acquire);
-        const kv_pressure_r = kv_total_r > 0 and kv_used_r * 100 / kv_total_r >= kv_cache_degradation_pct;
-        const completed_r = g_server.metrics.requests_completed.load(.monotonic);
-        const failed_r = g_server.metrics.requests_failed.load(.monotonic);
-        const total_settled_r = completed_r + failed_r;
-        const high_error_rate_r = total_settled_r >= error_rate_min_requests and failed_r * 100 / total_settled_r >= error_rate_degradation_pct;
-        // When API key is configured and auth missing, return only status to prevent fingerprinting.
+        const hv = loadHealthView();
+        noteHealthTransition(hv);
+        // Unauthenticated probes omit queue/KV details; degraded still includes `reason`.
         const authed = g_server.api_key == null or validateAuth(g_server, req.headers);
-        if (is_shutting_down_r) {
+        if (hv.shutting_down) {
             if (authed) {
                 var sbuf: [health_buf_size]u8 = undefined;
                 const sjson = std.fmt.bufPrint(&sbuf,
                     \\{{"status":"shutting_down","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
-                , .{ queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"shutting_down\"}";
+                , .{ hv.queue, hv.kv_used, hv.kv_total }) catch "{\"status\":\"shutting_down\"}";
                 sendResponse(stream, "503 Service Unavailable", "application/json", sjson);
             } else {
                 sendResponse(stream, "503 Service Unavailable", "application/json", "{\"status\":\"shutting_down\"}");
             }
-        } else if (kv_pressure_r or high_error_rate_r) {
+        } else if (!hv.ready()) {
             if (authed) {
-                const ready_reason: []const u8 = if (kv_pressure_r and high_error_rate_r) "kv_pressure,high_error_rate" else if (kv_pressure_r) "kv_pressure" else "high_error_rate";
                 var rbuf: [health_buf_size]u8 = undefined;
                 const rjson = std.fmt.bufPrint(&rbuf,
                     \\{{"status":"degraded","reason":"{s}","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
-                , .{ ready_reason, queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"degraded\"}";
+                , .{ hv.reasonStr(), hv.queue, hv.kv_used, hv.kv_total }) catch "{\"status\":\"degraded\"}";
                 sendResponse(stream, "503 Service Unavailable", "application/json", rjson);
             } else {
-                sendResponse(stream, "503 Service Unavailable", "application/json", "{\"status\":\"degraded\"}");
+                var rbuf: [health_buf_size]u8 = undefined;
+                const rjson = std.fmt.bufPrint(&rbuf,
+                    \\{{"status":"degraded","reason":"{s}"}}
+                , .{hv.reasonStr()}) catch "{\"status\":\"degraded\"}";
+                sendResponse(stream, "503 Service Unavailable", "application/json", rjson);
             }
         } else {
             if (authed) {
                 var rbuf: [health_buf_size]u8 = undefined;
                 const rjson = std.fmt.bufPrint(&rbuf,
                     \\{{"status":"ready","queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d}}}
-                , .{ queue_r, kv_used_r, kv_total_r }) catch "{\"status\":\"ready\"}";
+                , .{ hv.queue, hv.kv_used, hv.kv_total }) catch "{\"status\":\"ready\"}";
                 sendJson(stream, rjson);
             } else {
                 sendJson(stream, "{\"status\":\"ready\"}");
@@ -1655,6 +2157,13 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         writer.print("# HELP agave_build_info Agave server version and configuration\n# TYPE agave_build_info gauge\nagave_build_info{{version=\"{s}\",backend=\"{s}\",language=\"zig\"}} 1\n", .{ engine_version, g_server.backend_name }) catch {
             std.log.warn("req={d} metrics buffer overflow: build_info metric truncated ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
         };
+        // Ready gauge: same conditions as GET /ready so Prometheus alerts do
+        // not have to reimplement /health JSON (agave_up is liveness only).
+        const hv = loadHealthView();
+        noteHealthTransition(hv);
+        writer.print("# HELP agave_ready 1 when /ready would return 200, 0 when degraded or shutting down\n# TYPE agave_ready gauge\nagave_ready {d}\n", .{@as(u32, if (hv.ready()) 1 else 0)}) catch {
+            std.log.warn("req={d} metrics buffer overflow: agave_ready metric truncated ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
+        };
         sendResponse(stream, "200 OK", "text/plain; version=0.0.4; charset=utf-8", fbs.getWritten());
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
@@ -1674,8 +2183,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
-        sendHtml(stream, html_page);
-        logRequestDone(method, path, 200, elapsedMs(request_start));
+        const ui_status = sendHtmlPage(stream, req.headers);
+        logRequestDone(method, path, ui_status, elapsedMs(request_start));
         return;
     }
 
@@ -1728,7 +2237,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
-        const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens") orelse json.extractIntField(body, "max_completion_tokens"));
+        const max_tokens = extractMaxGenTokens(body, &.{ "max_tokens", "max_completion_tokens" });
         var sampling = json.SamplingParams{};
         json.parseSampling(&sampling, body);
 
@@ -1745,6 +2254,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
+        if (rejectBadImage(stream, body, false, false, request_start, method, path)) return;
         const fallback_str = fallback_raw orelse "";
         const fallback_content = json.jsonUnescape(g_server.allocator, fallback_str) catch @constCast(fallback_str);
         defer if (fallback_content.ptr != fallback_str.ptr) wipeFree(g_server.allocator, fallback_content);
@@ -1753,7 +2263,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var tool_system: ?[]u8 = null;
         defer if (tool_system) |ts| wipeFree(g_server.allocator, ts);
         if (toolsWanted(&tool_params)) {
-            tool_system = buildToolSystemPrompt(g_server.allocator, &tool_params, if (extracted) |ex| ex.system else null, &g_server.tool_registry) catch |err| {
+            tool_system = buildToolSystemPrompt(g_server.allocator, g_server.chat_template, &tool_params, if (extracted) |ex| ex.system else null, &g_server.tool_registry) catch |err| {
                 std.log.err("req={d} tool system prompt build failed: {}", .{ log_request_id, err });
                 sendJsonError(stream, "500 Internal Server Error", "server_error", "Failed to build tool definitions");
                 g_server.metrics.recordFailure();
@@ -1795,7 +2305,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (g_server.vision_encoder) |ve| {
                 if (processVisionImage(b64_data, ve)) {
                     completions_image_embedded = true;
-                    slog("  Image attached and encoded ({d} visual tokens)\n", .{if (ve.patch_size > 0) ve.image_size / ve.patch_size * (ve.image_size / ve.patch_size) else 0});
                 } else {
                     std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
                     sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
@@ -1806,8 +2315,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
         }
         defer if (completions_image_embedded) {
-            g_server.model.setImageEmbeddings(null, 0, 0);
-            pending_visual_tokens = 0;
+            clearPendingVision();
         };
 
         if (json.extractBoolField(body, "stream")) {
@@ -1838,16 +2346,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const total = gen.stats.tokens_generated + gen.stats.prompt_tokens;
         var resp_buf: [response_buf_size]u8 = undefined;
 
-        // Check if output contains tool calls.
-        // Store raw output in the replay map keyed by request ID so future turns
-        // can reconstruct the exact token stream from stored bytes (ds4 replay approach).
-        if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) {
-            var rid_buf: [24]u8 = undefined;
-            const rid_str = std.fmt.bufPrint(&rid_buf, "{d}", .{req_id}) catch "";
-            toolReplayStore(rid_str, gen.raw);
-        }
         const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
-            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated);
+            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params);
             break :blk if (tc_resp.len > 0) tc_resp else std.fmt.bufPrint(&resp_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
             , .{ req_id, created, g_server.model_name, system_fingerprint, gen.escaped, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
@@ -1928,14 +2428,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const prompt_raw = json.extractField(body, "prompt") orelse {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: prompt", "prompt", "missing_required_parameter");
+            if (json.hasField(body, "prompt")) {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "prompt must be a string", "prompt", "invalid_value");
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: prompt", "prompt", "missing_required_parameter");
+            }
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         };
         const prompt = json.jsonUnescape(g_server.allocator, prompt_raw) catch @constCast(prompt_raw);
         defer if (prompt.ptr != prompt_raw.ptr) wipeFree(g_server.allocator, prompt);
-        const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens"));
+        const max_tokens = extractMaxGenTokens(body, &.{"max_tokens"});
         var sampling_c = json.SamplingParams{};
         json.parseSampling(&sampling_c, body);
 
@@ -2041,7 +2545,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 200, elapsedMs(request_start));
                 return;
             }
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Provide text, content, or messages", null, "missing_required_parameter");
+            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Provide text, content, or messages", "text", "missing_required_parameter");
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
@@ -2162,14 +2666,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 }
             }
         }
-        const info_json = std.fmt.allocPrint(g_server.allocator,
+        var info_buf: [health_buf_size]u8 = undefined;
+        const info_json = std.fmt.bufPrint(&info_buf,
             \\{{"seq_len":{d},"cached_prefix_len":{d},"prefix_hash":"{x}","kv_used":{d},"kv_total":{d}}}
         , .{ seq_len, cached_prefix_len, hash, kv_used, kv_total }) catch {
-            sendJson(stream, "{}");
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
-        defer g_server.allocator.free(info_json);
         sendJson(stream, info_json);
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
@@ -2186,20 +2690,25 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         // Parse n_tokens from query string: ?n_tokens=<N>
-        const n_tokens: usize = blk: {
-            const raw = extractQueryParam(req.query, "n_tokens") orelse break :blk 0;
-            break :blk std.fmt.parseInt(usize, raw, 10) catch 0;
+        const n_tokens: usize = switch (parsePositiveQueryParam(req.query, "n_tokens")) {
+            .missing => {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens query parameter required (positive integer)", "n_tokens", "missing_required_parameter");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            },
+            .invalid => {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens must be a positive integer", "n_tokens", "invalid_value");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            },
+            .value => |n| n,
         };
-        if (n_tokens == 0) {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens query parameter required (positive integer)", "n_tokens", "missing_required_parameter");
-            g_server.metrics.recordClientError();
-            logRequestDone(method, path, 400, elapsedMs(request_start));
-            return;
-        }
         if (is_get) {
             // Export under inference mutex (not stdout_mutex): KV must not race generate.
             // Copy under lock, then release before network I/O so slow clients do not stall inference.
-            const ExportOutcome = enum { ok, oom, unsupported };
+            const ExportOutcome = enum { ok, oom, unsupported, too_many };
             var export_buf: []u8 = &.{};
             var export_n: usize = 0;
             const outcome: ExportOutcome = blk: {
@@ -2211,6 +2720,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 // the KV cache mid-forward and hands out a torn prefix blob.
                 lockModelWithScheduler();
                 defer unlockModelWithScheduler();
+                if (n_tokens > g_server.model.kvSeqLen()) break :blk .too_many;
                 var buf_len = estimateKvExportBytes(g_server.model.*, n_tokens);
                 var buf = g_server.allocator.alloc(u8, buf_len) catch break :blk .oom;
                 var n_written = g_server.model.exportKvPrefix(buf, n_tokens);
@@ -2236,9 +2746,15 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     logRequestDone(method, path, 500, elapsedMs(request_start));
                     return;
                 },
+                .too_many => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "n_tokens exceeds current KV cache length", "n_tokens", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
                 .unsupported => {
                     sendJsonErrorEx(stream, "501 Not Implemented", "not_implemented", "Model does not support KV export", null, "not_implemented");
-                    g_server.metrics.recordFailure();
+                    g_server.metrics.recordClientError();
                     logRequestDone(method, path, 501, elapsedMs(request_start));
                     return;
                 },
@@ -2270,12 +2786,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 400, elapsedMs(request_start));
                 return;
             }
-            if (std.fmt.allocPrint(g_server.allocator, "{{\"imported\":{d}}}", .{n_tokens})) |import_resp| {
-                defer g_server.allocator.free(import_resp);
-                sendJson(stream, import_resp);
-            } else |_| {
-                sendJson(stream, "{}");
-            }
+            var import_buf: [clear_response_buf_size]u8 = undefined;
+            const import_resp = std.fmt.bufPrint(&import_buf, "{{\"imported\":{d}}}", .{n_tokens}) catch "{\"ok\":true}";
+            sendJson(stream, import_resp);
             logRequestDone(method, path, 200, elapsedMs(request_start));
         }
         return;
@@ -2290,7 +2803,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         g_server.metrics.recordRequest();
         sendJsonErrorEx(stream, "501 Not Implemented", "not_implemented", "Embeddings endpoint not implemented", null, "not_implemented");
-        g_server.metrics.recordFailure();
+        g_server.metrics.recordClientError();
         logRequestDone(method, path, 501, elapsedMs(request_start));
         return;
     }
@@ -2314,14 +2827,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         const input_raw = json.extractField(body, "input") orelse {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: input", "input", "missing_required_parameter");
+            if (json.hasField(body, "input")) {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "input must be a string", "input", "invalid_value");
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: input", "input", "missing_required_parameter");
+            }
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         };
         const input = json.jsonUnescape(g_server.allocator, input_raw) catch @constCast(input_raw);
         defer if (input.ptr != input_raw.ptr) wipeFree(g_server.allocator, input);
-        const max_tokens = clampMaxTokens(json.extractIntField(body, "max_tokens"));
+        const max_tokens = extractMaxGenTokens(body, &.{ "max_output_tokens", "max_tokens", "max_completion_tokens" });
         var sampling_r = json.SamplingParams{};
         json.parseSampling(&sampling_r, body);
 
@@ -2399,7 +2916,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
-        const max_tokens_m = clampMaxTokens(json.extractIntField(body, "max_tokens"));
+        const max_tokens_m = extractMaxGenTokens(body, &.{"max_tokens"});
         var sampling_m = json.SamplingParams{};
         json.parseSampling(&sampling_m, body);
 
@@ -2423,7 +2940,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         var tool_system_m: ?[]u8 = null;
         defer if (tool_system_m) |ts| wipeFree(g_server.allocator, ts);
         if (want_tools_m) {
-            tool_system_m = buildToolSystemPrompt(g_server.allocator, &tool_params_m, system_msg, &g_server.tool_registry) catch |err| {
+            tool_system_m = buildToolSystemPrompt(g_server.allocator, g_server.chat_template, &tool_params_m, system_msg, &g_server.tool_registry) catch |err| {
                 std.log.err("req={d} anthropic tool system prompt build failed: {}", .{ log_request_id, err });
                 sendAnthropicError(stream, "500", "api_error", "Failed to build tool definitions");
                 g_server.metrics.recordFailure();
@@ -2443,6 +2960,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
         }
+        if (rejectBadImage(stream, body, false, true, request_start, method, path)) return;
         const fallback_str_m = fallback_raw_m orelse "";
         const fallback_content_m = json.jsonUnescape(g_server.allocator, fallback_str_m) catch @constCast(fallback_str_m);
         defer if (fallback_content_m.ptr != fallback_str_m.ptr) wipeFree(g_server.allocator, fallback_content_m);
@@ -2479,7 +2997,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (g_server.vision_encoder) |ve| {
                 if (processVisionImage(b64_data, ve)) {
                     anthropic_image_embedded = true;
-                    slog("  Image attached and encoded\n", .{});
                 } else {
                     std.log.err("req={d} anthropic image attached but decode/encode failed", .{log_request_id});
                     sendAnthropicError(stream, "400", "invalid_request_error", "Failed to decode or encode attached image");
@@ -2490,13 +3007,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
         }
         defer if (anthropic_image_embedded) {
-            g_server.model.setImageEmbeddings(null, 0, 0);
-            pending_visual_tokens = 0;
+            clearPendingVision();
         };
 
         if (json.extractBoolField(body, "stream")) {
             if (want_tools_m) {
-                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
+                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, &tool_params_m);
             } else {
                 startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
             }
@@ -2525,7 +3041,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // parses (small-model malformed output), mirroring /v1/chat/completions.
         var resp_buf_tc: [response_buf_size]u8 = undefined;
         if (want_tools_m and hasToolCalls(gen.raw)) {
-            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated);
+            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params_m);
             if (anth_tc.len > 0) {
                 sendJson(stream, anth_tc);
                 g_server.metrics.recordLatency(elapsedMs(req_start_time));
@@ -2626,8 +3142,21 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "select")) {
-            const id_str = json.extractFormField(body, "id") orelse "0";
-            const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
+            const id: u32 = switch (parseFormConversationId(body)) {
+                .missing => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .invalid => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .value => |v| v,
+            };
             var mbuf: [conv_msgs_buf_size]u8 = undefined;
             var mfbs = FixedBufStream.init(&mbuf);
             const select_result: enum { not_found, format_ok, format_fail } = blk: {
@@ -2673,8 +3202,21 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 },
             }
         } else if (std.mem.eql(u8, action, "delete")) {
-            const id_str = json.extractFormField(body, "id") orelse "0";
-            const id = std.fmt.parseInt(u32, id_str, 10) catch 0;
+            const id: u32 = switch (parseFormConversationId(body)) {
+                .missing => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .invalid => {
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
+                    g_server.metrics.recordClientError();
+                    logRequestDone(method, path, 400, elapsedMs(request_start));
+                    return;
+                },
+                .value => |v| v,
+            };
             const delete_result: ?bool = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
@@ -2752,8 +3294,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (regen_conv.messages.items.len > 0) {
                 const last_msg = regen_conv.messages.items[regen_conv.messages.items.len - 1];
                 if (last_msg.role == .assistant) {
-                    wipeFree(g_server.allocator, @constCast(last_msg.content));
+                    Conversation.freeOwnedMessage(g_server.allocator, last_msg);
                     _ = regen_conv.messages.pop();
+                    g_server.persistConversationsLocked();
                 }
             }
 
@@ -2783,7 +3326,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         defer wipeFree(g_server.allocator, @constCast(regen_formatted));
         const regen_msg_count = regen_prep.?.msg_count;
 
-        slog("  [regenerate] Re-generating from {d} messages\n", .{regen_msg_count});
+        std.log.info("req={d} regenerate from {d} messages", .{ log_request_id, regen_msg_count });
 
         // Rate limit check
         const regen_prompt_ids_owned = g_server.tokenizer.encode(regen_formatted) catch |err| blk: {
@@ -2872,11 +3415,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
 
         // Log message receipt without content (avoid leaking prompts in shared deployments)
-        slog("  User message ({d} chars)\n", .{decoded.len});
+        std.log.info("req={d} user message ({d} chars)", .{ log_request_id, decoded.len });
 
         // Check for attached image data (base64-encoded data URI from web UI)
         // If a vision encoder is available, decode and encode the image into
         // visual token embeddings that the model injects during generation.
+        if (rejectBadImage(stream, body, true, false, request_start, method, path)) return;
         const chat_has_image = json.extractFormImage(body) != null and g_server.vision_encoder != null;
         if (chat_has_image) g_server.vision_mutex.lockUncancelable(g_server.io);
         defer if (chat_has_image) g_server.vision_mutex.unlock(g_server.io);
@@ -2885,22 +3429,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (g_server.vision_encoder) |ve| {
                 if (processVisionImage(b64_data, ve)) {
                     image_embedded = true;
-                    slog("  Image attached and encoded ({d} visual tokens)\n", .{if (ve.patch_size > 0) ve.image_size / ve.patch_size * (ve.image_size / ve.patch_size) else 0});
                 } else {
                     std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
-                    sendHtml(stream, "<div class=\"msg assistant\">Error: failed to process attached image</div>");
+                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
                     g_server.metrics.recordClientError();
                     logRequestDone(method, path, 400, elapsedMs(request_start));
                     return;
                 }
-            } else {
-                slog("  Image attached (no vision encoder, ignored)\n", .{});
             }
         }
         // Ensure image embeddings are cleared after generation
         defer if (image_embedded) {
-            g_server.model.setImageEmbeddings(null, 0, 0);
-            pending_visual_tokens = 0;
+            clearPendingVision();
         };
 
         // Handle REPL-style commands in the chat interface
@@ -2961,6 +3501,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 500, elapsedMs(request_start));
                 break :blk null;
             };
+            g_server.persistConversationsLocked();
 
             // Title is set at createConv time (opaque "Chat {id}"); never store message text.
 
@@ -3105,9 +3646,10 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             // onto empty slots and skip re-prefilling (garbled output).
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
+            g_server.persistConversationsLocked();
         }
         if (ngram_mod.global_pool) |*pool| pool.clear();
-        slog("  [command] /clear\n", .{});
+        std.log.info("req={d} chat command /clear", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
     if (std.mem.eql(u8, cmd, "/reset")) {
@@ -3120,13 +3662,14 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             g_server.kv_valid = false;
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
+            g_server.persistConversationsLocked();
         }
         if (ngram_mod.global_pool) |*pool| pool.clear();
-        slog("  [command] /reset\n", .{});
+        std.log.info("req={d} chat command /reset", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
     }
     if (std.mem.eql(u8, cmd, "/model")) {
-        slog("  [command] /model\n", .{});
+        std.log.info("req={d} chat command /model", .{log_request_id});
         const escaped_name = json.htmlEscape(g_server.allocator, g_server.model_name) catch return null;
         defer if (escaped_name.ptr != g_server.model_name.ptr) g_server.allocator.free(escaped_name);
         return std.fmt.bufPrint(&cmd_buf,
@@ -3134,7 +3677,7 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
         , .{escaped_name}) catch null;
     }
     if (std.mem.eql(u8, cmd, "/help")) {
-        slog("  [command] /help\n", .{});
+        std.log.info("req={d} chat command /help", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">/clear &mdash; Clear conversation and KV cache&lt;br&gt;/stats &mdash; Toggle generation statistics&lt;br&gt;/model &mdash; Show model name&lt;br&gt;/help &mdash; Show available commands</div>";
     }
     return null;
@@ -3143,33 +3686,33 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
 /// Process a base64-encoded image from a web UI form submission.
 ///
 /// Decodes URL-encoded base64 image bytes, decodes PNG to RGB, resizes to
-/// the vision encoder's expected input size, and encodes visual token
-/// embeddings onto the model for the next forward pass.
+/// the vision encoder's expected input size, and stashes visual token
+/// embeddings on this handler thread. The scheduler copies them onto the
+/// model under `model_mutex`; the direct path does the same after locking.
 ///
 /// HTTP vision accepts PNG only (JPEG is detected and rejected; PPM is
 /// CLI/`--image` only). Returns true on success, false on any failure.
 fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
     const allocator = g_server.allocator;
-    slog("  vision: processing image ({d} bytes base64)\n", .{b64_raw.len});
+    std.log.info("req={d} vision: encoding image ({d} bytes base64)", .{ log_request_id, b64_raw.len });
 
     // URL-decode the base64 data (form fields encode +, /, = as %2B, %2F, %3D)
     const url_decoded = json.urlDecode(allocator, b64_raw) catch |err| {
-        slog("  vision: URL decode failed: {}\n", .{err});
+        std.log.warn("req={d} vision: URL decode failed: {}", .{ log_request_id, err });
         return false;
     };
     defer {
         @memset(url_decoded, 0);
         allocator.free(url_decoded);
     }
-    slog("  vision: URL decoded ({d} bytes)\n", .{url_decoded.len});
 
     // Base64 decode to raw image bytes
     const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(url_decoded) catch |err| {
-        slog("  vision: base64 size calc failed: {}\n", .{err});
+        std.log.warn("req={d} vision: base64 size calc failed: {}", .{ log_request_id, err });
         return false;
     };
     const image_bytes = allocator.alloc(u8, decoded_size) catch |err| {
-        slog("  vision: alloc failed for {d} bytes: {}\n", .{ decoded_size, err });
+        std.log.warn("req={d} vision: alloc failed for {d} bytes: {}", .{ log_request_id, decoded_size, err });
         return false;
     };
     defer {
@@ -3177,27 +3720,24 @@ fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
         allocator.free(image_bytes);
     }
     std.base64.standard.Decoder.decode(image_bytes, url_decoded) catch |err| {
-        slog("  vision: base64 decode failed: {}\n", .{err});
+        std.log.warn("req={d} vision: base64 decode failed: {}", .{ log_request_id, err });
         return false;
     };
-    slog("  vision: decoded image ({d} bytes)\n", .{image_bytes.len});
 
     // Detect format and decode to RGB pixels
     const format = image_mod.detectFormat(image_bytes);
     switch (format) {
         .png => {
-            slog("  vision: PNG detected, decoding...\n", .{});
             var png = image_mod.decodePng(allocator, image_bytes) catch |err| {
-                slog("  vision: PNG decode failed: {}\n", .{err});
+                std.log.warn("req={d} vision: PNG decode failed: {}", .{ log_request_id, err });
                 return false;
             };
             defer png.deinit();
-            slog("  vision: decoded {d}x{d} PNG\n", .{ png.width, png.height });
 
             // Resize to vision encoder's expected input size
             const target = ve.image_size;
             const resized = image_mod.resize(allocator, png.pixels, png.width, png.height, target, target) catch |err| {
-                slog("  vision: resize failed: {}\n", .{err});
+                std.log.warn("req={d} vision: resize failed: {}", .{ log_request_id, err });
                 return false;
             };
             defer {
@@ -3205,28 +3745,27 @@ fn processVisionImage(b64_raw: []const u8, ve: *VisionEncoder) bool {
                 allocator.free(resized);
             }
 
-            // Encode into visual token embeddings
-            slog("  vision: running encoder...\n", .{});
             const visual_tokens = ve.encode(resized) catch |err| {
-                slog("  vision: encode failed: {}\n", .{err});
+                std.log.warn("req={d} vision: encode failed: {}", .{ log_request_id, err });
                 return false;
             };
             if (ve.projection_dim == 0) {
-                slog("  vision: projection_dim is 0\n", .{});
+                std.log.warn("req={d} vision: projection_dim is 0", .{log_request_id});
                 return false;
             }
             const n_vis: u32 = @intCast(visual_tokens.len / ve.projection_dim);
-            g_server.model.setImageEmbeddings(visual_tokens, n_vis, g_server.image_pad_token_id);
+            pending_visual_embeddings = visual_tokens;
             pending_visual_tokens = n_vis;
-            slog("  vision: encoded {d} visual tokens\n", .{n_vis});
+            std.log.info("req={d} vision: encoded {d} visual tokens ({d}x{d})", .{ log_request_id, n_vis, png.width, png.height });
             return true;
         },
         .jpeg => {
-            slog("  vision: JPEG images not supported, convert to PNG\n", .{});
+            std.log.warn("req={d} vision: JPEG images not supported, convert to PNG", .{log_request_id});
             return false;
         },
         else => {
-            slog("  vision: unrecognized image format (first bytes: {x:0>2}{x:0>2}{x:0>2}{x:0>2})\n", .{
+            std.log.warn("req={d} vision: unrecognized image format (first bytes: {x:0>2}{x:0>2}{x:0>2}{x:0>2})", .{
+                log_request_id,
                 if (image_bytes.len > 0) image_bytes[0] else 0,
                 if (image_bytes.len > 1) image_bytes[1] else 0,
                 if (image_bytes.len > 2) image_bytes[2] else 0,
@@ -3301,7 +3840,9 @@ fn storeConversationResponse(result_data: []const u8, stats: Stats) void {
         std.log.warn("req={d} OOM appending response to conversation", .{log_request_id});
         @memset(duped, 0);
         g_server.allocator.free(duped);
+        return;
     };
+    g_server.persistConversationsLocked();
 }
 
 fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GeneratedEscaped {
@@ -3411,7 +3952,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     if (g_server.request_manager != null and !use_grammar_pre and !sampling.json_mode) {
         const rm = g_server.request_manager.?;
         const gen_start = milliTimestamp();
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             return .{ .data = g_server.allocator.dupe(u8, "[enqueue error]") catch &.{}, .finish_reason = "error", .stats = zero_stats };
         };
@@ -3515,6 +4056,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
 
     // Re-check kv_valid under mutex, the caller's `reset` flag may be stale
     // if another thread invalidated the cache (e.g. /clear) between the caller's
@@ -3535,7 +4077,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             // Shared prefix found, rollback KV cache to prefix boundary
             const bos_offset: usize = if (g_server.bos_token_id > 0) 1 else 0;
             model.setKvSeqLen(prefix_len + bos_offset);
-            slog("  Prefix cache hit: {d}/{d} tokens reused\n", .{ prefix_len, token_ids.len });
+            std.log.info("req={d} prefix cache hit: {d}/{d} tokens reused", .{ log_request_id, prefix_len, token_ids.len });
         } else {
             prefix_len = 0;
         }
@@ -3587,6 +4129,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     // Apply sampling to first generated token (from prefill's last forward call)
     const use_sampling = sampling.temperature > 0;
     const prng_seed = prngSeedFromSampling(sampling);
+    noteAutoSeed(sampling, prng_seed);
     var prng = std.Random.Xoshiro256.init(prng_seed);
     var mirostat_mu: f32 = sampling.mirostat_tau * 2.0;
     var json_depth: i32 = 0;
@@ -4025,7 +4568,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     if (g_server.request_manager != null and !use_grammar_cs and !sampling.json_mode) {
         const rm = g_server.request_manager.?;
         const gen_start = milliTimestamp();
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
@@ -4140,6 +4683,7 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
     // Re-check kv_valid under mutex, caller's `reset` may be stale if another
     // thread invalidated the cache between the caller's unlock and this lock.
     const actual_reset = reset or !g_server.kv_valid;
@@ -4184,7 +4728,9 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
 
     // Apply sampling to first generated token (from prefill's last forward call)
     const use_sampling = sampling.temperature > 0;
-    var prng_cs = std.Random.Xoshiro256.init(prngSeedFromSampling(sampling));
+    const prng_seed_cs = prngSeedFromSampling(sampling);
+    noteAutoSeed(sampling, prng_seed_cs);
+    var prng_cs = std.Random.Xoshiro256.init(prng_seed_cs);
     if (use_sampling and token_ids.len > 0) {
         const cs_logits = model.getLogits();
         if (sampling.min_p > 0) math_ops.applyMinP(cs_logits, sampling.min_p);
@@ -4568,7 +5114,7 @@ const anthropic_delta_piece_len: usize = 256;
 /// generation runs to completion first and the parsed result is emitted as
 /// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
 /// the raw text as a `text` block when nothing parses (small-model fallback).
-fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
+fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, tp: *const json.ToolParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -4594,17 +5140,9 @@ fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_t
 
     var call_idx: usize = 0;
     if (hasToolCalls(gen.raw)) {
-        const tc_start_tag = "<tool_call>";
-        const tc_end_tag = "</tool_call>";
         var search_pos: usize = 0;
 
-        while (search_pos < gen.raw.len) {
-            const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
-            const json_start = tc_start + tc_start_tag.len;
-            const tc_end = std.mem.indexOfPos(u8, gen.raw, json_start, tc_end_tag) orelse break;
-            const tc_json = gen.raw[json_start..tc_end];
-            search_pos = tc_end + tc_end_tag.len;
-
+        while (nextAllowedToolCall(gen.raw, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
             const name = json.extractField(tc_json, "name") orelse continue;
             const resolved_input = resolveAnthropicToolInput(g_server.allocator, tc_json, call_idx);
             defer if (resolved_input.owned) |p| g_server.allocator.free(p);
@@ -4619,7 +5157,7 @@ fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_t
             const block_start = std.fmt.bufPrint(&blk_buf,
                 \\{{"type":"content_block_start","index":{d},"content_block":{{"type":"tool_use","id":"toolu_{d}_{d}","name":"{s}"}}}}
             , .{ call_idx, req_id, call_idx, escaped_name }) catch {
-                slog("req={d} stream anthropic tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
+                std.log.warn("req={d} stream anthropic tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
                 continue;
             };
             if (!sseWriteEvent(stream, "content_block_start", block_start)) return;
@@ -4719,7 +5257,7 @@ fn sendAnthropicMessageEnd(stream: TcpStream, stop_reason: []const u8, token_cou
     const delta = std.fmt.bufPrint(&delta_buf,
         \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
     , .{ stop_reason, token_count }) catch {
-        std.log.warn("Anthropic message_delta exceeded buffer", .{});
+        std.log.warn("req={d} anthropic message_delta exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteEvent(stream, "message_delta", delta);
@@ -4762,7 +5300,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     const use_grammar_anth = (sampling_a.grammar_string != null or sampling_a.json_schema != null) and !sampling_a.json_mode;
     if (g_server.request_manager != null and !use_grammar_anth and !sampling_a.json_mode) {
         const rm = g_server.request_manager.?;
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             sendAnthropicFinalEvents(stream, "end_turn", 0);
@@ -4861,6 +5399,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
     model.resetCache();
     g_server.clearCachedPromptIds();
 
@@ -4875,7 +5414,9 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
 
     // Prefill
     const use_sampling_a = sampling_a.temperature > 0;
-    var prng_a = std.Random.Xoshiro256.init(prngSeedFromSampling(sampling_a));
+    const prng_seed_a = prngSeedFromSampling(sampling_a);
+    noteAutoSeed(sampling_a, prng_seed_a);
+    var prng_a = std.Random.Xoshiro256.init(prng_seed_a);
     const anth_prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
@@ -5030,7 +5571,7 @@ fn sendAnthropicFinalEvents(stream: TcpStream, stop_reason: []const u8, token_co
     const delta = std.fmt.bufPrint(&delta_buf,
         \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
     , .{ stop_reason, token_count }) catch {
-        std.log.warn("Anthropic message_delta exceeded buffer", .{});
+        std.log.warn("req={d} anthropic message_delta exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteEvent(stream, "message_delta", delta);
@@ -5049,7 +5590,7 @@ fn emitAnthropicDeltaPiece(stream: TcpStream, text: []const u8) bool {
     const data = std.fmt.bufPrint(&buf,
         \\{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{s}"}}}}
     , .{escaped}) catch {
-        std.log.warn("Anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{escaped.len});
+        std.log.warn("req={d} anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
     return sseWriteEvent(stream, "content_block_delta", data);
@@ -5112,7 +5653,7 @@ fn emitResponsesDeltaPiece(stream: TcpStream, text: []const u8) bool {
     const data = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_text.delta","item_id":"msg_0","output_index":0,"content_index":0,"delta":"{s}"}}
     , .{escaped}) catch {
-        std.log.warn("Responses SSE delta exceeded buffer ({d} bytes escaped)", .{escaped.len});
+        std.log.warn("req={d} responses SSE delta exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
     return sseWriteEvent(stream, "response.output_text.delta", data);
@@ -5145,7 +5686,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const text_done = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_text.done","item_id":"msg_0","output_index":0,"content_index":0,"text":"{s}"}}
     , .{escaped_text}) catch {
-        std.log.warn("Responses output_text.done exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses output_text.done exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.output_text.done", text_done);
@@ -5153,7 +5694,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const part_done = std.fmt.bufPrint(&buf,
         \\{{"type":"response.content_part.done","item_id":"msg_0","output_index":0,"content_index":0,"part":{{"type":"output_text","text":"{s}"}}}}
     , .{escaped_text}) catch {
-        std.log.warn("Responses content_part.done exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses content_part.done exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.content_part.done", part_done);
@@ -5161,7 +5702,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const item_done = std.fmt.bufPrint(&buf,
         \\{{"type":"response.output_item.done","output_index":0,"item":{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}}}
     , .{escaped_text}) catch {
-        std.log.warn("Responses output_item.done exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses output_item.done exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.output_item.done", item_done);
@@ -5169,7 +5710,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
     const completed = std.fmt.bufPrint(&buf,
         \\{{"type":"response.completed","response":{{"id":"resp-{d}","object":"response","created_at":{d},"status":"completed","model":"{s}","stop_reason":"{s}","output":[{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"input_tokens":{d},"output_tokens":{d},"total_tokens":{d}}}}}}}
     , .{ req_id, created, g_server.model_name, stop_reason, escaped_text, input_tokens, output_tokens, total }) catch {
-        std.log.warn("Responses completed event exceeded buffer ({d} bytes text)", .{escaped_text.len});
+        std.log.warn("req={d} responses completed event exceeded buffer ({d} bytes text)", .{ log_request_id, escaped_text.len });
         return;
     };
     _ = sseWriteEvent(stream, "response.completed", completed);
@@ -5207,7 +5748,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     const use_grammar_resp = (sampling_r.grammar_string != null or sampling_r.json_schema != null) and !sampling_r.json_mode;
     if (g_server.request_manager != null and !use_grammar_resp and !sampling_r.json_mode) {
         const rm = g_server.request_manager.?;
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
@@ -5324,6 +5865,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
     model.resetCache();
     g_server.clearCachedPromptIds();
 
@@ -5338,7 +5880,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
 
     // Prefill
     const use_sampling_r = sampling_r.temperature > 0;
-    var prng_r = std.Random.Xoshiro256.init(prngSeedFromSampling(sampling_r));
+    const prng_seed_r = prngSeedFromSampling(sampling_r);
+    noteAutoSeed(sampling_r, prng_seed_r);
+    var prng_r = std.Random.Xoshiro256.init(prng_seed_r);
     const resp_prefill_start = milliTimestamp();
     var first_gen_token: u32 = 0;
     for (token_ids) |tid| {
@@ -5553,7 +6097,7 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
         else
             "null";
         const chunk = formatContentDeltaChunk(chunk_buf, model_name, req_id, created, piece, fr_json) orelse {
-            slog("req={d} stream content chunk overflow: dropping remainder from byte {d}", .{ log_request_id, pos });
+            std.log.warn("req={d} stream content chunk overflow: dropping remainder from byte {d}", .{ log_request_id, pos });
             return;
         };
         _ = sseWriteData(stream, chunk);
@@ -5565,7 +6109,6 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
 /// Streaming with tool call support. Generates full output first, then emits
 /// tool_calls delta chunks if tool calls detected, otherwise streams content.
 fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, tp: *const json.ToolParams) void {
-    _ = tp;
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -5590,17 +6133,9 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
     var call_idx: usize = 0;
     if (hasToolCalls(gen.raw)) {
         // Emit tool calls as delta chunks
-        const tc_start_tag = "<tool_call>";
-        const tc_end_tag = "</tool_call>";
         var search_pos: usize = 0;
 
-        while (search_pos < gen.raw.len) {
-            const tc_start = std.mem.indexOfPos(u8, gen.raw, search_pos, tc_start_tag) orelse break;
-            const json_start = tc_start + tc_start_tag.len;
-            const tc_end = std.mem.indexOfPos(u8, gen.raw, json_start, tc_end_tag) orelse break;
-            const tc_json = gen.raw[json_start..tc_end];
-            search_pos = tc_end + tc_end_tag.len;
-
+        while (nextAllowedToolCall(gen.raw, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
             const name = json.extractField(tc_json, "name") orelse continue;
             const args = json.extractObjectField(tc_json, "arguments") orelse
                 (json.extractField(tc_json, "arguments") orelse "{}");
@@ -5620,7 +6155,7 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
             const role_chunk = std.fmt.bufPrint(&chunk_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","tool_calls":[{{"index":{d},"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}]}},"finish_reason":null}}]}}
             , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, escaped_name, escaped_args }) catch {
-                slog("req={d} stream tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
+                std.log.warn("req={d} stream tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
                 continue;
             };
             _ = sseWriteData(stream, role_chunk);
@@ -5697,7 +6232,9 @@ fn computeLogprobs(logits: []const f32, token_id: u32, n_top: u32) ?LogprobInfo 
 /// Format logprobs JSON into buffer. Returns slice or empty on overflow.
 fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: LogprobInfo) []const u8 {
     var pos: usize = 0;
-    const header = std.fmt.bufPrint(buf, "\"logprobs\":{{\"content\":[{{\"token\":\"{s}\",\"logprob\":{d:.6},\"top_logprobs\":[", .{ token_text, info.token_logprob }) catch return "";
+    var lp_buf: [32]u8 = undefined;
+    const lp_s = json.formatFiniteF32(&lp_buf, info.token_logprob);
+    const header = std.fmt.bufPrint(buf, "\"logprobs\":{{\"content\":[{{\"token\":\"{s}\",\"logprob\":{s},\"top_logprobs\":[", .{ token_text, lp_s }) catch return "";
     pos = header.len;
     for (0..info.count) |i| {
         const top_decoded = decodeTokenText(tok, info.top_ids[i]) orelse continue;
@@ -5705,7 +6242,9 @@ fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: Logp
         const top_escaped = json.jsonEscape(g_server.allocator, top_decoded) catch continue;
         defer if (top_escaped.ptr != top_decoded.ptr) g_server.allocator.free(top_escaped);
         const prefix: []const u8 = if (i > 0) "," else "";
-        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{d:.6}}}", .{ prefix, top_escaped, info.top_logprobs[i] }) catch return "";
+        var top_lp_buf: [32]u8 = undefined;
+        const top_lp_s = json.formatFiniteF32(&top_lp_buf, info.top_logprobs[i]);
+        const entry = std.fmt.bufPrint(buf[pos..], "{s}{{\"token\":\"{s}\",\"logprob\":{s}}}", .{ prefix, top_escaped, top_lp_s }) catch return "";
         pos += entry.len;
     }
     const tail = "]}]}";
@@ -5767,7 +6306,7 @@ fn writeOpenAiChunk(
     if (chunk) |c| {
         return sseWriteData(stream, c);
     } else |_| {
-        std.log.warn("SSE stream chunk exceeded buffer ({d} bytes escaped)", .{escaped.len});
+        std.log.warn("req={d} SSE stream chunk exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     }
 }
@@ -5814,7 +6353,7 @@ fn sendUsageChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: 
     const chunk = std.fmt.bufPrint(chunk_buf,
         \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
     , .{ id_prefix, req_id, obj_type, created, g_server.model_name, prompt_tokens, completion_tokens, total }) catch {
-        std.log.warn("SSE usage chunk exceeded buffer", .{});
+        std.log.warn("req={d} SSE usage chunk exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteData(stream, chunk);
@@ -5832,7 +6371,7 @@ fn sendFinalChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: 
     const final = std.fmt.bufPrint(chunk_buf,
         \\{{"id":"{s}-{d}","object":"{s}","created":{d},"model":"{s}","choices":[{{"index":0,{s},"finish_reason":"{s}"}}]}}
     , .{ id_prefix, req_id, obj_type, created, g_server.model_name, delta_or_text, finish_reason }) catch {
-        std.log.warn("SSE final chunk exceeded buffer", .{});
+        std.log.warn("req={d} SSE final chunk exceeded buffer", .{log_request_id});
         return;
     };
     _ = sseWriteData(stream, final);
@@ -5876,7 +6415,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     const use_grammar_stream = (sampling.grammar_string != null or sampling.json_schema != null) and !sampling.json_mode;
     if (g_server.request_manager != null and !use_grammar_stream and !sampling.json_mode) {
         const rm = g_server.request_manager.?;
-        const req = rm.enqueue(token_ids) catch |err| {
+        const req = rm.enqueue(token_ids, log_request_id) catch |err| {
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
@@ -5981,6 +6520,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    applyPendingVisionEmbeddings();
 
     // Prompt prefix caching (streaming): reuse KV cache for shared prefix
     var s_prefix_len: usize = 0;
@@ -6055,6 +6595,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     // Prefill, capture the last forward's return value (first generated token)
     const use_sampling_s = sampling.temperature > 0;
     const prng_seed_s = prngSeedFromSampling(sampling);
+    noteAutoSeed(sampling, prng_seed_s);
     var prng_s = std.Random.Xoshiro256.init(prng_seed_s);
     var mirostat_mu_s: f32 = sampling.mirostat_tau * 2.0;
     const prefill_start = milliTimestamp();
@@ -6392,21 +6933,25 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 // ── Connection handler & server entry point ─────────────────────
 
 fn handleConnection(stream: TcpStream) void {
+    // Assign the correlation ID before any log so socket-option failures
+    // can be grepped with the same req=N as the rest of the request.
+    log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
+    log_client_rid_len = 0;
     // Set read/write timeouts to prevent slow loris attacks, without this,
     // stream.read()/writeAll() block indefinitely and an attacker can exhaust
     // all max_concurrent_connections slots with incomplete requests or stalled reads.
     const timeout = std.posix.timeval{ .sec = connection_read_timeout_sec, .usec = 0 };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("Failed to set connection read timeout: {}", .{err});
+        std.log.warn("req={d} failed to set connection read timeout: {}", .{ log_request_id, err });
     };
     std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("Failed to set connection write timeout: {}", .{err});
+        std.log.warn("req={d} failed to set connection write timeout: {}", .{ log_request_id, err });
     };
     // Disable Nagle's algorithm, SSE streaming writes small token chunks (~20-100 bytes)
     // that Nagle would buffer for up to 200ms waiting for ACK coalescing.
     const nodelay_val: c_int = 1;
     std.posix.setsockopt(stream.handle, std.posix.IPPROTO.TCP, std.posix.TCP.NODELAY, std.mem.asBytes(&nodelay_val)) catch |err| {
-        std.log.warn("Failed to set TCP_NODELAY: {}", .{err});
+        std.log.warn("req={d} failed to set TCP_NODELAY: {}", .{ log_request_id, err });
     };
 
     // active_connections already incremented by accept loop before thread spawn.
@@ -6414,7 +6959,6 @@ fn handleConnection(stream: TcpStream) void {
         _ = g_server.metrics.active_connections.fetchSub(1, .release);
         stream.close();
     }
-    log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
     // Heap buffer: avoid ~1MB stack per connection thread (up to max_concurrent_connections).
     const buf = g_server.allocator.alloc(u8, http_buf_size) catch {
         g_server.metrics.recordRequest();
@@ -6448,11 +6992,11 @@ fn handleConnection(stream: TcpStream) void {
         // Connection-level failures below are not client protocol errors: no
         // 4xx is produced (the peer is gone or unresponsive), so they are kept
         // out of requests_client_error to preserve that signal's meaning.
-        // Probes/port scans make plain closes common, log once, move on.
+        // Probes/port scans make plain closes common; debug so production
+        // ReleaseFast logs are not flooded.
         .connection_closed => {
             g_server.metrics.recordRequest();
-            const t = getTimeComponents();
-            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Connection closed before request completed\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+            std.log.debug("req={d} connection closed before request completed", .{log_request_id});
         },
         .read_error => {
             g_server.metrics.recordRequest();
@@ -6497,6 +7041,10 @@ pub const ServerConfig = struct {
     rate_limit_rpm: u32 = 0,
     /// Max prompt tokens per minute (0 = no token-rate limit).
     rate_limit_tpm: u32 = 0,
+    /// Explicit conversation store path. Ignored when `no_conv_store` is set.
+    conv_store_path: ?[]const u8 = null,
+    /// Disable conversation persist/restore (in-memory only).
+    no_conv_store: bool = false,
 };
 
 /// Start the HTTP server with OpenAI-compatible API endpoints.
@@ -6565,6 +7113,20 @@ pub fn run(config: ServerConfig) !void {
     };
     server.api_key = api_key;
     server.start_time = timestamp();
+    server.start_mono_ms = milliTimestamp();
+
+    var conv_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (config.no_conv_store) {
+        server.conv_store_path = null;
+    } else if (config.conv_store_path) |p| {
+        server.conv_store_path = p;
+    } else {
+        server.conv_store_path = conv_store.defaultPath(&conv_path_buf);
+        if (server.conv_store_path == null) {
+            std.log.warn("conversation store disabled: no XDG_CACHE_HOME or HOME (pass --conv-store PATH)", .{});
+        }
+    }
+    server.loadConversationsLocked();
     server.metrics.process_start_time.store(server.start_time, .monotonic);
 
     // Optional token-bucket rate limiter (null when both limits are 0).
@@ -6578,7 +7140,12 @@ pub fn run(config: ServerConfig) !void {
     }
 
     g_server = &server;
-    g_tool_replay_allocator = config.allocator;
+
+    server.html_gzip = gzipAlloc(allocator, html_page) catch |err| blk: {
+        std.log.warn("server: gzip of chat UI failed ({s}), serving uncompressed", .{@errorName(err)});
+        break :blk &.{};
+    };
+    defer if (server.html_gzip.len != 0) allocator.free(server.html_gzip);
 
     // Initialize continuous batching scheduler and background thread.
     // The scheduler owns the model forward loop; HTTP handlers enqueue
@@ -6636,7 +7203,7 @@ pub fn run(config: ServerConfig) !void {
     // Without this, accept() blocks indefinitely and Ctrl+C doesn't work on macOS.
     const timeout = std.posix.timeval{ .sec = accept_timeout_sec, .usec = 0 };
     std.posix.setsockopt(tcp.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout)) catch |err| {
-        std.log.warn("Failed to set accept timeout: {}", .{err});
+        std.log.warn("server: failed to set accept timeout: {}", .{err});
     };
     defer tcp.deinit(io);
 
@@ -6731,20 +7298,29 @@ pub fn run(config: ServerConfig) !void {
         std.log.info("Draining {d} active connections...", .{active_count});
     }
 
+    var drain_warned = false;
     while (g_server.metrics.active_connections.load(.acquire) > 0) {
         const elapsed = milliTimestamp() - drain_start;
-        if (elapsed > drain_timeout_ms) {
-            std.log.warn("Drain timeout after {d}ms, forcing shutdown", .{elapsed});
-            break;
+        if (elapsed > drain_timeout_ms and !drain_warned) {
+            // Detached handler threads still use g_server (stack Server in run()).
+            // Freeing conversations / prefix IDs while they run is a use-after-free.
+            // Keep waiting; connection read timeouts and the cancelled scheduler
+            // make in-flight handlers exit.
+            std.log.warn("Drain timeout after {d}ms, still {d} connection(s); waiting so handlers cannot use freed server state", .{
+                elapsed,
+                g_server.metrics.active_connections.load(.acquire),
+            });
+            drain_warned = true;
         }
         sleepNs(drain_poll_interval_ms * std.time.ns_per_ms);
     }
 
-    // Free conversation storage under mutex, handler threads may still
-    // be running (drain timeout exceeded) and accessing conversations.
+    // Free conversation storage under mutex. Handlers have all exited
+    // (active_connections == 0), so they cannot still be reading these.
     {
         server.mutex.lockUncancelable(server.io);
         defer server.mutex.unlock(server.io);
+        server.persistConversationsLocked();
         if (server.cached_prompt_ids.len > 0) {
             server.clearCachedPromptIds();
         }
@@ -6761,6 +7337,15 @@ pub fn run(config: ServerConfig) !void {
 }
 
 // ── Tests ───────────────────────────────────────────────────────
+
+test "uptimeSeconds is monotonic elapsed and never negative" {
+    try std.testing.expectEqual(@as(i64, 0), uptimeSeconds(1000, 1000));
+    try std.testing.expectEqual(@as(i64, 0), uptimeSeconds(1000, 1999));
+    try std.testing.expectEqual(@as(i64, 5), uptimeSeconds(1000, 6000));
+    // NTP/manual step backward on a wall clock would look like this; monotonic
+    // duration must clamp rather than go negative.
+    try std.testing.expectEqual(@as(i64, 0), uptimeSeconds(5000, 1000));
+}
 
 test "parseContentLength normal" {
     try std.testing.expectEqual(@as(?usize, 42), parseContentLength("Content-Length: 42\r\nHost: localhost"));
@@ -6860,6 +7445,29 @@ test "writeStreamedContent emits empty delta with finish reason" {
     try std.testing.expect(std.mem.indexOf(u8, frames.items[0], "\"finish_reason\":\"stop\"") != null);
 }
 
+test "getTimeComponents wraps pre-epoch timestamps" {
+    defer sim_clock.setOverrideMs(null);
+    // 1s before epoch → 1969-12-31 23:59:59 UTC. Truncating division used to
+    // report 00:00:00.
+    sim_clock.setOverrideMs(-1000);
+    const before = getTimeComponents();
+    try std.testing.expectEqual(@as(u64, 23), before.hours);
+    try std.testing.expectEqual(@as(u64, 59), before.minutes);
+    try std.testing.expectEqual(@as(u64, 59), before.seconds);
+
+    sim_clock.setOverrideMs(0);
+    const epoch = getTimeComponents();
+    try std.testing.expectEqual(@as(u64, 0), epoch.hours);
+    try std.testing.expectEqual(@as(u64, 0), epoch.minutes);
+    try std.testing.expectEqual(@as(u64, 0), epoch.seconds);
+
+    sim_clock.setOverrideMs(3_661_000); // 1h 1m 1s
+    const later = getTimeComponents();
+    try std.testing.expectEqual(@as(u64, 1), later.hours);
+    try std.testing.expectEqual(@as(u64, 1), later.minutes);
+    try std.testing.expectEqual(@as(u64, 1), later.seconds);
+}
+
 test "prngSeedFromSampling uses sim_clock when seed omitted" {
     defer sim_clock.setOverrideMs(null);
     sim_clock.setOverrideMs(1_700_000_000_000);
@@ -6871,6 +7479,13 @@ test "prngSeedFromSampling uses sim_clock when seed omitted" {
     const mixed = schedulerPrngSeed(7, sampling);
     try std.testing.expect(mixed != seed);
     try std.testing.expectEqual(seed ^ (7 *% prng_seed_mix_golden), mixed);
+}
+
+test "shouldNoteAutoSeed only when sampling and seed omitted" {
+    try std.testing.expect(!shouldNoteAutoSeed(.{}));
+    try std.testing.expect(shouldNoteAutoSeed(.{ .temperature = 0.7 }));
+    try std.testing.expect(!shouldNoteAutoSeed(.{ .temperature = 0.7, .seed = 42 }));
+    try std.testing.expect(!shouldNoteAutoSeed(.{ .temperature = 0, .seed = 42 }));
 }
 
 test "originMatchesHost accepts same-origin http" {
@@ -6885,16 +7500,163 @@ test "originMatchesHost rejects path userinfo and cross-origin" {
     try std.testing.expect(!originMatchesHost("http://user@127.0.0.1:49453", "127.0.0.1:49453"));
 }
 
+test "isLoopbackHttpHost accepts loopback Host values" {
+    try std.testing.expect(isLoopbackHttpHost("127.0.0.1"));
+    try std.testing.expect(isLoopbackHttpHost("127.0.0.1:49453"));
+    try std.testing.expect(isLoopbackHttpHost("127.1.2.3:80"));
+    try std.testing.expect(isLoopbackHttpHost("localhost"));
+    try std.testing.expect(isLoopbackHttpHost("LocalHost:49453"));
+    try std.testing.expect(isLoopbackHttpHost("localhost."));
+    try std.testing.expect(isLoopbackHttpHost("[::1]"));
+    try std.testing.expect(isLoopbackHttpHost("[::1]:49453"));
+}
+
+test "isLoopbackHttpHost rejects DNS-rebind and LAN Host values" {
+    try std.testing.expect(!isLoopbackHttpHost("evil.com"));
+    try std.testing.expect(!isLoopbackHttpHost("evil.com:49453"));
+    try std.testing.expect(!isLoopbackHttpHost("127.0.0.1.nip.io"));
+    try std.testing.expect(!isLoopbackHttpHost("localhost.evil.com"));
+    try std.testing.expect(!isLoopbackHttpHost("0.0.0.0"));
+    try std.testing.expect(!isLoopbackHttpHost("192.168.1.1:49453"));
+    try std.testing.expect(!isLoopbackHttpHost(""));
+    try std.testing.expect(!isLoopbackHttpHost("127.1"));
+    try std.testing.expect(!isLoopbackHttpHost("127.0.0.1.2"));
+}
+
 test "getHeaderValue trims and rejects duplicates" {
     try std.testing.expectEqualStrings("127.0.0.1:49453", getHeaderValue("Host: 127.0.0.1:49453\r\n", "host").?);
     try std.testing.expect(getHeaderValue("Host: a\r\nHost: b\r\n", "host") == null);
     try std.testing.expect(getHeaderValue("Accept: */*\r\n", "origin") == null);
 }
 
+test "acceptsEncoding honors gzip q-values" {
+    try std.testing.expect(acceptsEncoding("Accept-Encoding: gzip, deflate, br\r\n", "gzip"));
+    try std.testing.expect(acceptsEncoding("accept-encoding: GZIP\r\n", "gzip"));
+    try std.testing.expect(!acceptsEncoding("Accept-Encoding: gzip;q=0\r\n", "gzip"));
+    try std.testing.expect(!acceptsEncoding("Accept-Encoding: deflate, br\r\n", "gzip"));
+    try std.testing.expect(!acceptsEncoding("Host: localhost\r\n", "gzip"));
+    try std.testing.expect(acceptsEncoding("Accept-Encoding: gzip;q=1.0, identity;q=0.5\r\n", "gzip"));
+}
+
+test "ifNoneMatch matches listed ETags" {
+    try std.testing.expect(ifNoneMatch("If-None-Match: \"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(ifNoneMatch("If-None-Match: W/\"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(ifNoneMatch("If-None-Match: \"x\", \"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(ifNoneMatch("If-None-Match: *\r\n", "\"abc\""));
+    try std.testing.expect(!ifNoneMatch("If-None-Match: \"xyz\"\r\n", "\"abc\""));
+    try std.testing.expect(!ifNoneMatch("Host: localhost\r\n", "\"abc\""));
+}
+
+test "gzipAlloc shrinks the chat UI and round-trips" {
+    const gz = try gzipAlloc(std.testing.allocator, html_page);
+    defer std.testing.allocator.free(gz);
+    try std.testing.expect(gz.len < html_page.len);
+    try std.testing.expectEqual(gzip_id1, gz[0]);
+    try std.testing.expectEqual(gzip_id2, gz[1]);
+
+    var reader: std.Io.Reader = .fixed(gz);
+    var window_buf: [std.compress.flate.max_window_len]u8 = undefined;
+    var decompress = std.compress.flate.Decompress.init(&reader, .gzip, &window_buf);
+    const out = try std.testing.allocator.alloc(u8, html_page.len + 1);
+    defer std.testing.allocator.free(out);
+    var writer: std.Io.Writer = .fixed(out);
+    _ = try decompress.reader.streamRemaining(&writer);
+    try std.testing.expectEqualSlices(u8, html_page, out[0..writer.end]);
+}
+
+test "chat UI defers markdown CDN and does not render-block highlight.js" {
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "rel=\"preconnect\" href=\"https://cdn.jsdelivr.net\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "marked.min.js") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "referrerpolicy=\"no-referrer\" defer></script>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "<script src=\"https://cdn.jsdelivr.net/gh/highlightjs") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/gh/highlightjs") == null);
+}
+
+test "sanitizeClientRequestId accepts correlation tokens" {
+    var buf: [max_client_request_id_len]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 3), sanitizeClientRequestId("abc", &buf));
+    try std.testing.expectEqualStrings("abc", buf[0..3]);
+    try std.testing.expectEqual(@as(usize, 36), sanitizeClientRequestId("550e8400-e29b-41d4-a716-446655440000", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("has space", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("bad\nid", &buf));
+    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("a" ** 65, &buf));
+}
+
+test "HealthView maps degradation reasons" {
+    var hv = HealthView{
+        .shutting_down = false,
+        .kv_pressure = false,
+        .high_error_rate = false,
+        .kv_used = 0,
+        .kv_total = 100,
+        .queue = 0,
+        .completed = 0,
+        .failed = 0,
+        .cancelled = 0,
+        .sched_errs = 0,
+        .preemptions = 0,
+        .sleeping = false,
+    };
+    try std.testing.expect(hv.ready());
+    try std.testing.expectEqualStrings("ok", hv.statusStr());
+    try std.testing.expectEqualStrings("none", hv.reasonStr());
+    hv.kv_pressure = true;
+    try std.testing.expect(!hv.ready());
+    try std.testing.expectEqual(HealthState.kv_pressure, hv.state());
+    try std.testing.expectEqualStrings("kv_pressure", hv.reasonStr());
+    hv.high_error_rate = true;
+    try std.testing.expectEqualStrings("kv_pressure,high_error_rate", hv.reasonStr());
+    hv.shutting_down = true;
+    try std.testing.expectEqualStrings("shutting_down", hv.statusStr());
+    try std.testing.expectEqualStrings("shutting_down", hv.reasonStr());
+}
+
 test "isSafeErrorToken" {
     try std.testing.expect(isSafeErrorToken("n_not_supported"));
     try std.testing.expect(!isSafeErrorToken("a\"b"));
     try std.testing.expect(!isSafeErrorToken(""));
+}
+
+test "nextAllowedToolCall skips undeclared names" {
+    var tp = json.ToolParams{};
+    tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
+    tp.tool_count = 1;
+    var reg = tools_mod.Registry{};
+    const text =
+        \\<tool_call>{"name": "rm", "arguments": {"path": "/"}}</tool_call>
+        \\<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>
+        \\<tool_call>{"name": "shell", "arguments": {}}</tool_call>
+    ;
+    var pos: usize = 0;
+    const first = nextAllowedToolCall(text, &pos, &tp, &reg) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, first, "get_weather") != null);
+    try std.testing.expect(std.mem.indexOf(u8, first, "rm") == null);
+    try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
+}
+
+test "nextAllowedToolCall accepts registry names" {
+    var tp = json.ToolParams{};
+    var reg = tools_mod.Registry{};
+    _ = try reg.register(.{ .name = "search", .description = "", .parameters_json = "{}" });
+    const text =
+        \\<tool_call>{"name": "search", "arguments": {}}</tool_call>
+    ;
+    var pos: usize = 0;
+    const hit = nextAllowedToolCall(text, &pos, &tp, &reg) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, hit, "search") != null);
+}
+
+test "nextAllowedToolCall rejects payload without name" {
+    var tp = json.ToolParams{};
+    tp.tools[0] = .{ .name = "a", .description = "", .parameters_json = "{}" };
+    tp.tool_count = 1;
+    var reg = tools_mod.Registry{};
+    const text =
+        \\<tool_call>{"arguments": {}}</tool_call>
+    ;
+    var pos: usize = 0;
+    try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
 }
 
 test "anthropicStatusLine maps known codes" {
@@ -6974,7 +7736,53 @@ test "parseDetokenizeTokens reads token id array" {
     try std.testing.expectEqual(@as(u32, 3), out[2]);
     try std.testing.expectEqual(@as(usize, 0), parseDetokenizeTokens("{}", &out));
     try std.testing.expectEqual(@as(usize, 0), parseDetokenizeTokens("{\"tokens\":[]}", &out));
-    try std.testing.expectEqual(@as(usize, 2), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..2]));
+    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..3]));
+    // Overflow: more entries than `out` can hold returns out.len + 1.
+    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..2]));
+    try std.testing.expectEqual(@as(usize, 9), parseDetokenizeTokens("{\"tokens\":[1,2,3,4,5,6,7,8,9]}", &out));
+}
+
+test "parsePositiveQueryParam distinguishes missing and invalid" {
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("foo=1", "n_tokens")) == .missing);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=0", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=abc", "n_tokens")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parsePositiveQueryParam("n_tokens=-1", "n_tokens")) == .invalid);
+    const a = parsePositiveQueryParam("n_tokens=512", "n_tokens");
+    try std.testing.expectEqual(@as(usize, 512), a.value);
+    const b = parsePositiveQueryParam("foo=1&n_tokens=64&bar=2", "n_tokens");
+    try std.testing.expectEqual(@as(usize, 64), b.value);
+}
+
+test "parseFormConversationId rejects missing zero and non-numeric" {
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select")) == .missing);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=0")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=abc")) == .invalid);
+    try std.testing.expect(std.meta.activeTag(parseFormConversationId("action=select&id=-1")) == .invalid);
+    const a = parseFormConversationId("action=select&id=1");
+    try std.testing.expectEqual(@as(u32, 1), a.value);
+    const b = parseFormConversationId("id=42");
+    try std.testing.expectEqual(@as(u32, 42), b.value);
+}
+
+test "extractMaxGenTokens prefers first present alias" {
+    try std.testing.expectEqual(@as(usize, 10), extractMaxGenTokens(
+        "{\"max_output_tokens\":10,\"max_tokens\":20}",
+        &.{ "max_output_tokens", "max_tokens", "max_completion_tokens" },
+    ));
+    try std.testing.expectEqual(@as(usize, 20), extractMaxGenTokens(
+        "{\"max_tokens\":20}",
+        &.{ "max_output_tokens", "max_tokens", "max_completion_tokens" },
+    ));
+    try std.testing.expectEqual(@as(usize, 30), extractMaxGenTokens(
+        "{\"max_completion_tokens\":30}",
+        &.{ "max_tokens", "max_completion_tokens" },
+    ));
+    try std.testing.expectEqual(default_max_gen_tokens, extractMaxGenTokens("{}", &.{"max_tokens"}));
+    try std.testing.expectEqual(@as(usize, 1), extractMaxGenTokens("{\"max_tokens\":0}", &.{"max_tokens"}));
+    try std.testing.expectEqual(max_gen_tokens_cap, extractMaxGenTokens("{\"max_tokens\":99999}", &.{"max_tokens"}));
 }
 
 test "known_endpoints include kv_cache routes" {
@@ -7059,6 +7867,34 @@ test "Utf8Holdback releases invalid continuation raw like batch decode" {
     try std.testing.expectEqualStrings("z", pieces.body);
 }
 
+test "Conversation.freeMessages releases tool_call_id" {
+    const allocator = std.testing.allocator;
+    var conv = Conversation{ .id = 1 };
+    const content = try allocator.dupe(u8, "ok");
+    const tcid = try allocator.dupe(u8, "call_1");
+    try conv.messages.append(allocator, .{
+        .role = .tool,
+        .content = content,
+        .tool_call_id = tcid,
+    });
+    conv.freeMessages(allocator);
+}
+
+test "Conversation.clearMessages releases tool_call_id" {
+    const allocator = std.testing.allocator;
+    var conv = Conversation{ .id = 1 };
+    defer conv.messages.deinit(allocator);
+    const content = try allocator.dupe(u8, "ok");
+    const tcid = try allocator.dupe(u8, "call_1");
+    try conv.messages.append(allocator, .{
+        .role = .tool,
+        .content = content,
+        .tool_call_id = tcid,
+    });
+    conv.clearMessages(allocator);
+    try std.testing.expectEqual(@as(usize, 0), conv.messages.items.len);
+}
+
 test "Conversation.setTitle keeps trailing multi-byte characters" {
     var conv = Conversation{ .id = 1 };
     conv.setTitle("caf\xc3\xa9"); // café, trailing é is fully present
@@ -7073,7 +7909,6 @@ test "Conversation.setTitle keeps trailing multi-byte characters" {
     try std.testing.expect(std.unicode.utf8ValidateSlice(t));
     try std.testing.expect(t.len < 47);
 }
-
 
 test "fuzz: all server functions" {
     try std.testing.fuzz({}, struct {
@@ -7128,6 +7963,16 @@ test "fuzz: all server functions" {
                 // null case
                 const null_result = clampMaxTokens(null);
                 std.debug.assert(null_result == default_max_gen_tokens);
+            }
+
+            // extractMaxGenTokens: first present alias wins, missing → default
+            {
+                const a = extractMaxGenTokens("{\"max_output_tokens\":10,\"max_tokens\":20}", &.{ "max_output_tokens", "max_tokens" });
+                std.debug.assert(a == 10);
+                const b = extractMaxGenTokens("{\"max_tokens\":20}", &.{ "max_output_tokens", "max_tokens" });
+                std.debug.assert(b == 20);
+                const c = extractMaxGenTokens("{}", &.{"max_tokens"});
+                std.debug.assert(c == default_max_gen_tokens);
             }
 
             // tokensPerSec
@@ -7313,6 +8158,11 @@ test "fuzz: all server functions" {
                 // First match wins, must not crash on duplicate keys
                 const ntok = extractQueryParam(qn, "n_tokens");
                 std.debug.assert(ntok != null);
+                _ = parsePositiveQueryParam(qn, "n_tokens");
+                _ = parsePositiveQueryParam(path_buf[0..path_len], "n_tokens");
+                std.debug.assert(std.meta.activeTag(parsePositiveQueryParam("foo=1", "n_tokens")) == .missing);
+                std.debug.assert(std.meta.activeTag(parsePositiveQueryParam("n_tokens=0", "n_tokens")) == .invalid);
+                std.debug.assert(std.meta.activeTag(parsePositiveQueryParam("n_tokens=512", "n_tokens")) == .value);
             }
 
             // parseRequestLine, untrusted HTTP request-line bytes
@@ -7344,7 +8194,7 @@ test "fuzz: all server functions" {
                 const body_len = smith.indexWithHash(body_buf.len + 1, 0x71);
                 var out_ids: [64]u32 = undefined;
                 const n_rand = parseDetokenizeTokens(body_buf[0..body_len], &out_ids);
-                std.debug.assert(n_rand <= out_ids.len);
+                std.debug.assert(n_rand <= out_ids.len + 1);
 
                 var good_body: [128]u8 = undefined;
                 const bn = std.fmt.bufPrint(&good_body, "{{\"tokens\":[{d},{d},9999999999]}}", .{
@@ -7358,7 +8208,13 @@ test "fuzz: all server functions" {
 
                 std.debug.assert(parseDetokenizeTokens("{}", &out_ids) == 0);
                 std.debug.assert(parseDetokenizeTokens("{\"tokens\":[]}", &out_ids) == 0);
-                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[1,2,3]}", out_ids[0..2]) == 2); // out cap
+                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[1,2,3]}", out_ids[0..2]) == 3); // overflow sentinel
+
+                _ = parseFormConversationId(body_buf[0..body_len]);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("action=select")) == .missing);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("id=")) == .invalid);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("id=0")) == .invalid);
+                std.debug.assert(std.meta.activeTag(parseFormConversationId("id=1")) == .value);
             }
 
             // KnownEndpoint: verify at comptime
@@ -7453,6 +8309,8 @@ test "fuzz: HTTP header and request-line helpers" {
 
             // getHeaderValue: any returned value must be a subslice of the
             // input, and must not contain the line separator.
+            _ = acceptsEncoding(headers, "gzip");
+            _ = ifNoneMatch(headers, "\"abc\"");
             if (getHeaderValue(headers, "host")) |val| {
                 const v0 = @intFromPtr(val.ptr);
                 const v1 = v0 + val.len;
@@ -7500,6 +8358,25 @@ test "fuzz: HTTP header and request-line helpers" {
                     origin["http://".len..];
                 try std.testing.expect(std.ascii.eqlIgnoreCase(rest, host));
                 try std.testing.expect(std.mem.indexOfAny(u8, rest, "/@?#") == null);
+            }
+
+            // sanitizeClientRequestId: either rejects (0) or copies the whole
+            // input; never panics or returns a length that would overrun `out`.
+            var out: [max_client_request_id_len]u8 = undefined;
+            const n = sanitizeClientRequestId(headers, &out);
+            try std.testing.expect(n == 0 or n == headers.len);
+            if (n > 0) try std.testing.expectEqualStrings(headers, out[0..n]);
+
+            // isLoopbackHttpHost: a positive verdict is localhost, ::1, or 127/8.
+            _ = isLoopbackHttpHost(host);
+            _ = isLoopbackHttpHost(origin);
+            if (isLoopbackHttpHost(host)) {
+                const hn = hostnameFromHost(host);
+                const name = if (hn.len > 0 and hn[hn.len - 1] == '.') hn[0 .. hn.len - 1] else hn;
+                const loop = std.ascii.eqlIgnoreCase(name, "localhost") or
+                    std.mem.eql(u8, name, "::1") or
+                    (name.len >= 5 and std.mem.startsWith(u8, name, "127."));
+                try std.testing.expect(loop);
             }
         }
     }.f, .{});

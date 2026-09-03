@@ -1,5 +1,7 @@
 # DeepSeek V4 Metal: Full GPU Path & Output Divergence Fix
 
+**Status**: accepted outcome (bit-identical Metal vs CPU) still holds. Current `Ds4Model` routes rms/SDPA/HC through a dedicated `CpuBackend` on every selected backend; Metal GEMV also stays on that CPU path (`gemvBackend` is GPU only for Vulkan/WebGPU/CUDA). The ten kernels below still compile into Metal pipelines. MoE/top-k Metal kernels listed in earlier drafts were removed.
+
 ## Result
 
 `--backend metal` now produces **bit-identical output** to `--backend cpu` and achieves **10.7-21.2 tok/s** with suffix speculation (matching CPU exactly).
@@ -50,7 +52,9 @@ This ensures:
 
 ## What Was Built
 
-### 14 DS4 Metal Compute Kernels
+### 10 DS4 Metal Compute Kernels
+
+Canonical inventory: [KERNELS.md](KERNELS.md) (DeepSeek V4 Metal Kernels). `ds4_topk_routing`, `ds4_moe_gate_up_mxfp4`, `ds4_moe_down_mxfp4`, and `ds4_rms_norm_noweight` were removed.
 
 | Kernel | File | Purpose |
 |--------|------|---------|
@@ -63,10 +67,6 @@ This ensures:
 | `ds4_inv_rope_table` | ds4.metal | Inverse RoPE |
 | `ds4_weighted_accum` | ds4.metal | Expert output accumulation |
 | `sdpa_fa2_turbo_hd512` | ds4.metal | FlashAttention-2 for turbo/Q8_0 hd=512 |
-| `ds4_topk_routing` | ds4.metal | GPU top-k expert selection |
-| `ds4_moe_gate_up_mxfp4` | ds4.metal | Batched MoE gate+up GEMV |
-| `ds4_moe_down_mxfp4` | ds4.metal | Batched MoE down GEMV |
-| `ds4_rms_norm_noweight` | ds4.metal | Weightless per-head Q norm |
 | `ds4_fused_attn_proj` | ds4_fused.metal | Megakernel: 6-stage fused attention |
 
 ### Metal Backend Infrastructure
@@ -74,7 +74,6 @@ This ensures:
 - `gemvMlxQGpu` / `gemvMxfp4StGpu`, GPU-native GEMV with `getWeightBufRef` (makeBuffer copy)
 - `getWeightBufRef`: copies weight data to Metal-managed memory for mmap safety
 - `ds4FusedAttnProj`: dispatch function for fused attention megakernel
-- `ds4TopkRouting` / `ds4MoeGateUpMxfp4` / `ds4MoeDownMxfp4`, batched MoE dispatch
 - Zero-cost `sync()` fast path (skip when no GPU work pending)
 - Conditional sync in `gemvMlxQ`/`gemvMxfp4St` CPU fallback
 - CPU thresholds for rmsNorm (≤8192), clampedSiluMul (≤16384), SDPA (≤8192)

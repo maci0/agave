@@ -3,6 +3,7 @@
 //! Atomic counter provides dynamic work distribution across threads.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 
 /// Maximum number of worker threads (excludes main thread which also participates).
@@ -21,6 +22,12 @@ pub const ThreadPool = struct {
 
     /// Io context for futex operations. Set during spawn().
     io: Io = undefined,
+
+    /// Logical CPU each worker pins itself to, indexed by worker id. Only the
+    /// first `n_core_ids` entries are set; a worker past that stays unpinned.
+    /// Set by `setAffinity` before `spawn`.
+    core_ids: [max_workers]u32 = undefined,
+    n_core_ids: usize = 0,
 
     // ── Shared task descriptor ──────────────────────────────────
     // Written by dispatch(), read by workers. Protected by generation counter.
@@ -57,13 +64,44 @@ pub const ThreadPool = struct {
         return .{ .n_workers = @min(n, max_workers) };
     }
 
+    /// Pin worker `i` to `core_ids[i]`. Must be called before `spawn`.
+    ///
+    /// `core_ids` should hold one logical CPU per physical core
+    /// (`backend.physicalCoreIds`): memory-bandwidth-bound kernels gain nothing
+    /// from SMT siblings, which only contend for a core's load ports, and the
+    /// spin-wait in `parallelFor` degrades badly when workers share a core.
+    /// Ids past `n_workers` are ignored; extra workers run unpinned.
+    ///
+    /// No-op off Linux. macOS exposes no thread-to-core binding (its affinity
+    /// API is an advisory hint and does nothing on Apple Silicon).
+    pub fn setAffinity(self: *ThreadPool, core_ids: []const u32) void {
+        if (comptime builtin.os.tag != .linux) return;
+        const n = @min(core_ids.len, max_workers);
+        @memcpy(self.core_ids[0..n], core_ids[0..n]);
+        self.n_core_ids = n;
+    }
+
+    /// Bind the calling thread to one logical CPU. Failure is ignored: an
+    /// unpinned worker is slower under SMT contention, never incorrect.
+    fn pinSelf(cpu: u32) void {
+        if (comptime builtin.os.tag != .linux) return;
+        const linux = std.os.linux;
+        // CPU_SETSIZE is the mask size in bytes, not in words: the bit capacity
+        // is @bitSizeOf(cpu_set_t) (1024 on every word size). Multiplying by
+        // @bitSizeOf(usize) overshoots 8x and indexes the mask out of bounds.
+        if (cpu >= @bitSizeOf(linux.cpu_set_t)) return;
+        var set: linux.cpu_set_t = @splat(0);
+        set[cpu / @bitSizeOf(usize)] = @as(usize, 1) << @intCast(cpu % @bitSizeOf(usize));
+        linux.sched_setaffinity(0, &set) catch {};
+    }
+
     /// Spawn worker threads. Must be called exactly once, after the pool is
     /// at its final memory location. Workers capture `self` by pointer.
     pub fn spawn(self: *ThreadPool, io: Io) void {
         self.io = io;
         for (0..self.n_workers) |i| {
             self.workers[i] = .{
-                .thread = std.Thread.spawn(.{}, workerLoop, .{self}) catch |err| {
+                .thread = std.Thread.spawn(.{}, workerLoop, .{ self, i }) catch |err| {
                     std.log.warn("ThreadPool: failed to spawn worker {d}: {s}", .{ i, @errorName(err) });
                     self.n_workers = i;
                     return;
@@ -73,8 +111,16 @@ pub const ThreadPool = struct {
     }
 
     /// Shut down all worker threads.
+    ///
+    /// `shutdown` is published before waiting for `active == 0` so a racing
+    /// `parallelFor` either completes its batch (workers still fetchSub) or
+    /// sees the flag and runs inline instead of waking threads that `join`
+    /// is about to reap.
     pub fn deinit(self: *ThreadPool) void {
         self.shutdown.store(true, .release);
+        while (self.active.load(.acquire) != 0) {
+            std.atomic.spinLoopHint();
+        }
         _ = self.generation.fetchAdd(1, .release);
         self.io.futexWake(u32, &self.generation.raw, @intCast(self.n_workers));
         for (0..self.n_workers) |i| {
@@ -98,7 +144,7 @@ pub const ThreadPool = struct {
         const effective_grain = @max(grain, min_grain);
 
         // If work is too small for parallelism, run inline
-        if (self.n_workers == 0 or total <= effective_grain) {
+        if (self.n_workers == 0 or total <= effective_grain or self.shutdown.load(.acquire)) {
             func(ctx, 0, total);
             return;
         }
@@ -108,6 +154,14 @@ pub const ThreadPool = struct {
         // race, only one succeeds; the other falls back to inline execution.
         if (self.active.cmpxchgStrong(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
             std.log.err("ThreadPool: concurrent parallelFor detected (active={d}), running inline", .{still_active});
+            func(ctx, 0, total);
+            return;
+        }
+
+        // deinit() may have set shutdown after the check above and be waiting
+        // on active == 0. Drop the claim and run inline so join can proceed.
+        if (self.shutdown.load(.acquire)) {
+            self.active.store(0, .release);
             func(ctx, 0, total);
             return;
         }
@@ -149,7 +203,9 @@ pub const ThreadPool = struct {
     }
 
     /// Worker thread main loop. Sleeps on generation futex, wakes to do work.
-    fn workerLoop(pool: *ThreadPool) void {
+    fn workerLoop(pool: *ThreadPool, worker_id: usize) void {
+        if (worker_id < pool.n_core_ids) pinSelf(pool.core_ids[worker_id]);
+
         // Start at 0 to ensure workers wake on the first generation bump (0→1).
         var local_gen: u32 = 0;
 
@@ -157,17 +213,19 @@ pub const ThreadPool = struct {
             // Sleep until generation advances past our local copy
             pool.io.futexWaitUncancelable(u32, &pool.generation.raw, local_gen);
 
-            if (pool.shutdown.load(.acquire)) return;
-
             const new_gen = pool.generation.load(.acquire);
-            if (new_gen == local_gen) continue; // spurious wakeup
-            local_gen = new_gen;
+            if (new_gen != local_gen) {
+                local_gen = new_gen;
+                // Drain a posted batch even if deinit() already set shutdown.
+                // parallelFor claims `active` for each worker and waits for
+                // fetchSub; returning here without it deadlocks both.
+                if (pool.active.load(.acquire) != 0) {
+                    pool.doWork();
+                    _ = pool.active.fetchSub(1, .release);
+                }
+            }
 
-            // Do work
-            pool.doWork();
-
-            // Signal completion
-            _ = pool.active.fetchSub(1, .release);
+            if (pool.shutdown.load(.acquire) and pool.active.load(.acquire) == 0) return;
         }
     }
 };
@@ -250,6 +308,51 @@ test "init and deinit without work" {
 
     // After deinit, n_workers should be 0
     try std.testing.expectEqual(@as(usize, 0), pool.n_workers);
+}
+
+/// Parallel work that publishes `started` before finishing, so a racing
+/// `deinit` can overlap the batch.
+const OverlapContext = struct {
+    started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    result: std.atomic.Value(usize),
+
+    fn callback(ctx_ptr: *anyopaque, start: usize, end: usize) void {
+        const self: *OverlapContext = @ptrCast(@alignCast(ctx_ptr));
+        self.started.store(true, .release);
+        const ts = std.posix.timespec{ .sec = 0, .nsec = 20 * std.time.ns_per_ms };
+        _ = std.posix.system.nanosleep(&ts, null);
+        var local_sum: usize = 0;
+        for (start..end) |i| {
+            local_sum += i;
+        }
+        _ = self.result.fetchAdd(local_sum, .acq_rel);
+    }
+};
+
+test "deinit waits for in-flight parallelFor" {
+    var threaded = Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+
+    var pool = ThreadPool.init(2);
+    pool.spawn(threaded.io());
+
+    var ctx = OverlapContext{ .result = std.atomic.Value(usize).init(0) };
+    const n: usize = 64;
+
+    const Dispatch = struct {
+        fn run(p: *ThreadPool, c: *OverlapContext, total: usize) void {
+            p.parallelFor(total, 8, @ptrCast(c), OverlapContext.callback);
+        }
+    };
+    const t = try std.Thread.spawn(.{}, Dispatch.run, .{ &pool, &ctx, n });
+    while (!ctx.started.load(.acquire)) {
+        std.atomic.spinLoopHint();
+    }
+    pool.deinit();
+    t.join();
+
+    const expected: usize = (n - 1) * n / 2;
+    try std.testing.expectEqual(expected, ctx.result.load(.acquire));
 }
 
 test "fuzz: ThreadPool parallelFor" {
