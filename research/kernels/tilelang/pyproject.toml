@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "TileLang kernel-generation experiment for Agave backends (research-only)"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "tilelang==0.1.13",
+    "tilelang==0.1.14",
     "numpy==2.4.3",
     "gguf==0.18.0",
 ]
