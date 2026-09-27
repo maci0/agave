@@ -2057,7 +2057,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
 /// Target architectures listed in `--help`. DFlash2 is a drafter (`--draft-model`), not a target.
 const supported_arch_help = blk: {
     const order = [_]Arch{
-        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4_exp,
+        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4exp, .qwen4_exp,
         .gpt_oss, .nemotron_h, .nemotron_nano,   .glm4,   .deepseek4,
         .llama4,
     };
@@ -2413,7 +2413,7 @@ pub fn main(init: std.process.Init) !void {
 
     var arch = Arch.detect(arch_str) orelse {
         eprint("Error: unsupported architecture '{s}'\n", .{arch_str});
-        eprint("  Supported: gemma3, gemma4, diffusion-gemma, qwen35, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4\n", .{});
+        eprint("  Supported: gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4_exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4\n", .{});
         std.process.exit(1);
     };
 
@@ -2426,6 +2426,12 @@ pub fn main(init: std.process.Init) !void {
         eprint("Error: {s} model support disabled at compile time\n", .{arch.displayName()});
         eprint("  Rebuild with -Denable-{s}=true to enable.\n", .{arch.buildFlag()});
         std.process.exit(1);
+    }
+
+    // qwen4exp PLE table is tens of GB: never fault it in at load.
+    if (arch == .qwen4exp and !cli.use_mmap) {
+        cli.use_mmap = true;
+        if (!g_quiet) eprint("qwen4exp: enabling --mmap so the PLE table stays demand-paged\n", .{});
     }
 
     // ── Backend selection ─────────────────────────────────────────
@@ -2457,6 +2463,9 @@ pub fn main(init: std.process.Init) !void {
     // Register mmap'd weight regions for UMA zero-copy GPU access
     if (gguf_file) |g| {
         if (g.mapped_data.len > 0) be.registerHostRegion(g.mapped_data.ptr, g.mapped_data.len);
+        for (g.extra_shards.items) |shard| {
+            if (shard.len > 0) be.registerHostRegion(shard.ptr, shard.len);
+        }
     }
     if (st_dir) |s| {
         for (s.shard_data) |shard| {
@@ -5538,6 +5547,9 @@ test {
     _ = @import("models/gemma4.zig");
     _ = @import("models/diffusion_gemma.zig");
     _ = @import("models/qwen35.zig");
+    _ = @import("models/qwen4exp.zig");
+    _ = @import("models/qwen4_exp.zig");
+    _ = @import("ngram_cache.zig");
     _ = @import("models/gpt_oss.zig");
     _ = @import("models/glm4.zig");
     _ = @import("models/deepseek4.zig");
@@ -5848,7 +5860,7 @@ test "usage_text documents every cli_spec" {
 
 test "usage_text lists qwen4-exp" {
     try std.testing.expect(std.mem.indexOf(u8, usage_text, "qwen4-exp") != null);
-    try std.testing.expectEqualStrings(supported_arch_help, "gemma3, gemma4, diffusion-gemma, qwen35, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4");
+    try std.testing.expectEqualStrings(supported_arch_help, "gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4");
 }
 
 test "shouldNoteSeed always surfaces auto-derived seeds" {

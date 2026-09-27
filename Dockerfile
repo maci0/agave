@@ -28,6 +28,7 @@ ARG ENABLE_BENCH=false
 # Model enable flags (all enabled by default). Disable to reduce binary size.
 ARG ENABLE_GEMMA3=true
 ARG ENABLE_QWEN35=true
+ARG ENABLE_QWEN4EXP=true
 ARG ENABLE_QWEN4_EXP=true
 ARG ENABLE_GPT_OSS=true
 ARG ENABLE_NEMOTRON_H=true
@@ -151,6 +152,7 @@ RUN --mount=type=cache,target=/src/.zig-cache \
         -Denable-bench="$ENABLE_BENCH" \
         -Denable-gemma3="$ENABLE_GEMMA3" \
         -Denable-qwen35="$ENABLE_QWEN35" \
+        -Denable-qwen4exp="$ENABLE_QWEN4EXP" \
         -Denable-qwen4-exp="$ENABLE_QWEN4_EXP" \
         -Denable-gpt-oss="$ENABLE_GPT_OSS" \
         -Denable-nemotron-h="$ENABLE_NEMOTRON_H" \

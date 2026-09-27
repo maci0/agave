@@ -139,6 +139,7 @@ jobs:
             ENABLE_WEBGPU=false
             ENABLE_DEBUG=false
             ENABLE_QWEN35=false
+            ENABLE_QWEN4EXP=false
             ENABLE_QWEN4_EXP=false
             ENABLE_GPT_OSS=false
             ENABLE_NEMOTRON_H=false

@@ -39,7 +39,8 @@ pub fn build(b: *std.Build) void {
     // ── Model enable/disable flags (all default to true) ─────────
     const enable_gemma3 = b.option(bool, "enable-gemma3", "Enable Gemma3 model support (default: true)") orelse true;
     const enable_qwen35 = b.option(bool, "enable-qwen35", "Enable Qwen3.5 model support (default: true)") orelse true;
-    const enable_qwen4_exp = b.option(bool, "enable-qwen4-exp", "Enable Qwen4-Exp model support (default: true)") orelse true;
+    const enable_qwen4exp = b.option(bool, "enable-qwen4exp", "Enable Qwen3.8-Flash-Next GGUF (qwen4exp) model support (default: true)") orelse true;
+    const enable_qwen4_exp = b.option(bool, "enable-qwen4-exp", "Enable Qwen4-Exp SafeTensors (qwen4_exp) model support (default: true)") orelse true;
     const enable_gpt_oss = b.option(bool, "enable-gpt-oss", "Enable GPT-OSS model support (default: true)") orelse true;
     const enable_nemotron_h = b.option(bool, "enable-nemotron-h", "Enable Nemotron-H model support (default: true)") orelse true;
     const enable_nemotron_nano = b.option(bool, "enable-nemotron-nano", "Enable Nemotron-Nano model support (default: true)") orelse true;
@@ -252,6 +253,7 @@ pub fn build(b: *std.Build) void {
     backend_options.addOption(bool, "enable_webgpu", enable_webgpu);
     backend_options.addOption(bool, "enable_gemma3", enable_gemma3);
     backend_options.addOption(bool, "enable_qwen35", enable_qwen35);
+    backend_options.addOption(bool, "enable_qwen4exp", enable_qwen4exp);
     backend_options.addOption(bool, "enable_qwen4_exp", enable_qwen4_exp);
     backend_options.addOption(bool, "enable_gpt_oss", enable_gpt_oss);
     backend_options.addOption(bool, "enable_nemotron_h", enable_nemotron_h);
@@ -534,6 +536,7 @@ pub fn build(b: *std.Build) void {
     wasm_options.addOption(bool, "enable_webgpu", false);
     wasm_options.addOption(bool, "enable_gemma3", enable_gemma3);
     wasm_options.addOption(bool, "enable_qwen35", false); // disabled: Zig+LLVM wasm32 codegen bug in DeltaNet SSM
+    wasm_options.addOption(bool, "enable_qwen4exp", false);
     wasm_options.addOption(bool, "enable_qwen4_exp", false);
     wasm_options.addOption(bool, "enable_gpt_oss", false);
     wasm_options.addOption(bool, "enable_nemotron_h", false);
