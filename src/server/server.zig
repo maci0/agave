@@ -434,6 +434,17 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/favicon.ico", .allow = "GET, OPTIONS", .msg = "Use GET." },
 };
+
+/// True when `path` addresses a route whose errors use the Anthropic envelope.
+/// Used for failures raised before routing (malformed request, oversized body)
+/// so a `/v1/messages` client never receives an OpenAI-shaped error.
+fn isAnthropicPath(path: []const u8) bool {
+    for (known_endpoints) |ep| {
+        if (ep.is_anthropic) return std.mem.eql(u8, path, ep.path);
+    }
+    return false;
+}
+
 /// Per-connection read timeout (seconds), prevents slow loris DoS attacks
 /// where an attacker holds connections open by sending data one byte at a time.
 const connection_read_timeout_sec: i64 = 30;
@@ -1387,8 +1398,13 @@ fn parseFormConversationId(body: []const u8) FormConversationId {
 /// content when the peer vanished before sending a complete request.
 const HttpReadResult = union(enum) {
     ok: HttpRequest,
-    malformed,
-    body_too_large,
+    /// Request line or headers were unreadable. Payload is the request path
+    /// when the request line parsed, "" otherwise, so the caller can pick the
+    /// error envelope of the route the client addressed.
+    malformed: []const u8,
+    /// Payload is the request path, so an oversized body to `/v1/messages`
+    /// still gets the Anthropic error shape.
+    body_too_large: []const u8,
     /// Peer closed the connection before a complete request arrived
     /// (probes, port scans, health checks dialing the raw port).
     connection_closed,
@@ -1428,6 +1444,8 @@ fn parseContentLength(headers: []const u8) ?usize {
 /// on parse errors, `.connection_closed`/`.read_error` when the peer vanished
 /// or the socket failed before a complete request arrived, `.body_too_large`
 /// when Content-Length exceeds max_request_body_size (RFC 7231 §6.5.11).
+/// Both failure variants carry the request path (empty when the request line
+/// did not parse) so the caller can answer in the addressed route's envelope.
 fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     var total: usize = 0;
     var hdr_end: usize = undefined;
@@ -1443,12 +1461,12 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
             hdr_end = scan_start + pos;
             break;
         }
-    } else return .malformed;
+    } else return .{ .malformed = "" };
 
     // Parse request line: "GET /path HTTP/1.1"
-    const req_line_end = std.mem.indexOf(u8, buf[0..hdr_end], "\r\n") orelse return .malformed;
+    const req_line_end = std.mem.indexOf(u8, buf[0..hdr_end], "\r\n") orelse return .{ .malformed = "" };
     const req_line = buf[0..req_line_end];
-    const parsed_line = parseRequestLine(req_line) orelse return .malformed;
+    const parsed_line = parseRequestLine(req_line) orelse return .{ .malformed = "" };
     const method = parsed_line.method;
     const path = parsed_line.path;
     const query = parsed_line.query;
@@ -1459,16 +1477,16 @@ fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
     // Reject Transfer-Encoding, this server only supports identity encoding.
     // Accepting chunked requests without parsing them enables HTTP request
     // smuggling (CWE-444) when behind a reverse proxy.
-    if (hasHeader(headers, "transfer-encoding")) return .malformed;
+    if (hasHeader(headers, "transfer-encoding")) return .{ .malformed = path };
 
-    const content_length = parseContentLength(headers) orelse return .malformed;
+    const content_length = parseContentLength(headers) orelse return .{ .malformed = path };
     const body_start = hdr_end + 4;
 
     // Read remaining body bytes if needed
     if (content_length > 0) {
-        if (content_length > max_request_body_size) return .body_too_large;
-        const body_end = std.math.add(usize, body_start, content_length) catch return .body_too_large;
-        if (body_end > buf.len) return .body_too_large;
+        if (content_length > max_request_body_size) return .{ .body_too_large = path };
+        const body_end = std.math.add(usize, body_start, content_length) catch return .{ .body_too_large = path };
+        if (body_end > buf.len) return .{ .body_too_large = path };
         while (total < body_end) {
             const n = stream.read(buf[total..body_end]) catch return .read_error;
             if (n == 0) return .connection_closed;
@@ -2710,14 +2728,16 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
             // Distinguish "field absent" from "field present but not a string",
             // the way /v1/completions and /v1/responses do for `prompt`/`input`.
-            const wrong_type = (json.hasField(body, "text") and json.extractField(body, "text") == null) or
-                (json.hasField(body, "content") and json.extractField(body, "content") == null);
+            // Name the offending field so the caller knows which one to fix.
+            const bad_text = json.hasField(body, "text") and json.extractField(body, "text") == null;
+            const bad_content = json.hasField(body, "content") and json.extractField(body, "content") == null;
+            const wrong_type = bad_text or bad_content;
             sendJsonErrorEx(
                 stream,
                 "400 Bad Request",
                 "invalid_request_error",
                 if (wrong_type) "text and content must be strings" else "Provide text, content, or messages",
-                "text",
+                if (bad_text) "text" else if (bad_content) "content" else null,
                 if (wrong_type) "invalid_value" else "missing_required_parameter",
             );
             g_server.metrics.recordClientError();
@@ -2821,6 +2841,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
         const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
         const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
         // Snapshot seq_len + prefix under mutex, concurrent generateN may free/replace
@@ -2851,10 +2872,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             \\{{"seq_len":{d},"cached_prefix_len":{d},"prefix_hash":"{x}","kv_used":{d},"kv_total":{d}}}
         , .{ seq_len, cached_prefix_len, hash, kv_used, kv_total }) catch {
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
+            g_server.metrics.recordFailure();
             logRequestDone(method, path, 500, elapsedMs(request_start));
             return;
         };
         sendJson(stream, info_json);
+        g_server.metrics.recordCompletion();
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
@@ -3525,9 +3548,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             };
             // Rate limit while the reply is still recoverable.
             const regen_ids_owned = g_server.tokenizer.encode(regen_formatted) catch |err| {
-                std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+                std.log.err("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
                 wipeFree(g_server.allocator, @constCast(regen_formatted));
+                // Put the popped reply back and answer, so the turn survives
+                // and the client sees a status line instead of a bare close.
                 if (removed_assistant) |m| regen_conv.restoreHeldMessage(g_server.allocator, m);
+                sendJsonError(stream, "500 Internal Server Error", "server_error", "Tokenization failed");
+                g_server.metrics.recordFailure();
+                logRequestDone(method, path, 500, elapsedMs(request_start));
                 break :blk null;
             };
             const regen_prompt_tokens = estimatePromptTokens(regen_ids_owned.len, regen_formatted.len);
@@ -3743,13 +3771,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             // leaves a user message that no assistant ever answered, and it
             // replays as context on the next turn.
             const prompt_ids_owned = g_server.tokenizer.encode(formatted) catch |err| {
-                std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
-                // Undo the append above so the stored conversation is what one
-                // run leaves, and the retry the released key invites starts
-                // from the same state instead of a second copy of this turn.
+                std.log.err("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+                // Roll the turn back like the 429 path below so the stored
+                // conversation is what one run leaves and the retry the
+                // released key invites starts from the same state, then
+                // answer: a request that ends with no response leaves the
+                // client hanging on a closed connection with no status line.
                 const appended = conv.messages.pop();
                 if (appended) |dropped| Conversation.freeOwnedMessage(g_server.allocator, dropped);
                 if (formatted.ptr != trimmed.ptr) wipeFree(g_server.allocator, @constCast(formatted));
+                sendJsonError(stream, "500 Internal Server Error", "server_error", "Tokenization failed");
+                g_server.metrics.recordFailure();
+                logRequestDone(method, path, 500, elapsedMs(request_start));
                 break :blk null;
             };
             // Ownership moves to the caller on the success path only.
@@ -5286,6 +5319,7 @@ fn anthropicStatusLine(status_code: []const u8) []const u8 {
     if (std.mem.eql(u8, status_code, "400")) return "400 Bad Request";
     if (std.mem.eql(u8, status_code, "401")) return "401 Unauthorized";
     if (std.mem.eql(u8, status_code, "404")) return "404 Not Found";
+    if (std.mem.eql(u8, status_code, "413")) return "413 Payload Too Large";
     if (std.mem.eql(u8, status_code, "429")) return "429 Too Many Requests";
     if (std.mem.eql(u8, status_code, "503")) return "503 Service Unavailable";
     return "500 Internal Server Error";
@@ -7246,19 +7280,27 @@ fn handleConnection(stream: TcpStream) void {
     }
     switch (readHttpRequest(stream, buf)) {
         .ok => |req| handleRequest(stream, req),
-        .body_too_large => {
+        .body_too_large => |ep_path| {
             g_server.metrics.recordRequest();
             g_server.metrics.recordClientError();
             const t = getTimeComponents();
             slog(log_time_fmt ++ " req={d} Rejected oversized request body (>{d} bytes) -> 413\n", .{ t.hours, t.minutes, t.seconds, log_request_id, max_request_body_size });
-            sendJsonErrorEx(stream, "413 Payload Too Large", "invalid_request_error", "Request body too large", null, "request_too_large");
+            if (isAnthropicPath(ep_path)) {
+                sendAnthropicError(stream, "413", "request_too_large", "Request body too large");
+            } else {
+                sendJsonErrorEx(stream, "413 Payload Too Large", "invalid_request_error", "Request body too large", null, "request_too_large");
+            }
         },
-        .malformed => {
+        .malformed => |ep_path| {
             g_server.metrics.recordRequest();
             g_server.metrics.recordClientError();
             const t = getTimeComponents();
             slog(log_time_fmt ++ " req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request", null, "malformed_request");
+            if (isAnthropicPath(ep_path)) {
+                sendAnthropicError(stream, "400", "invalid_request_error", "Malformed HTTP request");
+            } else {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request", null, "malformed_request");
+            }
         },
         // Connection-level failures below are not client protocol errors: no
         // 4xx is produced (the peer is gone or unresponsive), so they are kept
@@ -8116,6 +8158,17 @@ test "known_endpoints include kv_cache routes" {
     try std.testing.expect(found_root);
 }
 
+test "isAnthropicPath selects the Anthropic error envelope" {
+    try std.testing.expect(isAnthropicPath("/v1/messages"));
+    try std.testing.expect(!isAnthropicPath("/v1/chat/completions"));
+    try std.testing.expect(!isAnthropicPath("/v1/completions"));
+    try std.testing.expect(!isAnthropicPath(""));
+    // Pre-routing failures pass the request-target path, query already split off.
+    try std.testing.expect(!isAnthropicPath("/v1/kv_cache?n_tokens=1"));
+    // 413 must keep its status line in the Anthropic envelope, not fall back to 500.
+    try std.testing.expectEqualStrings("413 Payload Too Large", anthropicStatusLine("413"));
+}
+
 test "incompleteUtf8TailLen holds only valid partial sequences" {
     // ASCII always ends on a boundary.
     try std.testing.expectEqual(@as(usize, 0), incompleteUtf8TailLen("hello"));
@@ -8442,8 +8495,8 @@ test "fuzz: all server functions" {
             // HttpReadResult union: verify layout at comptime
             comptime {
                 _ = @as(?HttpReadResult, null);
-                _ = HttpReadResult.malformed;
-                _ = HttpReadResult.body_too_large;
+                _ = HttpReadResult{ .malformed = "" };
+                _ = HttpReadResult{ .body_too_large = "" };
             }
 
             // splitPathQuery + extractQueryParam, untrusted request-target / query string

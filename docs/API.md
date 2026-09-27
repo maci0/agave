@@ -224,6 +224,10 @@ Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` w
 
 This route appends the user turn to the conversation and persists it, so it honors `X-Request-Id` as an idempotency key. See [Idempotency](#idempotency) below.
 
+A tokenizer failure while preparing the turn rolls the user message back and
+answers `500` (`type: server_error`), so the request never ends without a
+response.
+
 ### POST /v1/chat/regenerate
 
 Regenerate the last assistant response in the active conversation. Rolls back the last assistant message, resets the KV cache, and generates a new response. Supports streaming via `stream=1`.
@@ -232,7 +236,7 @@ Regenerate the last assistant response in the active conversation. Rolls back th
 curl -X POST http://localhost:49453/v1/chat/regenerate -d 'stream=1&max_tokens=200'
 ```
 
-Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, and `system` fields. Always operates on the currently active conversation. Every call rolls back one assistant message, so it honors `X-Request-Id` as an idempotency key: see [Idempotency](#idempotency) below.
+Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, and `system` fields. Always operates on the currently active conversation. Every call rolls back one assistant message, so it honors `X-Request-Id` as an idempotency key: see [Idempotency](#idempotency) below. A tokenizer failure puts the popped assistant message back and answers `500` (`type: server_error`).
 
 ### GET|POST /v1/conversations
 
@@ -633,6 +637,10 @@ All endpoints return JSON error bodies on failure.
 
 `param` names the offending field or query key when known; otherwise `null`.
 `code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `duplicate_request`, `not_implemented`, `cross_origin_forbidden`, `host_forbidden`, `message_too_long`, `image_decode_failed`, `vision_not_supported`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
+
+Failures raised before routing (malformed request, oversized body) use the envelope
+of the route the request addressed, so a `/v1/messages` client never receives an
+OpenAI-shaped error for a 400 or 413.
 
 **Anthropic format** (`/v1/messages` only):
 ```json

@@ -262,6 +262,18 @@ must still appear under **Changed** or **Breaking** below. See
   `caches` is three words, so two threads racing the `detected` flag could
   publish a mix of both calls' results, and the device name and memory figures
   in `/health` and the model-info response could come from neither.
+- `POST /v1/messages` answers a malformed request or an oversized body in the
+  Anthropic error envelope. Both are raised before routing, so a client on that
+  route used to receive an OpenAI-shaped `400` or `413` it could not parse.
+- `POST /v1/chat` and `POST /v1/chat/regenerate` answer `500` (`type:
+  server_error`) when the tokenizer fails mid-request. Both previously closed
+  the connection with no status line, and the route lost the turn it had
+  already appended or popped.
+- `GET /v1/kv_cache/info` counts toward `agave_requests_total` and
+  `agave_requests_completed_total`. It was the only authenticated route that
+  recorded no request metrics, so orchestrator polling skewed the totals.
+- `POST /v1/tokenize` names the offending field in `param` (`text` or
+  `content`) when one of them is present but not a string.
 - `--pflash-alpha` and `--diffusion-confidence` reject `nan` and out-of-range
   values instead of accepting them. `nan` compares false against every bound, so
   the old range check let it through and silently disabled block selection or
