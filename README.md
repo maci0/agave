@@ -54,7 +54,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 
 ## Features
 
-- **11 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, Qwen4-Exp, GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4 (plus DFlash2 as a block-diffusion drafter, not a chat model)
+- **12 Model Architectures**: Gemma 3, Gemma 4, DiffusionGemma, Qwen 3.5, Qwen 3.8 Flash-Next GGUF (`qwen4exp`), Qwen4-Exp SafeTensors (`qwen4_exp`), GPT-OSS, Nemotron-H, Nemotron Nano, GLM-4, DeepSeek V4, Llama 4 (plus DFlash2 as a block-diffusion drafter, not a chat model)
 - **6 Backends**: CPU (SIMD-optimized, Accelerate.framework on macOS), Metal GPU (Apple Silicon), Vulkan, CUDA, ROCm, WebGPU, individually toggleable at build time
 - **Compile-Time Model Selection**: Disable unused model architectures to reduce binary size
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
@@ -491,7 +491,7 @@ zig build -Denable-cpu=false
 zig build -Denable-glm4=false
 
 # Minimal build: single model (Gemma 3) + single backend (Metal)
-zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-qwen4-exp=false \
+zig build -Denable-gemma4=false -Denable-qwen35=false -Denable-qwen4exp=false -Denable-qwen4-exp=false \
   -Denable-gpt-oss=false -Denable-nemotron-h=false -Denable-nemotron-nano=false \
   -Denable-glm4=false -Denable-llama4=false -Denable-diffusion-gemma=false \
   -Denable-deepseek4=false -Denable-dflash2=false \
@@ -529,7 +529,8 @@ zig build -Dtarget=aarch64-linux-gnu -Denable-metal=false
 | `enable-gemma4` | bool | true | Gemma 4 model support |
 | `enable-diffusion-gemma` | bool | true | DiffusionGemma model support |
 | `enable-qwen35` | bool | true | Qwen 3.5 model support |
-| `enable-qwen4-exp` | bool | true | Qwen4-Exp / Qwen3.8-Flash-Next |
+| `enable-qwen4exp` | bool | true | Qwen 3.8 Flash-Next GGUF (`qwen4exp`) model support |
+| `enable-qwen4-exp` | bool | true | Qwen4-Exp SafeTensors (`qwen4_exp`) model support |
 | `enable-gpt-oss` | bool | true | GPT-OSS model support |
 | `enable-nemotron-h` | bool | true | Nemotron-H model support |
 | `enable-nemotron-nano` | bool | true | Nemotron Nano model support |
@@ -595,6 +596,7 @@ docker buildx build --load -t agave \
   --build-arg ENABLE_ROCM=false \
   --build-arg ENABLE_WEBGPU=false \
   --build-arg ENABLE_QWEN35=false \
+  --build-arg ENABLE_QWEN4EXP=false \
   --build-arg ENABLE_QWEN4_EXP=false \
   --build-arg ENABLE_GPT_OSS=false \
   --build-arg ENABLE_NEMOTRON_H=false \

@@ -398,8 +398,14 @@ must still appear under **Changed** or **Breaking** below. See
   re-uploaded on demand. `--vram-budget-policy mru|lru` selects eviction order
   (default `mru`: a dense layer loop with LRU evicts the next layer's weights).
   `auto` sizes the cap from free device memory (75%).
-- **Qwen4-Exp / Qwen3.8-Flash-Next** (`qwen4_exp`, `-Denable-qwen4-exp`): Gated
-  DeltaNet + QSA, PLE ngram SSD streaming (`--ssd-streaming`), NVFP4.
+- **Qwen 3.8 Flash-Next GGUF** (`qwen4exp`, `-Denable-qwen4exp`): llama.cpp
+  split GGUF, separate from SafeTensors `qwen4_exp`. The PLE table stays
+  demand-paged (`--mmap` is forced on, `MADV_RANDOM` on the table) and IQ2/IQ3
+  expert GEMV runs on the CPU. No megakernel, vision, or MTP on this arch.
+- **Qwen4-Exp / Qwen3.8-Flash-Next SafeTensors** (`qwen4_exp`,
+  `-Denable-qwen4-exp`): Gated DeltaNet + QSA and NVFP4. PLE ngram shards are
+  mmap'd but not read by the forward pass, and `--ssd-streaming` still pages
+  MoE experts only.
 - Browser WASM engine (`web/agave.ts`): `AgaveError` with a stable `code` (and
   optional `httpStatus`) so callers can handle init, download, and generate
   failures without matching `Error.message`.

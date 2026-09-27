@@ -12,6 +12,7 @@ pub const ImageTokens = @import("image_tokens.zig").ImageTokens;
 /// Supported model architectures, used for dispatch, display, and build-time toggles.
 pub const Arch = enum {
     qwen35,
+    qwen4exp,
     qwen4_exp,
     gemma3,
     gemma4,
@@ -32,6 +33,7 @@ pub const Arch = enum {
             .{ "gemma3", .gemma3 },
             .{ "gemma3_text", .gemma3 },
             .{ "gemma2", .gemma3 }, // Gemma 2 uses same architecture path as Gemma 3
+            .{ "qwen4exp", .qwen4exp },
             .{ "qwen3_5_text", .qwen35 },
             .{ "qwen35moe", .qwen35 },
             .{ "qwen3_5_moe", .qwen35 },
@@ -47,7 +49,6 @@ pub const Arch = enum {
             .{ "qwen2", .qwen35 },
             .{ "qwen4_exp", .qwen4_exp },
             .{ "qwen4_exp_text", .qwen4_exp },
-            .{ "qwen4exp", .qwen4_exp },
             .{ "qwen4_text", .qwen4_exp },
             .{ "gpt-oss", .gpt_oss },
             .{ "gpt_oss", .gpt_oss },
@@ -82,6 +83,7 @@ pub const Arch = enum {
             .gemma4 => "Gemma 4",
             .diffusion_gemma => "DiffusionGemma",
             .qwen35 => "Qwen 3.5/3.8",
+            .qwen4exp => "Qwen 3.8 Flash-Next",
             .qwen4_exp => "Qwen4-Exp",
             .gpt_oss => "GPT-OSS",
             .nemotron_h => "Nemotron-H",
@@ -99,7 +101,7 @@ pub const Arch = enum {
             .gemma3 => ChatTemplate.gemma,
             .gemma4, .diffusion_gemma => ChatTemplate.gemma4,
             .gpt_oss => ChatTemplate.gpt_oss,
-            .qwen35, .qwen4_exp => ChatTemplate.qwen35,
+            .qwen35, .qwen4exp, .qwen4_exp => ChatTemplate.qwen35,
             .glm4 => ChatTemplate.glm4,
             .deepseek4 => ChatTemplate.deepseek4,
             .llama4 => ChatTemplate.llama4,
@@ -120,7 +122,7 @@ pub const Arch = enum {
             .gemma3 => "gemma",
             .gemma4, .diffusion_gemma => "gemma4",
             .gpt_oss => "gpt-oss",
-            .qwen35, .qwen4_exp => "qwen35",
+            .qwen35, .qwen4exp, .qwen4_exp => "qwen35",
             .glm4 => "glm4",
             .deepseek4 => "deepseek4",
             .llama4 => "llama4",
@@ -135,6 +137,7 @@ pub const Arch = enum {
             .gemma4 => build_options.enable_gemma4,
             .diffusion_gemma => build_options.enable_diffusion_gemma,
             .qwen35 => build_options.enable_qwen35,
+            .qwen4exp => build_options.enable_qwen4exp,
             .qwen4_exp => build_options.enable_qwen4_exp,
             .gpt_oss => build_options.enable_gpt_oss,
             .nemotron_h => build_options.enable_nemotron_h,
@@ -151,7 +154,7 @@ pub const Arch = enum {
     /// whose chat template already emits the BOS string (see `templateIncludesBos`).
     pub fn defaultBos(self: Arch) ?u32 {
         return switch (self) {
-            .qwen35, .qwen4_exp, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2, .glm4, .deepseek4 => null,
+            .qwen35, .qwen4exp, .qwen4_exp, .gpt_oss, .nemotron_h, .nemotron_nano, .dflash2, .glm4, .deepseek4 => null,
             .llama4 => llama4_fallback_bos,
             .gemma3, .gemma4, .diffusion_gemma => default_bos_id,
         };
@@ -174,7 +177,7 @@ pub const Arch = enum {
         return switch (self) {
             .gemma3, .gemma4, .diffusion_gemma => gemma_fallback_eos,
             .llama4 => llama4_fallback_eos,
-            .qwen35, .qwen4_exp, .dflash2 => qwen_fallback_eos,
+            .qwen35, .qwen4exp, .qwen4_exp, .dflash2 => qwen_fallback_eos,
             .gpt_oss => gpt_oss_fallback_eos,
             .glm4 => glm4_fallback_eos,
             .deepseek4 => deepseek4_fallback_eos,
@@ -200,6 +203,7 @@ pub const Arch = enum {
             .gemma4 => "gemma4",
             .diffusion_gemma => "diffusion-gemma",
             .qwen35 => "qwen35",
+            .qwen4exp => "qwen4exp",
             .qwen4_exp => "qwen4-exp",
             .gpt_oss => "gpt-oss",
             .nemotron_h => "nemotron-h",
@@ -270,9 +274,9 @@ test "Arch.detect known names" {
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3_5").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen3").?);
     try std.testing.expectEqual(Arch.qwen35, Arch.detect("qwen2").?);
+    try std.testing.expectEqual(Arch.qwen4exp, Arch.detect("qwen4exp").?);
     try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4_exp").?);
     try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4_exp_text").?);
-    try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4exp").?);
     try std.testing.expectEqual(Arch.qwen4_exp, Arch.detect("qwen4_text").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt-oss").?);
     try std.testing.expectEqual(Arch.gpt_oss, Arch.detect("gpt_oss").?);
@@ -301,6 +305,7 @@ test "Arch.displayName" {
     try std.testing.expectEqualStrings("Gemma 4", Arch.gemma4.displayName());
     try std.testing.expectEqualStrings("DiffusionGemma", Arch.diffusion_gemma.displayName());
     try std.testing.expectEqualStrings("Qwen 3.5/3.8", Arch.qwen35.displayName());
+    try std.testing.expectEqualStrings("Qwen 3.8 Flash-Next", Arch.qwen4exp.displayName());
     try std.testing.expectEqualStrings("Qwen4-Exp", Arch.qwen4_exp.displayName());
     try std.testing.expectEqualStrings("GPT-OSS", Arch.gpt_oss.displayName());
     try std.testing.expectEqualStrings("Nemotron-H", Arch.nemotron_h.displayName());
@@ -318,6 +323,7 @@ test "Arch.defaultBos" {
     try std.testing.expectEqual(@as(?u32, null), Arch.glm4.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.deepseek4.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.qwen35.defaultBos());
+    try std.testing.expectEqual(@as(?u32, null), Arch.qwen4exp.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.qwen4_exp.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.gpt_oss.defaultBos());
     try std.testing.expectEqual(@as(?u32, null), Arch.nemotron_h.defaultBos());
@@ -340,6 +346,7 @@ test "Arch.defaultEos" {
     try std.testing.expectEqual(@as(u32, 1), Arch.gemma4.defaultEos());
     try std.testing.expectEqual(@as(u32, 1), Arch.diffusion_gemma.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.qwen35.defaultEos());
+    try std.testing.expectEqual(@as(u32, 248046), Arch.qwen4exp.defaultEos());
     try std.testing.expectEqual(@as(u32, 248046), Arch.qwen4_exp.defaultEos());
     try std.testing.expectEqual(@as(u32, 200002), Arch.gpt_oss.defaultEos());
     try std.testing.expectEqual(@as(u32, 154820), Arch.glm4.defaultEos());
@@ -426,6 +433,7 @@ test "Arch.buildFlag returns valid flag names" {
     try std.testing.expectEqualStrings("gemma4", Arch.gemma4.buildFlag());
     try std.testing.expectEqualStrings("diffusion-gemma", Arch.diffusion_gemma.buildFlag());
     try std.testing.expectEqualStrings("qwen35", Arch.qwen35.buildFlag());
+    try std.testing.expectEqualStrings("qwen4exp", Arch.qwen4exp.buildFlag());
     try std.testing.expectEqualStrings("qwen4-exp", Arch.qwen4_exp.buildFlag());
     try std.testing.expectEqualStrings("gpt-oss", Arch.gpt_oss.buildFlag());
     try std.testing.expectEqualStrings("nemotron-h", Arch.nemotron_h.buildFlag());
