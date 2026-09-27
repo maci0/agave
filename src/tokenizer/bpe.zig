@@ -1032,9 +1032,7 @@ test "BpeTokenizer SPM encode/decode roundtrip" {
 
     // Build a minimal SPM vocabulary with ▁-prefixed word tokens
     const vocab = [_][]const u8{ "\xe2\x96\x81hello", "\xe2\x96\x81world", "h", "e", "l", "o", "w", "r", "d" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUFSpm(&vocab_slice, 0);
+    try tok.loadFromGGUFSpm(&vocab, 0);
 
     // SPM encode: "hello world" → [▁hello, ▁world]
     const ids = try tok.encodeSpm("hello world");
@@ -1052,9 +1050,7 @@ test "BpeTokenizer SPM decode produces text" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "\xe2\x96\x81hello", "\xe2\x96\x81world" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUFSpm(&vocab_slice, 0);
+    try tok.loadFromGGUFSpm(&vocab, 0);
 
     // Decode token id 0 → " hello" (▁ maps to space)
     const decoded = try tok.decodeSpm(&.{0});
@@ -1068,9 +1064,7 @@ test "BpeTokenizer SPM decode multiple tokens" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "\xe2\x96\x81hello", "\xe2\x96\x81", "\xe2\x96\x81world" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUFSpm(&vocab_slice, 0);
+    try tok.loadFromGGUFSpm(&vocab, 0);
 
     // Decode [▁hello, ▁world] → " hello world"
     const decoded = try tok.decodeSpm(&.{ 0, 2 });
@@ -1084,9 +1078,7 @@ test "BpeTokenizer empty encode" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{"a"};
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    vocab_slice[0] = vocab[0];
-    try tok.loadFromGGUFSpm(&vocab_slice, 0);
+    try tok.loadFromGGUFSpm(&vocab, 0);
 
     const ids = try tok.encodeSpm("");
     defer allocator.free(ids);
@@ -1099,9 +1091,7 @@ test "BpeTokenizer vocabSize" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "a", "b", "c", "d", "e" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUFSpm(&vocab_slice, 4);
+    try tok.loadFromGGUFSpm(&vocab, 4);
 
     try std.testing.expectEqual(@as(u32, 5), tok.vocab_size);
     try std.testing.expectEqual(@as(u32, 4), tok.eos_token_id);
@@ -1113,9 +1103,7 @@ test "BpeTokenizer decode out of range token" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{"a"};
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    vocab_slice[0] = vocab[0];
-    try tok.loadFromGGUFSpm(&vocab_slice, 0);
+    try tok.loadFromGGUFSpm(&vocab, 0);
 
     // Token id 999 is out of range, should be skipped
     const decoded = try tok.decodeSpm(&.{999});
@@ -1129,9 +1117,7 @@ test "BpeTokenizer interface via VTable" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "hi", "!" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUFSpm(&vocab_slice, 0);
+    try tok.loadFromGGUFSpm(&vocab, 0);
 
     // Use the VTable interface
     var iface = tok.tokenizer();
@@ -1144,9 +1130,7 @@ test "BPE encode matches bracket special tokens" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "a", "[INST]", "[/INST]" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUF(&vocab_slice, &.{}, 0);
+    try tok.loadFromGGUF(&vocab, &.{}, 0);
 
     const ids = try tok.encode("[INST]a[/INST]");
     defer allocator.free(ids);
@@ -1163,9 +1147,7 @@ test "isSpecialId uses loaded special-token table, not id range" {
 
     // Gemma-like layout: specials at the BOTTOM of the vocab, content above.
     const vocab = [_][]const u8{ "<pad>", "<bos>", "hello", "world" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-    try tok.loadFromGGUFSpm(&vocab_slice, 1);
+    try tok.loadFromGGUFSpm(&vocab, 1);
 
     // Specials detected by table membership regardless of id value.
     try std.testing.expect(tok.isSpecialId(0)); // <pad>
@@ -1184,15 +1166,11 @@ test "BPE encode with merge rules" {
     // Vocab in unicode-mapped form (ASCII printable chars map 1:1).
     // "a"=0, "b"=1, "c"=2, "ab"=3
     const vocab = [_][]const u8{ "a", "b", "c", "ab" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
 
     // Merge rule: "a b" → priority 0 (merge "a"+"b" into "ab")
     const merges = [_][]const u8{"a b"};
-    var merges_slice: [merges.len][]const u8 = undefined;
-    for (&merges, 0..) |m, i| merges_slice[i] = m;
 
-    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+    try tok.loadFromGGUF(&vocab, &merges, 0);
 
     // Encode "ab": bytesToUnicode→"ab", splitUtfChars→["a","b"],
     // applyBpe merges at pos 0→["ab"], lookup→3
@@ -1208,13 +1186,9 @@ test "BPE encode no merge match falls back to individual tokens" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "a", "b", "c", "ab" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
     const merges = [_][]const u8{"a b"};
-    var merges_slice: [merges.len][]const u8 = undefined;
-    for (&merges, 0..) |m, i| merges_slice[i] = m;
 
-    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+    try tok.loadFromGGUF(&vocab, &merges, 0);
 
     // Encode "c": no merge rules for "c" → stays as single char → id 2
     const ids = try tok.encode("c");
@@ -1229,13 +1203,9 @@ test "BPE decode reverses encode" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "a", "b", "c", "ab" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
     const merges = [_][]const u8{"a b"};
-    var merges_slice: [merges.len][]const u8 = undefined;
-    for (&merges, 0..) |m, i| merges_slice[i] = m;
 
-    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+    try tok.loadFromGGUF(&vocab, &merges, 0);
 
     // Decode [3, 2] → "ab" + "c" → unicodeToBytes → "abc"
     const decoded = try tok.decode(&.{ 3, 2 });
@@ -1249,12 +1219,8 @@ test "BPE heap merge order matches naive findBestMerge" {
     defer tok.deinit();
 
     const vocab = [_][]const u8{ "a", "b", "ab" };
-    var vocab_slice: [vocab.len][]const u8 = undefined;
-    for (&vocab, 0..) |v, i| vocab_slice[i] = v;
     const merges = [_][]const u8{"a b"};
-    var merges_slice: [merges.len][]const u8 = undefined;
-    for (&merges, 0..) |m, i| merges_slice[i] = m;
-    try tok.loadFromGGUF(&vocab_slice, &merges_slice, 0);
+    try tok.loadFromGGUF(&vocab, &merges, 0);
 
     // 128 repeats of "ab": heap and naive must both collapse to 128 "ab" tokens.
     const n_pairs: usize = 128;
@@ -1381,9 +1347,7 @@ test "decodeOne matches single-token decode in all modes" {
         var tok = BpeTokenizer.init(allocator);
         defer tok.deinit();
         const vocab = [_][]const u8{ "a", "\xc3\xa9", "\xe2\x96\x81", "ab" };
-        var vocab_slice: [vocab.len][]const u8 = undefined;
-        for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-        try tok.loadFromGGUF(&vocab_slice, &.{}, 0);
+        try tok.loadFromGGUF(&vocab, &.{}, 0);
 
         for (0..vocab.len) |id| {
             const batch = try tok.decode(&.{@intCast(id)});
@@ -1403,9 +1367,7 @@ test "decodeOne matches single-token decode in all modes" {
         var tok = BpeTokenizer.init(allocator);
         defer tok.deinit();
         const vocab = [_][]const u8{ "<0x41>", "\xe2\x96\x81hello", "world", "<0xZZ>" };
-        var vocab_slice: [vocab.len][]const u8 = undefined;
-        for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-        try tok.loadFromGGUFSpm(&vocab_slice, 0);
+        try tok.loadFromGGUFSpm(&vocab, 0);
         tok.tok_kind = .spm; // set by callers after loading (see main.zig)
 
         for (0..vocab.len) |id| {
@@ -1422,9 +1384,7 @@ test "decodeOne matches single-token decode in all modes" {
         defer tok.deinit();
         const long_tok = "x" ** 100;
         const vocab = [_][]const u8{ long_tok, "y" };
-        var vocab_slice: [vocab.len][]const u8 = undefined;
-        for (&vocab, 0..) |v, i| vocab_slice[i] = v;
-        try tok.loadFromGGUFSpm(&vocab_slice, 0);
+        try tok.loadFromGGUFSpm(&vocab, 0);
         tok.tok_kind = .spm;
         var small: [4]u8 = undefined;
         try std.testing.expect(tok.decodeOne(0, &small) == null);
@@ -1457,10 +1417,8 @@ test "fuzz: all bpe functions" {
                 "o",
                 "<0x0A>",
             };
-            var vocab_slice: [vocab.len][]const u8 = undefined;
-            for (&vocab, 0..) |v, i| vocab_slice[i] = v;
             const eos_id = smith.valueWithHash(u32, 0) % @as(u32, vocab.len);
-            tok.loadFromGGUFSpm(&vocab_slice, eos_id) catch return;
+            tok.loadFromGGUFSpm(&vocab, eos_id) catch return;
 
             // --- vocab_size ---
             const vs = tok.vocab_size;
@@ -1511,16 +1469,12 @@ test "fuzz: all bpe functions" {
             defer tok2.deinit();
 
             const bpe_vocab = [_][]const u8{ "a", "b", "c", "ab", "bc", "abc" };
-            var bpe_vocab_slice: [bpe_vocab.len][]const u8 = undefined;
-            for (&bpe_vocab, 0..) |v, i| bpe_vocab_slice[i] = v;
 
             const bpe_merges = [_][]const u8{ "a b", "ab c" };
-            var bpe_merges_slice: [bpe_merges.len][]const u8 = undefined;
-            for (&bpe_merges, 0..) |m, i| bpe_merges_slice[i] = m;
 
             // --- loadFromGGUF ---
             const bpe_eos = smith.valueWithHash(u32, 3) % @as(u32, bpe_vocab.len);
-            tok2.loadFromGGUF(&bpe_vocab_slice, &bpe_merges_slice, bpe_eos) catch return;
+            tok2.loadFromGGUF(&bpe_vocab, &bpe_merges, bpe_eos) catch return;
 
             // --- encode (BPE mode) with mixed vocab chars, special-token
             // markers, and hostile bytes. Pure a/b/c input never reaches the

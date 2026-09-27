@@ -4790,18 +4790,18 @@ fn generateSpeculative(
             const n = spec_decode.draftLookahead(&spec_state, target, last, &la_state, ngram_state.history[tail_start..ngram_state.len]);
             break :blk n;
         } else if (use_eagle) blk: {
-            // EAGLE: condition draft on target's post-norm hidden state (EAGLE-1).
+            // EAGLE-1: condition draft on target's post-norm hidden state.
             const n = if (!use_sampling)
-                spec_decode.draftEagle(&spec_state, target.*, draft_model.*, last)
+                spec_decode.draftEagle(&spec_state, target.*, draft_model.*, last, false)
             else
-                spec_decode.draftEagleWithLogits(&spec_state, target.*, draft_model.*, last);
+                spec_decode.draftEagleWithLogits(&spec_state, target.*, draft_model.*, last, false);
             break :blk n;
         } else if (use_eagle3) blk: {
             // EAGLE-3: condition draft on pre-output-norm hidden state for richer signal.
             const n = if (!use_sampling)
-                spec_decode.draftEagle3(&spec_state, target.*, draft_model.*, last)
+                spec_decode.draftEagle(&spec_state, target.*, draft_model.*, last, true)
             else
-                spec_decode.draftEagle3WithLogits(&spec_state, target.*, draft_model.*, last);
+                spec_decode.draftEagleWithLogits(&spec_state, target.*, draft_model.*, last, true);
             break :blk n;
         } else if (use_mlp) blk: {
             // MLP Speculator: single-context draft (no chain). All K steps use target's hidden.
