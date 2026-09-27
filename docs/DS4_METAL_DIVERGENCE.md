@@ -1,4 +1,4 @@
-# DeepSeek V4 Metal: Full GPU Path & Output Divergence Fix
+# DeepSeek V4 Metal: Output Divergence Fix and the CPU Path That Resolved It
 
 **Status**: accepted outcome (bit-identical Metal vs CPU) still holds. Current `Ds4Model` routes rms/SDPA/HC through a dedicated `CpuBackend` on every selected backend; Metal GEMV also stays on that CPU path (`gemvBackend` is GPU only for Vulkan/WebGPU/CUDA). The ten kernels below still compile into Metal pipelines. MoE/top-k Metal kernels listed in earlier drafts were removed.
 
@@ -116,7 +116,7 @@ Forward Pass (--backend metal, MLX-Q SafeTensors):
   self.be = Metal Backend (used only for init, not in hot path)
 ```
 
-The 10 GPU kernels activate for GGUF models with native GPU GEMV types (Q8_0, Q4_K) or models that fit in RAM (no SSD streaming page eviction).
+All 10 kernels compile into Metal pipelines and `MetalBackend` carries a dispatch wrapper for each, but no model forward path calls them: `Ds4Model` references none of the `ds4*` entry points, so the DS4 hot path runs through `self.cpu` (`computeBackend()`) plus `gemvBackend()` only. The full-GPU path described above is the design target, not current behavior.
 
 ---
 
