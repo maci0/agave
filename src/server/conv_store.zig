@@ -527,9 +527,11 @@ fn testPathMode(path: []const u8) ?u32 {
         if (rc != 0) return null;
         return st.mode & 0o777;
     }
-    var st: std.c.Stat = undefined;
-    if (std.c.stat(@ptrCast(&buf), &st) != 0) return null;
-    return st.mode & 0o777;
+    // `std.c.stat` is not declared for arm64 darwin in this Zig release;
+    // `std.c.fstatat` is declared there (and empty on Linux, hence the branch).
+    var st: std.posix.Stat = undefined;
+    if (std.c.fstatat(std.posix.AT.FDCWD, @ptrCast(&buf), &st, 0) != 0) return null;
+    return @intCast(st.mode & 0o777);
 }
 
 test "a saved store is owner-only, and a store an older agave left wide is tightened on load" {
