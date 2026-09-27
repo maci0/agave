@@ -6,14 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry add_scaled_kernel
-(
-	.param .b64 add_scaled_$_add_scaled_kernel_param_0,
-	.param .b64 add_scaled_$_add_scaled_kernel_param_1,
-	.param .b32 add_scaled_$_add_scaled_kernel_param_2,
-	.param .b32 add_scaled_$_add_scaled_kernel_param_3
-)
-;
 
 .entry add_scaled_kernel(
 	.param .b64 add_scaled_$_add_scaled_kernel_param_0,

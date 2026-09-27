@@ -6,15 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gemv_q4_k_kernel
-(
-	.param .b64 gemv_q4_k_$_gemv_q4_k_kernel_param_0,
-	.param .b64 gemv_q4_k_$_gemv_q4_k_kernel_param_1,
-	.param .b64 gemv_q4_k_$_gemv_q4_k_kernel_param_2,
-	.param .b32 gemv_q4_k_$_gemv_q4_k_kernel_param_3,
-	.param .b32 gemv_q4_k_$_gemv_q4_k_kernel_param_4
-)
-;
 
 .entry gemv_q4_k_kernel(
 	.param .b64 gemv_q4_k_$_gemv_q4_k_kernel_param_0,

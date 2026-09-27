@@ -6,24 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry sdpa_turbo_kernel
-(
-	.param .b64 sdpa_turbo_$_sdpa_turbo_kernel_param_0,
-	.param .b64 sdpa_turbo_$_sdpa_turbo_kernel_param_1,
-	.param .b64 sdpa_turbo_$_sdpa_turbo_kernel_param_2,
-	.param .b64 sdpa_turbo_$_sdpa_turbo_kernel_param_3,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_4,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_5,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_6,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_7,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_8,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_9,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_10,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_11,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_12,
-	.param .b32 sdpa_turbo_$_sdpa_turbo_kernel_param_13
-)
-;
 .global .align 4 .b8 __anon_882[64] = {121, 233, 46, 192, 127, 106, 4, 192, 160, 26, 207, 191, 156, 196, 160, 191, 233, 38, 113, 191, 39, 49, 40, 191, 240, 167, 198, 190, 111, 18, 3, 190, 111, 18, 3, 62, 240, 167, 198, 62, 39, 49, 40, 63, 233, 38, 113, 63, 156, 196, 160, 63, 160, 26, 207, 63, 127, 106, 4, 64, 121, 233, 46, 64};
 .global .align 4 .b8 __anon_904[32] = {94, 186, 9, 192, 49, 8, 172, 191, 55, 137, 65, 191, 72, 225, 122, 190, 72, 225, 122, 62, 55, 137, 65, 63, 49, 8, 172, 63, 94, 186, 9, 64};
 .global .align 4 .b8 __anon_916[16] = {174, 71, 193, 191, 158, 239, 231, 190, 158, 239, 231, 62, 174, 71, 193, 63};

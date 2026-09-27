@@ -6,13 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry l2_norm_kernel
-(
-	.param .b64 l2_norm_$_l2_norm_kernel_param_0,
-	.param .b32 l2_norm_$_l2_norm_kernel_param_1,
-	.param .b32 l2_norm_$_l2_norm_kernel_param_2
-)
-;
 
 .entry l2_norm_kernel(
 	.param .b64 l2_norm_$_l2_norm_kernel_param_0,

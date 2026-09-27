@@ -6,15 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gemv_iq4_xs_kernel
-(
-	.param .b64 gemv_iq4_xs_$_gemv_iq4_xs_kernel_param_0,
-	.param .b64 gemv_iq4_xs_$_gemv_iq4_xs_kernel_param_1,
-	.param .b64 gemv_iq4_xs_$_gemv_iq4_xs_kernel_param_2,
-	.param .b32 gemv_iq4_xs_$_gemv_iq4_xs_kernel_param_3,
-	.param .b32 gemv_iq4_xs_$_gemv_iq4_xs_kernel_param_4
-)
-;
 .global .align 1 .b8 __anon_577[16] = {129, 152, 173, 191, 207, 221, 234, 246, 1, 13, 25, 38, 53, 69, 89, 113};
 
 .entry gemv_iq4_xs_kernel(
