@@ -41,6 +41,9 @@
 # what it did, and a failed copy, a malformed store, or a missing file is a
 # nonzero exit, not a warning.
 #
+# Needs bash, coreutils-style stat, awk, grep, and cp. Runs on any host agave
+# runs on, including macOS: no GNU-only find(1) or stat(1) syntax.
+#
 # Runbook: docs/DURABILITY.md
 set -euo pipefail
 export LC_ALL=C TZ=UTC
@@ -126,15 +129,34 @@ stamp() {
 # something the server could not parse, could not keep whole, or an operator
 # replaced by mistake. Rotation of ordinary backups must never decide their
 # fate.
-# find -regex matches the whole path, so each pattern anchors on the basename.
-readonly DATED_RE='.*/conversations-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
-readonly SNAPSHOT_RE='.*/conversations-(corrupt|overflow|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
+# EREs matched against the basename by bash's own regex engine, not find(1):
+# -regextype and -printf are GNU extensions that BSD/macOS find rejects, and
+# the runbook schedules this script with cron on any host, macOS included.
+readonly DATED_RE='^conversations-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
+readonly SNAPSHOT_RE='^conversations-(corrupt|overflow|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
 
-# Newest first, "<mtime> <path>". $1 is a find -regextype pattern.
+# mtime as seconds.fraction. GNU stat and BSD/macOS stat take the same field
+# under different syntax, so the flavor is probed once instead of guessed from
+# uname. The fraction is not optional: a `backup` run writes the dated copy and
+# the sidecar copies in one second, and pruning the wrong one of two files with
+# the same whole-second mtime is a deletion with no recovery window. Fixed
+# width on each platform, so `sort -r` below orders by mtime.
+if stat -c %Y . >/dev/null 2>&1; then
+    mtime_of() { stat -c %.9Y "$1"; }
+else
+    mtime_of() { stat -f %Fm "$1"; }
+fi
+
+# Newest first, one path per line. $1 is the directory, $2 a basename ERE.
 list_backups() {
-    local dir="$1" re="$2"
-    find "$dir" -maxdepth 1 -type f -regextype posix-extended -regex "$re" -printf '%T@ %p\n' |
-        sort -rn | cut -d' ' -f2-
+    local dir="$1" re="$2" f
+    (
+        shopt -s nullglob
+        for f in "$dir"/*; do
+            [[ -f "$f" && "${f##*/}" =~ $re ]] || continue
+            printf '%s %s\n' "$(mtime_of "$f")" "$f"
+        done
+    ) | sort -r | cut -d' ' -f2-
 }
 
 # A copy on the store's own filesystem survives a bad save and nothing else:
@@ -308,12 +330,13 @@ do_check() {
     local dir
     dir="$(backup_dir)"
     [[ -d "$dir" ]] || die "no backup dir at $dir (the backup job has never run, or AGAVE_BACKUP_DIR moved)"
-    local entry newest
-    entry="$(find "$dir" -maxdepth 1 -type f -regextype posix-extended -regex "$DATED_RE" -printf '%T@ %p\n' | sort -rn | head -1)"
-    [[ -n "$entry" ]] || die "no dated backup in $dir (the backup job has never produced one)"
-    newest="${entry#* }"
+    local newest
+    newest="$(list_backups "$dir" "$DATED_RE" | head -1)"
+    [[ -n "$newest" ]] || die "no dated backup in $dir (the backup job has never produced one)"
+    local mtime
+    mtime="$(mtime_of "$newest")"
     local age_seconds max_age_seconds
-    age_seconds=$(( $(date -u +%s) - ${entry%%.*} ))
+    age_seconds=$(( $(date -u +%s) - ${mtime%%.*} ))
     (( age_seconds >= 0 )) || die "newest backup $newest has a timestamp in the future; the host clock is wrong"
     max_age_seconds=$(( MAX_AGE_HOURS * HOUR_SECONDS ))
     if (( age_seconds > max_age_seconds )); then
