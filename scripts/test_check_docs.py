@@ -119,5 +119,59 @@ class VersionConsistencyTest(unittest.TestCase):
         self.assertEqual(errors, [])
 
 
+class DocsWorkflowPathsTest(unittest.TestCase):
+    """The docs-check path filter must cover every file check-docs.py reads."""
+
+    def _workflow(self, patterns: list[str]) -> str:
+        return "on:\n  push:\n    paths:\n" + "".join(
+            f"      - '{p}'\n" for p in patterns
+        )
+
+    def _errors(self, patterns: list[str]) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".github" / "workflows" / "docs-check.yml"
+            path.parent.mkdir(parents=True)
+            path.write_text(self._workflow(patterns), encoding="utf-8")
+            with patch.object(check_docs, "ROOT", root):
+                return check_docs.check_docs_workflow_paths()
+
+    def test_full_coverage_reports_nothing(self) -> None:
+        self.assertEqual(self._errors(check_docs.DOCS_CHECK_PATH_INPUTS), [])
+
+    def test_missing_input_is_reported(self) -> None:
+        patterns = [p for p in check_docs.DOCS_CHECK_PATH_INPUTS if p != "package.json"]
+        errors = self._errors(patterns)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("package.json", errors[0])
+
+    def test_single_star_covers_a_direct_child(self) -> None:
+        patterns = [
+            ".github/workflows/*" if p == ".github/workflows/ci.yml" else p
+            for p in check_docs.DOCS_CHECK_PATH_INPUTS
+        ]
+        self.assertEqual(self._errors(patterns), [])
+
+    def test_star_pattern_does_not_match_a_sibling_directory(self) -> None:
+        # 'scripts/*' covers scripts/check-shader-artifacts.sh, not
+        # src/main.zig: the directory part has to match as well as the name.
+        patterns = [
+            p
+            for p in check_docs.DOCS_CHECK_PATH_INPUTS
+            if p not in {"scripts/check-shader-artifacts.sh", "src/main.zig"}
+        ] + ["scripts/*"]
+        errors = self._errors(patterns)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("src/main.zig", errors[0])
+
+    def test_missing_workflow_file_is_reported(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(check_docs, "ROOT", Path(tmp)),
+        ):
+            errors = check_docs.check_docs_workflow_paths()
+        self.assertTrue(any("docs-check.yml" in e for e in errors), errors)
+
+
 if __name__ == "__main__":
     sys.exit(not unittest.main(exit=False).result.wasSuccessful())

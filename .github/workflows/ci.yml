@@ -152,6 +152,16 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The compose file is the documented local entry point but nothing parsed
+      # it: a syntax error or a bad healthcheck reached a developer's
+      # `docker compose up` instead of a red check. `config` parses the file and
+      # expands every ${VAR}, including the :? on AGAVE_API_KEY, so a value is
+      # supplied here.
+      - name: Validate docker-compose.yml
+        env:
+          AGAVE_API_KEY: ci-compose-validate
+        run: docker compose config --quiet
+
       - name: Smoke test binary
         run: |
           set -euo pipefail
@@ -439,10 +449,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Pinned to the ruff.toml required-version so the fetch cannot drift with
-      # whatever PyPI serves that day.
+      # scripts/lint-python.sh is the single entry point, so this job and
+      # `zig build lint-python` run the same rules, the same ruff version and
+      # the same paths. A raw `uvx ruff@<pin>` here would let a check added to
+      # the script pass locally and never run remotely.
       - name: ruff
-        run: uvx ruff@0.16.4 check --config ruff.toml .
+        run: bash scripts/lint-python.sh
 
   # scripts/*.sh is 13 files of unanalysed shell: quoting bugs and unset-variable
   # failures there break CI jobs and developer tooling the same way. Blocking.

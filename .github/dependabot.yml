@@ -35,7 +35,10 @@ updates:
     schedule:
       interval: "weekly"
 
-  - package-ecosystem: "pip"
+  # uv, not pip: this directory ships a uv.lock that `zig build check-pins`
+  # compares against tests/pyproject.toml. A pip-ecosystem bump edits the
+  # manifest without relocking, and the next gate run fails on the stale lock.
+  - package-ecosystem: "uv"
     directory: "/tests"
     schedule:
       interval: "weekly"
