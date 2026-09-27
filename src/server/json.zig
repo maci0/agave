@@ -38,6 +38,10 @@ const max_logit_bias: usize = 16;
 /// Maximum number of tool definitions per request.
 const max_tools: usize = 8;
 
+/// Upper bound for a client-supplied thinking budget. extractIntField returns a
+/// usize, so an unclamped value above maxInt(u32) would panic on the cast.
+const max_thinking_budget_tokens: usize = std.math.maxInt(u32);
+
 /// Zero heap bytes that may hold prompt/message text, then free.
 fn wipeFree(allocator: Allocator, buf: []u8) void {
     @memset(buf, 0);
@@ -522,12 +526,12 @@ pub fn parseSampling(out: *SamplingParams, body: []const u8) void {
     // Parse thinking budget: Anthropic API "thinking": {"type": "enabled", "budget_tokens": N}
     // or OpenAI-style "thinking_budget_tokens": N.
     if (extractIntField(body, "thinking_budget_tokens")) |b| {
-        result.thinking_budget_tokens = @intCast(@max(0, b));
+        result.thinking_budget_tokens = @intCast(@min(b, max_thinking_budget_tokens));
     } else if (extractObjectField(body, "thinking")) |thinking_obj| {
         // Search for budget_tokens within the thinking object only,
         // not the full body, avoids false matches from unrelated fields.
         if (extractIntField(thinking_obj, "budget_tokens")) |b| {
-            result.thinking_budget_tokens = @intCast(@max(0, b));
+            result.thinking_budget_tokens = @intCast(@min(b, max_thinking_budget_tokens));
         }
     }
 
@@ -2389,4 +2393,18 @@ test "fuzz: all json functions" {
             }
         }
     }.f, .{});
+}
+
+test "thinking budget above u32 range clamps instead of panicking" {
+    var sp = SamplingParams{};
+    parseSampling(&sp, "{\"thinking_budget_tokens\":99999999999}");
+    try std.testing.expectEqual(@as(u32, std.math.maxInt(u32)), sp.thinking_budget_tokens);
+
+    var sp2 = SamplingParams{};
+    parseSampling(&sp2, "{\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":4294967296}}");
+    try std.testing.expectEqual(@as(u32, std.math.maxInt(u32)), sp2.thinking_budget_tokens);
+
+    var sp3 = SamplingParams{};
+    parseSampling(&sp3, "{\"thinking_budget_tokens\":2000}");
+    try std.testing.expectEqual(@as(u32, 2000), sp3.thinking_budget_tokens);
 }

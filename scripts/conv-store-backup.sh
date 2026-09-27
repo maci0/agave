@@ -56,6 +56,14 @@ note() {
     echo "conv-store-backup: $*"
 }
 
+# KEEP is a loop bound and an array index, so a non-numeric or out-of-range
+# value either aborts in the arithmetic context or, at 0 and below, prunes the
+# whole tier including the copy this run just made. Reject anything that is not
+# a plain positive integer.
+if [[ ! "$KEEP" =~ ^[1-9][0-9]*$ ]]; then
+    die "AGAVE_KEEP must be a positive integer, got '${KEEP}'"
+fi
+
 # Same precedence as conv_store.defaultPath: XDG wins when non-empty, HOME is
 # the fallback, and neither set means the store has no path at all.
 live_store_path() {
@@ -248,8 +256,20 @@ do_self_test() {
         status=1
     }
 
+    # A retention value of 0 or below prunes the whole tier, so the guard
+    # rejects it before do_backup can run. It lives at load time, so exercise
+    # it by re-entering the script rather than calling do_backup here.
+    local self_path="${BASH_SOURCE[0]}"
+    local bad_keep
+    for bad_keep in 0 -3 abc '1.5' ' '; do
+        if AGAVE_KEEP="$bad_keep" "$self_path" path >/dev/null 2>&1; then
+            echo "conv-store-backup: self-test FAILED: accepted AGAVE_KEEP='$bad_keep'" >&2
+            status=1
+        fi
+    done
+
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention"
+        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, reject-bad-retention"
     fi
     return "$status"
 }
