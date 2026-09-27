@@ -452,6 +452,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # scripts/lint-python.sh resolves the ruff.toml pin and runs it through
+      # uvx. The runner image ships neither ruff nor uv (only pipx), so the job
+      # used to fail before reading a single file. Install uv here and put its
+      # shims on PATH; the ruff version stays pinned in ruff.toml alone.
+      - name: Install uv
+        run: |
+          pipx install uv
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       # scripts/lint-python.sh is the single entry point, so this job and
       # `zig build lint-python` run the same rules, the same ruff version and
       # the same paths. A raw `uvx ruff@<pin>` here would let a check added to
