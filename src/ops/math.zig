@@ -216,17 +216,71 @@ pub fn applyGelu(x: []f32) void {
     }
 }
 
+/// Empty marker for `UniqTokenSet`. Vocabulary ids stay far below it.
+const uniq_set_empty: u32 = std.math.maxInt(u32);
+/// Smallest `UniqTokenSet` table, in slots.
+const uniq_set_min_bits: u5 = 6;
+/// Largest `UniqTokenSet` table, in slots. Fixes the stack footprint at 32 KiB.
+const uniq_set_max_bits: u5 = 13;
+
+/// Stack-allocated open-addressing set of u32 token ids, so the samplers can
+/// deduplicate a generation history without allocating.
+const UniqTokenSet = struct {
+    buf: [1 << uniq_set_max_bits]u32 = undefined,
+    set: []u32,
+    mask: u32,
+
+    /// Right-sizes the table to ~2x `n` so the load factor stays under 50%,
+    /// which is what makes the probe loop terminate on a miss.
+    fn init(n: usize) UniqTokenSet {
+        const needed = std.math.mul(usize, n, 2) catch (1 << uniq_set_max_bits);
+        var bits: u5 = uniq_set_min_bits;
+        while (bits < uniq_set_max_bits) : (bits += 1) {
+            if ((@as(usize, 1) << bits) >= needed) break;
+        }
+        const size = @as(usize, 1) << bits;
+        var self: UniqTokenSet = .{ .set = undefined, .mask = @intCast(size - 1) };
+        self.set = self.buf[0..size];
+        @memset(self.set, uniq_set_empty);
+        return self;
+    }
+
+    /// True the first time `tok` is inserted, false on every later repeat.
+    /// A full table reports false rather than probing forever: the sizing
+    /// invariant makes that unreachable, and a wrong answer beats a hang.
+    fn insert(self: *UniqTokenSet, tok: u32) bool {
+        var slot = tok & self.mask;
+        for (0..self.set.len) |_| {
+            if (self.set[slot] == uniq_set_empty) {
+                self.set[slot] = tok;
+                return true;
+            }
+            if (self.set[slot] == tok) return false;
+            slot = (slot +% 1) & self.mask;
+        }
+        return false;
+    }
+};
+
 /// Apply repetition penalty: divide positive logits, multiply negative by `penalty`.
 /// Standard repeat penalty (Keskar et al. 2019). penalty > 1.0 = more suppression.
+///
+/// `penalty` is a single factor, so it is applied once per distinct token.
+/// Re-applying it per occurrence would raise it to the number of times the
+/// token appears: at `--repeat-penalty 1.2` a token generated 30 times would
+/// be suppressed by 1.2^30 (about 237x) instead of 1.2x, and the error grows
+/// with the length of the output rather than staying a fixed nudge.
 pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) void {
     std.debug.assert(penalty > 0);
+    if (penalty == 1.0 or recent_ids.len == 0) return;
+    var seen = UniqTokenSet.init(recent_ids.len);
     for (recent_ids) |tok_id| {
-        if (tok_id < logits.len) {
-            if (logits[tok_id] > 0) {
-                logits[tok_id] /= penalty;
-            } else {
-                logits[tok_id] *= penalty;
-            }
+        if (tok_id >= logits.len) continue;
+        if (!seen.insert(tok_id)) continue;
+        if (logits[tok_id] > 0) {
+            logits[tok_id] /= penalty;
+        } else {
+            logits[tok_id] *= penalty;
         }
     }
 }
@@ -298,42 +352,11 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     }
 
     // Single pass: frequency penalty per occurrence + presence penalty per unique token.
-    // Open-addressing hash set (power-of-2 table) for O(1) amortized uniqueness check.
-    // Right-size table to ~2× input to keep load factor <50% and minimize init cost.
-    const empty_slot = std.math.maxInt(u32);
-    const min_bits = 6;
-    const max_bits = 13;
-    const set_bits = blk: {
-        const needed = std.math.mul(usize, gen_tokens.len, 2) catch (1 << max_bits);
-        var bits: u5 = min_bits;
-        while (bits < max_bits) : (bits += 1) {
-            if ((@as(usize, 1) << bits) >= needed) break;
-        }
-        break :blk bits;
-    };
-    const set_size = @as(usize, 1) << set_bits;
-    const set_mask: u32 = @intCast(set_size - 1);
-    var set_buf: [1 << max_bits]u32 = undefined;
-    const set: []u32 = set_buf[0..set_size];
-    @memset(set, empty_slot);
-
+    var seen = UniqTokenSet.init(gen_tokens.len);
     for (gen_tokens) |tid| {
         if (tid >= logits.len) continue;
         if (frequency_penalty != 0) logits[tid] -= frequency_penalty;
-        // Probe hash set for uniqueness
-        var slot = tid & set_mask;
-        var is_new = true;
-        while (set[slot] != empty_slot) {
-            if (set[slot] == tid) {
-                is_new = false;
-                break;
-            }
-            slot = (slot +% 1) & set_mask;
-        }
-        if (is_new) {
-            set[slot] = tid;
-            logits[tid] -= presence_penalty;
-        }
+        if (seen.insert(tid)) logits[tid] -= presence_penalty;
     }
 }
 
@@ -951,6 +974,40 @@ test "applyRepeatPenalty out-of-range token ignored" {
     applyRepeatPenalty(&logits, &recent, 2.0);
     try std.testing.expectEqual(@as(f32, 0.5), logits[0]); // 1.0 / 2.0
     try std.testing.expectEqual(@as(f32, 2.0), logits[1]); // unchanged
+}
+
+test "applyRepeatPenalty applies once per distinct token" {
+    // Token 1 appears three times. The penalty is a factor, so the logit is
+    // divided by 2.0 exactly once, not by 2.0^3 = 8.0.
+    var logits = [_]f32{ 1.0, 8.0, 3.0 };
+    const recent = [_]u32{ 1, 1, 1 };
+    applyRepeatPenalty(&logits, &recent, 2.0);
+    try std.testing.expectEqual(@as(f32, 4.0), logits[1]);
+    try std.testing.expectEqual(@as(f32, 1.0), logits[0]);
+    try std.testing.expectEqual(@as(f32, 3.0), logits[2]);
+}
+
+test "applyRepeatPenalty repeat count does not compound" {
+    // A long history of one repeated token must stay a fixed nudge: 500
+    // occurrences at penalty 1.2 give the same logit as one occurrence.
+    var once = [_]f32{ 1.0, 10.0 };
+    applyRepeatPenalty(&once, &[_]u32{1}, 1.2);
+    var many = [_]f32{ 1.0, 10.0 };
+    const recent = [_]u32{1} ** 500;
+    applyRepeatPenalty(&many, &recent, 1.2);
+    try std.testing.expectApproxEqAbs(once[1], many[1], 1e-6);
+}
+
+test "applyRepeatPenalty deduplicates a long mixed history" {
+    // 40 distinct ids interleaved, more occurrences than the small set table
+    // holds: every distinct token is still penalized exactly once.
+    var ids: [200]u32 = undefined;
+    var expect: [40]f32 = undefined;
+    for (&ids, 0..) |*v, i| v.* = @intCast(i % 40);
+    for (&expect) |*v| v.* = 4.0;
+    var logits = expect;
+    applyRepeatPenalty(&logits, &ids, 2.0);
+    for (logits) |v| try std.testing.expectEqual(@as(f32, 2.0), v);
 }
 
 test "topKExperts bias-corrected selection vs raw weighting" {

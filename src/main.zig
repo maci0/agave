@@ -152,6 +152,13 @@ const default_max_tokens: u32 = 512;
 /// Default KV cache context size when user/recipe doesn't specify.
 /// 4096 balances memory usage with practical conversation length.
 const default_ctx_size: u32 = 4096;
+/// Percent of the usable-memory budget that `--ctx-size auto` may spend on the
+/// KV cache. The remainder covers the resident weights and runtime overhead.
+const auto_ctx_kv_percent: usize = 80;
+/// Per-token KV footprint above which the model metadata is treated as
+/// degenerate rather than large, and the auto-fit falls back to the default
+/// context. No real model comes close: this is 1 MiB of KV per token.
+const max_kv_bytes_per_token: usize = 1 << 20;
 /// Default prefill chunk size (tokens per batch).
 const default_chunk_size: u32 = 512;
 /// Milliseconds per second, used for tok/s calculations.
@@ -2507,14 +2514,26 @@ pub fn main(init: std.process.Init) !void {
         const hd = disp_info.head_dim;
         const nl = disp_info.n_layers;
         if (n_kv > 0 and hd > 0 and nl > 0 and avail_mem > 0) {
-            // Use float arithmetic for per-token KV bytes, bitsPerElement() returns
-            // fractional values (e.g. Q8_0 = 8.5). @intFromFloat on a non-integer
-            // is UB in ReleaseFast, so compute in float and round up.
+            // Per-token KV bytes, in float throughout: bitsPerElement() returns
+            // fractional values (e.g. Q8_0 = 8.5) and the three dimensions are
+            // u32 read straight from the model file, so an integer product
+            // would wrap on hostile metadata. @intFromFloat on a non-integer is
+            // UB in ReleaseFast, hence the ceil.
             const kv_bpe = cli.kv_type_k.bitsPerElement() + cli.kv_type_v.bitsPerElement();
-            const per_token_bytes: usize = @intFromFloat(@ceil(@as(f64, @floatFromInt(@as(usize, nl) * @as(usize, n_kv) * @as(usize, hd))) * @as(f64, kv_bpe) / 8.0));
+            const kv_bytes_f = @as(f64, @floatFromInt(nl)) * @as(f64, @floatFromInt(n_kv)) *
+                @as(f64, @floatFromInt(hd)) * @as(f64, kv_bpe) / 8.0;
+            const per_token_bytes: usize = if (kv_bytes_f >= @as(f64, @floatFromInt(max_kv_bytes_per_token)))
+                max_kv_bytes_per_token
+            else
+                @intFromFloat(@ceil(kv_bytes_f));
             const model_bytes = disp_info.file_size_bytes;
             const usable = if (avail_mem > model_bytes * 2) avail_mem - model_bytes * 2 else avail_mem / 4;
-            const fit_ctx = if (per_token_bytes > 0) usable * 8 / (per_token_bytes * 10) else default_ctx_size;
+            const kv_budget = std.math.mul(usize, usable, auto_ctx_kv_percent) catch std.math.maxInt(usize);
+            const kv_cost = std.math.mul(usize, per_token_bytes, 100) catch std.math.maxInt(usize);
+            const fit_ctx = if (per_token_bytes > 0 and per_token_bytes < max_kv_bytes_per_token)
+                std.math.divTrunc(usize, kv_budget, kv_cost) catch std.math.maxInt(usize)
+            else
+                default_ctx_size;
             const max_ctx = if (model_native_ctx > 0) @as(usize, model_native_ctx) else 131072;
             cli.ctx_size = @intCast(@max(128, @min(fit_ctx, max_ctx)));
             std.log.info("ctx-size: auto → {d} ({d} MB available, {d} B/token KV)", .{
