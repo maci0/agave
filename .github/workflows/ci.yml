@@ -81,6 +81,14 @@ jobs:
             exit 1
           fi
           echo "Debian snapshot day OK: $from_day (SOURCE_DATE_EPOCH=$epoch)"
+          # Both stages must drop the base image's deb822 debian.sources, or apt
+          # keeps resolving against live deb.debian.org and the pin does nothing.
+          dropped="$(grep -c 'rm -f /etc/apt/sources.list.d/\*\.list /etc/apt/sources.list.d/\*\.sources' Dockerfile || true)"
+          if [[ "$dropped" != "2" ]]; then
+            echo "::error::Dockerfile must remove pre-existing apt sources in both stages (found $dropped of 2)"
+            exit 1
+          fi
+          echo "Apt source isolation OK"
 
       - name: Check formatting
         run: zig fmt --check src/ tests/ build.zig build.zig.zon
