@@ -107,7 +107,6 @@ pub const Transport = struct {
     cuda_sync: ?*const fn () callconv(.c) c_int = null,
     cuda_ctx: ?*anyopaque = null,
     cuda_ctx_set: ?*const fn (?*anyopaque) callconv(.c) c_int = null,
-    cuda_host_register: ?*const fn (*const anyopaque, usize, c_uint) callconv(.c) c_int = null,
     cuda_mem_alloc: ?*const fn (*u64, usize) callconv(.c) c_int = null,
     cuda_mem_free: ?*const fn (u64) callconv(.c) c_int = null,
     cuda_memcpy_htod: ?*const fn (u64, *const anyopaque, usize) callconv(.c) c_int = null,
