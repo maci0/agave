@@ -2,10 +2,10 @@
 # Reproducibility pins that CI's fmt-check job and `zig build check` both run.
 #
 # A green `zig build check` must not disagree with CI: these pins
-# (Zig toolchain, Debian snapshot day, SOURCE_DATE_EPOCH, apt source
-# isolation, listen port, ruff version, bun version) are what make a build or a
-# gate reproducible, and a mismatch only surfaced in CI, so a contributor
-# learned about it after pushing.
+# (Zig toolchain, Zig download checksums, Debian snapshot day,
+# SOURCE_DATE_EPOCH, apt source isolation, listen port, ruff version, bun
+# version) are what make a build or a gate reproducible, and a mismatch only
+# surfaced in CI, so a contributor learned about it after pushing.
 #
 # Exit 0 when every pin agrees, 1 on a mismatch or an unparseable file.
 set -euo pipefail
@@ -13,6 +13,52 @@ export LC_ALL=C TZ=UTC
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+# Midnight UTC of a calendar date, as a Unix epoch, in POSIX shell arithmetic.
+#
+# `date -u -d <str> +%s` parses the string but is GNU-only: BSD date (macOS, the
+# platform the Metal backend and the macOS test job target) has no -d, so it
+# exited non-zero and took `zig build check` down with it on a developer Mac.
+# Days-from-civil needs no date(1), no locale and no timezone database, so both
+# platforms compute the same number. The known-epoch table below is what pins
+# the arithmetic; it was cross-checked against GNU date(1) when it was written.
+midnight_epoch() {
+    # 10# keeps a zero-padded "08" out of bash's octal-integer parsing.
+    local year=$((10#$1)) month=$((10#$2)) day=$((10#$3))
+    local y era yoe doy doe days
+    if ((month <= 2)); then
+        y=$((year - 1))
+    else
+        y=$year
+    fi
+    era=$(((y >= 0 ? y : y - 399) / 400))
+    yoe=$((y - era * 400))
+    if ((month > 2)); then
+        doy=$(((153 * (month - 3) + 2) / 5 + day - 1))
+    else
+        doy=$(((153 * (month + 9) + 2) / 5 + day - 1))
+    fi
+    doe=$((yoe * 365 + yoe / 4 - yoe / 100 + doy))
+    days=$((era * 146097 + doe - 719468))
+    echo $((days * 86400))
+}
+
+# Known epochs, so a typo in the arithmetic above fails here instead of turning
+# a correct SOURCE_DATE_EPOCH into a spurious mismatch (or, worse, accepting a
+# wrong one). 2026-08-24 is the Debian snapshot day this repo pins.
+while read -r want y m d; do
+    got="$(midnight_epoch "$y" "$m" "$d")"
+    if [[ "$got" != "$want" ]]; then
+        echo "check-pins: midnight_epoch $y-$m-$d = $got, expected $want" >&2
+        exit 1
+    fi
+done <<'EOF'
+0 1970 01 01
+1009843200 2002 01 01
+1787529600 2026 08 24
+951782400 2000 02 29
+EOF
+echo "midnight_epoch arithmetic OK"
 
 # Read the pin from .zigversion rather than from a CI step output, so the
 # local and CI paths run the identical check.
@@ -29,6 +75,30 @@ if [[ "$pin" != "$zon" ]]; then
 fi
 echo "Zig pin OK: $pin"
 
+# The Dockerfile verifies the Zig tarball by SHA256, but nothing tied those
+# hashes to a Zig release: bumping .zigversion and build.zig.zon left the old
+# hashes in place, `zig build check` stayed green, and only the docker-build job
+# failed, at the download, with a checksum warning. ZIG_CHECKSUMS_FOR names the
+# release the hashes were copied from, so the bump is caught here instead.
+checksums_for="$(sed -n 's/^ARG ZIG_CHECKSUMS_FOR=\([^[:space:]]*\).*/\1/p' Dockerfile | head -n1)"
+if [[ -z "$checksums_for" ]]; then
+    echo "check-pins: could not parse ARG ZIG_CHECKSUMS_FOR from Dockerfile" >&2
+    exit 1
+fi
+if [[ "$checksums_for" != "$pin" ]]; then
+    echo "check-pins: Dockerfile ZIG_SHA256_* are for Zig $checksums_for != .zigversion pin $pin" >&2
+    echo "check-pins: replace ZIG_CHECKSUMS_FOR and both ZIG_SHA256_* with the values from https://ziglang.org/download/$pin/shasum.txt" >&2
+    exit 1
+fi
+for arch in X86_64 AARCH64; do
+    sha="$(sed -n "s/^ARG ZIG_SHA256_${arch}=\([0-9a-f]*\).*/\1/p" Dockerfile | head -n1)"
+    if [[ ! "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "check-pins: Dockerfile ZIG_SHA256_${arch} is not a 64-char lowercase sha256: '$sha'" >&2
+        exit 1
+    fi
+done
+echo "Zig download checksums OK: $checksums_for (ZIG_SHA256_X86_64, ZIG_SHA256_AARCH64)"
+
 # Dated debian:bookworm-YYYYMMDD-slim must match DEBIAN_SNAPSHOT=YYYYMMDDT...
 from_day="$(sed -n 's/.*debian:bookworm-\([0-9]\{8\}\)-slim.*/\1/p' Dockerfile | head -n1)"
 snap_day="$(sed -n 's/.*DEBIAN_SNAPSHOT=\([0-9]\{8\}\)T.*/\1/p' Dockerfile | head -n1)"
@@ -41,7 +111,7 @@ if [[ "$from_day" != "$snap_day" ]]; then
     exit 1
 fi
 epoch="$(sed -n 's/^ARG SOURCE_DATE_EPOCH=\([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
-expected_epoch="$(date -u -d "${from_day:0:4}-${from_day:4:2}-${from_day:6:2} 00:00:00 UTC" +%s)"
+expected_epoch="$(midnight_epoch "${from_day:0:4}" "${from_day:4:2}" "${from_day:6:2}")"
 if [[ -z "$epoch" ]]; then
     echo "check-pins: could not parse ARG SOURCE_DATE_EPOCH from Dockerfile" >&2
     exit 1
