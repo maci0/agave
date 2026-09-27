@@ -26,6 +26,12 @@ const max_array_len: usize = 1_000_000;
 /// Maximum allowed alignment (prevents arithmetic issues from crafted metadata).
 /// Standard GGUF alignment is 32; values beyond 1 MiB are nonsensical.
 const max_alignment: u32 = 1 << 20;
+/// Minimum alignment every tensor's data offset must satisfy, independent of
+/// the file's declared `general.alignment`. Consumers `@alignCast` the pointer
+/// `tensorData()` hands out to at most 4-byte types (f32, u32, i32, f16), and a
+/// crafted file may place a tensor at any byte offset. Unaligned access traps
+/// under safety checks and is undefined behaviour once they are compiled out.
+const min_tensor_data_alignment: usize = 4;
 /// Buffer size for tensor/metadata name formatting (must fit longest GGUF key).
 const name_buf_size: usize = 256;
 
@@ -867,6 +873,7 @@ pub const GGUFFile = struct {
             const tensor_end = std.math.add(usize, abs_offset, data_bytes) catch
                 return error.OffsetOutOfBounds;
             if (tensor_end > self.file_size) return error.OffsetOutOfBounds;
+            if (abs_offset % min_tensor_data_alignment != 0) return error.OffsetOutOfBounds;
         }
     }
 

@@ -33,6 +33,14 @@ const max_shard_count: usize = 10_000;
 const name_buf_size: usize = 256;
 /// Maximum JSON nesting depth to prevent stack exhaustion from crafted inputs.
 const max_json_depth: usize = 128;
+/// Minimum alignment every tensor's data offset must satisfy. The JSON header
+/// is not padded, so `tensor_base` is arbitrary modulo 8 and `data_offsets`
+/// come straight from the file; the format guarantees no alignment at all.
+/// Consumers `@alignCast` the pointer `entryToInfo` hands out to at most
+/// 4-byte types (f32, u32, i32, f16), so an unaligned offset traps under safety
+/// checks and is undefined behaviour once they are compiled out. Every real
+/// writer pads tensor data to 64 bytes.
+const min_tensor_data_alignment: usize = 4;
 
 // ── Shard & tensor storage ────────────────────────────────────────────────────
 
@@ -475,6 +483,10 @@ pub const SafeTensorsDir = struct {
         };
         if (abs_end > shard.data.len) {
             std.log.err("Tensor data exceeds shard bounds for {s} (end={d}, shard_size={d})", .{ name, abs_end, shard.data.len });
+            return null;
+        }
+        if (abs_start % min_tensor_data_alignment != 0) {
+            std.log.err("Tensor {s} at offset {d} is not {d}-byte aligned", .{ name, abs_start, min_tensor_data_alignment });
             return null;
         }
         const effective_dtype = blk: {
