@@ -2,7 +2,7 @@
 
 Bugs, performance issues, and future work. Detailed designs inline.
 
-**Last updated**: 2026-09-02
+**Last updated**: 2026-09-27
 
 ---
 
@@ -92,8 +92,6 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | Batched KV swap (TransferCallback + batchPromoteToVram) | vLLM |
 | TurboQuant in SDPA kernel (sdpa_fa2_turbo) | n/a |
 | Spec decode thinking budget (adaptive cooldown) | n/a |
-| Topology-aware auto partitioning (device cap exchange) | Partial |
-| Sparse GEMV for all GPU backends (Metal +12%, Vulkan, WebGPU) | PowerInfer/TurboSparse |
 | WebGPU buffer lifecycle fix (defer params + cache destruction) | n/a |
 | WebGPU backend enabled by default | n/a |
 | Apple Accelerate.framework (AMX BLAS for F32 CPU GEMV/GEMM) | n/a |
@@ -101,6 +99,18 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | MLX-4bit SafeTensors rope_theta + vocab_size fix | n/a |
 | GGUF MoE expert stride fix (dims[1]*dims[2]) | n/a |
 | LoRA adapter loading (`--lora <path>`, load-time merge, all quant formats) | llama.cpp |
+| Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured; CPU +21%, Metal +12%) | PowerInfer/TurboSparse |
+| DeepSeek V4 Flash 0731 full support (HC, MLA, CSA/HCA, LID, hash routing; 10 Metal kernels in `ds4.metal` + `ds4_fused.metal`; dedicated CpuBackend bypass gives bit-identical `--backend cpu` / `--backend metal` output at 10.7-21.2 tok/s with suffix speculation, see [DS4_METAL_DIVERGENCE.md](DS4_METAL_DIVERGENCE.md)) | n/a |
+| AWQ column-major INT4 GEMV kernel (+ nibble order fix, all 6 backends) | n/a |
+| TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte, all 6 backends) | n/a |
+| TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2, all 6 backends) | n/a |
+| HQQ half-quadratic quantization (Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) | n/a |
+
+### Partial
+
+| Feature | State |
+|---------|-------|
+| Topology-aware auto partitioning (device cap exchange) | Partial: device cap exchange incomplete |
 
 ### High Priority
 
@@ -127,13 +137,9 @@ and Vulkan (gfx1100) despite full kernel coverage.
 | 23 | Nostr-based discovery | Mesh-LLM |
 | 24 | RDMA over Thunderbolt 5 | Exo |
 | 25 | Inter-model collaboration (MoM) | Mesh-LLM |
-| 26 | Sparse GEMV (skip near-zero FFN activations, ~40% sparsity measured) | Done (CPU +21%, Metal +12%) |
-| 27 | DeepSeek V4 Flash 0731 full support | Done | All components: HC, MLA, CSA/HCA, LID, hash routing. **10 Metal GPU kernels** (ds4.metal + ds4_fused.metal): HC mixing, RoPE/invRoPE, weighted accum, turbo SDPA hd512, fused attention megakernel (unused MoE/top-k kernels removed). **Dedicated CpuBackend bypass** for MLX-Q SafeTensors: bit-identical output between --backend cpu and --backend metal, 10.7-21.2 tok/s with suffix speculation. |
-| 28 | AWQ column-major INT4 GEMV kernel (currently uses GPTQ row-major, wrong packing) | Done (all 6 backends + nibble order fix) |
-| 29 | TQ1_0 ternary GEMV kernel (BitNet 1.58-bit, {-1,0,1}, 5 trits/byte) | Done (all 6 backends) |
-| 30 | TQ2_0 ternary GEMV kernel (2-bit ternary, faster on AVX2) | Done (all 6 backends) |
 | 31 | EXL2 mixed-precision codebook (NVIDIA only) | ExLlama |
-| 32 | HQQ half-quadratic quantization | Done (all 6 backends: Metal/Vulkan/WebGPU/CUDA/ROCm native + CPU) |
+
+Items 26, 27, 28, 29, 30 and 32 shipped and moved to Done above.
 
 ---
 
@@ -173,7 +179,9 @@ UMA platforms (Apple Silicon, GB10) already optimal via zero-copy mmap. Discrete
 
 ## Pre-Sharded Weights
 
-`agave shard` subcommand: split GGUF by TP degree → `model-tp0.gguf`, `model-tp1.gguf`. Zero init-time sharding, peak memory = shard size. Auto-detect via GGUF metadata.
+Not built. The only subcommands today are `pull`, `calibrate`, and `help`; there is no `agave shard`.
+
+Planned: an `agave shard` subcommand splitting GGUF by TP degree → `model-tp0.gguf`, `model-tp1.gguf`. Zero init-time sharding, peak memory = shard size. Auto-detect via GGUF metadata.
 
 ---
 

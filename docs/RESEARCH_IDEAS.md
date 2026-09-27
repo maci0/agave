@@ -1,5 +1,9 @@
 # Research Ideas for Agave DS V4 Flash Maximum Performance
 
+**Status**: proposals. Nothing here is a decision or a shipped feature; an item ships only when
+`docs/TODO.md` says so. Expected gains are the papers' or the authors' numbers unless marked measured.
+**Last reviewed**: 2026-09-27 (no item moved to Done in the TODO roadmap).
+
 ## Priority 1: IMPLEMENT NOW
 
 ### A. Pre-packed AMX SGEMM for Attention (arXiv 2606.25426)

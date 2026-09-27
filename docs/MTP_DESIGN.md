@@ -1,6 +1,8 @@
 # DS V4 Flash MTP Implementation Design
 
-**Status**: implemented (shared-expert FFN only). Weights load from a caller-supplied safetensors file via `--mtp-model`; they are not bundled in GGUF. Canonical CLI: `src/main.zig` (`--mtp-model`), loader: `src/models/ds4_mtp.zig`, forward: `Ds4Model.mtpForward`.
+**Status**: implemented (shared-expert FFN only). Weights load from a caller-supplied safetensors file via `--mtp-model`; they are not bundled in GGUF. Canonical CLI: `src/main.zig` (`--mtp-model`), loader: `src/models/ds4_mtp.zig`, forward: `Ds4Model.mtpForward` (`src/models/deepseek4.zig`).
+
+**Last updated**: 2026-09-27 (status and performance note checked against `mtpForward`).
 
 **Implementation note:** `mtpForward` currently runs MTP layers 0–2 on every call and does not use `depth` to select a single layer. The per-depth sketch below is the intended v1 shape; do not treat the loop-all-layers path as a superseding decision.
 
@@ -66,11 +68,15 @@ MTP tensors are mmap'd from the safetensors file (595MB).
 On 48GB system: 595MB fits easily alongside the 155GB main model page cache.
 No SSD streaming needed for MTP non-expert weights.
 
-### Performance Estimate
+### Performance Estimate (unmeasured projection)
+
+The numbers below are a pre-implementation estimate, not a measurement: MTP has
+never been benchmarked (`docs/BENCHMARKS.md` has no MTP entry). Treat the
+throughput and acceptance figures as a hypothesis to test, not a result.
 
 Each MTP forward:
 - main_proj GEMV: [4096, 12288] × [12288] → ~50M FLOPs
-- Attention GEMVs: ~5 × [~4K, ~4K] → ~80M FLOPs  
+- Attention GEMVs: ~5 × [~4K, ~4K] → ~80M FLOPs
 - Shared expert FFN: 3 × [2048, 4096] → ~50M FLOPs
 - HC: negligible
 - Total: ~180M FLOPs per MTP depth
@@ -79,5 +85,5 @@ Each MTP forward:
 3 MTP depths: ~54ms per target token
 Target token: ~770ms
 MTP overhead: 54/770 = 7%
-Expected draft acceptance: ~60% (3 drafts → ~1.8 accepted)
-Net throughput: 2.8 tokens per 824ms = 3.4 tok/s (2.6× improvement!)
+Assumed draft acceptance: ~60% (3 drafts → ~1.8 accepted)
+Projected throughput: 2.8 tokens per 824ms = 3.4 tok/s
