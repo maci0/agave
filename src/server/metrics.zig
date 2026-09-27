@@ -1199,7 +1199,12 @@ test "Metrics: renderPrometheus, TPOT histogram rendered" {
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds") != null);
+    // The name alone also appears in the unconditional # HELP / # TYPE lines,
+    // so the series lines have to be checked for the data to be covered.
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds_bucket{le=\"0.005\"} 1\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds_bucket{le=\"0.01\"} 1\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds_sum 0.005\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds_count 1\n") != null);
 }
 
 test "Metrics: renderPrometheus, queue time histogram rendered" {
@@ -1209,7 +1214,10 @@ test "Metrics: renderPrometheus, queue time histogram rendered" {
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_bucket{le=\"0.01\"} 0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_bucket{le=\"0.05\"} 1\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_sum 0.025\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_count 1\n") != null);
 }
 
 test "Metrics: renderPrometheus, prompt token histogram rendered" {
@@ -1219,7 +1227,10 @@ test "Metrics: renderPrometheus, prompt token histogram rendered" {
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_bucket{le=\"64\"} 0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_bucket{le=\"128\"} 1\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_sum 100\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_count 1\n") != null);
 }
 
 test "Metrics: renderPrometheus, generation token histogram rendered" {
@@ -1229,7 +1240,10 @@ test "Metrics: renderPrometheus, generation token histogram rendered" {
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_bucket{le=\"128\"} 0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_bucket{le=\"256\"} 1\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_sum 200\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_count 1\n") != null);
 }
 
 test "Metrics: renderPrometheus, GPU KV cache rendered" {
@@ -1239,7 +1253,7 @@ test "Metrics: renderPrometheus, GPU KV cache rendered" {
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_gpu_cache_usage_perc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_gpu_cache_usage_perc 0.2500\n") != null);
 }
 
 test "Metrics: renderPrometheus, ITL histogram rendered" {
@@ -1249,7 +1263,10 @@ test "Metrics: renderPrometheus, ITL histogram rendered" {
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_bucket{le=\"0.005\"} 0\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_bucket{le=\"0.01\"} 1\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_sum 0.010\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_count 1\n") != null);
 }
 
 test "Metrics: renderPrometheus, cache config rendered" {

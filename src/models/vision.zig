@@ -2226,6 +2226,7 @@ test "attention_chunk_size guard" {
     // scores buffer is 16 * 64 * 4096 * 4 = 16MB (bounded, vs 1GB for full n^2).
     try std.testing.expectEqual(@as(u32, 64), attention_chunk_size);
     const scores_bytes = @as(usize, default_n_heads) * attention_chunk_size * 4096 * @sizeOf(f32);
-    // Should be 16MB
-    try std.testing.expectEqual(@as(usize, 16 * 64 * 4096 * 4), scores_bytes);
+    // Bound, not a restatement: raising attention_chunk_size to 1024 would
+    // push this to 256MB and the name's promise would quietly break.
+    try std.testing.expect(scores_bytes <= 32 * 1024 * 1024);
 }
