@@ -53,6 +53,10 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 - **[Benchmarks](BENCHMARKS.md)**: performance data across models, backends, and quantization types
 - **[Contributing](CONTRIBUTING.md)**: how to add backends, models, quantization, megakernels, chat templates; [versioning & releases](CONTRIBUTING.md#versioning--releases) (0.x SemVer, changelog, deprecation, support/lifecycle)
 - **[Test Matrix](TEST_MATRIX.md)**: model × backend test status and known issues
+- **[DeepSeek V4 MTP Design](MTP_DESIGN.md)**: DS V4 Flash multi-token prediction design, weight names, unmeasured cost estimate
+- **[DeepSeek V4 Metal Divergence](DS4_METAL_DIVERGENCE.md)**: why DS4 uses a dedicated CpuBackend for bit-identical Metal output
+- **[DeepSeek V4 Benchmark](DS4_BENCHMARK.md)**: cross-engine DeepSeek V4 Flash measurements and methodology
+- **[Research Ideas](RESEARCH_IDEAS.md)**: unbuilt optimization proposals with expected gains
 - **[Parallelism](PARALLELISM.md)**: distributed inference: TP, PP, NCCL, transports
 - **[TODO & Roadmap](TODO.md)**: bugs, roadmap, design notes
 - **[Changelog](../CHANGELOG.md)**: user-facing release history (product version 0.3.0)
