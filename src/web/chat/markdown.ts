@@ -31,6 +31,12 @@ const CDN_SCRIPT_TIMEOUT_MS = 10_000;
  * script that declares it has run, and the first response arrives before that
  * on a cold page; a missing property on globalThis is simply undefined.
  */
+/** `setTimeout` handle, which the Bun types call a Timeout object. */
+type Timer = ReturnType<typeof setTimeout>;
+
+// SAFETY: the shape is the ambient declaration in globals.d.ts.
+// The cast only widens globalThis to carry those optional properties.
+// oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- the declaration above is the contract
 const cdn = globalThis as {
   marked?: MarkedStatic;
   DOMPurify?: DOMPurifyStatic;
@@ -44,22 +50,29 @@ let markedConfigured = false;
 /** Append a pinned CDN script. Resolves false on load failure or timeout; every
  *  caller has a working fallback, so a blocked CDN degrades the page instead of
  *  breaking it. */
-const loadCdnScript = (url: string, integrity: string): Promise<boolean> => {
-  return new Promise(function (resolve) {
-    const script = document.createElement('script');
-    script.src = url;
-    script.integrity = integrity;
-    script.crossOrigin = 'anonymous';
-    script.referrerPolicy = 'no-referrer';
-    const timer = setTimeout(function () { settle(false); }, CDN_SCRIPT_TIMEOUT_MS);
-    const settle = (ok: boolean) => {
-      clearTimeout(timer);
-      resolve(ok);
+const loadCdnScript = async (url: string, integrity: string): Promise<boolean> => {
+  const script = document.createElement('script');
+  script.src = url;
+  script.integrity = integrity;
+  script.crossOrigin = 'anonymous';
+  script.referrerPolicy = 'no-referrer';
+  // oxlint-disable-next-line promise/avoid-new -- a script load is an event, so it needs a promise to await
+  const result = await new Promise<'load' | 'error' | 'timeout'>(function (resolve) {
+    let settled = false;
+    const handles: Array<Timer> = [];
+    const settle = function (outcome: 'load' | 'error' | 'timeout') {
+      if (settled) { return; }
+      settled = true;
+      for (const handle of handles) { clearTimeout(handle); }
+      // oxlint-disable-next-line promise/no-multiple-resolved -- the guard above resolves exactly once
+      resolve(outcome);
     };
-    script.addEventListener('load', function () { settle(true); });
-    script.addEventListener('error', function () { settle(false); });
+    handles.push(setTimeout(function () { settle('timeout'); }, CDN_SCRIPT_TIMEOUT_MS));
+    script.addEventListener('load', function () { settle('load'); }, { once: true });
+    script.addEventListener('error', function () { settle('error'); }, { once: true });
     document.head.append(script);
   });
+  return result === 'load';
 };
 
 /** Fetch marked and DOMPurify. Resolves false when either fails; the renderers
@@ -75,22 +88,23 @@ export const loadMarkdown = (): Promise<boolean> => {
 
 /** Fetch highlight.js and its theme on the first code block. Copy and language
  *  chrome do not wait for it. */
+const appendHighlightTheme = (): void => {
+  if (document.querySelector('link[data-agave-hljs]')) {return;}
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = HLJS_STYLE_URL;
+  link.integrity = HLJS_STYLE_INTEGRITY;
+  link.crossOrigin = 'anonymous';
+  link.referrerPolicy = 'no-referrer';
+  link.dataset.agaveHljs = '1';
+  document.head.append(link);
+};
+
 export const loadHighlightJs = (): Promise<boolean> => {
   if (highlightLoad) {return highlightLoad;}
   if (cdn.hljs) {return Promise.resolve(true);}
-  highlightLoad = new Promise(function (resolve) {
-    if (!document.querySelector('link[data-agave-hljs]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = HLJS_STYLE_URL;
-      link.integrity = HLJS_STYLE_INTEGRITY;
-      link.crossOrigin = 'anonymous';
-      link.referrerPolicy = 'no-referrer';
-      link.dataset.agaveHljs = '1';
-      document.head.append(link);
-    }
-    loadCdnScript(HLJS_URL, HLJS_INTEGRITY).then(function (ok) { resolve(ok && Boolean(cdn.hljs)); });
-  });
+  appendHighlightTheme();
+  highlightLoad = loadCdnScript(HLJS_URL, HLJS_INTEGRITY).then(function (ok) { return ok && Boolean(cdn.hljs); });
   return highlightLoad;
 };
 
@@ -150,10 +164,10 @@ const wrapTables = (root: HTMLElement): void => {
     wrapper.setAttribute('tabindex', '0');
     wrapper.setAttribute('role', 'region');
     wrapper.setAttribute('aria-label', 'Data table');
-    table.parentNode?.insertBefore(wrapper, table);
+    table.before(wrapper);
     wrapper.append(table);
     for (const header of table.querySelectorAll('th')) {
-      if (!header.getAttribute('scope')) {header.setAttribute('scope', 'col');}
+      if (header.getAttribute('scope') === null) {header.setAttribute('scope', 'col');}
     }
   }
 };
@@ -183,10 +197,23 @@ const hardenLinks = (root: HTMLElement): void => {
   }
 };
 
+/** Copy to the clipboard. The caller owns the label and its revert timer, so
+ *  this only reports whether the write landed. */
+/** Copy to the clipboard. The caller owns the label and its revert timer, so
+ *  this only reports whether the write landed. */
+export const copyText = async (text: string): Promise<'copied' | 'failed'> => {
+  try {
+    await navigator.clipboard.writeText(text);
+    return 'copied';
+  } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- the caller renders the failure
+    return 'failed';
+  }
+};
+
 const decorateCodeBlock = (block: Element): void => {
   const pre = block.parentElement;
   if (!pre || pre.querySelector('.copy-btn')) {return;}
-  const lang = block.className.match(/language-(\w+)/)?.[1] ?? '';
+  const lang = /language-(\w+)/.exec(block.className)?.[1] ?? '';
   if (lang) {
     const label = document.createElement('span');
     label.className = 'code-lang';
@@ -199,7 +226,7 @@ const decorateCodeBlock = (block: Element): void => {
   copy.textContent = 'Copy';
   copy.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
   copy.addEventListener('click', function () {
-    void copyText(block.textContent ?? '').then(function (result) {
+    void copyText(block.textContent).then(function (result) {
       copy.textContent = result === 'copied' ? 'Copied' : 'Failed';
       setTimeout(function () { copy.textContent = 'Copy'; }, 2000);
     });
@@ -215,20 +242,14 @@ const highlightCodeBlocks = (root: HTMLElement): void => {
     if (!cdn.hljs || !root.isConnected) {return;}
     for (const block of root.querySelectorAll('pre code')) {
       if (block.classList.contains('hljs')) {continue;}
+      // SAFETY: a `pre code` descendant is an HTMLElement, which is
+      // What highlight.js takes; a selector never returns an SVG.
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the query above
       cdn.hljs.highlightElement(block as HTMLElement);
     }
   };
   if (cdn.hljs) {apply(); return;}
   void loadHighlightJs().then(function (ok) { if (ok) {apply();} });
-};
-
-/** Copy to the clipboard. The caller owns the label and its revert timer, so
- *  this only reports whether the write landed. */
-export const copyText = (text: string): Promise<'copied' | 'failed'> => {
-  return navigator.clipboard.writeText(text).then(
-    function () { return 'copied' as const; },
-    function () { return 'failed' as const; },
-  );
 };
 
 /**
@@ -256,12 +277,20 @@ export const renderMarkdown = (target: HTMLElement, content: string): void => {
 export const markdownReady = (): boolean =>
   Boolean(cdn.marked && cdn.DOMPurify);
 
-const idleQueue: (() => void)[] = [];
+const idleQueue: Array<() => void> = [];
 let idleDraining = false;
 
 const scheduleIdle = (fn: () => void): void => {
-  if (typeof requestIdleCallback === 'function') { requestIdleCallback(fn); }
-  else { setTimeout(fn, 0); }
+  // Safari has no requestIdleCallback until 18. A timeout is the fallback.
+  if ('requestIdleCallback' in globalThis) { globalThis.requestIdleCallback(fn); return; }
+  setTimeout(fn, 0);
+};
+
+const drainIdle = (): void => {
+  const next = idleQueue.shift();
+  if (!next) { idleDraining = false; return; }
+  next();
+  if (idleQueue.length > 0) { scheduleIdle(drainIdle); } else { idleDraining = false; }
 };
 
 /** Responses that finished before the deferred libraries landed are rebuilt one
@@ -270,12 +299,5 @@ export const onIdle = (fn: () => void): void => {
   idleQueue.push(fn);
   if (idleDraining) {return;}
   idleDraining = true;
-  const drain = function () {
-    const next = idleQueue.shift();
-    if (!next) { idleDraining = false; return; }
-    next();
-    if (idleQueue.length > 0) { scheduleIdle(drain); }
-    else { idleDraining = false; }
-  };
-  scheduleIdle(drain);
+  scheduleIdle(drainIdle);
 };

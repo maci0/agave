@@ -1,6 +1,6 @@
 import { cva, type VariantProps } from 'class-variance-authority';
 import type { HTMLAttributes } from 'react';
-import { cn } from './utils';
+import { cn } from './cn';
 
 /** Badge: the header model name, the context-window counter, status pills. */
 const badgeVariants = cva(

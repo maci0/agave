@@ -57,98 +57,114 @@ const SettingSlider = ({
   );
 };
 
-export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPanelProps) => {
-  const maxTokensId = useId();
-  const systemId = useId();
-  const maxTokensValid = isMaxTokensValid(sampling.maxTokens);
-
+/** The token budget: a numeric field with an inline range error. It is the one
+ *  setting that is typed rather than dragged, so it validates as you type. */
+const MaxTokensField = ({ sampling, onChange }: { sampling: Sampling; onChange: (next: Sampling) => void }) => {
+  const fieldId = useId();
+  const valid = isMaxTokensValid(sampling.maxTokens);
   return (
-    <div
-      id="settings-panel"
-      role="region"
-      aria-label="Sampling settings"
-      className="mx-auto mb-3 max-w-prose rounded-lg border border-border bg-popover p-4"
-    >
-      <div className="mb-3 grid grid-cols-3 gap-4 max-drawer:grid-cols-1">
-        <SettingSlider
-          label="Temperature"
-          value={sampling.temperature}
-          min={0}
-          max={TEMPERATURE_MAX}
-          step={0.1}
-          digits={1}
-          hint="0 is focused, higher is more random"
-          onChange={function (next) { onChange({ ...sampling, temperature: next }); }}
-        />
-        <SettingSlider
-          label="Top-P"
-          value={sampling.topP}
-          min={0}
-          max={TOP_P_MAX}
-          step={0.05}
-          digits={2}
-          hint="1.0 considers all tokens"
-          onChange={function (next) { onChange({ ...sampling, topP: next }); }}
-        />
-        <div>
-          <Label htmlFor={maxTokensId} className="mb-1.5 block">
-            Max Tokens
-          </Label>
-          <Input
-            id={maxTokensId}
-            type="number"
-            inputMode="numeric"
-            min={MAX_TOKENS_MIN}
-            max={MAX_TOKENS_MAX}
-            value={sampling.maxTokens}
-            className="font-mono"
-            aria-invalid={!maxTokensValid}
-            aria-describedby={`${maxTokensId}-range${maxTokensValid ? '' : ` ${maxTokensId}-error`}`}
-            onChange={function (event) { onChange({ ...sampling, maxTokens: event.target.value }); }}
-            onKeyDown={function (event) {
-              if (event.key === 'Enter') { event.preventDefault(); }
-            }}
-            onBlur={function () {
-              if (maxTokensValid) {return;}
-              onChange({ ...sampling, maxTokens: String(clampMaxTokens(sampling.maxTokens)) });
-            }}
-          />
-          <span id={`${maxTokensId}-range`} className="mt-0.5 block font-mono text-2xs text-faint">
-            {`${MAX_TOKENS_MIN}–${MAX_TOKENS_MAX}`}
-          </span>
-          {maxTokensValid ? null : (
-            <span id={`${maxTokensId}-error`} role="alert" className="mt-1 block font-mono text-2xs text-destructive-foreground">
-              {`Max tokens must be a whole number from ${MAX_TOKENS_MIN} to ${MAX_TOKENS_MAX}.`}
-            </span>
-          )}
-        </div>
+  <div>
+    <Label htmlFor={fieldId} className="mb-1.5 block">
+      Max Tokens
+    </Label>
+    <Input
+      id={fieldId}
+      type="number"
+      inputMode="numeric"
+      min={MAX_TOKENS_MIN}
+      max={MAX_TOKENS_MAX}
+      value={sampling.maxTokens}
+      className="font-mono"
+      aria-invalid={!valid}
+      aria-describedby={`${fieldId}-range${valid ? '' : ` ${fieldId}-error`}`}
+      onChange={function (event) { onChange({ ...sampling, maxTokens: event.target.value }); }}
+      onKeyDown={function (event) {
+        if (event.key === 'Enter') { event.preventDefault(); }
+      }}
+      onBlur={function () {
+        if (valid) {return;}
+        onChange({ ...sampling, maxTokens: String(clampMaxTokens(sampling.maxTokens)) });
+      }}
+    />
+    <span id={`${fieldId}-range`} className="mt-0.5 block font-mono text-2xs text-faint">
+      {`${MAX_TOKENS_MIN}–${MAX_TOKENS_MAX}`}
+    </span>
+    {valid ? null : (
+      <span id={`${fieldId}-error`} role="alert" className="mt-1 block font-mono text-2xs text-destructive-foreground">
+        {`Max tokens must be a whole number from ${MAX_TOKENS_MIN} to ${MAX_TOKENS_MAX}.`}
+      </span>
+    )}
+  </div>
+  );
+};
+
+/** The system prompt, with the control that clears it from both stores. */
+const SystemPromptField = ({ sampling, onChange, onClear }: {
+  sampling: Sampling;
+  onChange: (next: Sampling) => void;
+  onClear: () => void;
+}) => {
+  const fieldId = useId();
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between">
+        <Label htmlFor={fieldId}>System Prompt</Label>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="min-h-11 px-2 text-2xs hover:text-destructive-foreground"
+          onClick={onClear}
+          aria-label="Clear system prompt"
+        >
+          Clear
+        </Button>
       </div>
-      <div>
-        <div className="mb-1.5 flex items-center justify-between">
-          <Label htmlFor={systemId}>System Prompt</Label>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="min-h-11 px-2 text-2xs hover:text-destructive-foreground"
-            onClick={onClearSystem}
-            aria-label="Clear system prompt"
-          >
-            Clear
-          </Button>
-        </div>
-        <Textarea
-          id={systemId}
-          rows={2}
-          spellCheck={false}
-          autoCapitalize="off"
-          dir="auto"
-          placeholder="Optional system prompt..."
-          value={sampling.system}
-          className="min-h-10 max-h-30 resize-y"
-          onChange={function (event) { onChange({ ...sampling, system: event.target.value }); }}
-        />
-      </div>
+      <Textarea
+        id={fieldId}
+        rows={2}
+        spellCheck={false}
+        autoCapitalize="off"
+        dir="auto"
+        placeholder="Optional system prompt..."
+        value={sampling.system}
+        className="min-h-10 max-h-30 resize-y"
+        onChange={function (event) { onChange({ ...sampling, system: event.target.value }); }}
+      />
     </div>
   );
 };
+
+export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPanelProps) => (
+  <div
+    id="settings-panel"
+    role="region"
+    aria-label="Sampling settings"
+    className="mx-auto mb-3 max-w-prose rounded-lg border border-border bg-popover p-4"
+  >
+    <div className="mb-3 grid grid-cols-3 gap-4 max-drawer:grid-cols-1">
+      <SettingSlider
+        label="Temperature"
+        value={sampling.temperature}
+        min={0}
+        max={TEMPERATURE_MAX}
+        step={0.1}
+        digits={1}
+        hint="0 is focused, higher is more random"
+        onChange={function (next) { onChange({ ...sampling, temperature: next }); }}
+      />
+      <SettingSlider
+        label="Top-P"
+        value={sampling.topP}
+        min={0}
+        max={TOP_P_MAX}
+        step={0.05}
+        digits={2}
+        hint="1.0 considers all tokens"
+        onChange={function (next) { onChange({ ...sampling, topP: next }); }}
+      />
+      <MaxTokensField sampling={sampling} onChange={onChange} />
+    </div>
+    <SystemPromptField sampling={sampling} onChange={onChange} onClear={onClearSystem} />
+  </div>
+);

@@ -14,19 +14,14 @@ const SYSTEM_PROMPT_KEY = 'agave_system_prompt';
 
 const TEMPERATURE_KEY = 'agave_temperature';
 const TOP_P_KEY = 'agave_top_p';
+// oxlint-disable-next-line @rikalabs/no-hardcoded-secrets -- a localStorage key, not a credential
 const MAX_TOKENS_KEY = 'agave_max_tokens';
 const SHOW_STATS_KEY = 'agave_show_stats';
 
 export const MAX_TOKENS_MIN = 1;
 export const MAX_TOKENS_MAX = 4096;
+// oxlint-disable-next-line @rikalabs/no-hardcoded-secrets -- a token budget, not a credential
 const MAX_TOKENS_DEFAULT = '512';
-
-const readNumber = (key: string, fallback: number): number => {
-  const raw = localStorage.getItem(key);
-  if (raw === null) {return fallback;}
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
 
 /** Read the system prompt, migrating the legacy localStorage key once.
  *  The old key is deleted in the same pass, so the prompt cannot linger in a
@@ -35,11 +30,11 @@ const readSystemPrompt = (): string => {
   const current = sessionStorage.getItem(SYSTEM_PROMPT_KEY);
   if (current !== null) {return current;}
   // One-time migration of a legacy storage key; not a runtime environment fallback.
-  const legacy = localStorage.getItem(SYSTEM_PROMPT_KEY);
-  if (legacy === null) {return '';}
-  sessionStorage.setItem(SYSTEM_PROMPT_KEY, legacy);
+  const previous = localStorage.getItem(SYSTEM_PROMPT_KEY);
+  if (previous === null) {return '';}
+  sessionStorage.setItem(SYSTEM_PROMPT_KEY, previous);
   localStorage.removeItem(SYSTEM_PROMPT_KEY);
-  return legacy;
+  return previous;
 };
 
 /** Clamp a raw max-tokens field to the allowed range; unparseable text becomes
@@ -58,15 +53,25 @@ export const isMaxTokensValid = (raw: string): boolean => {
   return !Number.isNaN(parsed) && String(parsed) === raw.trim() && parsed >= MAX_TOKENS_MIN && parsed <= MAX_TOKENS_MAX;
 };
 
-/** The stored settings, normalized on the way out. A stored value can be empty
- *  or out of range (an older build, or a field the user left mid-edit), so the
- *  reader clamps instead of trusting it. */
-export const readSampling = (): Sampling => {
+/** The stored max-tokens field, normalized on the way out. A stored value can
+ *  be empty or out of range (an older build, or a field the user left
+ *  mid-edit), so the reader clamps instead of trusting it. */
+const readMaxTokens = (): string => {
   const stored = localStorage.getItem(MAX_TOKENS_KEY);
+  if (stored === null) { return MAX_TOKENS_DEFAULT; }
+  if (isMaxTokensValid(stored)) { return stored; }
+  return String(clampMaxTokens(stored));
+};
+
+/** The stored settings, normalized on the way out. A missing or unparseable
+ *  key falls back to the engine default rather than poisoning the turn. */
+export const readSampling = (): Sampling => {
+  const temperature = Number.parseFloat(localStorage.getItem(TEMPERATURE_KEY) ?? '');
+  const topP = Number.parseFloat(localStorage.getItem(TOP_P_KEY) ?? '');
   return {
-    temperature: readNumber(TEMPERATURE_KEY, 0),
-    topP: readNumber(TOP_P_KEY, 1),
-    maxTokens: stored === null ? MAX_TOKENS_DEFAULT : (isMaxTokensValid(stored) ? stored : String(clampMaxTokens(stored))),
+    temperature: Number.isFinite(temperature) ? temperature : 0,
+    topP: Number.isFinite(topP) ? topP : 1,
+    maxTokens: readMaxTokens(),
     system: readSystemPrompt(),
   };
 };

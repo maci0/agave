@@ -58,6 +58,16 @@
 		},
 		{
 			"files": [
+				"web/shell.tsx",
+				"web/use-model-loader.ts",
+				"web/load-errors.ts"
+			],
+			"globals": {
+				"AgaveEngine": "readonly"
+			}
+		},
+		{
+			"files": [
 				"docs/**/*.mjs"
 			],
 			"env": {

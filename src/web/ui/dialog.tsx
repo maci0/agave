@@ -1,7 +1,16 @@
-import * as DialogPrimitive from '@radix-ui/react-dialog';
+import {
+  Close,
+  Content,
+  Description,
+  Overlay,
+  Portal,
+  Root,
+  Title,
+  Trigger,
+} from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import type { ComponentProps } from 'react';
-import { cn } from './utils';
+import { cn } from './cn';
 
 /**
  * Modal dialog.
@@ -11,19 +20,16 @@ import { cn } from './utils';
  * turns the same primitive into the mobile conversation drawer, which is the
  * one place this surface uses a sheet instead of a centered card.
  */
-export const Dialog = (props: ComponentProps<typeof DialogPrimitive.Root>) =>
-  <DialogPrimitive.Root data-slot="dialog" {...props} />;
+export const Dialog = (props: ComponentProps<typeof Root>) => <Root data-slot="dialog" {...props} />;
 
-export const DialogTrigger = (props: ComponentProps<typeof DialogPrimitive.Trigger>) =>
-  <DialogPrimitive.Trigger data-slot="dialog-trigger" {...props} />;
+export const DialogTrigger = (props: ComponentProps<typeof Trigger>) => <Trigger data-slot="dialog-trigger" {...props} />;
 
-export const DialogClose = (props: ComponentProps<typeof DialogPrimitive.Close>) =>
-  <DialogPrimitive.Close data-slot="dialog-close" {...props} />;
+export const DialogClose = (props: ComponentProps<typeof Close>) => <Close data-slot="dialog-close" {...props} />;
 
-type DialogContentProps = ComponentProps<typeof DialogPrimitive.Content> & {
-  /** `Left` renders a drawer pinned to the inline start edge. */
+type DialogContentProps = ComponentProps<typeof Content> & {
+  /** `left` renders a drawer pinned to the inline start edge. */
   side?: 'center' | 'left';
-  /** Hide the built-in close button (the About dialog keeps its own). */
+  /** Hide the built-in close button; the drawer carries its own. */
   hideClose?: boolean;
 };
 
@@ -31,9 +37,9 @@ const overlayClass =
   'fixed inset-0 z-40 bg-black/60 transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100';
 
 export const DialogContent = ({ className, children, side = 'center', hideClose, ...props }: DialogContentProps) => (
-  <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className={overlayClass} />
-    <DialogPrimitive.Content
+  <Portal>
+    <Overlay className={overlayClass} />
+    <Content
       className={cn(
         'fixed z-50 border border-border bg-popover text-popover-foreground shadow-[0_8px_20px_rgb(0_0_0/0.45)]',
         side === 'center'
@@ -44,25 +50,22 @@ export const DialogContent = ({ className, children, side = 'center', hideClose,
       {...props}
     >
       {children}
-      {hideClose ? null : (
-        <DialogPrimitive.Close
+      {hideClose === true ? null : (
+        <Close
           className="absolute end-4 top-4 inline-flex size-11 items-center justify-center rounded-sm text-faint transition-colors hover:bg-card hover:text-foreground"
           aria-label="Close dialog"
         >
           <X className="size-5" aria-hidden="true" />
-        </DialogPrimitive.Close>
+        </Close>
       )}
-    </DialogPrimitive.Content>
-  </DialogPrimitive.Portal>
+    </Content>
+  </Portal>
 );
-export const DialogTitle = ({ className, ...props }: ComponentProps<typeof DialogPrimitive.Title>) => (
-  <DialogPrimitive.Title
-    className={cn('font-mono text-lg font-semibold text-primary', className)}
-    {...props}
-  />
+
+export const DialogTitle = ({ className, ...props }: ComponentProps<typeof Title>) => (
+  <Title className={cn('font-mono text-lg font-semibold text-primary', className)} {...props} />
 );
-export const DialogDescription = ({
-className,
-...props
-}: ComponentProps<typeof DialogPrimitive.Description>) =>
-<DialogPrimitive.Description className={cn('text-sm text-muted-foreground', className)} {...props} />;
+
+export const DialogDescription = ({ className, ...props }: ComponentProps<typeof Description>) => (
+  <Description className={cn('text-sm text-muted-foreground', className)} {...props} />
+);

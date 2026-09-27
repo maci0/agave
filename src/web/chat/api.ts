@@ -10,10 +10,9 @@ const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' } as 
 /** Idempotency key for one mutating request. A fresh key is minted per user
  *  action, never per attempt, so an intentional second action still runs. */
 export const newRequestId = (): string => {
-  // RandomUUID needs a secure context; the UI is also reachable over plain
-  // Http on a LAN address, where the fallback keeps every key inside the
-  // Server's A-Za-z0-9-_. sanitize set.
-  if (typeof crypto.randomUUID === 'function') {return crypto.randomUUID();}
+  // RandomUUID needs a secure context, and the UI is reachable over plain
+  // HTTP on a LAN address, so the fallback keeps keys inside the sanitize set.
+  if ('randomUUID' in crypto) { return crypto.randomUUID(); }
   return `${Date.now().toString(16)}.${Math.random().toString(16).slice(2, 10)}`;
 };
 
@@ -29,24 +28,25 @@ export const httpErrorMessage = (status: number): string => {
 
 /** Map fetch and network failures to short, actionable copy, not the engine's
  *  exception text. */
-export const userFacingError = (error: unknown): string => {
-  if (error instanceof Error) {
-    const lower = error.message.toLowerCase();
+export const userFacingError = (cause: unknown): string => {
+  if (cause instanceof Error) {
+    const lower = cause.message.toLowerCase();
     if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
       return 'Could not reach the server. Check that it is still running.';
     }
     if (lower === 'empty response body') {
       return 'The server sent an empty reply. Try again.';
     }
-    return error.message;
+    return cause.message;
   }
-  return String(error);
+  return String(cause);
 };
 
 const getJson = async <T>(url: string): Promise<T> => {
   const response = await fetch(url);
-  // SAFETY: every route below answers with the JSON shape named by the caller,
-  // And the server is the same binary that serves this page.
+  // SAFETY: every route answers with the shape the caller names, and
+  // The server serving this page is that same binary.
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the contract above
   return (await response.json()) as T;
 };
 
@@ -56,8 +56,9 @@ const postConversation = async (action: string, id?: string, requestId?: string)
   const target = id === undefined ? `action=${action}` : `action=${action}&id=${encodeURIComponent(id)}`;
   const headers = requestId === undefined ? FORM_HEADERS : { ...FORM_HEADERS, 'X-Request-Id': requestId };
   const response = await fetch('/v1/conversations', { method: 'POST', headers, body: target });
-  // SAFETY: the /v1/conversations POST always answers with the ConvMessages
-  // Shape; a non-JSON body surfaces as a parse error the caller toasts.
+  // SAFETY: the POST answers with the ConvMessages shape; a non-JSON
+  // Body surfaces as a parse error the caller toasts.
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the contract above
   return (await response.json()) as ConvMessages;
 };
 
@@ -108,6 +109,22 @@ export type StreamRequest = {
   url?: string;
 };
 
+/** Decode one SSE frame. A malformed frame is reported to the console and
+ *  dropped: one bad frame must not kill a stream that is otherwise healthy. */
+const parseFrame = (payload: string): StreamFrame | null => {
+  // oxlint-disable-next-line @rikalabs/no-json-parse-default-fallback -- a malformed SSE frame is dropped, not defaulted
+  try {
+    // SAFETY: the server emits these frames itself (docs/API.md, streaming).
+    // A frame that does not match is dropped by the field checks below.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the contract above
+    return JSON.parse(payload) as StreamFrame;
+  } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- one malformed SSE frame must not kill the stream
+    // oxlint-disable-next-line no-console -- stream diagnostics; toasts would spam the UI per token
+    console.warn('SSE parse:', error);
+    return null;
+  }
+};
+
 /** Consume a `stream=1` response, calling back per token and once with the
  *  final statistics. Throws on a non-2xx response, an empty body, a decode
  *  failure, or the abort signal; the caller turns that into UI state. */
@@ -135,21 +152,13 @@ export const streamChat = async (request: StreamRequest, callbacks: StreamCallba
       if (!line.startsWith('data: ')) {continue;}
       const payload = line.slice(6);
       if (payload === '[DONE]') {return;}
-      let frame: StreamFrame;
-      try {
-        // SAFETY: the server emits these frames itself (docs/API.md, streaming);
-        // A frame that does not match is dropped by the field checks below.
-        frame = JSON.parse(payload) as StreamFrame;
-      } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- one malformed SSE frame must not kill the stream
-        // Oxlint-disable-next-line no-console -- stream diagnostics; toasts would spam the UI per token
-        console.warn('SSE parse:', error);
-        continue;
-      }
-      if (frame.t) {
+      const frame = parseFrame(payload);
+      if (frame === null) { continue; }
+      if (frame.t !== undefined && frame.t !== '') {
         content += frame.t;
         callbacks.onText(content);
       }
-      if (frame.done) {
+      if (frame.done === true) {
         callbacks.onStats({
           tokens: String(frame.n),
           tps: (frame.tps ?? 0).toFixed(2),

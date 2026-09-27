@@ -23,5 +23,5 @@
     "removeComments": false,
     "types": []
   },
-  "include": ["agave.ts", "shell.tsx", "../src/web/ui/**/*"]
+  "include": ["agave.ts", "shell.tsx", "load-errors.ts", "use-model-loader.ts", "../src/web/ui/**/*"]
 }
