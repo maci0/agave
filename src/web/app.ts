@@ -128,6 +128,11 @@ let autoScroll = true;
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
 /** Latest stream paint target, updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
 let pendingStreamRender: PendingStreamPaint | null = null;
+/** Element whose streaming text is already on screen. The flush appends only
+ *  the new tail instead of rewriting the whole message, so a long response costs
+ *  one text node per 60ms window instead of one per token. Reset whenever the
+ *  element is rebuilt or refilled. */
+let streamTextEl: HTMLElement | null = null;
 let msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 let backendName = '';
@@ -1011,13 +1016,23 @@ function renderContent(el: HTMLElement, content: string, final: boolean) {
       pendingStreamRender = null;
       if (!p) {return;}
       p.el.classList.remove('thinking');
-      p.el.textContent = p.content;
+      // Append only what the last flush did not paint. A different element, or
+      // text on screen that is no longer a prefix of the stream (a rebuild, a
+      // regenerated turn), means the DOM and the stream have diverged: refill.
+      const painted = p.el === streamTextEl ? p.el.textContent ?? '' : null;
+      if (painted !== null && p.content.startsWith(painted)) {
+        p.el.append(document.createTextNode(p.content.slice(painted.length)));
+      } else {
+        p.el.textContent = p.content;
+      }
+      streamTextEl = p.el;
       scrollBottom();
     }, 60);
     return;
   }
   if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
   pendingStreamRender = null;
+  streamTextEl = null;
   renderFinal(el, content);
 }
 
@@ -1060,7 +1075,7 @@ async function streamResponse(body: string, errLabel: string, url?: string) {
     finalized = true;
     renderContent(el, content || 'No response.', true);
     if (stats) {addStats(el, stats);}
-    addRegenBtn(el); loadConvs(); refreshCtxBadge();
+    addRegenBtn(el); loadConvs();
   }
   try {
     const resp = await fetch(url ?? '/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1098,12 +1113,15 @@ async function streamResponse(body: string, errLabel: string, url?: string) {
       err.setAttribute('role', 'alert');
       err.textContent = errMsg;
       el.textContent = ''; el.append(err);
+      streamTextEl = null;
       announceToSR(errMsg);
       // Same server path as regenerate: last user turn is already stored when the
       // Request reached prep; Retry re-runs from that turn without retyping.
       addRegenBtn(el, 'Retry');
     }
   } finally {
+    // The one context refresh per turn. finalizeStream used to ask for its own,
+    // which sent the same /v1/models twice back to back on every response.
     abortCtrl = null; setStreaming(false); refreshCtxBadge();
     if (!qs('#info-modal').classList.contains('show')) {inp.focus();}
   }
