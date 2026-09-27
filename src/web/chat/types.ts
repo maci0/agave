@@ -25,7 +25,7 @@ export type StoredMessage = {
 
 /** Body of `POST /v1/conversations` with `action=select`. */
 export type ConvMessages = {
-  messages?: StoredMessage[];
+  messages?: Array<StoredMessage>;
   cleared?: boolean;
 };
 

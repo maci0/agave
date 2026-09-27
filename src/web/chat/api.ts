@@ -9,27 +9,27 @@ const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' } as 
 
 /** Idempotency key for one mutating request. A fresh key is minted per user
  *  action, never per attempt, so an intentional second action still runs. */
-export function newRequestId(): string {
+export const newRequestId = (): string => {
   // randomUUID needs a secure context; the UI is also reachable over plain
   // http on a LAN address, where the fallback keeps every key inside the
   // server's A-Za-z0-9-_. sanitize set.
   if (typeof crypto.randomUUID === 'function') {return crypto.randomUUID();}
   return `${Date.now().toString(16)}.${Math.random().toString(16).slice(2, 10)}`;
-}
+};
 
 /** Map HTTP status codes to short, actionable messages for the chat UI. */
-export function httpErrorMessage(status: number): string {
+export const httpErrorMessage = (status: number): string => {
   if (status === 400) {return 'The request was rejected. Check your message and settings.';}
   if (status === 413) {return 'Message or image is too large.';}
   if (status === 429) {return 'The server is busy. Wait a moment and try again.';}
   if (status === 503) {return 'The model is not ready yet. Try again shortly.';}
   if (status >= 500) {return 'Something went wrong on the server. Try again.';}
   return `Could not complete the request (error ${status}).`;
-}
+};
 
 /** Map fetch and network failures to short, actionable copy, not the engine's
  *  exception text. */
-export function userFacingError(error: unknown): string {
+export const userFacingError = (error: unknown): string => {
   if (error instanceof Error) {
     const lower = error.message.toLowerCase();
     if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
@@ -41,7 +41,7 @@ export function userFacingError(error: unknown): string {
     return error.message;
   }
   return String(error);
-}
+};
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -50,13 +50,12 @@ async function getJson<T>(url: string): Promise<T> {
 
 /** First model in `/v1/models`, or null when the server reports none. */
 export async function loadModels(): Promise<ModelRecord | null> {
-  const data = await getJson<{ data?: ModelRecord[] }>('/v1/models');
+  const data = await getJson<{ data?: Array<ModelRecord> }>('/v1/models');
   return data.data?.[0] ?? null;
 }
 
-export function loadConversations(): Promise<ConvRecord[]> {
-  return getJson<ConvRecord[]>('/v1/conversations');
-}
+export const loadConversations = (): Promise<Array<ConvRecord>> =>
+  getJson<Array<ConvRecord>>('/v1/conversations');;
 
 export async function createConversation(): Promise<void> {
   await fetch('/v1/conversations', {
@@ -90,7 +89,7 @@ export async function clearServerConversation(): Promise<void> {
 }
 
 /** Query string for the sampling settings and the system prompt. */
-export function samplingParams(sampling: Sampling): string {
+export const samplingParams = (sampling: Sampling): string => {
   const parts = [
     `temperature=${encodeURIComponent(String(sampling.temperature))}`,
     `top_p=${encodeURIComponent(String(sampling.topP))}`,
@@ -99,7 +98,7 @@ export function samplingParams(sampling: Sampling): string {
   const system = sampling.system.trim();
   if (system) {parts.push(`system=${encodeURIComponent(system)}`);}
   return `&${parts.join('&')}`;
-}
+};
 
 export type StreamCallbacks = {
   /** Called with the full text so far, once per decoded token. */

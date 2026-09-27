@@ -27,7 +27,7 @@ type ComposerProps = {
   focusToken: number;
 };
 
-export function Composer(props: ComposerProps) {
+export const Composer = (props: ComposerProps) => {
   const [text, setText] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
@@ -206,4 +206,4 @@ export function Composer(props: ComposerProps) {
       </p>
     </form>
   );
-}
+};

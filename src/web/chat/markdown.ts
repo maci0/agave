@@ -44,7 +44,7 @@ let markedConfigured = false;
 /** Append a pinned CDN script. Resolves false on load failure or timeout; every
  *  caller has a working fallback, so a blocked CDN degrades the page instead of
  *  breaking it. */
-function loadCdnScript(url: string, integrity: string): Promise<boolean> {
+const loadCdnScript = (url: string, integrity: string): Promise<boolean> => {
   return new Promise(function (resolve) {
     const script = document.createElement('script');
     script.src = url;
@@ -52,30 +52,30 @@ function loadCdnScript(url: string, integrity: string): Promise<boolean> {
     script.crossOrigin = 'anonymous';
     script.referrerPolicy = 'no-referrer';
     const timer = setTimeout(function () { settle(false); }, CDN_SCRIPT_TIMEOUT_MS);
-    function settle(ok: boolean) {
+    const settle = (ok: boolean) => {
       clearTimeout(timer);
       resolve(ok);
-    }
+    };
     script.addEventListener('load', function () { settle(true); });
     script.addEventListener('error', function () { settle(false); });
     document.head.append(script);
   });
-}
+};
 
 /** Fetch marked and DOMPurify. Resolves false when either fails; the renderers
  *  then fall back to escaped plain text. */
-export function loadMarkdown(): Promise<boolean> {
+export const loadMarkdown = (): Promise<boolean> => {
   if (markdownLoad) {return markdownLoad;}
   if (cdn.marked && cdn.DOMPurify) {return Promise.resolve(true);}
   markdownLoad = Promise.all([loadCdnScript(MARKED_URL, MARKED_INTEGRITY), loadCdnScript(PURIFY_URL, PURIFY_INTEGRITY)]).then(
     function () {return Boolean(cdn.marked && cdn.DOMPurify);},
   );
   return markdownLoad;
-}
+};
 
 /** Fetch highlight.js and its theme on the first code block. Copy and language
  *  chrome do not wait for it. */
-export function loadHighlightJs(): Promise<boolean> {
+export const loadHighlightJs = (): Promise<boolean> => {
   if (highlightLoad) {return highlightLoad;}
   if (cdn.hljs) {return Promise.resolve(true);}
   highlightLoad = new Promise(function (resolve) {
@@ -92,17 +92,15 @@ export function loadHighlightJs(): Promise<boolean> {
     loadCdnScript(HLJS_URL, HLJS_INTEGRITY).then(function (ok) { resolve(ok && Boolean(cdn.hljs)); });
   });
   return highlightLoad;
-}
+};
 
-function escapeHtmlEntities(text: string): string {
-  return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-}
+const escapeHtmlEntities = (text: string): string =>
+  text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');;
 
-function escapeHtmlText(text: string): string {
-  return escapeHtmlEntities(text).replaceAll('\n', '<br>');
-}
+const escapeHtmlText = (text: string): string =>
+  escapeHtmlEntities(text).replaceAll('\n', '<br>');;
 
-function markdownToHtml(source: string): string {
+const markdownToHtml = (source: string): string => {
   if (!cdn.marked) {return escapeHtmlText(source);}
   if (!markedConfigured) {
     cdn.marked.setOptions({ breaks: true, gfm: true });
@@ -113,12 +111,12 @@ function markdownToHtml(source: string): string {
   } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- fall back to escaped plain text instead of killing the response render
     return escapeHtmlText(source);
   }
-}
+};
 
 /** Rewrite <think> blocks into a collapsed chain-of-thought disclosure. An
  *  unclosed tag is stripped and escaped so marked cannot treat the remainder as
  *  raw HTML (marked 11 passes HTML through; CWE-79). */
-function expandThinkBlocks(content: string): string {
+const expandThinkBlocks = (content: string): string => {
   if (!content.includes('<think>')) {return content;}
   let thinkIndex = 0;
   const expanded = content.replaceAll(/<think>([\s\S]*?)<\/think>\s*/g, function (_match, part: string) {
@@ -129,12 +127,12 @@ function expandThinkBlocks(content: string): string {
   });
   if (expanded.startsWith('<think>')) {return escapeHtmlEntities(expanded.slice(7));}
   return expanded;
-}
+};
 
 /** Demote headings two levels so a model response cannot outrank the page
  *  structure. Attributes are not copied across (CWE-79): re-applying them
  *  could reintroduce handlers if a sanitizer gap exists. */
-function demoteHeadings(root: HTMLElement): void {
+const demoteHeadings = (root: HTMLElement): void => {
   for (const heading of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
     const level = Number.parseInt(heading.tagName.charAt(1), 10);
     const next = Math.min(level + 2, 6);
@@ -143,9 +141,9 @@ function demoteHeadings(root: HTMLElement): void {
     while (heading.firstChild) {replacement.append(heading.firstChild);}
     heading.parentNode?.replaceChild(replacement, heading);
   }
-}
+};
 
-function wrapTables(root: HTMLElement): void {
+const wrapTables = (root: HTMLElement): void => {
   for (const table of root.querySelectorAll('table')) {
     const wrapper = document.createElement('div');
     wrapper.className = 'table-wrap';
@@ -158,10 +156,10 @@ function wrapTables(root: HTMLElement): void {
       if (!header.getAttribute('scope')) {header.setAttribute('scope', 'col');}
     }
   }
-}
+};
 
 /** Neutralize active-content URL schemes that may survive sanitizer gaps (CWE-79). */
-function hardenLinks(root: HTMLElement): void {
+const hardenLinks = (root: HTMLElement): void => {
   for (const anchor of root.querySelectorAll('a[href]')) {
     const href = anchor.getAttribute('href') ?? '';
     const lower = href.trim().toLowerCase();
@@ -183,9 +181,9 @@ function hardenLinks(root: HTMLElement): void {
       }
     }
   }
-}
+};
 
-function decorateCodeBlock(block: Element): void {
+const decorateCodeBlock = (block: Element): void => {
   const pre = block.parentElement;
   if (!pre || pre.querySelector('.copy-btn')) {return;}
   const lang = block.className.match(/language-(\w+)/)?.[1] ?? '';
@@ -207,9 +205,9 @@ function decorateCodeBlock(block: Element): void {
     });
   });
   pre.append(copy);
-}
+};
 
-function highlightCodeBlocks(root: HTMLElement): void {
+const highlightCodeBlocks = (root: HTMLElement): void => {
   const blocks = root.querySelectorAll('pre code');
   if (blocks.length === 0) {return;}
   for (const block of blocks) {decorateCodeBlock(block);}
@@ -222,23 +220,23 @@ function highlightCodeBlocks(root: HTMLElement): void {
   };
   if (cdn.hljs) {apply(); return;}
   void loadHighlightJs().then(function (ok) { if (ok) {apply();} });
-}
+};
 
 /** Copy to the clipboard. The caller owns the label and its revert timer, so
  *  this only reports whether the write landed. */
-export function copyText(text: string): Promise<'copied' | 'failed'> {
+export const copyText = (text: string): Promise<'copied' | 'failed'> => {
   return navigator.clipboard.writeText(text).then(
     function () { return 'copied' as const; },
     function () { return 'failed' as const; },
   );
-}
+};
 
 /**
  * Render `content` as sanitized markdown into `target`, replacing whatever was
  * there. Callers own the element: the streaming path appends plain text to the
  * same node, this path rebuilds it once the turn is final.
  */
-export function renderMarkdown(target: HTMLElement, content: string): void {
+export const renderMarkdown = (target: HTMLElement, content: string): void => {
   const parsed = markdownToHtml(expandThinkBlocks(content));
   if (!cdn.DOMPurify) {
     // No sanitizer: escape everything rather than trust marked's output.
@@ -251,25 +249,24 @@ export function renderMarkdown(target: HTMLElement, content: string): void {
   demoteHeadings(target);
   wrapTables(target);
   hardenLinks(target);
-}
+};
 
 /** True when the markdown libraries are in place, so callers know whether a
  *  plain-text render is the final one. */
-export function markdownReady(): boolean {
-  return Boolean(cdn.marked && cdn.DOMPurify);
-}
+export const markdownReady = (): boolean =>
+  Boolean(cdn.marked && cdn.DOMPurify);;
 
 const idleQueue: (() => void)[] = [];
 let idleDraining = false;
 
-function scheduleIdle(fn: () => void): void {
+const scheduleIdle = (fn: () => void): void => {
   if (typeof requestIdleCallback === 'function') { requestIdleCallback(fn); }
   else { setTimeout(fn, 0); }
-}
+};
 
 /** Responses that finished before the deferred libraries landed are rebuilt one
  *  per idle slot, so a restored history does not re-render in one task. */
-export function onIdle(fn: () => void): void {
+export const onIdle = (fn: () => void): void => {
   idleQueue.push(fn);
   if (idleDraining) {return;}
   idleDraining = true;
@@ -281,4 +278,4 @@ export function onIdle(fn: () => void): void {
     else { idleDraining = false; }
   };
   scheduleIdle(drain);
-}
+};

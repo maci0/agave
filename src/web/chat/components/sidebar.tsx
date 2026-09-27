@@ -4,7 +4,7 @@ import { cn } from '../../ui/utils';
 import type { ConvRecord } from '../types';
 
 export type SidebarProps = {
-  conversations: ConvRecord[] | null;
+  conversations: Array<ConvRecord> | null;
   loadError: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
@@ -14,7 +14,7 @@ export type SidebarProps = {
   onClose?: () => void;
 };
 
-function ConversationList({ conversations, loadError, onSelect, onDelete, onRetryLoad }: SidebarProps) {
+const ConversationList = ({ conversations, loadError, onSelect, onDelete, onRetryLoad }: SidebarProps) => {
   if (loadError !== null) {
     return (
       <div className="px-3 py-5 text-center font-mono text-xs text-faint">
@@ -76,11 +76,11 @@ function ConversationList({ conversations, loadError, onSelect, onDelete, onRetr
       })}
     </div>
   );
-}
+};
 
 /** The conversation drawer body, shared by the desktop column and the mobile
  *  sheet so both surfaces stay identical. */
-export function Sidebar(props: SidebarProps) {
+export const Sidebar = (props: SidebarProps) => {
   return (
     <div className="flex h-full w-full flex-col bg-card">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-3">
@@ -101,4 +101,4 @@ export function Sidebar(props: SidebarProps) {
       </div>
     </div>
   );
-}
+};

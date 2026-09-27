@@ -2,7 +2,7 @@ import type { TextareaHTMLAttributes } from 'react';
 import { cn } from './utils';
 
 /** Multiline input: system prompt, message composer. */
-export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export const Textarea = ({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) => {
   return (
     <textarea
       className={cn(
@@ -15,4 +15,4 @@ export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTex
       {...props}
     />
   );
-}
+};

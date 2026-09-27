@@ -66,9 +66,9 @@ const HELP_TEXT = [
   'Use the settings panel to configure temperature, top-p, max tokens, and system prompt.',
 ].join('\n');
 
-function ChatApp() {
-  const [bubbles, setBubbles] = useState<Bubble[]>([]);
-  const [conversations, setConversations] = useState<ConvRecord[] | null>(null);
+const ChatApp = () => {
+  const [bubbles, setBubbles] = useState<Array<Bubble>>([]);
+  const [conversations, setConversations] = useState<Array<ConvRecord> | null>(null);
   const [convError, setConvError] = useState<string | null>(null);
   const [model, setModel] = useState<ModelRecord | null>(null);
   const [modelResolved, setModelResolved] = useState(false);
@@ -83,7 +83,7 @@ function ChatApp() {
     system: readSystemPrompt(),
   });
   const [showStats, setShowStats] = useState(readShowStats);
-  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [toasts, setToasts] = useState<Array<Toast>>([]);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -97,9 +97,9 @@ function ChatApp() {
   const nextBubbleId = useRef(1);
   const nextToastId = useRef(1);
   const abortRef = useRef<AbortController | null>(null);
-  const flushTimer = useRef<number | null>(null);
+  const flushTimer = useRef<Timer | null>(null);
   const pendingText = useRef('');
-  const announceTimer = useRef<number | null>(null);
+  const announceTimer = useRef<Timer | null>(null);
   const tokenCount = useRef(0);
   const streamStart = useRef(0);
   const lastTokenAt = useRef(0);
@@ -122,9 +122,9 @@ function ChatApp() {
   }, []);
 
   const announce = useCallback(function (text: string) {
-    if (announceTimer.current !== null) { window.clearTimeout(announceTimer.current); }
+    if (announceTimer.current !== null) { clearTimeout(announceTimer.current); }
     setAnnouncement('');
-    announceTimer.current = window.setTimeout(function () { setAnnouncement(text); }, ANNOUNCE_DELAY_MS);
+    announceTimer.current = setTimeout(function () { setAnnouncement(text); }, ANNOUNCE_DELAY_MS);
   }, []);
 
   const pushToast = useCallback(function (text: string, level: Toast['level'] = 'error', retry?: () => void) {
@@ -210,13 +210,13 @@ function ChatApp() {
   const stopGeneration = useCallback(function () { abortRef.current?.abort(); }, []);
 
   useEffect(function () {
-    function onKeyDown(event: KeyboardEvent) {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') {return;}
       if (aboutOpen) { setAboutOpen(false); }
       else if (drawerOpen) { setDrawerOpen(false); }
       else if (settingsOpen) { setSettingsOpen(false); }
       else if (abortRef.current) { stopGeneration(); }
-    }
+    };
     document.addEventListener('keydown', onKeyDown);
     return function () { document.removeEventListener('keydown', onKeyDown); };
   }, [aboutOpen, drawerOpen, settingsOpen, stopGeneration]);
@@ -230,7 +230,7 @@ function ChatApp() {
   }, []);
 
   const flushNow = useCallback(function (id: number, content: string, patch: Partial<Bubble>) {
-    if (flushTimer.current !== null) { window.clearTimeout(flushTimer.current); flushTimer.current = null; }
+    if (flushTimer.current !== null) { clearTimeout(flushTimer.current); flushTimer.current = null; }
     pendingText.current = '';
     patchBubble(id, { text: content, ...patch });
   }, [patchBubble]);
@@ -241,7 +241,7 @@ function ChatApp() {
   const schedulePaint = useCallback(function (id: number, content: string) {
     pendingText.current = content;
     if (flushTimer.current !== null) {return;}
-    flushTimer.current = window.setTimeout(function () {
+    flushTimer.current = setTimeout(function () {
       flushTimer.current = null;
       const next = pendingText.current;
       pendingText.current = '';
@@ -620,7 +620,7 @@ function ChatApp() {
       ) : null}
     </div>
   );
-}
+};
 
 const root = document.getElementById('root');
 if (!root) { throw new Error('missing #root'); }

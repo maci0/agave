@@ -19,15 +19,15 @@ GlobalRegistrator.register({ url: 'http://127.0.0.1:49453' });
 afterAll(function () { GlobalRegistrator.unregister(); });
 
 /** Let React flush its concurrent render and the stream throttle timer. */
-function tick(times = 4): Promise<void> {
+const tick = (times = 4): Promise<void> => {
   let chain = Promise.resolve();
   for (let index = 0; index < times; index++) {
     chain = chain.then(function () { return new Promise(function (resolve) { setTimeout(resolve, 5); }); });
   }
   return chain;
-}
+};
 
-function sseResponse(frames: string[]): Response {
+const sseResponse = (frames: string[]): Response => {
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -36,11 +36,11 @@ function sseResponse(frames: string[]): Response {
     },
   });
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-}
+};
 
 const MODEL = { data: [{ id: 'test-model', backend: 'cpu', ctx_size: 4096, kv_seq_len: 5, vision: false }] };
 
-function stubServer(): void {
+const stubServer = (): void => {
   globalThis.fetch = function (input: RequestInfo | URL, init?: RequestInit) {
     const url = String(input);
     if (url === '/v1/models') { return Promise.resolve(Response.json(MODEL)); }
@@ -58,7 +58,7 @@ function stubServer(): void {
     }
     return Promise.resolve(new Response('not found', { status: 404 }));
   } as typeof fetch;
-}
+};
 
 test('a prompt streams into the log and the model badge resolves', async function () {
   document.body.innerHTML = '<div id="root"></div>';

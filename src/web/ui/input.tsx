@@ -11,7 +11,7 @@ type InputProps = InputHTMLAttributes<HTMLInputElement> & {
  * Text input. `mono` is for fields that carry numbers or identifiers (token
  * budgets, model URLs) so digits keep a fixed width while the value changes.
  */
-export function Input({ className, type, ...props }: InputProps) {
+export const Input = ({ className, type, ...props }: InputProps) => {
   return (
     <input
       type={type}
@@ -25,4 +25,4 @@ export function Input({ className, type, ...props }: InputProps) {
       {...props}
     />
   );
-}
+};

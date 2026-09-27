@@ -12,7 +12,7 @@ const THINKING_GLYPH = '…';
  *  wrapping; appending the delta keeps a flush proportional to the tokens that
  *  arrived. A stream that no longer extends what is on screen (a rebuild, a
  *  regenerated turn) refills instead of appending. */
-function appendDelta(element: HTMLElement, painted: string, next: string): string {
+const appendDelta = (element: HTMLElement, painted: string, next: string): string => {
   const node = element.firstChild;
   if (node instanceof Text && next.startsWith(painted)) {
     node.appendData(next.slice(painted.length));
@@ -20,7 +20,7 @@ function appendDelta(element: HTMLElement, painted: string, next: string): strin
   }
   element.textContent = next;
   return next;
-}
+};
 
 type MessageBodyProps = {
   text: string;
@@ -84,7 +84,7 @@ export const MessageBody = memo(function MessageBody({ text, phase, onRendered }
   );
 });
 
-function StatsLine({ stats }: { stats: StreamStats }) {
+const StatsLine = ({ stats }: { stats: StreamStats }) => {
   const total = Number.parseInt(stats.time, 10) + (Number.parseInt(stats.pfMs, 10) || 0);
   const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(Number.parseFloat(stats.tps), 2)}`;
   const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(Number.parseFloat(stats.pfTps), 1)}`;
@@ -108,7 +108,7 @@ function StatsLine({ stats }: { stats: StreamStats }) {
       </span>
     </div>
   );
-}
+};
 
 type MessageProps = {
   bubble: Bubble;

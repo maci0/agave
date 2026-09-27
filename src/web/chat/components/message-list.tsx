@@ -9,7 +9,7 @@ const TOAST_ERROR_MS = 12000;
 /** A message the user is reading gets twice as long before it leaves. */
 const REDUCED_MOTION_FACTOR = 2;
 
-function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
+const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) => {
   const [paused, setPaused] = useState(false);
   useEffect(function () {
     if (paused) {return;}
@@ -54,9 +54,9 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       </button>
     </div>
   );
-}
+};
 
-function EmptyState({ vision, onRunCommand }: { vision: boolean; onRunCommand: (command: string) => void }) {
+const EmptyState = ({ vision, onRunCommand }: { vision: boolean; onRunCommand: (command: string) => void }) => {
   return (
     <div className="m-auto px-5 py-10 text-center">
       <span className="mark mark-lg" aria-hidden="true" />
@@ -81,11 +81,11 @@ function EmptyState({ vision, onRunCommand }: { vision: boolean; onRunCommand: (
       </div>
     </div>
   );
-}
+};
 
 type MessageListProps = {
-  bubbles: Bubble[];
-  toasts: Toast[];
+  bubbles: Array<Bubble>;
+  toasts: Array<Toast>;
   showStats: boolean;
   vision: boolean;
   streaming: boolean;

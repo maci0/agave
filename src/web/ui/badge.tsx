@@ -21,8 +21,7 @@ const badgeVariants = cva(
 type BadgeProps = HTMLAttributes<HTMLSpanElement> & VariantProps<typeof badgeVariants>;
 
 /** Span badge. Pass a `title` and `aria-label` when the text is truncated. */
-export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
-}
+export const Badge = ({ className, variant, ...props }: BadgeProps) =>
+  <span className={cn(badgeVariants({ variant }), className)} {...props} />;;
 
 export { badgeVariants };

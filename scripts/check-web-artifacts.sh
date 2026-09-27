@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# check-web-artifacts.sh, verify the committed classic-script build outputs are
-# fresh.
+# check-web-artifacts.sh, verify the committed browser build outputs are fresh.
 #
-# src/web/app.js (embedded by the server) and web/agave.js, web/shell.js (the
-# browser WASM shell) are tsc outputs of app.ts, agave.ts and shell.ts, checked
-# into git so `zig build` needs no TypeScript toolchain. Editing a .ts without
-# rerunning scripts/build-web.sh silently leaves the committed .js stale, the
-# same failure mode scripts/check-shader-artifacts.sh guards for the GPU
-# kernels. This script regenerates all three into a scratch dir and byte-compares
-# them against the tree.
+# src/web/app.js and src/web/style.css are embedded by the server, and
+# web/shell.js, web/style.css and web/agave.js ship next to agave.wasm. They are
+# bun and Tailwind builds of the .tsx sources, checked into git so `zig build`
+# needs no JavaScript toolchain. Editing a source without rerunning
+# scripts/build-web.sh silently leaves the committed output stale, the same
+# failure mode scripts/check-shader-artifacts.sh guards for the GPU kernels.
+# This script regenerates all five into a scratch dir and byte-compares them
+# against the tree.
 #
-# Needs bun and `bun install --frozen-lockfile`; tsc comes from node_modules.
+# Needs bun and `bun install --frozen-lockfile`; bun, tsc and the Tailwind CLI
+# come from node_modules.
 #
 # Exit 0 when everything matches, 1 on drift or a missing copy.
 # Canonical regeneration: scripts/build-web.sh
@@ -23,16 +24,27 @@ cd "$REPO_ROOT"
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
-echo "== TypeScript -> classic script (scripts/build-web.sh)"
+echo "== browser bundles and stylesheets (scripts/build-web.sh)"
 bash scripts/build-web.sh "$SCRATCH"
 
-shopt -s nullglob
-generated=("$SCRATCH"/src/web/app.js "$SCRATCH"/web/agave.js "$SCRATCH"/web/shell.js)
-shopt -u nullglob
-if [[ ${#generated[@]} -ne 3 ]]; then
-    echo "error: build-web.sh emitted ${#generated[@]} of 3 expected files" >&2
-    exit 1
-fi
+expected=(
+    "src/web/app.js"
+    "src/web/style.css"
+    "web/shell.js"
+    "web/style.css"
+    "web/agave.js"
+)
+
+generated=()
+for artifact in "${expected[@]}"; do
+    generated+=("$SCRATCH/$artifact")
+done
+for gen in "${generated[@]}"; do
+    if [[ ! -f "$gen" ]]; then
+        echo "error: build-web.sh did not emit ${gen#"$SCRATCH"/}" >&2
+        exit 1
+    fi
+done
 
 drift=0
 for gen in "${generated[@]}"; do
@@ -41,13 +53,13 @@ for gen in "${generated[@]}"; do
         echo "MISSING committed copy: ${committed#"$REPO_ROOT"/}"
         drift=$((drift + 1))
     elif ! cmp -s "$gen" "$committed"; then
-        echo "STALE: ${committed#"$REPO_ROOT"/} differs from a fresh tsc build"
+        echo "STALE: ${committed#"$REPO_ROOT"/} differs from a fresh build"
         drift=$((drift + 1))
     fi
 done
 
 if [[ $drift -eq 0 ]]; then
-    echo "OK: all committed classic scripts match a fresh build"
+    echo "OK: all committed browser artifacts match a fresh build"
     echo "Result: all web artifacts fresh"
     exit 0
 fi

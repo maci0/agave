@@ -25,7 +25,7 @@ type AppHeaderProps = {
   onAbout: () => void;
 };
 
-function ContextBadge({ ctx }: { ctx: Context | null }) {
+const ContextBadge = ({ ctx }: { ctx: Context | null }) => {
   if (!ctx || ctx.max <= 0) {return null;}
   const nearFull = ctx.used / ctx.max >= CTX_WARN_RATIO;
   const label = `${nearFull ? '!\u00A0' : ''}${fmtCtx(ctx.used)}/${fmtCtx(ctx.max)}`;
@@ -35,9 +35,9 @@ function ContextBadge({ ctx }: { ctx: Context | null }) {
       {label}
     </Badge>
   );
-}
+};
 
-export function AppHeader(props: AppHeaderProps) {
+export const AppHeader = (props: AppHeaderProps) => {
   const { model, modelResolved } = props;
   return (
     <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-6 py-3 max-drawer:px-4">
@@ -96,4 +96,4 @@ export function AppHeader(props: AppHeaderProps) {
       </div>
     </header>
   );
-}
+};

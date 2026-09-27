@@ -19,11 +19,9 @@
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
     "skipLibCheck": true,
-    "noEmitOnError": true,
+    "noEmit": true,
     "removeComments": false,
-    "outDir": "../.web-ts-out/wasm",
-    "rootDir": ".",
     "types": []
   },
-  "include": ["agave.ts"]
+  "include": ["agave.ts", "shell.tsx", "../src/web/ui/**/*"]
 }

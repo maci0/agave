@@ -9,10 +9,10 @@ import { cn } from './utils';
  * own `aria-label` and `aria-valuetext`; the value text is what a screen reader
  * announces, so the consumer formats a fixed number of digits there.
  */
-export function Slider({ className, thumbProps, ...props }: ComponentProps<typeof SliderPrimitive.Root> & {
+export const Slider = ({ className, thumbProps, ...props }: ComponentProps<typeof SliderPrimitive.Root> & {
   /** Applied to the thumb, where Radix puts the slider role and value text. */
   thumbProps?: ComponentProps<typeof SliderPrimitive.Thumb>;
-}) {
+}) => {
   return (
     <SliderPrimitive.Root
       className={cn(
@@ -30,4 +30,4 @@ export function Slider({ className, thumbProps, ...props }: ComponentProps<typeo
       />
     </SliderPrimitive.Root>
   );
-}
+};
