@@ -142,10 +142,11 @@ pub fn renameOver(old_path: []const u8, new_path: []const u8) !void {
 }
 
 /// Mode for artifacts that are not personal data and are meant to be readable
-/// by other users of the host.
-pub const shared_file_mode: u32 = 0o644;
+/// by other users of the host. `mode_t` is the platform's own width (u32 on
+/// Linux, u16 on macOS), which is what `std.posix.openat` takes.
+pub const shared_file_mode: std.posix.mode_t = 0o644;
 /// Mode for artifacts holding user data (the conversation store): owner only.
-pub const private_file_mode: u32 = 0o600;
+pub const private_file_mode: std.posix.mode_t = 0o600;
 
 /// Write `data` over `path` via a sibling tmp so a crash cannot truncate the
 /// live file and a second process cannot truncate this write.
@@ -160,7 +161,7 @@ pub fn replacePrivate(path: []const u8, data: []const u8) !void {
     return replaceWithMode(path, data, private_file_mode);
 }
 
-fn replaceWithMode(path: []const u8, data: []const u8, file_mode: u32) !void {
+fn replaceWithMode(path: []const u8, data: []const u8, file_mode: std.posix.mode_t) !void {
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
     const tmp_path = try tmpPath(&tmp_buf, path);
 
@@ -321,11 +322,13 @@ test "replacePrivate writes owner-only, replace writes shared" {
 
     const prev_umask = readUmask();
     defer _ = std.c.umask(prev_umask);
-    try std.testing.expectEqual(shared_file_mode & ~prev_umask, fileMode(shared_path));
-    try std.testing.expectEqual(private_file_mode & ~prev_umask, fileMode(private_path));
+    try std.testing.expectEqual(@as(u32, shared_file_mode) & ~@as(u32, prev_umask), fileMode(shared_path));
+    try std.testing.expectEqual(@as(u32, private_file_mode) & ~@as(u32, prev_umask), fileMode(private_path));
 }
 
-/// Permission bits of `path`, or error.StatFailed if it cannot be stat'ed.
+/// Permission bits of `path`, or 0 if it cannot be stat'ed. Per-platform:
+/// `std.c.stat` is not declared for arm64 darwin in this Zig release, and
+/// `std.c.fstatat` is declared for darwin but empty on Linux.
 fn fileMode(path: []const u8) u32 {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     if (path.len >= path_buf.len) return 0;
@@ -343,19 +346,19 @@ fn fileMode(path: []const u8) u32 {
         if (rc != 0) return 0;
         return st.mode & 0o777;
     }
-    var st: std.c.Stat = undefined;
-    if (std.c.stat(@ptrCast(&path_buf), &st) != 0) return 0;
-    return st.mode & 0o777;
+    var st: std.posix.Stat = undefined;
+    if (std.c.fstatat(std.posix.AT.FDCWD, @ptrCast(&path_buf), &st, 0) != 0) return 0;
+    return @intCast(st.mode & 0o777);
 }
 
 /// Read the process umask without changing it, so a test can assert the mode
 /// the caller asked for rather than the narrower one a restrictive umask
 /// leaves behind.
-fn readUmask() u32 {
+fn readUmask() std.c.mode_t {
     const probe: std.c.mode_t = 0o022;
     const prev = std.c.umask(probe);
     _ = std.c.umask(prev);
-    return @intCast(prev);
+    return prev;
 }
 
 test "replace overwrites previous contents atomically" {
