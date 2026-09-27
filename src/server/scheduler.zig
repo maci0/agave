@@ -260,6 +260,20 @@ fn timeoutRequest(req: *Request, now: i64, timeout_sec: u32, metrics: *Metrics) 
     metrics.recordTimeout();
 }
 
+/// Prompt tokens still to prefill across the running set. Published as
+/// `agave_input_tokens_in_flight` for load-aware routers: it is the work the
+/// next decode steps still owe, so it drops before the requests do and a
+/// router that reads only `agave_active_requests` overestimates load.
+fn prefillTokensInFlight(self: *const RequestManager) u32 {
+    var total: u64 = 0;
+    for (self.running.items) |req| {
+        if (req.is_cancelled.load(.acquire)) continue;
+        if (req.prefill_pos >= req.prompt_tokens) continue;
+        total += req.prompt_tokens - req.prefill_pos;
+    }
+    return std.math.cast(u32, total) orelse std.math.maxInt(u32);
+}
+
 /// Calculate cache-aware priority for a request.
 /// SGLang-style cache-aware scheduling: longer cached prefixes get priority boost.
 /// Formula: priority = α × cached_prefix_length − elapsed_ms
@@ -555,23 +569,39 @@ pub const RequestManager = struct {
             // Update Prometheus gauges
             self.metrics.updateQueueDepth(@intCast(self.waiting.items.len));
             self.metrics.updateActiveRequests(@intCast(self.running.items.len));
+            self.metrics.updateInputTokensInFlight(prefillTokensInFlight(self));
         }
 
         // Update KV cache block metrics from tiered cache under tier_lock
         // (prefetcher worker thread may be modifying free lists concurrently)
         if (self.tiered_cache) |cache| {
-            const total, const free, const gpu_total, const gpu_free = blk: {
+            const tiers = blk: {
                 cache.lockTier();
                 defer cache.unlockTier();
                 break :blk .{
-                    @as(u32, @intCast(cache.vram_block_count + cache.ram_block_count + cache.ssd_block_count)),
-                    @as(u32, @intCast(cache.vram_free_list.items.len + cache.ram_free_list.items.len + cache.ssd_free_list.items.len)),
-                    @as(u32, @intCast(cache.vram_block_count)),
-                    @as(u32, @intCast(cache.vram_free_list.items.len)),
+                    .vram_total = @as(u32, @intCast(cache.vram_block_count)),
+                    .vram_free = @as(u32, @intCast(cache.vram_free_list.items.len)),
+                    .ram_total = @as(u32, @intCast(cache.ram_block_count)),
+                    .ram_free = @as(u32, @intCast(cache.ram_free_list.items.len)),
+                    .ssd_total = @as(u32, @intCast(cache.ssd_block_count)),
+                    .ssd_free = @as(u32, @intCast(cache.ssd_free_list.items.len)),
                 };
             };
+            const total = tiers.vram_total + tiers.ram_total + tiers.ssd_total;
+            const free = tiers.vram_free + tiers.ram_free + tiers.ssd_free;
             self.metrics.updateKvBlocks(total - free, total);
-            self.metrics.updateGpuKvBlocks(gpu_total - gpu_free, gpu_total);
+            self.metrics.updateKvTiers(
+                tiers.vram_total - tiers.vram_free,
+                tiers.vram_total,
+                tiers.ram_total - tiers.ram_free,
+                tiers.ram_total,
+                tiers.ssd_total - tiers.ssd_free,
+                tiers.ssd_total,
+            );
+            // Absolute, read outside tier_lock: the counters are independent
+            // atomics and only ever grow.
+            const demotions = cache.demotionCounts();
+            self.metrics.setKvDemotions(demotions.vram_to_ram, demotions.ram_to_ssd);
         }
 
         // 5. Promote all blocks in running requests' block tables to VRAM (if tiered cache enabled)
@@ -815,6 +845,38 @@ fn testIo() Io {
 /// Tests enqueue without configureSchedulerSampling, mark ready so step can admit.
 fn markSamplingReady(req: *Request) void {
     req.sampling_ready.store(true, .release);
+}
+
+test "prefillTokensInFlight counts only unprefilled tokens of running requests" {
+    const allocator = std.testing.allocator;
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 4, 30, null, testIo());
+    defer manager.deinit();
+
+    // Queued requests are not in flight: their prefill has not started.
+    const queued = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    const waiting = try manager.enqueue(&queued, 1);
+    markSamplingReady(waiting);
+    try std.testing.expectEqual(@as(u32, 0), prefillTokensInFlight(&manager));
+
+    // Move it to running by hand: step() needs a Model, which the unit tests
+    // here do not build.
+    _ = manager.waiting.pop();
+    try manager.running.append(allocator, waiting);
+    try std.testing.expectEqual(@as(u32, 8), prefillTokensInFlight(&manager));
+
+    // Partial prefill subtracts what has been consumed.
+    waiting.prefill_pos = 3;
+    try std.testing.expectEqual(@as(u32, 5), prefillTokensInFlight(&manager));
+
+    // Fully prefilled requests owe no prefill work.
+    waiting.prefill_pos = 8;
+    try std.testing.expectEqual(@as(u32, 0), prefillTokensInFlight(&manager));
+
+    // A cancelled request is not scheduled work.
+    waiting.prefill_pos = 0;
+    waiting.is_cancelled.store(true, .release);
+    try std.testing.expectEqual(@as(u32, 0), prefillTokensInFlight(&manager));
 }
 
 // Unit tests
