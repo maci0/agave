@@ -449,6 +449,30 @@ chat.addEventListener('scroll', function() {
 
 function scrollBottom() { if (autoScroll) {chat.scrollTop = chat.scrollHeight;} }
 
+/// Where new messages are appended. `startChatBatch` points it at a
+/// DocumentFragment so a restored history lays out once instead of once per
+/// message.
+let chat_sink: ParentNode = chat;
+let chat_batch_depth = 0;
+
+/// Append new messages to a detached fragment. Each `scrollBottom` would
+/// otherwise force a full-document reflow, making a long history cost O(n)
+/// layouts. Close with `finishChatBatch`, which attaches and scrolls once.
+function startChatBatch(): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  if (chat_batch_depth === 0) { chat_sink = frag; }
+  chat_batch_depth += 1;
+  return frag;
+}
+
+function finishChatBatch(frag: DocumentFragment) {
+  chat_batch_depth -= 1;
+  if (chat_batch_depth > 0) { return; }
+  chat_sink = chat;
+  if (frag.childNodes.length > 0) { chat.append(frag); }
+  scrollBottom();
+}
+
 function setStreaming(s: boolean) {
   isStreaming = s;
   sendBtn.style.display = s ? 'none' : '';
@@ -601,7 +625,8 @@ function addUser(text: string, imageSrc?: string | null) {
   const span = document.createElement('span'); span.textContent = text;
   m.append(span);
   m.dataset.content = text;
-  w.append(r); w.append(m); chat.append(w); scrollBottom();
+  w.append(r); w.append(m); chat_sink.append(w);
+  if (chat_batch_depth === 0) { scrollBottom(); }
 }
 
 function addAssistant() {
@@ -614,7 +639,8 @@ function addAssistant() {
   w.setAttribute('aria-labelledby', roleId);
   const m = document.createElement('div'); m.className = 'msg assistant thinking'; m.dir = 'auto';
   m.textContent = '\u2026';
-  w.append(r); w.append(m); chat.append(w); scrollBottom();
+  w.append(r); w.append(m); chat_sink.append(w);
+  if (chat_batch_depth === 0) { scrollBottom(); }
   return m;
 }
 
@@ -831,7 +857,7 @@ function renderFinal(el: HTMLElement, content: string) {
   const respondedText = truncateAnnounce(el.textContent, 200);
   attachCopyButton(el, content);
   announceToSR(`Agave responded: ${respondedText}`);
-  scrollBottom();
+  if (chat_batch_depth === 0) { scrollBottom(); }
 }
 
 function renderContent(el: HTMLElement, content: string, final: boolean) {
@@ -951,7 +977,9 @@ function sendMessage(text: string) {
 }
 
 function addRegenBtn(msgEl: HTMLElement, actionLabel?: string) {
-  const oldBtns = chat.querySelectorAll('.regen-btn');
+  // Scoped to the sink: during a history restore that is the fragment, so the
+  // sweep stays O(batch) instead of re-querying the whole document per message.
+  const oldBtns = chat_sink.querySelectorAll('.regen-btn');
   for (const oldBtn of oldBtns) {oldBtn.remove();}
   const wrap = msgEl.closest('.msg-wrap');
   if (!wrap?.classList.contains('assistant')) {return;}
@@ -1154,8 +1182,16 @@ function syncSidebarForViewport() {
 }
 window.addEventListener('resize', syncSidebarForViewport);
 
+/** Last conversation list rendered, so an unchanged refresh is a no-op.
+ *  `loadConvs` also runs after every generated turn; rebuilding the sidebar
+ *  each time churns the DOM and drops focus for no visible change. */
+let rendered_convs_json = '';
+
 function loadConvs() {
   fetch('/v1/conversations').then(function(r) { return r.json(); }).then(function(convs) {
+    const json = JSON.stringify(convs);
+    if (json === rendered_convs_json) { return; }
+    rendered_convs_json = json;
     const list = qs('#conv-list');
     list.replaceChildren();
     if (convs.length === 0) {
@@ -1188,6 +1224,9 @@ function loadConvs() {
       item.append(selectBtn); item.append(del); list.append(item);
     }
   }).catch(function() {
+    // The error state replaced the list, so the memo no longer describes what
+    // is on screen; clear it or the retry would render nothing.
+    rendered_convs_json = '';
     const list = qs('#conv-list');
     list.replaceChildren();
     list.removeAttribute('role');
@@ -1241,11 +1280,16 @@ function selectConv(id: string) {
     if (!data.messages || data.messages.length === 0) {
       showEmpty(); loadConvs(); closeMobileSidebar(); inp.focus(); return;
     }
-    for (const m of data.messages) {
-      if (m.role === 'user') { addUser(m.content); }
-      else { renderContent(addAssistant(), m.content, true); }
+    const frag = startChatBatch();
+    try {
+      for (const m of data.messages) {
+        if (m.role === 'user') { addUser(m.content); }
+        else { renderContent(addAssistant(), m.content, true); }
+      }
+    } finally {
+      finishChatBatch(frag);
     }
-    loadConvs(); scrollBottom();
+    loadConvs();
     if (qs('#sidebar').classList.contains('open')) {toggleSidebar();}
     inp.focus();
   }).catch(function() {
