@@ -61,6 +61,27 @@ if [[ "$dropped" != "2" ]]; then
 fi
 echo "Apt source isolation OK"
 
+# The image declares its listen port three times (ENV, EXPOSE, HEALTHCHECK) and
+# docker-compose.yml a fourth time in its own healthcheck. They must agree: an
+# unset AGAVE_PORT with an unbraced $AGAVE_PORT collapses the probe URL to
+# http://localhost/ready, so the probe silently checks port 80 and reports the
+# container healthy while the server listens elsewhere.
+env_port="$(sed -n 's/^ENV AGAVE_PORT=\([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
+expose_port="$(sed -n 's/^EXPOSE \([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
+# shellcheck disable=SC2016  # the ${...} below is sed's literal, not a shell expansion
+probe_port="$(sed -n 's/.*http:\/\/localhost:\$\${AGAVE_PORT:-\([0-9][0-9]*\)}\/ready.*/\1/p' Dockerfile | head -n1)"
+# shellcheck disable=SC2016
+compose_probe_port="$(sed -n 's/.*AGAVE_PORT:-\([0-9][0-9]*\)}\/ready.*/\1/p' docker-compose.yml | head -n1)"
+if [[ -z "$env_port" || -z "$expose_port" || -z "$probe_port" || -z "$compose_probe_port" ]]; then
+    echo "check-pins: could not parse the AGAVE_PORT default from Dockerfile (ENV/EXPOSE/HEALTHCHECK) or docker-compose.yml" >&2
+    exit 1
+fi
+if [[ "$env_port$expose_port$probe_port$compose_probe_port" != "$env_port$env_port$env_port$env_port" ]]; then
+    echo "check-pins: port mismatch: ENV=$env_port EXPOSE=$expose_port Dockerfile HEALTHCHECK=$probe_port compose healthcheck=$compose_probe_port" >&2
+    exit 1
+fi
+echo "Listen port OK: $env_port (ENV, EXPOSE, both healthchecks)"
+
 # ruff.toml owns the ruff version (required-version gates every local and CI
 # run); the CI job names the same version so the uvx fetch cannot drift.
 ruff_pin="$(sed -n 's/^[[:space:]]*required-version[[:space:]]*=[[:space:]]*"==\([^"]*\)".*/\1/p' ruff.toml | head -n1)"

@@ -229,12 +229,15 @@ ENV AGAVE_PORT=49453 \
     HOME=/home/agave
 
 # Shell form + $$ so AGAVE_PORT expands at container runtime (not image build).
+# 49453 fallback matches the image ENV below and the compose healthcheck: with
+# an empty AGAVE_PORT an unbraced $AGAVE_PORT collapses the URL to
+# http://localhost/ready and the probe silently hits port 80.
 # Use /ready (not /health): Docker HEALTHCHECK gates routing/depends_on, and
 # /health returns 200 while degraded (KV pressure / high error rate).
 # Probe assumes --serve. One-shot inference should pass --no-healthcheck.
 # start-period covers slow model load before probes count as failures.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD curl -sf http://localhost:$$AGAVE_PORT/ready || exit 1
+    CMD curl -sf http://localhost:$${AGAVE_PORT:-49453}/ready || exit 1
 
 # Binds all interfaces for container networking. --serve requires AGAVE_API_KEY
 # (or --api-key) because non-loopback binds are rejected without auth.
