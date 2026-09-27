@@ -231,9 +231,14 @@ verify_store() {
 # sequence the server itself uses (src/durable_file.zig): without it a power
 # loss can drop the renamed entry and leave a backup directory that verifies
 # while holding no backup at all.
+#
+# Every copy of the store is chat history, so the tmp is owner-only before it
+# is published. `cp` would otherwise leave it at the caller's umask, and a
+# 0644 backup hands every local user the full conversation history.
 copy_atomic() {
     local src="$1" dest="$2"
     cp -- "$src" "$dest.tmp" || die "copy $src -> $dest.tmp failed"
+    chmod 600 -- "$dest.tmp" || die "could not restrict permissions on $dest.tmp"
     if ! command -v sync >/dev/null 2>&1; then
         die "no sync command available; cannot flush $dest.tmp to disk (install coreutils or busybox)"
     fi
@@ -247,6 +252,9 @@ do_backup() {
     live="$(live_store_path)" || die "neither XDG_CACHE_HOME nor HOME is set; pass --store PATH"
     dir="$(backup_dir)"
     mkdir -p -- "$dir" || die "cannot create $dir"
+    # The backup dir holds nothing but copies of the conversation store, so it
+    # is owner-only even when the operator's umask is not.
+    chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
     if [[ ! -f "$live" ]]; then
         die "no conversation store at $live (nothing to back up; the server writes one on its first conversation)"
     fi
@@ -310,6 +318,7 @@ do_restore() {
         local dir snap
         dir="$(backup_dir)"
         mkdir -p -- "$dir" || die "cannot create $dir"
+        chmod 700 -- "$dir" || die "cannot restrict permissions on $dir"
         snap="$dir/conversations-prerestore-$(stamp).json"
         [[ -e "$snap" ]] && snap="${snap%.json}-$$.json"
         copy_atomic "$live" "$snap"
@@ -367,6 +376,12 @@ do_self_test() {
     local backup
     backup="$(find "$tmp/backups" -name 'conversations-2*.json' | head -1)"
     [[ -f "$backup" ]] || die "self-test: backup produced no file"
+    # A backup is the whole chat history, so it must not be readable by any
+    # other user of the host whatever umask the operator runs with.
+    if [[ "$(stat -c '%a' -- "$backup")" != "600" ]]; then
+        echo "conv-store-backup: self-test FAILED: backup mode is $(stat -c '%a' -- "$backup"), expected 600" >&2
+        status=1
+    fi
 
     # A restore must be rejected before it can clobber the live store.
     printf '%s' '{"version":1,' >"$tmp/truncated.json"
