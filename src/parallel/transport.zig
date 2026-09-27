@@ -560,7 +560,12 @@ pub const Transport = struct {
 
     fn ensureRecvBuf(self: *Transport, n: usize) ![]f32 {
         if (self.recv_buf == null or self.recv_buf.?.len < n) {
-            if (self.recv_buf) |old| self.allocator.free(old);
+            // Drop the stale pointer before freeing: an allocation failure must
+            // not leave a freed slice in the field for deinit to free again.
+            if (self.recv_buf) |old| {
+                self.recv_buf = null;
+                self.allocator.free(old);
+            }
             self.recv_buf = try self.allocator.alloc(f32, n);
         }
         return self.recv_buf.?;
