@@ -6,7 +6,7 @@ Templates and step-by-step guides for extending the inference engine.
 
 Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). `zig build` exits if the running compiler does not match that pin. GPU backends `dlopen` drivers at runtime; no GPU SDK is needed to compile.
 
-`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`uv tool install ruff`, then `zig build lint-python`); CI gets ruff through `uvx`, so it has no such prerequisite.
+`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`zig build lint-python`). `scripts/lint-python.sh` runs a `ruff` on PATH when it already reports the `ruff.toml` pin, and otherwise runs the pinned ruff ephemerally through `uvx`, the same way CI does, so no global tool install is required; with neither available it names both ways to get the pin.
 
 ```bash
 zig version          # must print 0.16.0
