@@ -269,6 +269,11 @@ Select and delete require a positive integer `id`. Missing `id` returns `400`
 `400` (`code: invalid_value`). Unknown `id` returns `404`
 (`code: conversation_not_found`).
 
+`action=new` allocates an id and persists a row, so it honors `X-Request-Id` as
+an idempotency key. `select` and `delete` do not: both converge on the same
+state, so a retry of them repeats no side effect. See
+[Idempotency](#idempotency) below.
+
 Limits: maximum 100 concurrent conversations, 1000 messages per conversation.
 Titles are opaque (`Chat {id}`), never derived from user message content. The
 OpenAI `user` request field is ignored (often an email or username). Message
@@ -671,10 +676,11 @@ CLI value is ignored.
 
 ## Idempotency
 
-`POST /v1/chat` and `POST /v1/chat/regenerate` change the stored conversation,
-so a client that retries after a lost response would otherwise append a second
-user turn, or roll back a second assistant message. Both routes accept the
-sanitized `X-Request-Id` header (up to 64 characters of `A-Za-z0-9-_.`) as an
+`POST /v1/chat`, `POST /v1/chat/regenerate`, and `POST /v1/conversations` with
+`action=new` change stored state: a client that retries after a lost response
+would otherwise append a second user turn, roll back a second assistant
+message, or create a second conversation. Those routes accept the sanitized
+`X-Request-Id` header (up to 64 characters of `A-Za-z0-9-_.`) as an
 idempotency key: one key per logical operation, reused across retries.
 
 | Situation | Result |
@@ -691,9 +697,10 @@ hour, so storage is bounded and an abandoned request cannot block its own
 retries. A key that collides with an unrelated operation is the caller's
 responsibility: generate one per logical request, not per attempt.
 
-Every other route is stateless or naturally idempotent (`delete` is guarded by
-an existence check, `select` converges on the same id), so a retry of those
-repeats no side effect.
+Every other route is stateless or naturally idempotent: `select` converges on
+the same id, `delete` is guarded by an existence check, and `POST /v1/kv_cache`
+re-imports the same prefix over the same state. A retry of those repeats no
+side effect.
 
 ---
 

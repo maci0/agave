@@ -3267,6 +3267,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const body = req.body;
         const action = json.extractFormField(body, "action") orelse "new";
         if (std.mem.eql(u8, action, "new")) {
+            // `new` allocates an id and persists another conversation row, so a
+            // retry after a lost response leaves two conversations for one user
+            // action. `select` and `delete` converge on the same state and stay
+            // out of the ledger.
+            if (resolveIdempotency(stream, method, path, request_start)) return;
             const new_id: u32 = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
@@ -3275,6 +3280,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             if (new_id == 0) {
                 sendJsonErrorEx(stream, "503 Service Unavailable", "server_error", "Maximum conversation limit reached", null, "conversation_limit_reached");
                 g_server.metrics.recordFailure();
+                g_server.releaseIdempotencyKey();
                 logRequestDone(method, path, 503, elapsedMs(request_start));
                 return;
             }
@@ -3283,6 +3289,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 \\{{"ok":true,"id":{d}}}
             , .{new_id}) catch "{\"ok\":true}";
             sendJson(stream, njson);
+            g_server.completeIdempotencyKey("200 OK", "application/json", njson);
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "select")) {

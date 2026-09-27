@@ -234,6 +234,7 @@ test "release leaves a completed key alone" {
     var l = Ledger.init(testing.allocator);
     defer l.deinit();
 
+    _ = l.claim("a", 0);
     l.complete("a", 0, "200 OK", "text/html", "hello");
     l.release("a");
     try testing.expect(l.claim("a", 1) == .replay);
@@ -259,15 +260,17 @@ test "ring eviction keeps a bounded replay set" {
         l.complete(k, 1, "200 OK", "text/html", "body");
     }
     // The first `capacity` keys are gone; the newest `capacity` replay.
-    for (0..capacity) |i| {
-        var buf: [16]u8 = undefined;
-        const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
-        try testing.expect(l.claim(k, 2) == .fresh);
-    }
+    // Claiming a live key leaves the ring untouched, so the replays are
+    // asserted first: the fresh claims below evict live slots.
     for (capacity..capacity * 2) |i| {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
         try testing.expect(l.claim(k, 2) == .replay);
+    }
+    for (0..capacity) |i| {
+        var buf: [16]u8 = undefined;
+        const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
+        try testing.expect(l.claim(k, 2) == .fresh);
     }
 }
 
@@ -276,6 +279,7 @@ test "oversized body still records completion" {
     defer l.deinit();
 
     const big = "y" ** (max_body_len + 1);
+    _ = l.claim("a", 0);
     l.complete("a", 0, "200 OK", "text/html", big);
     const c = l.claim("a", 1);
     try testing.expect(c == .replay);
@@ -292,7 +296,8 @@ test "slot reuse does not leak the previous body" {
         _ = l.claim(k, 0);
         l.complete(k, 0, "200 OK", "text/html", "secret-body");
     }
-    try testing.expectEqual(@as(usize, 0), countStoredBodies(&l));
+    // One body per live slot, never one per completed operation.
+    try testing.expectEqual(capacity, countStoredBodies(&l));
 }
 
 fn countStoredBodies(l: *const Ledger) usize {
