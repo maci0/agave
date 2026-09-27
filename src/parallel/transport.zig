@@ -68,6 +68,15 @@ fn getenv(name: []const u8) ?[]const u8 {
     return std.mem.sliceTo(ptr, 0);
 }
 
+/// Errors a poll(2) wait can surface. Named rather than `anyerror`: an inferred
+/// error set that widens to the global set propagates through every caller and
+/// cannot be coerced into `model.ForwardError` at the model vtable.
+const PollError = error{ AcceptFailed, ConnectFailed };
+
+/// Errors a shared-memory flag wait can surface. Kept separate from
+/// `PollError` so a caller of one never widens the other's error set.
+const ShmWaitError = error{ ShmRecvTimeout, ShmSendTimeout };
+
 /// Poll `fd` for `events` until ready or `budget_ms` elapse on the injectable
 /// clock. Returns the poll result (0 on timeout), or `poll_error` if poll(2)
 /// itself fails.
@@ -78,7 +87,7 @@ fn getenv(name: []const u8) ?[]const u8 {
 /// therefore sliced, the deadline is read from sim_clock, and under an
 /// override the probe is non-blocking with virtual time advanced by the slice,
 /// so the timeout lands after the same number of probes on every host.
-fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_error: anyerror) !usize {
+fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_error: PollError) PollError!usize {
     const deadline = sim_clock.monoMilli() + budget_ms;
     while (true) {
         const virtual = sim_clock.isOverridden();
@@ -95,9 +104,11 @@ fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_err
 /// reached. Production keeps the spin count; under a clock override the bound
 /// is `shm_wait_budget_ms` of virtual time, so the same number of iterations
 /// elapse on every host.
-/// `timeout_error` is comptime so the return type stays a named set: a runtime
-/// `anyerror` parameter would widen every caller to the global error set.
-fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, comptime timeout_error: TransportError) TransportError!void {
+/// `timeout_error` is comptime and its type is `ShmWaitError`, so the return
+/// type stays a named set narrower than `TransportError`: a runtime `anyerror`
+/// parameter would widen every caller to the global error set, and a
+/// `TransportError` return would let a wait failure take on unrelated tags.
+fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, comptime timeout_error: ShmWaitError) ShmWaitError!void {
     if (sim_clock.isOverridden()) {
         const deadline = sim_clock.monoMilli() + shm_wait_budget_ms;
         while (flag.load(.acquire) != want) {
