@@ -1,6 +1,6 @@
 //! Crash-safe file replace for operator-facing artifacts.
 //!
-//! Write a sibling `*.tmp`, fsync, rename over the live path, then fsync the
+//! Write a sibling `*.tmp.<pid>`, fsync, rename over the live path, then fsync the
 //! parent directory. A crash mid-write leaves the previous live file intact
 //! (or no file on first write). Used by calibration output, conversation
 //! store, Vulkan pipeline cache, expert profiles, and Hub download publish.
@@ -141,7 +141,8 @@ pub fn renameOver(old_path: []const u8, new_path: []const u8) !void {
     if (rc != 0) return error.RenameFailed;
 }
 
-/// Write `data` over `path` via `{path}.tmp` so a crash cannot truncate the live file.
+/// Write `data` over `path` via a sibling tmp so a crash cannot truncate the
+/// live file and a second process cannot truncate this write.
 pub fn replace(path: []const u8, data: []const u8) !void {
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
     const tmp_path = try tmpPath(&tmp_buf, path);
@@ -194,8 +195,13 @@ fn writeAll(fd: std.posix.fd_t, data: []const u8) !void {
     }
 }
 
+/// Sibling tmp path for `path`, qualified with the writing process id so two
+/// processes replacing the same file cannot truncate or rename each other's
+/// partial write. Callers in one process must still serialize writes to the
+/// same path (the server does so under its mutex).
 fn tmpPath(buf: []u8, path: []const u8) ![]u8 {
-    return std.fmt.bufPrint(buf, "{s}.tmp", .{path}) catch error.NameTooLong;
+    if (comptime !posix_sync) return std.fmt.bufPrint(buf, "{s}.tmp", .{path}) catch error.NameTooLong;
+    return std.fmt.bufPrint(buf, "{s}.tmp.{d}", .{ path, std.c.getpid() }) catch error.NameTooLong;
 }
 
 fn closeFd(fd: std.posix.fd_t) void {
@@ -255,8 +261,8 @@ fn readPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 
 /// Pid-unique test path. `zig build test` runs several test binaries in
 /// parallel in one working directory, and every binary that links
-/// `backend.zig` compiles these tests, so a shared name lets one rename the
-/// other's `*.tmp` away mid-write.
+/// `backend.zig` compiles these tests, so a shared live path lets one
+/// overwrite the other's file mid-test.
 fn testPath(buf: []u8, name: []const u8) []u8 {
     return std.fmt.bufPrint(buf, "test_durable_file_{d}_{s}", .{ std.c.getpid(), name }) catch unreachable;
 }

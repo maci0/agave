@@ -23,10 +23,12 @@ Only the first two cannot be rebuilt. Everything else is a cache with a
 rebuild path, so this document is about the conversation store.
 
 Writes for all of them go through `src/durable_file.zig`: write a sibling
-`*.tmp`, `fsync`, `rename` over the live path, `fsync` the parent directory. A
-crash mid-write leaves the previous file intact, and a file at the live path is
-always complete. That property is what makes a plain file copy a consistent
-backup, and it is pinned by the tests in `src/durable_file.zig`.
+`*.tmp.<pid>`, `fsync`, `rename` over the live path, `fsync` the parent
+directory. A crash mid-write leaves the previous file intact, and a file at the
+live path is always complete. The pid in the tmp name keeps two processes
+replacing the same path from truncating or renaming each other's bytes. That
+property is what makes a plain file copy a consistent backup, and it is pinned
+by the tests in `src/durable_file.zig`.
 
 Other verified properties, so a future pass leaves them alone:
 

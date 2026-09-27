@@ -222,6 +222,8 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
 
 Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode, image on a non-vision model) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`, `vision_not_supported`).
 
+This route appends the user turn to the conversation and persists it, so it honors `X-Request-Id` as an idempotency key. See [Idempotency](#idempotency) below.
+
 ### POST /v1/chat/regenerate
 
 Regenerate the last assistant response in the active conversation. Rolls back the last assistant message, resets the KV cache, and generates a new response. Supports streaming via `stream=1`.
@@ -230,7 +232,7 @@ Regenerate the last assistant response in the active conversation. Rolls back th
 curl -X POST http://localhost:49453/v1/chat/regenerate -d 'stream=1&max_tokens=200'
 ```
 
-Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, and `system` fields. Always operates on the currently active conversation.
+Uses form-encoded body. Accepts `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, and `system` fields. Always operates on the currently active conversation. Every call rolls back one assistant message, so it honors `X-Request-Id` as an idempotency key: see [Idempotency](#idempotency) below.
 
 ### GET|POST /v1/conversations
 
@@ -272,8 +274,9 @@ text is zeroed in RAM on delete/clear.
 **Durability:** the web-UI conversation list is written to
 `$XDG_CACHE_HOME/agave/conversations.json` (fallback `~/.cache/agave/conversations.json`;
 override with `--conv-store PATH`, disable with `--no-conv-store`). Saves use a sibling
-`.tmp` file, `fsync`, and rename, so
-a crash cannot truncate the live file. On startup the server loads that file;
+`.tmp.<pid>` file, `fsync`, and rename, so
+a crash cannot truncate the live file and a second server on the same path
+cannot truncate this one's write. On startup the server loads that file;
 a corrupt file is renamed to `{path}.corrupt` and the server starts empty
 rather than overwriting the only copy. Instance restart RPO is the last
 completed mutation (create/select/delete, user message, assistant reply, clear).
@@ -658,8 +661,35 @@ CLI value is ignored.
 
 ---
 
-## Response Headers
+## Idempotency
 
+`POST /v1/chat` and `POST /v1/chat/regenerate` change the stored conversation,
+so a client that retries after a lost response would otherwise append a second
+user turn, or roll back a second assistant message. Both routes accept the
+sanitized `X-Request-Id` header (up to 64 characters of `A-Za-z0-9-_.`) as an
+idempotency key: one key per logical operation, reused across retries.
+
+| Situation | Result |
+|-----------|--------|
+| First request with a key | Runs normally, response recorded under the key |
+| Same key while the first is still running | `409`, `code` `duplicate_request` |
+| Same key within the replay window, non-streaming | Original response re-sent, `Idempotent-Replay: true` |
+| Same key within the replay window, `stream=1` | `409`, `code` `duplicate_request` (streamed bytes are not buffered) |
+| Same key after the replay window | Runs again as a new operation |
+| No `X-Request-Id` header | Runs normally, nothing is recorded |
+
+The ledger keeps the 64 most recent keys and holds a replayed response for one
+hour, so storage is bounded and an abandoned request cannot block its own
+retries. A key that collides with an unrelated operation is the caller's
+responsibility: generate one per logical request, not per attempt.
+
+Every other route is stateless or naturally idempotent (`delete` is guarded by
+an existence check, `select` converges on the same id), so a retry of those
+repeats no side effect.
+
+---
+
+## Response Headers
 All responses include these headers:
 
 | Header | Description |
