@@ -614,25 +614,23 @@ pub const RequestManager = struct {
         // 6. Prefetch next N blocks during attention compute (if prefetcher enabled)
         if (self.tiered_cache) |cache| {
             // Promote failures are counted and reported once per step: the loop
-            // below runs over every block of every running request, so a per-block
-            // warn would emit thousands of lines per second under cache pressure
-            // and hide the rest of the log.
+            // below runs over every running request, so a per-request warn would
+            // emit thousands of lines per second under cache pressure and hide
+            // the rest of the log.
             var promote_failures: u64 = 0;
             var first_failed_req: u64 = 0;
             var first_failed_err: ?anyerror = null;
             for (self.running.items) |req| {
                 // Promote all blocks in this request's block table to VRAM.
-                // promoteToVram takes tier_lock and handles already-promoted blocks
-                // internally (returns early if tier == .vram).
-                for (req.block_table) |block_id| {
-                    cache.promoteToVram(block_id) catch |err| {
-                        if (first_failed_err == null) {
-                            first_failed_req = req.id;
-                            first_failed_err = err;
-                        }
-                        promote_failures += 1;
-                    };
-                }
+                // batchPromoteToVram takes tier_lock once for the whole table
+                // instead of once per block, and skips blocks already in VRAM.
+                cache.batchPromoteToVram(req.block_table) catch |err| {
+                    if (first_failed_err == null) {
+                        first_failed_req = req.id;
+                        first_failed_err = err;
+                    }
+                    promote_failures += 1;
+                };
 
                 // Prefetch next blocks asynchronously (per D-07: next 2 blocks)
                 // This overlaps SSD I/O with GPU attention compute to hide latency
@@ -643,7 +641,7 @@ pub const RequestManager = struct {
             }
             if (promote_failures > 0) {
                 self.metrics.recordKvPromoteFailures(promote_failures);
-                std.log.warn("req={d} kv promote: {d} block(s) failed this step (first: {s}); they stay on a slower tier", .{
+                std.log.warn("req={d} kv promote: {d} request(s) had a failed block this step (first: {s}); those blocks stay on a slower tier", .{
                     first_failed_req, promote_failures, @errorName(first_failed_err.?),
                 });
             }
