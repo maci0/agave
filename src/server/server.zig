@@ -820,6 +820,23 @@ fn unlockModelWithScheduler() void {
     if (g_server.request_manager) |rm| rm.model_mutex.unlock(g_server.io);
 }
 
+/// Snapshot the model's KV sequence length with the model excluded.
+///
+/// `kv_seq_len` is a plain `usize` (no atomic). The scheduler thread writes it
+/// inside its Phase A/B forward loops while holding only `model_mutex`, and the
+/// direct-path generators write it under `server.mutex`. An unlocked read here
+/// races with both, and the value is reported next to `kv_cache_used` /
+/// `queue_depth` in the same response, so a torn pair is user-visible. Both
+/// locks are taken in the documented order; callers that already hold
+/// `server.mutex` must inline `lockModelWithScheduler` instead of calling this.
+fn kvSeqLenSnapshot() usize {
+    g_server.mutex.lockUncancelable(g_server.io);
+    defer g_server.mutex.unlock(g_server.io);
+    lockModelWithScheduler();
+    defer unlockModelWithScheduler();
+    return g_server.model.kvSeqLen();
+}
+
 /// Per-thread request ID for log correlation. Set at the start of each
 /// handleRequest() call so all log lines from the same request (including
 /// logGeneration calls deep in generate functions) share the same ID.
@@ -2085,7 +2102,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             sendResponse(stream, http_status, "application/json", minimal);
             return;
         }
-        const kv_seq_len = g_server.model.kvSeqLen();
+        const kv_seq_len = kvSeqLenSnapshot();
         const json_body = std.fmt.bufPrint(&buf,
             \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d},"sleeping":{s}}}
         , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), hv.completed, hv.failed, hv.cancelled, hv.queue, hv.kv_used, hv.kv_total, kv_seq_len, g_server.ctx_size, hv.sched_errs, hv.preemptions, if (hv.sleeping) "true" else "false" }) catch
@@ -2202,7 +2219,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         var buf: [models_json_buf_size]u8 = undefined;
-        const kv_pos = g_server.model.kvSeqLen();
+        const kv_pos = kvSeqLenSnapshot();
         const has_vision = g_server.vision_encoder != null;
         const mtp_depth = g_server.model.getMtpDepth();
         const json_body = std.fmt.bufPrint(&buf,
@@ -2652,12 +2669,16 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
         // Snapshot seq_len + prefix under mutex, concurrent generateN may free/replace
         // cached_prompt_ids (UAF) or reset KV between unlocked reads (inconsistent pair).
+        // server.mutex alone does not exclude the scheduler thread's forwards on
+        // kv_seq_len (they hold model_mutex without server.mutex), so take both.
         var hash: u64 = fnv1a_offset_basis;
         var cached_prefix_len: usize = 0;
         var seq_len: usize = 0;
         {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
+            lockModelWithScheduler();
+            defer unlockModelWithScheduler();
             seq_len = g_server.model.kvSeqLen();
             const prefix_ids = g_server.cached_prompt_ids;
             cached_prefix_len = prefix_ids.len;
