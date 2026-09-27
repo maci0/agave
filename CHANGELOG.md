@@ -24,8 +24,59 @@ must still appear under **Changed** or **Breaking** below. See
   4-byte aligned (GGUF: `OffsetOutOfBounds`; SafeTensors: logged, tensor
   skipped). A repacked or hand-crafted model that loaded before now errors at
   load time. Every real writer pads to 64 bytes, so no shipped model changes.
+- `POST /v1/detokenize` validates `tokens` per `docs/API.md`: a missing or
+  empty array is `400` (`code: missing_required_parameter`), and a non-array
+  value, a non-integer or negative element, or an array over 4096 entries is
+  `400` (`code: invalid_value`). Previously a malformed array was decoded up to
+  the bad element, so a client sending one bad ID got a `200` with a silently
+  truncated prefix. The whole array is now rejected.
+- `POST /v1/tokenize` returns `400` (`code: invalid_value`) for a non-string
+  `text` or `content`, and `400` (`code: missing_required_parameter`) when none
+  of `text`, `content`, or `messages` is present. Both previously reached the
+  tokenizer.
+- `POST /v1/chat/completions` `logprobs` follows the documented behavior: the
+  sampled token's own `logprob` is returned with an empty `top_logprobs` list
+  when `top_logprobs` is omitted, instead of suppressing `logprobs` entirely.
+- Prometheus metric `agave_num_preemptions_total` is **removed**; it was
+  reported without a backing counter. `/health` returns `kv_demotions` in
+  place of `preemptions`, and `/metrics` gains
+  `agave_kv_cache_tier_blocks{tier=vram|ram|ssd,state=used|total}`,
+  `agave_kv_cache_demotions_vram_to_ram_total`, and
+  `agave_kv_cache_demotions_ram_to_ssd_total`. `agave_gpu_cache_usage_perc`
+  now derives from the VRAM tier alone. Dashboards and alerts reading
+  `agave_num_preemptions_total` or the `preemptions` health field must be
+  updated; `agave_input_tokens_in_flight` now means tokens still to prefill.
+- `--repeat-penalty` is applied once per **distinct** token instead of once per
+  occurrence, so `--repeat-penalty 1.2` is a 1.2x nudge at any output length.
+  Repetition-heavy output therefore differs from previous releases; lower the
+  value if the new penalty reads as too strong.
+- Conversation-creation idempotency: `POST /v1/conversations` with
+  `action=new` honors `X-Request-Id` as an idempotency key, and
+  `POST /v1/chat` and `POST /v1/chat/regenerate` accept the header. A replayed
+  non-streaming response is re-sent with `Idempotent-Replay: true`; a duplicate
+  while the first is in flight, and any `stream=1` retry, is `409`
+  (`code: duplicate_request`). Keys are sanitized to 64 characters of
+  `A-Za-z0-9-_`, 64 are retained, and the replay window is 1 hour. A client
+  that reused one `X-Request-Id` across unrelated requests now gets `409`.
+- `KV /import` on a blob whose size does not match `n_tokens` returns `400`
+  (`code: kv_import_failed`) instead of `501`; `501` is now specific to an
+  architecture that does not implement `exportKvPrefix` / `importKvPrefix`.
+  `POST /v1/messages` rejects `n > 1` with `400` (`n_not_supported`), matching
+  `/v1/chat/completions`, and `POST /v1/conversations` rejects an
+  unrecognised `action` with `400` (`code: unknown_conversation_action`),
+  defaulting to `new` when the field is absent.
 
 ### Added
+- `POST /v1/chat` accepts `top_k` alongside `temperature`, `top_p`, `max_tokens`,
+  `stream`, `system`, and `image`.
+- `POST /v1/chat/completions` and `/v1/messages` return `409 Conflict` for a
+  repeated `X-Request-Id` still in flight, or a replay whose response cannot be
+  re-sent. `duplicate_request` is a documented `code` value.
+- `tools/gguf_io.py`, a shared GGUF header reader. `tools/mixed-quant/
+  splice_mixed_experts.py` is rebuilt on it, raises on a donor/base dimension
+  mismatch and on an unknown ggml type instead of mis-sizing, and gains
+  `--dry-run` to list the spliced tensors. `tools/synth-moe/moeify_gguf.py`
+  uses the same module.
 - `docs/OBSERVABILITY.md`: `--serve` Prometheus metrics, `/health` and
   `/ready` fields, and `X-Request-Id` log correlation.
 - `docs/DURABILITY.md`: what state is on disk, RPO/RTO, and the conversation
@@ -126,6 +177,26 @@ must still appear under **Changed** or **Breaking** below. See
 - `src/kvcache/checkpoint.zig` is removed. No CLI flag or on-disk format ever
   shipped, so no file is affected; `docs/tutorial/24-advanced-features.md`
   records that KV checkpointing is not built and why.
+- `--ctx-size auto` spends 80% of the usable-memory budget on KV cache, was a
+  fixed 10x fudge that could size the context past what the cache holds, and
+  falls back to the 4096 default when per-token KV cost exceeds 1 MiB
+  (degenerate header metadata) instead of wrapping.
+- A missing or mistyped model path now prints
+  `Error: '<path>' does not exist. Check the path and try again.` (or
+  `is not a SafeTensors directory.`) before the underlying errno line, and a
+  mistyped REPL slash command gets a `did you mean` suggestion. Scripts that
+  match the exact previous error text need updating.
+- A backend with no fused FFN kernel for a weight dtype (for example CUDA
+  Q4_0) now runs the standard gate/up/down path and warns, instead of feeding
+  stale `ff_gate` values into the layer. `--ssd-streaming` warns that it does
+  not page Qwen4-Exp PLE ngrams, and `--spec-mode ddtree` under `--serve`
+  warns that the server uses linear draft and verify, so `--tree-budget` has no
+  effect.
+- Conversation store temp files are named `*.tmp.<pid>`, so two servers sharing
+  one `--conv-store` path can no longer truncate each other's in-flight write.
+- Developer tooling records timestamps in UTC: `research/kernels/autotune.py`
+  log rows, `meta.json`, and staging directories, `tests/harness.py` run
+  stamps (RFC 3339 with offset), and the `scripts/fetch-changelogs.sh` header.
 
 ### Fixed
 - `agave pull` reports a shard whose filename cannot be built as `Error:`
@@ -147,6 +218,34 @@ must still appear under **Changed** or **Breaking** below. See
   the layer aliases instead.
 - `tools/quality-testing/collect_continuations.py` error records now carry the
   model, so a retry after a model switch is not skipped.
+- Terminal width, line truncation, and readline cursor math count extended
+  grapheme clusters, so a ZWJ family emoji, a skin-tone modifier, or a
+  regional-indicator flag occupies the columns the terminal gives it instead of
+  4x or 8x. A hand-edited conversation title past the 48-byte cap is clipped on
+  a character boundary when loaded, so the web UI no longer shows a
+  half-encoded title.
+- Chat-template control tokens are stripped from replayed assistant content as
+  well as user and tool content, so a prior model turn containing
+  `<|im_start|>` or `<|im_end|>` can no longer inject role framing into the
+  next request.
+- `--serve` chat UI: the offline badge is replaced with a fresh node on each
+  failure, so one click refetches once (it previously fired once per past
+  failure) and the model name returns as a plain badge when the server answers.
+  Stop announces "Generation stopped." rather than "Response complete.", and a
+  slash command sent with an attached image is refused with a toast instead of
+  silently dropping the image.
+- A vision encoder header with `patch_size == 0`, `image_size < patch_size`,
+  `embd_dim == 0`, `embd_dim` not a multiple of `n_heads`, or a zero
+  `projection_dim` fails at init with `error.InvalidMetadata` rather than
+  dividing by zero or truncating. The startup banner prints
+  `KV cache n/a (size overflows)` when the KV size product overflows, and
+  `agave pull` shard totals saturate instead of reporting a size smaller than
+  the shards it lists.
+- A client-supplied `thinking_budget_tokens` (or `thinking.budget_tokens`)
+  above the `u32` range clamps to `4294967295` instead of trapping the server.
+- `scripts/conv-store-backup.sh` rejects a non-positive-integer `AGAVE_KEEP`
+  (`0`, negative, `abc`, `1.5`, or blank) instead of pruning the whole backup
+  tier.
 
 ## [0.3.0] - 2026-09-02
 
