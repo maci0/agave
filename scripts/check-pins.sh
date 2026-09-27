@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Reproducibility pins that CI's fmt-check job and `zig build check` both run.
 #
-# A green `zig build check` must not disagree with CI: these four pins
+# A green `zig build check` must not disagree with CI: these five pins
 # (Zig toolchain, Debian snapshot day, SOURCE_DATE_EPOCH, apt source
-# isolation) are what make a Docker build reproducible, and a mismatch only
-# surfaced in CI, so a contributor learned about it after pushing.
+# isolation, ruff version) are what make a build or a gate reproducible, and a
+# mismatch only surfaced in CI, so a contributor learned about it after
+# pushing.
 #
 # Exit 0 when every pin agrees, 1 on a mismatch or an unparseable file.
 set -euo pipefail
@@ -59,3 +60,17 @@ if [[ "$dropped" != "2" ]]; then
     exit 1
 fi
 echo "Apt source isolation OK"
+
+# ruff.toml owns the ruff version (required-version gates every local and CI
+# run); the CI job names the same version so the uvx fetch cannot drift.
+ruff_pin="$(sed -n 's/^[[:space:]]*required-version[[:space:]]*=[[:space:]]*"==\([^"]*\)".*/\1/p' ruff.toml | head -n1)"
+ci_ruff_pin="$(sed -n 's/.*uvx ruff@\([^ ]*\) check.*/\1/p' .github/workflows/ci.yml | head -n1)"
+if [[ -z "$ruff_pin" || -z "$ci_ruff_pin" ]]; then
+    echo "check-pins: could not parse required-version from ruff.toml and uvx ruff@<version> from ci.yml" >&2
+    exit 1
+fi
+if [[ "$ruff_pin" != "$ci_ruff_pin" ]]; then
+    echo "check-pins: ruff.toml required-version (==$ruff_pin) != ci.yml uvx ruff@$ci_ruff_pin" >&2
+    exit 1
+fi
+echo "Ruff pin OK: $ruff_pin"

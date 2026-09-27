@@ -49,6 +49,12 @@ must still appear under **Changed** or **Breaking** below. See
   interrupted run no longer re-bills every completed call.
 
 ### Changed
+- The Python lint gate pins ruff. `ruff.toml` sets `required-version`, CI
+  fetches that exact version through `uvx`, and `scripts/check-pins.sh` fails
+  when the two disagree. Previously `uvx ruff` resolved whatever PyPI served,
+  so a ruff release could add findings (or silence them) on an unchanged tree.
+  A different local ruff now refuses to run instead of reporting different
+  results; install the pinned one (`uv tool install ruff==0.16.4`).
 - Docker Compose forwards `AGAVE_DF2_DEBUG` (documented in `.env.example` and
   `docs/API.md` but previously reachable only outside the container).
 - Server: request logs now carry `req=<id>` on streaming client disconnects,

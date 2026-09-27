@@ -384,8 +384,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pinned to the ruff.toml required-version so the fetch cannot drift with
+      # whatever PyPI serves that day.
       - name: ruff
-        run: uvx ruff check --config ruff.toml .
+        run: uvx ruff@0.16.4 check --config ruff.toml .
 
   # scripts/*.sh is 13 files of unanalysed shell: quoting bugs and unset-variable
   # failures there break CI jobs and developer tooling the same way. Blocking.
