@@ -151,10 +151,12 @@ fn parseArgs(args_iter: *std.process.Args.Iterator) ?CalibrateArgs {
             }
             result.n_tokens = std.fmt.parseInt(u32, val, 10) catch {
                 eprint("Error: --tokens value '{s}' is not a valid integer\n", .{val});
+                eprint("Run 'agave calibrate --help' for more information.\n", .{});
                 std.process.exit(2);
             };
             if (result.n_tokens == 0) {
                 eprint("Error: --tokens must be >= 1\n", .{});
+                eprint("Run 'agave calibrate --help' for more information.\n", .{});
                 std.process.exit(2);
             }
         } else if (std.mem.eql(u8, arg, "--output") or std.mem.startsWith(u8, arg, "--output=")) {
@@ -648,13 +650,24 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     var fmt: Format = undefined;
     if (is_dir) {
         st_dir = SafeTensorsDir.open(allocator, args.model_path) catch |e| {
-            eprint("Error: failed to open safetensors dir '{s}': {}\n", .{ args.model_path, e });
+            if (e == error.FileNotFound or e == error.NotDir) {
+                eprint("Error: '{s}' is not a SafeTensors directory.\n", .{args.model_path});
+                eprint("  Pass a directory holding shards, config.json, and tokenizer.json.\n", .{});
+            } else {
+                eprint("Error: failed to open safetensors dir '{s}': {}\n", .{ args.model_path, e });
+            }
             return 1;
         };
         fmt = st_dir.?.format();
     } else {
         gguf_file = GGUFFile.open(allocator, args.model_path) catch |e| {
-            eprint("Error: failed to open '{s}': {}\n", .{ args.model_path, e });
+            if (e == error.FileNotFound) {
+                eprint("Error: '{s}' does not exist. Check the path and try again.\n", .{args.model_path});
+            } else {
+                eprint("Error: failed to open '{s}': {}\n", .{ args.model_path, e });
+            }
+            if (e == error.InvalidMagic)
+                eprint("  Not a valid GGUF file. Expected GGUF magic bytes.\n", .{});
             return 1;
         };
         fmt = gguf_file.?.format();
