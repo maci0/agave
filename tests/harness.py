@@ -76,6 +76,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 try:
@@ -106,6 +107,18 @@ GOLDEN_DIR = AGAVE_ROOT / "tests" / "golden" / "references"
 DEFAULT_PROMPT = "What is 2+2? Answer briefly."
 DEFAULT_MAX_TOKENS = 64
 DEFAULT_TIMEOUT = 120  # seconds
+
+
+def utc_timestamp() -> str:
+    """Run wall-clock stamp for result files, as RFC 3339 UTC.
+
+    `time.strftime` is local time: two runs on differently configured hosts
+    recorded different instants for the same run, and a golden reference
+    saved at 23:30 local under TZ=Europe/Warsaw was stamped 22:30Z while the
+    same save in New York read 04:30Z the next day.
+    """
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
 
 # Architecture detection from filename patterns
 ARCH_PATTERNS: dict[str, list[str]] = {
@@ -878,7 +891,7 @@ def save_golden(result: RunResult, model: ModelInfo) -> None:
         "output_text": result.output_text,
         "tokens_generated": result.tokens_generated,
         "tokens_per_sec": result.tokens_per_sec,
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "timestamp": utc_timestamp(),
     }
     with open(gp, "w") as f:
         json.dump(data, f, indent=2)
@@ -1709,7 +1722,7 @@ def main() -> int:
                 print_summary([], [], model_info_results, [], golden_stats, elapsed)
             elif args.output == "json":
                 data = results_to_json([], [], model_info_results, {}, {
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "timestamp": utc_timestamp(),
                     "platform": platform.system(), "machine": platform.machine(),
                     "elapsed_s": round(elapsed, 1),
                 })
@@ -1871,7 +1884,7 @@ def main() -> int:
 
     # --- Output ---
     meta = {
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "timestamp": utc_timestamp(),
         "platform": platform.system(),
         "machine": platform.machine(),
         "python": platform.python_version(),

@@ -13,8 +13,8 @@ Modes:
 
 import subprocess
 import sys
-import time
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import tomllib
@@ -39,6 +39,16 @@ BENCH_MODELS = {
 
 
 # ── Helpers ───────────────────────────────────────────────────────
+
+def utc_stamp(fmt: str) -> str:
+    """Format the current UTC instant for logs, TSV rows, and staging paths.
+
+    Local time put every stamp one zone-dependent offset off, landed runs in
+    the spring-forward gap hour that never happened, and reused the same
+    staging directory name for the two autumn 01:30s an hour apart.
+    """
+    return datetime.now(UTC).strftime(fmt)
+
 
 def die(msg: str):
     """Print error to stderr and exit."""
@@ -77,7 +87,7 @@ def confirm_modify(file_path: str, kernel_name: str) -> bool:
 def stage_improvement(kernel_name: str, file_path: str, patched_content: str,
                       result_info: dict) -> Path:
     """Save an improved source file to the staging area for later review."""
-    ts = time.strftime("%Y%m%d_%H%M%S")
+    ts = utc_stamp("%Y%m%d_%H%M%S")
     desc = result_info.get("description", "improvement")
     safe_desc = "".join(c if c.isalnum() or c in "-_" else "_" for c in desc)
     entry_dir = STAGING_DIR / f"{kernel_name}_{ts}_{safe_desc}"
@@ -90,7 +100,7 @@ def stage_improvement(kernel_name: str, file_path: str, patched_content: str,
         "kernel": kernel_name,
         "source_file": str(file_path),
         "staged_file": str(dest),
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": utc_stamp("%Y-%m-%dT%H:%M:%SZ"),
         **result_info,
     }
     (entry_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -205,7 +215,7 @@ def log_result(kernel_name: str, backend: str, metric_value: float,
     if not LOG_FILE.exists():
         with open(LOG_FILE, "w") as f:
             f.write(header)
-    ts = time.strftime("%Y-%m-%d %H:%M")
+    ts = utc_stamp("%Y-%m-%dT%H:%M:%SZ")
     with open(LOG_FILE, "a") as f:
         f.write(f"{ts}\t{kernel_name}\t{backend}\t{metric_name}\t"
                 f"{metric_value:.2f}\t{status}\t{description}\n")
@@ -386,7 +396,7 @@ def append_tsv(results, tag=""):
     if not RESULTS_FILE.exists():
         with open(RESULTS_FILE, "w") as f:
             f.write(header)
-    ts = time.strftime("%Y-%m-%d %H:%M")
+    ts = utc_stamp("%Y-%m-%dT%H:%M:%SZ")
     with open(RESULTS_FILE, "a") as f:
         for r in results:
             knames = ",".join(r.get("kernels", ["all"]))
