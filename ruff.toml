@@ -6,10 +6,11 @@
 # the CI lint-python job. Run `ruff format` only on files you already touch;
 # the tree is not wholesale reformatted.
 
-# Ruff version gate. CI fetches ruff through uvx and a local run uses whatever
-# `ruff` is on PATH, so without this a new release can move the findings under
-# an unchanged tree. Pinned the way .zigversion and package.json's
-# packageManager pin are; a mismatched ruff fails before reading the tree.
+# Ruff version gate. Both CI and scripts/lint-python.sh run the pinned ruff
+# through uvx, except when a `ruff` on PATH already reports this version, so
+# without the pin a new release can move the findings under an unchanged tree.
+# Pinned the way .zigversion and package.json's packageManager pin are; a
+# mismatched ruff fails before reading the tree.
 required-version = "==0.16.4"
 
 line-length = 120
