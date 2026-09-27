@@ -142,7 +142,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 
 Single points of failure: the API key alone carries all client-side authn on 49453 and, because no principal is derived from it, also all of the shared-state isolation that does not exist; the loopback-bind default carries all safety for no-key users; neither extends to the distributed ports.
 
-Docs-vs-code check (2026-09-27): `docs/API.md` auth / CORS / Host-rebind / rate-limit / security-header / health / ready claims match `src/server/server.zig`. `SECURITY.md` version and support claims match `build.zig.zon:4` (`.version = "0.3.0"`), and its distributed-port references match `src/main.zig:146,148,150` and `src/parallel/peer_discovery.zig:21`. No user-facing doc claims a mitigation the code lacks. Notes for the next pass:
+Docs-vs-code check (2026-09-27): `docs/API.md` auth / CORS / Host-rebind / rate-limit / security-header / health / ready claims match `src/server/server.zig`. `SECURITY.md` version and support claims match `build.zig.zon:4` (`.version = "0.4.0"`), and its distributed-port references match `src/main.zig:146,148,150` and `src/parallel/peer_discovery.zig:21`. No user-facing doc claims a mitigation the code lacks. Notes for the next pass:
 
 - Auth is enforced at exactly one call site, `authorizedForPath` at `src/server/server.zig:2336`. Any second `validateAuth` call inside a handler is drift and a code smell, not defence in depth; grep before trusting a per-route claim.
 - The zeroization claim still holds: prompt-derived buffers, the per-connection request buffer, and the Hub `Authorization` buffers are all wiped before free (`src/server/server.zig:1213,1219,7309`, `src/pull.zig:739,1089`).
