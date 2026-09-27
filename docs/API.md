@@ -697,6 +697,11 @@ hour, so storage is bounded and an abandoned request cannot block its own
 retries. A key that collides with an unrelated operation is the caller's
 responsibility: generate one per logical request, not per attempt.
 
+The bundled chat UI mints a key per send, per regenerate, and per new chat
+(`newRequestId` in `src/web/app.ts`). A request that fails after the server
+persisted the turn records its response under the key and completes it, so the
+UI's Retry cannot append the same turn twice.
+
 Every other route is stateless or naturally idempotent: `select` converges on
 the same id, `delete` is guarded by an existence check, and `POST /v1/kv_cache`
 re-imports the same prefix over the same state. A retry of those repeats no

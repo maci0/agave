@@ -645,6 +645,21 @@ function updateCtxBadge(modelData) {
     badge.setAttribute('aria-label', ariaText);
     badge.classList.add('visible');
 }
+/** Idempotency key for one mutating request. The server collapses a repeated
+ *  `X-Request-Id` on `/v1/chat`, `/v1/chat/regenerate`, and
+ *  `action=new` (docs/API.md, Idempotency), so one key per logical operation
+ *  keeps a double-click, a proxy replay, or a retried fetch from appending a
+ *  second user turn or a second conversation. A fresh key is minted per user
+ *  action, never per attempt, so an intentional second action still runs. */
+function newRequestId() {
+    // randomUUID needs a secure context; the UI is also reachable over plain
+    // http on a LAN address, where the fallback keeps every key inside the
+    // server's A-Za-z0-9-_. sanitize set.
+    if (typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `${Date.now().toString(16)}.${Math.random().toString(16).slice(2, 10)}`;
+}
 /** Map HTTP status codes to short, actionable messages for the chat UI. */
 function httpErrorMessage(status) {
     if (status === 400) {
@@ -1169,7 +1184,7 @@ function addStats(el, s) {
     d.append(mkStat('total ', fmtInt(total), 'ms'));
     el.append(d);
 }
-async function streamResponse(body, errLabel, url) {
+async function streamResponse(body, errLabel, url, requestId) {
     // Start the markdown fetch alongside the request: by the time the last chunk
     // renders, marked and DOMPurify are normally already in place.
     loadMarkdown();
@@ -1195,7 +1210,8 @@ async function streamResponse(body, errLabel, url) {
         loadConvs();
     }
     try {
-        const resp = await fetch(url ?? '/v1/chat', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        const resp = await fetch(url ?? '/v1/chat', { method: 'POST',
+            headers: requestId ? { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Request-Id': requestId } : { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: body, signal: abortCtrl.signal });
         if (!resp.ok) {
             throw new Error(httpErrorMessage(resp.status));
@@ -1282,7 +1298,7 @@ function sendMessage(text) {
         body += `&image=${encodeURIComponent(pendingImage)}`;
     }
     // Fire-and-forget: the stream paints itself; errors surface in the message area.
-    void streamResponse(body, 'Failed to get response');
+    void streamResponse(body, 'Failed to get response', undefined, newRequestId());
     if (pendingImage) {
         removeImage();
     }
@@ -1317,7 +1333,7 @@ function regenerate() {
         return;
     }
     wraps[wraps.length - 1]?.remove();
-    void streamResponse(`stream=1${getSamplingParams()}${getSystemParam()}`, 'Failed to regenerate', '/v1/chat/regenerate');
+    void streamResponse(`stream=1${getSamplingParams()}${getSystemParam()}`, 'Failed to regenerate', '/v1/chat/regenerate', newRequestId());
 }
 function runCommand(cmd) {
     if (cmd === '/help') {
@@ -1655,7 +1671,7 @@ function newConv() {
     if (pendingImage) {
         removeImage();
     }
-    fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'action=new' })
+    fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Request-Id': newRequestId() }, body: 'action=new' })
         .then(function () {
         loadConvs();
         showEmpty();
