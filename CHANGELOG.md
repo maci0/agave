@@ -67,6 +67,18 @@ must still appear under **Changed** or **Breaking** below. See
   defaulting to `new` when the field is absent.
 
 ### Added
+- `--sim-clock-ms <MS>`: pins every clock read to a virtual start time given in
+  epoch milliseconds, so a whole run (CLI or `--serve`) replays from one value.
+  Measured durations read 0, sleeps advance virtual time instead of blocking
+  (distributed peer waits included, and the scheduler's per-request auto-seed
+  becomes the virtual-clock value alone), and `--seed` no longer has to carry
+  replay on its own. The pinned value is logged. A non-integer or negative
+  value exits 2.
+- Prometheus counters `agave_kv_promote_failures_total` and
+  `agave_conv_store_save_failures_total` (both in `docs/OBSERVABILITY.md`).
+  The first counts blocks that failed to promote to the VRAM tier, the second
+  conversation-store writes that failed; requests still return `200`, so the
+  counters are the only signal that history is being dropped.
 - `POST /v1/chat` accepts `top_k` alongside `temperature`, `top_p`, `max_tokens`,
   `stream`, `system`, and `image`.
 - `POST /v1/chat/completions` and `/v1/messages` return `409 Conflict` for a
@@ -110,6 +122,21 @@ must still appear under **Changed** or **Breaking** below. See
   interrupted run no longer re-bills every completed call.
 
 ### Changed
+- `zig build test -Dtest-filter=<str>` now fails the build when a filter matches
+  no `test "..."` name under `src/` or `tests/`, instead of compiling the test
+  artifacts, running zero of them, and exiting 0. A filter that names a test
+  the build does not compile on this host (a GPU-guarded test on a CPU-only
+  host) still passes, so the check catches the typo, not the target.
+- Server request-log timestamps render as `[HH:MM:SSZ]` instead of
+  `[HH:MM:SS]`. The value is unchanged (always UTC); the `Z` marks it, because
+  `journald`, `docker logs`, and a shell prompt all print local time and a bare
+  `HH:MM:SS` reads as local. A log pipeline matching `^\[HH:MM:SS\]` must
+  accept the trailing `Z`.
+- `agave_inter_token_latency_seconds` is now sampled on every streaming
+  endpoint (`/v1/chat/completions`, `/v1/completions`, `/v1/messages`,
+  `/v1/responses`) instead of one, so the histogram covers all of them.
+  Dashboards that compared a `/v1/chat/completions` p99 against another
+  endpoint's are now comparing like with like.
 - `scripts/check-pins.sh` also verifies that `tests/uv.lock` and
   `research/kernels/uv.lock` still agree with their `pyproject.toml`
   (`uv lock --check`, skipped when uv is not on PATH). The research lock had
@@ -205,6 +232,36 @@ must still appear under **Changed** or **Breaking** below. See
   stamps (RFC 3339 with offset), and the `scripts/fetch-changelogs.sh` header.
 
 ### Fixed
+- Distributed startup: an incoming peer connection is polled with a 300s bound
+  instead of a blocking `accept(2)`, so rank 0 no longer waits for the life of
+  the process when the other rank never starts, and it fails with
+  `AcceptTimeout`. The rank-0/rank-1 capability and RTT handshake is bounded at
+  5s and reports which step timed out (and, on a connect failure, the address
+  and port) instead of continuing silently. Bulk transfers are not bounded.
+- `--video`: a failing or abnormally terminated ffmpeg, a failed frame scan, and
+  an unreadable frame now name the cause and the file. Previously an unreadable
+  video and a video that produced no frames both reported "no frames
+  extracted", and a skipped frame was dropped without a count, so a video could
+  be encoded from a silent prefix.
+- GPU weight budget: `invalidateWeight` (CUDA, ROCm, Vulkan) now uncharges the
+  dropped buffer, and re-admitting a live key that no longer fits evicts other
+  entries, or is untracked when it cannot fit alone. `used_bytes` no longer
+  counts freed memory or stays above `budget_bytes`, so a long run under
+  tensor-parallel weight reuse stops evicting weights the budget had already
+  released.
+- Paged KV cache: `allocBlock` sets `ref_count = 1` and `freeBlock` sets it to
+  `0`. A released block used to be left marked live, so the tiered cache could
+  hand the same physical block to two requests and serve another request's KV
+  content.
+- Both chat UIs (`--serve` and the browser shell) map a generation failure to
+  actionable copy and surface it in the transcript: an out-of-memory or engine
+  fault says the engine failed and to reload the page, a network failure says
+  so, and anything else is reported as `Could not generate a reply: <reason>`
+  instead of a raw engine string.
+- CPU `backendInfo` caches the one-time cache-size detection under a spinlock.
+  `caches` is three words, so two threads racing the `detected` flag could
+  publish a mix of both calls' results, and the device name and memory figures
+  in `/health` and the model-info response could come from neither.
 - `--pflash-alpha` and `--diffusion-confidence` reject `nan` and out-of-range
   values instead of accepting them. `nan` compares false against every bound, so
   the old range check let it through and silently disabled block selection or
