@@ -3,10 +3,9 @@
 #
 # oxlint is the blocking linter for the TypeScript under src/web/ and web/, so
 # every path in ignorePatterns is code that merges without being linted. The
-# list is a ratchet: a path may leave it (the migration in docs/TODO.md #13),
-# nothing may join it, and a path that no longer silences any file is dead
-# weight that hides the fact. Both directions are checked here so the list
-# cannot drift upward between CI runs.
+# list is a ratchet: a path may leave it, nothing may join it, and a path that
+# no longer silences any file is dead weight that hides the fact. Both
+# directions are checked here so the list cannot drift upward between CI runs.
 #
 # Canonical: zig build lint-web (via scripts/lint-web.sh) and CI job `lint-web`.
 # Exit 0 when the list is a subset of the known-debt set below, 1 otherwise.
@@ -20,9 +19,8 @@ cd "$ROOT"
 #   tools/oxlint/anti-slop/**  the local rules plugin, linted by its own tests
 #   src/web/app.js, web/*.js  committed tsc output, compared by
 #                             scripts/check-web-artifacts.sh
-#   src/web/app.ts,           legacy web sources, migrated one at a time
-#   web/shell.ts              (docs/TODO.md #13); tsc --noEmit covers both
 # The dot directories and build output trees are tool and cache roots.
+# No .ts/.tsx source is skipped: every one of them is linted.
 # Removing an entry here is only correct once it is gone from ignorePatterns.
 allowed_ignore_patterns=(
     "node_modules/**"
@@ -36,8 +34,6 @@ allowed_ignore_patterns=(
     "src/web/app.js"
     "web/agave.js"
     "web/shell.js"
-    "src/web/app.ts"
-    "web/shell.ts"
 )
 
 if [[ ! -f .oxlintrc.json ]]; then
