@@ -7,7 +7,10 @@ set -euo pipefail
 
 OUT="${1:-docs/changelogs}"
 mkdir -p "$OUT"
-DATE=$(date +%Y-%m-%d)
+# UTC, not the host's local calendar date: the GitHub release timestamps
+# written into the same files are UTC, and a local date recorded next to them
+# reads as a day off depending on where the doc was generated.
+DATE=$(date -u +%Y-%m-%d)
 
 echo "Fetching changelogs → $OUT (as of $DATE)"
 
