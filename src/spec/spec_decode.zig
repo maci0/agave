@@ -323,10 +323,16 @@ pub fn dflash2HybridNgram(
 /// handles multi-candidate speculation. Pass use_tree=true to enable.
 ///
 /// Requires: target and draft_model have been initialized with the same vocab/embedding dim.
-pub fn draftEagle(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
+///
+/// `pre_norm` selects EAGLE-3 conditioning: the residual stream BEFORE the final
+/// rmsNorm instead of the post-output-norm hidden state. That preserves magnitude
+/// information normalization discards, a richer signal for the draft model. The
+/// target must save hidden_pre_norm in its forward() (currently Gemma4);
+/// otherwise this falls back to the post-norm getHiddenState().
+pub fn draftEagle(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32, pre_norm: bool) u32 {
     // Step 0: get target model's hidden state from the PREVIOUS target forward pass.
     // The caller is responsible for having called target.forward() before this.
-    var context_hidden = target_model.getHiddenState();
+    var context_hidden = if (pre_norm) target_model.getPreNormHiddenState() else target_model.getHiddenState();
 
     var tok = last_token;
     var n: u32 = 0;
@@ -345,72 +351,13 @@ pub fn draftEagle(state: *SpecState, target_model: Model, draft_model: Model, la
 
 /// EAGLE with saved logits (for rejection sampling verification).
 /// Same as draftEagle but saves log-prob distributions for stochastic verification.
-pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
-    var context_hidden = target_model.getHiddenState();
+pub fn draftEagleWithLogits(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32, pre_norm: bool) u32 {
+    var context_hidden = if (pre_norm) target_model.getPreNormHiddenState() else target_model.getHiddenState();
     var tok = last_token;
     var n: u32 = 0;
-    const vs = state.vocab_size;
     while (n < state.k and n < max_draft_tokens) {
         _ = draft_model.eagleForward(tok, context_hidden) catch break;
-        const logits = draft_model.getLogits();
-        const offset = @as(usize, n) * vs;
-        const dst = state.draft_log_probs[offset..][0..vs];
-        @memcpy(dst, logits);
-        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
-        logSoftmax(dst);
-        tok = math_ops.argmax(dst);
-        state.draft_tokens[n] = tok;
-        state.depth_slices[n] = dst;
-        n += 1;
-        context_hidden = draft_model.getHiddenState();
-    }
-    state.n_draft = n;
-    return n;
-}
-
-/// EAGLE-3 speculative decoding: conditions on pre-output-norm hidden state.
-///
-/// EAGLE-3 improvement over EAGLE-1: instead of the post-output-norm hidden state,
-/// uses the residual stream BEFORE the final rmsNorm. This preserves magnitude
-/// information that normalization discards, providing richer conditioning signal
-/// for draft model prediction accuracy.
-///
-/// The target model must save hidden_pre_norm in its forward(), currently Gemma4.
-/// Falls back to post-norm getHiddenState() for models that don't implement it.
-pub fn draftEagle3(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
-    // Use pre-output-norm hidden state for EAGLE-3 conditioning.
-    var context_hidden = target_model.getPreNormHiddenState();
-
-    var tok = last_token;
-    var n: u32 = 0;
-    while (n < state.k and n < max_draft_tokens) {
-        tok = draft_model.eagleForward(tok, context_hidden) catch break;
-        state.draft_tokens[n] = tok;
-        n += 1;
-        // Subsequent draft steps use draft model's own hidden state (same as EAGLE-1).
-        context_hidden = draft_model.getHiddenState();
-    }
-    state.n_draft = n;
-    return n;
-}
-
-/// EAGLE-3 with saved logits for stochastic rejection sampling.
-pub fn draftEagle3WithLogits(state: *SpecState, target_model: Model, draft_model: Model, last_token: u32) u32 {
-    var context_hidden = target_model.getPreNormHiddenState();
-    var tok = last_token;
-    var n: u32 = 0;
-    const vs = state.vocab_size;
-    while (n < state.k and n < max_draft_tokens) {
-        _ = draft_model.eagleForward(tok, context_hidden) catch break;
-        const logits = draft_model.getLogits();
-        const offset = @as(usize, n) * vs;
-        const dst = state.draft_log_probs[offset..][0..vs];
-        @memcpy(dst, logits);
-        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
-        logSoftmax(dst);
-        tok = math_ops.argmax(dst);
-        state.draft_tokens[n] = tok;
-        state.depth_slices[n] = dst;
+        tok = saveDraftStep(state, draft_model, n);
         n += 1;
         context_hidden = draft_model.getHiddenState();
     }
@@ -449,18 +396,9 @@ pub fn draftMlpSpeculatorWithLogits(state: *SpecState, target_model: Model, draf
     const target_hidden = target_model.getHiddenState();
     var tok = last_token;
     var n: u32 = 0;
-    const vs = state.vocab_size;
     while (n < state.k and n < max_draft_tokens) {
         _ = draft_model.eagleForward(tok, target_hidden) catch break;
-        const logits = draft_model.getLogits();
-        const offset = @as(usize, n) * vs;
-        const dst = state.draft_log_probs[offset..][0..vs];
-        @memcpy(dst, logits);
-        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
-        logSoftmax(dst);
-        tok = math_ops.argmax(dst);
-        state.draft_tokens[n] = tok;
-        state.depth_slices[n] = dst;
+        tok = saveDraftStep(state, draft_model, n);
         n += 1;
     }
     state.n_draft = n;
@@ -503,6 +441,22 @@ pub fn draft(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     }
     state.n_draft = n;
     return n;
+}
+
+/// Bookkeeping for one saved-logit draft step: copy the draft model's logits
+/// into `state.draft_log_probs[n]`, apply the FR-Spec mask, log-softmax, then
+/// take the argmax as the next draft token. Stores `state.draft_tokens[n]` and
+/// `state.depth_slices[n]`. Returns the sampled token.
+fn saveDraftStep(state: *SpecState, draft_model: Model, n: u32) u32 {
+    const vs = state.vocab_size;
+    const dst = state.draft_log_probs[@as(usize, n) * vs ..][0..vs];
+    @memcpy(dst, draft_model.getLogits());
+    if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
+    logSoftmax(dst);
+    const tok = math_ops.argmax(dst);
+    state.draft_tokens[n] = tok;
+    state.depth_slices[n] = dst;
+    return tok;
 }
 
 /// Generate K draft tokens, saving logit distributions at each step.
@@ -564,19 +518,9 @@ pub fn buildTokenMask(allocator: std.mem.Allocator, token_map_path: []const u8, 
 pub fn draftWithLogits(state: *SpecState, draft_model: *Model, last_token: u32) u32 {
     var tok = last_token;
     var n: u32 = 0;
-    const vs = state.vocab_size;
     while (n < state.k and n < max_draft_tokens) {
         _ = draft_model.forward(tok) catch break;
-        const logits = draft_model.getLogits();
-        const offset = @as(usize, n) * vs;
-        const dst = state.draft_log_probs[offset..][0..vs];
-        @memcpy(dst, logits);
-        // FR-Spec: restrict draft to high-frequency tokens only
-        if (state.token_mask) |tm| applyFrSpecMask(dst, tm);
-        logSoftmax(dst);
-        tok = math_ops.argmax(dst);
-        state.draft_tokens[n] = tok;
-        state.depth_slices[n] = dst;
+        tok = saveDraftStep(state, draft_model.*, n);
         n += 1;
     }
     state.n_draft = n;
