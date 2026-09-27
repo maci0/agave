@@ -8,7 +8,7 @@ type AboutDialogProps = {
   backendName: string;
 };
 
-function Row({ label, value, chip }: { label: string; value: string; chip?: boolean }) {
+const Row = ({ label, value, chip }: { label: string; value: string; chip?: boolean }) => {
   return (
     <div className="flex justify-between gap-4 border-b border-border py-1.5 text-sm last:border-none">
       <span className="text-faint">{label}</span>
@@ -17,11 +17,11 @@ function Row({ label, value, chip }: { label: string; value: string; chip?: bool
       </span>
     </div>
   );
-}
+};
 
 /** The About dialog. Radix owns the focus trap, Escape and the focus restore the
  *  hand-rolled modal used to reimplement. */
-export function AboutDialog({ open, onOpenChange, modelName, backendName }: AboutDialogProps) {
+export const AboutDialog = ({ open, onOpenChange, modelName, backendName }: AboutDialogProps) => {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="text-muted-foreground">
@@ -61,4 +61,4 @@ export function AboutDialog({ open, onOpenChange, modelName, backendName }: Abou
       </DialogContent>
     </Dialog>
   );
-}
+};

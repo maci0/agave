@@ -32,37 +32,35 @@ type Message = {
 
 const ROLE_LABELS: Record<Role, string> = { user: 'You', assistant: 'Agave', system: 'System', error: 'Error' };
 
-function fmtMb(bytes: number): string {
-  return (bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
-}
+const fmtMb = (bytes: number): string =>
+  (bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });;
 
-function truncateAnnounce(text: string, maxChars: number): string {
+const truncateAnnounce = (text: string, maxChars: number): string => {
   const chars = Array.from(text);
   if (chars.length <= maxChars) {return text;}
   return `${chars.slice(0, maxChars).join('')}...`;
-}
+};
 
-function isGgufName(name: string): boolean {
-  return name.toLowerCase().endsWith('.gguf');
-}
+const isGgufName = (name: string): boolean =>
+  name.toLowerCase().endsWith('.gguf');;
 
-function isGgufBuffer(data: ArrayBuffer): boolean {
+const isGgufBuffer = (data: ArrayBuffer): boolean => {
   if (data.byteLength < GGUF_MAGIC.length) {return false;}
   const head = new Uint8Array(data, 0, GGUF_MAGIC.length);
   return head[0] === GGUF_MAGIC[0] && head[1] === GGUF_MAGIC[1] && head[2] === GGUF_MAGIC[2] && head[3] === GGUF_MAGIC[3];
-}
+};
 
-function isHttpUrl(value: string): boolean {
+const isHttpUrl = (value: string): boolean => {
   try {
     const parsed = new URL(value);
     return parsed.protocol === 'http:' || parsed.protocol === 'https:';
   } catch {
     return false;
   }
-}
+};
 
 /** Map engine and network failures to short, actionable copy. */
-function friendlyLoadError(error: unknown): string {
+const friendlyLoadError = (error: unknown): string => {
   if (error instanceof AgaveError) {
     switch (error.code) {
       case 'wasm_fetch_failed':
@@ -116,10 +114,10 @@ function friendlyLoadError(error: unknown): string {
   if (lower.includes('failed to allocate')) {return 'The model is too large to fit in this browser.';}
   if (lower === 'engine not initialized') {return 'The engine is not ready. Reload the page and try again.';}
   return message.startsWith('Could not') ? message : `Could not load model: ${message}`;
-}
+};
 
 /** Map generation failures to short, actionable copy, mirroring friendlyLoadError. */
-function friendlyGenerateError(error: unknown): string {
+const friendlyGenerateError = (error: unknown): string => {
   if (error instanceof AgaveError) {
     switch (error.code) {
       case 'not_initialized':
@@ -147,10 +145,10 @@ function friendlyGenerateError(error: unknown): string {
     return 'The connection dropped while generating. Try again.';
   }
   return message.startsWith('Could not') ? message : `Could not generate a reply: ${message}`;
-}
+};
 
-function Shell() {
-  const [messages, setMessages] = useState<Message[]>([]);
+const Shell = () => {
+  const [messages, setMessages] = useState<Array<Message>>([]);
   const [status, setStatus] = useState(IDLE_HINT);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -162,15 +160,15 @@ function Shell() {
   const [announcement, setAnnouncement] = useState('');
 
   const nextId = useRef(1);
-  const announceTimer = useRef<number | null>(null);
+  const announceTimer = useRef<Timer | null>(null);
   const promptRef = useRef<HTMLInputElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const hadModel = useRef(false);
 
   const announce = useCallback(function (text: string) {
-    if (announceTimer.current !== null) { window.clearTimeout(announceTimer.current); }
+    if (announceTimer.current !== null) { clearTimeout(announceTimer.current); }
     setAnnouncement('');
-    announceTimer.current = window.setTimeout(function () { setAnnouncement(text); }, ANNOUNCE_DELAY_MS);
+    announceTimer.current = setTimeout(function () { setAnnouncement(text); }, ANNOUNCE_DELAY_MS);
   }, []);
 
   const addMessage = useCallback(function (role: Role, text: string) {
@@ -467,7 +465,7 @@ function Shell() {
       <div id="sr-announce" className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</div>
     </div>
   );
-}
+};
 
 const root = document.getElementById('root');
 if (!root) { throw new Error('missing #root'); }

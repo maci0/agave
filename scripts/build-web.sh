@@ -42,9 +42,6 @@ trap 'rm -rf "$STAGE"' EXIT
 
 mkdir -p "$STAGE/server" "$STAGE/wasm"
 
-# The SDK stays a plain tsc output: it is a documented, framework-free module
-# for embedders, and nothing about the React UI changes its contract.
-"$TSC" -p web/tsconfig.json --outDir "$STAGE/wasm"
 
 # React and Radix are bundled to one IIFE per surface. `--format=iife` keeps the
 # result a classic script, which is what the server inlines into <script> and
@@ -57,6 +54,11 @@ bun build src/web/app.tsx --outfile "$STAGE/server/app.js" \
     --format=iife --minify --target browser
 bun build web/shell.tsx --outfile "$STAGE/wasm/shell.js" \
     --format=iife --minify --target browser
+# The SDK stays unminified and framework-free: it is a documented module for
+# embedders that load agave.js next to their own page, so it has to stay
+# readable, and nothing about the React UI changes its contract.
+bun build web/agave.ts --outfile "$STAGE/wasm/agave.js" \
+    --format=iife --target browser
 
 # server.zig concatenates head.html + style.css + body.html + app.js into one
 # page, so app.js is inlined into a <script> element. The HTML parser ends a

@@ -358,10 +358,11 @@ jobs:
         run: zig build test --fuzz=1000 --summary all
 
   # oxlint + tsc are configured in-tree but never ran on GitHub: the chat UI
-  # and WASM shell could regress without a red check. Blocking. IgnorePatterns
-  # in .oxlintrc.json still exclude src/web/app.ts and web/shell.ts until those
-  # files are migrated; tsc --noEmit covers both regardless, and
-  # scripts/check-web-lint-scope.sh keeps that list from growing.
+  # and WASM shell could regress without a red check. Blocking. Every .tsx
+  # source is linted; .oxlintrc.json ignorePatterns holds build outputs only,
+  # and scripts/check-web-lint-scope.sh keeps that list from growing. The job
+  # also runs the chat UI smoke test, so a bundle that no longer mounts is red
+  # here rather than in a browser.
   lint-web:
     name: Lint and typecheck TypeScript
     runs-on: ubuntu-24.04
@@ -394,12 +395,13 @@ jobs:
       # the same lint-scope ratchet. Raw `bun run lint` / `bun run typecheck`
       # here would let a check added to the script pass locally and never run
       # remotely.
-      - name: oxlint, tsc and lint-scope ratchet
+      - name: oxlint, tsc, UI smoke test and lint-scope ratchet
         run: bash scripts/lint-web.sh
 
-      # src/web/app.js and web/*.js are committed tsc outputs (embedded by the
-      # server, shipped as the browser shell). tsc --noEmit passes on stale
-      # committed .js, so compare a fresh build byte for byte.
+      # src/web/{app.js,style.css} and web/{shell.js,style.css,agave.js} are
+      # committed bun + Tailwind outputs (embedded by the server, shipped as the
+      # browser shell). tsc --noEmit passes on stale committed output, so
+      # compare a fresh build byte for byte.
       - name: Committed web artifacts are fresh
         run: bash scripts/check-web-artifacts.sh
 

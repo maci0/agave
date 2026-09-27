@@ -627,11 +627,12 @@ pub fn build(b: *std.Build) void {
         const conv_backup_step = b.step("conv-store-backup-test", "Conversation store backup + restore self-test (docs/DURABILITY.md)");
         conv_backup_step.dependOn(&conv_backup_cmd.step);
 
-        // src/web/app.js and web/*.js are committed tsc outputs @embedFile'd or
-        // shipped as-is. CI's lint-web job regenerates and byte-compares them.
+        // src/web/app.js, the two style.css files and web/*.js are committed
+        // bun + Tailwind outputs, @embedFile'd or shipped as-is. CI's lint-web
+        // job regenerates and byte-compares them.
         const web_artifacts_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-web-artifacts.sh" });
         web_artifacts_cmd.has_side_effects = true;
-        const web_artifacts_step = b.step("check-web", "Committed classic scripts match a fresh tsc build (CI lint-web job)");
+        const web_artifacts_step = b.step("check-web", "Committed browser bundles and stylesheets match a fresh build (CI lint-web job)");
         web_artifacts_step.dependOn(&web_artifacts_cmd.step);
         lint_web_step.dependOn(web_artifacts_step);
 

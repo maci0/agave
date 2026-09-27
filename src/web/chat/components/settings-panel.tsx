@@ -17,7 +17,7 @@ type SettingsPanelProps = {
   onClearSystem: () => void;
 };
 
-function SettingSlider({
+const SettingSlider = ({
   label,
   value,
   min,
@@ -35,7 +35,7 @@ function SettingSlider({
   digits: number;
   hint: string;
   onChange: (next: number) => void;
-}) {
+}) => {
   const id = useId();
   const shown = fmtNum(value, digits);
   return (
@@ -55,9 +55,9 @@ function SettingSlider({
       <span className="mt-0.5 block font-mono text-2xs text-faint">{hint}</span>
     </div>
   );
-}
+};
 
-export function SettingsPanel({ sampling, onChange, onClearSystem }: SettingsPanelProps) {
+export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPanelProps) => {
   const maxTokensId = useId();
   const systemId = useId();
   const maxTokensValid = isMaxTokensValid(sampling.maxTokens);
@@ -151,4 +151,4 @@ export function SettingsPanel({ sampling, onChange, onClearSystem }: SettingsPan
       </div>
     </div>
   );
-}
+};

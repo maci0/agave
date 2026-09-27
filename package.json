@@ -8,7 +8,9 @@
   },
   "scripts": {
     "lint": "oxlint --disable-nested-config --type-aware --deny-warnings",
-    "typecheck": "tsc --noEmit -p src/web/tsconfig.json"
+    "typecheck": "tsc --noEmit -p src/web/tsconfig.json",
+    "test:web": "bun test src/web",
+    "build:web": "bash scripts/build-web.sh"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.23",
