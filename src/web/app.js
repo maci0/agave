@@ -56,6 +56,8 @@ const inp = qs('#msg');
 const sendBtn = qs('#send-btn');
 const stopBtn = qs('#stop-btn');
 let modelName = '';
+/** A model name came back from the server at least once this page load. */
+let modelResolved = false;
 let abortCtrl = null;
 let isStreaming = false;
 /** The current turn ended because the user pressed Stop, not because it finished. */
@@ -101,6 +103,7 @@ function setModelBadge(text, ariaLabel) {
 }
 /** Apply model metadata from /v1/models to the header, context badge, and image attach. */
 function applyModelInfo(modelData) {
+    modelResolved = true;
     modelName = modelData.id;
     backendName = modelData.backend ?? '';
     setModelBadge(modelName);
@@ -167,6 +170,13 @@ function loadModelInfo() {
 }
 loadModelInfo();
 function setOfflineBadge() {
+    // The context-badge refresh runs after every turn, so a single transient
+    // failure reached here while a loaded model was still serving and replaced
+    // its name with "offline - click to retry". Once a name is known, a failed
+    // refresh only means the numbers are stale, so leave the badge alone.
+    if (modelResolved) {
+        return;
+    }
     const imgBtn = document.getElementById('img-btn');
     if (imgBtn && !hasVision) {
         imgBtn.hidden = true;

@@ -339,6 +339,7 @@ async function send(): Promise<void> {
   isSending = true;
 
   const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
+  let failed = false;
   addMessage('user', text);
   promptInput.value = '';
   promptInput.disabled = true;
@@ -371,6 +372,7 @@ async function send(): Promise<void> {
     pending.remove();
     // addMessage announces the text for the error role, so no second announce here.
     addMessage('error', friendlyGenerateError(e));
+    failed = true;
   }
 
   promptInput.disabled = false;
@@ -379,9 +381,10 @@ async function send(): Promise<void> {
   sendBtn.textContent = 'Send';
   setModelControlsEnabled(true);
   chat.setAttribute('aria-busy', 'false');
-  statusEl.textContent = 'Ready';
+  // A failed turn must not report "Ready" over the error it just rendered.
+  statusEl.textContent = failed ? 'Generation failed' : 'Ready';
   promptInput.focus();
-  announceToSR('Response complete');
+  if (!failed) {announceToSR('Response complete');}
   isSending = false;
 }
 
