@@ -27,3 +27,10 @@ The living attack-surface document is [docs/THREAT_MODEL.md](docs/THREAT_MODEL.m
 Operator-facing HTTP auth, CORS, Host-rebind, rate-limit, and header behavior
 is specified in [docs/API.md](docs/API.md) and implemented in
 `src/server/server.zig`.
+
+The API key covers the HTTP listener only (default TCP 49453). The
+tensor-parallel, pipeline-parallel, and disaggregated data ports (TCP
+49454/49455/49456) and UDP peer discovery (49460/49461) are separate
+listeners with no authentication, so a deployment that exposes them must
+rely on network-level isolation. See T1 in
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
