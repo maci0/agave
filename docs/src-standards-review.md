@@ -27,11 +27,11 @@ Review the following. Each item names a findable shape, not a vibe.
 
 If available, use: `rg` for text, `ast-grep` (`sg`) for structural search when the shape is a call or a struct field. Do not install tools.
 
-Before reporting, run `zig build test` once. If a finding is a real violation, quote the rule from `AGENTS.md` and the violating line with `file:line`. Do not report from memory or from a pattern you did not grep for.
+Before reporting, run `zig build test` once when `zig` is on PATH. A build that already fails before you edit anything is not a finding; note it and continue. After each fix, re-run the narrowest check that covers the edit (`zig build test -Dtest-filter=<name>` or the file's own tests) and revert the fix if it was the cause. If a finding is a real violation, quote the rule from `AGENTS.md` and the violating line with `file:line`. Do not report from memory or from a pattern you did not grep for.
 
 Fix order when the budget is tight: (1) item 1 dispatcher violations, (2) items 2 and 3 hot-path and backend-safety violations, (3) item 7 stale kernel artifacts, (4) items 4 and 6, (5) item 5 naming, (6) item 8.
 
-Fix `src/`; do not edit `AGENTS.md` (a rule the source breaks may itself be wrong, but rewriting the rule file is `docs/agents-review.md`'s call; report it instead). Do not rewrite `AGENTS.md`. A fix is the smallest edit that removes the violation; do not restructure a file to satisfy a style item. Cap: 12 findings; drop `[WARNING]` before `[ERROR]` if over cap. Stop after one pass.
+Fix `src/`; do not edit `AGENTS.md` (a rule the source breaks may itself be wrong, but rewriting the rule file is `docs/agents-review.md`'s call; report it instead). Do not rewrite `AGENTS.md`. A fix is the smallest edit that removes the violation; do not restructure a file to satisfy a style item. Writes are limited to `src/` (item 7 artifacts included) and, for item 8, the build files that hold the offending entry. Cap: 12 findings; drop `[WARNING]` before `[ERROR]` if over cap. Stop after one pass.
 
 ### Output Format
 
