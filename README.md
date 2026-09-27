@@ -358,7 +358,7 @@ All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GP
 - **Zig 0.16.0** (pin in `.zigversion`; must match `build.zig.zon` `.minimum_zig_version`). Download: https://ziglang.org/download/
 - macOS (Metal backend) / Linux (Vulkan, CUDA, ROCm) / any platform (CPU, WebGPU backends)
 - GPU backends load drivers at runtime via dlopen, no SDK needed at build time
-- Contributors: `zig build check` is the local Zig CI gate (format + docs hygiene + unit tests; needs Python 3.11+). TypeScript under `src/web/` and `web/` is `zig build lint-web` (`bun 1.4.0`, `bun install --frozen-lockfile`); `scripts/*.sh` is `zig build lint-shell` (shellcheck). See [Contributing](docs/CONTRIBUTING.md).
+- Contributors: `zig build ci` is the full local CI gate (`check`: format + docs hygiene + unit tests, needs Python 3.11+; plus `lint-web`: oxlint + tsc, needs bun 1.4.0 and `bun install --frozen-lockfile`). Run the halves separately if only one toolchain is installed. `scripts/*.sh` is `zig build lint-shell` (shellcheck). See [Contributing](docs/CONTRIBUTING.md).
 
 ## CLI Options
 

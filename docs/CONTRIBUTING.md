@@ -15,7 +15,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build check` (format check + docs hygiene + unit tests), `zig build lint-web` (oxlint + tsc), and `zig build lint-shell` (shellcheck). `check` covers the Zig jobs (fmt-check, unit tests, and docs-check). `lint-web` is the blocking TypeScript job, `lint-shell` the blocking shell job. Extra jobs fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + unit tests) plus `lint-web` (oxlint + tsc). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, and `zig build lint-shell` (shellcheck) is the blocking shell job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -27,6 +27,8 @@ Before a PR, run `zig build check` (format check + docs hygiene + unit tests), `
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
+
+`ci-pass` also requires the `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, and `kernel-artifacts` jobs. `zig build ci` does not cover them. Fuzz smoke runs anywhere (`zig build test --fuzz=1000 --summary all`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
 
 ## Where New Code Goes
 
@@ -332,7 +334,11 @@ Notes:
 ## How to Run Tests
 
 ```bash
-# Local CI gate (format + docs hygiene + unit tests). Run this before pushing.
+# Everything CI runs on a workstation, in one command. Needs Python 3.11+ and
+# bun 1.4.0 with `bun install --frozen-lockfile`.
+zig build ci
+
+# Local CI gate (format + docs hygiene + unit tests). Zig-only scope; run this before pushing.
 zig build check
 
 # Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
@@ -356,6 +362,8 @@ zig build
 
 # Run only tests whose name contains a substring (repeatable flag to AND filters)
 zig build test -Dtest-filter=wht32
+# A filter that matches nothing prints "All 0 tests passed." and still exits 0;
+# read the count in `--summary all` output before trusting a green filtered run.
 
 # Run with a specific backend (tests that need GPU use target guards)
 zig build test -Denable-webgpu=false    # skip WebGPU tests
@@ -366,13 +374,17 @@ zig build test --fuzz=1000 --summary all
 # Golden tests (need ./zig-out/bin/agave and weights under ./models; skipped if missing)
 zig build
 zig test tests/models/test_gemma3.zig --test-filter CPU
-# Workflow: zig test tests/models/test_*.zig --test-filter CPU|Metal|CUDA|Vulkan|ROCm
+# One backend over every model: zig test takes a single root file, so loop.
+for f in tests/models/test_*.zig; do zig test "$f" --test-filter CPU; done
 ```
+
+`zig test` accepts one root source file: `zig test tests/models/test_*.zig` fails with
+`found another zig file ... after root source file`, so sweep a backend across models with a loop.
 
 **Test categories:**
 - **Unit tests**: `test` blocks at the bottom of each source file (run via `zig build test`)
 - **Leak detection**: All tests use `std.testing.allocator`, any unfreed allocation fails the test
-- **Golden tests**: `zig test tests/models/test_*.zig` (skipped without weights under `./models`)
+- **Golden tests**: `zig test tests/models/test_*.zig` is a loop, not one command (see above); skipped without weights under `./models`
 - **Model × Backend matrix**: See [TEST_MATRIX.md](TEST_MATRIX.md)
 
 ### End-to-End Test Harness
