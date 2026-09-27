@@ -35,7 +35,7 @@ benchmark_model() {
     echo "--- $name ---"
     
     # Check model exists
-    if [ ! -f "$model" ]; then
+    if [[ ! -f "$model" ]]; then
         echo "  SKIP: model not found: $model"
         echo ""
         return

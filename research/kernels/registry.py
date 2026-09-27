@@ -10,6 +10,7 @@ to the research tooling. Each entry knows:
 
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
 
 AGAVE_ROOT = Path(__file__).parent.parent.parent
 
@@ -473,17 +474,16 @@ def groups() -> dict[str, list[Kernel]]:
 
 def changed_kernels() -> list[Kernel]:
     """Detect which kernels have changed source files since HEAD (git diff)."""
-    import subprocess
-
     try:
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
             cwd=str(AGAVE_ROOT),
             capture_output=True,
             text=True,
+            check=False,
         )
         changed_files = set(result.stdout.strip().split("\n"))
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return []
 
     # Also check staged changes
@@ -493,10 +493,13 @@ def changed_kernels() -> list[Kernel]:
             cwd=str(AGAVE_ROOT),
             capture_output=True,
             text=True,
+            check=False,
         )
         changed_files.update(result.stdout.strip().split("\n"))
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Losing the staged set would report a staged kernel as unchanged, so
+        # report the unstaged set and say so instead of passing silently.
+        print(f"warning: staged diff unavailable ({exc}); ignoring staged changes")
 
     changed_files.discard("")
 

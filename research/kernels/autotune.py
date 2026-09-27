@@ -144,7 +144,7 @@ def _run_json_cmd(cmd: list[str]) -> dict:
     """Run a command that outputs JSON, returning parsed dict or error status."""
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300, cwd=str(AGAVE_ROOT)
+            cmd, capture_output=True, text=True, timeout=300, cwd=str(AGAVE_ROOT), check=False
         )
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT"}
@@ -188,7 +188,7 @@ def resolve_quants(kernels: list[Kernel] | None) -> set[str]:
 def rebuild() -> bool:
     """Unconditionally rebuild Agave. Returns False on failure."""
     result = subprocess.run(
-        ["zig", "build"], cwd=AGAVE_ROOT, capture_output=True, text=True, timeout=120
+        ["zig", "build"], cwd=AGAVE_ROOT, capture_output=True, text=True, timeout=120, check=False
     )
     if result.returncode != 0:
         print(f"BUILD FAILED:\n{result.stderr[:500]}", file=sys.stderr)
@@ -205,7 +205,7 @@ def revert_sources(kernel: Kernel):
         else:
             paths.append(p)
     if paths:
-        subprocess.run(["git", "checkout", "--", *paths], cwd=AGAVE_ROOT)
+        subprocess.run(["git", "checkout", "--", *paths], cwd=AGAVE_ROOT, check=False)
 
 
 def log_result(kernel_name: str, backend: str, metric_value: float,
@@ -502,8 +502,8 @@ def cmd_grid(args):
         return
 
     values = []
-    for v in parsed.values.split(","):
-        v = v.strip()
+    for raw_v in parsed.values.split(","):
+        v = raw_v.strip()
         try:
             values.append(int(v))
         except ValueError:
@@ -986,7 +986,7 @@ def cmd_staged(args):
             current = AGAVE_ROOT / source_file
             result = subprocess.run(
                 ["diff", "-u", str(current), str(staged_files[0])],
-                capture_output=True, text=True
+                capture_output=True, text=True, check=False
             )
             if result.stdout:
                 print(result.stdout)

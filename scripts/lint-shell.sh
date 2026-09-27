@@ -22,5 +22,10 @@ if [[ ! -e "${scripts[0]}" ]]; then
     exit 1
 fi
 
-shellcheck -x "${scripts[@]}"
+# Optional checks, enabled individually. check-extra-masked-returns and
+# check-set-e-suppressed stay off: the backup and benchmark scripts run
+# best-effort commands whose failure is the expected path (a missing model, a
+# device already backed up), so those two fire on intended code.
+# require-variable-braces and avoid-negated-conditions stay off as pure style.
+shellcheck -x -o require-double-brackets,check-unassigned-uppercase,deprecate-which,useless-use-of-cat "${scripts[@]}"
 echo "lint-shell: ${#scripts[@]} script(s) clean"

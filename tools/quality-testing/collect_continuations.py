@@ -29,11 +29,16 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 # Seconds; hosted APIs can be slow for long greedy continuations.
 HTTP_TIMEOUT_SEC = 120
+
+# The API key travels in an Authorization header, so the endpoint must be
+# https. A file: or plain-http endpoint would leak it.
+ENDPOINT_SCHEME = "https"
 
 
 def collect_one(endpoint, model, prompt, api_key, max_tokens):
@@ -50,14 +55,18 @@ def collect_one(endpoint, model, prompt, api_key, max_tokens):
         "logprobs": True,
         "top_logprobs": 5,
     }
-    req = urllib.request.Request(
+    if urllib.parse.urlparse(endpoint).scheme != ENDPOINT_SCHEME:
+        raise ValueError(f"endpoint must be {ENDPOINT_SCHEME}://, got {endpoint!r}")
+    # S310 cannot see the scheme check above, so it fires on the Request
+    # construction and the urlopen alike.
+    req = urllib.request.Request(  # noqa: S310 - endpoint scheme checked above
         endpoint,
         data=json.dumps(body).encode(),
         headers=headers,
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:  # noqa: S310 - checked above
             data = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
@@ -90,8 +99,8 @@ def load_results(path):
     results = {}
     if not path.exists():
         return results
-    for line in path.read_text().splitlines():
-        line = line.strip()
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         try:

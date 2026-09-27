@@ -283,7 +283,8 @@ def require_tool(name: str) -> None:
 
 def globalize_kd(obj_path: str, out_path: str, renames=()):
     """Globalize all .kd symbols and apply module-prefix symbol renames."""
-    assert isinstance(renames, list)
+    if not isinstance(renames, list):
+        raise SystemExit('[fix_kd_isa] error: renames must be a list of (old, new) pairs')
     require_tool('llvm-readelf')
     require_tool('llvm-objcopy')
     result = subprocess.run(

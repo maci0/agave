@@ -43,8 +43,8 @@ LAYER_RE = re.compile(r"(?:blk\.|layers\.)(\d+)")
 def parse_layer_ranges(spec: str) -> list[int]:
     """Parse '37-42' or '0-2,40-42' into a set of layer indices."""
     layers = set()
-    for part in spec.split(","):
-        part = part.strip()
+    for raw_part in spec.split(","):
+        part = raw_part.strip()
         if "-" in part:
             start, end = part.split("-", 1)
             layers.update(range(int(start), int(end) + 1))
