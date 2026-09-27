@@ -185,9 +185,9 @@ device_of() {
 
 # Structural check: the server only needs a non-empty object carrying the
 # expected envelope version. Full parse validation is the server's job on
-# restart (src/server/conv_store.zig load), and a file that fails it is
-# quarantined to {path}.corrupt rather than dropped, so nothing is destroyed
-# by a false negative here.
+# restart (src/server/conv_store.zig load), and a file that fails it is left
+# in place rather than dropped, so nothing is destroyed by a false negative
+# here.
 # Count `{` and `}` outside JSON string literals, honoring backslash escapes,
 # so a literal brace in message content cannot look like truncation.
 brace_balance() {

@@ -159,9 +159,10 @@ pub fn encode(
 }
 
 /// Load a store from `path`. FileNotFound if missing. Quarantines a corrupt
-/// file to `{path}.corrupt` and returns error.CorruptStore. OutOfMemory and
-/// I/O errors leave the live file in place (error.QuarantineFailed if a
-/// corrupt file could not be preserved).
+/// file to `{path}.corrupt` and returns error.CorruptStore. A store whose
+/// version this build does not read returns error.UnsupportedVersion with the
+/// live file left in place. OutOfMemory and I/O errors leave the live file in
+/// place (error.QuarantineFailed if a corrupt file could not be preserved).
 pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
     restrictToOwner(path);
     const data = readFile(allocator, path) catch |err| {
@@ -174,6 +175,12 @@ pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
         // OOM is not corruption: quarantining would rename a valid store away
         // and the next save would replace it with an empty one.
         if (err == error.OutOfMemory) return err;
+        // A store written by a newer agave is intact, just unreadable here.
+        // Quarantining it would move the only copy aside and let the next save
+        // write an empty store over the live path, so a downgrade destroys the
+        // history the newer build wrote. Leave it and let the caller keep
+        // persisting nowhere until a build that understands it runs.
+        if (err == error.UnsupportedVersion) return err;
         quarantine(path, data) catch |qerr| {
             std.log.err("conversation store: failed to preserve {s} ({}, original {})", .{
                 path, qerr, err,
@@ -708,6 +715,24 @@ test "load quarantines a store truncated mid-object" {
 test "load missing file is FileNotFound" {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     try std.testing.expectError(error.FileNotFound, load(std.testing.allocator, testPath(&path_buf, "missing.json")));
+}
+
+test "load leaves a newer store in place instead of quarantining it" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "future.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(path);
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+
+    const future = "{\"version\": 99, \"active_id\": 0, \"next_id\": 2, \"conversations\": []}";
+    try durable.replace(path, future);
+    try std.testing.expectError(error.UnsupportedVersion, load(allocator, path));
+
+    // The file a newer agave wrote is intact, not renamed aside: the next save
+    // must not be able to replace it with an empty store.
+    const kept = try std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0);
+    defer _ = std.posix.system.close(kept);
 }
 
 test "load OOM does not quarantine a valid store" {
