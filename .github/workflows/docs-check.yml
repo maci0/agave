@@ -8,9 +8,11 @@ on:
       - 'README.md'
       - 'AGENTS.md'
       - 'CHANGELOG.md'
+      - 'SECURITY.md'
       - 'build.zig.zon'
       - '.zigversion'
       - 'scripts/check-docs.py'
+      - 'scripts/test_check_docs.py'
       - 'src/main.zig'
       - 'src/backend/metal.zig'
       - 'src/backend/cuda.zig'
@@ -29,9 +31,11 @@ on:
       - 'README.md'
       - 'AGENTS.md'
       - 'CHANGELOG.md'
+      - 'SECURITY.md'
       - 'build.zig.zon'
       - '.zigversion'
       - 'scripts/check-docs.py'
+      - 'scripts/test_check_docs.py'
       - 'src/main.zig'
       - 'src/backend/metal.zig'
       - 'src/backend/cuda.zig'
@@ -68,3 +72,6 @@ jobs:
 
       - name: Run docs checks
         run: python3 scripts/check-docs.py
+
+      - name: Test the release SemVer guard
+        run: python3 scripts/test_check_docs.py

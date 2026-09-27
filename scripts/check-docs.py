@@ -6,8 +6,9 @@
 
 Validates relative links, mermaid vs diagram asset counts, backend kernel
 count claims against source constants, product SemVer / Zig version
-alignment across build.zig.zon, CHANGELOG, API docs, and .zigversion,
-and Docker image packaging (Debian pin, OCI license, LICENSE shipment).
+alignment across build.zig.zon, CHANGELOG, API docs, README, SECURITY, and
+.zigversion, and Docker image packaging (Debian pin, OCI license, LICENSE
+shipment).
 """
 
 from __future__ import annotations
@@ -148,6 +149,20 @@ def check_version_consistency() -> list[str]:
             f"docs/CONTRIBUTING.md: must state Product version: **{product}** "
             "(match build.zig.zon .version)"
         )
+
+    # Reader-facing pages that restate the product version. Nothing in the build
+    # or the binary reads them, so they drift silently at the next release bump.
+    secondary = [
+        ("README.md", f"product version `{product}`"),
+        ("SECURITY.md", f"Product version is **{product}**"),
+        ("docs/DOCUMENTATION.md", f"product version {product}"),
+    ]
+    for rel, needle in secondary:
+        path = ROOT / rel
+        if not path.exists():
+            errors.append(f"{rel}: missing (states the product version)")
+        elif needle not in path.read_text(encoding="utf-8", errors="replace"):
+            errors.append(f"{rel}: must state {needle!r} (match build.zig.zon .version)")
 
     # Leftover "until the next tagged product release bumps `0.1.0`" after a 0.2.0 cut.
     for bump in re.findall(r"bumps `([0-9]+\.[0-9]+\.[0-9]+)`", changelog):

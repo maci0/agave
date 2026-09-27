@@ -533,6 +533,12 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
 Bump `.version` in `build.zig.zon` in the release commit. Do not publish a tag
 whose name disagrees with that string.
 
+`CHANGELOG.md`, `docs/API.md`, `docs/CONTRIBUTING.md`, `README.md`,
+`SECURITY.md`, and `docs/DOCUMENTATION.md` each restate the product version for
+readers. `python3 scripts/check-docs.py` fails when any of them disagrees with
+`build.zig.zon`; `python3 scripts/test_check_docs.py` covers that guard. A
+release commit updates all of them in the same change.
+
 ### Changelog requirements
 
 For every user-facing change, add an entry under `## [Unreleased]` before merge:
@@ -556,7 +562,8 @@ maintainers (avoid commit hashes as the only description).
 5. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
    builders).
 6. Run `python3 scripts/check-docs.py` (SemVer string must match across
-   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, and `docs/CONTRIBUTING.md`;
+   `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, `docs/CONTRIBUTING.md`,
+   `README.md`, `SECURITY.md`, and `docs/DOCUMENTATION.md`;
    every `cli_specs` flag must appear in the README CLI Options block; every
    model `-Denable-*` must appear in README, `Dockerfile`, and the Gemma3-only
    Compose override).
