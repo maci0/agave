@@ -1796,7 +1796,10 @@ fn sendSseHeaders(stream: TcpStream) bool {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     // Cache-Control comes only from security_headers (no-store). Emitting a second
     // Cache-Control: no-cache here produced duplicate headers and ambiguous caching.
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, corsHeaders() }) catch return false;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, corsHeaders() }) catch {
+        std.log.warn("req={d} SSE header overflow ({d} bytes available)", .{ log_request_id, hdr_buf_size });
+        return false;
+    };
     stream.writeAll(hdr) catch |err| {
         std.log.warn("req={d} SSE header write failed: {}", .{ log_request_id, err });
         return false;
@@ -2306,7 +2309,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 if (processVisionImage(b64_data, ve)) {
                     completions_image_embedded = true;
                 } else {
-                    std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
+                    std.log.warn("req={d} image attached but decode/encode failed (400, client error)", .{log_request_id});
                     sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
                     g_server.metrics.recordClientError();
                     logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -2998,7 +3001,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 if (processVisionImage(b64_data, ve)) {
                     anthropic_image_embedded = true;
                 } else {
-                    std.log.err("req={d} anthropic image attached but decode/encode failed", .{log_request_id});
+                    std.log.warn("req={d} anthropic image attached but decode/encode failed (400, client error)", .{log_request_id});
                     sendAnthropicError(stream, "400", "invalid_request_error", "Failed to decode or encode attached image");
                     g_server.metrics.recordClientError();
                     logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -3430,7 +3433,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 if (processVisionImage(b64_data, ve)) {
                     image_embedded = true;
                 } else {
-                    std.log.err("req={d} image attached but decode/encode failed", .{log_request_id});
+                    std.log.warn("req={d} image attached but decode/encode failed (400, client error)", .{log_request_id});
                     sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Failed to decode or encode attached image", "image", "image_decode_failed");
                     g_server.metrics.recordClientError();
                     logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -4648,9 +4651,10 @@ fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, 
         g_server.metrics.recordGenerationTokens(token_count);
         // Match other stream paths: max_tokens is successful completion, not failure.
         // Timeouts are already counted by recordTimeout(); do not poison requests_failed.
-        if (!client_connected)
-            g_server.metrics.recordCancellation()
-        else if (req.is_finished.load(.acquire) or streamed_count >= max_tokens)
+        if (!client_connected) {
+            std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
+            g_server.metrics.recordCancellation();
+        } else if (req.is_finished.load(.acquire) or streamed_count >= max_tokens)
             g_server.metrics.recordCompletion()
         else if (req.is_timed_out.load(.acquire))
             std.log.warn("req={d} chat stream timed out (tokens={d})", .{ log_request_id, token_count })
@@ -5380,7 +5384,10 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
         g_server.metrics.recordTPOT(token_count, time_ms);
         g_server.metrics.recordPromptTokens(input_tokens);
         g_server.metrics.recordGenerationTokens(token_count);
-        if (!anth_client_connected) g_server.metrics.recordCancellation() else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
+        if (!anth_client_connected) {
+            std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
+            g_server.metrics.recordCancellation();
+        } else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
             std.log.warn("req={d} anthropic stream timed out (tokens={d})", .{ log_request_id, token_count });
         } else {
             std.log.warn("req={d} anthropic stream incomplete (tokens={d}, cancelled={})", .{
@@ -5422,6 +5429,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     for (token_ids) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
+                std.log.info("req={d} anthropic stream prefill cancelled", .{log_request_id});
                 g_server.metrics.recordCancellation();
                 sendAnthropicFinalEvents(stream, "end_turn", 0);
                 return;
@@ -5888,6 +5896,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     for (token_ids) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
+                std.log.info("req={d} responses stream prefill cancelled", .{log_request_id});
                 g_server.metrics.recordCancellation();
                 sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
                 return;
@@ -6501,7 +6510,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         g_server.metrics.recordTPOT(token_count, time_ms);
         g_server.metrics.recordPromptTokens(@intCast(token_ids.len));
         g_server.metrics.recordGenerationTokens(token_count);
-        if (!chunk_client_connected) g_server.metrics.recordCancellation() else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
+        if (!chunk_client_connected) {
+            std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
+            g_server.metrics.recordCancellation();
+        } else if (req.is_finished.load(.acquire) or token_count >= max_tokens) g_server.metrics.recordCompletion() else if (req.is_timed_out.load(.acquire)) {
             std.log.warn("req={d} openai stream timed out (tokens={d})", .{ log_request_id, token_count });
         } else {
             std.log.warn("req={d} openai stream incomplete (tokens={d}, cancelled={})", .{
@@ -6603,6 +6615,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     for (token_ids[s_prefix_len..]) |tid| {
         first_gen_token = model.forward(tid) catch |err| {
             if (err == error.Cancelled) {
+                std.log.info("req={d} openai stream prefill cancelled", .{log_request_id});
                 invalidateKvBookkeeping();
                 g_server.metrics.recordCancellation();
                 _ = sseWriteData(stream, "[DONE]");
@@ -6658,6 +6671,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     if (token_ids.len > 0 and !g_server.isEog(first_gen_token)) {
         if (!streamChunk(stream, &chunk_buf, tok, first_gen_token, req_id, created, is_chat, &chunk_hb)) {
             logGeneration(0, 0, 0);
+            std.log.warn("req={d} client disconnected before first stream chunk", .{log_request_id});
             g_server.metrics.recordCancellation();
             return;
         }
@@ -6918,7 +6932,10 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     g_server.metrics.recordGenerationTokens(token_count);
     g_server.metrics.recordLatency(time_ms);
     g_server.metrics.recordTokens(token_count);
-    if (stream_disconnected) g_server.metrics.recordCancellation() else if (stream_forward_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+    if (stream_disconnected) {
+        std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
+        g_server.metrics.recordCancellation();
+    } else if (stream_forward_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
 
     // Update prompt prefix cache for next request (zeros old IDs).
     g_server.clearCachedPromptIds();
