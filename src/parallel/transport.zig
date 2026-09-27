@@ -22,6 +22,10 @@ const shm_spin_max: u32 = 100_000_000;
 /// connect(2) to an unreachable address otherwise stalls distributed startup
 /// for the kernel's SYN retry window (~2 minutes).
 const tcp_connect_timeout_ms: i32 = 5000;
+/// Maximum wall-clock wait for an incoming peer connection. A blocking
+/// accept(2) has no kernel-level bound, so the listener is polled first:
+/// without this, rank 0 waits forever when the other rank never starts.
+const tcp_accept_timeout_ms: i32 = 300_000;
 
 const builtin = @import("builtin");
 const sim_clock = @import("../sim_clock.zig");
@@ -201,9 +205,16 @@ pub const Transport = struct {
 
     /// Accept an incoming TCP peer connection on `listen_fd` and register it.
     /// Returns `error.TooManyPeers` if the maximum peer count is reached,
+    /// `error.AcceptTimeout` if no peer connects within `tcp_accept_timeout_ms`,
     /// or `error.AcceptFailed` if the underlying accept(2) call fails.
     pub fn acceptPeer(self: *Transport, listen_fd: c_int) !void {
         if (self.tcp_connected >= max_peers) return error.TooManyPeers;
+        // A blocking accept(2) never returns when the peer never starts, which
+        // strands rank 0 on a listen socket for the life of the process.
+        var pfd: [1]posix.pollfd = .{.{ .fd = listen_fd, .events = posix.POLL.IN, .revents = 0 }};
+        const ready = posix.poll(&pfd, tcp_accept_timeout_ms) catch return error.AcceptFailed;
+        if (ready == 0) return error.AcceptTimeout;
+        if (ready < 1) return error.AcceptFailed;
         var addr: std.posix.sockaddr.in = undefined;
         var addr_len: c.socklen_t = @sizeOf(@TypeOf(addr));
         const fd = c.accept(listen_fd, @ptrCast(&addr), &addr_len);

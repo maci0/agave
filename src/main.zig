@@ -1671,13 +1671,22 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
         if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) return null;
         if (std.c.listen(ls, 1) != 0) return null;
         std.log.info("waiting for rank 1 on port {d}...", .{port});
-        t.acceptPeer(ls) catch return null;
+        t.acceptPeer(ls) catch |err| {
+            std.log.err("rank 1 never connected on port {d}: {s}", .{ port, @errorName(err) });
+            return null;
+        };
         std.log.info("rank 1 connected", .{});
     } else {
         std.log.info("connecting to rank 0 at {d}.{d}.{d}.{d}:{d}...", .{ host[0], host[1], host[2], host[3], port });
-        t.connectPeer(host, port) catch return null;
+        t.connectPeer(host, port) catch |err| {
+            std.log.err("could not reach rank 0 at {d}.{d}.{d}.{d}:{d}: {s}", .{ host[0], host[1], host[2], host[3], port, @errorName(err) });
+            return null;
+        };
         std.log.info("connected to rank 0", .{});
     }
+    // Bound only the handshake exchanges; bulk transfers on this descriptor
+    // must stay untimed so a large KV or allreduce payload is never cut short.
+    setPeerSocketTimeout(t.tcp_fds[0], peer_handshake_timeout_ms);
 
     // Measure peer RTT via TCP ping-pong (4-byte round-trip)
     const rtt_us = measurePeerRtt(t, rank);
@@ -1686,6 +1695,7 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     // Exchange device capabilities for topology-aware partitioning
     const local_mem = backend_mod.detectSystemMem();
     const peer_mem = exchangeDeviceCaps(t, rank, local_mem);
+    setPeerSocketTimeout(t.tcp_fds[0], 0);
     if (peer_mem > 0) {
         // Store for topology-aware PP layer assignment
         t.peer_mem = peer_mem;
@@ -1724,6 +1734,45 @@ fn setupTransport(allocator: std.mem.Allocator, peers_str: []const u8, rank: u32
     return t;
 }
 
+/// Bound on the rank-0/rank-1 capability and RTT handshake. A peer that
+/// accepts the connection and then stalls must not hang the run forever.
+const peer_handshake_timeout_ms: i32 = 5000;
+
+/// Set (or clear, with `timeout_ms` of 0) the send/receive timeout on a peer
+/// socket. Only the fixed-size handshake exchanges are wrapped in this; bulk
+/// transfers on the same descriptor run with no timeout, so a large KV or
+/// allreduce payload is never cut short.
+fn setPeerSocketTimeout(fd: std.posix.fd_t, timeout_ms: i32) void {
+    const tv: std.c.timeval = .{
+        .sec = @intCast(@divTrunc(timeout_ms, 1000)),
+        .usec = @intCast(@mod(timeout_ms, 1000) * std.time.us_per_ms),
+    };
+    _ = std.c.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
+    _ = std.c.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
+}
+
+/// Send exactly `len` bytes on `fd`, reporting a short or failed write.
+/// The rank-0/rank-1 handshake is a fixed-size exchange, so a partial write
+/// means the peer is not what it claims and the run cannot continue.
+fn sendExact(fd: std.posix.fd_t, bytes: []const u8) !void {
+    var sent: usize = 0;
+    while (sent < bytes.len) {
+        const n = std.posix.system.send(fd, bytes.ptr + sent, bytes.len - sent, 0);
+        if (n <= 0) return error.PeerSendFailed;
+        sent += @intCast(n);
+    }
+}
+
+/// Receive exactly `len` bytes into `bytes`, reporting a short or failed read.
+fn recvExact(fd: std.posix.fd_t, bytes: []u8) !void {
+    var got: usize = 0;
+    while (got < bytes.len) {
+        const n = std.posix.system.recv(fd, bytes.ptr + got, bytes.len - got, 0);
+        if (n <= 0) return error.PeerRecvFailed;
+        got += @intCast(n);
+    }
+}
+
 /// Exchange device capabilities with peer for topology-aware partitioning.
 /// Returns peer's available memory in bytes, or 0 on failure.
 fn exchangeDeviceCaps(t: *TransportMod.Transport, rank: u32, local_mem: usize) usize {
@@ -1731,14 +1780,22 @@ fn exchangeDeviceCaps(t: *TransportMod.Transport, rank: u32, local_mem: usize) u
     const fd = t.tcp_fds[0];
     var local_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &local_bytes, @intCast(local_mem), .little);
-    var remote_bytes: [8]u8 = undefined;
+    // Zeroed, not undefined: a failed transfer must read as "unknown" (0)
+    // rather than as stack garbage that then drives layer partitioning.
+    var remote_bytes: [8]u8 = @splat(0);
 
-    if (rank == 0) {
-        _ = std.posix.system.send(fd, &local_bytes, 8, 0);
-        _ = std.posix.system.recv(fd, &remote_bytes, 8, 0);
-    } else {
-        _ = std.posix.system.recv(fd, &remote_bytes, 8, 0);
-        _ = std.posix.system.send(fd, &local_bytes, 8, 0);
+    const exchanged = if (rank == 0) blk: {
+        sendExact(fd, &local_bytes) catch break :blk false;
+        recvExact(fd, &remote_bytes) catch break :blk false;
+        break :blk true;
+    } else blk: {
+        recvExact(fd, &remote_bytes) catch break :blk false;
+        sendExact(fd, &local_bytes) catch break :blk false;
+        break :blk true;
+    };
+    if (!exchanged) {
+        std.log.warn("device capability exchange with peer failed: transport is up but the peer did not complete the 8-byte handshake within {d}ms; assuming unknown peer memory", .{peer_handshake_timeout_ms});
+        return 0;
     }
     const peer_mem = std.mem.readInt(u64, &remote_bytes, .little);
     if (peer_mem > 0) {
@@ -1753,15 +1810,25 @@ fn exchangeDeviceCaps(t: *TransportMod.Transport, rank: u32, local_mem: usize) u
 fn measurePeerRtt(t: *TransportMod.Transport, rank: u32) u64 {
     if (t.tcp_connected == 0) return 0;
     const fd = t.tcp_fds[0];
-    var ping: [4]u8 = .{ 'P', 'I', 'N', 'G' };
-    var pong: [4]u8 = undefined;
+    const ping: [4]u8 = .{ 'P', 'I', 'N', 'G' };
+    var pong: [4]u8 = @splat(0);
     const t0 = sim_clock.monoNano();
-    if (rank == 0) {
-        _ = std.posix.system.send(fd, &ping, 4, 0);
-        _ = std.posix.system.recv(fd, &pong, 4, 0);
-    } else {
-        _ = std.posix.system.recv(fd, &pong, 4, 0);
-        _ = std.posix.system.send(fd, &ping, 4, 0);
+    const answered = if (rank == 0) blk: {
+        sendExact(fd, &ping) catch break :blk false;
+        recvExact(fd, &pong) catch break :blk false;
+        break :blk true;
+    } else blk: {
+        recvExact(fd, &pong) catch break :blk false;
+        sendExact(fd, &ping) catch break :blk false;
+        break :blk true;
+    };
+    if (!answered) {
+        std.log.warn("peer RTT probe failed: no answer within {d}ms, continuing without a timing estimate", .{peer_handshake_timeout_ms});
+        return 0;
+    }
+    if (!std.mem.eql(u8, &ping, &pong)) {
+        std.log.warn("peer RTT probe got an unexpected reply, ignoring the timing estimate", .{});
+        return 0;
     }
     const delta_us = elapsedUs(t0, sim_clock.monoNano());
     return if (delta_us > 0) @intCast(delta_us) else 0;
@@ -3656,13 +3723,32 @@ fn initAndRun(
             const fps_str = std.fmt.bufPrint(&fps_buf, "fps={d:.2}", .{cli.video_fps}) catch "fps=1";
             var fp_buf: [400]u8 = undefined;
             const frame_pattern = std.fmt.bufPrint(&fp_buf, "{s}/frame_%04d.png", .{tmp_dir_slice}) catch "";
+            var ffmpeg_failed = false;
             {
                 const ffmpeg_argv = [_][]const u8{ "ffmpeg", "-i", video_path, "-vf", fps_str, frame_pattern, "-y", "-loglevel", "quiet" };
                 if (std.process.spawn(g_io, .{ .argv = &ffmpeg_argv })) |ffmpeg_proc_val| {
                     var ffmpeg_proc = ffmpeg_proc_val;
-                    _ = ffmpeg_proc.wait(g_io) catch null;
+                    // The exit status is the only signal that distinguishes an
+                    // unreadable video from a video that produced no frames;
+                    // discarding it reported both as "no frames extracted".
+                    if (ffmpeg_proc.wait(g_io)) |term| {
+                        switch (term) {
+                            .exited => |code| if (code != 0) {
+                                eprint("Warning: ffmpeg exited with status {d} while extracting frames from '{s}'; re-run with --video-fps or check the file\n", .{ code, video_path });
+                                ffmpeg_failed = true;
+                            },
+                            else => {
+                                eprint("Warning: ffmpeg terminated abnormally ({t}) on '{s}'\n", .{ term, video_path });
+                                ffmpeg_failed = true;
+                            },
+                        }
+                    } else |err| {
+                        eprint("Warning: waiting for ffmpeg on '{s}' failed: {s}\n", .{ video_path, @errorName(err) });
+                        ffmpeg_failed = true;
+                    }
                 } else |_| {
                     eprint("Warning: ffmpeg not found (is ffmpeg installed?)\n", .{});
+                    ffmpeg_failed = true;
                 }
             }
 
@@ -3678,6 +3764,8 @@ fn initAndRun(
                     eprint("Error: could not open video temp directory: {s}\n", .{tmp_dir_slice});
                     return false;
                 };
+                // Deferred so every early return below still releases the handle.
+                defer if (scan_dir.handle != Io.Dir.cwd().handle) scan_dir.close(g_io);
                 var scan_buf: [Io.Dir.Reader.min_buffer_len]u8 align(@alignOf(usize)) = undefined;
                 var reader = Io.Dir.Reader.init(scan_dir, &scan_buf);
                 var frame_names: std.ArrayList([]u8) = .empty;
@@ -3686,33 +3774,66 @@ fn initAndRun(
                     frame_names.deinit(allocator);
                 }
                 var entries: [8]Io.Dir.Entry = undefined;
-                while (reader.read(g_io, &entries) catch null) |n| {
+                // A readdir failure ends the scan early; without this the run
+                // would encode a silent prefix of the video and say nothing.
+                while (reader.read(g_io, &entries)) |n| {
                     for (entries[0..n]) |entry| {
                         if (!std.mem.endsWith(u8, entry.name, ".png")) continue;
-                        const nc = allocator.dupe(u8, entry.name) catch continue;
+                        const nc = allocator.dupe(u8, entry.name) catch {
+                            eprint("Error: out of memory recording extracted frame '{s}'\n", .{entry.name});
+                            return false;
+                        };
                         frame_names.append(allocator, nc) catch {
                             allocator.free(nc);
+                            eprint("Error: out of memory recording extracted frame '{s}'\n", .{entry.name});
+                            return false;
                         };
                     }
                     if (n == 0) break;
+                } else |err| {
+                    eprint("Error: scanning extracted frames in '{s}' failed: {s}\n", .{ tmp_dir_slice, @errorName(err) });
+                    return false;
                 }
-                if (scan_dir.handle != Io.Dir.cwd().handle) scan_dir.close(g_io);
                 std.mem.sort([]u8, frame_names.items, {}, struct {
                     fn lt(_: void, a: []u8, b: []u8) bool {
                         return std.mem.lessThan(u8, a, b);
                     }
                 }.lt);
+                var skipped_frames: u32 = 0;
+                var first_skip: []const u8 = "";
                 for (frame_names.items) |name| {
                     var frame_path_buf2: [512]u8 = undefined;
-                    const frame_path = std.fmt.bufPrint(&frame_path_buf2, "{s}/{s}", .{ tmp_dir_slice, name }) catch continue;
-                    const img_pixels = loadImage(allocator, frame_path, ve.image_size) catch continue;
+                    // Skipping a frame silently would encode a video from an
+                    // arbitrary subset of its timeline, so each skip is counted
+                    // and the first offender is named.
+                    const frame_path = std.fmt.bufPrint(&frame_path_buf2, "{s}/{s}", .{ tmp_dir_slice, name }) catch {
+                        skipped_frames += 1;
+                        if (first_skip.len == 0) first_skip = name;
+                        continue;
+                    };
+                    const img_pixels = loadImage(allocator, frame_path, ve.image_size) catch |err| {
+                        skipped_frames += 1;
+                        if (first_skip.len == 0) first_skip = frame_path;
+                        std.log.warn("video: skipping frame '{s}': {s}", .{ frame_path, @errorName(err) });
+                        continue;
+                    };
                     defer allocator.free(img_pixels);
-                    const tokens = ve.encode(img_pixels) catch continue;
+                    const tokens = ve.encode(img_pixels) catch |err| {
+                        skipped_frames += 1;
+                        if (first_skip.len == 0) first_skip = frame_path;
+                        std.log.warn("video: skipping frame '{s}': vision encode failed ({s})", .{ frame_path, @errorName(err) });
+                        continue;
+                    };
                     all_visual_tokens.appendSlice(allocator, tokens) catch {
                         eprint("Error: out of memory collecting video frame embeddings\n", .{});
                         return false;
                     };
                     frame_count += 1;
+                }
+                if (skipped_frames > 0) {
+                    eprint("Warning: {d} of {d} extracted frames were skipped (first: '{s}'); the video is encoded from the remaining frames only\n", .{
+                        skipped_frames, frame_names.items.len, first_skip,
+                    });
                 }
             }
             if (frame_count > 0 and ve.projection_dim > 0) {
@@ -3722,7 +3843,11 @@ fn initAndRun(
                 model_if.setImageEmbeddings(owned, n_visual_tokens, pad_id);
                 if (!g_quiet) eprint("video: encoded {d} frames → {d} visual tokens\n", .{ frame_count, n_visual_tokens });
             } else {
-                eprint("Warning: no frames extracted from '{s}' (is ffmpeg installed? is --mmproj set?)\n", .{video_path});
+                if (ffmpeg_failed) {
+                    eprint("Warning: no frames extracted from '{s}' after ffmpeg failed; see the ffmpeg error above\n", .{video_path});
+                } else {
+                    eprint("Warning: no frames extracted from '{s}' (is ffmpeg installed? is --mmproj set?)\n", .{video_path});
+                }
             }
         }
     }
@@ -3957,14 +4082,26 @@ fn initAndRun(
                 // Prefill node: tokenize, prefill, send KV
                 var la: std.posix.sockaddr.in = .{ .port = std.mem.nativeToBig(u16, port), .addr = 0 };
                 const ls = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-                if (ls < 0) break :disagg_blk;
+                if (ls < 0) {
+                    eprint("Error: disaggregated prefill could not create a TCP socket (errno={d})\n", .{std.c._errno().*});
+                    break :disagg_blk;
+                }
                 defer _ = std.c.close(ls);
                 var one: c_int = 1;
                 _ = std.c.setsockopt(ls, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, @ptrCast(&one), @sizeOf(c_int));
-                if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) break :disagg_blk;
-                if (std.c.listen(ls, 1) != 0) break :disagg_blk;
+                if (std.c.bind(ls, @ptrCast(&la), @sizeOf(@TypeOf(la))) != 0) {
+                    eprint("Error: disaggregated prefill could not bind port {d} (errno={d})\n", .{ port, std.c._errno().* });
+                    break :disagg_blk;
+                }
+                if (std.c.listen(ls, 1) != 0) {
+                    eprint("Error: disaggregated prefill could not listen on port {d} (errno={d})\n", .{ port, std.c._errno().* });
+                    break :disagg_blk;
+                }
                 std.log.info("Disagg prefill: waiting for decode node on port {d}...", .{port});
-                dtr.acceptPeer(ls) catch break :disagg_blk;
+                dtr.acceptPeer(ls) catch |err| {
+                    eprint("Error: decode node did not connect to the prefill listener on port {d}: {s}\n", .{ port, @errorName(err) });
+                    break :disagg_blk;
+                };
                 std.log.info("Decode node connected. Prefilling...", .{});
 
                 if (effective_prompt) |prompt| {
@@ -3972,12 +4109,25 @@ fn initAndRun(
                     const formatted = tmpl.format(allocator, null, prompt) catch prompt;
                     defer if (formatted.ptr != prompt.ptr) allocator.free(@constCast(formatted));
                     const tok_iface = tok.tokenizer();
-                    const token_ids = tok_iface.encode(formatted) catch break :disagg_blk;
+                    const token_ids = tok_iface.encode(formatted) catch |err| {
+                        eprint("Error: tokenizing the prompt for disaggregated prefill failed: {s}\n", .{@errorName(err)});
+                        break :disagg_blk;
+                    };
                     defer allocator.free(token_ids);
+                    if (token_ids.len == 0) {
+                        eprint("Error: the prompt tokenized to zero tokens; nothing to prefill for the decode node\n", .{});
+                        break :disagg_blk;
+                    }
 
                     var first_tok: u32 = 0;
-                    first_tok = mdl.model().forward(token_ids[0]) catch break :disagg_blk;
-                    for (token_ids[1..]) |tid| first_tok = mdl.model().forward(tid) catch break :disagg_blk;
+                    first_tok = mdl.model().forward(token_ids[0]) catch |err| {
+                        eprint("Error: prefill forward pass failed on token 0/{d}: {s}\n", .{ token_ids.len, @errorName(err) });
+                        break :disagg_blk;
+                    };
+                    for (token_ids[1..], 1..) |tid, i| first_tok = mdl.model().forward(tid) catch |err| {
+                        eprint("Error: prefill forward pass failed on token {d}/{d}: {s}\n", .{ i, token_ids.len, @errorName(err) });
+                        break :disagg_blk;
+                    };
                     std.log.info("Prefill done ({d} tokens, first_gen={d}). Sending KV cache...", .{ token_ids.len, first_tok });
                     mdl.sendKvCache(dtr) catch |err| {
                         eprint("Error: failed to send KV cache to decode node: {s}\n", .{@errorName(err)});
@@ -3994,9 +4144,15 @@ fn initAndRun(
             } else {
                 // Decode node: receive KV, generate tokens
                 std.log.info("Disagg decode: connecting to prefill node...", .{});
-                dtr.connectPeer(host, port) catch break :disagg_blk;
+                dtr.connectPeer(host, port) catch |err| {
+                    eprint("Error: decode node could not reach the prefill node at {d}.{d}.{d}.{d}:{d}: {s}\n", .{ host[0], host[1], host[2], host[3], port, @errorName(err) });
+                    break :disagg_blk;
+                };
                 std.log.info("Connected. Waiting for KV cache...", .{});
-                mdl.recvKvCache(dtr) catch break :disagg_blk;
+                mdl.recvKvCache(dtr) catch |err| {
+                    eprint("Error: receiving the KV cache from the prefill node failed: {s}\n", .{@errorName(err)});
+                    break :disagg_blk;
+                };
                 const kv_len = mdl.model().kvSeqLen();
                 // Receive first generated token from prefill node
                 var first_tok_f32: [1]f32 = undefined;
