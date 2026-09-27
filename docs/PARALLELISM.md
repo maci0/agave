@@ -1,6 +1,7 @@
 # Agave: Distributed Inference
 
 **Status**: PP implemented; TP FFN/expert-parallel all-reduce implemented for 2-rank pairs (`--tp 2`, `--pp 2`). Hybrid TP+PP does not launch (TP transport is skipped when `--pp > 1`). RCCL is declared, not implemented.  
+**Last verified**: 2026-09-27 (transport kinds, CLI flags, shm names and sizes, sharding entry points, and the key-file table checked against source; the benchmark table is the run recorded on it).  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
 **Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU
@@ -214,7 +215,7 @@ Implemented in `src/parallel/peer_discovery.zig`.
 | File | Purpose |
 | :--- | :--- |
 | `src/parallel/transport.zig` | Transport layer: TCP, shm, NCCL |
-| `src/models/tp.zig` | Tensor parallelism weight sharding and all-reduce logic |
+| `src/models/tp.zig` | CPU multi-rank coordinator (builds one sharded `ModelStorage` per rank, executes rank 0 only; all-reduce not implemented, no model imports it. Live sharding lives in the model files, e.g. `qwen35.zig` `shardColumnWeight`/`shardRowWeight`) |
 | `src/parallel/peer_discovery.zig` | UDP peer discovery (LAN broadcast/join) |
 | `src/main.zig` | CLI parsing, transport setup, NCCL wiring |
 | `src/models/qwen35.zig` | TP/PP model integration (sharding, all-reduce, send/recv) |

@@ -1,6 +1,7 @@
 # Megakernel Implementation
 
 **Status**: Tier 1 (fused FFN) is what `--megakernel` enables. Tier 2/3 kernels and dispatch helpers exist; model forward paths do not call them.
+**Last verified**: 2026-09-27 (tier status, kernel inventory, kernel and file counts, `ModelDesc` fields, and the `--megakernel` arch/backend gate checked against source; the throughput table is from the run recorded on it).
 
 Fused GPU kernels that eliminate per-layer dispatch overhead. Three-tier system:
 1. **Fused FFN** (active): 3→1 dispatch per FFN layer. Up to +93% short decode.

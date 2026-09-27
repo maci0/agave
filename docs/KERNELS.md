@@ -147,7 +147,7 @@ WebGPU and Vulkan cap workgroups per dimension at 65535. Vocab-sized GEMV (Qwen3
 
 ## DeepSeek V4 Metal Kernels (`ds4.metal` + `ds4_fused.metal`)
 
-Ten dedicated Metal compute kernels for DeepSeek V4 Flash that eliminate all CPU reads of GPU-written activation buffers between layers. Fixes GPU L2 cache coherency issues with `newBufferWithBytesNoCopy` shared-memory wraps on Apple Silicon UMA.
+Ten dedicated Metal compute kernels for DeepSeek V4 Flash. They compile into the Metal pipeline set and `MetalBackend` carries a dispatch wrapper for each, but no model forward path calls them (`Ds4Model` never references them), so they do not run today. The routing note below is the operative description of the DS4 hot path.
 
 | Kernel | Description | Threadgroup |
 | :--- | :--- | :--- |
