@@ -417,13 +417,14 @@ pub const TieredKvCache = struct {
                 self.blocks[block_id].base.keys = keys;
                 self.blocks[block_id].base.values = values;
                 self.blocks[block_id].tier = .ram;
+                _ = self.ram_used.fetchAdd(1, .monotonic);
             } else {
-                // Promote from SSD to RAM before use (inner: lock already held)
+                // Promote from SSD to RAM before use (inner: lock already held).
+                // promoteFromSsdInner already counted the block in ram_used.
                 try self.promoteFromSsdInner(block_id);
             }
             self.blocks[block_id].base.ref_count = 1;
             self.blocks[block_id].base.used = 0;
-            _ = self.ram_used.fetchAdd(1, .monotonic);
             return block_id;
         }
 
