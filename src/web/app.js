@@ -972,12 +972,19 @@ async function streamResponse(body, errLabel, url) {
     abortCtrl = new AbortController();
     let content = '';
     let finalized = false;
+    // The stats frame arrives before [DONE], and the final render replaces the
+    // message contents. Hold the stats so they are re-attached after that render
+    // instead of being wiped by it.
+    let stats = null;
     function finalizeStream() {
         if (finalized) {
             return;
         }
         finalized = true;
         renderContent(el, content || 'No response.', true);
+        if (stats) {
+            addStats(el, stats);
+        }
         addRegenBtn(el);
         loadConvs();
         refreshCtxBadge();
@@ -1022,7 +1029,7 @@ async function streamResponse(body, errLabel, url) {
                         renderContent(el, content, false);
                     }
                     if (o.done) {
-                        addStats(el, { tokens: String(o.n), tps: o.tps.toFixed(2), time: String(o.ms), pfTok: String(o.pn), pfMs: String(o.pms), pfTps: o.ptps.toFixed(1) });
+                        stats = { tokens: String(o.n), tps: o.tps.toFixed(2), time: String(o.ms), pfTok: String(o.pn), pfMs: String(o.pms), pfTps: o.ptps.toFixed(1) };
                     }
                 }
                 catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- one malformed SSE frame must not kill the stream
@@ -1234,7 +1241,8 @@ function clearChat() {
         showEmpty();
         closeMobileSidebar();
         inp.focus();
-        showToast('Could not clear on server. Local view was reset.', 'info');
+        // Failure styling: every other failed action in the UI toasts in red.
+        showToast('Could not clear on the server. The view was reset locally, but the conversation is still stored.');
     });
 }
 function toggleSidebar() {
@@ -1451,9 +1459,13 @@ function selectConv(id) {
             return;
         }
         chat.replaceChildren();
+        // Every outcome hands the viewport back to the conversation, so the mobile
+        // drawer must close in each branch, not only the populated one.
         if (!data.messages || data.messages.length === 0) {
             showEmpty();
             loadConvs();
+            closeMobileSidebar();
+            inp.focus();
             return;
         }
         for (const m of data.messages) {
@@ -1475,6 +1487,7 @@ function selectConv(id) {
             return;
         }
         chat.replaceChildren();
+        closeMobileSidebar();
         const errMsg = 'Failed to load conversation. Check that the server is running.';
         const err = document.createElement('div');
         err.className = 'error-msg toast';
