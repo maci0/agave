@@ -26,6 +26,11 @@ python3 tools/quality-testing/collect_continuations.py \
     --max-tokens 128
 ```
 
+Each result is appended to `continuations.jsonl` (atomically) as it arrives, and
+a rerun skips prompts that already have a successful continuation for the same
+model, so an interrupted run does not pay for the same prompt twice. Prompt
+records holding an `error` are retried on the next run.
+
 ### 2. Score Local Model
 
 There is **no `--eval` CLI flag** yet. Call the library from Zig (tests or a

@@ -21,9 +21,13 @@ token for token, on every backend. Anything else is a bug in the MoE path.
     python3 moeify_gguf.py --in model.gguf --out moe.gguf --experts 4
     agave moe.gguf --backend rocm -t 0 "..."   # must match model.gguf exactly
 
+The output is published by atomic rename and the source is never written, so
+a rerun after an interrupted run converges on the same file and cannot destroy
+the dense input.
 """
 
 import argparse
+import os
 import struct
 import sys
 from pathlib import Path
@@ -124,6 +128,13 @@ def main() -> int:
 
     if args.experts < 1 or args.experts_used < 1 or args.experts_used > args.experts:
         print("error: need 1 <= experts-used <= experts", file=sys.stderr)
+        return 2
+
+    # Writing the output over the input would destroy the only dense copy the
+    # rerun depends on, and an interrupted write would leave a truncated GGUF
+    # that a rerun reads as a bad source. Refuse in place, publish atomically.
+    if args.dst.resolve() == args.src.resolve():
+        print("error: --out must differ from --in", file=sys.stderr)
         return 2
 
     raw = args.src.read_bytes()
@@ -251,7 +262,10 @@ def main() -> int:
         # Pad each tensor to the alignment the offsets above assumed.
         body += b"\0" * (align_up(len(body) - base, alignment) - (len(body) - base))
 
-    args.dst.write_bytes(bytes(body))
+    args.dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = args.dst.with_name(args.dst.name + ".tmp")
+    tmp.write_bytes(bytes(body))
+    os.replace(tmp, args.dst)
     print(f"wrote {args.dst} ({len(body) / 2**20:.1f} MB): "
           f"{len(out_tensors)} tensors, {args.experts} experts "
           f"({args.experts_used} used), {len(layers_seen)} MoE layers")
