@@ -83,6 +83,8 @@ pub fn printVersion() void {
 
 /// Bits per byte, used for bits-per-weight (bpw) calculation.
 const bits_per_byte: f32 = 8.0;
+/// Same constant in f64, for the KV byte estimate which stays in f64.
+const bits_per_byte_f64: f64 = 8.0;
 /// Show available memory when available is less than this percentage of total.
 const avail_display_threshold_pct: usize = 98;
 /// Maximum number of content lines in the TTY banner box.
@@ -456,10 +458,12 @@ pub const Display = struct {
                 // checked: a crafted file wraps it and the banner would print a
                 // size orders of magnitude off (or drop the KV line).
                 const kv_elems: ?u64 = mulAll(&[_]u64{ info.ctx_size, info.n_kv_heads, info.head_dim, info.n_layers, 2 });
-                const kv_bytes: u64 = if (kv_elems) |e|
-                    @intFromFloat(@as(f64, @floatFromInt(e)) * @as(f64, info.kv_bpe) / 8.0)
-                else
-                    0;
+                // kv_bpe can exceed bits_per_byte (quantized KV), so the float
+                // scaling is a second multiply that mulAll cannot bound.
+                const kv_bytes: u64 = if (kv_elems) |e| blk: {
+                    const scaled = @as(f64, @floatFromInt(e)) * @as(f64, info.kv_bpe) / bits_per_byte_f64;
+                    break :blk if (scaled >= @as(f64, @floatFromInt(std.math.maxInt(u64)))) 0 else @intFromFloat(scaled);
+                } else 0;
                 if (kv_elems != null and kv_bytes > 0) {
                     const kvs = formatSize(kv_bytes);
                     const kv_label = info.kv_type_name;

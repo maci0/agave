@@ -153,8 +153,10 @@ pub const Parser = struct {
             return .{ .n = 1, .event = .{ .key_press = .{ .codepoint = Key.escape } } };
         }
 
-        // Ctrl+letter (0x01-0x1a = Ctrl+a through Ctrl+z, excluding 0x0d=Enter and 0x09=Tab)
-        if (b >= 1 and b <= 26 and b != '\r' and b != '\t') {
+        // Ctrl+letter (0x01-0x1a = Ctrl+a through Ctrl+z, excluding 0x0a=LF,
+        // 0x0d=CR=Enter and 0x09=Tab). 0x0a must be excluded or a bare LF is
+        // decoded as Ctrl+j and the Enter arm below never fires.
+        if (b >= 1 and b <= 26 and b != '\n' and b != '\r' and b != '\t') {
             return .{ .n = 1, .event = .{ .key_press = .{
                 .codepoint = @as(u21, b) + 0x60,
                 .mods = .{ .ctrl = true },
@@ -557,9 +559,11 @@ pub const TextInput = struct {
             self.cursor = new_idx;
         }
 
-        /// Move the cursor right by n positions.
+        /// Move the cursor right by n positions. Callers must not move past
+        /// the second half; there is no room to grow the gap from the right.
         pub fn moveGapRight(self: *Buffer, n: usize) void {
             const new_idx = self.cursor + n;
+            std.debug.assert(new_idx + self.gap_size <= self.buffer.len);
             const dst = self.buffer[self.cursor..];
             const src = self.buffer[self.cursor + self.gap_size .. new_idx + self.gap_size];
             std.mem.copyForwards(u8, dst, src);

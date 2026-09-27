@@ -140,7 +140,9 @@ pub const PagedKvCache = struct {
     /// Allocate a single physical block. Returns null if no blocks available.
     pub fn allocBlock(self: *PagedKvCache) ?u32 {
         if (self.free_list.items.len == 0) return null;
-        return self.free_list.pop();
+        const block_id = self.free_list.pop() orelse return null;
+        self.blocks[block_id].ref_count = 1;
+        return block_id;
     }
 
     /// Release a physical block back to the free list.
@@ -162,8 +164,11 @@ pub const PagedKvCache = struct {
                 }
             }
         }
+        // ref_count == 0 is the shared "block is free" marker (see CacheBlock);
+        // the paged cache must agree with TieredKvCache or a released block
+        // reads as live to any code that checks it.
         self.blocks[block_id].used = 0;
-        self.blocks[block_id].ref_count = 1;
+        self.blocks[block_id].ref_count = 0;
         self.free_list.appendAssumeCapacity(block_id);
     }
 

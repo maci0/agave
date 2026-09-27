@@ -92,8 +92,10 @@ pub const ChatTemplate = struct {
         }
         for (messages) |msg| {
             const extra: usize = if (msg.role == .tool) tool_format_overhead else 0;
-            const p = if (msg.role == .user) self.user_prefix else self.assistant_prefix;
-            const s = if (msg.role == .user) self.user_suffix else self.assistant_suffix;
+            // The non-ChatML tool branch below emits user_prefix/user_suffix,
+            // so the size estimate must agree with it.
+            const p = if (msg.role == .assistant) self.assistant_prefix else self.user_prefix;
+            const s = if (msg.role == .assistant) self.assistant_suffix else self.user_suffix;
             total_len = std.math.add(usize, total_len, p.len + msg.content.len + s.len + extra) catch return error.OutOfMemory;
         }
         var result = std.ArrayList(u8).empty;
@@ -496,6 +498,7 @@ fn truncateUtf8(s: []const u8, max_len: usize) []const u8 {
 }
 
 fn countOccurrences(hay: []const u8, needle: []const u8) usize {
+    if (needle.len == 0) return 0;
     var n: usize = 0;
     var i: usize = 0;
     while (std.mem.indexOfPos(u8, hay, i, needle)) |p| {

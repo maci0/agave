@@ -23,6 +23,10 @@ const max_json_properties: usize = 32;
 const max_schema_depth: usize = 16;
 const max_grammar_input_size: usize = 64 * 1024;
 const max_rules: usize = 512;
+/// Maximum number of ranges in one `[...]` character class. Exceeding it is
+/// `error.GrammarTooLarge` rather than a silent drop, which would build a
+/// grammar that accepts fewer characters than it was written to.
+const max_char_class_ranges: usize = 64;
 const max_accept_depth: u32 = 32;
 const max_stack_growth_per_token: usize = max_accept_depth + 1;
 const bpe_two_byte_prefix: u8 = 0xC4;
@@ -670,7 +674,7 @@ const Parser = struct {
         try self.rules.append(self.allocator, .{ .name = name, .elements = elems });
     }
 
-    const ParseError = error{OutOfMemory};
+    const ParseError = error{ OutOfMemory, TooManyRules, GrammarTooLarge };
 
     fn parseAlternatives(self: *Parser) ParseError!void {
         try self.parseSequence();
@@ -727,7 +731,7 @@ const Parser = struct {
 
             if (self.rules.items.len >= max_rules) {
                 self.allocator.free(group_elems);
-                return error.OutOfMemory;
+                return error.TooManyRules;
             }
             const synth_id: u32 = @intCast(self.rules.items.len);
             try self.rules.append(self.allocator, .{ .name = "_group", .elements = group_elems });
@@ -826,7 +830,7 @@ const Parser = struct {
         }
         // Collect all ranges in the character class first.
         const RangePair = struct { lo: u32, hi: u32 };
-        var ranges: [64]RangePair = undefined;
+        var ranges: [max_char_class_ranges]RangePair = undefined;
         var n_ranges: usize = 0;
         while (self.pos < self.input.len and self.input[self.pos] != ']') {
             var lo: u8 = self.input[self.pos];
@@ -863,10 +867,9 @@ const Parser = struct {
                     self.pos += 1;
                 }
             }
-            if (n_ranges < ranges.len) {
-                ranges[n_ranges] = .{ .lo = lo, .hi = hi };
-                n_ranges += 1;
-            }
+            if (n_ranges >= ranges.len) return error.GrammarTooLarge;
+            ranges[n_ranges] = .{ .lo = lo, .hi = hi };
+            n_ranges += 1;
         }
         if (self.pos < self.input.len) self.pos += 1;
         // Single range: emit directly (no .alt needed).
@@ -1151,8 +1154,19 @@ const SchemaConverter = struct {
         if (i >= json.len or json[i] != open) return null;
         const start = i + 1;
         var depth: i32 = 1;
+        var in_string = false;
         i += 1;
         while (i < json.len and depth > 0) : (i += 1) {
+            // Braces and brackets inside a JSON string are content, not nesting.
+            if (json[i] == '\\' and in_string) {
+                i += 1; // skip the escaped character
+                continue;
+            }
+            if (json[i] == '"') {
+                in_string = !in_string;
+                continue;
+            }
+            if (in_string) continue;
             if (json[i] == open) depth += 1;
             if (json[i] == close) depth -= 1;
         }
