@@ -39,56 +39,11 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup-zig
-        id: zig
 
-      - name: Check Zig version pins agree
-        env:
-          # Env indirection, not ${{ }} interpolation: step outputs derived from
-          # repo files must never be spliced into a shell command (injection).
-          ZIG_PIN: ${{ steps.zig.outputs.version }}
-        run: |
-          set -euo pipefail
-          pin="$ZIG_PIN"
-          zon="$(sed -n 's/^[[:space:]]*\.minimum_zig_version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' build.zig.zon | head -n1)"
-          if [[ -z "$zon" ]]; then
-            echo "::error::Could not parse minimum_zig_version from build.zig.zon"
-            exit 1
-          fi
-          if [[ "$pin" != "$zon" ]]; then
-            echo "::error::.zigversion ($pin) != build.zig.zon minimum_zig_version ($zon)"
-            exit 1
-          fi
-          echo "Zig pin OK: $pin"
-          # Dated debian:bookworm-YYYYMMDD-slim must match DEBIAN_SNAPSHOT=YYYYMMDDT...
-          from_day="$(sed -n 's/.*debian:bookworm-\([0-9]\{8\}\)-slim.*/\1/p' Dockerfile | head -n1)"
-          snap_day="$(sed -n 's/.*DEBIAN_SNAPSHOT=\([0-9]\{8\}\)T.*/\1/p' Dockerfile | head -n1)"
-          if [[ -z "$from_day" || -z "$snap_day" ]]; then
-            echo "::error::Could not parse debian FROM tag day and DEBIAN_SNAPSHOT from Dockerfile"
-            exit 1
-          fi
-          if [[ "$from_day" != "$snap_day" ]]; then
-            echo "::error::Dockerfile debian day ($from_day) != DEBIAN_SNAPSHOT day ($snap_day)"
-            exit 1
-          fi
-          epoch="$(sed -n 's/^ARG SOURCE_DATE_EPOCH=\([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
-          expected_epoch="$(date -u -d "${from_day:0:4}-${from_day:4:2}-${from_day:6:2} 00:00:00 UTC" +%s)"
-          if [[ -z "$epoch" ]]; then
-            echo "::error::Could not parse ARG SOURCE_DATE_EPOCH from Dockerfile"
-            exit 1
-          fi
-          if [[ "$epoch" != "$expected_epoch" ]]; then
-            echo "::error::Dockerfile SOURCE_DATE_EPOCH ($epoch) != midnight UTC of debian day $from_day ($expected_epoch)"
-            exit 1
-          fi
-          echo "Debian snapshot day OK: $from_day (SOURCE_DATE_EPOCH=$epoch)"
-          # Both stages must drop the base image's deb822 debian.sources, or apt
-          # keeps resolving against live deb.debian.org and the pin does nothing.
-          dropped="$(grep -c 'rm -f /etc/apt/sources.list.d/\*\.list /etc/apt/sources.list.d/\*\.sources' Dockerfile || true)"
-          if [[ "$dropped" != "2" ]]; then
-            echo "::error::Dockerfile must remove pre-existing apt sources in both stages (found $dropped of 2)"
-            exit 1
-          fi
-          echo "Apt source isolation OK"
+      # Shared with `zig build check` (scripts/check-pins.sh), so a green local
+      # gate cannot disagree with CI on the reproducibility pins.
+      - name: Check Zig and Docker reproducibility pins agree
+        run: scripts/check-pins.sh
 
       - name: Check formatting
         run: zig fmt --check src/ tests/ build.zig build.zig.zon

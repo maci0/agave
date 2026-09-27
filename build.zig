@@ -668,12 +668,18 @@ pub fn build(b: *std.Build) void {
         const fmt_check_step = b.step("fmt-check", "Check formatting (same paths as CI)");
         fmt_check_step.dependOn(&fmt_check_cmd.step);
 
-        const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py)");
+        const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py + its SemVer guard tests)");
         if (python3) |py| {
             const docs_check_cmd = b.addSystemCommand(&.{ py, "scripts/check-docs.py" });
             pin_spawned_python(docs_check_cmd);
             docs_check_cmd.has_side_effects = true;
             docs_check_step.dependOn(&docs_check_cmd.step);
+            // CI's docs-check job runs the guard's own tests; keeping them in
+            // `check` means a broken guard fails locally, not after a push.
+            const docs_check_test_cmd = b.addSystemCommand(&.{ py, "scripts/test_check_docs.py" });
+            pin_spawned_python(docs_check_test_cmd);
+            docs_check_test_cmd.has_side_effects = true;
+            docs_check_step.dependOn(&docs_check_test_cmd.step);
         } else {
             docs_check_step.dependOn(&b.addFail(
                 "python3 not found; zig build check needs Python 3.11+ for scripts/check-docs.py",
@@ -712,9 +718,17 @@ pub fn build(b: *std.Build) void {
         web_artifacts_step.dependOn(&web_artifacts_cmd.step);
         lint_web_step.dependOn(web_artifacts_step);
 
-        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
+        // CI's fmt-check job runs the same script, so the pins that make a
+        // Docker build reproducible fail locally too, not only after a push.
+        const check_pins_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-pins.sh" });
+        check_pins_cmd.has_side_effects = true;
+        const check_pins_step = b.step("check-pins", "Zig / Debian / SOURCE_DATE_EPOCH pins agree (CI fmt-check job)");
+        check_pins_step.dependOn(&check_pins_cmd.step);
+
+        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + unit tests");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
+        check_step.dependOn(check_pins_step);
         check_step.dependOn(test_step);
         check_step.dependOn(conv_backup_step);
 

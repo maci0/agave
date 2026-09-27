@@ -15,18 +15,29 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + unit tests), `lint-web` (oxlint + tsc + web artifact freshness) and `lint-shell` (shellcheck). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, and `lint-shell` is the blocking shell job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness) and `lint-shell` (shellcheck). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, and `lint-shell` is the blocking shell job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
 | CUDA kernel sources under `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` (then regenerate with `zig build ptx -Dcuda-sm=sm_120` if it drifts) |
 | WASM / `src/wasm_entry.zig` / `web/` | `zig build wasm` |
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
+| `Dockerfile` or `.zigversion` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, Debian snapshot day, `SOURCE_DATE_EPOCH`, and apt source isolation must agree) |
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
+
+## Golden Tests (manual, weights required)
+
+`golden_tests.yml` is `workflow_dispatch` only: GitHub-hosted runners have no model weights, so the CPU, Metal, and Vulkan matrix entries all fail on a hosted runner by design. Dispatch it with the `runner` input set to a self-hosted label whose checkout has `./models` populated (and, for the Vulkan entry, a working Vulkan loader; the LunarG SDK install step is skipped on self-hosted):
+
+```bash
+gh workflow run golden_tests.yml -f runner=self-hosted
+```
+
+Leaving `runner` empty keeps the matrix on the GitHub-hosted labels, where the run stops at the `Require local GGUF models` step. Without `runner` there is no way to reach a machine that has weights, so the workflow always fails.
 
 `ci-pass` also requires the `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, and `kernel-artifacts` jobs. `zig build ci` does not cover them. Fuzz smoke runs anywhere (`zig build test --fuzz=1000 --summary all`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
 
