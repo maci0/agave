@@ -6,7 +6,6 @@
 //! Dequantization: value = (trit - 1) * scale
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
 const sparsity = @import("activation_sparsity.zig");
 
 const block_elems: usize = 256;

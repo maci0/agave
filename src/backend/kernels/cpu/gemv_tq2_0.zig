@@ -5,7 +5,6 @@
 //! struct block_tq2_0 { uint8_t qs[64]; ggml_half d; } // llama.cpp layout
 
 const std = @import("std");
-const backend_mod = @import("../../backend.zig");
 const sparsity = @import("activation_sparsity.zig");
 
 /// Number of quantized elements (ternary values) packed into one TQ2_0 block.

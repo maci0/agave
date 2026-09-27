@@ -7,7 +7,6 @@
 //! Supports group_size 32, 64, 128 (most common: 128).
 
 const std = @import("std");
-const quant = @import("quant.zig");
 
 const gptq_nibbles_per_u32: usize = 8;
 

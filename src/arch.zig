@@ -229,9 +229,6 @@ pub const deepseek4_fallback_eos: u32 = 1;
 pub const nemotron_h_fallback_eos: u32 = 11;
 /// Nemotron Nano fallback EOS.
 pub const nemotron_nano_fallback_eos: u32 = 2;
-/// GLM-4 `[gMASK]` token ID. The chat template already emits `[gMASK]<sop>`,
-/// so `defaultBos(.glm4)` is null; this is the vocabulary id only.
-pub const glm4_fallback_bos: u32 = 154822;
 /// Llama 4 fallback BOS token ID.
 pub const llama4_fallback_bos: u32 = 128000;
 /// Llama 4 fallback EOS token ID.
@@ -500,7 +497,6 @@ test "fuzz: all arch functions" {
             try std.testing.expect(deepseek4_fallback_eos == 1);
             try std.testing.expect(nemotron_h_fallback_eos == 11);
             try std.testing.expect(nemotron_nano_fallback_eos == 2);
-            try std.testing.expect(glm4_fallback_bos == 154822);
             try std.testing.expect(llama4_fallback_bos == 128000);
             try std.testing.expect(llama4_fallback_eos == 128009);
             try std.testing.expect(default_bos_id == 2);

@@ -60,8 +60,6 @@
 //!      comptime vtable with @ptrCast to model's forward() function
 //!   3. forward() transitively references GEMV/SDPA kernels with @Vector
 
-const std = @import("std");
-
 // This standalone file does NOT reproduce the bug because the vtable
 // and SIMD functions are in the same compilation unit. The actual bug
 // requires cross-module LTO where the vtable is generated in one module

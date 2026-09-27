@@ -33,8 +33,6 @@ export fn rms_norm_add_kernel(
     }
 }
 
-const std = @import("std");
-
 test "constants valid" {
     _ = @sizeOf(u8);
 }

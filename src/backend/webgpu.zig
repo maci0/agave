@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const backend_mod = @import("backend.zig");
-const kv_quant = @import("../ops/kv_quant.zig");
 
 const TensorData = backend_mod.TensorData;
 const KvQuantType = backend_mod.KvQuantType;

@@ -18,7 +18,6 @@
 //!   3. Block autoregressive: chain 256-token canvases for long outputs
 
 const std = @import("std");
-const build_options = @import("build_options");
 
 const backend_mod = @import("../backend/backend.zig");
 const format_mod = @import("../format/format.zig");
