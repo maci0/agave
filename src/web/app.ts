@@ -237,6 +237,38 @@ qs<HTMLTextAreaElement>('#system-prompt').addEventListener('input', function(thi
 });
 
 // Persist and restore sampling settings
+const MAX_TOKENS_MIN = 1;
+const MAX_TOKENS_MAX = 4096;
+
+/** Clamp a raw max-tokens field to the allowed range; unparseable text becomes the minimum. */
+function clampMaxTokens(raw: string): number {
+  const v = Number.parseInt(raw, 10);
+  if (Number.isNaN(v) || v < MAX_TOKENS_MIN) {return MAX_TOKENS_MIN;}
+  if (v > MAX_TOKENS_MAX) {return MAX_TOKENS_MAX;}
+  return v;
+}
+
+/** A field is valid only when it holds a whole number inside the range, with no stray text. */
+function isMaxTokensValid(raw: string): boolean {
+  const v = Number.parseInt(raw, 10);
+  return !Number.isNaN(v) && String(v) === raw.trim() && v >= MAX_TOKENS_MIN && v <= MAX_TOKENS_MAX;
+}
+
+/** Show or clear the inline range error on #max-tokens. */
+function setMaxTokensError(el: HTMLInputElement, message: string) {
+  const errEl = qs('#max-tokens-error');
+  if (message) {
+    el.setAttribute('aria-invalid', 'true');
+    el.setAttribute('aria-describedby', 'max-tokens-range max-tokens-error');
+    if (errEl) { errEl.textContent = message; errEl.hidden = false; }
+    else { announceToSR(message); }
+  } else {
+    el.removeAttribute('aria-invalid');
+    el.setAttribute('aria-describedby', 'max-tokens-range');
+    if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
+  }
+}
+
 const tempEl = qs<HTMLInputElement>('#temperature');
 const topPEl = qs<HTMLInputElement>('#top-p');
 const maxTokEl = qs<HTMLInputElement>('#max-tokens');
@@ -246,6 +278,10 @@ const savedMaxTok = localStorage.getItem('agave_max_tokens');
 if (savedTemp !== null) { tempEl.value = savedTemp; qs('#temp-val').textContent = fmtNum(Number.parseFloat(savedTemp), 1); }
 if (savedTopP !== null) { topPEl.value = savedTopP; qs('#topp-val').textContent = fmtNum(Number.parseFloat(savedTopP), 2); }
 if (savedMaxTok !== null) { maxTokEl.value = savedMaxTok; }
+// A stored value can be empty or out of range (an older build, or a field the user
+// left mid-edit). Normalize it now: an empty number input reports "" and would
+// otherwise fall through to a silent 1-token budget on the next send.
+if (!isMaxTokensValid(maxTokEl.value)) { maxTokEl.value = String(clampMaxTokens(maxTokEl.value)); }
 tempEl.setAttribute('aria-valuetext', fmtNum(Number.parseFloat(tempEl.value), 1));
 topPEl.setAttribute('aria-valuetext', fmtNum(Number.parseFloat(topPEl.value), 2));
 
@@ -260,37 +296,28 @@ topPEl.addEventListener('input', function(this: HTMLInputElement) {
   localStorage.setItem('agave_top_p', this.value);
 });
 maxTokEl.addEventListener('input', function(this: HTMLInputElement) {
-  this.removeAttribute('aria-invalid');
-  const errEl = qs('#max-tokens-error');
-  if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
-  this.setAttribute('aria-describedby', 'max-tokens-range');
-  localStorage.setItem('agave_max_tokens', this.value);
+  // Validate as the user types so the range is known before the field is left, but
+  // never rewrite the field mid-entry: clamping here would fight every keystroke.
+  // Only a value that will be sent is stored, so a bad entry cannot survive a reload.
+  if (isMaxTokensValid(this.value)) {
+    setMaxTokensError(this, '');
+    localStorage.setItem('agave_max_tokens', this.value);
+  } else {
+    setMaxTokensError(this, `Max tokens must be a whole number from ${MAX_TOKENS_MIN} to ${MAX_TOKENS_MAX}.`);
+  }
 });
 maxTokEl.addEventListener('keydown', function(this: HTMLInputElement, e: KeyboardEvent) {
   if (e.key === 'Enter') {e.preventDefault();}
 });
 maxTokEl.addEventListener('blur', function(this: HTMLInputElement) {
-  const raw = this.value;
-  const v = Number.parseInt(raw, 10);
-  let clamped = v;
-  if (Number.isNaN(v) || v < 1) {clamped = 1;}
-  else if (v > 4096) {clamped = 4096;}
-  const errEl = qs('#max-tokens-error');
-  if (String(clamped) !== String(raw).trim() || Number.isNaN(v)) {
-    this.value = String(clamped);
-    this.setAttribute('aria-invalid', 'true');
-    const msg = `Max tokens adjusted to ${clamped} (allowed range 1 to 4096)`;
-    if (errEl) {
-      errEl.textContent = msg;
-      errEl.hidden = false;
-      this.setAttribute('aria-describedby', 'max-tokens-range max-tokens-error');
-    } else {
-      announceToSR(msg);
-    }
+  const raw = this.value.trim();
+  if (isMaxTokensValid(raw)) {
+    this.value = raw;
+    setMaxTokensError(this, '');
   } else {
-    this.removeAttribute('aria-invalid');
-    if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
-    this.setAttribute('aria-describedby', 'max-tokens-range');
+    const clamped = clampMaxTokens(raw);
+    this.value = String(clamped);
+    setMaxTokensError(this, `Max tokens adjusted to ${clamped} (allowed range ${MAX_TOKENS_MIN} to ${MAX_TOKENS_MAX}).`);
   }
   localStorage.setItem('agave_max_tokens', this.value);
 });
@@ -507,9 +534,7 @@ function updateToksCounter() {
 function getSamplingParams() {
   const temp = qs<HTMLInputElement>('#temperature').value;
   const topP = qs<HTMLInputElement>('#top-p').value;
-  let maxTok = Number.parseInt(qs<HTMLInputElement>('#max-tokens').value, 10);
-  if (Number.isNaN(maxTok) || maxTok < 1) {maxTok = 1;}
-  else if (maxTok > 4096) {maxTok = 4096;}
+  const maxTok = clampMaxTokens(qs<HTMLInputElement>('#max-tokens').value);
   return `&temperature=${encodeURIComponent(temp)}&top_p=${encodeURIComponent(topP)}&max_tokens=${encodeURIComponent(maxTok)}`;
 }
 
@@ -1320,7 +1345,10 @@ function deleteConv(id: string) {
   fetch('/v1/conversations', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `action=delete&id=${encodeURIComponent(id)}` })
   .then(function(r) { return r.json(); }).then(function(data) {
     loadConvs(); if (data.cleared) {showEmpty();} inp.focus();
-    announceToSR('Conversation deleted');
+    // Deleting another conversation changes nothing on screen, so the row
+    // vanishing is the only feedback; say it landed. The toast's own live
+    // region announces it, so no second announce here.
+    showToast('Conversation deleted.', 'info');
   }).catch(function() {
     showToast('Could not delete that conversation. Check that the server is running.');
   });

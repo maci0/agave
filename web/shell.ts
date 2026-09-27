@@ -124,6 +124,35 @@ function friendlyLoadError(error: unknown): string {
   return msg.startsWith('Could not') ? msg : `Could not load model: ${msg}`;
 }
 
+/** Map generation failures to short, actionable copy, mirroring friendlyLoadError. */
+function friendlyGenerateError(error: unknown): string {
+  if (error instanceof AgaveError) {
+    switch (error.code) {
+      case 'not_initialized':
+      case 'no_model':
+        return 'Load a GGUF model first.';
+      case 'alloc_failed':
+        return 'Not enough memory to generate a reply. Try a smaller model.';
+      case 'invalid_argument':
+        return 'Generation settings are out of range. Reload the page and try again.';
+      case 'wasm_invalid':
+        return 'The inference engine failed. Reload the page.';
+      default:
+        return error.message.startsWith('Could not') ? error.message : `Could not generate a reply: ${error.message}`;
+    }
+  }
+  const msg = error instanceof Error ? error.message : String(error);
+  const lower = msg.toLowerCase();
+  if (lower === 'no model loaded' || lower === 'model not initialized') {return 'Load a GGUF model first.';}
+  if (lower.includes('out of memory') || lower.includes('failed to allocate')) {
+    return 'Not enough memory to generate a reply. Try a smaller model.';
+  }
+  if (lower === 'failed to fetch' || lower === 'load failed' || lower.includes('networkerror')) {
+    return 'The connection dropped while generating. Try again.';
+  }
+  return msg.startsWith('Could not') ? msg : `Could not generate a reply: ${msg}`;
+}
+
 async function downloadModel(url: string): Promise<ArrayBuffer> {
   const response = await fetch(url);
   if (!response.ok) {
@@ -340,14 +369,8 @@ async function send(): Promise<void> {
     addMessage('assistant', output);
   } catch (e) {
     pending.remove();
-    const no_model = e instanceof AgaveError
-      && (e.code === 'no_model' || e.code === 'not_initialized');
-    const message = e instanceof Error ? e.message : String(e);
-    const lower = message.toLowerCase();
-    const shown = no_model || lower === 'no model loaded' || lower === 'model not initialized'
-      ? 'Load a GGUF model first.'
-      : `Could not generate a reply: ${message}`;
-    addMessage('error', shown);
+    // addMessage announces the text for the error role, so no second announce here.
+    addMessage('error', friendlyGenerateError(e));
   }
 
   promptInput.disabled = false;
