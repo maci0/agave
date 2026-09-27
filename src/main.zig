@@ -2057,9 +2057,8 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
 /// Target architectures listed in `--help`. DFlash2 is a drafter (`--draft-model`), not a target.
 const supported_arch_help = blk: {
     const order = [_]Arch{
-        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4exp, .qwen4_exp,
-        .gpt_oss, .nemotron_h, .nemotron_nano,   .glm4,   .deepseek4,
-        .llama4,
+        .gemma3,  .gemma4,     .diffusion_gemma, .qwen35, .qwen4exp,  .qwen4_exp,
+        .gpt_oss, .nemotron_h, .nemotron_nano,   .glm4,   .deepseek4, .llama4,
     };
     var acc: []const u8 = "";
     for (order) |a| {

@@ -535,15 +535,15 @@ pub const Qwen4ExpModel = struct {
     pub fn deinit(self: *Qwen4ExpModel) void {
         const a = self.allocator;
         inline for (.{
-            &self.hidden,        &self.hidden2,      &self.res_hc,     &self.hc_lo,
-            &self.hc_gate,       &self.hc_inject,    &self.q_buf,      &self.k_buf,
-            &self.v_buf,         &self.gate_buf,     &self.attn_out,   &self.scores_buf,
-            &self.ff_buf1,       &self.ff_buf2,      &self.moe_out,    &self.router_logits,
-            &self.logits_buf,    &self.ssm_qkv_buf,  &self.ssm_z_buf,  &self.ssm_alpha_buf,
-            &self.ssm_beta_buf,  &self.ssm_conv_out, &self.idx_q_buf,  &self.idx_k_buf,
-            &self.idx_pooled,    &self.idx_scores,   &self.ple_emb,    &self.ple_key,
-            &self.ple_value,     &self.ple_query,    &self.ple_gated,  &self.ple_conv_in,
-            &self.ple_conv_out,  &self.ple_conv_w,   &self.ple_conv_hist,
+            &self.hidden,       &self.hidden2,      &self.res_hc,        &self.hc_lo,
+            &self.hc_gate,      &self.hc_inject,    &self.q_buf,         &self.k_buf,
+            &self.v_buf,        &self.gate_buf,     &self.attn_out,      &self.scores_buf,
+            &self.ff_buf1,      &self.ff_buf2,      &self.moe_out,       &self.router_logits,
+            &self.logits_buf,   &self.ssm_qkv_buf,  &self.ssm_z_buf,     &self.ssm_alpha_buf,
+            &self.ssm_beta_buf, &self.ssm_conv_out, &self.idx_q_buf,     &self.idx_k_buf,
+            &self.idx_pooled,   &self.idx_scores,   &self.ple_emb,       &self.ple_key,
+            &self.ple_value,    &self.ple_query,    &self.ple_gated,     &self.ple_conv_in,
+            &self.ple_conv_out, &self.ple_conv_w,   &self.ple_conv_hist,
         }) |buf| {
             if (buf.len > 0) a.free(buf.*);
         }
@@ -749,7 +749,7 @@ pub const Qwen4ExpModel = struct {
         self.be.silu(self.ple_conv_out.ptr, self.ple_conv_out.ptr, hc_dim);
         if (hist > 0) {
             if (hist > 1) {
-                std.mem.copyForwards(f32, self.ple_conv_hist[0 .. (hist - 1) * hc_dim], self.ple_conv_hist[hc_dim..hist * hc_dim]);
+                std.mem.copyForwards(f32, self.ple_conv_hist[0 .. (hist - 1) * hc_dim], self.ple_conv_hist[hc_dim .. hist * hc_dim]);
             }
             @memcpy(self.ple_conv_hist[(hist - 1) * hc_dim ..][0..hc_dim], self.ple_conv_in);
         }
