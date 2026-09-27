@@ -66,6 +66,7 @@ agave/
 │   ├── micro_bench.zig    # Standalone micro-benchmark binary
 │   ├── fuzz_tests.zig     # Fuzz tests (tokenizer, grammar, JSON parser, quantization)
 │   ├── format/
+│   │   ├── dtype.zig      # Element-type enum (DType), leaf module for ops/backend
 │   │   ├── format.zig     # Format interface (getTensor, getMetaStr, ...)
 │   │   ├── gguf.zig       # GGUF v2/v3 parser with mmap
 │   │   └── safetensors.zig# Multi-shard SafeTensors loader with config.json

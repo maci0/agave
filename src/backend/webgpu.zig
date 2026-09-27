@@ -1105,7 +1105,7 @@ pub const WebGpuBackend = struct {
         // This avoids uploading the entire multi-hundred-MB vocab table to GPU.
         if (table.dtype != .f32) {
             const quant = @import("../ops/quant.zig");
-            const DType = @import("../format/format.zig").DType;
+            const DType = @import("../format/dtype.zig").DType;
             const row_dtype: DType = switch (table.dtype) {
                 .q8_0 => .q8_0,
                 .bf16 => .bf16,

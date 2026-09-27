@@ -3,46 +3,9 @@
 
 const std = @import("std");
 
-/// Supported tensor data types for model weights and activations.
-/// Shared across format loaders (tensor metadata) and backends (kernel dispatch).
-pub const DType = enum {
-    f32,
-    f16,
-    bf16,
-    q2_k,
-    q3_k,
-    q4_0,
-    q4_1,
-    q4_k,
-    q5_0,
-    q5_k,
-    q6_k,
-    q8_0,
-    iq4_xs,
-    iq4_nl,
-    iq3_xxs,
-    iq3_s,
-    iq2_xxs,
-    iq2_xs,
-    iq2_s,
-    iq1_s,
-    iq1_m,
-    fp8_e4m3,
-    fp8_e5m2,
-    nvfp4,
-    mxfp4,
-    tq1_0,
-    tq2_0,
-    /// MLX quantized weights (U32-packed); needs companion scales/biases tensors for dequant.
-    mlx_q,
-    /// GPTQ INT4 packed in INT32 (row-major); needs companion scales/qzeros tensors.
-    gptq,
-    /// AWQ INT4 packed in INT32 (column-major); needs companion scales/qzeros tensors.
-    awq,
-    /// HQQ 4-bit packed in uint8 (2 nibbles/byte); needs companion meta.scale/meta.zero tensors.
-    hqq,
-    unknown,
-};
+/// Supported tensor data types, canonical definition in `dtype.zig`,
+/// re-exported here for loader-side consumers.
+pub const DType = @import("dtype.zig").DType;
 
 pub const arch_key_buf_size: usize = 256;
 const layer_name_buf_size: usize = 128;
@@ -545,13 +508,6 @@ test "Format layerTensor name formatting" {
 
     const name42 = std.fmt.bufPrint(&buf, "blk.{d}.{s}", .{ @as(u32, 42), "ffn_gate_exps.weight" }) catch unreachable;
     try std.testing.expectEqualStrings("blk.42.ffn_gate_exps.weight", name42);
-}
-
-test "DType enum completeness" {
-    // Verify all DType variants are distinct and the enum has the expected count
-    const dtype_fields = @typeInfo(DType).@"enum".fields;
-    // Count should match all known dtypes
-    try std.testing.expect(dtype_fields.len >= 25); // At least: f32, f16, bf16, q2-q8, iq4s, fp8s, nvfp4, mxfp4, tq1_0, tq2_0, mlx_q, gptq, awq, hqq, unknown
 }
 
 test "fuzz: all format functions" {
