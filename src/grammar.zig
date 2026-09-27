@@ -29,8 +29,16 @@ const max_rules: usize = 512;
 const max_char_class_ranges: usize = 64;
 const max_accept_depth: u32 = 32;
 const max_stack_growth_per_token: usize = max_accept_depth + 1;
-const bpe_two_byte_prefix: u8 = 0xC4;
-const bpe_latin1_prefix: u8 = 0xC3;
+/// Byte-level BPE markers whose UTF-8 form opens with a C3 or C4 lead byte:
+/// Ġ (space), Ċ (newline), Ã (raw 0xC3). A leading byte pair that is not one of
+/// these is text, not a marker, and must reach the grammar intact.
+fn isBpeMarkerPrefix(lead: u8, trail: u8) bool {
+    return switch (lead) {
+        0xC4 => trail == 0xA0 or trail == 0x8A, // Ġ Ċ
+        0xC3 => trail == 0x83, // Ã
+        else => false,
+    };
+}
 
 // ── Grammar Elements ────────────────────────────────────────────
 
@@ -256,12 +264,15 @@ pub const Grammar = struct {
     }
 
     /// Strip BPE byte-level encoding prefix to get actual text.
-    /// Qwen/GPT uses Ġ (0xC4 0xA0) for space, Ċ (0xC4 0x8A) for newline, etc.
+    /// Qwen/GPT uses Ġ (U+0120) for space, Ċ (U+010A) for newline, and Ã (U+00C3)
+    /// for a raw 0xC3 byte.
+    ///
+    /// Only those three markers are stripped. Every other C3/C4 lead byte also
+    /// opens real text ("é" is C3 A9, "Ā" is C4 80), and a vocabulary that
+    /// stores decoded text rather than the byte-level mapping would have that
+    /// first character eaten, leaving the grammar to validate the wrong string.
     pub fn getEffectiveText(text: []const u8) []const u8 {
-        if (text.len >= 2 and text[0] == bpe_two_byte_prefix) {
-            return text[2..];
-        }
-        if (text.len >= 2 and text[0] == bpe_latin1_prefix) {
+        if (text.len >= 2 and isBpeMarkerPrefix(text[0], text[1])) {
             return text[2..];
         }
         // Strip a leading ASCII space (0x20), the decoded form of the BPE Ġ prefix.
@@ -1741,6 +1752,17 @@ test "Grammar.getEffectiveText strips BPE prefix" {
     // No prefix: identity
     const plain = "hello";
     try std.testing.expectEqualStrings(plain, Grammar.getEffectiveText(plain));
+}
+
+test "Grammar.getEffectiveText keeps non-marker non-ASCII text" {
+    // "é" is C3 A9 and "Ā" is C4 80: C3/C4 lead bytes that are text, not
+    // byte-level markers. Stripping them left the grammar with "gaux" for
+    // "égaux" and no valid text at all for a bare "é".
+    try std.testing.expectEqualStrings("\xc3\xa9gaux", Grammar.getEffectiveText("\xc3\xa9gaux"));
+    try std.testing.expectEqualStrings("\xc4\x80bc", Grammar.getEffectiveText("\xc4\x80bc"));
+    // Ċ and Ã are still markers.
+    try std.testing.expectEqualStrings("hi", Grammar.getEffectiveText(&[_]u8{ 0xC4, 0x8A, 'h', 'i' }));
+    try std.testing.expectEqualStrings("a", Grammar.getEffectiveText(&[_]u8{ 0xC3, 0x83, 'a' }));
 }
 
 test "Grammar.parse rejects oversized input" {
