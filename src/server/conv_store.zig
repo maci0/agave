@@ -408,6 +408,13 @@ fn testPath(buf: []u8, name: []const u8) []u8 {
     return std.fmt.bufPrint(buf, "test_conv_store_{d}_{s}", .{ std.c.getpid(), name }) catch unreachable;
 }
 
+/// Suffix `durable.replace` appends to the live path for its sibling tmp.
+fn tmpSuffix() []const u8 {
+    return std.fmt.bufPrint(&tmp_suffix_buf, ".tmp.{d}", .{std.c.getpid()}) catch unreachable;
+}
+
+var tmp_suffix_buf: [32]u8 = undefined;
+
 fn testPathSuffix(buf: []u8, path: []const u8, suffix: []const u8) []u8 {
     return std.fmt.bufPrint(buf, "{s}{s}", .{ path, suffix }) catch unreachable;
 }
@@ -472,7 +479,7 @@ test "save/load round-trips conversations and tool ids" {
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
     var corrupt_buf: [std.fs.max_path_bytes]u8 = undefined;
     defer deleteTestPath(path);
-    defer deleteTestPath(testPathSuffix(&tmp_buf, path, ".tmp"));
+    defer deleteTestPath(testPathSuffix(&tmp_buf, path, tmpSuffix()));
     defer deleteTestPath(testPathSuffix(&corrupt_buf, path, ".corrupt"));
 
     const msgs = [_]Message{

@@ -489,7 +489,9 @@ const CalibrationResult = struct {
 fn writeCalFile(result: *const CalibrationResult, path: []const u8) !void {
     const io = mod_io;
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const tmp_path = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{path}) catch return error.NameTooLong;
+    // Pid-qualified so a concurrent calibration of the same path cannot
+    // truncate this tmp or rename its own bytes into the live file.
+    const tmp_path = std.fmt.bufPrint(&tmp_buf, "{s}.tmp.{d}", .{ path, std.c.getpid() }) catch return error.NameTooLong;
     const file = try Io.Dir.cwd().createFile(io, tmp_path, .{ .read = true });
     var fd_open = true;
     errdefer {

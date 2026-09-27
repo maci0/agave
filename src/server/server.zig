@@ -29,6 +29,7 @@ const Metrics = metrics_mod.Metrics;
 const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 const json = @import("json.zig");
 const conv_store = @import("conv_store.zig");
+const Idempotency = @import("idempotency.zig");
 const tools_mod = @import("tools.zig");
 const SamplingParams = json.SamplingParams;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
@@ -555,6 +556,9 @@ const Server = struct {
     next_id: u32 = 1,
     /// JSON conversation store path. Null disables persist/restore.
     conv_store_path: ?[]const u8 = null,
+    /// Replay ledger for the mutating chat routes, keyed by client
+    /// `X-Request-Id`. Guarded by `mutex`.
+    idem: Idempotency.Ledger,
     /// Whether the KV cache matches the active conversation's state.
     kv_valid: bool = false,
     /// Cached prompt token IDs from the last API generation (for prefix reuse).
@@ -717,6 +721,36 @@ const Server = struct {
             self.kv_valid = false;
             self.persistConversationsLocked();
         }
+    }
+
+    /// Claim the caller's `X-Request-Id` in the replay ledger. A request
+    /// without a client id has nothing to deduplicate on and always runs.
+    fn claimIdempotencyKey(self: *Server) Idempotency.Claim {
+        const key = log_client_rid[0..log_client_rid_len];
+        if (key.len == 0) return .fresh;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.idem.claim(key, milliTimestamp());
+    }
+
+    /// Record a mutating request's response so a retry replays it instead of
+    /// applying the operation twice. `status_line` and `content_type` must be
+    /// string literals or otherwise outlive the server.
+    fn completeIdempotencyKey(self: *Server, status_line: []const u8, content_type: []const u8, body: []const u8) void {
+        const key = log_client_rid[0..log_client_rid_len];
+        if (key.len == 0) return;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.idem.complete(key, milliTimestamp(), status_line, content_type, body);
+    }
+
+    /// Drop an unfinished claim so a failed request does not block its retries.
+    fn releaseIdempotencyKey(self: *Server) void {
+        const key = log_client_rid[0..log_client_rid_len];
+        if (key.len == 0) return;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.idem.release(key);
     }
 
     /// Write conversations to `conv_store_path`. Caller must hold self.mutex.
@@ -1488,6 +1522,52 @@ fn sendJson(stream: TcpStream, body: []const u8) void {
 /// Send a 200 OK HTTP response with `text/html; charset=utf-8` content type.
 fn sendHtml(stream: TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
+}
+
+/// Resolve a repeated mutating request against the replay ledger.
+/// Returns true when the response was sent and the caller must not run the
+/// operation again; false when this request owns the key and should proceed.
+fn resolveIdempotency(stream: TcpStream, method: []const u8, path: []const u8, request_start: i64) bool {
+    switch (g_server.claimIdempotencyKey()) {
+        .fresh => return false,
+        .duplicate => {
+            sendJsonErrorEx(stream, "409 Conflict", "invalid_request_error", "A request with this X-Request-Id is still in flight", null, "duplicate_request");
+            g_server.metrics.recordClientError();
+            logRequestDone(method, path, 409, elapsedMs(request_start));
+        },
+        .replay => |r| {
+            // A streamed or oversized response is recorded as completed
+            // without a body: the operation stays suppressed, but there are
+            // no original bytes to send back.
+            if (r.body.len == 0) {
+                sendJsonErrorEx(stream, "409 Conflict", "invalid_request_error", "This X-Request-Id already ran; its response is not replayable", null, "duplicate_request");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 409, elapsedMs(request_start));
+            } else {
+                sendIdempotentReplay(stream, r);
+                logRequestDone(method, path, 200, elapsedMs(request_start));
+            }
+        },
+    }
+    return true;
+}
+
+/// Re-send the response recorded for a repeated `X-Request-Id`. The ledger
+/// has already refused to run the operation a second time, so this is the
+/// answer the first execution produced.
+fn sendIdempotentReplay(stream: TcpStream, replay: Idempotency.Replay) void {
+    var hdr_buf: [hdr_buf_size]u8 = undefined;
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nIdempotent-Replay: true\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ replay.status_line, replay.content_type, replay.body.len, log_request_id, corsHeaders() }) catch {
+        std.log.warn("req={d} replay header overflow (body={d})", .{ log_request_id, replay.body.len });
+        return;
+    };
+    stream.writeAll(hdr) catch |err| {
+        std.log.warn("req={d} replay write failed (headers): {}", .{ log_request_id, err });
+        return;
+    };
+    stream.writeAll(replay.body) catch |err| {
+        std.log.warn("req={d} replay write failed (body, {d} bytes): {}", .{ log_request_id, replay.body.len, err });
+    };
 }
 
 fn sendDocumentNotModified(stream: TcpStream, etag: []const u8) void {
@@ -3293,6 +3373,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         g_server.metrics.recordRequest();
 
+        // Each call pops one assistant message, so a retry after a lost
+        // response would destroy a turn the first attempt already replaced.
+        if (resolveIdempotency(stream, method, path, request_start)) return;
+
         const regen_body = req.body;
         var regen_sampling = json.SamplingParams{};
         json.parseFormSampling(&regen_sampling, regen_body);
@@ -3374,7 +3458,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
             break :blk RegenPrepResult{ .formatted = regen_formatted, .msg_count = regen_conv.messages.items.len, .prompt_ids = regen_ids_owned };
         };
-        if (regen_prep == null) return;
+        if (regen_prep == null) {
+            g_server.releaseIdempotencyKey();
+            return;
+        }
         const regen_formatted = regen_prep.?.formatted;
         defer wipeFree(g_server.allocator, @constCast(regen_formatted));
         const regen_msg_count = regen_prep.?.msg_count;
@@ -3388,11 +3475,15 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         if (wants_stream_regen) {
             if (!sendSseHeaders(stream)) {
                 g_server.metrics.recordCancellation();
+                g_server.releaseIdempotencyKey();
                 return;
             }
             const regen_result = chatStreamGeneratePre(stream, regen_formatted, true, regen_max_tokens, regen_sampling, regen_prompt_ids_owned);
             defer wipeFree(g_server.allocator, regen_result.data);
             storeConversationResponse(regen_result.data, regen_result.stats);
+            // Streamed bytes are not buffered for replay, but the key still
+            // has to be marked done so a retry does not pop another message.
+            g_server.completeIdempotencyKey("200 OK", "text/event-stream", "");
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -3410,6 +3501,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Never fall back to unescaped model output, OOM must not enable XSS (CWE-79).
         const regen_escaped = json.htmlEscape(g_server.allocator, regen_result.data) catch {
             sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
+            g_server.releaseIdempotencyKey();
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         };
@@ -3419,6 +3511,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             \\<div class="msg assistant" data-tokens="{d}" data-time="{d}" data-tps="{d:.2}" data-prefill-tokens="{d}" data-prefill-ms="{d}" data-prefill-tps="{d:.1}">{s}</div>
         , .{ regen_result.stats.tokens_generated, regen_result.stats.time_ms, regen_result.stats.tokens_per_sec, regen_result.stats.prompt_tokens, regen_result.stats.prefill_ms, regen_result.stats.prefill_tps, regen_escaped }) catch "<div class=\"msg assistant\">Error</div>";
         sendHtml(stream, regen_html);
+        g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", regen_html);
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
@@ -3510,6 +3603,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Get or create active conversation, add user message, format prompt
         //, all under mutex. Returns (need_reset, formatted) or null on failure.
+        // The turn is appended and persisted, so a retry after a lost response
+        // would leave a second user turn and a second assistant reply behind.
+        if (resolveIdempotency(stream, method, path, request_start)) return;
         const ChatPrepResult = struct { need_reset: bool, formatted: []const u8, prompt_ids: []u32 };
         const prep_result: ?ChatPrepResult = blk: {
             g_server.mutex.lockUncancelable(g_server.io);
@@ -3580,7 +3676,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             prompt_ids_owned_handed_off = true;
             break :blk ChatPrepResult{ .need_reset = need_reset, .formatted = formatted, .prompt_ids = prompt_ids_owned };
         };
-        if (prep_result == null) return;
+        if (prep_result == null) {
+            g_server.releaseIdempotencyKey();
+            return;
+        }
         const need_reset = prep_result.?.need_reset;
         const formatted = prep_result.?.formatted;
         defer if (formatted.ptr != trimmed.ptr) wipeFree(g_server.allocator, @constCast(formatted));
@@ -3597,11 +3696,15 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         if (wants_stream) {
             if (!sendSseHeaders(stream)) {
                 g_server.metrics.recordCancellation();
+                g_server.releaseIdempotencyKey();
                 return;
             }
             const result = chatStreamGeneratePre(stream, formatted, need_reset, chat_max_tokens, chat_sampling, chat_prompt_ids_owned);
             defer wipeFree(g_server.allocator, result.data);
             storeConversationResponse(result.data, result.stats);
+            // Streamed bytes are not buffered for replay, but the key still
+            // has to be marked done so a retry does not append a second turn.
+            g_server.completeIdempotencyKey("200 OK", "text/event-stream", "");
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         }
@@ -3618,12 +3721,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Never fall back to unescaped input, send a safe error page on OOM (CWE-79).
         const escaped_user = json.htmlEscape(g_server.allocator, decoded) catch {
             sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
+            g_server.releaseIdempotencyKey();
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         };
         defer if (escaped_user.ptr != decoded.ptr) wipeFree(g_server.allocator, escaped_user);
         const escaped_resp = json.htmlEscape(g_server.allocator, result.data) catch {
             sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
+            g_server.releaseIdempotencyKey();
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         };
@@ -3633,6 +3738,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             \\<div class="msg user">{s}</div><div class="msg assistant" data-tokens="{d}" data-time="{d}" data-tps="{d:.2}" data-prefill-tokens="{d}" data-prefill-ms="{d}" data-prefill-tps="{d:.1}">{s}</div>
         , .{ escaped_user, result.stats.tokens_generated, result.stats.time_ms, result.stats.tokens_per_sec, result.stats.prompt_tokens, result.stats.prefill_ms, result.stats.prefill_tps, escaped_resp }) catch "<div class=\"msg assistant\">Error</div>";
         sendHtml(stream, html);
+        g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", html);
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
@@ -7170,6 +7276,7 @@ pub fn run(config: ServerConfig) !void {
         .image_start_token_id = image_start_token_id,
         .image_end_token_id = image_end_token_id,
         .io = io,
+        .idem = Idempotency.Ledger.init(allocator),
         .draft_model = config.draft_model,
         .spec_tokens = config.spec_tokens,
         .tree_budget = config.tree_budget,
@@ -7210,6 +7317,7 @@ pub fn run(config: ServerConfig) !void {
         break :blk &.{};
     };
     defer if (server.html_gzip.len != 0) allocator.free(server.html_gzip);
+    defer server.idem.deinit();
 
     // Initialize continuous batching scheduler and background thread.
     // The scheduler owns the model forward loop; HTTP handlers enqueue
