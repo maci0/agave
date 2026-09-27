@@ -5701,7 +5701,7 @@ test "looksLikeUnknownShortOpt detects short typos" {
 comptime {
     _ = @import("devices/discovery.zig");
     _ = @import("parallel/peer_discovery.zig");
-    _ = @import("parallel/tp.zig");
+    _ = @import("models/tp.zig");
     _ = @import("kvcache/prefetch.zig");
 }
 

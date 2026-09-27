@@ -4,10 +4,13 @@
 //! but only executes rank 0, all-reduce is not yet implemented.
 //!
 //! CPU-only. GPU TP would use NCCL/RCCL all-reduce instead.
+//!
+//! Lives with the model layer because it composes `ModelStorage` instances;
+//! `src/parallel/` holds only the leaf transport and peer-discovery modules.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const model_mod = @import("../models/model.zig");
+const model_mod = @import("model.zig");
 const Model = model_mod.Model;
 const ModelStorage = model_mod.ModelStorage;
 const format_mod = @import("../format/format.zig");

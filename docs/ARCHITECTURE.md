@@ -85,6 +85,7 @@ agave/
 │   │   ├── llama4.zig       # Llama 4 (iRoPE, chunked attention, top-1 MoE)
 │   │   ├── dflash2.zig      # DFlash2 block-diffusion drafter (binds target embeddings/LM head)
 │   │   ├── ds4_mtp.zig      # DeepSeek V4 MTP heads loaded from a separate safetensors file
+│   │   ├── tp.zig          # CPU tensor parallelism coordinator (rank-0 only; GPU TP uses NCCL via parallel/transport.zig)
 │   │   └── vision.zig       # Vision encoder (SigLIP-2, SigLIP, Qwen VL) for multimodal models
 │   ├── ops/
 │   │   ├── attention.zig  # Shared SDPA kernel (SIMD, sliding window, backend dispatch)
@@ -123,7 +124,6 @@ agave/
 │   │       └── webgpu/    # WGSL compute shaders
 │   ├── parallel/
 │   │   ├── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
-│   │   ├── tp.zig         # CPU tensor parallelism coordinator (rank-0 only; GPU TP uses NCCL via transport.zig)
 │   │   └── peer_discovery.zig # UDP peer discovery (LAN broadcast, auto-connect; not devices/discovery)
 │   ├── spec/
 │   │   ├── spec_decode.zig # Speculative decoding orchestrator (draft, verify, accept)

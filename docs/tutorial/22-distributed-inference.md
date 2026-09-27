@@ -34,7 +34,7 @@ Two code paths exist for running dual-rank TP, chosen by whether a network `Tran
 - **No transport (in-process simulation):** a single `Qwen35Model` instance flips its own `tp_rank` field between `0` and `1` and calls `ffnCompute()` twice in a row inside its own `forward()`, once per rank, reusing the same weight buffers via `shardColumnWeight()`'s pointer-offset trick. The two partial results land in separate scratch buffers and get added together with a plain loop (`self.hidden2[i] += self.attn_out[i]`), the in-process stand-in for `allReduceAdd`. One model, one process, no parallelism speedup, useful for correctness testing without a second machine.
 - **With transport:** a single rank per process, real network communication for `allReduceAdd`, real parallel speedup, second machine or second process required.
 
-A separate, third coordinator, `TpGroup` (`src/parallel/tp.zig`), is not the mechanism behind either path above. It allocates `degree` full `ModelStorage` instances, one per rank, each with its own sharded weights, but its own file header says plainly it "only executes rank 0", because all-reduce isn't implemented for it. It is an incomplete scaffold that `main.zig` doesn't call into today, not the code path that runs when you set `tp_degree > 1`.
+A separate, third coordinator, `TpGroup` (`src/models/tp.zig`), is not the mechanism behind either path above. It allocates `degree` full `ModelStorage` instances, one per rank, each with its own sharded weights, but its own file header says plainly it "only executes rank 0", because all-reduce isn't implemented for it. It is an incomplete scaffold that `main.zig` doesn't call into today, not the code path that runs when you set `tp_degree > 1`.
 
 `--tp 2` and `--pp 2` are launchable from the CLI. Transport is still a 2-rank pair, so `--tp > 2` and `--pp > 2` exit with code 2. Qwen 3.5 FFN TP and DeepSeek V4 expert-parallel TP both call `Transport.allReduceAdd` (TCP, shm, or `--transport nccl` on CUDA). `--pp` and `--disagg` use the same pair.
 
@@ -154,7 +154,7 @@ agave model.gguf --tp 2 --pp 2 --rank 0 --peers 192.168.0.2
 - **Only the FFN block is genuinely tensor-parallel today.** As covered in section 2, attention always runs at `tp_degree = 1` because per-rank KV cache splitting isn't implemented. Expect TP speedup (or memory savings) proportional to the FFN block's share of the layer, not the whole layer, and don't expect attention-heavy configurations to benefit as much as the FFN math alone would suggest.
 - **RCCL is a name in an enum, nothing more.** `TransportKind.rccl` exists so code can pattern-match on it and so future work has a slot to fill in, but `Transport.init()` returns `error.NotImplemented` for it unconditionally. There's no partial ROCm collective path to fall back to.
 
-**In the code:** [`parallel` transport and sharding](../../src/parallel/transport.zig), [`Qwen35Model.forward()` TP/PP wiring](../../src/models/qwen35.zig), [`Ds4Model.forward()` PP + expert-parallel TP](../../src/models/deepseek4.zig), [`TpGroup`, rank-0-only, unused](../../src/parallel/tp.zig), [`device discovery`](../../src/devices/discovery.zig)
+**In the code:** [`parallel` transport and sharding](../../src/parallel/transport.zig), [`Qwen35Model.forward()` TP/PP wiring](../../src/models/qwen35.zig), [`Ds4Model.forward()` PP + expert-parallel TP](../../src/models/deepseek4.zig), [`TpGroup`, rank-0-only, unused](../../src/models/tp.zig), [`device discovery`](../../src/devices/discovery.zig)
 
 ```text
 enumerate local devices
