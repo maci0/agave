@@ -155,8 +155,13 @@ pub const SpecState = struct {
 
         for (0..@min(self.k, max_draft_tokens)) |ki| {
             if (self.k_total_counts[ki] < adaptive_k_min_samples) continue;
+            // u64 product: k_total_counts * (ki + 1) wraps a u32 after ~134M
+            // rounds at the deepest k, and the wrapped denominator picks a
+            // garbage accept_rate that then drives best_k.
+            const total = @as(u64, self.k_total_counts[ki]) * (@as(u64, ki) + 1);
+            if (total == 0) continue;
             const accept_rate = @as(f32, @floatFromInt(self.k_accept_counts[ki])) /
-                @as(f32, @floatFromInt(self.k_total_counts[ki] * (@as(u32, @intCast(ki)) + 1)));
+                @as(f32, @floatFromInt(total));
             const k_val: f32 = @floatFromInt(ki + 1);
             const ev = k_val * accept_rate + 1.0;
             if (ev > best_ev) {

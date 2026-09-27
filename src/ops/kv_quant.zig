@@ -384,7 +384,10 @@ fn rotorStore(comptime bits: u3, comptime rot: Rotation, dst: [*]u8, src: [*]con
         const norm = @sqrt(@reduce(.Add, norm_acc));
         const bp = dst + blk * bb;
 
-        if (norm < absmax_epsilon) {
+        // A NaN norm fails `norm < absmax_epsilon`; 1.0 / NaN would then
+        // normalize the block to NaN and nearestCentroid would return index 0
+        // for every lane, silently collapsing it onto the first centroid.
+        if (!std.math.isFinite(norm) or norm < absmax_epsilon) {
             @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
             @memset(bp[2..bb], 0);
             continue;
@@ -1295,7 +1298,10 @@ fn turboStore(comptime bits: u3, dst: [*]u8, src: [*]const f32, n: usize) void {
         const norm = @sqrt(norm_sq);
         const bp = dst + blk * bb;
 
-        if (norm < absmax_epsilon) {
+        // A NaN norm fails `norm < absmax_epsilon`; 1.0 / NaN would then
+        // normalize the block to NaN and nearestCentroid would return index 0
+        // for every lane, silently collapsing it onto the first centroid.
+        if (!std.math.isFinite(norm) or norm < absmax_epsilon) {
             // Near-zero vector: store zero norm and zero indices
             @as(*align(1) u16, @ptrCast(bp)).* = @bitCast(@as(f16, 0));
             @memset(bp[2..bb], 0);

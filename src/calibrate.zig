@@ -781,7 +781,7 @@ fn printSummary(result: *const CalibrationResult) void {
         }
     }
     const total_bands: f32 = @floatFromInt(total_heads * n_bands);
-    avg_concentration /= total_bands;
+    if (total_bands > 0) avg_concentration /= total_bands;
 
     eprint("\nCalibration summary:\n", .{});
     eprint("  Concentration: avg={d:.4}, min={d:.4}, max={d:.4}\n", .{

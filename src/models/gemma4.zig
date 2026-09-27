@@ -682,6 +682,15 @@ pub const Gemma4Model = struct {
             }
         }
 
+        // KV head counts come straight from metadata. A zero collapses every
+        // KV buffer to length 0 and divides by zero in the tri eviction scorer.
+        if (sl_n_kv_head == 0 or gl_n_kv_head == 0 or sl_n_head == 0 or gl_n_head == 0) {
+            std.log.err("gemma4: attention head counts must be non-zero (n_head={d}, n_head_kv={d}, n_head_global={d}, n_head_kv_global={d})", .{
+                sl_n_head, sl_n_kv_head, gl_n_head, gl_n_kv_head,
+            });
+            return error.InvalidModelConfig;
+        }
+
         // Compute max buffer sizes across both layer types
         const sl_qkv_dim: usize = @as(usize, sl_n_head) * sl_head_dim;
         const sl_kv_dim: usize = @as(usize, sl_n_kv_head) * sl_head_dim;

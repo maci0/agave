@@ -351,6 +351,11 @@ pub fn scorePositionsTri(
 /// Generate RoPE frequency table for calibration.
 /// ω_f = 1 / θ^(2f/d) for f = 0..d/2-1.
 pub fn ropeFrequencies(allocator: std.mem.Allocator, head_dim: usize, theta: f32) ![]f32 {
+    // theta comes from a .cal header field with no range check. A zero or
+    // negative theta makes pow(theta, 2f/d) zero or NaN for every f > 0, so
+    // 1.0 / that is inf or NaN and every tri score becomes NaN.
+    if (head_dim == 0) return error.InvalidHeadDim;
+    if (!std.math.isFinite(theta) or theta <= 0) return error.InvalidRopeTheta;
     const n_bands = head_dim / 2;
     const freqs = try allocator.alloc(f32, n_bands);
     const inv_dim: f32 = 1.0 / @as(f32, @floatFromInt(head_dim));
