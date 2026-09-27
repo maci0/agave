@@ -678,5 +678,13 @@ pub fn build(b: *std.Build) void {
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
         check_step.dependOn(test_step);
+
+        // The blocking ci-pass jobs a workstation can reproduce. Docker,
+        // cross-compile, wasm, fuzz and PTX freshness stay in CI (or the
+        // CONTRIBUTING table): they need Docker, cross toolchains, or a
+        // long fuzz budget.
+        const ci_step = b.step("ci", "Full local CI gate: check + lint-web (needs bun)");
+        ci_step.dependOn(check_step);
+        ci_step.dependOn(lint_web_step);
     }
 }
