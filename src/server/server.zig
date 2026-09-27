@@ -3134,12 +3134,13 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         const want_tools_m = toolsWanted(&tool_params_m);
 
-        // Anthropic: system message is a top-level field, not in messages array
-        const system_msg_raw = json.extractField(body, "system");
-        const system_msg = if (system_msg_raw) |s| (json.jsonUnescape(g_server.allocator, s) catch @constCast(s)) else null;
-        defer if (system_msg) |s| if (system_msg_raw) |r| {
-            if (s.ptr != r.ptr) wipeFree(g_server.allocator, s);
+        // Anthropic: system message is a top-level field, not in messages
+        // array, and is either a string or an array of text blocks.
+        const system_msg = json.extractSystemOwned(g_server.allocator, body) catch |err| blk: {
+            std.log.warn("req={d} anthropic system prompt decode failed: {}", .{ log_request_id, err });
+            break :blk null;
         };
+        defer if (system_msg) |s| wipeFree(g_server.allocator, s);
 
         // Inject tool definitions into the system prompt ahead of the request's
         // own system message (same contract as /v1/chat/completions).
