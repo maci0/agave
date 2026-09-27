@@ -100,36 +100,19 @@ pub const TieredBlock = struct {
     ssd_offset: ?u64 = null,
 };
 
-/// Callback for physical data transfer between tiers on discrete GPUs.
-/// UMA platforms (Apple Silicon, NVIDIA GB10) use null (no-op, shared memory).
-/// Discrete GPUs implement this to copy data via cuMemcpyAsync / hipMemcpyAsync.
-pub const TransferCallback = struct {
-    /// Copy block data from host (RAM) to device (VRAM).
-    /// Called during promoteToVram on discrete GPUs.
-    upload: ?*const fn (ctx: *anyopaque, dst_dev: [*]u8, src_host: [*]const u8, bytes: usize) void = null,
-    /// Copy block data from device (VRAM) to host (RAM).
-    /// Called during demoteToRam on discrete GPUs.
-    download: ?*const fn (ctx: *anyopaque, dst_host: [*]u8, src_dev: [*]const u8, bytes: usize) void = null,
-    /// Flush all pending async transfers (batch sync point).
-    sync: ?*const fn (ctx: *anyopaque) void = null,
-    /// Opaque backend context (e.g., CUDA stream, HIP stream).
-    ctx: ?*anyopaque = null,
-
-    /// No-op transfer for UMA platforms (default).
-    pub const uma_noop = TransferCallback{};
-
-    pub fn isActive(self: TransferCallback) bool {
-        return self.upload != null;
-    }
-};
-
 /// Tiered KV cache allocator supporting VRAM, RAM, and SSD tiers.
 /// Blocks are allocated from highest available tier, with automatic demotion
 /// when VRAM usage exceeds threshold (90%).
 ///
-/// SSD tier (Plan 03): Sparse file with fixed-size block slots.
+/// SSD tier: Sparse file with fixed-size block slots.
 /// Block offset = block_id × block_bytes. Blocks spilled to SSD have no RAM
 /// backing (empty slices), restored on-demand via promoteFromSsd().
+///
+/// UMA only. The VRAM and RAM tiers are a residency budget over one shared
+/// address space, so a tier change is a tag change and the block's K/V slices
+/// never move. On a discrete GPU the host and device addresses differ, so the
+/// same tag would mislabel device memory as host memory. There is no transfer
+/// path: do not enable this cache on a discrete backend.
 pub const TieredKvCache = struct {
     /// All blocks (VRAM + RAM + SSD).
     blocks: []TieredBlock,
@@ -169,12 +152,9 @@ pub const TieredKvCache = struct {
     /// Bytes per block (kv_dim × block_size × @sizeOf(f32) × 2).
     block_bytes: usize,
 
-    /// GPU transfer callback for discrete GPUs (null = UMA zero-copy).
-    transfer: TransferCallback = TransferCallback.uma_noop,
-
     /// Tier-mutation lock: serializes promoteFromSsd/promoteToVram/demoteToRam
-    /// across scheduler and prefetch worker threads. Short critical sections
-    /// (microseconds) make spin-wait acceptable.
+    /// across scheduler and prefetch worker threads. Critical sections cover a
+    /// full block migration, including SSD reads on the promote path.
     tier_lock: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Acquire the tier-mutation spinlock. Callers must hold this lock for
@@ -493,15 +473,6 @@ pub const TieredKvCache = struct {
 
         if (!found) return error.NoVramBlocksToDemote;
 
-        // Download data from VRAM → RAM on discrete GPUs (no-op on UMA)
-        if (self.transfer.isActive()) {
-            // TODO(Plan 04): discrete GPU transfer requires separate host/device pointers.
-            // Current TieredBlock stores a single keys/values slice. On UMA this is shared
-            // memory (transfer is no-op). On discrete GPUs, device and host addresses differ
-            // and passing the same pointer as both src and dst would silently corrupt data.
-            std.debug.assert(false); // Plan 04: discrete GPU transfer not yet supported
-        }
-
         self.blocks[victim_id].tier = .ram;
         _ = self.vram_used.fetchSub(1, .monotonic);
         _ = self.ram_used.fetchAdd(1, .monotonic);
@@ -779,16 +750,14 @@ pub const TieredKvCache = struct {
 
     /// Promote block from RAM or SSD to VRAM tier.
     ///
-    /// On UMA platforms, RAM→VRAM is just a tier tag change, no data movement.
-    /// Physical memory is shared between CPU and GPU, so "RAM" and "VRAM" are the
-    /// same memory. Backends use zero-copy access (Metal newBufferWithBytesNoCopy,
+    /// RAM→VRAM is a tier tag change, no data movement. Physical memory is
+    /// shared between CPU and GPU, so "RAM" and "VRAM" are the same memory.
+    /// Backends use zero-copy access (Metal newBufferWithBytesNoCopy,
     /// CUDA cuMemAllocManaged, Vulkan HOST_VISIBLE|DEVICE_LOCAL).
     ///
     /// SSD→VRAM promotion requires two steps:
     /// 1. Restore SSD block to RAM (promoteFromSsd)
-    /// 2. Promote RAM block to VRAM (tier tag change on UMA)
-    ///
-    /// On discrete GPUs, this will trigger data upload in Plan 04.
+    /// 2. Promote RAM block to VRAM (tier tag change)
     ///
     /// If VRAM is full, evicts coldest VRAM block to make room.
     ///
@@ -815,15 +784,6 @@ pub const TieredKvCache = struct {
             std.log.debug("Evicted block {d} to make room for promotion of {d}", .{ evicted, block_id });
         }
 
-        // Transfer data from RAM → VRAM on discrete GPUs (no-op on UMA)
-        if (self.transfer.isActive()) {
-            // TODO(Plan 04): discrete GPU transfer requires separate host/device pointers.
-            // Current TieredBlock stores a single keys/values slice. On UMA this is shared
-            // memory (transfer is no-op). On discrete GPUs, device and host addresses differ
-            // and passing the same pointer as both src and dst would silently corrupt data.
-            std.debug.assert(false); // Plan 04: discrete GPU transfer not yet supported
-        }
-
         std.debug.assert(blk.tier == .ram);
         blk.tier = .vram;
         blk.last_access_ms = milliTimestamp();
@@ -834,9 +794,9 @@ pub const TieredKvCache = struct {
         std.log.debug("Promoted block {d} to VRAM", .{block_id});
     }
 
-    /// Batch promote multiple blocks to VRAM with a single sync point.
-    /// More efficient than individual promoteToVram calls on discrete GPUs
-    /// because async transfers are batched and synced once at the end.
+    /// Batch promote multiple blocks to VRAM under one lock acquisition.
+    /// The per-block VRAM budget check and eviction run once per block, but the
+    /// lock is taken and released once for the whole batch.
     pub fn batchPromoteToVram(self: *TieredKvCache, block_ids: []const u32) !void {
         self.lockTier();
         defer self.unlockTier();
@@ -850,21 +810,11 @@ pub const TieredKvCache = struct {
                 _ = try self.demoteToRam();
             }
 
-            if (self.transfer.isActive()) {
-                // TODO(Plan 04): discrete GPU transfer requires separate host/device pointers.
-                std.debug.assert(false); // Plan 04: discrete GPU transfer not yet supported
-            }
-
             blk.tier = .vram;
             blk.last_access_ms = milliTimestamp();
             blk.access_count +|= 1;
             _ = self.ram_used.fetchSub(1, .monotonic);
             _ = self.vram_used.fetchAdd(1, .monotonic);
-        }
-
-        // Single sync for all batched transfers
-        if (self.transfer.isActive()) {
-            if (self.transfer.sync) |sync_fn| sync_fn(self.transfer.ctx.?);
         }
     }
 
@@ -1027,15 +977,6 @@ test "TieredKvCache access_count increments on promote" {
     try std.testing.expectEqual(@as(u32, 1), cache.blocks[b2].access_count);
 }
 
-test "TransferCallback.uma_noop is inactive" {
-    const cb = TransferCallback.uma_noop;
-    try std.testing.expect(!cb.isActive());
-    try std.testing.expect(cb.upload == null);
-    try std.testing.expect(cb.download == null);
-    try std.testing.expect(cb.sync == null);
-    try std.testing.expect(cb.ctx == null);
-}
-
 test "TieredKvCache batchPromoteToVram empty list" {
     const allocator = std.testing.allocator;
     var cache = try TieredKvCache.init(allocator, 1, 2, 2, 1, 0, 16, null);
@@ -1109,20 +1050,6 @@ test "fuzz: all tiered functions" {
             const tier_val = smith.valueWithHash(u8, 0) % 3;
             const tier: BlockTier = @enumFromInt(tier_val);
             _ = @intFromEnum(tier);
-
-            // --- TransferCallback ---
-            const noop = TransferCallback.uma_noop;
-            std.debug.assert(!noop.isActive());
-            std.debug.assert(noop.upload == null);
-
-            var active_cb = TransferCallback{
-                .upload = &struct {
-                    fn cb(_: *anyopaque, _: [*]u8, _: [*]const u8, _: usize) void {}
-                }.cb,
-                .ctx = undefined,
-            };
-            std.debug.assert(active_cb.isActive());
-            active_cb = TransferCallback.uma_noop;
 
             // --- TieredBlock struct fields ---
             var tb: TieredBlock = undefined;
