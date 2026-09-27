@@ -725,7 +725,14 @@ pub const Ds4Model = struct {
     // ── Tensor lookup ─────────────────────────────────────────────
 
     fn layerTensor(self: *Ds4Model, li: usize, suffix: []const u8) ?TensorInfo {
-        const name = std.fmt.bufPrint(&self.name_buf, "blk.{d}.{s}", .{ li, suffix }) catch return null;
+        return self.layerTensorInto(&self.name_buf, li, suffix);
+    }
+
+    /// Build the tensor name in a caller-owned buffer. Callers running on a pool
+    /// worker must pass their own buffer: `self.name_buf` is shared, and
+    /// `getTensor` hashes and compares the slice while another worker rewrites it.
+    fn layerTensorInto(self: *Ds4Model, buf: []u8, li: usize, suffix: []const u8) ?TensorInfo {
+        const name = std.fmt.bufPrint(buf, "blk.{d}.{s}", .{ li, suffix }) catch return null;
         return self.fmt.getTensor(name);
     }
 
@@ -3588,9 +3595,10 @@ pub const Ds4Model = struct {
                 hash_offset: u32,
                 fn work(ctx_ptr: *anyopaque, start: usize, end: usize) void {
                     const ctx: *const @This() = @ptrCast(@alignCast(ctx_ptr));
+                    var name_buf: [name_buf_size]u8 = undefined;
                     for (start..end) |rel_li| {
                         const li = rel_li + ctx.hash_offset;
-                        if (ctx.model.layerTensor(li, "ffn_gate_exps.weight")) |t| {
+                        if (ctx.model.layerTensorInto(&name_buf, li, "ffn_gate_exps.weight")) |t| {
                             const stride = ds4ExpertStride(t, ctx.model.n_experts);
                             // Touch first byte of each of the top-6 MRU experts
                             if (ctx.model.expert_cache) |ec2| {

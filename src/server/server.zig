@@ -778,12 +778,15 @@ const Server = struct {
 
     /// Claim the caller's `X-Request-Id` in the replay ledger. A request
     /// without a client id has nothing to deduplicate on and always runs.
+    /// A fresh claim's token is stashed in `log_idem_token` for this thread.
     fn claimIdempotencyKey(self: *Server) Idempotency.Claim {
         const key = log_client_rid[0..log_client_rid_len];
-        if (key.len == 0) return .fresh;
+        if (key.len == 0) return .{ .fresh = 0 };
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        return self.idem.claim(key, milliTimestamp());
+        const claim = self.idem.claim(key, milliTimestamp());
+        log_idem_token = if (claim == .fresh) claim.fresh else 0;
+        return claim;
     }
 
     /// Record a mutating request's response so a retry replays it instead of
@@ -791,19 +794,19 @@ const Server = struct {
     /// string literals or otherwise outlive the server.
     fn completeIdempotencyKey(self: *Server, status_line: []const u8, content_type: []const u8, body: []const u8) void {
         const key = log_client_rid[0..log_client_rid_len];
-        if (key.len == 0) return;
+        if (key.len == 0 or log_idem_token == 0) return;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.idem.complete(key, milliTimestamp(), status_line, content_type, body);
+        self.idem.complete(key, log_idem_token, milliTimestamp(), status_line, content_type, body);
     }
 
     /// Drop an unfinished claim so a failed request does not block its retries.
     fn releaseIdempotencyKey(self: *Server) void {
         const key = log_client_rid[0..log_client_rid_len];
-        if (key.len == 0) return;
+        if (key.len == 0 or log_idem_token == 0) return;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.idem.release(key);
+        self.idem.release(key, log_idem_token);
     }
 
     /// Write conversations to `conv_store_path`. Caller must hold self.mutex.
@@ -952,6 +955,11 @@ threadlocal var log_request_id: u64 = 0;
 /// Sanitized inbound `X-Request-Id` (empty when the client omitted one).
 threadlocal var log_client_rid: [max_client_request_id_len]u8 = undefined;
 threadlocal var log_client_rid_len: usize = 0;
+/// Replay-ledger claim token for this handler thread, or 0 when it does not
+/// own a claim. Scopes `completeIdempotencyKey` and `releaseIdempotencyKey`
+/// to the claim this request actually took, so a request that outlives the
+/// in-flight TTL cannot complete or release the retry that replaced it.
+threadlocal var log_idem_token: u64 = 0;
 /// Visual token count from processVisionImage for the current handler thread only.
 /// Must not live on Server: concurrent text requests would observe another
 /// connection's count and inject bogus image pad tokens into the prompt.
@@ -1092,6 +1100,7 @@ fn sanitizeClientRequestId(raw: []const u8, buf: []u8) usize {
 /// Capture inbound `X-Request-Id` for access-log correlation (`xid=`).
 fn captureClientRequestId(headers: []const u8) void {
     log_client_rid_len = 0;
+    log_idem_token = 0;
     const raw = getHeaderValue(headers, "x-request-id") orelse return;
     log_client_rid_len = sanitizeClientRequestId(raw, &log_client_rid);
 }
@@ -1691,6 +1700,9 @@ fn resolveIdempotency(stream: TcpStream, method: []const u8, path: []const u8, r
             logRequestDone(method, path, 409, elapsedMs(request_start));
         },
         .replay => |r| {
+            // The body is this thread's copy: the ledger's slot can be freed by
+            // another request's claim while these bytes are still on the wire.
+            defer r.deinit(g_server.allocator);
             // A streamed or oversized response is recorded as completed
             // without a body: the operation stays suppressed, but there are
             // no original bytes to send back.
@@ -7273,6 +7285,7 @@ fn handleConnection(stream: TcpStream) void {
     // can be grepped with the same req=N as the rest of the request.
     log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
     log_client_rid_len = 0;
+    log_idem_token = 0;
     // Set read/write timeouts to prevent slow loris attacks, without this,
     // stream.read()/writeAll() block indefinitely and an attacker can exhaust
     // all max_concurrent_connections slots with incomplete requests or stalled reads.

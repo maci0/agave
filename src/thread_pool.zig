@@ -116,9 +116,15 @@ pub const ThreadPool = struct {
     /// `parallelFor` either completes its batch (workers still fetchSub) or
     /// sees the flag and runs inline instead of waking threads that `join`
     /// is about to reap.
+    ///
+    /// The store and the two `parallelFor` shutdown reads are sequentially
+    /// consistent, as is the claim CAS on `active`. On a weaker ordering the
+    /// store can sit in the store buffer while the claimer reads the pre-shutdown
+    /// value, and the claim then outlives every worker: no one left to fetchSub
+    /// and `parallelFor` spins on `active` forever.
     pub fn deinit(self: *ThreadPool) void {
-        self.shutdown.store(true, .release);
-        while (self.active.load(.acquire) != 0) {
+        self.shutdown.store(true, .seq_cst);
+        while (self.active.load(.seq_cst) != 0) {
             std.atomic.spinLoopHint();
         }
         _ = self.generation.fetchAdd(1, .release);
@@ -144,7 +150,7 @@ pub const ThreadPool = struct {
         const effective_grain = @max(grain, min_grain);
 
         // If work is too small for parallelism, run inline
-        if (self.n_workers == 0 or total <= effective_grain or self.shutdown.load(.acquire)) {
+        if (self.n_workers == 0 or total <= effective_grain or self.shutdown.load(.seq_cst)) {
             func(ctx, 0, total);
             return;
         }
@@ -152,7 +158,7 @@ pub const ThreadPool = struct {
         // Atomically claim the pool: active 0 → n_workers.
         // CAS eliminates the TOCTOU in a load-then-store guard: if two callers
         // race, only one succeeds; the other falls back to inline execution.
-        if (self.active.cmpxchgStrong(0, @intCast(self.n_workers), .acq_rel, .monotonic)) |still_active| {
+        if (self.active.cmpxchgStrong(0, @intCast(self.n_workers), .seq_cst, .monotonic)) |still_active| {
             std.log.err("ThreadPool: concurrent parallelFor detected (active={d}), running inline", .{still_active});
             func(ctx, 0, total);
             return;
@@ -160,7 +166,7 @@ pub const ThreadPool = struct {
 
         // deinit() may have set shutdown after the check above and be waiting
         // on active == 0. Drop the claim and run inline so join can proceed.
-        if (self.shutdown.load(.acquire)) {
+        if (self.shutdown.load(.seq_cst)) {
             self.active.store(0, .release);
             func(ctx, 0, total);
             return;
@@ -225,7 +231,7 @@ pub const ThreadPool = struct {
                 }
             }
 
-            if (pool.shutdown.load(.acquire) and pool.active.load(.acquire) == 0) return;
+            if (pool.shutdown.load(.seq_cst) and pool.active.load(.seq_cst) == 0) return;
         }
     }
 };
