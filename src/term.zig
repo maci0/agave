@@ -289,16 +289,6 @@ pub fn utf8BytePrefix(s: []const u8, max_bytes: usize) []const u8 {
     return s[0..len];
 }
 
-/// Also expose via the name used by vaxis: gwidth.gwidth(slice, .unicode).
-/// This enables minimal changes at call sites.
-pub const gwidth = struct {
-    pub const Method = enum { unicode };
-    /// Return the display width of a UTF-8 string as a `u16`, delegating to `displayWidth`.
-    pub fn gwidth(s: []const u8, _: Method) u16 {
-        return @intCast(displayWidth(s));
-    }
-};
-
 /// Fitzpatrick emoji skin-tone modifiers (👋🏻..👋🏿). Combine with the preceding emoji.
 const cp_emoji_skin_tone_lo: u21 = 0x1F3FB;
 const cp_emoji_skin_tone_hi: u21 = 0x1F3FF;
@@ -793,11 +783,6 @@ test "parser: empty buffer returns zero" {
     try std.testing.expect(result.event == null);
 }
 
-test "gwidth wrapper" {
-    try std.testing.expectEqual(@as(u16, 5), gwidth.gwidth("hello", .unicode));
-    try std.testing.expectEqual(@as(u16, 4), gwidth.gwidth("\xe4\xb8\xad\xe6\x96\x87", .unicode));
-}
-
 test "Key.Modifiers.eql" {
     const m1: Key.Modifiers = .{ .ctrl = true };
     const m2: Key.Modifiers = .{ .ctrl = true };
@@ -854,11 +839,7 @@ test "fuzz: all term functions" {
                 try std.testing.expect(std.unicode.utf8ValidateSlice(prefix));
             }
 
-            // ── 4. gwidth.gwidth ──
-            const gw = gwidth.gwidth(dw_slice, .unicode);
-            try std.testing.expect(gw <= @as(u16, @intCast(dw_slice.len)) * 2);
-
-            // ── 5. Parser.parse ──
+            // ── 4. Parser.parse ──
             var parser: Parser = .{};
             var parse_buf: [8]u8 = undefined;
             for (&parse_buf, 0..) |*b, i| b.* = smith.valueWithHash(u8, @intCast(200 + i));
@@ -866,7 +847,7 @@ test "fuzz: all term functions" {
             const result = parser.parse(parse_buf[0..parse_len], null) catch return;
             try std.testing.expect(result.n <= parse_len);
 
-            // ── 6-11. TextInput (init, deinit, insertSliceAtCursor,
+            // ── 5-10. TextInput (init, deinit, insertSliceAtCursor,
             //          clearRetainingCapacity, toOwnedSlice, update) ──
             var input = TextInput.init(std.testing.allocator);
             defer input.deinit();
@@ -894,7 +875,7 @@ test "fuzz: all term functions" {
             const owned = input.toOwnedSlice() catch return;
             std.testing.allocator.free(owned);
 
-            // ── 12-23. TextInput.Buffer (init, deinit, firstHalf, secondHalf,
+            // ── 11-22. TextInput.Buffer (init, deinit, firstHalf, secondHalf,
             //           realLength, insertSliceAtCursor, moveGapLeft, moveGapRight,
             //           growGapLeft, growGapRight, clearRetainingCapacity,
             //           toOwnedSlice) ──
