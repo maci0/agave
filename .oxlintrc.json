@@ -48,9 +48,7 @@
 		{
 			"files": [
 				"**/*.d.ts",
-				"src/web/app.ts",
-				"web/agave.ts",
-				"web/shell.ts"
+				"web/agave.ts"
 			],
 			"rules": {
 				"import/unambiguous": "off"
@@ -97,10 +95,6 @@
 		".web-ts-out/**",
 		"src/web/app.js",
 		"web/agave.js",
-		"web/shell.js",
-		// Chat UI and WASM shell: migrate off this list one file at a time (docs/TODO.md #13).
-		// tsc --noEmit still typechecks both. Count of ignored sources may fall, never rise.
-		"src/web/app.ts",
-		"web/shell.ts"
+		"web/shell.js"
 	]
 }
