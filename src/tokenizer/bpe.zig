@@ -19,6 +19,10 @@ const qwen_default_bos_id: u32 = 151643;
 const max_word_cache_seg_bytes: usize = 4096;
 /// Cap on word_cache entries to bound memory in long-lived --serve processes.
 const max_word_cache_entries: usize = 8192;
+/// Cap on the heap owned by word_cache keys and values. Entry count alone is a
+/// weak bound: a 4096-byte segment costs a 4096-byte key plus up to 4 bytes per
+/// token id, so the entry cap admits well over 100 MiB of pretoken heap.
+const max_word_cache_bytes: usize = 32 * 1024 * 1024;
 /// Linked-list node index sentinel used by the heap-based BPE merger.
 const bpe_none: u32 = std.math.maxInt(u32);
 /// UTF-8 start bytes that registered special tokens may begin with.
@@ -85,6 +89,9 @@ pub const BpeTokenizer = struct {
     // Atomic spinlock guards concurrent encode from server connection threads
     // (Zig 0.16 Mutex lives on Io; tokenizer has no Io context).
     word_cache: std.StringHashMapUnmanaged([]u32) = .{},
+    /// Heap owned by word_cache keys plus values, tracked so the entry cap
+    /// cannot be the only bound on memory. Guarded by word_cache_lock.
+    word_cache_bytes: usize = 0,
     word_cache_lock: std.atomic.Value(u8) = .init(0),
 
     /// Return the generic Tokenizer interface backed by this BPE tokenizer.
@@ -155,6 +162,11 @@ pub const BpeTokenizer = struct {
         self.word_cache_lock.store(0, .release);
     }
 
+    /// Heap cost of one word_cache entry: its owned key plus its id slice.
+    fn wordCacheEntryBytes(key: []const u8, value: []const u32) usize {
+        return key.len + value.len * @sizeOf(u32);
+    }
+
     /// Drop one arbitrary word_cache entry. Called under `word_cache_lock`
     /// when the map is at `max_word_cache_entries` so a long-lived --serve
     /// process can still admit newly hot segments instead of freezing on
@@ -164,9 +176,25 @@ pub const BpeTokenizer = struct {
         const entry = it.next() orelse return;
         const old_key = entry.key_ptr.*;
         const old_val = entry.value_ptr.*;
+        const freed = BpeTokenizer.wordCacheEntryBytes(old_key, old_val);
         _ = self.word_cache.remove(old_key);
         self.allocator.free(old_key);
         self.allocator.free(old_val);
+        self.word_cache_bytes -|= freed;
+    }
+
+    /// Evict until `incoming` bytes fit under `max_word_cache_bytes`. Returns
+    /// false when a single entry is larger than the whole budget and can never
+    /// be admitted, so the caller skips caching rather than thrashing.
+    /// Caller must hold `word_cache_lock`.
+    fn evictWordCacheToFit(self: *BpeTokenizer, incoming: usize) bool {
+        if (incoming > max_word_cache_bytes) return false;
+        while (self.word_cache_bytes + incoming > max_word_cache_bytes) {
+            const before = self.word_cache.count();
+            self.evictOneWordCacheEntry();
+            if (self.word_cache.count() == before) return false;
+        }
+        return true;
     }
 
     /// Free all owned memory (vocab, merges, byte mappings).
@@ -195,6 +223,7 @@ pub const BpeTokenizer = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.word_cache.deinit(self.allocator);
+        self.word_cache_bytes = 0;
     }
 
     /// Duplicate `s` into owned memory and track it for cleanup in `deinit`.
@@ -626,7 +655,13 @@ pub const BpeTokenizer = struct {
                             errdefer self.allocator.free(owned_key);
                             const owned_val = try self.allocator.dupe(u32, seg_ids);
                             errdefer self.allocator.free(owned_val);
-                            try self.word_cache.put(self.allocator, owned_key, owned_val);
+                            if (self.evictWordCacheToFit(BpeTokenizer.wordCacheEntryBytes(owned_key, owned_val))) {
+                                try self.word_cache.put(self.allocator, owned_key, owned_val);
+                                self.word_cache_bytes += BpeTokenizer.wordCacheEntryBytes(owned_key, owned_val);
+                            } else {
+                                self.allocator.free(owned_key);
+                                self.allocator.free(owned_val);
+                            }
                         }
                     }
                 }
@@ -1279,19 +1314,62 @@ test "word_cache evicts an entry so a new segment can be admitted" {
     const k1 = try allocator.dupe(u8, "alpha");
     const v1 = try allocator.dupe(u32, &.{1});
     try tok.word_cache.put(allocator, k1, v1);
+    tok.word_cache_bytes += BpeTokenizer.wordCacheEntryBytes(k1, v1);
     const k2 = try allocator.dupe(u8, "beta");
     const v2 = try allocator.dupe(u32, &.{2});
     try tok.word_cache.put(allocator, k2, v2);
+    tok.word_cache_bytes += BpeTokenizer.wordCacheEntryBytes(k2, v2);
     try std.testing.expectEqual(@as(usize, 2), tok.word_cache.count());
 
     tok.evictOneWordCacheEntry();
     try std.testing.expectEqual(@as(usize, 1), tok.word_cache.count());
+    // The surviving entry is the one whose bytes are still accounted for.
+    const bytes_k1 = BpeTokenizer.wordCacheEntryBytes(k1, v1);
+    const bytes_k2 = BpeTokenizer.wordCacheEntryBytes(k2, v2);
+    try std.testing.expect(tok.word_cache_bytes == bytes_k1 or tok.word_cache_bytes == bytes_k2);
+    try std.testing.expect(tok.word_cache_bytes <= bytes_k1 + bytes_k2);
 
     const k3 = try allocator.dupe(u8, "gamma");
     const v3 = try allocator.dupe(u32, &.{3});
     try tok.word_cache.put(allocator, k3, v3);
+    tok.word_cache_bytes += BpeTokenizer.wordCacheEntryBytes(k3, v3);
     try std.testing.expectEqual(@as(usize, 2), tok.word_cache.count());
     try std.testing.expect(tok.word_cache.contains("gamma"));
+}
+
+test "word_cache byte accounting tracks entries across eviction" {
+    const allocator = std.testing.allocator;
+    var tok = BpeTokenizer.init(allocator);
+    defer tok.deinit();
+
+    const keys = [_][]const u8{ "alpha", "beta", "gamma" };
+    var total: usize = 0;
+    for (keys) |k| {
+        const kk = try allocator.dupe(u8, k);
+        const vv = try allocator.dupe(u32, &.{1});
+        try tok.word_cache.put(allocator, kk, vv);
+        total += BpeTokenizer.wordCacheEntryBytes(kk, vv);
+        tok.word_cache_bytes += BpeTokenizer.wordCacheEntryBytes(kk, vv);
+    }
+    try std.testing.expectEqual(total, tok.word_cache_bytes);
+
+    // Every eviction must release exactly the bytes of the entry it removed,
+    // otherwise the counter drifts and the budget stops bounding the heap.
+    while (tok.word_cache.count() > 0) {
+        const before_count = tok.word_cache.count();
+        const before_bytes = tok.word_cache_bytes;
+        tok.evictOneWordCacheEntry();
+        try std.testing.expect(tok.word_cache.count() == before_count - 1);
+        try std.testing.expect(tok.word_cache_bytes < before_bytes);
+    }
+    try std.testing.expectEqual(@as(usize, 0), tok.word_cache_bytes);
+
+    // An entry larger than the whole budget is refused, not admitted by
+    // evicting everything else first.
+    try std.testing.expect(!tok.evictWordCacheToFit(max_word_cache_bytes + 1));
+    // A fitting entry leaves the budget satisfiable.
+    try std.testing.expect(tok.evictWordCacheToFit(4096));
+    try std.testing.expectEqual(@as(usize, 0), tok.word_cache_bytes);
 }
 
 test "decodeOne matches single-token decode in all modes" {
