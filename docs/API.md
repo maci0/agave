@@ -84,7 +84,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | mirostat_eta | float | 0.1 | Mirostat learning rate |
 | logit_bias | object | null | Token ID → bias mapping: `{"123": 5.0, "456": -2.0}` (max 16 entries) |
 | logprobs | bool | false | Return log probabilities for output tokens (streaming only) |
-| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only) |
+| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only). Omitting it still returns the sampled token's own `logprob` with an empty `top_logprobs` list |
 | n | int | 1 | Number of completions (only n=1 supported, n>1 returns 400) |
 | truncation_side | string | "right" | Which side of the prompt to drop when it exceeds the context window: `"right"` drops the tail, `"left"` drops the beginning (preserves recency) |
 | user | string | null | OpenAI compatibility only; accepted but ignored (not logged; often holds PII) |
@@ -200,7 +200,7 @@ curl http://localhost:49453/v1/messages -d '{
 | tools | array | null | Flat Anthropic format: `[{"name", "description", "input_schema"}]` |
 | tool_choice | string | auto | `auto`, `any`/`tool` (must call a tool), or `none` |
 
-All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, min_p, penalties, seed, etc.) are also accepted.
+All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, min_p, penalties, seed, etc.) are also accepted, including its `n` handling: `n` above 1 returns `400` (`code: n_not_supported`). Errors on this route use the Anthropic envelope, which has no `code` field; the status line and `error.type` carry the same meaning as elsewhere.
 
 **Response:**
 ```json
@@ -220,7 +220,7 @@ All sampling parameters from `/v1/chat/completions` (temperature, top_k, top_p, 
 
 ### POST /v1/chat
 
-Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode, image on a non-vision model) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`, `vision_not_supported`).
+Built-in web UI chat endpoint (form-encoded). Used by the web interface at `/` when the server is running. Accepts `message`, `max_tokens`, `temperature`, `top_k`, `top_p`, `stream`, `system`, and `image` fields. Successful responses are HTML fragments for the web UI. Validation failures (missing `message`, oversize message, failed image decode, image on a non-vision model) return the same JSON error envelope as `/v1/chat/completions` (`400`, `code` such as `missing_required_parameter`, `message_too_long`, `image_decode_failed`, `vision_not_supported`).
 
 This route appends the user turn to the conversation and persists it, so it honors `X-Request-Id` as an idempotency key. See [Idempotency](#idempotency) below.
 
@@ -245,7 +245,10 @@ curl http://localhost:49453/v1/conversations
 # [{"id":1,"title":"Chat 1","active":true,"count":4}]
 ```
 
-**POST**, Create, select, or delete conversations via form-encoded `action` field:
+**POST**, Create, select, or delete conversations via form-encoded `action` field.
+`action` defaults to `new` when absent, so a POST with no body creates a
+conversation; any other unrecognised value returns `400`
+(`code: unknown_conversation_action`).
 
 ```bash
 # Create a new conversation
@@ -293,7 +296,7 @@ implementation.
 
 ### POST /v1/tokenize
 
-Count tokens for a text string or messages array. Accepts `text`, `content`, or `messages` (applies the model's chat template before counting).
+Count tokens for a text string or messages array. Accepts `text`, `content`, or `messages` (applies the model's chat template before counting). A non-string `text` or `content` returns `400` (`code: invalid_value`); when none of the three is present, `400` (`code: missing_required_parameter`).
 
 ```bash
 curl http://localhost:49453/v1/tokenize -d '{"text": "Hello world"}'
@@ -305,7 +308,11 @@ curl http://localhost:49453/v1/tokenize -d '{"messages": [{"role": "user", "cont
 
 ### POST /v1/detokenize
 
-Convert token IDs back to text.
+Convert token IDs back to text. `tokens` must be an array of non-negative
+integers of at most 4096 entries; a missing or empty array returns `400`
+(`code: missing_required_parameter`), and a non-array value, a non-integer
+element, or an oversized array returns `400` (`code: invalid_value`). A
+malformed array is rejected whole rather than decoded up to the bad element.
 
 ```bash
 curl http://localhost:49453/v1/detokenize -d '{"tokens": [9906, 1917]}'
@@ -518,7 +525,7 @@ For deployments with multiple agave instances serving the same model, KV cache p
 **Wire format** (unversioned; not the disk `checkpoint.KVC` header):
 `layer₀_K | layer₀_V | layer₁_K | layer₁_V | …` as little-endian f32.
 Per-layer K/V length is `n_tokens × kvd_layer × 4` bytes (`kvd` may differ across layers on dual-attention / MLA models).
-Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4); others return `501`.
+Only architectures that implement `exportKvPrefix` / `importKvPrefix` support this (currently Gemma 4). Export on any other architecture returns `501` (`code: not_implemented`); import returns `400` (`code: kv_import_failed`), which also covers a blob whose size does not match `n_tokens`.
 The blob does **not** include prompt token IDs, so a following OpenAI-style request with `reset` still re-prefills unless the server already holds matching prefix-cache IDs from a prior local generation.
 
 **Export**, serialize `N` tokens of KV cache as a binary blob (`n_tokens` is a required query parameter):
@@ -620,7 +627,7 @@ All endpoints return JSON error bodies on failure.
 ```
 
 `param` names the offending field or query key when known; otherwise `null`.
-`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `not_implemented`, `cross_origin_forbidden`, `host_forbidden`, `message_too_long`, `image_decode_failed`, `vision_not_supported`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
+`code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `duplicate_request`, `not_implemented`, `cross_origin_forbidden`, `host_forbidden`, `message_too_long`, `image_decode_failed`, `vision_not_supported`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
 
 **Anthropic format** (`/v1/messages` only):
 ```json
@@ -634,6 +641,7 @@ All endpoints return JSON error bodies on failure.
 | `403 Forbidden` | Cross-origin request, or non-loopback `Host`, when no `--api-key` is configured |
 | `404 Not Found` | Unknown endpoint or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
+| `409 Conflict` | Repeated `X-Request-Id` still in flight, or a replay whose response cannot be re-sent (see [Idempotency](#idempotency)) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |
 | `429 Too Many Requests` | Token-bucket rate limiting via `--rate-limit-rpm` / `--rate-limit-tpm` (includes `Retry-After`) |
 | `500 Internal Server Error` | Model forward error or unexpected server failure |

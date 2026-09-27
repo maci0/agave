@@ -1252,10 +1252,19 @@ fn parseRequestLine(req_line: []const u8) ?struct { method: []const u8, path: []
 }
 
 /// Parse `{"tokens":[1,2,3]}`-style body into `out`.
-/// Returns the number of IDs written, 0 if the field is missing or empty, or
-/// `out.len + 1` when the array has more entries than `out` can hold (overflow
-/// sentinel used by `/v1/detokenize` to return 400 instead of truncating).
-fn parseDetokenizeTokens(body: []const u8, out: []u32) usize {
+/// Outcome of parsing the `tokens` array of a `/v1/detokenize` body.
+const DetokenizeTokens = union(enum) {
+    /// `tokens` absent, not an array, or an empty array.
+    empty,
+    /// An element is not a non-negative integer, or there are more elements
+    /// than `out` can hold. Decoding a prefix would silently drop the rest.
+    malformed,
+    count: usize,
+};
+
+/// Parse the `tokens` array into `out`. A malformed element or an oversized
+/// array is reported rather than truncated, so the caller returns 400.
+fn parseDetokenizeTokens(body: []const u8, out: []u32) DetokenizeTokens {
     var n_toks: usize = 0;
     if (std.mem.indexOf(u8, body, "\"tokens\"")) |ti| {
         var di = ti + "\"tokens\"".len;
@@ -1267,15 +1276,14 @@ fn parseDetokenizeTokens(body: []const u8, out: []u32) usize {
                 if (di >= body.len or body[di] == ']') break;
                 const num_start = di;
                 while (di < body.len and body[di] >= '0' and body[di] <= '9') : (di += 1) {}
-                if (di > num_start) {
-                    if (n_toks >= out.len) return out.len + 1;
-                    out[n_toks] = std.fmt.parseInt(u32, body[num_start..di], 10) catch break;
-                    n_toks += 1;
-                } else break;
+                if (di == num_start) return .malformed;
+                if (n_toks >= out.len) return .malformed;
+                out[n_toks] = std.fmt.parseInt(u32, body[num_start..di], 10) catch return .malformed;
+                n_toks += 1;
             }
         }
     }
-    return n_toks;
+    return if (n_toks == 0) .empty else .{ .count = n_toks };
 }
 
 /// Extract a single query parameter value (`key=value`). Returns null if absent.
@@ -2653,7 +2661,18 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 200, elapsedMs(request_start));
                 return;
             }
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Provide text, content, or messages", "text", "missing_required_parameter");
+            // Distinguish "field absent" from "field present but not a string",
+            // the way /v1/completions and /v1/responses do for `prompt`/`input`.
+            const wrong_type = (json.hasField(body, "text") and json.extractField(body, "text") == null) or
+                (json.hasField(body, "content") and json.extractField(body, "content") == null);
+            sendJsonErrorEx(
+                stream,
+                "400 Bad Request",
+                "invalid_request_error",
+                if (wrong_type) "text and content must be strings" else "Provide text, content, or messages",
+                "text",
+                if (wrong_type) "invalid_value" else "missing_required_parameter",
+            );
             g_server.metrics.recordClientError();
             logRequestDone(method, path, 400, elapsedMs(request_start));
             return;
@@ -2698,19 +2717,21 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         // Parse token IDs from JSON array: {"tokens": [1, 2, 3]}
         var tok_ids: [gen_ids_buf_size]u32 = undefined;
         defer @memset(std.mem.sliceAsBytes(&tok_ids), 0);
-        const n_toks = parseDetokenizeTokens(req.body, &tok_ids);
-        if (n_toks > gen_ids_buf_size) {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Token array exceeds maximum of 4096 entries", "tokens", "invalid_value");
-            g_server.metrics.recordClientError();
-            logRequestDone(method, path, 400, elapsedMs(request_start));
-            return;
-        }
-        if (n_toks == 0) {
-            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing or empty tokens array", "tokens", "missing_required_parameter");
-            g_server.metrics.recordClientError();
-            logRequestDone(method, path, 400, elapsedMs(request_start));
-            return;
-        }
+        const n_toks: usize = switch (parseDetokenizeTokens(req.body, &tok_ids)) {
+            .malformed => {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "tokens must be an array of non-negative integers of at most 4096 entries", "tokens", "invalid_value");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            },
+            .empty => {
+                sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing or empty tokens array", "tokens", "missing_required_parameter");
+                g_server.metrics.recordClientError();
+                logRequestDone(method, path, 400, elapsedMs(request_start));
+                return;
+            },
+            .count => |n| n,
+        };
         const decoded = g_server.tokenizer.decode(tok_ids[0..n_toks]) catch |err| {
             std.log.err("req={d} detokenizer decode failed ({d} tokens): {}", .{ log_request_id, n_toks, err });
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Detokenization failed");
@@ -2801,6 +2822,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             logRequestDone(method, path, 401, elapsedMs(request_start));
             return;
         }
+        g_server.metrics.recordRequest();
         // Parse n_tokens from query string: ?n_tokens=<N>
         const n_tokens: usize = switch (parsePositiveQueryParam(req.query, "n_tokens")) {
             .missing => {
@@ -2873,6 +2895,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 .ok => {
                     defer g_server.allocator.free(export_buf);
                     sendResponse(stream, "200 OK", "application/octet-stream", export_buf[0..export_n]);
+                    g_server.metrics.recordCompletion();
                     logRequestDone(method, path, 200, elapsedMs(request_start));
                 },
             }
@@ -2901,6 +2924,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             var import_buf: [clear_response_buf_size]u8 = undefined;
             const import_resp = std.fmt.bufPrint(&import_buf, "{{\"imported\":{d}}}", .{n_tokens}) catch "{\"ok\":true}";
             sendJson(stream, import_resp);
+            g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         }
         return;
@@ -3019,6 +3043,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const req_start_time = milliTimestamp();
 
         if (!validateAuth(g_server, req.headers)) {
+            // send401 records the auth failure; this route needs the Anthropic
+            // error envelope, so it cannot use send401 and records it here.
             g_server.metrics.recordAuthFailure();
             std.log.warn("req={d} authentication failed", .{log_request_id});
             sendAnthropicError(stream, "401", "authentication_error", "Invalid API key");
@@ -3028,6 +3054,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         g_server.metrics.recordRequest();
 
         const body = req.body;
+        if ((json.extractIntField(body, "n") orelse 1) > 1) {
+            sendAnthropicError(stream, "400", "invalid_request_error", "n > 1 is not supported; only single completions are available");
+            g_server.metrics.recordClientError();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return;
+        }
         const max_tokens_m = extractMaxGenTokens(body, &.{"max_tokens"});
         var sampling_m = json.SamplingParams{};
         json.parseSampling(&sampling_m, body);
@@ -6382,11 +6414,12 @@ const LogprobInfo = struct {
     count: u32 = 0,
 };
 
-/// Compute logprobs for a token from logits. Returns null if not requested.
-fn computeLogprobs(logits: []const f32, token_id: u32, n_top: u32) ?LogprobInfo {
-    if (n_top == 0) return null;
+/// Compute logprobs for a token from logits.
+/// `n_top == 0` still returns the sampled token's own logprob with an empty
+/// `top_logprobs` list, so `logprobs: true` works without `top_logprobs`.
+fn computeLogprobs(logits: []const f32, token_id: u32, n_top: u32) LogprobInfo {
     var info: LogprobInfo = .{};
-    info.count = math_ops.topLogProbs(logits, n_top, &info.top_ids, &info.top_logprobs);
+    if (n_top > 0) info.count = math_ops.topLogProbs(logits, n_top, &info.top_ids, &info.top_logprobs);
     info.token_logprob = math_ops.tokenLogProb(logits, token_id);
     return info;
 }
@@ -7002,7 +7035,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 next = math_ops.argmax(s_logits);
             }
             // Compute logprobs before EOG/stop checks (logits still valid)
-            const lp = if (sampling.logprobs) computeLogprobs(s_logits, next, sampling.top_logprobs) else null;
+            const lp: ?LogprobInfo = if (sampling.logprobs) computeLogprobs(s_logits, next, sampling.top_logprobs) else null;
 
             if (g_server.isEog(next)) break;
             // Accept in grammar
@@ -7808,6 +7841,15 @@ test "isSafeErrorToken" {
     try std.testing.expect(!isSafeErrorToken(""));
 }
 
+test "computeLogprobs without top_logprobs still reports the sampled token" {
+    const logits = [_]f32{ 0.0, 1.0, 2.0, 3.0 };
+    const info = computeLogprobs(&logits, 2, 0);
+    try std.testing.expectEqual(@as(u32, 0), info.count);
+    const expected = math_ops.tokenLogProb(&logits, 2);
+    try std.testing.expectApproxEqAbs(expected, info.token_logprob, 1e-6);
+    try std.testing.expect(info.token_logprob < 0);
+}
+
 test "nextAllowedToolCall skips undeclared names" {
     var tp = json.ToolParams{};
     tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
@@ -7920,16 +7962,24 @@ test "parseRequestLine extracts method path query" {
 
 test "parseDetokenizeTokens reads token id array" {
     var out: [8]u32 = undefined;
-    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[1, 2, 3]}", &out));
+    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[1, 2, 3]}", &out).count);
     try std.testing.expectEqual(@as(u32, 1), out[0]);
     try std.testing.expectEqual(@as(u32, 2), out[1]);
     try std.testing.expectEqual(@as(u32, 3), out[2]);
-    try std.testing.expectEqual(@as(usize, 0), parseDetokenizeTokens("{}", &out));
-    try std.testing.expectEqual(@as(usize, 0), parseDetokenizeTokens("{\"tokens\":[]}", &out));
-    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..3]));
-    // Overflow: more entries than `out` can hold returns out.len + 1.
-    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..2]));
-    try std.testing.expectEqual(@as(usize, 9), parseDetokenizeTokens("{\"tokens\":[1,2,3,4,5,6,7,8,9]}", &out));
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{}", &out)) == .empty);
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":[]}", &out)) == .empty);
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":\"abc\"}", &out)) == .empty);
+    try std.testing.expectEqual(@as(usize, 3), parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..3]).count);
+    // More entries than `out` can hold is an error, not a truncated decode.
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":[10,20,30]}", out[0..2])) == .malformed);
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":[1,2,3,4,5,6,7,8,9]}", &out)) == .malformed);
+}
+
+test "parseDetokenizeTokens rejects a non-numeric element instead of truncating" {
+    var out: [8]u32 = undefined;
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":[1,\"x\",3]}", &out)) == .malformed);
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":[1,-2,3]}", &out)) == .malformed);
+    try std.testing.expect(std.meta.activeTag(parseDetokenizeTokens("{\"tokens\":[1,null]}", &out)) == .malformed);
 }
 
 test "parsePositiveQueryParam distinguishes missing and invalid" {
@@ -8383,8 +8433,9 @@ test "fuzz: all server functions" {
                 smith.bytesWithHash(&body_buf, 0x70);
                 const body_len = smith.indexWithHash(body_buf.len + 1, 0x71);
                 var out_ids: [64]u32 = undefined;
-                const n_rand = parseDetokenizeTokens(body_buf[0..body_len], &out_ids);
-                std.debug.assert(n_rand <= out_ids.len + 1);
+                const rand_toks = parseDetokenizeTokens(body_buf[0..body_len], &out_ids);
+                std.debug.assert(rand_toks == .empty or rand_toks == .malformed or
+                    rand_toks.count <= out_ids.len);
 
                 var good_body: [128]u8 = undefined;
                 const bn = std.fmt.bufPrint(&good_body, "{{\"tokens\":[{d},{d},9999999999]}}", .{
@@ -8392,13 +8443,12 @@ test "fuzz: all server functions" {
                     smith.valueWithHash(u32, 0x73),
                 }) catch unreachable;
                 const n_good = parseDetokenizeTokens(bn, &out_ids);
-                // Oversized ints stop the scan; at least the first two fit in u32
-                std.debug.assert(n_good >= 2);
-                std.debug.assert(n_good <= 3);
+                // A value beyond u32 rejects the whole array rather than truncating it.
+                std.debug.assert(n_good == .malformed or n_good.count >= 2);
 
-                std.debug.assert(parseDetokenizeTokens("{}", &out_ids) == 0);
-                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[]}", &out_ids) == 0);
-                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[1,2,3]}", out_ids[0..2]) == 3); // overflow sentinel
+                std.debug.assert(parseDetokenizeTokens("{}", &out_ids) == .empty);
+                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[]}", &out_ids) == .empty);
+                std.debug.assert(parseDetokenizeTokens("{\"tokens\":[1,2,3]}", out_ids[0..2]) == .malformed);
 
                 _ = parseFormConversationId(body_buf[0..body_len]);
                 std.debug.assert(std.meta.activeTag(parseFormConversationId("action=select")) == .missing);
