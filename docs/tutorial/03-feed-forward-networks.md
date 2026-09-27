@@ -20,12 +20,12 @@ The standard FFN structure in modern transformers:
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Input["Hidden State\n(e.g. 2304 floats)"]:::setup
     Gate["gate_proj\n(2304 → 9216)"]:::sync
@@ -65,12 +65,12 @@ Notice the structure: `activation(gate_proj(x)) * up_proj(x)`. The `gate_proj` o
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Input["Input value x"]:::setup
     SiLU["SiLU / Swish\nx · sigmoid(x)\n\nSmooth, passes positive,\ndampens negative"]:::migration
@@ -108,12 +108,12 @@ Standard transformers use the same FFN weights for every token. MoE models have 
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Token["Token hidden state\n(e.g. 4096 floats)"]:::setup
     Router["Router\nhidden @ gate_weight\n→ 128 scores"]:::sync
@@ -199,12 +199,12 @@ MoE's key advantage is **sparse activation**, only K of N experts run per token.
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Dense["Dense 30B, every weight active"]
         D_in["Token\nhidden state"]:::setup
@@ -267,12 +267,12 @@ When multiple experts share the same input vector (common in decode), Agave batc
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Sequential["Sequential dispatch, 2 thread pool calls"]
         S_in["Input vector x\n(shared by all experts)"]:::setup
@@ -326,12 +326,12 @@ On Metal GPU, the three FFN GEMVs (gate + up + down) can be fused into a single 
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Unfused["3 separate GPU dispatches (standard)"]
         U_in["Input\n(GPU memory)"]:::setup

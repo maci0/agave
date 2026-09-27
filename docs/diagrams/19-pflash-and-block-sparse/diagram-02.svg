@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 746.7239999999999 764.475" width="746.7239999999999" height="764.475" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 746.7239999999999 764.475" width="746.7239999999999" height="764.475" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -138,64 +144,64 @@
 </g>
 <g class="node" data-id="K0" data-label="KV 0
 (global)" data-shape="rectangle">
-  <rect x="364.68550000000005" y="356.5" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="407.14950000000005" y="383.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="407.14950000000005" dy="-3.9000000000000012">KV 0</tspan><tspan x="407.14950000000005" dy="16.900000000000002">(global)</tspan></text>
+  <rect x="364.68550000000005" y="356.5" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="407.14950000000005" y="383.4" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="407.14950000000005" dy="-3.9000000000000012">KV 0</tspan><tspan x="407.14950000000005" dy="16.900000000000002">(global)</tspan></text>
 </g>
 <g class="node" data-id="K1" data-label="KV 1
 (global)" data-shape="rectangle">
-  <rect x="364.68550000000005" y="515.765" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="407.14950000000005" y="542.665" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="407.14950000000005" dy="-3.9000000000000012">KV 1</tspan><tspan x="407.14950000000005" dy="16.900000000000002">(global)</tspan></text>
+  <rect x="364.68550000000005" y="515.765" width="84.928" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="407.14950000000005" y="542.665" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="407.14950000000005" dy="-3.9000000000000012">KV 1</tspan><tspan x="407.14950000000005" dy="16.900000000000002">(global)</tspan></text>
 </g>
 <g class="node" data-id="K2" data-label="KV 2" data-shape="rectangle">
-  <rect x="364.68550000000005" y="686.875" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="399.369" y="705.325" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 2</text>
+  <rect x="364.68550000000005" y="686.875" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="399.369" y="705.325" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">KV 2</text>
 </g>
 <g class="node" data-id="K3" data-label="KV 3" data-shape="rectangle">
-  <rect x="364.68550000000005" y="621.975" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="399.369" y="640.4250000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 3</text>
+  <rect x="364.68550000000005" y="621.975" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="399.369" y="640.4250000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">KV 3</text>
 </g>
 <g class="node" data-id="K4" data-label="KV 4" data-shape="rectangle">
-  <rect x="364.68550000000005" y="291.6" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="399.369" y="310.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 4</text>
+  <rect x="364.68550000000005" y="291.6" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="399.369" y="310.05" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">KV 4</text>
 </g>
 <g class="node" data-id="K5" data-label="KV 5" data-shape="rectangle">
-  <rect x="364.68550000000005" y="226.69999999999993" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="399.369" y="245.14999999999992" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 5</text>
+  <rect x="364.68550000000005" y="226.69999999999993" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="399.369" y="245.14999999999992" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">KV 5</text>
 </g>
 <g class="node" data-id="K6" data-label="KV 6" data-shape="rectangle">
-  <rect x="364.68550000000005" y="96.89999999999998" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="399.369" y="115.34999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 6</text>
+  <rect x="364.68550000000005" y="96.89999999999998" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="399.369" y="115.34999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">KV 6</text>
 </g>
 <g class="node" data-id="K7" data-label="KV 7" data-shape="rectangle">
-  <rect x="364.68550000000005" y="161.79999999999995" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="399.369" y="180.24999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">KV 7</text>
+  <rect x="364.68550000000005" y="161.79999999999995" width="69.36699999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="399.369" y="180.24999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">KV 7</text>
 </g>
 <g class="node" data-id="Q0n" data-label="Q0: attends G0, G1" data-shape="rectangle">
-  <rect x="111.13599999999997" y="482.78000000000003" width="141.985" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="182.12849999999997" y="501.23" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q0: attends G0, G1</text>
+  <rect x="111.13599999999997" y="482.78000000000003" width="141.985" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="182.12849999999997" y="501.23" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Q0: attends G0, G1</text>
 </g>
 <g class="node" data-id="Q3n" data-label="Q3: attends G0, G1, W1, W2, W3" data-shape="rectangle">
-  <rect x="40.00000000000003" y="615.98" width="208.67499999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="144.33750000000003" y="634.4300000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q3: attends G0, G1, W1, W2, W3</text>
+  <rect x="40.00000000000003" y="615.98" width="208.67499999999998" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="144.33750000000003" y="634.4300000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Q3: attends G0, G1, W1, W2, W3</text>
 </g>
 <g class="node" data-id="Q5n" data-label="Q5: attends G0, G1, W3, W4, W5" data-shape="rectangle">
-  <rect x="40" y="370.155" width="213.12099999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="146.5605" y="388.60499999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q5: attends G0, G1, W3, W4, W5</text>
+  <rect x="40" y="370.155" width="213.12099999999998" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="146.5605" y="388.60499999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Q5: attends G0, G1, W3, W4, W5</text>
 </g>
 <g class="node" data-id="Q7n" data-label="Q7: attends G0, G1, W5, W6, W7" data-shape="rectangle">
-  <rect x="40.00000000000006" y="210.04999999999995" width="213.12099999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="146.56050000000005" y="228.49999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Q7: attends G0, G1, W5, W6, W7</text>
+  <rect x="40.00000000000006" y="210.04999999999995" width="213.12099999999998" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="146.56050000000005" y="228.49999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Q7: attends G0, G1, W5, W6, W7</text>
 </g>
 <g class="node" data-id="LG" data-label="G = global (always)" data-shape="rectangle">
-  <rect x="364.68550000000005" y="40" width="149.39499999999998" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="439.38300000000004" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">G = global (always)</text>
+  <rect x="364.68550000000005" y="40" width="149.39499999999998" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="439.38300000000004" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">G = global (always)</text>
 </g>
 <g class="node" data-id="LW" data-label="W = window (local)" data-shape="rectangle">
-  <rect x="160" y="40" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="232.845" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">W = window (local)</text>
+  <rect x="160" y="40" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="232.845" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">W = window (local)</text>
 </g>
 <g class="node" data-id="LD" data-label="unmarked = masked, skipped" data-shape="rectangle">
-  <rect x="495.085" y="40" width="211.63899999999998" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="600.9045" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">unmarked = masked, skipped</text>
+  <rect x="495.085" y="40" width="211.63899999999998" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="600.9045" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">unmarked = masked, skipped</text>
 </g>
 </svg>

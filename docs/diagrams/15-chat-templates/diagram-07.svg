@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 692.7362499999999 1466.9560000000001" width="692.7362499999999" height="1466.9560000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 692.7362499999999 1466.9560000000001" width="692.7362499999999" height="1466.9560000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -90,29 +96,29 @@
 <g class="node" data-id="Scan" data-label="findImageInsertPos()
 scan for last occurrence
 of user_prefix token sequence" data-shape="rectangle">
-  <rect x="92.60399999999998" y="141.8" width="220.53099999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="202.86949999999996" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="202.86949999999996" dy="-12.350000000000001">findImageInsertPos()</tspan><tspan x="202.86949999999996" dy="16.900000000000002">scan for last occurrence</tspan><tspan x="202.86949999999996" dy="16.900000000000002">of user_prefix token sequence</tspan></text>
+  <rect x="92.60399999999998" y="141.8" width="220.53099999999998" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="202.86949999999996" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="202.86949999999996" dy="-12.350000000000001">findImageInsertPos()</tspan><tspan x="202.86949999999996" dy="16.900000000000002">scan for last occurrence</tspan><tspan x="202.86949999999996" dy="16.900000000000002">of user_prefix token sequence</tspan></text>
 </g>
 <g class="node" data-id="InsertPos" data-label="insertion position
 (index after last prefix match)" data-shape="rectangle">
-  <rect x="99.64349999999996" y="260.5" width="206.452" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="202.86949999999996" y="287.4" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="202.86949999999996" dy="-3.9000000000000012">insertion position</tspan><tspan x="202.86949999999996" dy="16.900000000000002">(index after last prefix match)</tspan></text>
+  <rect x="99.64349999999996" y="260.5" width="206.452" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="202.86949999999996" y="287.4" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="202.86949999999996" dy="-3.9000000000000012">insertion position</tspan><tspan x="202.86949999999996" dy="16.900000000000002">(index after last prefix match)</tspan></text>
 </g>
 <g class="node" data-id="EmitStart" data-label="prepend start token
 (e.g. &lt;|vision_start|&gt;)" data-shape="rectangle">
-  <rect x="335.83833333333325" y="684.1360000000001" width="162.73300000000003" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="417.2048333333333" y="711.0360000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="417.2048333333333" dy="-3.9000000000000012">prepend start token</tspan><tspan x="417.2048333333333" dy="16.900000000000002">(e.g. &lt;|vision_start|&gt;)</tspan></text>
+  <rect x="335.83833333333325" y="684.1360000000001" width="162.73300000000003" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="417.2048333333333" y="711.0360000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="417.2048333333333" dy="-3.9000000000000012">prepend start token</tspan><tspan x="417.2048333333333" dy="16.900000000000002">(e.g. &lt;|vision_start|&gt;)</tspan></text>
 </g>
 <g class="node" data-id="EmitPads" data-label="emit pad token x N
 (N = n_visual_tokens
 from vision encoder)" data-shape="rectangle">
-  <rect x="414.42866666666663" y="785.936" width="164.21499999999997" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="496.53616666666665" y="821.2860000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="496.53616666666665" dy="-12.350000000000001">emit pad token x N</tspan><tspan x="496.53616666666665" dy="16.900000000000002">(N = n_visual_tokens</tspan><tspan x="496.53616666666665" dy="16.900000000000002">from vision encoder)</tspan></text>
+  <rect x="414.42866666666663" y="785.936" width="164.21499999999997" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="496.53616666666665" y="821.2860000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="496.53616666666665" dy="-12.350000000000001">emit pad token x N</tspan><tspan x="496.53616666666665" dy="16.900000000000002">(N = n_visual_tokens</tspan><tspan x="496.53616666666665" dy="16.900000000000002">from vision encoder)</tspan></text>
 </g>
 <g class="node" data-id="EmitEnd" data-label="append end token
 (e.g. &lt;|vision_end|&gt;)" data-shape="rectangle">
-  <rect x="138.7802499999999" y="684.1360000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="217.92374999999993" y="711.0360000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="217.92374999999993" dy="-3.9000000000000012">append end token</tspan><tspan x="217.92374999999993" dy="16.900000000000002">(e.g. &lt;|vision_end|&gt;)</tspan></text>
+  <rect x="138.7802499999999" y="684.1360000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="217.92374999999993" y="711.0360000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="217.92374999999993" dy="-3.9000000000000012">append end token</tspan><tspan x="217.92374999999993" dy="16.900000000000002">(e.g. &lt;|vision_end|&gt;)</tspan></text>
 </g>
 <g class="node" data-id="SplicedArr" data-label="&quot;spliced token array
 [..., start?, pad*N, end?, ..." data-shape="rectangle">
@@ -120,21 +126,21 @@ from vision encoder)" data-shape="rectangle">
   <text x="272.7289999999999" y="812.836" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="272.7289999999999" dy="-3.9000000000000012">&quot;spliced token array</tspan><tspan x="272.7289999999999" dy="16.900000000000002">[..., start?, pad*N, end?, ...</tspan></text>
 </g>
 <g class="node" data-id="TokenLoop" data-label="iterate tokens in forward()" data-shape="rectangle">
-  <rect x="371.2169166666666" y="1390.056" width="189.409" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="465.9214166666666" y="1408.506" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">iterate tokens in forward()</text>
+  <rect x="371.2169166666666" y="1390.056" width="189.409" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="465.9214166666666" y="1408.506" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">iterate tokens in forward()</text>
 </g>
 <g class="node" data-id="NormalEmb" data-label="embLookup(token_id)
 normal text embedding" data-shape="rectangle">
-  <rect x="139.73924999999997" y="1211.806" width="170.884" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="225.18124999999998" y="1238.7060000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="225.18124999999998" dy="-3.9000000000000012">embLookup(token_id)</tspan><tspan x="225.18124999999998" dy="16.900000000000002">normal text embedding</tspan></text>
+  <rect x="139.73924999999997" y="1211.806" width="170.884" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="225.18124999999998" y="1238.7060000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="225.18124999999998" dy="-3.9000000000000012">embLookup(token_id)</tspan><tspan x="225.18124999999998" dy="16.900000000000002">normal text embedding</tspan></text>
 </g>
 <g class="node" data-id="VisEmb" data-label="&quot;copy visual_embeddings[visual_token_idx" data-shape="rectangle">
   <rect x="338.62325" y="1211.806" width="296.1129999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
   <text x="486.6797499999999" y="1230.256" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;copy visual_embeddings[visual_token_idx</text>
 </g>
 <g class="node" data-id="NextTok" data-label="next token" data-shape="rectangle">
-  <rect x="318.4100833333332" y="1305.156" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="369.3955833333332" y="1323.606" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">next token</text>
+  <rect x="318.4100833333332" y="1305.156" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="369.3955833333332" y="1323.606" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">next token</text>
 </g>
 <g class="node" data-id="DistinctStart" data-label="start != pad?" data-shape="diamond">
   <polygon points="440.05249999999995,406.3 508.59549999999996,474.843 440.05249999999995,543.386 371.50949999999995,474.843" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />

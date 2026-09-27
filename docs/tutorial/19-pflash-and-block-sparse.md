@@ -27,12 +27,12 @@ Agave's `sparse_attn.zig` implements BigBird-style block sparsity with two compo
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Q["Query Block\n(any position)"]:::setup
     G["Global Blocks\n(first G blocks)"]:::sync
@@ -73,12 +73,12 @@ The diagram below shows which query blocks (rows) attend which KV blocks (column
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     K0["KV 0\n(global)"]:::success
     K1["KV 1\n(global)"]:::success
@@ -190,12 +190,12 @@ PFlash runs four sequential stages: a cheap sparse scorer pass over the full pro
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Prompt["Full Prompt\n(e.g. 128K tokens)"]:::setup
     Scorer["Scorer Model\n(small, 0.5-3B)"]:::setup
@@ -257,12 +257,12 @@ The threshold `alpha * mean(scores)` adapts to prompt structure: a dense technic
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Scores["Block Importance Scores"]:::setup
     Mean["Compute mean(scores)"]:::sync
@@ -443,12 +443,12 @@ PFlash cuts TTFT; DDTree cuts generation latency. For a 128K-token prompt genera
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     B_TTFT["TTFT: 6000ms\n(full 128K prefill)"]:::danger
     B_DEC["Decode: 33000ms\n(500 tokens, 1 per step)"]:::danger
@@ -484,12 +484,12 @@ The gains multiply because they target different bottlenecks: PFlash owns TTFT, 
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     FA["tok 0-15\nKEPT"]:::success
     FB["tok 16-31\ndropped"]:::danger

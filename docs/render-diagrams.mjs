@@ -15,15 +15,20 @@ import { Resvg } from '@resvg/resvg-js';
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join, basename, extname } from 'node:path';
 
-// All 7 colors required, resvg fails silently if any is missing.
+/**
+ * All 7 colors required, resvg fails silently if any is missing.
+ * Same ink ramp the chat UI and the wordmark use (docs/logo.svg), stepped for a
+ * white canvas. Per-role node colors live in the classDef lines of the mermaid
+ * blocks; see docs/CONTRIBUTING.md for that palette.
+ */
 const THEME = {
   bg:      '#ffffff',
-  fg:      '#1a1a2e',
-  accent:  '#4a6cf7',
-  line:    '#4a6cf7',
-  muted:   '#6b7280',
-  surface: '#e8f0fe',
-  border:  '#4a6cf7',
+  fg:      '#2a2522',
+  accent:  '#c4823a',
+  line:    '#94908c',
+  muted:   '#75716f',
+  surface: '#f1efec',
+  border:  '#9c938a',
 };
 
 // Resolve CSS custom properties (var(--xxx)) to hex values before rasterizing.

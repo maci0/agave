@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 935.3059999999999 380.5" width="935.3059999999999" height="380.5" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 935.3059999999999 380.5" width="935.3059999999999" height="380.5" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -58,30 +64,30 @@
   <text x="88.09" y="190.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;a[2</text>
 </g>
 <g class="node" data-id="s4" data-label="..." data-shape="rectangle">
-  <rect x="138.09" y="171.8" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="168.09" y="190.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">...</text>
+  <rect x="138.09" y="171.8" width="60" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="168.09" y="190.25" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">...</text>
 </g>
 <g class="node" data-id="r4" data-label="..." data-shape="rectangle">
-  <rect x="140.18" y="256.7" width="60" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="170.18" y="275.15" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">...</text>
+  <rect x="140.18" y="256.7" width="60" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="170.18" y="275.15" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">...</text>
 </g>
 <g class="node" data-id="reg_a" data-label="AVX2 register
 1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0" data-shape="rectangle">
-  <rect x="647.66" y="84" width="231.646" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="763.483" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="763.483" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="763.483" dy="16.900000000000002">1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0</tspan></text>
+  <rect x="647.66" y="84" width="231.646" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="763.483" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="763.483" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="763.483" dy="16.900000000000002">1.0 | 2.0 | 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0</tspan></text>
 </g>
 <g class="node" data-id="reg_b" data-label="AVX2 register
 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0" data-shape="rectangle">
-  <rect x="383.568" y="84" width="236.09199999999996" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="501.614" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="501.614" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="501.614" dy="16.900000000000002">2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0</tspan></text>
+  <rect x="383.568" y="84" width="236.09199999999996" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="501.614" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="501.614" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="501.614" dy="16.900000000000002">2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0 | 2.0</tspan></text>
 </g>
 <g class="node" data-id="op" data-label="vaddps (1 cycle)" data-shape="rectangle">
-  <rect x="565.6315" y="185.8" width="133.834" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="632.5485" y="204.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">vaddps (1 cycle)</text>
+  <rect x="565.6315" y="185.8" width="133.834" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="632.5485" y="204.25" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">vaddps (1 cycle)</text>
 </g>
 <g class="node" data-id="reg_c" data-label="AVX2 register
 3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0" data-shape="rectangle">
-  <rect x="513.0205" y="270.70000000000005" width="239.05599999999995" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="632.5485" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="632.5485" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="632.5485" dy="16.900000000000002">3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0</tspan></text>
+  <rect x="513.0205" y="270.70000000000005" width="239.05599999999995" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="632.5485" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="632.5485" dy="-3.9000000000000012">AVX2 register</tspan><tspan x="632.5485" dy="16.900000000000002">3.0 | 4.0 | 5.0 | 6.0 | 7.0 | 8.0 | 9.0 | 10.0</tspan></text>
 </g>
 </svg>

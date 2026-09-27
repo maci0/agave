@@ -12,10 +12,10 @@ When a GPU isn't available, the CPU backend needs to be fast. Modern CPUs have *
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
 
     X["x, w\n(k floats each)"]:::setup
     Load["load 8-wide chunk\n@Vector(8, f32)"]:::sync
@@ -38,12 +38,12 @@ A single SIMD instruction operates on an entire register of values at once, turn
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Scalar["Scalar (8 instructions)"]
         direction TB
@@ -127,12 +127,12 @@ Compiles to a **reduction tree** (pair-wise adds that preserve precision better 
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Input["Input vector (8 lanes)"]
         direction LR
@@ -170,12 +170,12 @@ FMA collapses a multiply and an add into one instruction, firing through a dedic
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Unfused["Without FMA (2 instructions, 2 cycles min)"]
         direction TB
@@ -252,12 +252,12 @@ Loading the input vector `x` is expensive. With 4-row batching, `x` is loaded on
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     x_mem["x vector\n(k floats in L1/L2 cache)"]:::setup
 
@@ -374,12 +374,12 @@ Each Q4_0 block encodes 32 elements into 18 bytes: a 2-byte f16 scale followed b
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Block["Q4_0 block, 18 bytes total\nencode 32 elements"]
         direction LR
@@ -532,12 +532,12 @@ Process data in the order it's laid out in memory. Row-major matrices should ite
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Matrix["Row-major matrix in memory\n(4 cols × 3 rows = 12 floats, 48 bytes)"]
         direction LR
@@ -615,12 +615,12 @@ RMSNorm is a two-pass reduction: compute RMS, then normalize.
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     input["input[0..n]\n(n f32 values)"]:::setup
     weight["weight[0..n]\n(learned gain per element)"]:::setup
@@ -696,12 +696,12 @@ After SiLU activation in FFN layers, ~40% of output values are near-zero (magnit
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     gate["gate_proj output\n(n values)"]:::setup
     up["up_proj output\n(n values)"]:::setup

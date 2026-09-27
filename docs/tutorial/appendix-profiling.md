@@ -12,12 +12,12 @@ The `--profile` flag threads timing instrumentation through the entire inference
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     CLI["--profile flag"]:::setup
     Enable["PerfCounters.enabled = true\nMetalBackend.profile_counters = true"]:::setup
@@ -183,12 +183,12 @@ The three Metal counters measure different levels of GPU work granularity. A dis
 
 ```mermaid
 graph TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Dispatch["Dispatch\n(one kernel invocation)\nOptimal: 300-600"]:::setup
     Barrier["Barrier\n(serializes two dispatches)\nOptimal: 300-700"]:::setup
@@ -335,12 +335,12 @@ User **immediately knows** there's an issue and has clear next steps.
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Op["GPU backend op called"]:::setup
     IsEmb{"op == embLookup?"}
@@ -426,12 +426,12 @@ softmax(data, n):
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Step1["1. Establish baseline\ngit checkout main\n--profile > baseline.txt"]:::setup
     Step2["2. Test change\ngit checkout feature\n--profile > feature.txt"]:::setup
@@ -623,12 +623,12 @@ fi
 
 ```mermaid
 graph LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Standard["Standard dispatch\n(no megakernel)"]
         S1["rmsNorm\n1 dispatch"]:::sync

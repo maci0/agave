@@ -12,10 +12,10 @@ A chat model expects prompts in a specific format with special tokens marking ro
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
 
     Msgs["messages\n[system?, user, assistant, ...]"]:::setup
     Fmt["ChatTemplate.formatConversation()\nprefix/suffix per role\n+ generation_prefix"]:::migration
@@ -32,12 +32,12 @@ One call to `formatConversation()` turns a role-tagged messages array into the e
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Messages["Messages\n[system, user, assistant, ...]"]:::setup
     Template["ChatTemplate\n(prefix/suffix pairs)"]:::setup
@@ -129,12 +129,12 @@ Each role (system, user, assistant) is wrapped in a pair of prefix and suffix st
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     SysMsg["system message\n'You are helpful'"]:::setup
     SysPre["system_prefix\n&lt;|im_start|&gt;system\n"]:::setup
@@ -216,12 +216,12 @@ prompt = template.formatConversation(system_msg = null, messages)
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph ChatML["ChatML style (Qwen3.5, Nemotron)"]
         direction TB
@@ -359,12 +359,12 @@ The `Arch` enum is the dispatch point for chat templates. Most architectures map
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     subgraph Archs["Arch enum variants (arch.zig)"]
         direction TB
@@ -455,12 +455,12 @@ prompt = if args.system_msg:
 
 ```mermaid
 flowchart LR
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     TmplNames["Template EOG names\n&lt;|im_end|&gt;, &lt;|endoftext|&gt;"]:::setup
     Lookup["Tokenizer special\ntoken map\n(from GGUF / tokenizer.json)"]:::sync
@@ -598,12 +598,12 @@ The function has three branching paths for system messages and a special branch 
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     Start(["formatConversation()"]):::setup
     Done(["return rendered prompt"]):::success
@@ -765,12 +765,12 @@ The pipeline spans three functions across two files: `findImageInsertPos()` and 
 
 ```mermaid
 flowchart TD
-    classDef setup     fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-    classDef sync      fill:#dcfce7,stroke:#22c55e,color:#14532d
-    classDef migration fill:#fef9c3,stroke:#eab308,color:#713f12
-    classDef success   fill:#bbf7d0,stroke:#16a34a,color:#14532d
-    classDef danger    fill:#fee2e2,stroke:#ef4444,color:#7f1d1d
-    classDef optional  fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+    classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+    classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+    classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+    classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+    classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
 
     TokenArr["token array\n[sys_tok..., user_prefix_toks..., text_toks...]"]:::setup
     Scan["findImageInsertPos()\nscan for last occurrence\nof user_prefix token sequence"]:::sync

@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814.1700000000001 297.40000000000003" width="814.1700000000001" height="297.40000000000003" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814.1700000000001 297.40000000000003" width="814.1700000000001" height="297.40000000000003" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -40,32 +46,32 @@
 <polyline class="edge" data-from="Bar" data-to="Attn" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="614.566,141.425 662.566,141.425" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="X" data-label="Input vector x
 (n_embd floats, loaded once)" data-shape="rectangle">
-  <rect x="40" y="121.80000000000001" width="205.711" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="142.8555" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="142.8555" dy="-3.9000000000000012">Input vector x</tspan><tspan x="142.8555" dy="16.900000000000002">(n_embd floats, loaded once)</tspan></text>
+  <rect x="40" y="121.80000000000001" width="205.711" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="142.8555" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="142.8555" dy="-3.9000000000000012">Input vector x</tspan><tspan x="142.8555" dy="16.900000000000002">(n_embd floats, loaded once)</tspan></text>
 </g>
 <g class="node" data-id="GQ" data-label="GEMV: W_q @ x
 → Q buffer" data-shape="rectangle">
-  <rect x="305.711" y="40" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="371.5165" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_q @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ Q buffer</tspan></text>
+  <rect x="305.711" y="40" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="371.5165" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_q @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ Q buffer</tspan></text>
 </g>
 <g class="node" data-id="GK" data-label="GEMV: W_k @ x
 → K buffer" data-shape="rectangle">
-  <rect x="305.711" y="121.80000000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="371.5165" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_k @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ K buffer</tspan></text>
+  <rect x="305.711" y="121.80000000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="371.5165" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_k @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ K buffer</tspan></text>
 </g>
 <g class="node" data-id="GV" data-label="GEMV: W_v @ x
 → V buffer" data-shape="rectangle">
-  <rect x="305.711" y="203.60000000000002" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="371.5165" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_v @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ V buffer</tspan></text>
+  <rect x="305.711" y="203.60000000000002" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="371.5165" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_v @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ V buffer</tspan></text>
 </g>
 <g class="node" data-id="Bar" data-label="Single barrier
 (all ops complete)" data-shape="rectangle">
-  <rect x="473.322" y="114.525" width="141.244" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="543.944" y="141.425" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="543.944" dy="-3.9000000000000012">Single barrier</tspan><tspan x="543.944" dy="16.900000000000002">(all ops complete)</tspan></text>
+  <rect x="473.322" y="114.525" width="141.244" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="543.944" y="141.425" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="543.944" dy="-3.9000000000000012">Single barrier</tspan><tspan x="543.944" dy="16.900000000000002">(all ops complete)</tspan></text>
 </g>
 <g class="node" data-id="Attn" data-label="Attention
 computation" data-shape="rectangle">
-  <rect x="662.566" y="114.525" width="111.60400000000001" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="718.368" y="141.425" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="718.368" dy="-3.9000000000000012">Attention</tspan><tspan x="718.368" dy="16.900000000000002">computation</tspan></text>
+  <rect x="662.566" y="114.525" width="111.60400000000001" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="718.368" y="141.425" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="718.368" dy="-3.9000000000000012">Attention</tspan><tspan x="718.368" dy="16.900000000000002">computation</tspan></text>
 </g>
 </svg>

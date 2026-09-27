@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 755.4095 567.2" width="755.4095" height="567.2" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 755.4095 567.2" width="755.4095" height="567.2" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -47,56 +53,56 @@
 <polyline class="edge" data-from="f_acc" data-to="fma" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="88.09,120.9 88.09,132.9 142.55075000000002,132.9 142.55075000000002,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="fma" data-to="f_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="191.7555,222.70000000000002 191.7555,270.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="u_a" data-label="a (weight)" data-shape="rectangle">
-  <rect x="603.3665" y="84" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="651.3879999999999" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">a (weight)</text>
+  <rect x="603.3665" y="84" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="651.3879999999999" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">a (weight)</text>
 </g>
 <g class="node" data-id="u_b" data-label="b (input)" data-shape="rectangle">
-  <rect x="481.26862500000004" y="84" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="524.8441250000001" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">b (input)</text>
+  <rect x="481.26862500000004" y="84" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="524.8441250000001" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">b (input)</text>
 </g>
 <g class="node" data-id="u_acc" data-label="acc" data-shape="rectangle">
-  <rect x="411.374" y="287.6" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="443.464" y="306.05" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">acc</text>
+  <rect x="411.374" y="287.6" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="443.464" y="306.05" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">acc</text>
 </g>
 <g class="node" data-id="mul" data-label="vmulps
 1 cycle" data-shape="rectangle">
-  <rect x="549.8665" y="168.9" width="83.446" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="591.5894999999999" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="591.5894999999999" dy="-3.9000000000000012">vmulps</tspan><tspan x="591.5894999999999" dy="16.900000000000002">1 cycle</tspan></text>
+  <rect x="549.8665" y="168.9" width="83.446" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="591.5894999999999" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="591.5894999999999" dy="-3.9000000000000012">vmulps</tspan><tspan x="591.5894999999999" dy="16.900000000000002">1 cycle</tspan></text>
 </g>
 <g class="node" data-id="tmp" data-label="tmp = a * b
 (intermediate, rounded)" data-shape="rectangle">
-  <rect x="503.55400000000003" y="270.70000000000005" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="591.5895" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="591.5895" dy="-3.9000000000000012">tmp = a * b</tspan><tspan x="591.5895" dy="16.900000000000002">(intermediate, rounded)</tspan></text>
+  <rect x="503.55400000000003" y="270.70000000000005" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="591.5895" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="591.5895" dy="-3.9000000000000012">tmp = a * b</tspan><tspan x="591.5895" dy="16.900000000000002">(intermediate, rounded)</tspan></text>
 </g>
 <g class="node" data-id="add" data-label="vaddps
 1 cycle" data-shape="rectangle">
-  <rect x="481.26862500000004" y="372.5" width="86.41" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="524.4736250000001" y="399.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="524.4736250000001" dy="-3.9000000000000012">vaddps</tspan><tspan x="524.4736250000001" dy="16.900000000000002">1 cycle</tspan></text>
+  <rect x="481.26862500000004" y="372.5" width="86.41" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="524.4736250000001" y="399.4" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="524.4736250000001" dy="-3.9000000000000012">vaddps</tspan><tspan x="524.4736250000001" dy="16.900000000000002">1 cycle</tspan></text>
 </g>
 <g class="node" data-id="u_out" data-label="acc + tmp" data-shape="rectangle">
-  <rect x="469.87575000000004" y="474.3" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="517.52675" y="492.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">acc + tmp</text>
+  <rect x="469.87575000000004" y="474.3" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="517.52675" y="492.75" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">acc + tmp</text>
 </g>
 <g class="node" data-id="f_a" data-label="a (weight)" data-shape="rectangle">
-  <rect x="263.331" y="84" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="311.3525" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">a (weight)</text>
+  <rect x="263.331" y="84" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="311.3525" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">a (weight)</text>
 </g>
 <g class="node" data-id="f_b" data-label="b (input)" data-shape="rectangle">
-  <rect x="148.18" y="84" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="191.7555" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">b (input)</text>
+  <rect x="148.18" y="84" width="87.15100000000001" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="191.7555" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">b (input)</text>
 </g>
 <g class="node" data-id="f_acc" data-label="acc" data-shape="rectangle">
-  <rect x="56" y="84" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="88.09" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">acc</text>
+  <rect x="56" y="84" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="88.09" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">acc</text>
 </g>
 <g class="node" data-id="fma" data-label="vfmadd231ps
 1 cycle, dedicated FMA unit" data-shape="rectangle">
-  <rect x="93.34600000000003" y="168.9" width="196.81899999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="191.7555" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="191.7555" dy="-3.9000000000000012">vfmadd231ps</tspan><tspan x="191.7555" dy="16.900000000000002">1 cycle, dedicated FMA unit</tspan></text>
+  <rect x="93.34600000000003" y="168.9" width="196.81899999999996" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="191.7555" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="191.7555" dy="-3.9000000000000012">vfmadd231ps</tspan><tspan x="191.7555" dy="16.900000000000002">1 cycle, dedicated FMA unit</tspan></text>
 </g>
 <g class="node" data-id="f_out" data-label="acc + a*b
 (no intermediate rounding)" data-shape="rectangle">
-  <rect x="95.19850000000002" y="270.70000000000005" width="193.11399999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="191.7555" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="191.7555" dy="-3.9000000000000012">acc + a*b</tspan><tspan x="191.7555" dy="16.900000000000002">(no intermediate rounding)</tspan></text>
+  <rect x="95.19850000000002" y="270.70000000000005" width="193.11399999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="191.7555" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="191.7555" dy="-3.9000000000000012">acc + a*b</tspan><tspan x="191.7555" dy="16.900000000000002">(no intermediate rounding)</tspan></text>
 </g>
 </svg>

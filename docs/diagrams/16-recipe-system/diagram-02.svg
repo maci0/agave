@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 579.9176666666666 1763.1409999999998" width="579.9176666666666" height="1763.1409999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 579.9176666666666 1763.1409999999998" width="579.9176666666666" height="1763.1409999999998" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -100,26 +106,26 @@
   <text x="461.28016666666656" y="1611.191" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
 </g>
 <g class="node" data-id="Start" data-label="match(arch, backend, quant)" data-shape="stadium">
-  <rect x="215.39316666666662" y="1584.4409999999998" width="206.45199999999994" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="318.6191666666666" y="1602.8909999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">match(arch, backend, quant)</text>
+  <rect x="215.39316666666662" y="1584.4409999999998" width="206.45199999999994" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="318.6191666666666" y="1602.8909999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">match(arch, backend, quant)</text>
 </g>
 <g class="node" data-id="Loop" data-label="Check next preset
 in order" data-shape="rectangle">
-  <rect x="52.192249999999945" y="1657.341" width="148.654" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="126.51924999999994" y="1684.241" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="126.51924999999994" dy="-3.9000000000000012">Check next preset</tspan><tspan x="126.51924999999994" dy="16.900000000000002">in order</tspan></text>
+  <rect x="52.192249999999945" y="1657.341" width="148.654" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="126.51924999999994" y="1684.241" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="126.51924999999994" dy="-3.9000000000000012">Check next preset</tspan><tspan x="126.51924999999994" dy="16.900000000000002">in order</tspan></text>
 </g>
 <g class="node" data-id="NextPreset" data-label="Skip to next preset" data-shape="rectangle">
-  <rect x="243.35666666666663" y="1332.2389999999998" width="149.395" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="318.0541666666666" y="1350.6889999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Skip to next preset</text>
+  <rect x="243.35666666666663" y="1332.2389999999998" width="149.395" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="318.0541666666666" y="1350.6889999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Skip to next preset</text>
 </g>
 <g class="node" data-id="Hit" data-label="Return this recipe" data-shape="rectangle">
-  <rect x="68.0354166666666" y="1492.1409999999998" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="140.8804166666666" y="1510.591" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Return this recipe</text>
+  <rect x="68.0354166666666" y="1492.1409999999998" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="140.8804166666666" y="1510.591" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Return this recipe</text>
 </g>
 <g class="node" data-id="Miss" data-label="Return null
 (use Recipe.default)" data-shape="rectangle">
-  <rect x="383.1126666666666" y="1657.341" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="461.5151666666666" y="1684.241" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="461.5151666666666" dy="-3.9000000000000012">Return null</tspan><tspan x="461.5151666666666" dy="16.900000000000002">(use Recipe.default)</tspan></text>
+  <rect x="383.1126666666666" y="1657.341" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="461.5151666666666" y="1684.241" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="461.5151666666666" dy="-3.9000000000000012">Return null</tspan><tspan x="461.5151666666666" dy="16.900000000000002">(use Recipe.default)</tspan></text>
 </g>
 <g class="node" data-id="ArchCheck" data-label="arch_prefix
 empty?" data-shape="diamond">

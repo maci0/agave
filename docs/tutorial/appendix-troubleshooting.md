@@ -76,9 +76,9 @@ Most inference failures fall into one of a handful of shapes: the process dies (
 
 ```mermaid
 flowchart TD
-  classDef setup fill:#dbeafe,stroke:#3b82f6,color:#1e3a5f
-  classDef sync fill:#dcfce7,stroke:#22c55e,color:#14532d
-  classDef success fill:#bbf7d0,stroke:#16a34a,color:#14532d
+  classDef setup fill:#e2e5e8,stroke:#5f7480,color:#25333a
+  classDef sync fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+  classDef success fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
 
   Symptom["observe symptom"]:::setup --> Classify["classify failure domain"]:::sync
   Classify --> Trace["trace to subsystem"]:::sync

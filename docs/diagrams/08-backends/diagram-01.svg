@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 621.221 539.6500000000001" width="621.221" height="539.6500000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 621.221 539.6500000000001" width="621.221" height="539.6500000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -49,70 +55,70 @@
 <polyline class="edge" data-from="SPIRV" data-to="AnyGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.193,343.4 433.308,343.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="WGSL2" data-to="Browser" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="387.53099999999995,425.20000000000005 433.308,425.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Zig" data-label="Zig kernel source" data-shape="rectangle">
-  <rect x="40" y="104.89999999999999" width="147.17200000000003" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="113.58600000000001" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Zig kernel source</text>
+  <rect x="40" y="104.89999999999999" width="147.17200000000003" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="113.58600000000001" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Zig kernel source</text>
 </g>
 <g class="node" data-id="PTX" data-label="PTX bytecode" data-shape="rectangle">
-  <rect x="232.94899999999998" y="40" width="125.68299999999999" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="295.79049999999995" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">PTX bytecode</text>
+  <rect x="232.94899999999998" y="40" width="125.68299999999999" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="295.79049999999995" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">PTX bytecode</text>
 </g>
 <g class="node" data-id="AMDGCN" data-label="AMDGCN bytecode" data-shape="rectangle">
-  <rect x="232.94899999999998" y="104.89999999999999" width="154.582" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="310.24" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">AMDGCN bytecode</text>
+  <rect x="232.94899999999998" y="104.89999999999999" width="154.582" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="310.24" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">AMDGCN bytecode</text>
 </g>
 <g class="node" data-id="NEON" data-label="NEON / AVX2
 (native binary)" data-shape="rectangle">
-  <rect x="232.94899999999998" y="169.8" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="295.79049999999995" y="196.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="295.79049999999995" dy="-3.9000000000000012">NEON / AVX2</tspan><tspan x="295.79049999999995" dy="16.900000000000002">(native binary)</tspan></text>
+  <rect x="232.94899999999998" y="169.8" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="295.79049999999995" y="196.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="295.79049999999995" dy="-3.9000000000000012">NEON / AVX2</tspan><tspan x="295.79049999999995" dy="16.900000000000002">(native binary)</tspan></text>
 </g>
 <g class="node" data-id="MSL" data-label="MSL shader" data-shape="rectangle">
-  <rect x="40.000000000000014" y="251.60000000000002" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="98.025" y="270.05" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">MSL shader</text>
+  <rect x="40.000000000000014" y="251.60000000000002" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="98.025" y="270.05" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">MSL shader</text>
 </g>
 <g class="node" data-id="GLSL" data-label="GLSL compute shader" data-shape="rectangle">
-  <rect x="40" y="324.95" width="173.84799999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="126.92399999999999" y="343.4" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">GLSL compute shader</text>
+  <rect x="40" y="324.95" width="173.84799999999998" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="126.92399999999999" y="343.4" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">GLSL compute shader</text>
 </g>
 <g class="node" data-id="WGSL" data-label="WGSL shader" data-shape="rectangle">
-  <rect x="40" y="406.75000000000006" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="102.471" y="425.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">WGSL shader</text>
+  <rect x="40" y="406.75000000000006" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="102.471" y="425.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">WGSL shader</text>
 </g>
 <g class="node" data-id="MetalIR" data-label="Metal IR" data-shape="rectangle">
-  <rect x="232.94899999999998" y="251.60000000000002" width="87.892" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="276.895" y="270.05" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Metal IR</text>
+  <rect x="232.94899999999998" y="251.60000000000002" width="87.892" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="276.895" y="270.05" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Metal IR</text>
 </g>
 <g class="node" data-id="SPIRV" data-label="SPIR-V bytecode" data-shape="rectangle">
-  <rect x="232.94899999999998" y="324.95" width="141.244" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="303.57099999999997" y="343.4" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">SPIR-V bytecode</text>
+  <rect x="232.94899999999998" y="324.95" width="141.244" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="303.57099999999997" y="343.4" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">SPIR-V bytecode</text>
 </g>
 <g class="node" data-id="WGSL2" data-label="WGSL (interpreted)" data-shape="rectangle">
-  <rect x="232.94899999999998" y="406.75000000000006" width="154.582" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="310.24" y="425.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">WGSL (interpreted)</text>
+  <rect x="232.94899999999998" y="406.75000000000006" width="154.582" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="310.24" y="425.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">WGSL (interpreted)</text>
 </g>
 <g class="node" data-id="NVIDIA" data-label="NVIDIA GPU" data-shape="rectangle">
-  <rect x="384.855" y="40" width="112.345" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="441.02750000000003" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">NVIDIA GPU</text>
+  <rect x="384.855" y="40" width="112.345" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="441.02750000000003" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">NVIDIA GPU</text>
 </g>
 <g class="node" data-id="AMD" data-label="AMD GPU" data-shape="rectangle">
-  <rect x="433.308" y="104.89999999999999" width="99.748" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="483.182" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">AMD GPU</text>
+  <rect x="433.308" y="104.89999999999999" width="99.748" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="483.182" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">AMD GPU</text>
 </g>
 <g class="node" data-id="CPU" data-label="CPU" data-shape="rectangle">
-  <rect x="384.855" y="178.25000000000003" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="419.168" y="196.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">CPU</text>
+  <rect x="384.855" y="178.25000000000003" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="419.168" y="196.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">CPU</text>
 </g>
 <g class="node" data-id="Apple" data-label="Apple Silicon GPU" data-shape="rectangle">
-  <rect x="339.942" y="251.60000000000002" width="147.172" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="413.528" y="270.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Apple Silicon GPU</text>
+  <rect x="339.942" y="251.60000000000002" width="147.172" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="413.528" y="270.05" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Apple Silicon GPU</text>
 </g>
 <g class="node" data-id="AnyGPU" data-label="Any GPU
 (Vulkan driver)" data-shape="rectangle">
-  <rect x="433.308" y="316.50000000000006" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="498.3725" y="343.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="498.3725" dy="-3.9000000000000012">Any GPU</tspan><tspan x="498.3725" dy="16.900000000000002">(Vulkan driver)</tspan></text>
+  <rect x="433.308" y="316.50000000000006" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="498.3725" y="343.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="498.3725" dy="-3.9000000000000012">Any GPU</tspan><tspan x="498.3725" dy="16.900000000000002">(Vulkan driver)</tspan></text>
 </g>
 <g class="node" data-id="Browser" data-label="Browser / native
 (wgpu)" data-shape="rectangle">
-  <rect x="433.308" y="398.3" width="137.539" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="502.0775" y="425.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="502.0775" dy="-3.9000000000000012">Browser / native</tspan><tspan x="502.0775" dy="16.900000000000002">(wgpu)</tspan></text>
+  <rect x="433.308" y="398.3" width="137.539" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="502.0775" y="425.2" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="502.0775" dy="-3.9000000000000012">Browser / native</tspan><tspan x="502.0775" dy="16.900000000000002">(wgpu)</tspan></text>
 </g>
 </svg>

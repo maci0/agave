@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1486.2560000000003 1070.7199999999998" width="1486.2560000000003" height="1070.7199999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1486.2560000000003 1070.7199999999998" width="1486.2560000000003" height="1070.7199999999998" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -136,102 +142,102 @@
   <text x="516.9855" y="861.274" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">null</text>
 </g>
 <g class="node" data-id="L1" data-label="user_set.X = true" data-shape="rectangle">
-  <rect x="56" y="84" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="127.363" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">user_set.X = true</text>
+  <rect x="56" y="84" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="127.363" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">user_set.X = true</text>
 </g>
 <g class="node" data-id="LU" data-label="user CLI value" data-shape="rectangle">
-  <rect x="322.196" y="84" width="127.90599999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="386.149" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user CLI value</text>
+  <rect x="322.196" y="84" width="127.90599999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="386.149" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">user CLI value</text>
 </g>
 <g class="node" data-id="L2" data-label="user_set.X = false
 recipe.X != null" data-shape="rectangle">
-  <rect x="56" y="140.9" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="129.586" y="167.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="129.586" dy="-3.9000000000000012">user_set.X = false</tspan><tspan x="129.586" dy="16.900000000000002">recipe.X != null</tspan></text>
+  <rect x="56" y="140.9" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="129.586" y="167.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="129.586" dy="-3.9000000000000012">user_set.X = false</tspan><tspan x="129.586" dy="16.900000000000002">recipe.X != null</tspan></text>
 </g>
 <g class="node" data-id="LR" data-label="recipe value" data-shape="rectangle">
-  <rect x="326.64200000000005" y="149.35000000000002" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="384.29650000000004" y="167.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">recipe value</text>
+  <rect x="326.64200000000005" y="149.35000000000002" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="384.29650000000004" y="167.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">recipe value</text>
 </g>
 <g class="node" data-id="L3" data-label="user_set.X = false
 recipe.X = null" data-shape="rectangle">
-  <rect x="56" y="214.70000000000002" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="129.586" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="129.586" dy="-3.9000000000000012">user_set.X = false</tspan><tspan x="129.586" dy="16.900000000000002">recipe.X = null</tspan></text>
+  <rect x="56" y="214.70000000000002" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="129.586" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="129.586" dy="-3.9000000000000012">user_set.X = false</tspan><tspan x="129.586" dy="16.900000000000002">recipe.X = null</tspan></text>
 </g>
 <g class="node" data-id="LD" data-label="CLI baseline default" data-shape="rectangle">
-  <rect x="326.64200000000005" y="223.15" width="156.06400000000002" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="404.6740000000001" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">CLI baseline default</text>
+  <rect x="326.64200000000005" y="223.15" width="156.06400000000002" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="404.6740000000001" y="241.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">CLI baseline default</text>
 </g>
 <g class="node" data-id="T1" data-label="temperature" data-shape="rectangle">
-  <rect x="811.33125" y="348.5" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="867.87425" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">temperature</text>
+  <rect x="811.33125" y="348.5" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="867.87425" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">temperature</text>
 </g>
 <g class="node" data-id="TV" data-label="user value
 e.g. 0.8" data-shape="rectangle">
-  <rect x="738.308" y="683.081" width="104.93499999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="790.7755" y="709.981" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="790.7755" dy="-3.9000000000000012">user value</tspan><tspan x="790.7755" dy="16.900000000000002">e.g. 0.8</tspan></text>
+  <rect x="738.308" y="683.081" width="104.93499999999999" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="790.7755" y="709.981" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="790.7755" dy="-3.9000000000000012">user value</tspan><tspan x="790.7755" dy="16.900000000000002">e.g. 0.8</tspan></text>
 </g>
 <g class="node" data-id="TRV" data-label="recipe value
 e.g. 0.6" data-shape="rectangle">
-  <rect x="815.664" y="960.92" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="873.3185" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="873.3185" dy="-3.9000000000000012">recipe value</tspan><tspan x="873.3185" dy="16.900000000000002">e.g. 0.6</tspan></text>
+  <rect x="815.664" y="960.92" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="873.3185" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="873.3185" dy="-3.9000000000000012">recipe value</tspan><tspan x="873.3185" dy="16.900000000000002">e.g. 0.6</tspan></text>
 </g>
 <g class="node" data-id="TDV" data-label="CLI baseline
 e.g. 0.0" data-shape="rectangle">
-  <rect x="958.973" y="960.92" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="1016.6274999999999" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1016.6274999999999" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="1016.6274999999999" dy="16.900000000000002">e.g. 0.0</tspan></text>
+  <rect x="958.973" y="960.92" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1016.6274999999999" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1016.6274999999999" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="1016.6274999999999" dy="16.900000000000002">e.g. 0.0</tspan></text>
 </g>
 <g class="node" data-id="P1" data-label="top_p" data-shape="rectangle">
-  <rect x="138.65625" y="348.5" width="74.554" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="175.93325" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">top_p</text>
+  <rect x="138.65625" y="348.5" width="74.554" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="175.93325" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">top_p</text>
 </g>
 <g class="node" data-id="PV" data-label="user value" data-shape="rectangle">
-  <rect x="56" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="108.4675" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user value</text>
+  <rect x="56" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="108.4675" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">user value</text>
 </g>
 <g class="node" data-id="PRV" data-label="recipe value" data-shape="rectangle">
-  <rect x="114.09" y="906.827" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="171.7445" y="925.277" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">recipe value</text>
+  <rect x="114.09" y="906.827" width="115.30899999999998" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="171.7445" y="925.277" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">recipe value</text>
 </g>
 <g class="node" data-id="PDV" data-label="CLI baseline
 e.g. 1.0" data-shape="rectangle">
-  <rect x="257.399" y="906.827" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="315.0535" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="315.0535" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="315.0535" dy="16.900000000000002">e.g. 1.0</tspan></text>
+  <rect x="257.399" y="906.827" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="315.0535" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="315.0535" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="315.0535" dy="16.900000000000002">e.g. 1.0</tspan></text>
 </g>
 <g class="node" data-id="M1" data-label="max_tokens" data-shape="rectangle">
-  <rect x="1167.3052500000001" y="348.5" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="1223.84825" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">max_tokens</text>
+  <rect x="1167.3052500000001" y="348.5" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="1223.84825" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">max_tokens</text>
 </g>
 <g class="node" data-id="MV" data-label="user value" data-shape="rectangle">
-  <rect x="1094.2820000000002" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="1146.7495000000001" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user value</text>
+  <rect x="1094.2820000000002" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1146.7495000000001" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">user value</text>
 </g>
 <g class="node" data-id="MRV" data-label="recipe value
 e.g. 1024" data-shape="rectangle">
-  <rect x="1171.6380000000001" y="960.92" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="1229.2925000000002" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1229.2925000000002" dy="-3.9000000000000012">recipe value</tspan><tspan x="1229.2925000000002" dy="16.900000000000002">e.g. 1024</tspan></text>
+  <rect x="1171.6380000000001" y="960.92" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1229.2925000000002" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1229.2925000000002" dy="-3.9000000000000012">recipe value</tspan><tspan x="1229.2925000000002" dy="16.900000000000002">e.g. 1024</tspan></text>
 </g>
 <g class="node" data-id="MDV" data-label="CLI baseline
 e.g. 512" data-shape="rectangle">
-  <rect x="1314.9470000000001" y="960.92" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="1372.6015000000002" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1372.6015000000002" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="1372.6015000000002" dy="16.900000000000002">e.g. 512</tspan></text>
+  <rect x="1314.9470000000001" y="960.92" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1372.6015000000002" y="987.8199999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1372.6015000000002" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="1372.6015000000002" dy="16.900000000000002">e.g. 512</tspan></text>
 </g>
 <g class="node" data-id="C1" data-label="ctx_size" data-shape="rectangle">
-  <rect x="470.91824999999994" y="348.5" width="92.338" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="517.0872499999999" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">ctx_size</text>
+  <rect x="470.91824999999994" y="348.5" width="92.338" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="517.0872499999999" y="366.95" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">ctx_size</text>
 </g>
 <g class="node" data-id="CV" data-label="user value" data-shape="rectangle">
-  <rect x="392.70799999999997" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="445.17549999999994" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">user value</text>
+  <rect x="392.70799999999997" y="683.081" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="445.17549999999994" y="701.5310000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">user value</text>
 </g>
 <g class="node" data-id="CRV" data-label="recipe value
 e.g. 2048" data-shape="rectangle">
-  <rect x="602.999" y="906.827" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="660.6535" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="660.6535" dy="-3.9000000000000012">recipe value</tspan><tspan x="660.6535" dy="16.900000000000002">e.g. 2048</tspan></text>
+  <rect x="602.999" y="906.827" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="660.6535" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="660.6535" dy="-3.9000000000000012">recipe value</tspan><tspan x="660.6535" dy="16.900000000000002">e.g. 2048</tspan></text>
 </g>
 <g class="node" data-id="CDV" data-label="CLI baseline
 e.g. 4096" data-shape="rectangle">
-  <rect x="459.68999999999994" y="906.827" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="517.3444999999999" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="517.3444999999999" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="517.3444999999999" dy="16.900000000000002">e.g. 4096</tspan></text>
+  <rect x="459.68999999999994" y="906.827" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="517.3444999999999" y="933.727" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="517.3444999999999" dy="-3.9000000000000012">CLI baseline</tspan><tspan x="517.3444999999999" dy="16.900000000000002">e.g. 4096</tspan></text>
 </g>
 <g class="node" data-id="TG" data-label="user_set
 .temperature?" data-shape="diamond">

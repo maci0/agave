@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 862.2570000000001 810.0000000000001" width="862.2570000000001" height="810.0000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 862.2570000000001 810.0000000000001" width="862.2570000000001" height="810.0000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -81,67 +87,67 @@ no negative outputs">
 </g>
 <g class="node" data-id="Input" data-label="Raw activation value x
 (any real number)" data-shape="rectangle">
-  <rect x="40" y="406.1" width="170.14299999999997" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="125.07149999999999" y="433" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="125.07149999999999" dy="-3.9000000000000012">Raw activation value x</tspan><tspan x="125.07149999999999" dy="16.900000000000002">(any real number)</tspan></text>
+  <rect x="40" y="406.1" width="170.14299999999997" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="125.07149999999999" y="433" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="125.07149999999999" dy="-3.9000000000000012">Raw activation value x</tspan><tspan x="125.07149999999999" dy="16.900000000000002">(any real number)</tspan></text>
 </g>
 <g class="node" data-id="GateUse" data-label="Controls how much
 signal passes through" data-shape="rectangle">
-  <rect x="642.5425" y="100.90000000000003" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="728.7255" y="127.80000000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="728.7255" dy="-3.9000000000000012">Controls how much</tspan><tspan x="728.7255" dy="16.900000000000002">signal passes through</tspan></text>
+  <rect x="642.5425" y="100.90000000000003" width="172.36599999999999" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="728.7255" y="127.80000000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="728.7255" dy="-3.9000000000000012">Controls how much</tspan><tspan x="728.7255" dy="16.900000000000002">signal passes through</tspan></text>
 </g>
 <g class="node" data-id="ClampUse" data-label="Soft clamp — prevents
 logit explosion" data-shape="rectangle">
-  <rect x="642.5425" y="216.5" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="725.3910000000001" y="243.4" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="725.3910000000001" dy="-3.9000000000000012">Soft clamp — prevents</tspan><tspan x="725.3910000000001" dy="16.900000000000002">logit explosion</tspan></text>
+  <rect x="642.5425" y="216.5" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="725.3910000000001" y="243.4" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="725.3910000000001" dy="-3.9000000000000012">Soft clamp — prevents</tspan><tspan x="725.3910000000001" dy="16.900000000000002">logit explosion</tspan></text>
 </g>
 <g class="node" data-id="FFNUse" data-label="Gate × up projection
 in SwiGLU FFN" data-shape="rectangle">
-  <rect x="642.5425" y="392.1" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="720.945" y="419" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="720.945" dy="-3.9000000000000012">Gate × up projection</tspan><tspan x="720.945" dy="16.900000000000002">in SwiGLU FFN</tspan></text>
+  <rect x="642.5425" y="392.1" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="720.945" y="419" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="720.945" dy="-3.9000000000000012">Gate × up projection</tspan><tspan x="720.945" dy="16.900000000000002">in SwiGLU FFN</tspan></text>
 </g>
 <g class="node" data-id="GELUUse" data-label="Drop-in for SiLU
 in Gemma3" data-shape="rectangle">
-  <rect x="642.5425" y="507.70000000000005" width="136.057" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="710.571" y="534.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="710.571" dy="-3.9000000000000012">Drop-in for SiLU</tspan><tspan x="710.571" dy="16.900000000000002">in Gemma3</tspan></text>
+  <rect x="642.5425" y="507.70000000000005" width="136.057" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="710.571" y="534.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="710.571" dy="-3.9000000000000012">Drop-in for SiLU</tspan><tspan x="710.571" dy="16.900000000000002">in Gemma3</tspan></text>
 </g>
 <g class="node" data-id="DtUse" data-label="Ensures dt &gt; 0
 for stable SSM decay" data-shape="rectangle">
-  <rect x="642.5425" y="683.3000000000001" width="166.438" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="725.7615000000001" y="710.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="725.7615000000001" dy="-3.9000000000000012">Ensures dt &gt; 0</tspan><tspan x="725.7615000000001" dy="16.900000000000002">for stable SSM decay</tspan></text>
+  <rect x="642.5425" y="683.3000000000001" width="166.438" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="725.7615000000001" y="710.2" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="725.7615000000001" dy="-3.9000000000000012">Ensures dt &gt; 0</tspan><tspan x="725.7615000000001" dy="16.900000000000002">for stable SSM decay</tspan></text>
 </g>
 <g class="node" data-id="Sigmoid" data-label="sigmoid(x)
 Range: (0, 1)
 Formula: 1/(1+exp(-x))
 Use: gating, routing" data-shape="rectangle">
-  <rect x="262.884" y="84" width="161.251" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="343.5095" y="127.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="343.5095" dy="-20.8">sigmoid(x)</tspan><tspan x="343.5095" dy="16.900000000000002">Range: (0, 1)</tspan><tspan x="343.5095" dy="16.900000000000002">Formula: 1/(1+exp(-x))</tspan><tspan x="343.5095" dy="16.900000000000002">Use: gating, routing</tspan></text>
+  <rect x="262.884" y="84" width="161.251" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="343.5095" y="127.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="343.5095" dy="-20.8">sigmoid(x)</tspan><tspan x="343.5095" dy="16.900000000000002">Range: (0, 1)</tspan><tspan x="343.5095" dy="16.900000000000002">Formula: 1/(1+exp(-x))</tspan><tspan x="343.5095" dy="16.900000000000002">Use: gating, routing</tspan></text>
 </g>
 <g class="node" data-id="Tanh" data-label="tanh(x)
 Range: (-1, 1)
 Formula: 2·sigmoid(2x)-1
 Use: softcapping logits" data-shape="rectangle">
-  <rect x="262.884" y="199.60000000000002" width="184.22199999999998" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="354.995" y="243.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="354.995" dy="-20.8">tanh(x)</tspan><tspan x="354.995" dy="16.900000000000002">Range: (-1, 1)</tspan><tspan x="354.995" dy="16.900000000000002">Formula: 2·sigmoid(2x)-1</tspan><tspan x="354.995" dy="16.900000000000002">Use: softcapping logits</tspan></text>
+  <rect x="262.884" y="199.60000000000002" width="184.22199999999998" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="354.995" y="243.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="354.995" dy="-20.8">tanh(x)</tspan><tspan x="354.995" dy="16.900000000000002">Range: (-1, 1)</tspan><tspan x="354.995" dy="16.900000000000002">Formula: 2·sigmoid(2x)-1</tspan><tspan x="354.995" dy="16.900000000000002">Use: softcapping logits</tspan></text>
 </g>
 <g class="node" data-id="SiLU" data-label="SiLU / Swish
 Range: (-0.28, ∞)
 Formula: x·sigmoid(x)
 Use: SwiGLU FFN layers" data-shape="rectangle">
-  <rect x="262.884" y="375.20000000000005" width="187.92699999999996" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="356.84749999999997" y="419.00000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="356.84749999999997" dy="-20.8">SiLU / Swish</tspan><tspan x="356.84749999999997" dy="16.900000000000002">Range: (-0.28, ∞)</tspan><tspan x="356.84749999999997" dy="16.900000000000002">Formula: x·sigmoid(x)</tspan><tspan x="356.84749999999997" dy="16.900000000000002">Use: SwiGLU FFN layers</tspan></text>
+  <rect x="262.884" y="375.20000000000005" width="187.92699999999996" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="356.84749999999997" y="419.00000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="356.84749999999997" dy="-20.8">SiLU / Swish</tspan><tspan x="356.84749999999997" dy="16.900000000000002">Range: (-0.28, ∞)</tspan><tspan x="356.84749999999997" dy="16.900000000000002">Formula: x·sigmoid(x)</tspan><tspan x="356.84749999999997" dy="16.900000000000002">Use: SwiGLU FFN layers</tspan></text>
 </g>
 <g class="node" data-id="GELU" data-label="GELU
 Range: (-0.17, ∞)
 Formula: 0.5x·(1+tanh(...))
 Use: Gemma3 FFN layers" data-shape="rectangle">
-  <rect x="262.884" y="490.80000000000007" width="189.409" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="357.5885" y="534.6" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="357.5885" dy="-20.8">GELU</tspan><tspan x="357.5885" dy="16.900000000000002">Range: (-0.17, ∞)</tspan><tspan x="357.5885" dy="16.900000000000002">Formula: 0.5x·(1+tanh(...))</tspan><tspan x="357.5885" dy="16.900000000000002">Use: Gemma3 FFN layers</tspan></text>
+  <rect x="262.884" y="490.80000000000007" width="189.409" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="357.5885" y="534.6" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="357.5885" dy="-20.8">GELU</tspan><tspan x="357.5885" dy="16.900000000000002">Range: (-0.17, ∞)</tspan><tspan x="357.5885" dy="16.900000000000002">Formula: 0.5x·(1+tanh(...))</tspan><tspan x="357.5885" dy="16.900000000000002">Use: Gemma3 FFN layers</tspan></text>
 </g>
 <g class="node" data-id="Softplus" data-label="softplus(x)
 Range: (0, ∞)
 Formula: log(1+exp(x))
 Use: SSM timestep dt" data-shape="rectangle">
-  <rect x="262.884" y="666.4000000000001" width="168.661" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="347.21450000000004" y="710.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="347.21450000000004" dy="-20.8">softplus(x)</tspan><tspan x="347.21450000000004" dy="16.900000000000002">Range: (0, ∞)</tspan><tspan x="347.21450000000004" dy="16.900000000000002">Formula: log(1+exp(x))</tspan><tspan x="347.21450000000004" dy="16.900000000000002">Use: SSM timestep dt</tspan></text>
+  <rect x="262.884" y="666.4000000000001" width="168.661" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="347.21450000000004" y="710.2" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="347.21450000000004" dy="-20.8">softplus(x)</tspan><tspan x="347.21450000000004" dy="16.900000000000002">Range: (0, ∞)</tspan><tspan x="347.21450000000004" dy="16.900000000000002">Formula: log(1+exp(x))</tspan><tspan x="347.21450000000004" dy="16.900000000000002">Use: SSM timestep dt</tspan></text>
 </g>
 </svg>

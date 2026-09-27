@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1424.6834999999999 1467.564" width="1424.6834999999999" height="1467.564" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1424.6834999999999 1467.564" width="1424.6834999999999" height="1467.564" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -95,29 +101,29 @@ for matching prefix">
 <g class="node" data-id="Search" data-label="N-gram Search
 O(window) linear scan
 stop at first length-N match" data-shape="rectangle">
-  <rect x="159.07849999999996" y="474.80000000000007" width="190.891" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="254.52399999999994" y="510.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="254.52399999999994" dy="-12.350000000000001">N-gram Search</tspan><tspan x="254.52399999999994" dy="16.900000000000002">O(window) linear scan</tspan><tspan x="254.52399999999994" dy="16.900000000000002">stop at first length-N match</tspan></text>
+  <rect x="159.07849999999996" y="474.80000000000007" width="190.891" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="254.52399999999994" y="510.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="254.52399999999994" dy="-12.350000000000001">N-gram Search</tspan><tspan x="254.52399999999994" dy="16.900000000000002">O(window) linear scan</tspan><tspan x="254.52399999999994" dy="16.900000000000002">stop at first length-N match</tspan></text>
 </g>
 <g class="node" data-id="Proposal" data-label="Proposal: tokens at j+1..j+K
 from history buffer
 (up to spec-tokens K tokens)" data-shape="rectangle">
-  <rect x="40" y="806.0640000000001" width="205.71099999999996" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="142.85549999999998" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="142.85549999999998" dy="-12.350000000000001">Proposal: tokens at j+1..j+K</tspan><tspan x="142.85549999999998" dy="16.900000000000002">from history buffer</tspan><tspan x="142.85549999999998" dy="16.900000000000002">(up to spec-tokens K tokens)</tspan></text>
+  <rect x="40" y="806.0640000000001" width="205.71099999999996" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="142.85549999999998" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="142.85549999999998" dy="-12.350000000000001">Proposal: tokens at j+1..j+K</tspan><tspan x="142.85549999999998" dy="16.900000000000002">from history buffer</tspan><tspan x="142.85549999999998" dy="16.900000000000002">(up to spec-tokens K tokens)</tspan></text>
 </g>
 <g class="node" data-id="Fallback" data-label="Fallback:
 single-token decode
 (no speculation this step)" data-shape="rectangle">
-  <rect x="273.71099999999996" y="806.0640000000001" width="184.96299999999997" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="366.19249999999994" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="366.19249999999994" dy="-12.350000000000001">Fallback:</tspan><tspan x="366.19249999999994" dy="16.900000000000002">single-token decode</tspan><tspan x="366.19249999999994" dy="16.900000000000002">(no speculation this step)</tspan></text>
+  <rect x="273.71099999999996" y="806.0640000000001" width="184.96299999999997" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="366.19249999999994" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="366.19249999999994" dy="-12.350000000000001">Fallback:</tspan><tspan x="366.19249999999994" dy="16.900000000000002">single-token decode</tspan><tspan x="366.19249999999994" dy="16.900000000000002">(no speculation this step)</tspan></text>
 </g>
 <g class="node" data-id="Verify" data-label="Target Model Verification
 standard accept/reject loop" data-shape="rectangle">
-  <rect x="41.48200000000001" y="993.0640000000001" width="202.74699999999996" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="142.8555" y="1019.964" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="142.8555" dy="-3.9000000000000012">Target Model Verification</tspan><tspan x="142.8555" dy="16.900000000000002">standard accept/reject loop</tspan></text>
+  <rect x="41.48200000000001" y="993.0640000000001" width="202.74699999999996" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="142.8555" y="1019.964" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="142.8555" dy="-3.9000000000000012">Target Model Verification</tspan><tspan x="142.8555" dy="16.900000000000002">standard accept/reject loop</tspan></text>
 </g>
 <g class="node" data-id="Emit" data-label="Emit to output" data-shape="rectangle">
-  <rect x="84.83049999999997" y="1163.164" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="142.85549999999998" y="1181.614" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Emit to output</text>
+  <rect x="84.83049999999997" y="1163.164" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="142.85549999999998" y="1181.614" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Emit to output</text>
 </g>
 <g class="node" data-id="Found" data-label="match
 found?" data-shape="diamond">
@@ -130,8 +136,8 @@ found?" data-shape="diamond">
 </g>
 <g class="node" data-id="QT" data-label="Current output tail
 (last N tokens, N = 3..10)" data-shape="rectangle">
-  <rect x="167.97049999999996" y="84" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="254.52399999999994" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="254.52399999999994" dy="-3.9000000000000012">Current output tail</tspan><tspan x="254.52399999999994" dy="16.900000000000002">(last N tokens, N = 3..10)</tspan></text>
+  <rect x="167.97049999999996" y="84" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="254.52399999999994" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="254.52399999999994" dy="-3.9000000000000012">Current output tail</tspan><tspan x="254.52399999999994" dy="16.900000000000002">(last N tokens, N = 3..10)</tspan></text>
 </g>
 <g class="node" data-id="Gram" data-label="&quot;Query: ['
 ', '4', '. '" data-shape="rectangle">
@@ -139,19 +145,19 @@ found?" data-shape="diamond">
   <text x="254.52399999999994" y="295.29999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="254.52399999999994" dy="-3.9000000000000012">&quot;Query: [&#39;</tspan><tspan x="254.52399999999994" dy="16.900000000000002">&#39;, &#39;4&#39;, &#39;. &#39;</tspan></text>
 </g>
 <g class="node" data-id="P1" data-label="Zero draft model weight memory" data-shape="rectangle">
-  <rect x="674.8024999999999" y="622.5640000000001" width="224.236" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="786.9205" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Zero draft model weight memory</text>
+  <rect x="674.8024999999999" y="622.5640000000001" width="224.236" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="786.9205" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">Zero draft model weight memory</text>
 </g>
 <g class="node" data-id="P2" data-label="O(window) lookup per step" data-shape="rectangle">
-  <rect x="927.0384999999999" y="622.5640000000001" width="193.855" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="1023.9659999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">O(window) lookup per step</text>
+  <rect x="927.0384999999999" y="622.5640000000001" width="193.855" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="1023.9659999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">O(window) lookup per step</text>
 </g>
 <g class="node" data-id="P3" data-label="Best on: code, JSON, repeated lists" data-shape="rectangle">
-  <rect x="401.0775" y="622.5640000000001" width="245.72499999999994" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="523.9399999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Best on: code, JSON, repeated lists</text>
+  <rect x="401.0775" y="622.5640000000001" width="245.72499999999994" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="523.9399999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">Best on: code, JSON, repeated lists</text>
 </g>
 <g class="node" data-id="P4" data-label="Useless on: novel creative text" data-shape="rectangle">
-  <rect x="1148.8935" y="622.5640000000001" width="219.78999999999994" height="36.900000000000006" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="1258.7884999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87" dy="4.55">Useless on: novel creative text</text>
+  <rect x="1148.8935" y="622.5640000000001" width="219.78999999999994" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="1258.7884999999999" y="641.0140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">Useless on: novel creative text</text>
 </g>
 </svg>

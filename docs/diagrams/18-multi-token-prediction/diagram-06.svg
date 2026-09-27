@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1063.9937499999999 822.3000000000001" width="1063.9937499999999" height="822.3000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1063.9937499999999 822.3000000000001" width="1063.9937499999999" height="822.3000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -58,68 +64,68 @@
 <g class="node" data-id="MainFwd" data-label="Main model forward
 (token t)
 SSM state updated in-place" data-shape="rectangle">
-  <rect x="408.56649999999996" y="40" width="199.783" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="508.45799999999997" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="508.45799999999997" dy="-12.350000000000001">Main model forward</tspan><tspan x="508.45799999999997" dy="16.900000000000002">(token t)</tspan><tspan x="508.45799999999997" dy="16.900000000000002">SSM state updated in-place</tspan></text>
+  <rect x="408.56649999999996" y="40" width="199.783" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="508.45799999999997" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="508.45799999999997" dy="-12.350000000000001">Main model forward</tspan><tspan x="508.45799999999997" dy="16.900000000000002">(token t)</tspan><tspan x="508.45799999999997" dy="16.900000000000002">SSM state updated in-place</tspan></text>
 </g>
 <g class="node" data-id="Checkpoint" data-label="Checkpoint SSM state
 ~50 MiB memcpy
 (all SSM layers)" data-shape="rectangle">
-  <rect x="423.3865" y="158.7" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="508.45799999999997" y="194.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="508.45799999999997" dy="-12.350000000000001">Checkpoint SSM state</tspan><tspan x="508.45799999999997" dy="16.900000000000002">~50 MiB memcpy</tspan><tspan x="508.45799999999997" dy="16.900000000000002">(all SSM layers)</tspan></text>
+  <rect x="423.3865" y="158.7" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="508.45799999999997" y="194.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="508.45799999999997" dy="-12.350000000000001">Checkpoint SSM state</tspan><tspan x="508.45799999999997" dy="16.900000000000002">~50 MiB memcpy</tspan><tspan x="508.45799999999997" dy="16.900000000000002">(all SSM layers)</tspan></text>
 </g>
 <g class="node" data-id="MTPDraft" data-label="MTP head forward
 (token t+1 draft)
 SSM state updated again" data-shape="rectangle">
-  <rect x="202.24174999999997" y="253.4" width="185.70399999999998" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="295.09374999999994" y="288.75" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="295.09374999999994" dy="-12.350000000000001">MTP head forward</tspan><tspan x="295.09374999999994" dy="16.900000000000002">(token t+1 draft)</tspan><tspan x="295.09374999999994" dy="16.900000000000002">SSM state updated again</tspan></text>
+  <rect x="202.24174999999997" y="253.4" width="185.70399999999998" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="295.09374999999994" y="288.75" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="295.09374999999994" dy="-12.350000000000001">MTP head forward</tspan><tspan x="295.09374999999994" dy="16.900000000000002">(token t+1 draft)</tspan><tspan x="295.09374999999994" dy="16.900000000000002">SSM state updated again</tspan></text>
 </g>
 <g class="node" data-id="Verify" data-label="Main model verify
 (token t+1)
 Compares main prediction
 vs MTP draft token" data-shape="rectangle">
-  <rect x="198.53674999999998" y="372.1" width="193.11399999999998" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="295.09375" y="415.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="295.09375" dy="-20.8">Main model verify</tspan><tspan x="295.09375" dy="16.900000000000002">(token t+1)</tspan><tspan x="295.09375" dy="16.900000000000002">Compares main prediction</tspan><tspan x="295.09375" dy="16.900000000000002">vs MTP draft token</tspan></text>
+  <rect x="198.53674999999998" y="372.1" width="193.11399999999998" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="295.09375" y="415.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="295.09375" dy="-20.8">Main model verify</tspan><tspan x="295.09375" dy="16.900000000000002">(token t+1)</tspan><tspan x="295.09375" dy="16.900000000000002">Compares main prediction</tspan><tspan x="295.09375" dy="16.900000000000002">vs MTP draft token</tspan></text>
 </g>
 <g class="node" data-id="Accept" data-label="Draft accepted
 Discard checkpoint
 (SSM state from draft pass is correct)" data-shape="rectangle">
-  <rect x="40" y="583.1500000000001" width="256.099" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="168.0495" y="618.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="168.0495" dy="-12.350000000000001">Draft accepted</tspan><tspan x="168.0495" dy="16.900000000000002">Discard checkpoint</tspan><tspan x="168.0495" dy="16.900000000000002">(SSM state from draft pass is correct)</tspan></text>
+  <rect x="40" y="583.1500000000001" width="256.099" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="168.0495" y="618.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="168.0495" dy="-12.350000000000001">Draft accepted</tspan><tspan x="168.0495" dy="16.900000000000002">Discard checkpoint</tspan><tspan x="168.0495" dy="16.900000000000002">(SSM state from draft pass is correct)</tspan></text>
 </g>
 <g class="node" data-id="Reject" data-label="Draft rejected
 Restore SSM state
 from checkpoint
 (undo draft SSM mutations)" data-shape="rectangle">
-  <rect x="324.099" y="583.1500000000001" width="196.07799999999997" height="87.60000000000001" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="422.138" y="626.95" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="422.138" dy="-20.8">Draft rejected</tspan><tspan x="422.138" dy="16.900000000000002">Restore SSM state</tspan><tspan x="422.138" dy="16.900000000000002">from checkpoint</tspan><tspan x="422.138" dy="16.900000000000002">(undo draft SSM mutations)</tspan></text>
+  <rect x="324.099" y="583.1500000000001" width="196.07799999999997" height="87.60000000000001" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="422.138" y="626.95" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="422.138" dy="-20.8">Draft rejected</tspan><tspan x="422.138" dy="16.900000000000002">Restore SSM state</tspan><tspan x="422.138" dy="16.900000000000002">from checkpoint</tspan><tspan x="422.138" dy="16.900000000000002">(undo draft SSM mutations)</tspan></text>
 </g>
 <g class="node" data-id="NextToken" data-label="Continue from
 accepted SSM state" data-shape="rectangle">
-  <rect x="88.906" y="710.3000000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="168.04950000000002" y="737.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="168.04950000000002" dy="-3.9000000000000012">Continue from</tspan><tspan x="168.04950000000002" dy="16.900000000000002">accepted SSM state</tspan></text>
+  <rect x="88.906" y="710.3000000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="168.04950000000002" y="737.2" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="168.04950000000002" dy="-3.9000000000000012">Continue from</tspan><tspan x="168.04950000000002" dy="16.900000000000002">accepted SSM state</tspan></text>
 </g>
 <g class="node" data-id="NextToken2" data-label="Continue from
 restored SSM state
 (as if draft never ran)" data-shape="rectangle">
-  <rect x="341.14199999999994" y="710.3000000000001" width="161.99200000000002" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="422.1379999999999" y="745.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="422.1379999999999" dy="-12.350000000000001">Continue from</tspan><tspan x="422.1379999999999" dy="16.900000000000002">restored SSM state</tspan><tspan x="422.1379999999999" dy="16.900000000000002">(as if draft never ran)</tspan></text>
+  <rect x="341.14199999999994" y="710.3000000000001" width="161.99200000000002" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="422.1379999999999" y="745.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="422.1379999999999" dy="-12.350000000000001">Continue from</tspan><tspan x="422.1379999999999" dy="16.900000000000002">restored SSM state</tspan><tspan x="422.1379999999999" dy="16.900000000000002">(as if draft never ran)</tspan></text>
 </g>
 <g class="node" data-id="C1" data-label="50 MiB checkpoint
 = ~100 μs memcpy
 every token" data-shape="rectangle">
-  <rect x="435.65074999999996" y="373" width="149.39499999999998" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="510.34824999999995" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="510.34824999999995" dy="-12.350000000000001">50 MiB checkpoint</tspan><tspan x="510.34824999999995" dy="16.900000000000002">= ~100 μs memcpy</tspan><tspan x="510.34824999999995" dy="16.900000000000002">every token</tspan></text>
+  <rect x="435.65074999999996" y="373" width="149.39499999999998" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="510.34824999999995" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="510.34824999999995" dy="-12.350000000000001">50 MiB checkpoint</tspan><tspan x="510.34824999999995" dy="16.900000000000002">= ~100 μs memcpy</tspan><tspan x="510.34824999999995" dy="16.900000000000002">every token</tspan></text>
 </g>
 <g class="node" data-id="C2" data-label="50 MiB restore
 on each rejection
 = additional latency" data-shape="rectangle">
-  <rect x="633.04575" y="373" width="153.10000000000002" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="709.59575" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="709.59575" dy="-12.350000000000001">50 MiB restore</tspan><tspan x="709.59575" dy="16.900000000000002">on each rejection</tspan><tspan x="709.59575" dy="16.900000000000002">= additional latency</tspan></text>
+  <rect x="633.04575" y="373" width="153.10000000000002" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="709.59575" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="709.59575" dy="-12.350000000000001">50 MiB restore</tspan><tspan x="709.59575" dy="16.900000000000002">on each rejection</tspan><tspan x="709.59575" dy="16.900000000000002">= additional latency</tspan></text>
 </g>
 <g class="node" data-id="C3" data-label="Net negative vs
 no speculation
 for SSM-heavy models" data-shape="rectangle">
-  <rect x="834.1457499999999" y="373" width="173.84799999999996" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="921.0697499999999" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="921.0697499999999" dy="-12.350000000000001">Net negative vs</tspan><tspan x="921.0697499999999" dy="16.900000000000002">no speculation</tspan><tspan x="921.0697499999999" dy="16.900000000000002">for SSM-heavy models</tspan></text>
+  <rect x="834.1457499999999" y="373" width="173.84799999999996" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="921.0697499999999" y="408.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="921.0697499999999" dy="-12.350000000000001">Net negative vs</tspan><tspan x="921.0697499999999" dy="16.900000000000002">no speculation</tspan><tspan x="921.0697499999999" dy="16.900000000000002">for SSM-heavy models</tspan></text>
 </g>
 </svg>

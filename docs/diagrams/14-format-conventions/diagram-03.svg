@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 398.674 648.3000000000001" width="398.674" height="648.3000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 398.674 648.3000000000001" width="398.674" height="648.3000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -117,43 +123,43 @@
   <text x="243.119" y="549.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">HF: h*2/8=1</text>
 </g>
 <g class="node" data-id="V0" data-label="V0" data-shape="rectangle">
-  <rect x="62.515" y="49.1999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="67.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V0</text>
+  <rect x="62.515" y="49.1999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="67.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V0</text>
 </g>
 <g class="node" data-id="V1" data-label="V1" data-shape="rectangle">
-  <rect x="62.515" y="182.3999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="200.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V1</text>
+  <rect x="62.515" y="182.3999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="200.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V1</text>
 </g>
 <g class="node" data-id="V2" data-label="V2" data-shape="rectangle">
-  <rect x="62.515" y="115.79999999999991" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="134.24999999999991" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V2</text>
+  <rect x="62.515" y="115.79999999999991" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="134.24999999999991" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V2</text>
 </g>
 <g class="node" data-id="V3" data-label="V3" data-shape="rectangle">
-  <rect x="62.515" y="248.99999999999991" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="267.44999999999993" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V3</text>
+  <rect x="62.515" y="248.99999999999991" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="267.44999999999993" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V3</text>
 </g>
 <g class="node" data-id="V4" data-label="V4" data-shape="rectangle">
-  <rect x="62.515" y="315.5999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="334.0499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V4</text>
+  <rect x="62.515" y="315.5999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="334.0499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V4</text>
 </g>
 <g class="node" data-id="V5" data-label="V5" data-shape="rectangle">
-  <rect x="62.515" y="448.80000000000007" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="467.25000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V5</text>
+  <rect x="62.515" y="448.80000000000007" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="467.25000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V5</text>
 </g>
 <g class="node" data-id="V6" data-label="V6" data-shape="rectangle">
-  <rect x="62.515" y="382.20000000000005" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="400.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V6</text>
+  <rect x="62.515" y="382.20000000000005" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="400.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V6</text>
 </g>
 <g class="node" data-id="V7" data-label="V7" data-shape="rectangle">
-  <rect x="62.515" y="515.4000000000001" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="92.515" y="533.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">V7</text>
+  <rect x="62.515" y="515.4000000000001" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="92.515" y="533.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">V7</text>
 </g>
 <g class="node" data-id="K0" data-label="K0" data-shape="rectangle">
-  <rect x="292.674" y="149.0999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="322.674" y="167.5499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">K0</text>
+  <rect x="292.674" y="149.0999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="322.674" y="167.5499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">K0</text>
 </g>
 <g class="node" data-id="K1" data-label="K1" data-shape="rectangle">
-  <rect x="292.674" y="415.5" width="60" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="322.674" y="433.95" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">K1</text>
+  <rect x="292.674" y="415.5" width="60" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="322.674" y="433.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">K1</text>
 </g>
 </svg>

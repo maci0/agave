@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 621.181 542.8000000000001" width="621.181" height="542.8000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 621.181 542.8000000000001" width="621.181" height="542.8000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -70,42 +76,42 @@
 <g class="node" data-id="Counter" data-label="task_counter
 (atomic usize)
 starts at 0" data-shape="rectangle">
-  <rect x="40" y="236.05" width="121.237" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="100.6185" y="271.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="100.6185" dy="-12.350000000000001">task_counter</tspan><tspan x="100.6185" dy="16.900000000000002">(atomic usize)</tspan><tspan x="100.6185" dy="16.900000000000002">starts at 0</tspan></text>
+  <rect x="40" y="236.05" width="121.237" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="100.6185" y="271.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="100.6185" dy="-12.350000000000001">task_counter</tspan><tspan x="100.6185" dy="16.900000000000002">(atomic usize)</tspan><tspan x="100.6185" dy="16.900000000000002">starts at 0</tspan></text>
 </g>
 <g class="node" data-id="M" data-label="Main Thread
 rows 0–3" data-shape="rectangle">
-  <rect x="329.311" y="40" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="388.077" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="388.077" dy="-3.9000000000000012">Main Thread</tspan><tspan x="388.077" dy="16.900000000000002">rows 0–3</tspan></text>
+  <rect x="329.311" y="40" width="117.532" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="388.077" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="388.077" dy="-3.9000000000000012">Main Thread</tspan><tspan x="388.077" dy="16.900000000000002">rows 0–3</tspan></text>
 </g>
 <g class="node" data-id="W1" data-label="Worker 1
 rows 4–7" data-shape="rectangle">
-  <rect x="329.311" y="121.80000000000001" width="96.04299999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="377.3325" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="377.3325" dy="-3.9000000000000012">Worker 1</tspan><tspan x="377.3325" dy="16.900000000000002">rows 4–7</tspan></text>
+  <rect x="329.311" y="121.80000000000001" width="96.04299999999999" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="377.3325" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="377.3325" dy="-3.9000000000000012">Worker 1</tspan><tspan x="377.3325" dy="16.900000000000002">rows 4–7</tspan></text>
 </g>
 <g class="node" data-id="W2" data-label="Worker 2
 rows 8–11" data-shape="rectangle">
-  <rect x="329.311" y="203.60000000000002" width="96.78399999999999" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="377.703" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="377.703" dy="-3.9000000000000012">Worker 2</tspan><tspan x="377.703" dy="16.900000000000002">rows 8–11</tspan></text>
+  <rect x="329.311" y="203.60000000000002" width="96.78399999999999" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="377.703" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="377.703" dy="-3.9000000000000012">Worker 2</tspan><tspan x="377.703" dy="16.900000000000002">rows 8–11</tspan></text>
 </g>
 <g class="node" data-id="W1b" data-label="Worker 1
 rows 12–15" data-shape="rectangle">
-  <rect x="329.311" y="285.40000000000003" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="380.2965" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="380.2965" dy="-3.9000000000000012">Worker 1</tspan><tspan x="380.2965" dy="16.900000000000002">rows 12–15</tspan></text>
+  <rect x="329.311" y="285.40000000000003" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="380.2965" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="380.2965" dy="-3.9000000000000012">Worker 1</tspan><tspan x="380.2965" dy="16.900000000000002">rows 12–15</tspan></text>
 </g>
 <g class="node" data-id="W3" data-label="Worker 3
 rows 16–19" data-shape="rectangle">
-  <rect x="329.311" y="367.20000000000005" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="380.2965" y="394.1" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="380.2965" dy="-3.9000000000000012">Worker 3</tspan><tspan x="380.2965" dy="16.900000000000002">rows 16–19</tspan></text>
+  <rect x="329.311" y="367.20000000000005" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="380.2965" y="394.1" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="380.2965" dy="-3.9000000000000012">Worker 3</tspan><tspan x="380.2965" dy="16.900000000000002">rows 16–19</tspan></text>
 </g>
 <g class="node" data-id="W2b" data-label="Worker 2
 rows 20–23" data-shape="rectangle">
-  <rect x="329.311" y="449.00000000000006" width="110.863" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="384.74249999999995" y="475.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="384.74249999999995" dy="-3.9000000000000012">Worker 2</tspan><tspan x="384.74249999999995" dy="16.900000000000002">rows 20–23</tspan></text>
+  <rect x="329.311" y="449.00000000000006" width="110.863" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="384.74249999999995" y="475.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="384.74249999999995" dy="-3.9000000000000012">Worker 2</tspan><tspan x="384.74249999999995" dy="16.900000000000002">rows 20–23</tspan></text>
 </g>
 <g class="node" data-id="Out" data-label="Output rows
 (y vector)" data-shape="rectangle">
-  <rect x="470.318" y="238.90000000000003" width="110.86299999999999" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="525.7495" y="265.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="525.7495" dy="-3.9000000000000012">Output rows</tspan><tspan x="525.7495" dy="16.900000000000002">(y vector)</tspan></text>
+  <rect x="470.318" y="238.90000000000003" width="110.86299999999999" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="525.7495" y="265.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="525.7495" dy="-3.9000000000000012">Output rows</tspan><tspan x="525.7495" dy="16.900000000000002">(y vector)</tspan></text>
 </g>
 </svg>

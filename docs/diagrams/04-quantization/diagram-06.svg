@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2083.912 308.5" width="2083.912" height="308.5" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2083.912 308.5" width="2083.912" height="308.5" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -51,57 +57,57 @@
 </g>
 <g class="node" data-id="KV" data-label="KV vector
 (128-dim, f16)" data-shape="rectangle">
-  <rect x="1087.764" y="181.8" width="108.64000000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="1142.0839999999998" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="1142.0839999999998" dy="-3.9000000000000012">KV vector</tspan><tspan x="1142.0839999999998" dy="16.900000000000002">(128-dim, f16)</tspan></text>
+  <rect x="1087.764" y="181.8" width="108.64000000000001" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="1142.0839999999998" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="1142.0839999999998" dy="-3.9000000000000012">KV vector</tspan><tspan x="1142.0839999999998" dy="16.900000000000002">(128-dim, f16)</tspan></text>
 </g>
 <g class="node" data-id="OUT" data-label="Restored KV vector
 (approx, f16)" data-shape="rectangle">
-  <rect x="40" y="84" width="157.546" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="118.773" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="118.773" dy="-3.9000000000000012">Restored KV vector</tspan><tspan x="118.773" dy="16.900000000000002">(approx, f16)</tspan></text>
+  <rect x="40" y="84" width="157.546" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="118.773" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="118.773" dy="-3.9000000000000012">Restored KV vector</tspan><tspan x="118.773" dy="16.900000000000002">(approx, f16)</tspan></text>
 </g>
 <g class="node" data-id="N1" data-label="1. Normalize
 divide by RMS norm
 → unit vector" data-shape="rectangle">
-  <rect x="1260.404" y="173.35000000000002" width="157.546" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="1339.177" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1339.177" dy="-12.350000000000001">1. Normalize</tspan><tspan x="1339.177" dy="16.900000000000002">divide by RMS norm</tspan><tspan x="1339.177" dy="16.900000000000002">→ unit vector</tspan></text>
+  <rect x="1260.404" y="173.35000000000002" width="157.546" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1339.177" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1339.177" dy="-12.350000000000001">1. Normalize</tspan><tspan x="1339.177" dy="16.900000000000002">divide by RMS norm</tspan><tspan x="1339.177" dy="16.900000000000002">→ unit vector</tspan></text>
 </g>
 <g class="node" data-id="W1" data-label="2. WHT
 5-stage butterfly
 ~640 add/sub ops
 → N(0,1) coords" data-shape="rectangle">
-  <rect x="1465.95" y="164.9" width="146.43099999999998" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="1539.1655" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1539.1655" dy="-20.8">2. WHT</tspan><tspan x="1539.1655" dy="16.900000000000002">5-stage butterfly</tspan><tspan x="1539.1655" dy="16.900000000000002">~640 add/sub ops</tspan><tspan x="1539.1655" dy="16.900000000000002">→ N(0,1) coords</tspan></text>
+  <rect x="1465.95" y="164.9" width="146.43099999999998" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1539.1655" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1539.1655" dy="-20.8">2. WHT</tspan><tspan x="1539.1655" dy="16.900000000000002">5-stage butterfly</tspan><tspan x="1539.1655" dy="16.900000000000002">~640 add/sub ops</tspan><tspan x="1539.1655" dy="16.900000000000002">→ N(0,1) coords</tspan></text>
 </g>
 <g class="node" data-id="CB1" data-label="3. Codebook lookup
 Lloyd-Max optimal
 bins per bit-width" data-shape="rectangle">
-  <rect x="1660.3809999999999" y="173.35000000000002" width="157.546" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="1739.1539999999998" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1739.1539999999998" dy="-12.350000000000001">3. Codebook lookup</tspan><tspan x="1739.1539999999998" dy="16.900000000000002">Lloyd-Max optimal</tspan><tspan x="1739.1539999999998" dy="16.900000000000002">bins per bit-width</tspan></text>
+  <rect x="1660.3809999999999" y="173.35000000000002" width="157.546" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1739.1539999999998" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1739.1539999999998" dy="-12.350000000000001">3. Codebook lookup</tspan><tspan x="1739.1539999999998" dy="16.900000000000002">Lloyd-Max optimal</tspan><tspan x="1739.1539999999998" dy="16.900000000000002">bins per bit-width</tspan></text>
 </g>
 <g class="node" data-id="PK" data-label="4. Pack
 f16 norm + indices
 (2B + n×bits)" data-shape="rectangle">
-  <rect x="1865.927" y="173.35000000000002" width="141.985" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="1936.9195" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1936.9195" dy="-12.350000000000001">4. Pack</tspan><tspan x="1936.9195" dy="16.900000000000002">f16 norm + indices</tspan><tspan x="1936.9195" dy="16.900000000000002">(2B + n×bits)</tspan></text>
+  <rect x="1865.927" y="173.35000000000002" width="141.985" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1936.9195" y="208.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1936.9195" dy="-12.350000000000001">4. Pack</tspan><tspan x="1936.9195" dy="16.900000000000002">f16 norm + indices</tspan><tspan x="1936.9195" dy="16.900000000000002">(2B + n×bits)</tspan></text>
 </g>
 <g class="node" data-id="UPK" data-label="1. Unpack
 read norm + indices" data-shape="rectangle">
-  <rect x="877.443" y="84" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="955.8455" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="955.8455" dy="-3.9000000000000012">1. Unpack</tspan><tspan x="955.8455" dy="16.900000000000002">read norm + indices</tspan></text>
+  <rect x="877.443" y="84" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="955.8455" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="955.8455" dy="-3.9000000000000012">1. Unpack</tspan><tspan x="955.8455" dy="16.900000000000002">read norm + indices</tspan></text>
 </g>
 <g class="node" data-id="CB2" data-label="2. Codebook decode
 index → centroid value" data-shape="rectangle">
-  <rect x="659.3" y="84" width="170.143" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="744.3715" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="744.3715" dy="-3.9000000000000012">2. Codebook decode</tspan><tspan x="744.3715" dy="16.900000000000002">index → centroid value</tspan></text>
+  <rect x="659.3" y="84" width="170.143" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="744.3715" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="744.3715" dy="-3.9000000000000012">2. Codebook decode</tspan><tspan x="744.3715" dy="16.900000000000002">index → centroid value</tspan></text>
 </g>
 <g class="node" data-id="IW" data-label="3. Inverse WHT
 restore original basis" data-shape="rectangle">
-  <rect x="443.38000000000005" y="84" width="167.92" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="527.34" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="527.34" dy="-3.9000000000000012">3. Inverse WHT</tspan><tspan x="527.34" dy="16.900000000000002">restore original basis</tspan></text>
+  <rect x="443.38000000000005" y="84" width="167.92" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="527.34" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="527.34" dy="-3.9000000000000012">3. Inverse WHT</tspan><tspan x="527.34" dy="16.900000000000002">restore original basis</tspan></text>
 </g>
 <g class="node" data-id="RS" data-label="4. Rescale
 multiply by norm" data-shape="rectangle">
-  <rect x="261.546" y="84" width="133.834" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="328.46299999999997" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="328.46299999999997" dy="-3.9000000000000012">4. Rescale</tspan><tspan x="328.46299999999997" dy="16.900000000000002">multiply by norm</tspan></text>
+  <rect x="261.546" y="84" width="133.834" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="328.46299999999997" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="328.46299999999997" dy="-3.9000000000000012">4. Rescale</tspan><tspan x="328.46299999999997" dy="16.900000000000002">multiply by norm</tspan></text>
 </g>
 </svg>

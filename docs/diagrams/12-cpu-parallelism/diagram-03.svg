@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 731.94 1108.8429999999998" width="731.94" height="1108.8429999999998" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 731.94 1108.8429999999998" width="731.94" height="1108.8429999999998" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -53,76 +59,76 @@
   <text x="558.4155" y="668.3930000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">CAS fails: pool busy</text>
 </g>
 <g class="node" data-id="Start" data-label="parallelFor() called" data-shape="rectangle">
-  <rect x="384.60125000000005" y="40" width="153.841" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="461.52175000000005" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">parallelFor() called</text>
+  <rect x="384.60125000000005" y="40" width="153.841" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="461.52175000000005" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">parallelFor() called</text>
 </g>
 <g class="node" data-id="Post" data-label="Post task descriptor
 (func, ctx, total, grain)" data-shape="rectangle">
-  <rect x="380.15525" y="124.9" width="162.73300000000003" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="461.52175000000005" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="461.52175000000005" dy="-3.9000000000000012">Post task descriptor</tspan><tspan x="461.52175000000005" dy="16.900000000000002">(func, ctx, total, grain)</tspan></text>
+  <rect x="380.15525" y="124.9" width="162.73300000000003" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="461.52175000000005" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="461.52175000000005" dy="-3.9000000000000012">Post task descriptor</tspan><tspan x="461.52175000000005" dy="16.900000000000002">(func, ctx, total, grain)</tspan></text>
 </g>
 <g class="node" data-id="Reset" data-label="task_counter = 0" data-shape="rectangle">
-  <rect x="391.64075" y="226.70000000000002" width="139.762" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="461.52175" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">task_counter = 0</text>
+  <rect x="391.64075" y="226.70000000000002" width="139.762" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="461.52175" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">task_counter = 0</text>
 </g>
 <g class="node" data-id="Wake" data-label="generation++
 futexWake(all workers)" data-shape="rectangle">
-  <rect x="276.082" y="622.0429999999999" width="176.81199999999998" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="364.488" y="648.9429999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="364.488" dy="-3.9000000000000012">generation++</tspan><tspan x="364.488" dy="16.900000000000002">futexWake(all workers)</tspan></text>
+  <rect x="276.082" y="622.0429999999999" width="176.81199999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="364.488" y="648.9429999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="364.488" dy="-3.9000000000000012">generation++</tspan><tspan x="364.488" dy="16.900000000000002">futexWake(all workers)</tspan></text>
 </g>
 <g class="node" data-id="Inline" data-label="run func() inline
 (return immediately)" data-shape="rectangle">
-  <rect x="480.894" y="725.193" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="558.5554999999999" y="752.093" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="558.5554999999999" dy="-3.9000000000000012">run func() inline</tspan><tspan x="558.5554999999999" dy="16.900000000000002">(return immediately)</tspan></text>
+  <rect x="480.894" y="725.193" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="558.5554999999999" y="752.093" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="558.5554999999999" dy="-3.9000000000000012">run func() inline</tspan><tspan x="558.5554999999999" dy="16.900000000000002">(return immediately)</tspan></text>
 </g>
 <g class="node" data-id="Split" data-label="Main thread + Workers
 all racing on task_counter" data-shape="rectangle">
-  <rect x="267.56050000000005" y="725.193" width="193.855" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="364.48800000000006" y="752.093" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="364.48800000000006" dy="-3.9000000000000012">Main thread + Workers</tspan><tspan x="364.48800000000006" dy="16.900000000000002">all racing on task_counter</tspan></text>
+  <rect x="267.56050000000005" y="725.193" width="193.855" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="364.48800000000006" y="752.093" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="364.48800000000006" dy="-3.9000000000000012">Main thread + Workers</tspan><tspan x="364.48800000000006" dy="16.900000000000002">all racing on task_counter</tspan></text>
 </g>
 <g class="node" data-id="Main" data-label="Main Thread
 doWork() loop
 (fetchAdd chunks)" data-shape="rectangle">
-  <rect x="40" y="826.9929999999999" width="147.913" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="113.9565" y="862.343" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="113.9565" dy="-12.350000000000001">Main Thread</tspan><tspan x="113.9565" dy="16.900000000000002">doWork() loop</tspan><tspan x="113.9565" dy="16.900000000000002">(fetchAdd chunks)</tspan></text>
+  <rect x="40" y="826.9929999999999" width="147.913" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="113.9565" y="862.343" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="113.9565" dy="-12.350000000000001">Main Thread</tspan><tspan x="113.9565" dy="16.900000000000002">doWork() loop</tspan><tspan x="113.9565" dy="16.900000000000002">(fetchAdd chunks)</tspan></text>
 </g>
 <g class="node" data-id="W1" data-label="Worker 1
 doWork() loop" data-shape="rectangle">
-  <rect x="217.395" y="826.9929999999999" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="279.125" y="853.8929999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="279.125" dy="-3.9000000000000012">Worker 1</tspan><tspan x="279.125" dy="16.900000000000002">doWork() loop</tspan></text>
+  <rect x="217.395" y="826.9929999999999" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="279.125" y="853.8929999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="279.125" dy="-3.9000000000000012">Worker 1</tspan><tspan x="279.125" dy="16.900000000000002">doWork() loop</tspan></text>
 </g>
 <g class="node" data-id="W2" data-label="Worker 2
 doWork() loop" data-shape="rectangle">
-  <rect x="388.121" y="826.9929999999999" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="449.851" y="853.8929999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="449.851" dy="-3.9000000000000012">Worker 2</tspan><tspan x="449.851" dy="16.900000000000002">doWork() loop</tspan></text>
+  <rect x="388.121" y="826.9929999999999" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="449.851" y="853.8929999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="449.851" dy="-3.9000000000000012">Worker 2</tspan><tspan x="449.851" dy="16.900000000000002">doWork() loop</tspan></text>
 </g>
 <g class="node" data-id="Wn" data-label="Worker N
 doWork() loop" data-shape="rectangle">
-  <rect x="558.847" y="826.9929999999999" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="620.577" y="853.8929999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="620.577" dy="-3.9000000000000012">Worker N</tspan><tspan x="620.577" dy="16.900000000000002">doWork() loop</tspan></text>
+  <rect x="558.847" y="826.9929999999999" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="620.577" y="853.8929999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="620.577" dy="-3.9000000000000012">Worker N</tspan><tspan x="620.577" dy="16.900000000000002">doWork() loop</tspan></text>
 </g>
 <g class="node" data-id="Spin" data-label="Main spins:
 while active != 0
  spinLoopHint()" data-shape="rectangle">
-  <rect x="48.151" y="937.2429999999999" width="131.61100000000002" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="113.9565" y="972.593" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="113.9565" dy="-12.350000000000001">Main spins:</tspan><tspan x="113.9565" dy="16.900000000000002">while active != 0</tspan><tspan x="113.9565" dy="16.900000000000002"> spinLoopHint()</tspan></text>
+  <rect x="48.151" y="937.2429999999999" width="131.61100000000002" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="113.9565" y="972.593" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="113.9565" dy="-12.350000000000001">Main spins:</tspan><tspan x="113.9565" dy="16.900000000000002">while active != 0</tspan><tspan x="113.9565" dy="16.900000000000002"> spinLoopHint()</tspan></text>
 </g>
 <g class="node" data-id="Dec1" data-label="active.fetchSub(1)" data-shape="rectangle">
-  <rect x="207.762" y="937.2429999999999" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="279.125" y="955.693" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">active.fetchSub(1)</text>
+  <rect x="207.762" y="937.2429999999999" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="279.125" y="955.693" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">active.fetchSub(1)</text>
 </g>
 <g class="node" data-id="Dec2" data-label="active.fetchSub(1)" data-shape="rectangle">
-  <rect x="378.48800000000006" y="937.2429999999999" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="449.85100000000006" y="955.693" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">active.fetchSub(1)</text>
+  <rect x="378.48800000000006" y="937.2429999999999" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="449.85100000000006" y="955.693" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">active.fetchSub(1)</text>
 </g>
 <g class="node" data-id="DecN" data-label="active.fetchSub(1)" data-shape="rectangle">
-  <rect x="549.214" y="937.2429999999999" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="620.577" y="955.693" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">active.fetchSub(1)</text>
+  <rect x="549.214" y="937.2429999999999" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="620.577" y="955.693" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">active.fetchSub(1)</text>
 </g>
 <g class="node" data-id="Done" data-label="active == 0
 parallelFor returns" data-shape="rectangle">
-  <rect x="220.849" y="1015.0429999999999" width="155.32300000000004" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="298.5105" y="1041.943" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="298.5105" dy="-3.9000000000000012">active == 0</tspan><tspan x="298.5105" dy="16.900000000000002">parallelFor returns</tspan></text>
+  <rect x="220.849" y="1015.0429999999999" width="155.32300000000004" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="298.5105" y="1041.943" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="298.5105" dy="-3.9000000000000012">active == 0</tspan><tspan x="298.5105" dy="16.900000000000002">parallelFor returns</tspan></text>
 </g>
 <g class="node" data-id="CAS" data-label="cmpxchgWeak
 (active, 0→n_workers)" data-shape="diamond">

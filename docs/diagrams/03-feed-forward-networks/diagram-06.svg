@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2524.442 292.65" width="2524.442" height="292.65" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2524.442 292.65" width="2524.442" height="292.65" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -79,44 +85,44 @@ memory round-trips">
 </g>
 <g class="node" data-id="U_in" data-label="Input
 (GPU memory)" data-shape="rectangle">
-  <rect x="56" y="182.85000000000002" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="118.10050000000001" y="209.75000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="118.10050000000001" dy="-3.9000000000000012">Input</tspan><tspan x="118.10050000000001" dy="16.900000000000002">(GPU memory)</tspan></text>
+  <rect x="56" y="182.85000000000002" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="118.10050000000001" y="209.75000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="118.10050000000001" dy="-3.9000000000000012">Input</tspan><tspan x="118.10050000000001" dy="16.900000000000002">(GPU memory)</tspan></text>
 </g>
 <g class="node" data-id="U_gate" data-label="Dispatch 1
 gate_proj GEMV" data-shape="rectangle">
-  <rect x="405.58900000000006" y="149.9" width="138.27999999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="474.72900000000004" y="176.8" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="474.72900000000004" dy="-3.9000000000000012">Dispatch 1</tspan><tspan x="474.72900000000004" dy="16.900000000000002">gate_proj GEMV</tspan></text>
+  <rect x="405.58900000000006" y="149.9" width="138.27999999999997" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="474.72900000000004" y="176.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="474.72900000000004" dy="-3.9000000000000012">Dispatch 1</tspan><tspan x="474.72900000000004" dy="16.900000000000002">gate_proj GEMV</tspan></text>
 </g>
 <g class="node" data-id="U_up" data-label="Dispatch 2
 up_proj GEMV" data-shape="rectangle">
-  <rect x="769.2570000000001" y="116.95000000000002" width="127.90599999999999" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="833.21" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="833.21" dy="-3.9000000000000012">Dispatch 2</tspan><tspan x="833.21" dy="16.900000000000002">up_proj GEMV</tspan></text>
+  <rect x="769.2570000000001" y="116.95000000000002" width="127.90599999999999" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="833.21" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="833.21" dy="-3.9000000000000012">Dispatch 2</tspan><tspan x="833.21" dy="16.900000000000002">up_proj GEMV</tspan></text>
 </g>
 <g class="node" data-id="U_act" data-label="Dispatch 3
 SiLU + multiply
 + down_proj GEMV" data-shape="rectangle">
-  <rect x="1057.461" y="108.50000000000001" width="153.84099999999998" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="1134.3815" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1134.3815" dy="-12.350000000000001">Dispatch 3</tspan><tspan x="1134.3815" dy="16.900000000000002">SiLU + multiply</tspan><tspan x="1134.3815" dy="16.900000000000002">+ down_proj GEMV</tspan></text>
+  <rect x="1057.461" y="108.50000000000001" width="153.84099999999998" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1134.3815" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1134.3815" dy="-12.350000000000001">Dispatch 3</tspan><tspan x="1134.3815" dy="16.900000000000002">SiLU + multiply</tspan><tspan x="1134.3815" dy="16.900000000000002">+ down_proj GEMV</tspan></text>
 </g>
 <g class="node" data-id="U_out" data-label="Output
 (GPU memory)" data-shape="rectangle">
-  <rect x="1339.524" y="116.95000000000002" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="1401.6245" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="1401.6245" dy="-3.9000000000000012">Output</tspan><tspan x="1401.6245" dy="16.900000000000002">(GPU memory)</tspan></text>
+  <rect x="1339.524" y="116.95000000000002" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="1401.6245" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="1401.6245" dy="-3.9000000000000012">Output</tspan><tspan x="1401.6245" dy="16.900000000000002">(GPU memory)</tspan></text>
 </g>
 <g class="node" data-id="U_rt1" data-label="round-trip
 to GPU memory" data-shape="rectangle">
-  <rect x="228.20100000000002" y="116.95000000000002" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="292.89500000000004" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="292.89500000000004" dy="-3.9000000000000012">round-trip</tspan><tspan x="292.89500000000004" dy="16.900000000000002">to GPU memory</tspan></text>
+  <rect x="228.20100000000002" y="116.95000000000002" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="292.89500000000004" y="143.85000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="292.89500000000004" dy="-3.9000000000000012">round-trip</tspan><tspan x="292.89500000000004" dy="16.900000000000002">to GPU memory</tspan></text>
 </g>
 <g class="node" data-id="U_rt2" data-label="round-trip
 to GPU memory" data-shape="rectangle">
-  <rect x="591.869" y="84" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="656.563" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="656.563" dy="-3.9000000000000012">round-trip</tspan><tspan x="656.563" dy="16.900000000000002">to GPU memory</tspan></text>
+  <rect x="591.869" y="84" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="656.563" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="656.563" dy="-3.9000000000000012">round-trip</tspan><tspan x="656.563" dy="16.900000000000002">to GPU memory</tspan></text>
 </g>
 <g class="node" data-id="F_in" data-label="Input
 (GPU memory)" data-shape="rectangle">
-  <rect x="1692.8509999999999" y="133.425" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="1754.9515" y="160.32500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="1754.9515" dy="-3.9000000000000012">Input</tspan><tspan x="1754.9515" dy="16.900000000000002">(GPU memory)</tspan></text>
+  <rect x="1692.8509999999999" y="133.425" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="1754.9515" y="160.32500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="1754.9515" dy="-3.9000000000000012">Input</tspan><tspan x="1754.9515" dy="16.900000000000002">(GPU memory)</tspan></text>
 </g>
 <g class="node" data-id="F_kern" data-label="Single kernel
 gate_proj
@@ -124,12 +130,12 @@ gate_proj
 + SiLU * gate
 + down_proj
 (all in registers/threadgroup)" data-shape="rectangle">
-  <rect x="1975.568" y="99.625" width="210.15699999999998" height="121.4" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="2080.6465" y="160.325" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2080.6465" dy="-37.70000000000001">Single kernel</tspan><tspan x="2080.6465" dy="16.900000000000002">gate_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">+ up_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">+ SiLU * gate</tspan><tspan x="2080.6465" dy="16.900000000000002">+ down_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">(all in registers/threadgroup)</tspan></text>
+  <rect x="1975.568" y="99.625" width="210.15699999999998" height="121.4" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="2080.6465" y="160.325" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="2080.6465" dy="-37.70000000000001">Single kernel</tspan><tspan x="2080.6465" dy="16.900000000000002">gate_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">+ up_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">+ SiLU * gate</tspan><tspan x="2080.6465" dy="16.900000000000002">+ down_proj</tspan><tspan x="2080.6465" dy="16.900000000000002">(all in registers/threadgroup)</tspan></text>
 </g>
 <g class="node" data-id="F_out" data-label="Output
 (GPU memory)" data-shape="rectangle">
-  <rect x="2344.241" y="133.425" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="2406.3415" y="160.32500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="2406.3415" dy="-3.9000000000000012">Output</tspan><tspan x="2406.3415" dy="16.900000000000002">(GPU memory)</tspan></text>
+  <rect x="2344.241" y="133.425" width="124.20100000000001" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="2406.3415" y="160.32500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="2406.3415" dy="-3.9000000000000012">Output</tspan><tspan x="2406.3415" dy="16.900000000000002">(GPU memory)</tspan></text>
 </g>
 </svg>

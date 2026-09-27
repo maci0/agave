@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 511.265 641.5" width="511.265" height="641.5" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 511.265 641.5" width="511.265" height="641.5" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -47,48 +53,48 @@
 <polyline class="edge" data-from="ZR" data-to="DQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="274.755,583.0500000000001 296.65075,583.0500000000001 296.65075,477.25 301.863,477.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="U32" data-label="u32 word
 (32 bits)" data-shape="rectangle">
-  <rect x="40" y="245.85" width="96.04299999999999" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="88.0215" y="272.75" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="88.0215" dy="-3.9000000000000012">u32 word</tspan><tspan x="88.0215" dy="16.900000000000002">(32 bits)</tspan></text>
+  <rect x="40" y="245.85" width="96.04299999999999" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="88.0215" y="272.75" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="88.0215" dy="-3.9000000000000012">u32 word</tspan><tspan x="88.0215" dy="16.900000000000002">(32 bits)</tspan></text>
 </g>
 <g class="node" data-id="N0" data-label="nibble 0
 bits 0-3
 elem 0" data-shape="rectangle">
-  <rect x="204.2875" y="40" width="87.151" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="247.863" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="247.863" dy="-12.350000000000001">nibble 0</tspan><tspan x="247.863" dy="16.900000000000002">bits 0-3</tspan><tspan x="247.863" dy="16.900000000000002">elem 0</tspan></text>
+  <rect x="204.2875" y="40" width="87.151" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="247.863" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="247.863" dy="-12.350000000000001">nibble 0</tspan><tspan x="247.863" dy="16.900000000000002">bits 0-3</tspan><tspan x="247.863" dy="16.900000000000002">elem 0</tspan></text>
 </g>
 <g class="node" data-id="N1" data-label="nibble 1
 bits 4-7
 elem 1" data-shape="rectangle">
-  <rect x="204.2875" y="138.7" width="83.446" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="246.01049999999998" y="174.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="246.01049999999998" dy="-12.350000000000001">nibble 1</tspan><tspan x="246.01049999999998" dy="16.900000000000002">bits 4-7</tspan><tspan x="246.01049999999998" dy="16.900000000000002">elem 1</tspan></text>
+  <rect x="204.2875" y="138.7" width="83.446" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="246.01049999999998" y="174.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="246.01049999999998" dy="-12.350000000000001">nibble 1</tspan><tspan x="246.01049999999998" dy="16.900000000000002">bits 4-7</tspan><tspan x="246.01049999999998" dy="16.900000000000002">elem 1</tspan></text>
 </g>
 <g class="node" data-id="N2" data-label="nibble 2
 bits 8-11
 elem 2" data-shape="rectangle">
-  <rect x="204.2875" y="237.39999999999998" width="87.151" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="247.863" y="272.75" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="247.863" dy="-12.350000000000001">nibble 2</tspan><tspan x="247.863" dy="16.900000000000002">bits 8-11</tspan><tspan x="247.863" dy="16.900000000000002">elem 2</tspan></text>
+  <rect x="204.2875" y="237.39999999999998" width="87.151" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="247.863" y="272.75" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="247.863" dy="-12.350000000000001">nibble 2</tspan><tspan x="247.863" dy="16.900000000000002">bits 8-11</tspan><tspan x="247.863" dy="16.900000000000002">elem 2</tspan></text>
 </g>
 <g class="node" data-id="Dots" data-label="..." data-shape="rectangle">
-  <rect x="204.2875" y="336.1" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="234.2875" y="354.55" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">...</text>
+  <rect x="204.2875" y="336.1" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="234.2875" y="354.55" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">...</text>
 </g>
 <g class="node" data-id="N7" data-label="nibble 7
 bits 28-31
 elem 7" data-shape="rectangle">
-  <rect x="160.043" y="401" width="93.82" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="206.953" y="436.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="206.953" dy="-12.350000000000001">nibble 7</tspan><tspan x="206.953" dy="16.900000000000002">bits 28-31</tspan><tspan x="206.953" dy="16.900000000000002">elem 7</tspan></text>
+  <rect x="160.043" y="401" width="93.82" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="206.953" y="436.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="206.953" dy="-12.350000000000001">nibble 7</tspan><tspan x="206.953" dy="16.900000000000002">bits 28-31</tspan><tspan x="206.953" dy="16.900000000000002">elem 7</tspan></text>
 </g>
 <g class="node" data-id="DQ" data-label="(nibble − zero) × scale
 (group_size=128)" data-shape="rectangle">
-  <rect x="301.863" y="450.35" width="169.402" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="386.56399999999996" y="477.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="386.56399999999996" dy="-3.9000000000000012">(nibble − zero) × scale</tspan><tspan x="386.56399999999996" dy="16.900000000000002">(group_size=128)</tspan></text>
+  <rect x="301.863" y="450.35" width="169.402" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="386.56399999999996" y="477.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="386.56399999999996" dy="-3.9000000000000012">(nibble − zero) × scale</tspan><tspan x="386.56399999999996" dy="16.900000000000002">(group_size=128)</tspan></text>
 </g>
 <g class="node" data-id="SC" data-label=".scales  (f16 per group)" data-shape="rectangle">
-  <rect x="86.08699999999999" y="499.7" width="170.884" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="171.529" y="518.15" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">.scales  (f16 per group)</text>
+  <rect x="86.08699999999999" y="499.7" width="170.884" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="171.529" y="518.15" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">.scales  (f16 per group)</text>
 </g>
 <g class="node" data-id="ZR" data-label=".qzeros  (INT4 per group)" data-shape="rectangle">
-  <rect x="86.08699999999999" y="564.6" width="188.668" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="180.421" y="583.0500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">.qzeros  (INT4 per group)</text>
+  <rect x="86.08699999999999" y="564.6" width="188.668" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="180.421" y="583.0500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">.qzeros  (INT4 per group)</text>
 </g>
 </svg>

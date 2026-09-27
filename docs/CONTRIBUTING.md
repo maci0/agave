@@ -236,6 +236,36 @@ When shipping a user-visible change, update in the same PR when possible:
 
 Run `python3 scripts/check-docs.py` (when present) for link and count hygiene.
 
+## Diagram Palette
+
+Mermaid blocks and the SVGs rendered from them share one palette, derived from
+the chat UI tokens in `src/web/style.css` and the wordmark in `docs/logo.svg`.
+Copy these classDef lines into a new diagram rather than picking colors:
+
+```text
+classDef setup     fill:#e2e5e8,stroke:#5f7480,color:#25333a
+classDef sync      fill:#d0dac9,stroke:#7d9b6a,color:#2f3f26
+classDef success   fill:#a9ba9e,stroke:#5f7f4c,color:#1e2b18
+classDef migration fill:#f9f3ea,stroke:#c4823a,color:#4a3116
+classDef danger    fill:#e8c3c3,stroke:#c05c5c,color:#4a1c1c
+classDef optional  fill:#d2bcb6,stroke:#a97f75,color:#3d2520
+```
+
+Role meanings are unchanged from the original set: `setup` is a prerequisite,
+`sync` an incremental update, `success` a finished state, `migration` work in
+flight, `danger` a failure, `optional` something shared. Unstyled nodes use the
+neutral ink ramp.
+
+Two rules hold the palette together, so keep them if you edit it:
+
+- Fills sit on a geometric luminance ladder, so neighboring roles separate by at
+  least 1.15 in luminance and a diagram still reads without color. `sync` and
+  `success` share the agave green hue and are told apart by lightness alone.
+- Every fill clears 4.5:1 for its text and every stroke clears 3:1 against the
+  white canvas (WCAG 1.4.3 and 1.4.11).
+
+To re-render `docs/diagrams/`, see `docs/render-diagrams.mjs`.
+
 ## How to Add a New Chat Template
 
 1. Add a `pub const` to `src/chat_template.zig` with role prefixes/suffixes and EOG token names
