@@ -167,7 +167,12 @@ pub const Request = struct {
     logit_bias_ids: [max_scheduler_logit_bias]u32 = .{0} ** max_scheduler_logit_bias,
     logit_bias_vals: [max_scheduler_logit_bias]f32 = .{0} ** max_scheduler_logit_bias,
     logit_bias_count: u32 = 0,
-    prng: std.Random.DefaultPrng = undefined,
+    /// Sampling stream. A fixed placeholder until the handler publishes the
+    /// request's sampling params: `id` is handed out in connection-accept
+    /// order, so seeding from it would make a run's tokens depend on host
+    /// scheduling and no seed would replay them. Defined (not `undefined`) so a
+    /// request that samples before configuration draws from a known stream.
+    prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0),
     /// False until the handler finishes writing sampling fields. Scheduler
     /// must not admit the request while this is false (avoids racing
     /// temperature/top_p/prng with sampleNextToken).
@@ -448,9 +453,10 @@ pub const RequestManager = struct {
             .cached_blocks = prefix_match.blocks,
             .prompt_tokens_slice = prompt_tokens_slice,
             .allocator = self.allocator,
-            .prng = std.Random.DefaultPrng.init(id),
             // Handler publishes sampling via configureSchedulerSampling before
-            // the scheduler may admit this request.
+            // the scheduler may admit this request, so the request id must not
+            // seed the stream: it follows connection-accept order.
+            .prng = std.Random.DefaultPrng.init(0),
             .sampling_ready = std.atomic.Value(bool).init(false),
         };
 
@@ -1163,6 +1169,36 @@ test "step does not admit until sampling_ready" {
     const after = manager.getStats();
     try std.testing.expectEqual(@as(u32, 0), after.waiting_count);
     try std.testing.expectEqual(@as(u32, 1), after.running_count);
+}
+
+test "enqueue placeholder PRNG ignores the connection-order request id" {
+    const allocator = std.testing.allocator;
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 2, 30, null, testIo());
+    defer manager.deinit();
+
+    const dummy_tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    const first = try manager.enqueue(&dummy_tokens, 1);
+    const second = try manager.enqueue(&dummy_tokens, 2);
+    try std.testing.expect(first.id != second.id);
+
+    // A run replays from a seed only if nothing on the sampling path carries
+    // host scheduling. The request id is handed out in connection-accept
+    // order, so two enqueues must leave the same placeholder stream; the
+    // handler re-seeds from the request's sampling params before admission.
+    var a = first.prng;
+    var b = second.prng;
+    var placeholder = std.Random.DefaultPrng.init(0);
+    var draws_a: [8]u64 = undefined;
+    var draws_b: [8]u64 = undefined;
+    var draws_placeholder: [8]u64 = undefined;
+    for (0..8) |i| {
+        draws_a[i] = a.random().int(u64);
+        draws_b[i] = b.random().int(u64);
+        draws_placeholder[i] = placeholder.random().int(u64);
+    }
+    try std.testing.expectEqualSlices(u64, &draws_placeholder, &draws_a);
+    try std.testing.expectEqualSlices(u64, &draws_placeholder, &draws_b);
 }
 
 test "appendToken marks finished on EOG" {
