@@ -6,7 +6,7 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "tilelang==0.1.13",
     "numpy==2.4.3",
-    "gguf==0.18.0",
+    "gguf==0.19.0",
 ]
 # torch is installed from a hardware-specific index (see README). Listing it
 # here would pull the PyPI CUDA/CPU wheel and break ROCm hosts.
