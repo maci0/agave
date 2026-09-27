@@ -34,7 +34,15 @@
 		"anti-slop/no-unsafe-dictionary-type": "error",
 		"anti-slop/no-widen-then-assert": "error",
 		"anti-slop/require-safety-comment-for-type-assertion": "error",
-		"jest/require-hook": "off"
+		"jest/require-hook": "off",
+		// Unicorn's default groups hex digits in pairs; the tree uses the
+		// conventional group of four (0xFFFF_FFFF), same as gofmt and the Zig side.
+		"unicorn/numeric-separators-style": [
+			"error",
+			{
+				"hexadecimal": { "minimumDigits": 5, "groupLength": 4 }
+			}
+		]
 	},
 	"overrides": [
 		{

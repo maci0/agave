@@ -15,7 +15,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build check` (format check + docs hygiene + unit tests) and `zig build lint-web` (oxlint + tsc). `check` covers the Zig jobs (fmt-check, unit tests, and docs-check). `lint-web` is the blocking TypeScript job. Extra jobs fire on specific surfaces:
+Before a PR, run `zig build check` (format check + docs hygiene + unit tests), `zig build lint-web` (oxlint + tsc), and `zig build lint-shell` (shellcheck). `check` covers the Zig jobs (fmt-check, unit tests, and docs-check). `lint-web` is the blocking TypeScript job, `lint-shell` the blocking shell job. Extra jobs fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -24,6 +24,7 @@ Before a PR, run `zig build check` (format check + docs hygiene + unit tests) an
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` (blocking CI job `lint-web`) |
+| `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
 
@@ -337,6 +338,10 @@ zig build check
 # Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
 zig build lint-web
 # equivalent: bun run lint && bun run typecheck
+
+# Shell scripts (blocking CI job lint-shell). Needs shellcheck.
+zig build lint-shell
+# equivalent: bash scripts/lint-shell.sh
 
 # Format check only (same paths as .github/workflows/ci.yml fmt-check)
 zig build fmt-check

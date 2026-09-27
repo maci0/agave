@@ -57,7 +57,7 @@ for i in "${!CMD[@]}"; do
         fi
         DBG="$(dirname "${CMD[$i]}")/agave-debug"
         if [[ -x "$DBG" ]]; then
-            CMD[$i]="$DBG"
+            CMD[i]="$DBG"
             echo "  Switched to: $DBG"
         fi
         break

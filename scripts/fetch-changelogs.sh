@@ -100,4 +100,4 @@ INDEX="$OUT/INDEX.md"
 
 echo
 echo "Done. Index: $INDEX"
-echo "Files written: $(ls -1 "$OUT"/*.md | wc -l | tr -d ' ') changelogs"
+echo "Files written: $(find "$OUT" -maxdepth 1 -type f -name '*.md' | wc -l | tr -d ' ') changelogs"

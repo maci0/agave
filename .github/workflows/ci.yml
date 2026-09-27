@@ -401,10 +401,26 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+  # scripts/*.sh is 12 files of unanalysed shell: quoting bugs and unset-variable
+  # failures there break CI jobs and developer tooling the same way. Blocking.
+  # scripts/lint-shell.sh is the single entry point, so the local `zig build
+  # lint-shell` and this job run identical checks.
+  lint-shell:
+    name: Lint shell scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: shellcheck
+        run: bash scripts/lint-shell.sh
+
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web, lint-shell]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
@@ -421,7 +437,8 @@ jobs:
             "wasm-build:${{ needs.wasm-build.result }}" \
             "fuzz-smoke:${{ needs.fuzz-smoke.result }}" \
             "kernel-artifacts:${{ needs.kernel-artifacts.result }}" \
-            "lint-web:${{ needs.lint-web.result }}"
+            "lint-web:${{ needs.lint-web.result }}" \
+            "lint-shell:${{ needs.lint-shell.result }}"
           do
             name="${pair%%:*}"
             result="${pair#*:}"
