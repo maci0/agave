@@ -13,6 +13,7 @@ pin, OCI license, LICENSE shipment).
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -554,6 +555,79 @@ def check_ci_runner_pins() -> list[str]:
     return errors
 
 
+# Repo-relative inputs the docs-check workflow must trigger on: everything
+# below is read by a check in this file, so a path filter that omits one means
+# those checks never run on the PR that changed the file.
+DOCS_CHECK_PATH_INPUTS = (
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "AGENTS.md",
+    "LICENSE",
+    "build.zig",
+    "build.zig.zon",
+    ".zigversion",
+    "Dockerfile",
+    ".dockerignore",
+    "docker-compose.yml",
+    "package.json",
+    "src/main.zig",
+    "src/backend/metal.zig",
+    "src/backend/cuda.zig",
+    "src/backend/rocm.zig",
+    "src/backend/vulkan.zig",
+    "scripts/check-docs.py",
+    "scripts/test_check_docs.py",
+    "scripts/check-shader-artifacts.sh",
+    ".github/workflows/ci.yml",
+)
+
+
+def check_docs_workflow_paths() -> list[str]:
+    """docs-check.yml must trigger on every file this script reads.
+
+    The workflow filters on `paths:`, so a check whose input is missing from
+    that list never runs: package.json can change the bun pin or
+    scripts/check-shader-artifacts.sh the -Dcuda-sm default, and docs-check
+    stays silent on the PR that made the change.
+    """
+    workflow = ROOT / ".github" / "workflows" / "docs-check.yml"
+    if not workflow.is_file():
+        return [".github/workflows/docs-check.yml: missing"]
+    text = workflow.read_text(encoding="utf-8", errors="replace")
+    patterns = re.findall(r"^\s+- '([^']+)'$", text, re.M)
+    if not patterns:
+        return [".github/workflows/docs-check.yml: no path filters found"]
+
+    def covered(rel: str) -> bool:
+        for pat in patterns:
+            if pat.endswith("/**"):
+                if rel.startswith(pat[:-2]):
+                    return True
+            elif pat.endswith("/*"):
+                # GitHub path filters: `*` matches within one path segment and
+                # never crosses `/`, which fnmatch's `*` does. Compare the
+                # directory part with the pattern's, and the last segment on
+                # its own, so a `*` cannot swallow a `/`.
+                dir_pattern = pat[:-2]
+                dir_actual, _, name = rel.rpartition("/")
+                if (
+                    dir_pattern == dir_actual
+                    or fnmatch.fnmatch(dir_actual, dir_pattern)
+                ) and name and fnmatch.fnmatch(name, "*"):
+                    return True
+            elif pat == rel:
+                return True
+        return False
+
+    return [
+        f".github/workflows/docs-check.yml: paths filter does not cover {rel} "
+        "(this script reads it, so its checks would not run on that PR)"
+        for rel in DOCS_CHECK_PATH_INPUTS
+        if not covered(rel)
+    ]
+
+
 def main() -> int:
     errors: list[str] = []
     errors.extend(check_links())
@@ -566,6 +640,7 @@ def main() -> int:
     errors.extend(check_debian_snapshot_pin())
     errors.extend(check_docker_packaging())
     errors.extend(check_ci_runner_pins())
+    errors.extend(check_docs_workflow_paths())
     errors.extend(check_bun_pin())
     errors.extend(check_cuda_sm_default())
     if errors:

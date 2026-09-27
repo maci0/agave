@@ -31,6 +31,21 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `build.zig` or anything that can put a path, timestamp or hostname in a binary | `zig build check-reproducible` (blocking CI job `reproducible-build`; builds twice from different paths and byte-compares) |
 | `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` (blocking CI job `lint-python`) |
 
+Dependabot (`.github/dependabot.yml`) opens weekly bumps for the GitHub
+Actions, Docker, npm and Python ecosystems. Two of them cannot be merged on
+their own, because `zig build check-pins` deliberately fails until a human
+completes the pin:
+
+- A `debian:bookworm-YYYYMMDD-slim` bump also needs `DEBIAN_SNAPSHOT` (both
+  stages) and `SOURCE_DATE_EPOCH` (both stages) set to the same new day.
+- A `package.json` bump of the `bun` version also needs `engines.bun` and
+  `lint-web`'s `bun-version` to match; `scripts/check-pins.sh` and
+  `scripts/check-docs.py` check the same three.
+
+A Python bump under `tests/` or `research/kernels/` comes from the `uv`
+ecosystem, which relocks `uv.lock`; `check-pins` rejects a manifest that has
+moved without its lock.
+
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
 
 ## Golden Tests (manual, weights required)
