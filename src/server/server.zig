@@ -8039,24 +8039,32 @@ test "gzipAlloc shrinks the chat UI and round-trips" {
 }
 
 test "chat UI head pulls no third-party asset" {
-    // Every jsDelivr script is fetched on demand by app.js (loadMarkdown,
-    // loadHighlightJs), so nothing third-party sits on the first paint.
+    // Every jsDelivr script is fetched on demand by the bundle (chat/markdown.ts
+    // loadMarkdown / loadHighlightJs), so nothing third-party sits on the first
+    // paint. The pinned URL is the marker that the deferred loader is shipped at
+    // all: it may appear in the page, never in the head.
     const head_end = std.mem.indexOf(u8, html_page, "</head>").?;
     const head = html_page[0..head_end];
     try std.testing.expect(std.mem.indexOf(u8, head, "cdn.jsdelivr.net") == null);
     try std.testing.expect(std.mem.indexOf(u8, head, "rel=\"preconnect\"") == null);
     try std.testing.expect(std.mem.indexOf(u8, head, "<script src=") == null);
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "function loadMarkdown()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "https://cdn.jsdelivr.net/npm/marked@") != null);
 }
 
 test "chat UI streams by appending and times out a stalled CDN script" {
+    // The committed src/web/app.js is a minified bundle, so the identifiers
+    // below no longer survive into html_page; assert on the sources it is built
+    // from, which is where these two mechanisms live.
+    const message_source = @embedFile("../web/chat/components/message.tsx");
+    const markdown_source = @embedFile("../web/chat/markdown.ts");
     // Each stream flush used to reset textContent, rewriting the whole message
     // every 60ms; the DOM keeps one text node and appends the delta instead.
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "function appendStreamText(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "appendStreamText(p.el, p.content)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message_source, "node.appendData(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message_source, "next.startsWith(painted)") != null);
     // A CDN that stalls fires no load or error event, so the load promise has
     // to give up on its own for the plain-text fallback to settle.
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "cdn_script_timeout_ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, markdown_source, "CDN_SCRIPT_TIMEOUT_MS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, markdown_source, "settle('timeout')") != null);
 }
 
 test "sanitizeClientRequestId accepts correlation tokens" {
