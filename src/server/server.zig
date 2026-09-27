@@ -409,10 +409,29 @@ fn tokensPerSec(token_count: u32, time_ms: u64) f32 {
     return if (time_ms > 0) @as(f32, @floatFromInt(token_count)) / (@as(f32, @floatFromInt(time_ms)) / ms_per_second) else 0.0;
 }
 
+/// Authentication policy a route answers with. Applied by the dispatcher's
+/// single chokepoint (`authorizedForPath`), never per handler.
+const AuthPolicy = enum {
+    /// Reject with 401 unless the request carries the configured API key.
+    required,
+    /// Serve unauthenticated, but let the handler trim its response for an
+    /// unauthenticated caller (`/health`, `/ready`).
+    optional,
+    /// Serve unauthenticated with no server state behind it (`/favicon.ico`).
+    public,
+};
+
 /// Known API endpoints with their allowed HTTP methods and error messages.
 /// Shared by the CORS OPTIONS handler (path-specific Access-Control-Allow-Methods)
-/// and the 405 Method Not Allowed handler.
-const KnownEndpoint = struct { path: []const u8, allow: []const u8, msg: []const u8, is_anthropic: bool = false };
+/// and the 405 Method Not Allowed handler. `auth` defaults to `.required` so a
+/// new entry is protected unless it explicitly opts out.
+const KnownEndpoint = struct {
+    path: []const u8,
+    allow: []const u8,
+    msg: []const u8,
+    is_anthropic: bool = false,
+    auth: AuthPolicy = .required,
+};
 const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/v1/chat/completions", .allow = "POST, OPTIONS", .msg = "Use POST." },
     .{ .path = "/v1/completions", .allow = "POST, OPTIONS", .msg = "Use POST." },
@@ -427,12 +446,22 @@ const known_endpoints = [_]KnownEndpoint{
     .{ .path = "/v1/models", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/v1/kv_cache", .allow = "GET, POST, OPTIONS", .msg = "Use GET or POST." },
     .{ .path = "/v1/kv_cache/info", .allow = "GET, OPTIONS", .msg = "Use GET." },
-    .{ .path = "/health", .allow = "GET, OPTIONS", .msg = "Use GET." },
-    .{ .path = "/ready", .allow = "GET, OPTIONS", .msg = "Use GET." },
+    .{ .path = "/health", .allow = "GET, OPTIONS", .msg = "Use GET.", .auth = .optional },
+    .{ .path = "/ready", .allow = "GET, OPTIONS", .msg = "Use GET.", .auth = .optional },
     .{ .path = "/metrics", .allow = "GET, OPTIONS", .msg = "Use GET." },
     .{ .path = "/", .allow = "GET, OPTIONS", .msg = "Use GET." },
-    .{ .path = "/favicon.ico", .allow = "GET, OPTIONS", .msg = "Use GET." },
+    .{ .path = "/favicon.ico", .allow = "GET, OPTIONS", .msg = "Use GET.", .auth = .public },
 };
+
+/// Auth policy for a request path. A path absent from `known_endpoints` is
+/// `.required`, so an unrecognized or newly added route cannot answer an
+/// unauthenticated caller by omission.
+fn authPolicyFor(path: []const u8) AuthPolicy {
+    for (known_endpoints) |ep| {
+        if (std.mem.eql(u8, path, ep.path)) return ep.auth;
+    }
+    return .required;
+}
 
 /// True when `path` addresses a route whose errors use the Anthropic envelope.
 /// Used for failures raised before routing (malformed request, oversized body)
@@ -1546,6 +1575,16 @@ fn validateAuth(server: *const Server, headers: []const u8) bool {
     return false;
 }
 
+/// Authentication decision for one request. The dispatcher's only chokepoint:
+/// handlers must not re-check the key, and a route is protected unless its
+/// `known_endpoints` entry opts out.
+fn authorizedForPath(server: *const Server, path: []const u8, headers: []const u8) bool {
+    return switch (authPolicyFor(path)) {
+        .required => validateAuth(server, headers),
+        .optional, .public => true,
+    };
+}
+
 /// Constant-time byte comparison to prevent timing side-channel attacks on secrets.
 /// Always iterates over the secret length (b) to avoid leaking key length.
 /// Accumulates XOR differences into a single byte, the compiler cannot
@@ -2244,6 +2283,25 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         return;
     }
 
+    // Single authentication chokepoint. Every route is answered here first, so
+    // a handler cannot be reachable without the key by omitting a check, and an
+    // unknown path is indistinguishable from a known one to an unauthenticated
+    // caller (401 before the 405 and 404 handlers run).
+    if (!authorizedForPath(g_server, path, req.headers)) {
+        logRequest(method, path);
+        if (isAnthropicPath(path)) {
+            // Anthropic clients need their error envelope; send401 emits the
+            // OpenAI one, so the metric and log are recorded here.
+            g_server.metrics.recordAuthFailure();
+            std.log.warn("req={d} authentication failed", .{log_request_id});
+            sendAnthropicError(stream, "401", "authentication_error", "Invalid API key");
+        } else {
+            send401(stream);
+        }
+        logRequestDone(method, path, 401, elapsedMs(request_start));
+        return;
+    }
+
     // Health check endpoint, lightweight, no mutex, no inference
     if (is_get and std.mem.eql(u8, path, "/health")) {
         var buf: [health_buf_size]u8 = undefined;
@@ -2318,11 +2376,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // Prometheus metrics endpoint (requires auth when API key configured)
     if (is_get and std.mem.eql(u8, path, "/metrics")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         var buf: [metrics_render_buf_size]u8 = undefined;
         var writer: std.Io.Writer = .fixed(&buf);
         g_server.metrics.renderPrometheus(&writer) catch {
@@ -2357,11 +2410,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     if (is_get and std.mem.eql(u8, path, "/")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         const ui_status = sendHtmlPage(stream, req.headers);
         logRequestDone(method, path, ui_status, elapsedMs(request_start));
         return;
@@ -2370,11 +2418,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     if (is_get and std.mem.eql(u8, path, "/v1/models")) {
         logRequest(method, path);
 
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         var buf: [models_json_buf_size]u8 = undefined;
@@ -2400,11 +2443,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         const req_start_time = milliTimestamp();
 
         // 1. Validate authentication
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         const body = req.body;
@@ -2592,11 +2630,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         logRequest(method, path);
         const req_start_time = milliTimestamp();
 
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         const body = req.body;
@@ -2681,11 +2714,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/tokenize")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
         // Accept: {"text":"..."} or {"content":"..."} (raw text)
         // Also accept: {"messages":[...]} (chat-completion format, apply template then tokenize)
@@ -2772,11 +2800,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/detokenize")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         // Parse token IDs from JSON array: {"tokens": [1, 2, 3]}
@@ -2834,11 +2857,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // Returns: seq_len, prefix_len, kv_used, kv_total, prefix_hash
     if (is_get and std.mem.eql(u8, path, "/v1/kv_cache/info")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
         const kv_used = g_server.metrics.kv_blocks_used.load(.monotonic);
         const kv_total = g_server.metrics.kv_blocks_total.load(.monotonic);
@@ -2885,11 +2903,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     // POST /v1/kv_cache?n_tokens=<N> , import N-token prefix from binary body
     if ((is_get or is_post) and std.mem.eql(u8, path, "/v1/kv_cache")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
         // Parse n_tokens from query string: ?n_tokens=<N>
         const n_tokens: usize = switch (parsePositiveQueryParam(req.query, "n_tokens")) {
@@ -3000,11 +3013,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     if (is_post and std.mem.eql(u8, path, "/v1/embeddings")) {
         logRequest(method, path);
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
         sendJsonErrorEx(stream, "501 Not Implemented", "not_implemented", "Embeddings endpoint not implemented", null, "not_implemented");
         g_server.metrics.recordClientError();
@@ -3016,11 +3024,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         logRequest(method, path);
         const req_start_time = milliTimestamp();
 
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         const body = req.body;
@@ -3110,15 +3113,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         logRequest(method, path);
         const req_start_time = milliTimestamp();
 
-        if (!validateAuth(g_server, req.headers)) {
-            // send401 records the auth failure; this route needs the Anthropic
-            // error envelope, so it cannot use send401 and records it here.
-            g_server.metrics.recordAuthFailure();
-            std.log.warn("req={d} authentication failed", .{log_request_id});
-            sendAnthropicError(stream, "401", "authentication_error", "Invalid API key");
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         const body = req.body;
@@ -3288,11 +3282,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     if ((is_get or is_post) and std.mem.eql(u8, path, "/v1/conversations")) {
         logRequest(method, path);
 
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         if (is_get) {
@@ -3471,11 +3460,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     if (is_post and std.mem.eql(u8, path, "/v1/chat/regenerate")) {
         logRequest(method, path);
 
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         // Each call pops one assistant message, so a retry after a lost
@@ -3631,11 +3615,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
     if (is_post and std.mem.eql(u8, path, "/v1/chat")) {
         logRequest(method, path);
 
-        if (!validateAuth(g_server, req.headers)) {
-            send401(stream);
-            logRequestDone(method, path, 401, elapsedMs(request_start));
-            return;
-        }
         g_server.metrics.recordRequest();
 
         const body = req.body;
@@ -8746,4 +8725,42 @@ test "fuzz: HTTP header and request-line helpers" {
             }
         }
     }.f, .{});
+}
+
+test "auth chokepoint denies every protected route" {
+    var server: Server = undefined;
+    server.api_key = "matrix-secret";
+    const bad = "Authorization: Bearer wrong-key\r\n";
+    const good = "Authorization: Bearer matrix-secret\r\n";
+
+    var optional_paths: usize = 0;
+    var public_paths: usize = 0;
+    for (known_endpoints) |ep| {
+        switch (ep.auth) {
+            .required => {
+                try std.testing.expect(!authorizedForPath(&server, ep.path, bad));
+                try std.testing.expect(authorizedForPath(&server, ep.path, good));
+            },
+            // Probes stay reachable, but only these two, and only because their
+            // handlers trim the body for a caller that failed validateAuth.
+            .optional => {
+                optional_paths += 1;
+                try std.testing.expect(std.mem.eql(u8, ep.path, "/health") or std.mem.eql(u8, ep.path, "/ready"));
+                try std.testing.expect(authorizedForPath(&server, ep.path, bad));
+            },
+            .public => {
+                public_paths += 1;
+                try std.testing.expectEqualStrings("/favicon.ico", ep.path);
+                try std.testing.expect(authorizedForPath(&server, ep.path, bad));
+            },
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), optional_paths);
+    try std.testing.expectEqual(@as(usize, 1), public_paths);
+
+    // A path with no table entry (typo, unrouted verb, future route) must not
+    // be reachable unauthenticated by omission.
+    try std.testing.expectEqual(AuthPolicy.required, authPolicyFor("/v1/nope"));
+    try std.testing.expect(!authorizedForPath(&server, "/v1/nope", bad));
+    try std.testing.expect(!authorizedForPath(&server, "/V1/MODELS", bad));
 }
