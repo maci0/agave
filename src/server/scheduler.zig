@@ -607,13 +607,24 @@ pub const RequestManager = struct {
         // 5. Promote all blocks in running requests' block tables to VRAM (if tiered cache enabled)
         // 6. Prefetch next N blocks during attention compute (if prefetcher enabled)
         if (self.tiered_cache) |cache| {
+            // Promote failures are counted and reported once per step: the loop
+            // below runs over every block of every running request, so a per-block
+            // warn would emit thousands of lines per second under cache pressure
+            // and hide the rest of the log.
+            var promote_failures: u64 = 0;
+            var first_failed_req: u64 = 0;
+            var first_failed_err: ?anyerror = null;
             for (self.running.items) |req| {
                 // Promote all blocks in this request's block table to VRAM.
                 // promoteToVram takes tier_lock and handles already-promoted blocks
                 // internally (returns early if tier == .vram).
                 for (req.block_table) |block_id| {
                     cache.promoteToVram(block_id) catch |err| {
-                        std.log.warn("req={d} block {d} promote failed: {}", .{ req.id, block_id, err });
+                        if (first_failed_err == null) {
+                            first_failed_req = req.id;
+                            first_failed_err = err;
+                        }
+                        promote_failures += 1;
                     };
                 }
 
@@ -623,6 +634,12 @@ pub const RequestManager = struct {
                     const current_block_idx = @divFloor(req.kv_position, cache.block_size);
                     prefetcher.prefetchNext(req.block_table, current_block_idx);
                 }
+            }
+            if (promote_failures > 0) {
+                self.metrics.recordKvPromoteFailures(promote_failures);
+                std.log.warn("req={d} kv promote: {d} block(s) failed this step (first: {s}); they stay on a slower tier", .{
+                    first_failed_req, promote_failures, @errorName(first_failed_err.?),
+                });
             }
         }
 

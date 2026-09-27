@@ -95,6 +95,9 @@ pub const Metrics = struct {
     /// Client-caused rejects (4xx except auth/rate-limit). Kept separate from
     /// requests_failed so /ready error-rate degradation tracks server faults only.
     requests_client_error: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Conversation store writes that failed. Requests still return 200, so this
+    /// counter is the only signal that user history is being dropped.
+    conv_store_save_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// 1 when idle sleep mode is active (see --sleep-after); 0 otherwise.
     sleeping: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     _pad0: [cache_line]u8 = undefined,
@@ -127,6 +130,10 @@ pub const Metrics = struct {
     kv_demotions_ram_to_ssd: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Tiered-cache promotions that failed, counted per block. A rising rate
+    /// means blocks stay on a slower tier, which is the cause of the latency
+    /// the demotion counters alone would attribute to cache pressure.
+    kv_promote_failures: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     _pad2: [cache_line]u8 = undefined,
 
     // ── Group 4: Latency histogram (per-request completion) ──
@@ -300,6 +307,19 @@ pub const Metrics = struct {
     /// Tracks scheduler.step() failures that are otherwise only visible in logs.
     pub fn recordSchedulerError(self: *Metrics) void {
         _ = self.scheduler_errors.fetchAdd(1, .monotonic);
+    }
+
+    /// Add `count` failed tiered-cache promotions. Callers aggregate the whole
+    /// scheduler step, so one call covers every block that failed to promote.
+    pub fn recordKvPromoteFailures(self: *Metrics, count: u64) void {
+        _ = self.kv_promote_failures.fetchAdd(count, .monotonic);
+    }
+
+    /// Increment the conversation store save failure counter. A flat counter
+    /// means persistence is healthy; any growth means history is being lost
+    /// while requests keep returning success.
+    pub fn recordConvStoreSaveFailure(self: *Metrics) void {
+        _ = self.conv_store_save_failures.fetchAdd(1, .monotonic);
     }
 
     /// Publish the tiered cache's cumulative demotion counts. Absolute, not
@@ -723,6 +743,14 @@ pub const Metrics = struct {
         try writer.writeAll("# HELP agave_kv_cache_demotions_ram_to_ssd_total Blocks demoted from the RAM to the SSD tier under cache pressure\n");
         try writer.writeAll("# TYPE agave_kv_cache_demotions_ram_to_ssd_total counter\n");
         try writer.print("agave_kv_cache_demotions_ram_to_ssd_total {d}\n", .{self.kv_demotions_ram_to_ssd.load(.monotonic)});
+
+        try writer.writeAll("# HELP agave_kv_promote_failures_total Blocks the scheduler could not promote to the VRAM tier\n");
+        try writer.writeAll("# TYPE agave_kv_promote_failures_total counter\n");
+        try writer.print("agave_kv_promote_failures_total {d}\n", .{self.kv_promote_failures.load(.monotonic)});
+
+        try writer.writeAll("# HELP agave_conv_store_save_failures_total Conversation store writes that failed, dropping history\n");
+        try writer.writeAll("# TYPE agave_conv_store_save_failures_total counter\n");
+        try writer.print("agave_conv_store_save_failures_total {d}\n", .{self.conv_store_save_failures.load(.monotonic)});
     }
 };
 
@@ -814,6 +842,10 @@ test "Metrics: renderPrometheus outputs valid format" {
         "agave_requests_timeout_total 0",
         "# TYPE agave_scheduler_errors_total counter",
         "agave_scheduler_errors_total 0",
+        "# TYPE agave_kv_promote_failures_total counter",
+        "agave_kv_promote_failures_total 0",
+        "# TYPE agave_conv_store_save_failures_total counter",
+        "agave_conv_store_save_failures_total 0",
         "agave_up 1",
         "agave_sleeping 0",
     };
@@ -971,6 +1003,18 @@ test "Metrics: recordTimeout increments counter" {
     try std.testing.expectEqual(@as(u64, 0), metrics.requests_timeout.load(.monotonic));
     metrics.recordTimeout();
     try std.testing.expectEqual(@as(u64, 1), metrics.requests_timeout.load(.monotonic));
+}
+
+test "Metrics: promote and conversation store failures accumulate" {
+    var metrics = Metrics{};
+    try std.testing.expectEqual(@as(u64, 0), metrics.kv_promote_failures.load(.monotonic));
+    metrics.recordKvPromoteFailures(3);
+    metrics.recordKvPromoteFailures(4);
+    try std.testing.expectEqual(@as(u64, 7), metrics.kv_promote_failures.load(.monotonic));
+
+    try std.testing.expectEqual(@as(u64, 0), metrics.conv_store_save_failures.load(.monotonic));
+    metrics.recordConvStoreSaveFailure();
+    try std.testing.expectEqual(@as(u64, 1), metrics.conv_store_save_failures.load(.monotonic));
 }
 
 test "Metrics: recordSchedulerError increments counter" {

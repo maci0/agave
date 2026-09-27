@@ -766,7 +766,10 @@ const Server = struct {
             };
         }
         conv_store.save(self.allocator, path, self.active_id, self.next_id, views_buf[0..n]) catch |err| {
-            std.log.warn("conversation store save failed ({s}): {}", .{ path, err });
+            // Reached from request threads and from startup/shutdown, so no
+            // request ID is attached here; the counter carries the signal.
+            self.metrics.recordConvStoreSaveFailure();
+            std.log.err("conversation store save failed ({s}): {}; conversation history is not persisted", .{ path, err });
         };
     }
 
@@ -918,6 +921,25 @@ fn elapsedMs(start: i64) u64 {
 fn elapsedBetween(start: i64, end: i64) u64 {
     return @intCast(@max(end - start, 0));
 }
+
+/// Wall-clock gap sampler for a streaming decode loop. One instance per
+/// request: every emitted token records the gap since the previous one, so
+/// `agave_inter_token_latency_seconds` covers every streaming endpoint and not
+/// only the one whose loop samples it.
+const ItlTracker = struct {
+    last_ms: i64,
+
+    fn init() ItlTracker {
+        return .{ .last_ms = milliTimestamp() };
+    }
+
+    /// Record the gap since the previous sample, then advance to now.
+    fn sample(self: *ItlTracker) void {
+        const now = milliTimestamp();
+        g_server.metrics.recordInterTokenLatency(elapsedBetween(self.last_ms, now));
+        self.last_ms = now;
+    }
+};
 
 /// Estimate prompt token count: use actual tokenized count when available,
 /// fall back to byte-length estimate (1 byte = 1 token) to prevent rate
@@ -5726,6 +5748,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             if (g_server.isEog(res.next_token)) break;
         }
     } else {
+        var itl = ItlTracker.init();
         for (0..max_tokens -| 1) |_| {
             if (anth_disconnected or token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             var next = model.forward(last) catch |err| {
@@ -5746,6 +5769,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
                 anth_disconnected = true;
                 break;
             }
+            itl.sample();
             last = next;
             token_count += 1;
         }
@@ -6197,6 +6221,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             if (g_server.isEog(res.next_token)) break;
         }
     } else {
+        var itl = ItlTracker.init();
         for (0..max_tokens -| 1) |_| {
             if (resp_disconnected or token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             var next = model.forward(last) catch |err| {
@@ -6217,6 +6242,7 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
                 resp_disconnected = true;
                 break;
             }
+            itl.sample();
             gen_tokens[token_count] = next;
             last = next;
             token_count += 1;
@@ -6647,6 +6673,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
         var token_count: u32 = 0;
 
         var chunk_client_connected = true;
+        var itl = ItlTracker.init();
         var stop_buf: [scheduler_stop_buf_size]u8 = undefined;
         var stop_len: usize = 0;
         var checked_len: usize = 0;
@@ -6666,6 +6693,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                 }
                 streamed_count += 1;
                 token_count += 1;
+                itl.sample();
                 if (token_count >= max_tokens) {
                     req.is_cancelled.store(true, .release);
                     break;
@@ -6956,7 +6984,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             s_gen_count = 1;
         }
 
-        var last_token_time: i64 = milliTimestamp();
+        var itl = ItlTracker.init();
 
         // Thinking budget state (Anthropic-style: limit reasoning token count).
         const think_budget = sampling.thinking_budget_tokens;
@@ -7105,10 +7133,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             }
 
             // Record inter-token latency
-            const now_itl = milliTimestamp();
-            const itl_ms: u64 = @intCast(@max(now_itl - last_token_time, 0));
-            g_server.metrics.recordInterTokenLatency(itl_ms);
-            last_token_time = now_itl;
+            itl.sample();
 
             last = next;
             token_count += 1;
