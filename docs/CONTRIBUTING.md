@@ -15,7 +15,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + unit tests) plus `lint-web` (oxlint + tsc). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, and `zig build lint-shell` (shellcheck) is the blocking shell job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + unit tests), `lint-web` (oxlint + tsc + web artifact freshness) and `lint-shell` (shellcheck). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, and `lint-shell` is the blocking shell job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -23,7 +23,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | WASM / `src/wasm_entry.zig` / `web/` | `zig build wasm` |
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
-| `src/web/` / `web/` TypeScript | `zig build lint-web` (blocking CI job `lint-web`) |
+| `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.

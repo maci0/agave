@@ -74,6 +74,11 @@ pub fn build(b: *std.Build) void {
         }
     }.apply;
 
+    // A bare `python3` in addSystemCommand surfaces as an exec failure with no
+    // name in the message. Resolve it up front so a missing interpreter names
+    // itself and the step that wanted it.
+    const python3 = b.findProgram(&.{"python3"}, &.{}) catch null;
+
     // ── CUDA PTX kernels (cross-compiled via nvptx64-cuda) ─────────
     // Compiles Zig CUDA kernels to PTX assembly. The resulting .s file
     // is placed in zig-out/ and can be embedded into cuda.zig via @embedFile.
@@ -111,7 +116,10 @@ pub fn build(b: *std.Build) void {
     };
 
     const ptx_step = b.step("ptx", "Compile CUDA kernels to PTX (nvptx64)");
-    {
+    if (python3 == null) {
+        ptx_step.dependOn(&b.addFail("python3 not found; zig build ptx runs src/backend/kernels/cuda/fix_kernel_alias.py").step);
+    }
+    if (python3) |py| {
         const kernel_files = [_][]const u8{
             // Core ops
             "all",             "silu",           "gelu",          "add",            "mul",
@@ -167,7 +175,7 @@ pub fn build(b: *std.Build) void {
             // Pass the fixup script via addFileArg so the build graph tracks it as an
             // input (rebuilds when the script changes) and avoids configure-time getPath
             // absolute host paths (same pattern as the ROCm fixup below).
-            const fixup = b.addSystemCommand(&.{"python3"});
+            const fixup = b.addSystemCommand(&.{py});
             pin_spawned_python(fixup);
             fixup.addFileArg(b.path("src/backend/kernels/cuda/fix_kernel_alias.py"));
             fixup.addFileArg(ptx.getEmittedAsm());
@@ -183,7 +191,15 @@ pub fn build(b: *std.Build) void {
     // After building, copy zig-out/rocm/kernels.o to
     // src/backend/kernels/rocm/kernels.hsaco and commit.
     const amdgcn_step = b.step("amdgcn", "Compile ROCm kernels to AMDGCN ISA");
-    {
+    // The HSACO link needs lld (ROCm ships it at /opt/rocm/lib/llvm/bin/ld.lld).
+    const ld_lld = b.findProgram(&.{"ld.lld"}, &.{}) catch null;
+    if (python3 == null) {
+        amdgcn_step.dependOn(&b.addFail("python3 not found; zig build amdgcn runs src/backend/kernels/rocm/fix_kd_isa.py").step);
+    }
+    if (ld_lld == null) {
+        amdgcn_step.dependOn(&b.addFail("ld.lld not found; add ROCm's llvm bin dir (/opt/rocm/lib/llvm/bin) to PATH").step);
+    }
+    if (python3 != null and ld_lld != null) {
         const obj = b.addObject(.{
             .name = "rocm_kernels",
             .root_module = b.createModule(.{
@@ -221,14 +237,14 @@ pub fn build(b: *std.Build) void {
         // Pass the fixup script via addFileArg so the build graph tracks it as an
         // input (rebuilds when the script changes) and avoids configure-time getPath
         // absolute host paths.
-        const fix_obj = b.addSystemCommand(&.{"python3"});
+        const fix_obj = b.addSystemCommand(&.{python3.?});
         pin_spawned_python(fix_obj);
         fix_obj.addFileArg(b.path("src/backend/kernels/rocm/fix_kd_isa.py"));
         fix_obj.addFileArg(obj.getEmittedBin());
         const fixed_obj = fix_obj.addOutputFileArg("kernels_fixed.o");
         fix_obj.step.dependOn(&obj.step);
 
-        const link = b.addSystemCommand(&.{ "ld.lld", "-shared", "-o" });
+        const link = b.addSystemCommand(&.{ ld_lld.?, "-shared", "-o" });
         const hsaco_out = link.addOutputFileArg("kernels.hsaco");
         link.addFileArg(fixed_obj);
         link.step.dependOn(&fix_obj.step);
@@ -653,8 +669,8 @@ pub fn build(b: *std.Build) void {
         fmt_check_step.dependOn(&fmt_check_cmd.step);
 
         const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py)");
-        if (b.findProgram(&.{"python3"}, &.{}) catch null) |python3| {
-            const docs_check_cmd = b.addSystemCommand(&.{ python3, "scripts/check-docs.py" });
+        if (python3) |py| {
+            const docs_check_cmd = b.addSystemCommand(&.{ py, "scripts/check-docs.py" });
             pin_spawned_python(docs_check_cmd);
             docs_check_cmd.has_side_effects = true;
             docs_check_step.dependOn(&docs_check_cmd.step);
@@ -683,6 +699,14 @@ pub fn build(b: *std.Build) void {
         const conv_backup_step = b.step("conv-store-backup-test", "Conversation store backup + restore self-test (docs/DURABILITY.md)");
         conv_backup_step.dependOn(&conv_backup_cmd.step);
 
+        // src/web/app.js and web/*.js are committed tsc outputs @embedFile'd or
+        // shipped as-is. CI's lint-web job regenerates and byte-compares them.
+        const web_artifacts_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-web-artifacts.sh" });
+        web_artifacts_cmd.has_side_effects = true;
+        const web_artifacts_step = b.step("check-web", "Committed classic scripts match a fresh tsc build (CI lint-web job)");
+        web_artifacts_step.dependOn(&web_artifacts_cmd.step);
+        lint_web_step.dependOn(web_artifacts_step);
+
         const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
@@ -693,8 +717,9 @@ pub fn build(b: *std.Build) void {
         // cross-compile, wasm, fuzz and PTX freshness stay in CI (or the
         // CONTRIBUTING table): they need Docker, cross toolchains, or a
         // long fuzz budget.
-        const ci_step = b.step("ci", "Full local CI gate: check + lint-web (needs bun)");
+        const ci_step = b.step("ci", "Full local CI gate: check + lint-web + lint-shell (needs bun, shellcheck)");
         ci_step.dependOn(check_step);
         ci_step.dependOn(lint_web_step);
+        ci_step.dependOn(lint_shell_step);
     }
 }

@@ -409,7 +409,13 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # scripts/*.sh is 12 files of unanalysed shell: quoting bugs and unset-variable
+      # src/web/app.js and web/*.js are committed tsc outputs (embedded by the
+      # server, shipped as the browser shell). tsc --noEmit passes on stale
+      # committed .js, so compare a fresh build byte for byte.
+      - name: Committed web artifacts are fresh
+        run: bash scripts/check-web-artifacts.sh
+
+  # scripts/*.sh is 13 files of unanalysed shell: quoting bugs and unset-variable
   # failures there break CI jobs and developer tooling the same way. Blocking.
   # scripts/lint-shell.sh is the single entry point, so the local `zig build
   # lint-shell` and this job run identical checks.
