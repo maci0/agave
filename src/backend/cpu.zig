@@ -707,11 +707,20 @@ pub const CpuBackend = struct {
             var caches: CacheSizes = .{};
             var sys_mem: usize = 0;
             var detected: std.atomic.Value(bool) = .init(false);
+            /// Spinlock for one-time detection. `caches` is three words, so two
+            /// threads racing the `detected` check would publish a mix of both
+            /// calls' results; `detected` excludes readers, not writers.
+            var init_lock: std.atomic.Value(u8) = .init(0);
         };
         if (!Static.detected.load(.acquire)) {
-            Static.caches = detectCacheSizes();
-            Static.sys_mem = detectSystemMem();
-            Static.detected.store(true, .release);
+            while (Static.init_lock.cmpxchgWeak(0, 1, .acquire, .monotonic) != null)
+                std.atomic.spinLoopHint();
+            defer Static.init_lock.store(0, .release);
+            if (!Static.detected.load(.acquire)) {
+                Static.caches = detectCacheSizes();
+                Static.sys_mem = detectSystemMem();
+                Static.detected.store(true, .release);
+            }
         }
         const avail = detectAvailMem();
         return .{
@@ -1421,6 +1430,55 @@ test "CpuBackend, backendInfo returns CPU" {
 test "CpuBackend, default pool is null" {
     const be = CpuBackend{};
     try std.testing.expectEqual(@as(?*ThreadPool, null), be.pool);
+}
+
+/// The one-time detection results `backendInfo` caches. `avail_mem` is
+/// re-read per call and is deliberately not part of this.
+const BackendInfoSnapshot = struct {
+    l1: usize,
+    l2: usize,
+    l3: usize,
+    total_mem: usize,
+    system_mem: usize,
+    device_name_len: usize,
+};
+
+test "CpuBackend, backendInfo caches detection atomically under concurrency" {
+    const n_threads = 8;
+    var be = CpuBackend{};
+    // Seed the detection on this thread first: a run where the first caller
+    // happens to win the race would pass even with the write unsynchronized.
+    _ = be.backendInfo();
+
+    var snaps: [n_threads]BackendInfoSnapshot = undefined;
+    const Collect = struct {
+        fn run(target: *CpuBackend, out: *BackendInfoSnapshot) void {
+            const info = target.backendInfo();
+            out.* = .{
+                .l1 = info.l1_cache,
+                .l2 = info.l2_cache,
+                .l3 = info.l3_cache,
+                .total_mem = info.total_mem,
+                .system_mem = info.system_mem,
+                .device_name_len = info.device_name.len,
+            };
+        }
+    };
+    var threads: [n_threads]std.Thread = undefined;
+    for (&threads, 0..) |*t, i| {
+        t.* = try std.Thread.spawn(.{}, Collect.run, .{ &be, &snaps[i] });
+    }
+    for (threads) |t| t.join();
+
+    const first = snaps[0];
+    for (snaps[1..]) |s| {
+        try std.testing.expectEqual(first.l1, s.l1);
+        try std.testing.expectEqual(first.l2, s.l2);
+        try std.testing.expectEqual(first.l3, s.l3);
+        try std.testing.expectEqual(first.total_mem, s.total_mem);
+        try std.testing.expectEqual(first.system_mem, s.system_mem);
+        try std.testing.expectEqual(first.device_name_len, s.device_name_len);
+    }
 }
 
 test "CpuBackend, gemvSeq with F32 identity" {

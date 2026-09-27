@@ -637,8 +637,10 @@ pub const RequestManager = struct {
         // model_mutex held across both phases: direct-path handler threads
         // (grammar / json_mode) take the same mutex before their own forward
         // loops, so model state (KV cache, logits) is never mutated by two
-        // threads at once. manager mutex stays free here, so enqueue/getStats
-        // do not stall behind inference.
+        // threads at once. The manager mutex is not held for the forward
+        // passes; the RadixTree insert below re-takes it for that one call
+        // (model_mutex → manager mutex, the documented order), so enqueue
+        // stalls behind a single insert, not behind inference.
         {
             self.model_mutex.lockUncancelable(self.io);
             defer self.model_mutex.unlock(self.io);
