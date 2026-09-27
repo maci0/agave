@@ -431,6 +431,21 @@ const repl_help =
     \\
 ;
 
+/// REPL slash commands and aliases, for "did you mean" on a mistyped command.
+const repl_command_names = [_][]const u8{
+    "/clear",   "/reset", "/context", "/ctx",  "/system", "/stats",
+    "/verbose", "/debug", "/model",   "/help", "/quit",   "/exit",
+    "/q",
+};
+
+/// Closest REPL command within edit distance 2 of `cmd`, or null when none.
+fn suggestReplCommand(cmd: []const u8) ?[]const u8 {
+    for (repl_command_names) |name| {
+        if (closeMatch(cmd, name)) return name;
+    }
+    return null;
+}
+
 // ── CLI definition ───────────────────────────────────────────────
 
 const cli_specs = [_]cli_mod.ArgSpec{
@@ -692,6 +707,26 @@ const CliArgs = struct {
     user_set: Recipe.Overrides = .{},
 };
 
+/// Subcommands that `agave help <topic>` documents, in the order the topic
+/// list is printed. Keeps `agave help <topic>` and the "Available help topics"
+/// line in `agave help <bad>` from drifting apart.
+const help_topics = [_]struct { name: []const u8, usage: *const fn () void }{
+    .{ .name = "pull", .usage = pull.printUsage },
+    .{ .name = "calibrate", .usage = @import("calibrate.zig").printUsage },
+};
+
+/// Print the usage of the help topic named `sub`. Returns false when `sub` is
+/// not a known topic.
+fn helpTopicPrintUsage(sub: []const u8) bool {
+    for (help_topics) |topic| {
+        if (std.mem.eql(u8, sub, topic.name)) {
+            topic.usage();
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Check if the first positional arg is a subcommand (e.g. "pull").
 /// Returns true if a subcommand was handled (caller should return).
 fn checkSubcommand(allocator: std.mem.Allocator) bool {
@@ -716,15 +751,7 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
             printUsage();
             return true;
         };
-        if (std.mem.eql(u8, sub, "pull")) {
-            pull.printUsage();
-            return true;
-        }
-        if (std.mem.eql(u8, sub, "calibrate")) {
-            const calibrate = @import("calibrate.zig");
-            calibrate.printUsage();
-            return true;
-        }
+        if (helpTopicPrintUsage(sub)) return true;
         // Handle flags and self-referential "help help" gracefully
         if (std.mem.eql(u8, sub, "help") or
             std.mem.eql(u8, sub, "--help") or
@@ -738,14 +765,18 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
             return true;
         }
         eprint("Error: no help available for '{s}'\n", .{sub});
-        const topics = [_][]const u8{ "pull", "calibrate" };
-        for (topics) |topic| {
-            if (closeMatch(sub, topic)) {
-                eprint("  Did you mean 'agave help {s}'?\n", .{topic});
+        for (help_topics) |topic| {
+            if (closeMatch(sub, topic.name)) {
+                eprint("  Did you mean 'agave help {s}'?\n", .{topic.name});
                 break;
             }
         }
-        eprint("Available help topics: pull, calibrate\n", .{});
+        eprint("Available help topics: ", .{});
+        for (help_topics, 0..) |topic, i| {
+            if (i > 0) eprint(", ", .{});
+            eprint("{s}", .{topic.name});
+        }
+        eprint("\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     }
@@ -1871,6 +1902,7 @@ fn eprintJsonRequiresPrompt() void {
     eprint("Error: --json requires a prompt, --model-info, --benchmark, or --frontier-bench\n", .{});
     eprint("  Usage: agave model.gguf --json \"prompt\"\n", .{});
     eprint("  Or: echo \"prompt\" | agave model.gguf --json\n", .{});
+    eprint("Run 'agave --help' for more information.\n", .{});
 }
 
 fn parseU32(s: ?[]const u8, comptime flag: []const u8) ?u32 {
@@ -2533,12 +2565,15 @@ pub fn main(init: std.process.Init) !void {
             std.process.exit(1);
         };
         fmt = st_dir.?.format();
-        if (cli.lora_path != null) eprint("warning: --lora is only supported for GGUF models; ignored for SafeTensors\n", .{});
+        if (cli.lora_path != null) eprint("Warning: --lora is only supported for GGUF models; ignored for SafeTensors\n", .{});
     } else {
         gguf_file = GGUFFile.open(allocator, cli.model_path) catch |e| {
-            eprint("Error: failed to open '{s}': {}\n", .{ cli.model_path, e });
             if (e == error.FileNotFound) {
-                eprint("  File does not exist. Check the path and try again.\n", .{});
+                eprint("Error: '{s}' does not exist. Check the path and try again.\n", .{cli.model_path});
+            } else {
+                eprint("Error: failed to open '{s}': {}\n", .{ cli.model_path, e });
+            }
+            if (e == error.FileNotFound) {
                 if (std.mem.indexOfScalar(u8, cli.model_path, '/') == null and
                     std.mem.indexOfScalar(u8, cli.model_path, '.') == null)
                 {
@@ -4347,6 +4382,8 @@ fn runRepl(
                 continue;
             } else {
                 print("Unknown command: {s} (try /help)\n", .{trimmed});
+                if (suggestReplCommand(trimmed)) |s|
+                    print("  Did you mean '/{s}'?\n", .{s[1..]});
                 continue;
             }
         }
@@ -5846,6 +5883,14 @@ test "suggestSpec finds known flags" {
     // Completely unrelated string should not match
     try std.testing.expect(suggestSpec("foobar") == null);
     try std.testing.expect(suggestSpec("x") == null);
+}
+
+test "suggestReplCommand finds near-miss slash commands" {
+    try std.testing.expectEqualStrings("/context", suggestReplCommand("/contxt").?);
+    try std.testing.expectEqualStrings("/verbose", suggestReplCommand("/verbos").?);
+    try std.testing.expect(suggestReplCommand("/zzzzzzzz") == null);
+    // An exact command never reaches the suggestion path, so it must not match.
+    try std.testing.expect(suggestReplCommand("/help") == null);
 }
 
 test "looksLikeUnknownShortOpt detects short typos" {
