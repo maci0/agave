@@ -4,7 +4,7 @@
 
 **Last updated**: 2026-09-27 (status and performance note checked against `mtpForward`).
 
-**Implementation note:** `mtpForward` currently runs MTP layers 0–2 on every call and does not use `depth` to select a single layer. The per-depth sketch below is the intended v1 shape; do not treat the loop-all-layers path as a superseding decision.
+**Implementation note:** `mtpForward` currently runs MTP layers 0–2 on every call and does not use `depth` to select a single layer. It also runs `main_proj` and `main_norm` once, ahead of the layer loop, and always fills the middle 4096-wide slot of the input from `mtp_hidden_buf` rather than zeros at depth 0. The per-depth sketch below is the intended v1 shape; do not treat the loop-all-layers path as a superseding decision.
 
 ## Architecture
 
@@ -38,29 +38,38 @@ Output:
 MTP weights live in a separate safetensors file (on the order of 595MB for Flash 0731).
 Pass the path with `--mtp-model`; the loader mmaps the file. GGUF checkpoints omit these tensors.
 
-### Tensor Name Mapping (HF → Internal)
+### Tensor Names
 
-| HF name | Internal name | Shape | Type |
-|---------|--------------|-------|------|
-| mtp.{d}.main_proj.weight | mtp.{d}.main_proj | [4096, 12288] | FP8 |
-| mtp.{d}.main_proj.scale | mtp.{d}.main_proj_scale | [32, 96] | E8M0 |
-| mtp.{d}.main_norm.weight | mtp.{d}.main_norm | [4096] | BF16 |
-| mtp.{d}.attn_norm.weight | mtp.{d}.attn_norm | [4096] | BF16 |
-| mtp.{d}.attn.wq_a.weight | mtp.{d}.attn_q_a | [1024, 4096] | FP8 |
-| mtp.{d}.attn.wq_b.weight | mtp.{d}.attn_q_b | [32768, 1024] | FP8 |
-| mtp.{d}.attn.wkv.weight | mtp.{d}.attn_kv | [512, 4096] | FP8 |
-| mtp.{d}.attn.wo_a.weight | mtp.{d}.attn_output_a | [8192, 4096] | FP8 |
-| mtp.{d}.attn.wo_b.weight | mtp.{d}.attn_output_b | [4096, 8192] | FP8 |
-| mtp.{d}.ffn_norm.weight | mtp.{d}.ffn_norm | [4096] | BF16 |
-| mtp.{d}.ffn.shared_experts.w1 | mtp.{d}.ffn_gate_shexp | [2048, 4096] | FP8 |
-| mtp.{d}.ffn.shared_experts.w2 | mtp.{d}.ffn_down_shexp | [4096, 2048] | FP8 |
-| mtp.{d}.ffn.shared_experts.w3 | mtp.{d}.ffn_up_shexp | [2048, 4096] | FP8 |
-| mtp.{d}.hc_*.{fn/base/scale} | mtp.{d}.hc_* | various | F32 |
-| mtp.2.confidence_head.proj.weight | mtp.2.confidence | [1, 4352] | BF16 |
-| mtp.2.markov_head.markov_w1.weight | mtp.2.markov_w1 | [129280, 256] | BF16 |
-| mtp.2.markov_head.markov_w2.weight | mtp.2.markov_w2 | [129280, 256] | BF16 |
-| mtp.2.norm.weight | mtp.2.output_norm | [4096] | BF16 |
-| mtp.2.hc_head_{fn/base/scale} | mtp.2.hc_head_* | various | F32 |
+`MtpWeights.load` keys every tensor by its checkpoint (HF) name verbatim, so lookups in
+`mtpForward` and its helpers use those names directly. There is no separate internal name.
+Every FP8 weight has a matching `.scale` (E8M0) tensor, also read by name.
+
+| Name | Shape | Type | Read by `mtpForward` |
+|------|-------|------|:--------------------:|
+| mtp.{d}.main_proj.weight / .scale | [4096, 12288] | FP8 | yes (depth 0 only) |
+| mtp.{d}.main_norm.weight | [4096] | BF16 | yes (depth 0 only) |
+| mtp.{d}.attn_norm.weight | [4096] | BF16 | yes |
+| mtp.{d}.attn.q_norm.weight | [4096] | BF16 | yes |
+| mtp.{d}.attn.kv_norm.weight | [512] | BF16 | yes |
+| mtp.{d}.attn.wq_a.weight / .scale | [1024, 4096] | FP8 | yes |
+| mtp.{d}.attn.wq_b.weight / .scale | [32768, 1024] | FP8 | yes |
+| mtp.{d}.attn.wkv.weight / .scale | [512, 4096] | FP8 | yes (depth 0 weights also fill the MTP KV cache) |
+| mtp.{d}.attn.wo_a.weight / .scale | [8192, 4096] | FP8 | yes |
+| mtp.{d}.attn.wo_b.weight / .scale | [4096, 8192] | FP8 | yes |
+| mtp.{d}.ffn_norm.weight | [4096] | BF16 | yes |
+| mtp.{d}.ffn.shared_experts.w1.weight / .scale | [2048, 4096] | FP8 | yes |
+| mtp.{d}.ffn.shared_experts.w2.weight / .scale | [4096, 2048] | FP8 | yes |
+| mtp.{d}.ffn.shared_experts.w3.weight / .scale | [2048, 4096] | FP8 | yes |
+| mtp.{d}.hc_{attn,ffn}_{fn,base,scale} | various | F32 | yes (no `.weight` suffix) |
+| mtp.2.norm.weight | [4096] | BF16 | yes |
+| mtp.2.confidence_head.proj.weight | [1, 4352] | BF16 | no |
+| mtp.2.markov_head.markov_w1.weight | [129280, 256] | BF16 | no |
+| mtp.2.markov_head.markov_w2.weight | [129280, 256] | BF16 | no |
+| mtp.2.hc_head_{fn,base,scale} | various | F32 | no |
+
+The last four rows are loaded (the loader takes every `mtp.*` tensor) but no code path
+reads them; the output head uses `mtp.2.norm.weight` followed by the main model's shared
+`output.weight` LM head.
 
 ### Memory Layout
 
