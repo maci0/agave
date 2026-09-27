@@ -16,8 +16,8 @@
             --border: #77716d;
             --border-hl: #8a837c;
             --text: #ebe3db;
-            --text-2: #a09890;
-            --text-3: #a8a29e;
+            --text-2: #aba39b;
+            --text-3: #9a928b;
             --accent: #d4a574;
             --accent-hover: #e0b88a;
             --accent-bg: rgba(212, 165, 116, 0.1);
@@ -26,13 +26,14 @@
             --red-bg: rgba(199, 80, 80, 0.1);
             --red-text: #e8a0a0;
             --mono: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace;
+            --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif;
             --r: 8px;
             --focus: var(--accent);
             --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-56 -72 112 88' fill='none' stroke='%23000' stroke-linecap='round'%3E%3Cpath stroke-width='6' d='M0-70Q5-35 0 0'/%3E%3Cpath stroke-width='5' d='M0 0Q-20-30-15-65'/%3E%3Cpath stroke-width='5' d='M0 0Q20-30 15-65'/%3E%3Cpath stroke-width='4.5' d='M0 0Q-30-20-35-50'/%3E%3Cpath stroke-width='4.5' d='M0 0Q30-20 35-50'/%3E%3Cpath stroke-width='4' d='M0 5Q-35-5-48-25'/%3E%3Cpath stroke-width='4' d='M0 5Q35-5 48-25'/%3E%3Cpath stroke-width='3.5' d='M0 10Q-38 5-55-8'/%3E%3Cpath stroke-width='3.5' d='M0 10Q38 5 55-8'/%3E%3C/svg%3E");
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html { color-scheme: dark; }
-        body { font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif; background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
+        body { font-family: var(--sans); background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
         header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
         header h1 { font-size: 1.2rem; color: var(--accent); font-family: var(--mono); letter-spacing: -0.5px; display: inline-flex; align-items: center; gap: 8px; }
         .mark { display: inline-block; width: 22px; height: 18px; background: currentColor; color: var(--green); flex-shrink: 0; -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
