@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # DS4 Benchmark Suite, speed + coherence across quants and KV types
+#
+# Usage: DS4_BLOB_DIR=<hf-hub blob dir> ./scripts/ds4-benchmark.sh
+# DS4_BLOB_DIR is the default HuggingFace cache layout for the DS4 GGUF repo.
+# Models that are not there are reported as SKIP rather than silently scoring 0.
 set -euo pipefail
 
-AGAVE="./zig-out/bin/agave"
-BLOB_DIR="/Users/mwysocki/.cache/huggingface/hub/models--ggml-org--DeepSeek-V4-Flash-0731-GGUF/blobs"
+AGAVE="${DS4_AGAVE:-./zig-out/bin/agave}"
+HF_CACHE="${HF_HUB_CACHE:-${HOME:-}/.cache/huggingface}"
+BLOB_DIR="${DS4_BLOB_DIR:-$HF_CACHE/hub/models--ggml-org--DeepSeek-V4-Flash-0731-GGUF/blobs}"
 PROMPT="Explain the theory of relativity step by step."
 
 echo "============================================"
@@ -31,7 +36,7 @@ benchmark_model() {
     
     # Check model exists
     if [ ! -f "$model" ]; then
-        echo "  SKIP: model not found"
+        echo "  SKIP: model not found: $model"
         echo ""
         return
     fi

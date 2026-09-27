@@ -22,7 +22,12 @@ __pycache__/
 .planning/
 .scratch/
 progress.md
-/scripts/
+# The runtime stage copies scripts/conv-store-backup.sh out of the build
+# context, so that one file must survive. `/scripts/*` rather than
+# `/scripts/`: a directory-level exclude prunes the tree before any
+# `!` re-include can match.
+/scripts/*
+!/scripts/conv-store-backup.sh
 /graphify-out/
 .pi-subagents/
 .review-loop.lock
@@ -94,6 +99,15 @@ compose*.yml
 
 # Local tooling / experiments (not needed in image)
 /tools/
+
+# JS deps (bun install output, 100+ MB, never read by the Zig build)
+/node_modules/
+/.web-ts-out/
+
+# Host-path cache (AGAVE_CACHE_DIR). Holds the plaintext conversation store
+# and Hub blobs; gitignored, but the Docker build context is a separate
+# filter, so it would otherwise be sent and copied into the build stage.
+/.agave-cache/
 
 # Stray files
 pelorus-*.yaml
