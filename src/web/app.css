@@ -1,0 +1,6 @@
+/* Server chat UI stylesheet (embedded by src/server/server.zig).
+ * Source of truth is this file plus the `@source` roots below; the build emits
+ * the compiled stylesheet to src/web/style.css (scripts/build-web.sh). */
+@import "./ui/theme.css";
+
+@source "./**/*.tsx";
