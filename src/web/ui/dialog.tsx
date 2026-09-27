@@ -33,6 +33,11 @@ type DialogContentProps = ComponentProps<typeof Content> & {
   hideClose?: boolean;
 };
 
+/** The centered card. Only top and left are pinned: `inset-1/2` would also
+ *  pin bottom and right at 50%, which collapses the box to zero height. */
+const centerClass =
+  'top-1/2 left-1/2 w-[min(480px,90vw)] max-h-[85dvh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg p-7';
+
 const overlayClass =
   'fixed inset-0 z-40 bg-black/60 transition-opacity duration-200 data-[state=closed]:opacity-0 data-[state=open]:opacity-100';
 
@@ -42,11 +47,7 @@ export const DialogContent = ({ className, children, side = 'center', hideClose,
     <Content
       className={cn(
         'fixed z-50 border border-border bg-popover text-popover-foreground shadow-[0_8px_20px_rgb(0_0_0/0.45)]',
-        side === 'center'
-          ? // top-1/2 left-1/2 only: `inset-1/2` would also pin bottom and
-            // right at 50%, which collapses the box to zero height.
-            'top-1/2 left-1/2 w-[min(480px,90vw)] max-h-[85dvh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg p-7'
-          : 'inset-y-0 start-0 flex w-(--spacing-sidebar) max-w-[85vw] flex-col border-e',
+        side === 'center' ? centerClass : 'inset-y-0 start-0 flex w-(--spacing-sidebar) max-w-[85vw] flex-col border-e',
         className,
       )}
       {...props}
