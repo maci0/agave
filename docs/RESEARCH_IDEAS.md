@@ -97,7 +97,7 @@
 
 ## From Colibri (github.com/JustVugg/colibri)
 
-### I. CFSE Nibble Entropy Compression (Priority: HIGH)
+### J. CFSE Nibble Entropy Compression (Priority: HIGH)
 INT4 weights have measured entropy H=2.924 bits/weight (vs 4 bits stored).
 rANS order-0 on nibbles achieves 1.37× compression:
 - 155GB MXFP4 → ~113GB compressed
@@ -106,7 +106,7 @@ rANS order-0 on nibbles achieves 1.37× compression:
 - "No context model can do better, it's a theorem" (white nibble statistics)
 - Implementation: ~200 lines in fse_coli.h, pure C, no dependencies
 
-### J. pread + O_DIRECT Expert Loading (Priority: HIGH)
+### K. pread + O_DIRECT Expert Loading (Priority: HIGH)
 Bypass the OS page cache entirely for expert weights:
 - Direct SSD → RAM transfer, no page cache pollution
 - Eliminates our Metal mmap page fault issue
@@ -114,14 +114,14 @@ Bypass the OS page cache entirely for expert weights:
 - Requires: open with O_DIRECT flag, aligned buffers, pread syscall
 - Implementation: ~100 lines to replace mmap with pread in expert dispatch
 
-### K. Batch Expert Union for Verification (Priority: MEDIUM)  
+### L. Batch Expert Union for Verification (Priority: MEDIUM)  
 Colibri's v4_moe_batch_union processes multiple tokens through MoE:
 - Route all tokens → compute union of needed experts
 - Load each expert ONCE → process all tokens needing it
 - Combines with our MoE-Spec: union of top-4 experts across batch
 - Implementation: ~200 lines in ffnLayer for batched expert dispatch
 
-### L. Route Trace for Learned Expert Placement (Priority: LOW)
+### M. Route Trace for Learned Expert Placement (Priority: LOW)
 .coli_usage file persists expert activation frequencies across sessions:
 - Builds routing histogram over time
 - Hot experts get pinned in RAM

@@ -116,7 +116,7 @@ Forward Pass (--backend metal, MLX-Q SafeTensors):
   self.be = Metal Backend (used only for init, not in hot path)
 ```
 
-The 14 GPU kernels activate for GGUF models with native GPU GEMV types (Q8_0, Q4_K) or models that fit in RAM (no SSD streaming page eviction).
+The 10 GPU kernels activate for GGUF models with native GPU GEMV types (Q8_0, Q4_K) or models that fit in RAM (no SSD streaming page eviction).
 
 ---
 
