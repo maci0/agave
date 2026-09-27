@@ -1,0 +1,7 @@
+/* Browser WASM shell stylesheet (web/index.html).
+ * Shares the agave theme with the server UI (src/web/) so both chat surfaces
+ * read as one product; `scripts/build-web.sh` emits web/style.css. */
+@import "../src/web/ui/theme.css";
+
+@source "./**/*.tsx";
+@source "../src/web/ui/**/*.tsx";

@@ -1324,8 +1324,9 @@ const html_page = @embedFile("../web/head.html") ++
     "\n</script></body></html>\n";
 
 /// Wyhash walks the embedded page in 48-byte rounds; the default comptime
-/// branch quota (1000) is below ~96 KiB of head+css+body+app.js.
-const html_page_hash_eval_quota: u32 = 1_000_000;
+/// branch quota (1000) is far below the ~400 KiB of head+css+body+app.js that
+/// the React bundle and the compiled Tailwind stylesheet add up to.
+const html_page_hash_eval_quota: u32 = 4_000_000;
 
 const html_page_hash = blk: {
     @setEvalBranchQuota(html_page_hash_eval_quota);

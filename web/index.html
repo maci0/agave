@@ -5,155 +5,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>agave - Browser LLM Inference</title>
-    <style>
-        /* Tokens mirror src/web/style.css so both chat surfaces share one visual identity. */
-        :root {
-            /* Desert-night surfaces; --green is the agave rosette (docs/logo.svg) on dark. */
-            --bg: #1a1714;
-            --surface: #231f1c;
-            --elevated: #2c2825;
-            /* Borders meet WCAG 1.4.11 (≥3:1) against bg/surface/elevated */
-            --border: #77716d;
-            --border-hl: #8a837c;
-            --text: #ebe3db;
-            --text-2: #aba39b;
-            --text-3: #9a928b;
-            --accent: #d4a574;
-            --accent-hover: #e0b88a;
-            --accent-bg: rgba(212, 165, 116, 0.1);
-            --green: #8faa7b;
-            --red: #e57373;
-            --red-bg: rgba(199, 80, 80, 0.1);
-            --red-text: #e8a0a0;
-            /* Type scale and radius ramp: the same steps as src/web/style.css. */
-            --fs-2xs: 11px;
-            --fs-xs: 12px;
-            --fs-sm: 13px;
-            --fs-base: 15px;
-            --fs-lg: 18px;
-            --r-sm: 4px;
-            --r: 8px;
-            --mono: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace;
-            --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif;
-            --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-56 -72 112 88' fill='none' stroke='%23000' stroke-linecap='round'%3E%3Cpath stroke-width='6' d='M0-70Q5-35 0 0'/%3E%3Cpath stroke-width='5' d='M0 0Q-20-30-15-65'/%3E%3Cpath stroke-width='5' d='M0 0Q20-30 15-65'/%3E%3Cpath stroke-width='4.5' d='M0 0Q-30-20-35-50'/%3E%3Cpath stroke-width='4.5' d='M0 0Q30-20 35-50'/%3E%3Cpath stroke-width='4' d='M0 5Q-35-5-48-25'/%3E%3Cpath stroke-width='4' d='M0 5Q35-5 48-25'/%3E%3Cpath stroke-width='3.5' d='M0 10Q-38 5-55-8'/%3E%3Cpath stroke-width='3.5' d='M0 10Q38 5 55-8'/%3E%3C/svg%3E");
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html { color-scheme: dark; }
-        body { font-family: var(--sans); background: var(--bg); color: var(--text); height: 100vh; height: 100dvh; display: flex; flex-direction: column; line-height: 1.5; }
-        header { padding: 1rem 2rem; background: var(--surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-        header h1 { font-size: var(--fs-lg); font-weight: 600; color: var(--accent); font-family: var(--mono); letter-spacing: -0.5px; display: inline-flex; align-items: center; gap: 8px; }
-        .mark { display: inline-block; width: 22px; height: 18px; background: currentColor; color: var(--green); flex-shrink: 0; -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
-        header small { color: var(--text-3); }
-        #clear-btn { flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--text-3); font-weight: 500; }
-        #clear-btn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
-        #clear-btn[hidden] { display: none !important; }
-        main { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-        #chat { flex: 1; overflow-y: auto; padding: 1rem 2rem; outline: none; }
-        #chat:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-        .msg { margin: 0.5rem 0; padding: 0.75rem 1rem; border-radius: var(--r); max-width: 80%; white-space: pre-wrap; overflow-wrap: break-word; word-wrap: break-word; word-break: break-word; line-break: loose; }
-        .msg.user { background: var(--surface); border: 1px solid var(--border); border-end-end-radius: 2px; margin-inline-start: auto; }
-        .msg.assistant { background: var(--elevated); border: 1px solid var(--border); border-end-start-radius: 2px; }
-        .msg.system { background: var(--accent-bg); border: 1px solid var(--border-hl); color: var(--text-2); font-size: var(--fs-sm); max-width: 100%; }
-        .msg.error { background: var(--red-bg); border: 1px solid var(--red); color: var(--red-text); font-size: var(--fs-sm); max-width: 100%; }
-        /* Empty state carries the rosette, the same mark and box the serve UI
-           (src/web/style.css .mark-lg) shows. Painted as a ::before so the node
-           survives the textContent rewrite in restoreEmptyChat() (shell.ts). */
-        .msg.empty-hint { background: transparent; border: 0; color: var(--text-3); max-width: 100%; text-align: center; margin: 2rem auto; }
-        .msg.empty-hint::before { content: ''; display: block; width: 56px; height: 44px; margin: 0 auto 16px; background: var(--green); -webkit-mask: var(--mark) center / contain no-repeat; mask: var(--mark) center / contain no-repeat; }
-        .msg.thinking { color: var(--text-3); animation: pulse 1.2s ease-in-out infinite; }
-        @keyframes pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
-        .msg-role, .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-        #input-hint { text-align: center; padding: 4px; color: var(--text-3); font-family: var(--mono); font-size: var(--fs-xs); }
-        #model-url[aria-invalid="true"] { border-color: var(--red); }
-        #url-error { color: var(--red-text); font-size: var(--fs-sm); width: 100%; display: none; }
-        #url-error:not(:empty) { display: block; }
-        #controls { padding: 1rem 2rem; background: var(--surface); border-top: 1px solid var(--border); display: flex; gap: 0.5rem; }
-        /* min-width: 0 lets the input shrink below intrinsic width at 320px (WCAG 1.4.10 Reflow). */
-        #prompt { flex: 1; min-width: 0; padding: 0.75rem; border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); color: var(--text); font-size: var(--fs-base); transition: border-color 0.15s; min-height: 44px; }
-        #prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
-        #prompt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        button { padding: 0.75rem 1.5rem; border: none; border-radius: var(--r); background: var(--accent); color: var(--bg); cursor: pointer; font-size: var(--fs-base); font-weight: 500; font-family: var(--mono); transition: background 0.15s; min-height: 44px; }
-        button:hover:not(:disabled) { background: var(--accent-hover); }
-        button:disabled { background: var(--accent); color: var(--bg); cursor: not-allowed; opacity: 0.4; }
-        input:disabled { opacity: 0.6; cursor: not-allowed; }
-        #status { padding: 0.5rem 2rem; background: var(--bg); color: var(--text-3); font-size: var(--fs-sm); font-family: var(--mono); }
-        #model-input { padding: 1rem 2rem; background: var(--surface); display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-        #model-input label[for="model-url"] { font-size: var(--fs-sm); color: var(--text-3); flex: 0 0 auto; font-family: var(--mono); }
-        #model-input input[type="url"] { flex: 1; min-width: 200px; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg); color: var(--text); min-height: 44px; }
-        #model-input input[type="url"]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
-        #model-input input[type="url"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        #drop-zone { border: 2px dashed var(--border); border-radius: var(--r); padding: 0.5rem 1rem; color: var(--text-3); cursor: pointer; font-size: var(--fs-sm); font-family: var(--mono); display: inline-flex; align-items: center; min-height: 44px; }
-        #drop-zone:hover { border-color: var(--accent); color: var(--accent); }
-        #drop-zone.dragover { border-color: var(--accent); color: var(--accent); }
-        #drop-zone[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
-        #file-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
-        #file-input:focus, #file-input:focus-visible { outline: none; }
-        button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        #drop-zone:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-color: var(--accent); }
-        .skip-link { position: absolute; top: -100%; inset-inline-start: 16px; z-index: 200; font-size: var(--fs-sm); padding: 8px 16px; background: var(--accent); color: var(--bg); border-radius: var(--r-sm); text-decoration: none; font-weight: 500; font-family: var(--mono); transition: top .2s; }
-        .skip-link:focus { top: 8px; }
-        @media (prefers-reduced-motion: reduce) {
-            .skip-link { transition: none; }
-            button { transition: none; }
-            .msg.thinking { animation: none !important; }
-        }
-        @media (forced-colors: active) {
-            button, #drop-zone { border: 1px solid ButtonText; }
-            #prompt { border: 1px solid ButtonText; }
-            #prompt:focus, button:focus-visible { outline: 2px solid Highlight; }
-            .msg.user, .msg.assistant { border: 1px solid CanvasText; }
-            .mark { background: CanvasText; }
-        }
-        @media (max-width: 600px) {
-            header { padding: 0.75rem 1rem; flex-wrap: wrap; }
-            #model-input { padding: 0.75rem 1rem; flex-direction: column; align-items: stretch; }
-            #model-input input[type="url"] { min-width: unset; width: 100%; }
-            #chat { padding: 0.75rem 1rem; }
-            #controls { padding: 0.75rem 1rem; }
-            /* 16px, not a ramp step: iOS Safari zooms the viewport on focus for any
-               input under 16px. Paired with the same rule on #msg in src/web/style.css. */
-            #prompt { font-size: 16px; }
-            button, #drop-zone { min-height: 44px; }
-        }
-    </style>
+    <!-- Tokens and components are shared with the serve UI (src/web/ui/theme.css),
+         so both chat surfaces read as one product. style.css is a committed build
+         output: regenerate it with scripts/build-web.sh. -->
+    <link rel="stylesheet" href="style.css">
     <meta name="theme-color" content="#1a1714">
     <meta name="color-scheme" content="dark">
     <meta name="description" content="Run LLM inference directly in your browser via WebAssembly. Load a GGUF model and chat, no server required.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='-62%20-86%20124%20124'%20fill='none'%20stroke='%238faa7b'%20stroke-linecap='round'%3E%3Cpath%20stroke-width='6'%20d='M0-70Q5-35%200%200'/%3E%3Cpath%20stroke-width='5'%20d='M0%200Q-20-30-15-65'/%3E%3Cpath%20stroke-width='5'%20d='M0%200Q20-30%2015-65'/%3E%3Cpath%20stroke-width='4.5'%20d='M0%200Q-30-20-35-50'/%3E%3Cpath%20stroke-width='4.5'%20d='M0%200Q30-20%2035-50'/%3E%3Cpath%20stroke-width='4'%20d='M0%205Q-35-5-48-25'/%3E%3Cpath%20stroke-width='4'%20d='M0%205Q35-5%2048-25'/%3E%3Cpath%20stroke-width='3.5'%20d='M0%2010Q-38%205-55-8'/%3E%3Cpath%20stroke-width='3.5'%20d='M0%2010Q38%205%2055-8'/%3E%3C/svg%3E">
 </head>
 <body>
-    <noscript><p style="padding:2rem;color:var(--red-text);text-align:center">JavaScript is required to run Agave in the browser.</p></noscript>
-    <a href="#prompt" class="skip-link">Skip to message input</a>
-    <header>
-        <div>
-            <h1><span class="mark" aria-hidden="true"></span>agave</h1>
-            <small>LLM inference in the browser via WebAssembly</small>
-        </div>
-        <button type="button" id="clear-btn" onclick="clearChat()" hidden title="Clear conversation">Clear</button>
-    </header>
-    <div id="model-input" role="region" aria-label="Model loading">
-        <label for="model-url">Model URL</label>
-        <input type="url" id="model-url" placeholder="https://example.com/model.gguf" autocomplete="url" spellcheck="false" />
-        <button type="button" onclick="loadModelFromUrl()" id="load-btn">Load model</button>
-        <label id="drop-zone" for="file-input">
-            Drop GGUF file or click
-        </label>
-        <input type="file" id="file-input" accept=".gguf" onchange="loadModelFromFile(event)" />
-        <div id="url-error" role="alert"></div>
-    </div>
-    <main aria-label="Chat">
-    <div id="status" role="status" aria-live="polite">Load a GGUF model to begin</div>
-    <div id="chat" role="log" aria-label="Chat messages" aria-live="off" tabindex="0">
-        <div id="chat-empty" class="msg empty-hint">Load a GGUF model above, then send a prompt.</div>
-    </div>
-    <form id="controls" onsubmit="event.preventDefault(); send();" aria-label="Send message">
-        <input type="text" id="prompt" placeholder="Load a model to start..." aria-label="Message input" enterkeyhint="send" autocomplete="off" dir="auto" disabled />
-        <button type="submit" id="send-btn" aria-label="Send message" disabled>Send</button>
-    </form>
-    <div id="input-hint" hidden>Enter to send</div>
-    </main>
-    <div id="sr-announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-
+    <noscript><p style="padding:2rem;color:#e8a0a0;text-align:center">JavaScript is required to run Agave in the browser.</p></noscript>
+    <!-- The shell is a React tree (web/shell.tsx). agave.js loads first: it puts
+         AgaveEngine and AgaveError on globalThis, which the shell consumes. -->
+    <div id="root"></div>
     <script src="agave.js" defer></script>
     <script src="shell.js" defer></script>
 </body>

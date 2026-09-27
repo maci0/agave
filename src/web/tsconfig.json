@@ -4,6 +4,7 @@
     "lib": ["ES2022", "DOM"],
     "module": "preserve",
     "moduleDetection": "legacy",
+    "jsx": "react-jsx",
     "strict": true,
     "noImplicitAny": true,
     "noImplicitThis": true,
@@ -18,11 +19,9 @@
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
     "skipLibCheck": true,
-    "noEmitOnError": true,
+    "noEmit": true,
     "removeComments": false,
-    "outDir": "../../.web-ts-out/server",
-    "rootDir": ".",
-    "types": []
+    "types": ["bun"]
   },
-  "include": ["app.ts", "globals.d.ts"]
+  "include": ["app.tsx", "app.test.tsx", "globals.d.ts", "chat/**/*", "ui/**/*", "../../web/agave.ts", "../../web/shell.tsx"]
 }

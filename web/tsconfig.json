@@ -4,6 +4,7 @@
     "lib": ["ES2022", "DOM"],
     "module": "preserve",
     "moduleDetection": "legacy",
+    "jsx": "react-jsx",
     "strict": true,
     "noImplicitAny": true,
     "noImplicitThis": true,
@@ -24,5 +25,5 @@
     "rootDir": ".",
     "types": []
   },
-  "include": ["agave.ts", "shell.ts"]
+  "include": ["agave.ts"]
 }
