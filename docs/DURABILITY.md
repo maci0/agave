@@ -58,6 +58,18 @@ Other verified properties, so a future pass leaves them alone:
   backup. A missing `sync` command fails the backup rather than passing it
   (`copy_atomic` in `scripts/conv-store-backup.sh`).
 
+## Permissions
+
+Message content is user data, so every copy of the store is owner-only:
+
+- The server writes the live store, the quarantine copy, and the overflow
+  sidecar with mode `0600` (`durable_file.replacePrivate`), and tightens a
+  store written by an older agave to `0600` on load, so an upgrade does not
+  leave a `0644` store behind.
+- The backup script locks its own backup directory to `0700` and restricts
+  each copy to `0600` before the rename publishes it, whatever umask the
+  operator runs with. The self-test fails if a backup is not `0600`.
+
 ## RPO and RTO
 
 | Disaster | RPO | RTO | Notes |

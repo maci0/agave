@@ -141,9 +141,26 @@ pub fn renameOver(old_path: []const u8, new_path: []const u8) !void {
     if (rc != 0) return error.RenameFailed;
 }
 
+/// Mode for artifacts that are not personal data and are meant to be readable
+/// by other users of the host.
+pub const shared_file_mode: u32 = 0o644;
+/// Mode for artifacts holding user data (the conversation store): owner only.
+pub const private_file_mode: u32 = 0o600;
+
 /// Write `data` over `path` via a sibling tmp so a crash cannot truncate the
 /// live file and a second process cannot truncate this write.
 pub fn replace(path: []const u8, data: []const u8) !void {
+    return replaceWithMode(path, data, shared_file_mode);
+}
+
+/// `replace` for content only the owning user should read. The tmp is
+/// created with `private_file_mode`, and a umask that is not more restrictive
+/// cannot widen the file, so the rename publishes it owner-only.
+pub fn replacePrivate(path: []const u8, data: []const u8) !void {
+    return replaceWithMode(path, data, private_file_mode);
+}
+
+fn replaceWithMode(path: []const u8, data: []const u8, file_mode: u32) !void {
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
     const tmp_path = try tmpPath(&tmp_buf, path);
 
@@ -152,7 +169,7 @@ pub fn replace(path: []const u8, data: []const u8) !void {
         .ACCMODE = .WRONLY,
         .CREAT = true,
         .TRUNC = true,
-    }, 0o644);
+    }, file_mode);
     var fd_open = true;
     errdefer |e| {
         // Whether or not the process is faulting, the descriptor is released;
@@ -289,6 +306,56 @@ test "replace round-trips bytes and removes tmp" {
     closeFd(tmp_fd);
     deletePath(tmp_path);
     return error.TmpLeftBehind;
+}
+
+test "replacePrivate writes owner-only, replace writes shared" {
+    if (comptime !posix_sync) return;
+    var shared_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var private_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const shared_path = testPath(&shared_buf, "modeshared.bin");
+    const private_path = testPath(&private_buf, "modeprivate.bin");
+    try replace(shared_path, "shared");
+    defer deletePath(shared_path);
+    try replacePrivate(private_path, "private");
+    defer deletePath(private_path);
+
+    const prev_umask = readUmask();
+    defer _ = std.c.umask(prev_umask);
+    try std.testing.expectEqual(shared_file_mode & ~prev_umask, fileMode(shared_path));
+    try std.testing.expectEqual(private_file_mode & ~prev_umask, fileMode(private_path));
+}
+
+/// Permission bits of `path`, or error.StatFailed if it cannot be stat'ed.
+fn fileMode(path: []const u8) u32 {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (path.len >= path_buf.len) return 0;
+    @memcpy(path_buf[0..path.len], path);
+    path_buf[path.len] = 0;
+    if (comptime builtin.os.tag == .linux) {
+        var st: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(
+            std.posix.AT.FDCWD,
+            @ptrCast(&path_buf),
+            std.os.linux.AT.EMPTY_PATH,
+            std.os.linux.STATX{ .MODE = true },
+            &st,
+        );
+        if (rc != 0) return 0;
+        return st.mode & 0o777;
+    }
+    var st: std.c.Stat = undefined;
+    if (std.c.stat(@ptrCast(&path_buf), &st) != 0) return 0;
+    return st.mode & 0o777;
+}
+
+/// Read the process umask without changing it, so a test can assert the mode
+/// the caller asked for rather than the narrower one a restrictive umask
+/// leaves behind.
+fn readUmask() u32 {
+    const probe: std.c.mode_t = 0o022;
+    const prev = std.c.umask(probe);
+    _ = std.c.umask(prev);
+    return @intCast(prev);
 }
 
 test "replace overwrites previous contents atomically" {

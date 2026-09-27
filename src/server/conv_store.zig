@@ -3,6 +3,11 @@
 //! JSON envelope (version 1):
 //!   {"version":1,"active_id":N,"next_id":N,"conversations":[...]}
 //!
+//! Message content is user data, so every write here goes through
+//! `durable_file.replacePrivate` (owner-only mode 0600): the store, the
+//! quarantine copy, and the overflow sidecar never become readable to other
+//! users of the host.
+//!
 //! Written with `durable_file.replace` so a crash cannot truncate the live
 //! file. Load is best-effort: missing file starts empty; a corrupt file is
 //! quarantined to `{path}.corrupt` so the next save cannot overwrite the
@@ -136,7 +141,7 @@ pub fn save(
     }
     try buf.appendSlice(allocator, "]}");
 
-    try durable.replace(path, buf.items);
+    try durable.replacePrivate(path, buf.items);
 }
 
 /// Load a store from `path`. FileNotFound if missing. Quarantines a corrupt
@@ -144,6 +149,7 @@ pub fn save(
 /// I/O errors leave the live file in place (error.QuarantineFailed if a
 /// corrupt file could not be preserved).
 pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
+    restrictToOwner(path);
     const data = readFile(allocator, path) catch |err| {
         if (err == error.FileNotFound) return error.FileNotFound;
         return err;
@@ -170,6 +176,19 @@ pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
     return result.snap;
 }
 
+/// Drop any group or other bits a store written by an older agave still
+/// carries. Best-effort: a mode that stays wide only widens who can read
+/// user content that is already on disk, and the next save replaces the
+/// inode at 0600 anyway. A filesystem without modes, or a path that is gone
+/// by now, is not an error.
+fn restrictToOwner(path: []const u8) void {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (path.len >= path_buf.len) return;
+    @memcpy(path_buf[0..path.len], path);
+    path_buf[path.len] = 0;
+    _ = std.c.chmod(@ptrCast(path_buf[0..path.len :0]), @as(std.c.mode_t, durable.private_file_mode));
+}
+
 /// Write the full bytes of a store that `parse` capped to `{path}.overflow`.
 /// Best-effort: the copy is a second chance, and the live file is still intact
 /// at this point, so a failure here costs the sidecar, not the store.
@@ -179,7 +198,7 @@ fn preserveOverflow(path: []const u8, data: []const u8) void {
         std.log.err("conversation store: store at {s} exceeds the load caps and its name does not fit {d} bytes; the part past the caps is lost on the next save", .{ path, std.fs.max_path_bytes });
         return;
     };
-    durable.replace(dest, data) catch |err| {
+    durable.replacePrivate(dest, data) catch |err| {
         std.log.err("conversation store: failed to preserve {s} ({}); the part past the load caps is lost on the next save", .{ dest, err });
         return;
     };
@@ -423,7 +442,7 @@ fn quarantine(path: []const u8, data: []const u8) !void {
         std.log.warn("conversation store: rename {s} -> {s} failed ({}): writing copy", .{
             path, dest, err,
         });
-        try durable.replace(dest, data);
+        try durable.replacePrivate(dest, data);
     };
     std.log.warn("conversation store: quarantined corrupt file to {s}", .{dest});
 }
@@ -450,7 +469,7 @@ fn testPath(buf: []u8, name: []const u8) []u8 {
     return std.fmt.bufPrint(buf, "test_conv_store_{d}_{s}", .{ std.c.getpid(), name }) catch unreachable;
 }
 
-/// Suffix `durable.replace` appends to the live path for its sibling tmp.
+/// Suffix `durable_file.replace` appends to the live path for its sibling tmp.
 fn tmpSuffix() []const u8 {
     return std.fmt.bufPrint(&tmp_suffix_buf, ".tmp.{d}", .{std.c.getpid()}) catch unreachable;
 }
@@ -467,6 +486,52 @@ fn deleteTestPath(path: []const u8) void {
     @memcpy(buf[0..path.len], path);
     buf[path.len] = 0;
     _ = std.c.unlink(@ptrCast(buf[0..path.len :0]));
+}
+
+/// Permission bits of `path`, or `null` when it cannot be stat'ed.
+fn testPathMode(path: []const u8) ?u32 {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (path.len >= buf.len) return null;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    if (comptime @import("builtin").os.tag == .linux) {
+        var st: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(
+            std.posix.AT.FDCWD,
+            @ptrCast(&buf),
+            std.os.linux.AT.EMPTY_PATH,
+            std.os.linux.STATX{ .MODE = true },
+            &st,
+        );
+        if (rc != 0) return null;
+        return st.mode & 0o777;
+    }
+    var st: std.c.Stat = undefined;
+    if (std.c.stat(@ptrCast(&buf), &st) != 0) return null;
+    return st.mode & 0o777;
+}
+
+test "a saved store is owner-only, and a store an older agave left wide is tightened on load" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "mode.json");
+    defer deleteTestPath(path);
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+
+    const msgs = [_]Message{.{ .role = .user, .content = "my address is 1 Main St" }};
+    const convs = [_]ConvView{.{ .id = 1, .title = "t", .messages = &msgs }};
+    try save(allocator, path, 1, 2, &convs);
+    // Message content is user data: no other user of the host may read it,
+    // whatever umask the build or the operator runs with.
+    try std.testing.expectEqual(@as(u32, 0), testPathMode(path).? & 0o077);
+
+    // A store written before the mode existed loads, and is narrowed before
+    // any other user can open it.
+    try durable.replace(path, "{\"version\":1,\"active_id\":0,\"next_id\":1,\"conversations\":[]}");
+    var snap = try load(allocator, path);
+    snap.deinit();
+    try std.testing.expectEqual(@as(u32, 0), testPathMode(path).? & 0o077);
 }
 
 test "defaultPath prefers XDG_CACHE_HOME then HOME/.cache" {
@@ -506,7 +571,7 @@ test "load caps conversations at the save cap instead of dropping silently" {
         try buf.print(allocator, "{{\"id\":{d},\"title\":\"c{d}\",\"messages\":[]}}", .{ n, n });
     }
     try buf.appendSlice(allocator, "]}");
-    try durable.replace(path, buf.items);
+    try durable.replacePrivate(path, buf.items);
 
     var snap = try load(allocator, path);
     defer snap.deinit();
@@ -532,7 +597,7 @@ test "load clips an over-long non-ASCII title on a character boundary" {
     // 47 ASCII bytes then a 3-byte "世": the cap of 48 lands inside it.
     const raw = "{\"version\":1,\"active_id\":0,\"next_id\":1,\"conversations\":" ++
         "[{\"id\":0,\"title\":\"" ++ ("a" ** 47) ++ "\\u4e16 extra\",\"messages\":[]}]}";
-    try durable.replace(path, raw);
+    try durable.replacePrivate(path, raw);
 
     var snap = try load(allocator, path);
     defer snap.deinit();
@@ -582,7 +647,7 @@ test "load quarantines corrupt store" {
     defer deleteTestPath(path);
     defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
 
-    try durable.replace(path, "{\"not\": \"a store\"}");
+    try durable.replacePrivate(path, "{\"not\": \"a store\"}");
     try std.testing.expectError(error.CorruptStore, load(allocator, path));
 
     // Original should have been renamed away.
@@ -603,7 +668,7 @@ test "load quarantines a store whose ids overflow u32" {
 
     // extractIntField yields any usize, so a hand-edited store decodes this
     // cleanly. It must be treated as corruption, not truncated or @intCast.
-    try durable.replace(path,
+    try durable.replacePrivate(path,
         \\{"version": 1, "active_id": 0, "next_id": 2, "conversations": [{"id": 4294967296, "title": "x", "messages": []}]}
     );
     try std.testing.expectError(error.CorruptStore, load(allocator, path));
@@ -620,7 +685,7 @@ test "load quarantines a store truncated mid-object" {
     // The array closes but the conversation object before it never does:
     // loading that as a whole conversation would let the next save rewrite the
     // file without the lost tail.
-    try durable.replace(path,
+    try durable.replacePrivate(path,
         \\{"version": 1, "active_id": 0, "next_id": 2, "conversations": [{"id": 1, "title": "x", "messages": []
     );
     try std.testing.expectError(error.CorruptStore, load(allocator, path));
