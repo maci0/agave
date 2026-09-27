@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Pin to a dated Debian tag for reproducible builds (bump with dependabot/docker).
-FROM --platform=$BUILDPLATFORM debian:bookworm-20260824-slim AS build
+FROM --platform=$BUILDPLATFORM debian:bookworm-20260918-slim AS build
 
 # Empty default: install the version pinned in .zigversion (single source of truth).
 # Override with --build-arg ZIG_VERSION=x.y.z and matching ZIG_SHA256_* args.
@@ -10,9 +10,9 @@ ARG TARGETARCH
 # Freeze apt to the same calendar day as the FROM tag. A dated image alone is not
 # enough: `apt-get update` against deb.debian.org still floats package versions.
 # Bump this when bumping debian:bookworm-YYYYMMDD-slim (CI checks they match).
-ARG DEBIAN_SNAPSHOT=20260824T000000Z
-# 2026-08-24 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
-ARG SOURCE_DATE_EPOCH=1787529600
+ARG DEBIAN_SNAPSHOT=20260918T000000Z
+# 2026-09-18 00:00:00 UTC; keep aligned with DEBIAN_SNAPSHOT / FROM tag day.
+ARG SOURCE_DATE_EPOCH=1789689600
 
 # Backend enable flags. Metal disabled by default (macOS-only, not usable in Docker).
 ARG ENABLE_CPU=true
@@ -169,11 +169,11 @@ RUN --mount=type=cache,target=/src/.zig-cache \
 # Musl static binaries also run fine on Debian.
 # No --platform needed: under BuildKit each stage defaults to its own
 # TARGETPLATFORM, regardless of the build stage's BUILDPLATFORM pin above.
-FROM debian:bookworm-20260824-slim
+FROM debian:bookworm-20260918-slim
 
 # Keep in sync with the build stage (same FROM day / snapshot).
-ARG DEBIAN_SNAPSHOT=20260824T000000Z
-ARG SOURCE_DATE_EPOCH=1787529600
+ARG DEBIAN_SNAPSHOT=20260918T000000Z
+ARG SOURCE_DATE_EPOCH=1789689600
 
 # Version label: build-arg validated against build.zig.zon in the build stage.
 # LABEL cannot read files, so plain builds fall back to "dev"; the authoritative
