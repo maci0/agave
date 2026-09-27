@@ -4611,6 +4611,12 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         while (token_count < effective_max and !hit_eog) {
             const pre_draft_pos = model.kvSeqLen();
             const is_self = (model.ptr == draft_model.ptr);
+            const spec_pen: spec_decode.Penalties = .{
+                .history = gen_tokens[0..token_count],
+                .repeat_penalty = sampling.repetition_penalty,
+                .dry_multiplier = sampling.dry_multiplier,
+                .dry_length = sampling.dry_allowed_length,
+            };
 
             const n_drafted = if (is_self and !use_sampling)
                 spec_decode.draft(spec_state, draft_model, last)
@@ -4625,9 +4631,9 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling)
-                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, sampling.temperature, prng.random())
+                spec_decode.verifySampling(spec_state, model, draft_model, last, pre_draft_pos, sampling.temperature, spec_pen, prng.random())
             else
-                spec_decode.verifySequential(spec_state, model, draft_model, last, pre_draft_pos);
+                spec_decode.verifySequential(spec_state, model, draft_model, last, pre_draft_pos, spec_pen);
 
             for (0..result.accepted) |i| {
                 const accepted_tok = spec_state.draft_tokens[i];
@@ -5807,10 +5813,24 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
             };
         }
         const a_spec = &a_spec_storage;
+        // Token history for penalty tracking, mirroring the non-spec path below.
+        var a_spec_tokens: [gen_ids_buf_size]u32 = undefined;
+        defer @memset(std.mem.sliceAsBytes(&a_spec_tokens), 0);
+        var a_spec_count: u32 = 0;
+        if (token_count > 0) {
+            a_spec_tokens[0] = first_gen_token;
+            a_spec_count = 1;
+        }
         while (token_count < max_tokens and !anth_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
             const is_self = (model.ptr == a_draft.ptr);
+            const pen_a: spec_decode.Penalties = .{
+                .history = a_spec_tokens[0..a_spec_count],
+                .repeat_penalty = sampling_a.repetition_penalty,
+                .dry_multiplier = sampling_a.dry_multiplier,
+                .dry_length = sampling_a.dry_allowed_length,
+            };
             const nd = if (is_self and !use_sampling_a)
                 spec_decode.draft(a_spec, a_draft, last)
             else
@@ -5823,9 +5843,9 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_a)
-                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, sampling_a.temperature, prng_a.random())
+                spec_decode.verifySampling(a_spec, model, a_draft, last, pre, sampling_a.temperature, pen_a, prng_a.random())
             else
-                spec_decode.verifySequential(a_spec, model, a_draft, last, pre);
+                spec_decode.verifySequential(a_spec, model, a_draft, last, pre, pen_a);
 
             for (0..res.accepted) |i| {
                 const at = a_spec.draft_tokens[i];
@@ -5835,12 +5855,20 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
                     anth_disconnected = true;
                     break;
                 }
+                if (a_spec_count < a_spec_tokens.len) {
+                    a_spec_tokens[a_spec_count] = at;
+                    a_spec_count += 1;
+                }
                 token_count += 1;
             }
             if (!anth_disconnected and !g_server.isEog(res.next_token)) {
                 if (token_count < max_tokens) {
                     if (!streamAnthropicDelta(stream, tok, res.next_token, &anth_hb)) {
                         anth_disconnected = true;
+                    }
+                    if (a_spec_count < a_spec_tokens.len) {
+                        a_spec_tokens[a_spec_count] = res.next_token;
+                        a_spec_count += 1;
                     }
                     token_count += 1;
                 }
@@ -6282,6 +6310,12 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
             const is_self = (model.ptr == r_draft.ptr);
+            const pen_r: spec_decode.Penalties = .{
+                .history = gen_tokens[0..token_count],
+                .repeat_penalty = sampling_r.repetition_penalty,
+                .dry_multiplier = sampling_r.dry_multiplier,
+                .dry_length = sampling_r.dry_allowed_length,
+            };
             const nd = if (is_self and !use_sampling_r)
                 spec_decode.draft(r_spec, r_draft, last)
             else
@@ -6294,9 +6328,9 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_r)
-                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, sampling_r.temperature, prng_r.random())
+                spec_decode.verifySampling(r_spec, model, r_draft, last, pre, sampling_r.temperature, pen_r, prng_r.random())
             else
-                spec_decode.verifySequential(r_spec, model, r_draft, last, pre);
+                spec_decode.verifySequential(r_spec, model, r_draft, last, pre, pen_r);
 
             for (0..res.accepted) |i| {
                 const at = r_spec.draft_tokens[i];
@@ -7034,10 +7068,24 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
             };
         }
         const s_spec = &s_spec_storage;
+        // Token history for penalty tracking, mirroring the non-spec path below.
+        var s_spec_tokens: [gen_ids_buf_size]u32 = undefined;
+        defer @memset(std.mem.sliceAsBytes(&s_spec_tokens), 0);
+        var s_spec_count: u32 = 0;
+        if (token_count > 0) {
+            s_spec_tokens[0] = first_gen_token;
+            s_spec_count = 1;
+        }
         while (token_count < max_tokens and !stream_disconnected) {
             if (token_ids.len == 0 or (token_count == 0 and g_server.isEog(first_gen_token))) break;
             const pre = model.kvSeqLen();
             const is_self = (model.ptr == s_draft.ptr);
+            const pen_s: spec_decode.Penalties = .{
+                .history = s_spec_tokens[0..s_spec_count],
+                .repeat_penalty = sampling.repetition_penalty,
+                .dry_multiplier = sampling.dry_multiplier,
+                .dry_length = sampling.dry_allowed_length,
+            };
             const nd = if (is_self and !use_sampling_s)
                 spec_decode.draft(s_spec, s_draft, last)
             else
@@ -7050,9 +7098,9 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     break :blk model.forward(ld) catch ld;
                 } }
             else if (use_sampling_s)
-                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, sampling.temperature, prng_s.random())
+                spec_decode.verifySampling(s_spec, model, s_draft, last, pre, sampling.temperature, pen_s, prng_s.random())
             else
-                spec_decode.verifySequential(s_spec, model, s_draft, last, pre);
+                spec_decode.verifySequential(s_spec, model, s_draft, last, pre, pen_s);
 
             for (0..res.accepted) |i| {
                 const at = s_spec.draft_tokens[i];
@@ -7062,12 +7110,20 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
                     stream_disconnected = true;
                     break;
                 }
+                if (s_spec_count < s_spec_tokens.len) {
+                    s_spec_tokens[s_spec_count] = at;
+                    s_spec_count += 1;
+                }
                 token_count += 1;
             }
             if (!stream_disconnected and !g_server.isEog(res.next_token)) {
                 if (token_count < max_tokens) {
                     if (!streamChunk(stream, &chunk_buf, tok, res.next_token, req_id, created, is_chat, &chunk_hb)) {
                         stream_disconnected = true;
+                    }
+                    if (s_spec_count < s_spec_tokens.len) {
+                        s_spec_tokens[s_spec_count] = res.next_token;
+                        s_spec_count += 1;
                     }
                     token_count += 1;
                 }

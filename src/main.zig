@@ -495,7 +495,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "transport", .kind = .option, .help = "IPC transport: auto, tcp, shm, nccl [default: auto]. rdma/udp/grpc are rejected until implemented." },
     .{ .long = "ctx-size", .kind = .option, .help = "Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit, whichever is smaller]." },
     .{ .long = "allow-cpu-fallback", .help = "Accepted for compatibility; not implemented. GPU backends fail closed on missing kernels (the flag only warns)." },
-    .{ .long = "mmap", .help = "Use lazy mmap instead of eagerly paging weights into RAM." },
+    .{ .long = "mmap", .help = "Skip the eager page-in warmup; weights stay mmap'd either way." },
     .{ .long = "prefill-batch-size", .kind = .option, .help = "Prefill chunk size in tokens [default: 512]." },
     // KV cache
     .{ .long = "no-kv-cache", .help = "Disable KV cache allocation (prefill-only / embedding use cases). Prevents any decode-phase caching." },
@@ -533,7 +533,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "mtp-model", .kind = .option, .help = "Path to MTP weight file (safetensors) for multi-token prediction speculative decoding." },
     .{ .long = "spec-tokens", .short = 'K', .kind = .option, .help = "Draft tokens per speculation round [default: 5]." },
     .{ .long = "tree-budget", .kind = .option, .help = "DDTree node budget [default: 64]." },
-    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2 [default: ddtree with --draft-model]." },
+    .{ .long = "spec-mode", .kind = .option, .help = "Speculative mode: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2, dflash [default: ddtree with --draft-model]." },
     .{ .long = "spec-token-map", .kind = .option, .help = "FR-Spec token frequency map file (one token ID per line). Restricts draft to high-frequency tokens for improved acceptance rate." },
     .{ .long = "draft-layers", .kind = .option, .help = "Layers for self-speculative draft [default: auto]." },
     .{ .long = "pflash-alpha", .kind = .option, .help = "PFlash block selection threshold (0.0-2.0) [default: 0.85]." },
@@ -1488,7 +1488,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
                 // DFlash CLI alias: the published checkpoints are DFlash2.
                 if (std.mem.eql(u8, s, "dflash")) break :blk SpecMode.dflash2;
                 if (std.mem.eql(u8, s, "auto")) break :blk if (dm != null) SpecMode.ddtree else SpecMode.ngram;
-                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2)\n", .{s});
+                eprint("Error: unknown --spec-mode '{s}' (expected: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2, dflash)\n", .{s});
                 std.process.exit(2);
             }
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
@@ -2128,7 +2128,7 @@ const usage_text =
     \\      --list-devices        List available compute devices and exit
     \\      --ctx-size <N|auto>   Context window size; 0 = full, auto = fit to memory [default: 4096 or model limit]
     \\      --allow-cpu-fallback  Not implemented; GPU backends fail closed (flag only warns)
-    \\      --mmap                Use lazy mmap instead of eagerly paging weights into RAM
+    \\      --mmap                Skip the eager page-in warmup; weights stay mmap'd either way
     \\      --prefill-batch-size <N>  Prefill chunk size in tokens [default: 512]
     \\
     \\KV CACHE:
@@ -4612,9 +4612,10 @@ fn generateSpeculative(
     var la_state = ngram_mod.LookaheadState{};
     if (use_lookahead) la_state.seed(token_ids);
     var ngram_state = ngram_mod.NgramState{};
-    if (use_ngram or use_dflash2) {
-        // Seed n-gram history with prefill tokens. In dflash2 mode the history
-        // powers hybrid block extension and cooldown-time drafting.
+    if (use_ngram or use_lookahead or use_dflash2) {
+        // Seed n-gram history with prefill tokens. dflash2 uses it for hybrid
+        // block extension and cooldown-time drafting; lookahead matches branch
+        // continuations against this tail.
         for (token_ids) |tid| ngram_state.push(tid);
         if (!isEogToken(first_target, eog)) ngram_state.push(first_target);
     }
@@ -4666,6 +4667,12 @@ fn generateSpeculative(
             }
         }
         const pre_draft_pos = target.kvSeqLen();
+        const spec_pen: spec_decode.Penalties = .{
+            .history = gen_ids_buf[0..token_count],
+            .repeat_penalty = cli.repeat_penalty,
+            .dry_multiplier = cli.dry_multiplier,
+            .dry_length = cli.dry_length,
+        };
         // Set when the cooldown branch produced pure n-gram drafts; skips the
         // drafter so verification consumes those drafts directly.
         var skip_draft_phase = false;
@@ -4700,6 +4707,10 @@ fn generateSpeculative(
                 if (use_suffix) target.setExpertBudget(0);
                 if (use_sampling) {
                     const cl = target.getLogits();
+                    if (spec_pen.active()) {
+                        if (cli.repeat_penalty != 1.0) math_ops.applyRepeatPenalty(cl, spec_pen.history, cli.repeat_penalty);
+                        if (cli.dry_multiplier > 0) math_ops.applyDry(cl, spec_pen.history, cli.dry_multiplier, cli.dry_length);
+                    }
                     if (cli.min_p > 0) math_ops.applyMinP(cl, cli.min_p);
                     if (cli.xtc_probability > 0) math_ops.applyXtc(cl, cli.xtc_probability, cli.xtc_threshold, prng.random());
                     last = math_ops.sampleToken(cl, cli.temperature, cli.top_k, cli.top_p, prng.random());
@@ -4716,7 +4727,10 @@ fn generateSpeculative(
 
         // Draft phase
         if (self_spec) target.setLayerSkip(skip_start, skip_end);
-        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp and !use_dspark and !use_dflash2);
+        // Self-draft is only sound for the linear drafter, whose proposals come
+        // from the target itself. Every other mode guesses (n-gram copy, Jacobi
+        // branch, MTP/EAGLE head) and must be verified, even with no draft model.
+        const is_self_draft = (target.ptr == draft_model.ptr and !self_spec and !use_ngram and !use_lookahead and !use_mtp and !use_eagle and !use_eagle3 and !use_mlp and !use_dspark and !use_dflash2);
         const effective_k = spec_state.optimalK();
         const n_drafted: u32 = if (skip_draft_phase) blk: {
             break :blk spec_state.n_draft;
@@ -4817,6 +4831,10 @@ fn generateSpeculative(
                 if (use_suffix) target.setExpertBudget(0);
                 if (use_sampling) {
                     const cl2 = target.getLogits();
+                    if (spec_pen.active()) {
+                        if (cli.repeat_penalty != 1.0) math_ops.applyRepeatPenalty(cl2, spec_pen.history, cli.repeat_penalty);
+                        if (cli.dry_multiplier > 0) math_ops.applyDry(cl2, spec_pen.history, cli.dry_multiplier, cli.dry_length);
+                    }
                     if (cli.min_p > 0) math_ops.applyMinP(cl2, cli.min_p);
                     if (cli.xtc_probability > 0) math_ops.applyXtc(cl2, cli.xtc_probability, cli.xtc_threshold, prng.random());
                     last = math_ops.sampleToken(cl2, cli.temperature, cli.top_k, cli.top_p, prng.random());
@@ -4854,9 +4872,9 @@ fn generateSpeculative(
         } else if (use_ddtree or self_spec)
             spec_decode.verifyDDTree(&spec_state, target, draft_model, last, cli.tree_budget, pre_draft_pos)
         else if (use_sampling)
-            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, prng.random())
+            spec_decode.verifySampling(&spec_state, target, draft_model, last, pre_draft_pos, cli.temperature, spec_pen, prng.random())
         else
-            spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos);
+            spec_decode.verifySequential(&spec_state, target, draft_model, last, pre_draft_pos, spec_pen);
 
         // Reset expert budget after verification.
         if (use_suffix) {
@@ -4930,7 +4948,7 @@ fn generateSpeculative(
         }
 
         // Update n-gram history with accepted tokens
-        if (use_ngram) {
+        if (use_ngram or use_lookahead) {
             for (0..result.accepted) |i| {
                 if (isEogToken(spec_state.draft_tokens[i], eog)) break;
                 ngram_state.push(spec_state.draft_tokens[i]);
