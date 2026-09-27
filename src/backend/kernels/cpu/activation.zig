@@ -31,12 +31,12 @@ pub fn silu(input: [*]const f32, output: [*]f32, n: usize) void {
 }
 
 /// Fused clamped SiLU + multiply: out[i] = silu(clamp(gate[i], -10, 10)) * clamp(up[i], -10, 10).
-/// Identical clamp bounds to the scalar implementation in cpu.zig. Dual-vector SIMD.
+/// Same bound as the GELU argument clamp; dual-vector SIMD.
 pub fn clampedSiluMul(gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usize) void {
     const one: V8 = @splat(1.0);
     const neg: V8 = @splat(-1.0);
-    const hi: V8 = @splat(@as(f32, 10.0));
-    const lo: V8 = @splat(@as(f32, -10.0));
+    const hi: V8 = @splat(gelu_clamp_hi);
+    const lo: V8 = @splat(gelu_clamp_lo);
     var i: usize = 0;
     while (i + 16 <= n) : (i += 16) {
         const ga: V8 = @min(hi, @max(lo, @as(V8, gate[i..][0..8].*)));
@@ -52,8 +52,8 @@ pub fn clampedSiluMul(gate: [*]const f32, up: [*]const f32, out: [*]f32, n: usiz
         out[i..][0..8].* = (gv / (one + @exp(neg * gv))) * uv;
     }
     while (i < n) : (i += 1) {
-        const g = @min(@as(f32, 10.0), @max(@as(f32, -10.0), gate[i]));
-        const u = @min(@as(f32, 10.0), @max(@as(f32, -10.0), up[i]));
+        const g = @min(gelu_clamp_hi, @max(gelu_clamp_lo, gate[i]));
+        const u = @min(gelu_clamp_hi, @max(gelu_clamp_lo, up[i]));
         out[i] = (g / (1.0 + @exp(-g))) * u;
     }
 }

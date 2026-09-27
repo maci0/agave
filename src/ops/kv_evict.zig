@@ -302,6 +302,13 @@ pub fn scorePositionsTri(
     calibrations: []const TriCalibration,
     scratch: []f32, // [n_q_heads * seq_len] for per-head scores
 ) void {
+    std.debug.assert(seq_len > 0);
+    std.debug.assert(n_kv_heads > 0);
+    std.debug.assert(n_q_heads >= n_kv_heads);
+    std.debug.assert(n_q_heads % n_kv_heads == 0);
+    std.debug.assert(calibrations.len >= n_q_heads);
+    std.debug.assert(scratch.len >= n_q_heads * seq_len);
+
     const kv_dim = n_kv_heads * head_dim;
     const heads_per_group = n_q_heads / n_kv_heads;
 

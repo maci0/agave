@@ -396,6 +396,7 @@ pub const GptOssModel = struct {
     /// MoE routing is per-token (different experts per token), so FFN remains sequential.
     pub fn prefill(self: *GptOssModel, token_ids: []const u32) !u32 {
         if (token_ids.len == 0) return error.MissingTensor;
+        if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
 
         // Fall back to sequential if batched buffers not allocated (MLX) or single token.
         if (self.chunk_size == 0 or token_ids.len == 1) {

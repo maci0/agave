@@ -1696,7 +1696,7 @@ inline fn silu(x: f32) f32 {
 /// Scalar GELU activation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))).
 inline fn geluScalar(x: f32) f32 {
     const inner = @mulAdd(f32, gelu_cubic_coeff, x * x * x, x);
-    const t = std.math.clamp(gelu_sqrt_2_over_pi * inner, -10.0, 10.0);
+    const t = std.math.clamp(gelu_sqrt_2_over_pi * inner, math_ops.gelu_clamp_lo, math_ops.gelu_clamp_hi);
     const e2t = @exp(2.0 * t);
     return 0.5 * x * (1.0 + (e2t - 1.0) / (e2t + 1.0));
 }

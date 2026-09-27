@@ -1974,6 +1974,9 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         eprint("frontier-bench: no valid context lengths in --frontier-ctx\n", .{});
         return;
     }
+    // The loop below prefills incrementally and slices prompt[cursor..ctx_len],
+    // so the frontiers must ascend. Sorting also makes max_ctx the last entry.
+    std.mem.sort(u32, frontiers_buf[0..n_frontiers], {}, std.sort.asc(u32));
 
     // Build a prompt long enough to cover the largest frontier.
     const max_ctx = std.mem.max(u32, frontiers_buf[0..n_frontiers]);
@@ -2004,9 +2007,11 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
     if (cli.json) _ = std.posix.system.write(stdout_file.handle, "[", 1);
 
     for (frontiers_buf[0..n_frontiers], 0..) |ctx_len, fi| {
-        // Prefill from cursor to ctx_len
-        const slice = if (ctx_len <= prompt.len) prompt[cursor..ctx_len] else prompt[cursor..];
-        if (slice.len == 0) continue;
+        // Prefill from cursor to ctx_len. `cursor` saturates at prompt.len, so
+        // a frontier below it has nothing left to prefill.
+        const end = @min(ctx_len, prompt.len);
+        if (end <= cursor) continue;
+        const slice = prompt[cursor..end];
 
         const ts0 = sim_clock.monoNano();
         _ = model.prefill(slice) catch {
@@ -2014,7 +2019,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
             break;
         };
         const ts1 = sim_clock.monoNano();
-        cursor = @min(ctx_len, prompt.len);
+        cursor = end;
 
         // Export KV snapshot before probe (64 MB should cover most models at frontier sizes).
         const kv_export_cap: usize = 64 * 1024 * 1024;
@@ -2029,7 +2034,7 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
         while (gen < probe_tokens) : (gen += 1) {
             if (isEogToken(last, eog)) break;
             last = model.forward(last) catch |err| {
-                eprint("benchmark: decode forward failed: {}\n", .{err});
+                eprint("frontier-bench: decode forward failed: {}\n", .{err});
                 break;
             };
             last = math_ops.argmax(model.getLogits());
@@ -5897,7 +5902,6 @@ test "fuzz: main.zig pure functions" {
                 _ = &insertionMatch;
                 _ = &isKnownShort;
                 _ = &isEogToken;
-                _ = &isKnownSpec;
             }
 
             var ip_out: [4]u8 = undefined;
