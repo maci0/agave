@@ -3302,7 +3302,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             break :blk if (s.len > 0) s else null;
         } else null;
 
-        const RegenPrepResult = struct { formatted: []const u8, msg_count: usize };
+        const RegenPrepResult = struct { formatted: []const u8, msg_count: usize, prompt_ids: []u32 };
         const regen_prep: ?RegenPrepResult = blk: {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
@@ -3314,14 +3314,14 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 break :blk null;
             };
 
-            // Remove the last assistant message (if any)
+            // Remove the last assistant message (if any). It is held, not
+            // freed, so the rate-limit check below can put it back when the
+            // request is rejected: freeing first would make the 429 lose the
+            // reply in memory and on disk.
+            var removed_assistant: ?chat_tmpl_mod.Message = null;
             if (regen_conv.messages.items.len > 0) {
                 const last_msg = regen_conv.messages.items[regen_conv.messages.items.len - 1];
-                if (last_msg.role == .assistant) {
-                    Conversation.freeOwnedMessage(g_server.allocator, last_msg);
-                    _ = regen_conv.messages.pop();
-                    g_server.persistConversationsLocked();
-                }
+                if (last_msg.role == .assistant) removed_assistant = regen_conv.messages.pop();
             }
 
             if (regen_conv.messages.items.len == 0) {
@@ -3343,28 +3343,37 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 500, elapsedMs(request_start));
                 break :blk null;
             };
-            break :blk RegenPrepResult{ .formatted = regen_formatted, .msg_count = regen_conv.messages.items.len };
+            // Rate limit while the reply is still recoverable.
+            const regen_ids_owned = g_server.tokenizer.encode(regen_formatted) catch |err| {
+                std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+                break :blk null;
+            };
+            const regen_prompt_tokens = estimatePromptTokens(regen_ids_owned.len, regen_formatted.len);
+            if (checkRateLimit(g_server, regen_prompt_tokens)) |retry| {
+                if (removed_assistant) |m| {
+                    regen_conv.messages.append(g_server.allocator, m) catch {
+                        Conversation.freeOwnedMessage(g_server.allocator, m);
+                    };
+                }
+                wipeFree(g_server.allocator, @constCast(regen_formatted));
+                wipeFreeTokens(g_server.allocator, regen_ids_owned);
+                send429(stream, retry);
+                logRequestDone(method, path, 429, elapsedMs(request_start));
+                break :blk null;
+            }
+            if (removed_assistant) |m| Conversation.freeOwnedMessage(g_server.allocator, m);
+            g_server.persistConversationsLocked();
+
+            break :blk RegenPrepResult{ .formatted = regen_formatted, .msg_count = regen_conv.messages.items.len, .prompt_ids = regen_ids_owned };
         };
         if (regen_prep == null) return;
         const regen_formatted = regen_prep.?.formatted;
         defer wipeFree(g_server.allocator, @constCast(regen_formatted));
         const regen_msg_count = regen_prep.?.msg_count;
+        const regen_prompt_ids_owned = regen_prep.?.prompt_ids;
+        defer wipeFreeTokens(g_server.allocator, regen_prompt_ids_owned);
 
         std.log.info("req={d} regenerate from {d} messages", .{ log_request_id, regen_msg_count });
-
-        // Rate limit check
-        const regen_prompt_ids_owned = g_server.tokenizer.encode(regen_formatted) catch |err| blk: {
-            std.log.warn("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
-            break :blk null;
-        };
-        defer if (regen_prompt_ids_owned) |ids| wipeFreeTokens(g_server.allocator, ids);
-        const regen_prompt_ids = regen_prompt_ids_owned orelse &[_]u32{};
-        const regen_prompt_tokens = estimatePromptTokens(regen_prompt_ids.len, regen_formatted.len);
-        if (checkRateLimit(g_server, regen_prompt_tokens)) |retry| {
-            send429(stream, retry);
-            logRequestDone(method, path, 429, elapsedMs(request_start));
-            return;
-        }
 
         // Always reset KV cache for regeneration (full re-prefill)
         const wants_stream_regen = json.extractFormBool(regen_body, "stream");
@@ -3493,7 +3502,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Get or create active conversation, add user message, format prompt
         //, all under mutex. Returns (need_reset, formatted) or null on failure.
-        const ChatPrepResult = struct { need_reset: bool, formatted: []const u8 };
+        const ChatPrepResult = struct { need_reset: bool, formatted: []const u8, prompt_ids: []u32 };
         const prep_result: ?ChatPrepResult = blk: {
             g_server.mutex.lockUncancelable(g_server.io);
             defer g_server.mutex.unlock(g_server.io);
@@ -3525,8 +3534,6 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 logRequestDone(method, path, 500, elapsedMs(request_start));
                 break :blk null;
             };
-            g_server.persistConversationsLocked();
-
             // Title is set at createConv time (opaque "Chat {id}"); never store message text.
 
             const need_reset = !g_server.kv_valid;
@@ -3540,26 +3547,37 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     std.log.warn("req={d} chat continuation formatting failed (OOM), using raw input: {}", .{ log_request_id, err });
                     break :fmt_err trimmed;
                 };
-            break :blk ChatPrepResult{ .need_reset = need_reset, .formatted = formatted };
+            // Rate limit before the durable append. A 429 after persisting
+            // leaves a user message that no assistant ever answered, and it
+            // replays as context on the next turn.
+            const prompt_ids_owned = g_server.tokenizer.encode(formatted) catch |err| {
+                std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+                break :blk null;
+            };
+            // Ownership moves to the caller on the success path only.
+            var prompt_ids_owned_handed_off = false;
+            defer if (!prompt_ids_owned_handed_off) wipeFreeTokens(g_server.allocator, prompt_ids_owned);
+            const prompt_tokens = estimatePromptTokens(prompt_ids_owned.len, formatted.len);
+            if (checkRateLimit(g_server, prompt_tokens)) |retry| {
+                const popped = conv.messages.pop();
+                if (popped) |dropped| Conversation.freeOwnedMessage(g_server.allocator, dropped);
+                if (formatted.ptr != trimmed.ptr) wipeFree(g_server.allocator, @constCast(formatted));
+                send429(stream, retry);
+                logRequestDone(method, path, 429, elapsedMs(request_start));
+                break :blk null;
+            }
+
+            g_server.persistConversationsLocked();
+
+            prompt_ids_owned_handed_off = true;
+            break :blk ChatPrepResult{ .need_reset = need_reset, .formatted = formatted, .prompt_ids = prompt_ids_owned };
         };
         if (prep_result == null) return;
         const need_reset = prep_result.?.need_reset;
         const formatted = prep_result.?.formatted;
         defer if (formatted.ptr != trimmed.ptr) wipeFree(g_server.allocator, @constCast(formatted));
-
-        // Rate limit check (matches API endpoint pattern)
-        const chat_prompt_ids_owned = g_server.tokenizer.encode(formatted) catch |err| blk: {
-            std.log.warn("req={d} tokenizer encode failed for rate-limit estimate: {}", .{ log_request_id, err });
-            break :blk null;
-        };
-        defer if (chat_prompt_ids_owned) |ids| wipeFreeTokens(g_server.allocator, ids);
-        const chat_prompt_ids = chat_prompt_ids_owned orelse &[_]u32{};
-        const chat_prompt_tokens = estimatePromptTokens(chat_prompt_ids.len, formatted.len);
-        if (checkRateLimit(g_server, chat_prompt_tokens)) |retry| {
-            send429(stream, retry);
-            logRequestDone(method, path, 429, elapsedMs(request_start));
-            return;
-        }
+        const chat_prompt_ids_owned = prep_result.?.prompt_ids;
+        defer wipeFreeTokens(g_server.allocator, chat_prompt_ids_owned);
 
         // Parse optional sampling parameters from form body
         var chat_sampling = json.SamplingParams{};

@@ -201,6 +201,8 @@ fn scanObject(arr: []const u8, idx: *usize) ![]const u8 {
 fn parse(allocator: Allocator, data: []const u8) !Snapshot {
     const version = json.extractIntField(data, "version") orelse return error.CorruptStore;
     if (version != format_version) return error.UnsupportedVersion;
+    // extractIntField rejects negatives but accepts values above u32 max; a
+    // hand-edited or truncated store must not truncate into a colliding id.
     const active_id: u32 = try castId(json.extractIntField(data, "active_id") orelse 0);
     const next_id_raw = json.extractIntField(data, "next_id") orelse 1;
     const next_id: u32 = try castId(@max(next_id_raw, 1));

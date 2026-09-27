@@ -221,6 +221,9 @@ pub const PullError = error{
     /// The corrupt blob is removed so the next run re-downloads instead of
     /// accepting it via the size-based "already downloaded" check.
     IntegrityCheckFailed,
+    /// A snapshot symlink could not be created or renamed into place, so the
+    /// published model path does not exist.
+    SymlinkFailed,
     /// Local blob size differs from the repository's current file (stale
     /// leftover from an older revision); the stale copy was removed so the
     /// next attempt downloads fresh.
@@ -1445,7 +1448,12 @@ fn verifyGgufBlob(io: Io, blob_path: []const u8) bool {
     };
     defer f.close(io);
     var magic: [4]u8 = undefined;
-    const n = f.readPositionalAll(io, &magic, 0) catch 0;
+    // A read error is not evidence of corruption: reporting it as a short read
+    // would unlink a multi-gigabyte completed download over a transient EIO.
+    const n = f.readPositionalAll(io, &magic, 0) catch |err| {
+        eprint("Warning: could not read '{s}' for integrity check: {}\n", .{ blob_path, err });
+        return true;
+    };
     if (n >= 4 and std.mem.eql(u8, &magic, "GGUF")) return true;
     Io.Dir.cwd().deleteFile(io, blob_path) catch |del_err| {
         eprint("Warning: could not remove corrupt file '{s}': {}\n", .{ blob_path, del_err });
@@ -1499,9 +1507,11 @@ fn pullGgufModel(
     if (total_shards > 1) {
         eprint("Split GGUF: {d} shards total, downloading remaining shards...\n", .{total_shards});
         for (2..total_shards + 1) |shard_idx| {
-            const shard_name = buildShardFilename(pa, selected.filename, @intCast(shard_idx), total_shards) catch {
-                eprint("Warning: could not build shard {d}/{d} filename, skipping\n", .{ shard_idx, total_shards });
-                continue;
+            // Fatal, not a skip: a published model missing one shard fails at
+            // open time with no indication that `pull` said anything was wrong.
+            const shard_name = buildShardFilename(pa, selected.filename, @intCast(shard_idx), total_shards) catch |err| {
+                eprint("Error: could not build shard {d}/{d} filename: {}\n", .{ shard_idx, total_shards, err });
+                return error.IntegrityCheckFailed;
             };
             defer pa.free(shard_name);
 
@@ -1527,7 +1537,7 @@ fn pullGgufModel(
                 try downloadFile(allocator, args.repo, shard_name, shard_blob, args.token, shard_size);
                 eprint("  shard {d}/{d} complete.\n", .{ shard_idx, total_shards });
             }
-            atomicSymlink(pa, std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard_name}) catch return error.OutOfMemory, shard_link);
+            try atomicSymlink(pa, std.fmt.allocPrint(pa, "../../blobs/{s}", .{shard_name}) catch return error.OutOfMemory, shard_link);
         }
     }
 
@@ -1543,7 +1553,7 @@ fn pullGgufModel(
     const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{selected.filename}) catch
         return error.OutOfMemory;
 
-    atomicSymlink(pa, relative_blob, snapshot_link);
+    try atomicSymlink(pa, relative_blob, snapshot_link);
 
     // Write refs/main and create convenience symlink.
     writeRefsMain(pa, refs_dir, list_result.commit_sha);
@@ -1603,12 +1613,12 @@ fn pullSafeTensorsModel(
             eprint("Warning: OOM creating symlink for shard {s}\n", .{shard});
             continue;
         };
-        atomicSymlink(pa, relative_blob, snapshot_link);
+        try atomicSymlink(pa, relative_blob, snapshot_link);
     }
 
     // Download index file if present.
     if (st.has_index) {
-        pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, "model.safetensors.index.json", st.index_size);
+        try pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, "model.safetensors.index.json", st.index_size);
     }
 
     // Download auxiliary files (config.json, tokenizer.json, tokenizer_config.json).
@@ -1616,7 +1626,7 @@ fn pullSafeTensorsModel(
     const aux_sizes = [_]u64{ st.config_size, st.tokenizer_size, st.tokenizer_config_size };
     for (&safetensors_aux_files, aux_flags, aux_sizes) |aux_name, has_file, aux_size| {
         if (!has_file) continue;
-        pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, aux_name, aux_size);
+        try pullSidecarFile(allocator, pa, args, blobs_dir, snapshots_dir, aux_name, aux_size);
     }
 
     eprint("Download complete.\n", .{});
@@ -1644,46 +1654,44 @@ fn pullSidecarFile(
     snapshots_dir: []const u8,
     filename: []const u8,
     expected_size: u64,
-) void {
-    const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, filename }) catch {
-        eprint("Warning: OOM creating path for {s}\n", .{filename});
-        return;
-    };
+) (PullError || Allocator.Error)!void {
+    const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, filename }) catch
+        return error.OutOfMemory;
     if (isLocalBlobComplete(blob_path, expected_size)) {
         eprint("Already downloaded: {s}\n", .{filename});
     } else {
         eprint("Downloading {s}...\n", .{filename});
-        downloadFile(allocator, args.repo, filename, blob_path, args.token, expected_size) catch |err| {
-            eprint("Warning: could not download {s}: {}\n", .{ filename, err });
-        };
+        // Propagate: a half-written sidecar that is symlinked and reported as
+        // complete is accepted by every later run's size check.
+        try downloadFile(allocator, args.repo, filename, blob_path, args.token, expected_size);
     }
-    const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, filename }) catch {
-        eprint("Warning: OOM creating symlink for {s}\n", .{filename});
-        return;
-    };
-    const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{filename}) catch {
-        eprint("Warning: OOM creating symlink for {s}\n", .{filename});
-        return;
-    };
-    atomicSymlink(pa, relative_blob, snapshot_link);
+    const snapshot_link = std.fmt.allocPrint(pa, "{s}/{s}", .{ snapshots_dir, filename }) catch
+        return error.OutOfMemory;
+    const relative_blob = std.fmt.allocPrint(pa, "../../blobs/{s}", .{filename}) catch
+        return error.OutOfMemory;
+    try atomicSymlink(pa, relative_blob, snapshot_link);
 }
 
 /// Create an atomic symlink replacement (temp + rename) to prevent TOCTOU races.
-fn atomicSymlink(pa: Allocator, target: []const u8, link_path: []const u8) void {
+/// Errors are returned: a snapshot link that is not published makes the whole
+/// pull unusable, and the path is printed to stdout for scripting.
+fn atomicSymlink(pa: Allocator, target: []const u8, link_path: []const u8) !void {
     var rand_buf: [8]u8 = undefined;
     mod_io.random(&rand_buf);
-    const tmp_link = std.fmt.allocPrint(pa, "{s}.tmp.{x}", .{
+    const tmp_link = try std.fmt.allocPrint(pa, "{s}.tmp.{x}", .{
         link_path, std.mem.readInt(u64, &rand_buf, .little),
-    }) catch return;
+    });
+    defer pa.free(tmp_link);
     createSymlink(pa, target, tmp_link) catch |err| {
-        eprint("Warning: could not create symlink: {}\n", .{err});
-        return;
+        eprint("Error: could not create symlink '{s}': {}\n", .{ link_path, err });
+        return error.SymlinkFailed;
     };
     Io.Dir.rename(Io.Dir.cwd(), tmp_link, Io.Dir.cwd(), link_path, mod_io) catch |err| {
-        eprint("Warning: could not finalize symlink: {}\n", .{err});
+        eprint("Error: could not finalize symlink '{s}': {}\n", .{ link_path, err });
         Io.Dir.cwd().deleteFile(mod_io, tmp_link) catch |del_err| {
             eprint("Warning: could not clean up temp file '{s}': {}\n", .{ tmp_link, del_err });
         };
+        return error.SymlinkFailed;
     };
 }
 
