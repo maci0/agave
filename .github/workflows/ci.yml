@@ -425,26 +425,21 @@ jobs:
     timeout-minutes: 1
     steps:
       - name: Verify all jobs passed
+        # Env indirection, not ${{ }} interpolation: the job results must never
+        # be spliced into the shell body.
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
           set -euo pipefail
-          # Require every needed job == success (skipped/cancelled must not green the gate).
-          for pair in \
-            "fmt-check:${{ needs.fmt-check.result }}" \
-            "test-linux-x86:${{ needs.test-linux-x86.result }}" \
-            "test-macos:${{ needs.test-macos.result }}" \
-            "docker-build:${{ needs.docker-build.result }}" \
-            "cross-compile-check:${{ needs.cross-compile-check.result }}" \
-            "wasm-build:${{ needs.wasm-build.result }}" \
-            "fuzz-smoke:${{ needs.fuzz-smoke.result }}" \
-            "kernel-artifacts:${{ needs.kernel-artifacts.result }}" \
-            "lint-web:${{ needs.lint-web.result }}" \
-            "lint-shell:${{ needs.lint-shell.result }}"
-          do
-            name="${pair%%:*}"
-            result="${pair#*:}"
-            if [[ "$result" != "success" ]]; then
-              echo "::error::Required CI job '$name' result was '$result' (expected success)"
-              exit 1
-            fi
-          done
-          echo "All required CI jobs succeeded"
+          # Require every job in `needs` == success (skipped/cancelled must not
+          # green the gate). Reading the needs payload keeps the required-job
+          # list in `needs:` above, so a new job cannot be added there and
+          # silently go unchecked here.
+          failed="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"' <<<"$NEEDS_JSON")"
+          if [[ -n "$failed" ]]; then
+            while read -r pair; do
+              echo "::error::Required CI job '${pair%%=*}' result was '${pair#*=}' (expected success)"
+            done <<<"$failed"
+            exit 1
+          fi
+          echo "All required CI jobs succeeded: $(jq -r 'keys | join(", ")' <<<"$NEEDS_JSON")"

@@ -22,7 +22,10 @@ on:
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/docs-check.yml'
+      - '.github/workflows/golden_tests.yml'
       - '.dockerignore'
+      - '.env.example'
       - 'LICENSE'
   pull_request:
     branches: [ main ]
@@ -45,7 +48,10 @@ on:
       - 'Dockerfile'
       - 'docker-compose.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/docs-check.yml'
+      - '.github/workflows/golden_tests.yml'
       - '.dockerignore'
+      - '.env.example'
       - 'LICENSE'
   workflow_dispatch:
 
