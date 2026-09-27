@@ -122,6 +122,15 @@ must still appear under **Changed** or **Breaking** below. See
   interrupted run no longer re-bills every completed call.
 
 ### Changed
+- API key authentication is enforced at one dispatcher chokepoint
+  (`authorizedForPath`), not per handler, and a path absent from the endpoint
+  table is treated as protected. The reachable behavior for a configured key
+  changes in one case: an unknown path now answers `401` before the `404` and
+  `405` handlers, so an unauthenticated caller cannot distinguish a real route
+  from a typo. `/health`, `/ready` (reduced body when the key does not match)
+  and `/favicon.ico` stay unauthenticated, and CORS preflight (`OPTIONS`) is
+  still answered before the check. The `401` on `/v1/messages` keeps its
+  Anthropic envelope (`type: authentication_error`).
 - `zig build test -Dtest-filter=<str>` now fails the build when a filter matches
   no `test "..."` name under `src/` or `tests/`, instead of compiling the test
   artifacts, running zero of them, and exiting 0. A filter that names a test
@@ -329,6 +338,39 @@ must still appear under **Changed** or **Breaking** below. See
 - `scripts/conv-store-backup.sh` rejects a non-positive-integer `AGAVE_KEEP`
   (`0`, negative, `abc`, `1.5`, or blank) instead of pruning the whole backup
   tier.
+- `POST /v1/messages` keeps Anthropic `content` arrays and `system` blocks in
+  the prompt. A `system` array of `{"type": "text"}` blocks is joined in order,
+  and a message `content` array contributes its text parts plus the text of a
+  `tool_result` part (capped at 16 KiB), which keeps the tool role for that
+  turn. Previously the array form fell through to a string-field scan that
+  returned the first nested string, so the prompt received a part's `type`
+  value (`"text"`, `"tool_result"`) or nothing at all, and a `system` array
+  was dropped entirely.
+- Prefix reuse: a prompt carrying image embeddings (`n_visual > 0`) neither
+  reads nor publishes the KV prefix memo, and a freed SSD-tier block drops its
+  spill offset. The memo is keyed on token IDs alone and image placeholders are
+  the same IDs for every image, so two different images behind an identical
+  token sequence shared KV and the second answer came from the first request's
+  picture; a re-allocated SSD block could likewise be promoted with the
+  previous sequence's keys and values. Text-only prompts keep the full reuse.
+- Streaming `POST /v1/messages` with tools no longer stalls when a decoded
+  piece begins with a run of UTF-8 continuation bytes. The piece walk that
+  backs the boundary at `piece_end < raw.len` could walk back past the start of
+  the piece and then re-derive the same boundary, so the loop stopped emitting.
+- Grammar-constrained generation strips only the three byte-level BPE markers
+  that open with a `C3` or `C4` lead byte (`Ġ`, `Ċ`, `Ã`). Any other `C3`/`C4`
+  lead pair is text (`"é"` is `C3 A9`, `"Ā"` is `C4 80`) and used to have its
+  first character eaten, so the grammar validated a string that was not the one
+  generated.
+- Log lines sanitize per codepoint instead of per byte, so the C1 control range
+  (U+0080-U+009F) is replaced with `?` along with C0 and DEL, and a byte that is
+  not valid UTF-8 is replaced rather than passed through as a partial sequence.
+  The sanitizer decodes first because the C1 range reaches a terminal through
+  its ordinary-looking UTF-8 form (`C2 80`-`C2 9F`), which a byte filter passes
+  and a terminal reads as CSI. Output is clipped on a character boundary, so a
+  path longer than the buffer no longer leaves half a character in the log, and
+  a log line carrying a C1 or non-UTF-8 byte now differs from the previous
+  release's.
 
 ## [0.3.0] - 2026-09-02
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, UTC
 from pathlib import Path
@@ -170,6 +171,64 @@ def check_version_consistency() -> list[str]:
             errors.append(
                 f"CHANGELOG.md: 'bumps `{bump}`' is stale (product version is {product})"
             )
+
+    errors.extend(_check_release_tags(changelog, product))
+    return errors
+
+
+def _tags_at_head() -> list[str] | None:
+    """Tags pointing at HEAD, or None when git is unavailable or HEAD is untagged."""
+    if not (ROOT / ".git").exists():
+        return None
+    try:
+        out = subprocess.run(
+            ["git", "tag", "--points-at", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return [t for t in out.stdout.split() if t]
+
+
+def _check_release_tags(changelog: str, product: str) -> list[str]:
+    """A release must be taggable and already-tagged commits must match the manifest.
+
+    Covers the two ways a release goes out inconsistent: shipping a tag whose
+    name disagrees with `build.zig.zon` `.version`, and cutting a version with a
+    changelog section no link definition resolves.
+    """
+    errors: list[str] = []
+
+    for version in re.findall(r"^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - \d{4}-\d{2}-\d{2}$", changelog, re.M):
+        if f"\n[{version}]:" not in changelog:
+            errors.append(
+                f"CHANGELOG.md: released section [{version}] has no [{version}]: link definition"
+            )
+
+    # The Unreleased section diffs against the last cut, so its base tag has to
+    # be the current product version.
+    m = re.search(r"^\[unreleased\]: (\S+)$", changelog, re.M)
+    if not m:
+        errors.append("CHANGELOG.md: missing [unreleased] link definition")
+    elif f"v{product}" not in m.group(1):
+        errors.append(
+            f"CHANGELOG.md: [unreleased] compares against {m.group(1)}, "
+            f"which is not tag v{product} (match build.zig.zon .version)"
+        )
+
+    tags = _tags_at_head()
+    if tags:
+        expected = f"v{product}"
+        for tag in tags:
+            if tag != expected and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+.*", tag):
+                errors.append(
+                    f"HEAD is tagged {tag} but build.zig.zon .version is {product} "
+                    f"(a release tag must be v{expected})"
+                )
 
     return errors
 
