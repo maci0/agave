@@ -37,10 +37,12 @@ services:
     environment:
       AGAVE_PORT: ${AGAVE_PORT:-49453}
       AGAVE_API_KEY: ${AGAVE_API_KEY:?Set AGAVE_API_KEY in .env (see .env.example)}
-      # Optional; empty is treated as unset (HF_TOKEN, NO_COLOR, AGAVE_VISION_DEBUG).
+      # Optional; empty is treated as unset (HF_TOKEN, NO_COLOR, AGAVE_VISION_DEBUG,
+      # AGAVE_DF2_DEBUG). Every var documented in .env.example is forwarded here.
       HF_TOKEN: ${HF_TOKEN:-}
       NO_COLOR: ${NO_COLOR:-}
       AGAVE_VISION_DEBUG: ${AGAVE_VISION_DEBUG:-}
+      AGAVE_DF2_DEBUG: ${AGAVE_DF2_DEBUG:-}
       # Match image ENV HOME (Hub pulls, Vulkan cache, conversation store).
       HOME: /home/agave
     volumes:

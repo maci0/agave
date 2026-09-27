@@ -74,6 +74,7 @@ jobs:
 
       - name: Require local GGUF models
         run: |
+          set -euo pipefail
           # Hosted runners have no weights; self-hosted / manual runs must provide models/.
           if ! find models -type f \( -name '*.gguf' -o -name '*.GGUF' \) 2>/dev/null | grep -q .; then
             echo "::error::Golden tests need at least one .gguf under models/. Use a self-hosted runner with models mounted, or place weights under ./models before workflow_dispatch."
@@ -85,6 +86,10 @@ jobs:
         run: zig build
 
       - name: Run golden tests (${{ matrix.backend }} backend)
+        # Env indirection, not ${{ }} interpolation: the backend name must never
+        # be spliced into the shell body.
+        env:
+          BACKEND: ${{ matrix.backend }}
         run: |
           set +e
           rc=0
@@ -97,12 +102,12 @@ jobs:
           fi
           for test_file in "${test_files[@]}"; do
             echo "::group::$(basename "$test_file")"
-            if zig test "$test_file" --test-filter "${{ matrix.backend }}"; then
+            if zig test "$test_file" --test-filter "$BACKEND"; then
               echo "PASS: $test_file"
             else
               rc=1
               failed="$failed $(basename "$test_file")"
-              echo "::error::FAIL: $test_file (${{ matrix.backend }} backend)"
+              echo "::error::FAIL: $test_file ($BACKEND backend)"
             fi
             echo "::endgroup::"
           done

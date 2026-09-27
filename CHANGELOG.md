@@ -16,6 +16,8 @@ must still appear under **Changed** or **Breaking** below. See
   `/ready` fields, and `X-Request-Id` log correlation.
 
 ### Changed
+- Docker Compose forwards `AGAVE_DF2_DEBUG` (documented in `.env.example` and
+  `docs/API.md` but previously reachable only outside the container).
 - Server: request logs now carry `req=<id>` on streaming client disconnects,
   SSE header overflow, and cancelled stream prefill. Image decode failures
   (a `400` client error, not a server fault) log at `warn` instead of `err`,
