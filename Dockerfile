@@ -56,7 +56,13 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends curl xz-utils ca-certificates; \
     rm -rf /var/lib/apt/lists/*
 
-# Zig toolchain checksums (SHA256). Update when bumping .zigversion / ZIG_VERSION.
+# Zig toolchain checksums (SHA256) and the release they were taken from.
+# Bumping .zigversion without re-copying these values would still pass
+# `zig build check` (nothing compares them) and would then fail the download
+# verification below, mid-layer, only in the docker-build job. ZIG_CHECKSUMS_FOR
+# names the release the hashes belong to so the mismatch is caught before the
+# download, by this RUN and by scripts/check-pins.sh.
+ARG ZIG_CHECKSUMS_FOR=0.16.0
 ARG ZIG_SHA256_X86_64=70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 ARG ZIG_SHA256_AARCH64=ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
 
@@ -69,6 +75,11 @@ ARG AGAVE_VERSION=
 COPY --link .zigversion /tmp/agave.zigversion
 
 RUN ZIG_VER="${ZIG_VERSION:-$(tr -d '[:space:]' </tmp/agave.zigversion)}" && \
+    if [ "$ZIG_CHECKSUMS_FOR" != "$ZIG_VER" ]; then \
+      echo "error: ZIG_SHA256_* were taken for Zig $ZIG_CHECKSUMS_FOR but this build wants $ZIG_VER" >&2; \
+      echo "Update ZIG_CHECKSUMS_FOR and both ZIG_SHA256_* from https://ziglang.org/download/$ZIG_VER/shasum.txt" >&2; \
+      exit 1; \
+    fi && \
     ARCH=$(uname -m) && \
     ZIG_URL="https://ziglang.org/download/${ZIG_VER}/zig-${ARCH}-linux-${ZIG_VER}.tar.xz" && \
     if [ "$ARCH" = "x86_64" ]; then EXPECTED_SHA256="$ZIG_SHA256_X86_64"; \
