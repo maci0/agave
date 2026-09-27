@@ -83,6 +83,26 @@ stamp() {
 # restart (src/server/conv_store.zig load), and a file that fails it is
 # quarantined to {path}.corrupt rather than dropped, so nothing is destroyed
 # by a false negative here.
+# Count `{` and `}` outside JSON string literals, honoring backslash escapes,
+# so a literal brace in message content cannot look like truncation.
+brace_balance() {
+    awk '
+    {
+        n = length($0)
+        for (i = 1; i <= n; i++) {
+            c = substr($0, i, 1)
+            if (esc) { esc = 0; continue }
+            if (c == "\\") { if (in_string) esc = 1; continue }
+            if (c == "\"") { in_string = !in_string; continue }
+            if (in_string) continue
+            if (c == "{") ob++
+            else if (c == "}") cb++
+        }
+    }
+    END { print ob + 0, cb + 0 }
+    ' "$1"
+}
+
 verify_store() {
     local file="$1"
     [[ -f "$file" ]] || die "not a file: $file"
@@ -91,9 +111,11 @@ verify_store() {
     grep -Eq '"version":[[:space:]]*'"$STORE_FORMAT_VERSION"'([[:space:]]*[,}])' "$file" ||
         die "no \"version\":$STORE_FORMAT_VERSION envelope in $file (written by a different format version; inspect before restoring)"
     # Balanced braces catches the truncation that a single missing byte causes.
+    # Only braces outside string literals count: message content is arbitrary
+    # user text, so a store whose conversation mentions `fn f() {` is loadable
+    # by the server and must verify here too.
     local open close
-    open=$(tr -cd '{' <"$file" | wc -c)
-    close=$(tr -cd '}' <"$file" | wc -c)
+    read -r open close < <(brace_balance "$file")
     [[ "$open" == "$close" ]] || die "unbalanced braces in $file (open=$open close=$close): truncated or corrupt"
     note "verified $file"
 }
@@ -199,6 +221,13 @@ do_self_test() {
         status=1
     }
 
+    # Braces inside message content are text, not structure.
+    printf '%s' '{"version":1,"active_id":2,"next_id":3,"conversations":[{"id":2,"title":"brace { title","messages":[{"role":"user","content":"see fn f() { } \"quoted\""}]}]}' >"$tmp/braces.json"
+    if ! verify_store "$tmp/braces.json" >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a store with braces in message content was rejected" >&2
+        status=1
+    fi
+
     # The real path: verify, snapshot the outgoing store, install, verify again.
     AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_restore "$backup" >/dev/null
     cmp -s "$store" "$backup" || {
@@ -220,7 +249,7 @@ do_self_test() {
     }
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, restore, pre-restore snapshot, retention"
+        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention"
     fi
     return "$status"
 }
