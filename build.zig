@@ -332,6 +332,7 @@ pub fn build(b: *std.Build) void {
         "test-filter",
         "Only run tests whose name contains this substring (repeatable)",
     ) orelse &.{};
+    if (test_filters.len != 0) _ = rejectEmptyTestFilters(b, test_filters);
 
     // Test modules use ReleaseSafe so std.debug.assert / unreachable fire.
     // Reusing mod_rel (ReleaseFast) silently no-ops ~400 assert-based checks
@@ -742,4 +743,64 @@ pub fn build(b: *std.Build) void {
         ci_step.dependOn(lint_shell_step);
         ci_step.dependOn(lint_python_step);
     }
+}
+
+/// A `-Dtest-filter` that matches nothing still compiles every test artifact,
+/// runs zero of them, and exits 0: a green run that tested nothing. Report it
+/// as a build failure instead, before the compile cost is paid.
+///
+/// Scans `test "..."` declaration names under `src/` and `tests/`. A filter
+/// that matches a name the build does not compile (an unreferenced file, a
+/// GPU-guarded test on a CPU-only host) still passes the check; the failure
+/// this catches is the typo, which matches nothing at all.
+///
+/// Returns null when every filter matched, and otherwise prints why and aborts
+/// the configure before any test artifact is compiled.
+fn rejectEmptyTestFilters(b: *std.Build, filters: []const []const u8) ?void {
+    const io = b.graph.io;
+    const arena = b.graph.arena;
+    const max_source_bytes: std.Io.Limit = .limited(16 << 20);
+
+    const matched = arena.alloc(bool, filters.len) catch @panic("out of memory");
+    @memset(matched, false);
+
+    for ([_][]const u8{ "src", "tests" }) |root| {
+        var dir = b.build_root.handle.openDir(io, root, .{ .iterate = true }) catch continue;
+        defer dir.close(io);
+        var walker = dir.walk(arena) catch @panic("out of memory");
+        defer walker.deinit();
+        while (walker.next(io) catch null) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+            const source = dir.readFileAlloc(io, entry.path, arena, max_source_bytes) catch continue;
+            var lines = std.mem.splitScalar(u8, source, '\n');
+            while (lines.next()) |line| {
+                const name = testDeclName(line) orelse continue;
+                for (filters, 0..) |filter, i| {
+                    if (!matched[i] and std.mem.indexOf(u8, name, filter) != null) matched[i] = true;
+                }
+            }
+        }
+    }
+
+    for (filters, 0..) |filter, i| {
+        if (matched[i]) continue;
+        std.debug.print(
+            "error: -Dtest-filter={s} matches no test name under src/ or tests/.\n" ++
+                "A filter that matches nothing reports \"All 0 tests passed.\" and exits 0, so the\n" ++
+                "run would be green without testing anything. Drop the flag to run everything, or\n" ++
+                "list the candidates with: rg -n '^test \"' src/ tests/\n",
+            .{filter},
+        );
+        std.process.exit(1);
+    }
+    return null;
+}
+
+/// Name of a `test "name" {` declaration, or null for any other line.
+fn testDeclName(line: []const u8) ?[]const u8 {
+    const prefix = "test \"";
+    if (!std.mem.startsWith(u8, line, prefix)) return null;
+    const rest = line[prefix.len..];
+    const end = std.mem.indexOfScalar(u8, rest, '"') orelse return null;
+    return rest[0..end];
 }

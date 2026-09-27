@@ -6,7 +6,7 @@ Templates and step-by-step guides for extending the inference engine.
 
 Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). `zig build` exits if the running compiler does not match that pin. GPU backends `dlopen` drivers at runtime; no GPU SDK is needed to compile.
 
-`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`) and `bun install --frozen-lockfile`.
+`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`uv tool install ruff`, then `zig build lint-python`); CI gets ruff through `uvx`, so it has no such prerequisite.
 
 ```bash
 zig version          # must print 0.16.0
@@ -15,7 +15,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness) and `lint-shell` (shellcheck). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, and `lint-shell` is the blocking shell job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness), `lint-shell` (shellcheck) and `lint-python` (ruff). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -26,6 +26,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
+| `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` (blocking CI job `lint-python`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
 
@@ -373,8 +374,10 @@ zig build
 
 # Run only tests whose name contains a substring (repeatable flag to AND filters)
 zig build test -Dtest-filter=wht32
-# A filter that matches nothing prints "All 0 tests passed." and still exits 0;
-# read the count in `--summary all` output before trusting a green filtered run.
+# A filter matching no `test "..."` name under src/ or tests/ aborts the build
+# before compiling: the test runner would otherwise report "All 0 tests
+# passed." and exit 0, so a typo would read as a green run that tested nothing.
+# Candidates: rg -n '^test "' src/ tests/
 
 # Run with a specific backend (tests that need GPU use target guards)
 zig build test -Denable-webgpu=false    # skip WebGPU tests
