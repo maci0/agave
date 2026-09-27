@@ -53,10 +53,7 @@ def main() -> None:
                 t = k
                 while t < n and lines[t].strip() == '':
                     t += 1
-                if t < n:
-                    term = lines[t].strip()
-                else:
-                    term = ''
+                term = lines[t].strip() if t < n else ''
                 if '{' in lines[k] or term.startswith('{'):
                     out.append('.entry ' + m.group(1))
                     i += 1

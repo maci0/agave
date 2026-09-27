@@ -56,9 +56,8 @@ class CollectOneTests(unittest.TestCase):
             hdrs={},
             fp=BytesIO(b'{"error":"bad key"}'),
         )
-        with patch("urllib.request.urlopen", side_effect=err):
-            with self.assertRaises(RuntimeError) as ctx:
-                collect_one("http://example.test/v1", "m", "hi", "k", 8)
+        with patch("urllib.request.urlopen", side_effect=err), self.assertRaises(RuntimeError) as ctx:
+            collect_one("http://example.test/v1", "m", "hi", "k", 8)
         self.assertIn("401", str(ctx.exception))
 
 

@@ -10,7 +10,10 @@ Usage:
     python3 research/gemma3_ref.py models/lmstudio-community/gemma-3-12b-it-GGUF/gemma-3-12b-it-Q8_0.gguf
 """
 
-import struct, sys, math, mmap
+import struct
+import sys
+import math
+import mmap
 import numpy as np
 
 # ── GGUF parser ──────────────────────────────────────────────────────
@@ -43,10 +46,9 @@ def read_val(f, vtype):
     raise ValueError(f"Unknown type {vtype}")
 
 def parse_gguf(path):
-    f = open(path, 'rb')
+    f = open(path, 'rb')  # noqa: SIM115 - returned to the caller, which closes it
     magic = f.read(4)
     assert magic == b'GGUF', f"Not a GGUF file: {magic}"
-    version = struct.unpack('<I', f.read(4))[0]
     n_tensors = struct.unpack('<Q', f.read(8))[0]
     n_kv = struct.unpack('<Q', f.read(8))[0]
 
@@ -108,13 +110,13 @@ def dequant_q6_k(raw_bytes, n_elements):
             qh = raw_bytes[bp + 128 + chunk*32 : bp + 128 + chunk*32 + 32]
             sc = np.frombuffer(raw_bytes[bp + 192 + chunk*8 : bp + 192 + chunk*8 + 8], dtype=np.int8)
             base = b * bs + chunk * 128
-            for l in range(32):
-                isc = l // 16
-                q1 = ((ql[l] & 0x0F) | (((qh[l] >> 0) & 3) << 4)) - 32
-                q2 = ((ql[l+32] & 0x0F) | (((qh[l] >> 2) & 3) << 4)) - 32
-                q3 = ((ql[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32
-                q4 = ((ql[l+32] >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32
-                gi0, gi1, gi2, gi3 = base+l, base+l+32, base+l+64, base+l+96
+            for li in range(32):
+                isc = li // 16
+                q1 = ((ql[li] & 0x0F) | (((qh[li] >> 0) & 3) << 4)) - 32
+                q2 = ((ql[li+32] & 0x0F) | (((qh[li] >> 2) & 3) << 4)) - 32
+                q3 = ((ql[li] >> 4) | (((qh[li] >> 4) & 3) << 4)) - 32
+                q4 = ((ql[li+32] >> 4) | (((qh[li] >> 6) & 3) << 4)) - 32
+                gi0, gi1, gi2, gi3 = base+li, base+li+32, base+li+64, base+li+96
                 if gi0 < n_elements: out[gi0] = d * float(sc[isc+0]) * q1
                 if gi1 < n_elements: out[gi1] = d * float(sc[isc+2]) * q2
                 if gi2 < n_elements: out[gi2] = d * float(sc[isc+4]) * q3
@@ -182,7 +184,8 @@ def gelu(x):
     return 0.5 * x * (1.0 + np.tanh(inner))
 
 def dump(label, v):
-    print(f"  {label:20s}: [{v.min():.4f}, {v.max():.4f}] rms={np.sqrt(np.mean(v*v)):.4f} [0]={v[0]:.6f} [1]={v[1]:.6f}")
+    rms = np.sqrt(np.mean(v*v))
+    print(f"  {label:20s}: [{v.min():.4f}, {v.max():.4f}] rms={rms:.4f} [0]={v[0]:.6f} [1]={v[1]:.6f}")
 
 # ── Main ─────────────────────────────────────────────────────────────
 

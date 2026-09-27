@@ -16,7 +16,6 @@ Output: JSON files in tests/golden/references/ with deterministic token sequence
 
 import subprocess
 import json
-import os
 from pathlib import Path
 import sys
 

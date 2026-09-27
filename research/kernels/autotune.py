@@ -19,7 +19,7 @@ from pathlib import Path
 
 import tomllib
 
-from registry import AGAVE_ROOT, KERNELS, Kernel, find_kernels, changed_kernels
+from registry import AGAVE_ROOT, Kernel, find_kernels, changed_kernels
 
 BENCH_BINARY = AGAVE_ROOT / "zig-out" / "bin" / "agave-bench"
 DATA_DIR = Path(__file__).parent
@@ -195,7 +195,7 @@ def revert_sources(kernel: Kernel):
         else:
             paths.append(p)
     if paths:
-        subprocess.run(["git", "checkout", "--"] + paths, cwd=AGAVE_ROOT)
+        subprocess.run(["git", "checkout", "--", *paths], cwd=AGAVE_ROOT)
 
 
 def log_result(kernel_name: str, backend: str, metric_value: float,
@@ -550,7 +550,7 @@ def cmd_grid(args):
             best_metric = m
             best_v = v
             best_patched = patched
-        print(f"  {str(v):>10}  {m:>10.1f} {unit}  {s}")
+        print(f"  {v!s:>10}  {m:>10.1f} {unit}  {s}")
 
     if best_v is not None and best_patched is not None:
         print(f"\n  Best: {parsed.param}={best_v} -> {best_metric:.1f} {unit}")
@@ -804,10 +804,7 @@ def run_bayesian(kernel, parsed, params, dimensions, full_path,
                                             step=param.get("step"))
             elif ptype == "boolean":
                 value = trial.suggest_categorical(dim_name, [True, False])
-                if value:
-                    template = param.get("template_true", template)
-                else:
-                    template = param.get("template_false", pattern)
+                template = param.get("template_true", template) if value else param.get("template_false", pattern)
             else:
                 continue
 
@@ -931,8 +928,8 @@ def cmd_staged(args):
                 metric_str = f"{meta['metric_value']:.1f} {mname}"
             print(f"  {entry.name:<50} {metric_str:>14} "
                   f"{meta.get('backend', '?'):<8} {meta.get('timestamp', '?')}")
-        print(f"\nApply with: run.py staged apply <name>")
-        print(f"Diff with:  run.py staged diff <name>")
+        print("\nApply with: run.py staged apply <name>")
+        print("Diff with:  run.py staged diff <name>")
 
     elif parsed.action == "clean":
         if not STAGING_DIR.exists():

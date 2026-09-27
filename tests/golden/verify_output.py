@@ -14,10 +14,10 @@ Returns:
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any
 
 
-def load_reference(model_name: str, ref_backend: str) -> Dict[str, Any]:
+def load_reference(model_name: str, ref_backend: str) -> dict[str, Any]:
     """Load golden reference for model."""
     ref_dir = Path(__file__).resolve().parent / "references"
     ref_file = ref_dir / f"{model_name}_{ref_backend}.json"
@@ -67,7 +67,7 @@ def compare_outputs(agave_output: str, reference_output: str) -> bool:
         print("PASS: Prefix exact match")
     else:
         # Check if 95% of prefix characters match (case-insensitive for minor variation)
-        matches = sum(1 for a, r in zip(agave_prefix.lower(), ref_prefix.lower()) if a == r)
+        matches = sum(1 for a, r in zip(agave_prefix.lower(), ref_prefix.lower(), strict=False) if a == r)
         match_ratio = matches / prefix_len if prefix_len > 0 else 0.0
         if match_ratio < 0.95:
             print(f"FAIL: Prefix mismatch (match ratio: {match_ratio*100:.1f}%)", file=sys.stderr)
@@ -83,7 +83,7 @@ def compare_outputs(agave_output: str, reference_output: str) -> bool:
         window = min(40, mid)
         agave_mid = agave_output[mid - window:mid].lower()
         ref_mid = reference_output[mid - window:mid].lower()
-        mid_matches = sum(1 for a, r in zip(agave_mid, ref_mid) if a == r)
+        mid_matches = sum(1 for a, r in zip(agave_mid, ref_mid, strict=False) if a == r)
         mid_ratio = mid_matches / len(agave_mid) if len(agave_mid) > 0 else 0.0
         if mid_ratio < 0.85:
             print(f"FAIL: Mid-point mismatch (match ratio: {mid_ratio*100:.1f}%)", file=sys.stderr)
@@ -97,7 +97,7 @@ def compare_outputs(agave_output: str, reference_output: str) -> bool:
     if suffix_len >= 20:
         agave_suffix = agave_output[-suffix_len:].lower()
         ref_suffix = reference_output[-suffix_len:].lower()
-        suffix_matches = sum(1 for a, r in zip(agave_suffix, ref_suffix) if a == r)
+        suffix_matches = sum(1 for a, r in zip(agave_suffix, ref_suffix, strict=False) if a == r)
         suffix_ratio = suffix_matches / suffix_len
         if suffix_ratio < 0.75:
             print(f"FAIL: Suffix mismatch (match ratio: {suffix_ratio*100:.1f}%)", file=sys.stderr)

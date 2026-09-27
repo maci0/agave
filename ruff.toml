@@ -1,0 +1,53 @@
+# Python lint config. The engine is Zig; this covers the auxiliary Python
+# (scripts/, tests/, tools/, research/ references and kernel fixups), which
+# had no analyzer at all before.
+#
+# Entry point: zig build lint-python  (scripts/lint-python.sh), same checks as
+# the CI lint-python job. Run `ruff format` only on files you already touch;
+# the tree is not wholesale reformatted.
+
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    # Third-party tilelang prototype tree, kept close to upstream.
+    "research/kernels/tilelang",
+]
+
+[lint]
+# Bug-prone and correctness groups first, then simplification, then style.
+select = [
+    "F",    # pyflakes: dead code, undefined names
+    "E",    # pycodestyle
+    "W",    # pycodestyle warnings
+    "B",    # flake8-bugbear: real defect class
+    "A",    # flake8-builtins: shadowing a builtin
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RET",  # flake8-return
+    "PIE",  # flake8-pie
+    "RUF",  # ruff-specific
+    "PT",   # flake8-pytest-style
+    "ISC",  # implicit string concat
+    "ICN",  # import conventions
+    "LOG",  # flake8-logging
+    "G",    # flake8-logging-format
+]
+ignore = [
+    # Single-line `if cond: return x` early returns are the house style in the
+    # reference scripts; splitting them is noise, not safety.
+    "E701",
+    # The test suites are unittest-based, not pytest.
+    "PT009",
+    "PT011",
+    "PT012",
+    "PT018",
+    "PT027",
+]
+
+[lint.per-file-ignores]
+# Math variable names (Q, K, V, Q_heads, HF_MODELS, ...) are the domain
+# vocabulary of the reference implementations and kernels.
+"research/**" = ["N803", "N806", "N812"]  # N812: torch convention is `import torch.nn.functional as F`
+"tests/golden/**" = ["N803", "N806"]

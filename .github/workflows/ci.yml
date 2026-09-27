@@ -415,6 +415,23 @@ jobs:
       - name: Committed web artifacts are fresh
         run: bash scripts/check-web-artifacts.sh
 
+  # The auxiliary Python (scripts/check-docs.py runs in docs-check, plus the
+  # golden harness and tools/) had no analyzer: an undefined name or a leaked
+  # file handle merged unseen. Blocking. scripts/lint-python.sh is the single
+  # entry point, so the local `zig build lint-python` and this job agree; both
+  # read the ruff.toml rule set.
+  lint-python:
+    name: Lint Python
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: ruff
+        run: uvx ruff check --config ruff.toml .
+
   # scripts/*.sh is 13 files of unanalysed shell: quoting bugs and unset-variable
   # failures there break CI jobs and developer tooling the same way. Blocking.
   # scripts/lint-shell.sh is the single entry point, so the local `zig build
@@ -434,7 +451,7 @@ jobs:
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web, lint-shell]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web, lint-shell, lint-python]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:

@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import os
+from pathlib import Path
 
 NT_META = 32
 # Match Zig's broken ISA triple for any gfx arch: amdhsa{semver}-unknown-gfxXXXX
@@ -51,9 +52,9 @@ def mp_decode(buf: bytes, pos: int = 0):
         return b - 256, pos + 1
     if 0x80 <= b <= 0x8F:
         n, pos = b & 0xF, pos + 1
-    elif 0xDE == b:
+    elif b == 0xDE:
         n, pos = struct.unpack_from('>H', buf, pos + 1)[0], pos + 3
-    elif 0xDF == b:
+    elif b == 0xDF:
         n, pos = struct.unpack_from('>I', buf, pos + 1)[0], pos + 5
     else:
         n = None
@@ -197,7 +198,7 @@ def replace_note_section(d: bytearray, loc, transform):
     """Decode the NT_META desc, apply transform(meta)->meta, re-encode, and
     splice the record back into its SHT_NOTE section, fixing sizes/offsets.
     Returns (new_bytearray, renames)."""
-    hdr, sh_off, rec_pos, desc, _tail = loc
+    _hdr, sh_off, rec_pos, desc, _tail = loc
     namesz = struct.unpack_from('<I', d, sh_off + rec_pos)[0]
     npad = (namesz + 3) & ~3
     meta, _ = mp_decode(desc)
@@ -317,7 +318,7 @@ def main():
 
     # Step 1+2: one metadata round-trip fixes the ISA triple and strips
     # module prefixes from kernel names; collect .kd renames.
-    d = bytearray(open(inp, 'rb').read())
+    d = bytearray(Path(inp).read_bytes())
     d, renames = normalize_and_fix_isa(d)
 
     # Step 3: write patched .o to temp file, then fix up symbols.

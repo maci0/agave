@@ -690,6 +690,11 @@ pub fn build(b: *std.Build) void {
         const lint_shell_step = b.step("lint-shell", "shellcheck (CI lint-shell job)");
         lint_shell_step.dependOn(&lint_shell_cmd.step);
 
+        const lint_python_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-python.sh" });
+        lint_python_cmd.has_side_effects = true;
+        const lint_python_step = b.step("lint-python", "ruff (CI lint-python job)");
+        lint_python_step.dependOn(&lint_python_cmd.step);
+
         // A backup nobody has restored is a hypothesis. This runs the
         // conversation-store backup, verify, and restore path end to end
         // against a scratch store, so the runbook in docs/DURABILITY.md is
@@ -717,9 +722,10 @@ pub fn build(b: *std.Build) void {
         // cross-compile, wasm, fuzz and PTX freshness stay in CI (or the
         // CONTRIBUTING table): they need Docker, cross toolchains, or a
         // long fuzz budget.
-        const ci_step = b.step("ci", "Full local CI gate: check + lint-web + lint-shell (needs bun, shellcheck)");
+        const ci_step = b.step("ci", "Full local CI gate: check + lint-web + lint-shell + lint-python (needs bun, shellcheck, ruff)");
         ci_step.dependOn(check_step);
         ci_step.dependOn(lint_web_step);
         ci_step.dependOn(lint_shell_step);
+        ci_step.dependOn(lint_python_step);
     }
 }
