@@ -838,7 +838,7 @@ pub const Gemma3Model = struct {
                 .f32, // PagedKvCache uses f32 blocks
                 .f32,
                 .{
-                    .partition = partition,
+                    .partition = &partition,
                     .pool = pool,
                     .gpu_out = self.split_gpu_out.ptr,
                     .cpu_out = self.split_cpu_out.ptr,

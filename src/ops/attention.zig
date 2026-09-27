@@ -110,10 +110,11 @@ pub fn scaledDotProductAttention(
         for (0..nh) |h| {
             const kvh = h / hpg;
             const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
+            const kvh_hd = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
 
             for (0..win_len) |wi| {
                 const t = win_start + wi;
-                const k_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("k_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("k_base overflow")) catch @panic("k_base overflow");
+                const k_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("k_base overflow"), kvh_hd) catch @panic("k_base overflow");
                 var acc: SimdVec = @splat(0.0);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -133,7 +134,7 @@ pub fn scaledDotProductAttention(
                 const score = scores[score_offset + wi];
                 if (score < sparse_v_threshold) continue;
                 const t = win_start + wi;
-                const v_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("v_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("v_base overflow")) catch @panic("v_base overflow");
+                const v_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("v_base overflow"), kvh_hd) catch @panic("v_base overflow");
                 const sv: SimdVec = @splat(score);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -155,11 +156,12 @@ pub fn scaledDotProductAttention(
     for (0..nh) |h| {
         const kvh = h / hpg;
         const q_base = h * hd;
+        const kvh_hd = kvh * hd;
 
         // QK dot products (key type)
         for (0..win_len) |wi| {
             const t = win_start + wi;
-            const elem_off = t * kvd + kvh * hd;
+            const elem_off = t * kvd + kvh_hd;
             const k_off = kv_quant.kvByteOffset(kv_type_k, elem_off);
             scores[score_offset + wi] = kv_quant.kvDot(q + q_base, kv_keys[k_off..].ptr, hd, kv_type_k) * scale;
         }
@@ -172,7 +174,7 @@ pub fn scaledDotProductAttention(
             const score = scores[score_offset + wi];
             if (score < sparse_v_threshold) continue;
             const t = win_start + wi;
-            const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), std.math.mul(usize, kvh, hd) catch @panic("elem_off overflow")) catch @panic("elem_off overflow");
+            const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), kvh_hd) catch @panic("elem_off overflow");
             const v_off = kv_quant.kvByteOffset(kv_type_v, elem_off);
             kv_quant.kvMulAccum(attn_out + q_base, score, kv_values[v_off..].ptr, hd, kv_type_v);
         }
@@ -185,8 +187,10 @@ pub fn scaledDotProductAttention(
 /// Passed to `scaledDotProductAttentionTiered()` to enable concurrent
 /// GPU + CPU SDPA when KV blocks span VRAM and RAM tiers.
 pub const TieredSdpaInfo = struct {
-    /// Block tier partition for this layer (from partitionBlocks).
-    partition: split_attn.Partition,
+    /// Block tier partition for this layer (from partitionBlocks). Borrowed:
+    /// an 8 KiB value copied by value here would cost more than the CPU SDPA
+    /// it feeds on a short sequence.
+    partition: *const split_attn.Partition,
     /// Thread pool for parallel CPU SDPA (null = single-threaded).
     pool: ?*ThreadPool,
     /// Pre-allocated GPU output buffer [nh * hd].
@@ -241,7 +245,7 @@ pub fn scaledDotProductAttentionTiered(
         be,
         kv_type_k,
         kv_type_v,
-        tiered_info.partition,
+        &tiered_info.partition.*,
         tiered_info.pool,
     );
 }
@@ -314,6 +318,7 @@ pub fn pagedAttention(
     for (0..nh) |h| {
         const kvh = h / hpg;
         const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
+        const kvh_hd = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
 
         // QK dot products, look up K from block table
         for (0..sl) |t| {
@@ -322,7 +327,7 @@ pub fn pagedAttention(
             std.debug.assert(lb < block_table.len);
             const phys = block_table[lb];
             std.debug.assert(phys < blocks.len);
-            const k_start = std.math.add(usize, std.math.mul(usize, bo, kvd) catch @panic("k_start overflow"), std.math.mul(usize, kvh, hd) catch @panic("k_start overflow")) catch @panic("k_start overflow");
+            const k_start = std.math.add(usize, std.math.mul(usize, bo, kvd) catch @panic("k_start overflow"), kvh_hd) catch @panic("k_start overflow");
 
             var acc: SimdVec = @splat(0.0);
             var d: usize = 0;
@@ -348,7 +353,7 @@ pub fn pagedAttention(
                 std.debug.assert(lb < block_table.len);
                 const phys = block_table[lb];
                 std.debug.assert(phys < blocks.len);
-                const v_start = std.math.add(usize, std.math.mul(usize, bo, kvd) catch @panic("v_start overflow"), std.math.mul(usize, kvh, hd) catch @panic("v_start overflow")) catch @panic("v_start overflow");
+                const v_start = std.math.add(usize, std.math.mul(usize, bo, kvd) catch @panic("v_start overflow"), kvh_hd) catch @panic("v_start overflow");
                 const sv: SimdVec = @splat(scores[t]);
                 const v_row = blocks[phys].values;
 
@@ -761,12 +766,13 @@ pub fn scaledDotProductAttentionCanvas(
     for (0..nh) |h| {
         const kvh = h / hpg;
         const q_base = std.math.mul(usize, h, hd) catch @panic("q_base overflow");
+        const kvh_hd = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
 
         // 1. Score against all cached prompt tokens (f32 or quantized).
         if (kv_type_k == .f32) {
             const f32_keys: [*]const f32 = @ptrCast(@alignCast(kv_keys.ptr));
             for (0..n_cached) |t| {
-                const k_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("k_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("k_base overflow")) catch @panic("k_base overflow");
+                const k_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("k_base overflow"), kvh_hd) catch @panic("k_base overflow");
                 var acc: SimdVec = @splat(0.0);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -780,7 +786,7 @@ pub fn scaledDotProductAttentionCanvas(
             }
         } else {
             for (0..n_cached) |t| {
-                const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), std.math.mul(usize, kvh, hd) catch @panic("elem_off overflow")) catch @panic("elem_off overflow");
+                const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), kvh_hd) catch @panic("elem_off overflow");
                 const k_off = kv_quant.kvByteOffset(kv_type_k, elem_off);
                 scores[t] = kv_quant.kvDot(q + q_base, kv_keys[k_off..].ptr, hd, kv_type_k) * scale;
             }
@@ -789,7 +795,6 @@ pub fn scaledDotProductAttentionCanvas(
         // 2. Score against canvas tokens (bidirectional, all attend to all).
         for (0..cl) |ci| {
             const ci_kvd = std.math.mul(usize, ci, kvd) catch @panic("ci kvd overflow");
-            const kvh_hd = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
             const k_ptr = canvas_k.ptr + ci_kvd + kvh_hd;
             var acc: SimdVec = @splat(0.0);
             var d: usize = 0;
@@ -812,7 +817,7 @@ pub fn scaledDotProductAttentionCanvas(
             for (0..n_cached) |t| {
                 const w = scores[t];
                 if (w < sparse_v_threshold) continue;
-                const v_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("v_base overflow"), std.math.mul(usize, kvh, hd) catch @panic("v_base overflow")) catch @panic("v_base overflow");
+                const v_base = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("v_base overflow"), kvh_hd) catch @panic("v_base overflow");
                 const sv: SimdVec = @splat(w);
                 var d: usize = 0;
                 while (d + simd_width <= hd) : (d += simd_width) {
@@ -828,7 +833,7 @@ pub fn scaledDotProductAttentionCanvas(
             for (0..n_cached) |t| {
                 const w = scores[t];
                 if (w < sparse_v_threshold) continue;
-                const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), std.math.mul(usize, kvh, hd) catch @panic("elem_off overflow")) catch @panic("elem_off overflow");
+                const elem_off = std.math.add(usize, std.math.mul(usize, t, kvd) catch @panic("elem_off overflow"), kvh_hd) catch @panic("elem_off overflow");
                 const v_off = kv_quant.kvByteOffset(kv_type_v, elem_off);
                 kv_quant.kvMulAccum(attn_out + q_base, w, kv_values[v_off..].ptr, hd, kv_type_v);
             }
@@ -839,8 +844,7 @@ pub fn scaledDotProductAttentionCanvas(
             const w = scores[n_cached + ci];
             if (w < sparse_v_threshold) continue;
             const ci_kvd2 = std.math.mul(usize, ci, kvd) catch @panic("ci kvd overflow");
-            const kvh_hd2 = std.math.mul(usize, kvh, hd) catch @panic("kvh hd overflow");
-            const v_ptr = canvas_v.ptr + ci_kvd2 + kvh_hd2;
+            const v_ptr = canvas_v.ptr + ci_kvd2 + kvh_hd;
             const sv: SimdVec = @splat(w);
             var d: usize = 0;
             while (d + simd_width <= hd) : (d += simd_width) {
@@ -948,8 +952,9 @@ test "fuzz: all attention functions" {
 
                 // TieredSdpaInfo exercised here (struct construction)
                 const pool_ptr: ?*ThreadPool = if (bs.pool != null) &bs.pool.? else null;
+                const all_gpu_partition = split_attn.Partition{}; // zero counts = all-GPU fast path
                 const tiered_info = TieredSdpaInfo{
-                    .partition = .{}, // zero counts = all-GPU fast path
+                    .partition = &all_gpu_partition,
                     .pool = pool_ptr,
                     .gpu_out = &gpu_out,
                     .cpu_out = &cpu_out,

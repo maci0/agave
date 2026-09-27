@@ -198,7 +198,8 @@ const CpuSdpaJob = struct {
 ///   - scale: Attention scale factor.
 ///   - be: Backend for GPU SDPA dispatch.
 ///   - kv_type_k, kv_type_v: KV cache quantization formats.
-///   - partition: Block tier partition (from partitionBlocks).
+///   - partition: Block tier partition (from partitionBlocks). Passed by pointer
+///     because it is an 8 KiB struct read only on this per-layer, per-token path.
 ///   - pool: Optional thread pool for parallel CPU SDPA.
 pub fn splitAttention(
     q: [*]const f32,
@@ -217,7 +218,7 @@ pub fn splitAttention(
     be: Backend,
     kv_type_k: KvQuantType,
     kv_type_v: KvQuantType,
-    partition: Partition,
+    partition: *const Partition,
     pool: ?*ThreadPool,
 ) void {
     // Fast path: all GPU, delegate directly, zero overhead
