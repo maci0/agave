@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 936.7289999999999 1318.1" width="936.7289999999999" height="1318.1" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 936.7289999999999 1318.1" width="936.7289999999999" height="1318.1" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -74,73 +80,73 @@ at each position">
 </g>
 <g class="node" data-id="DE" data-label="Embedding
 layer 0" data-shape="rectangle">
-  <rect x="397.25874999999985" y="84" width="107.158" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="450.83774999999986" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="450.83774999999986" dy="-3.9000000000000012">Embedding</tspan><tspan x="450.83774999999986" dy="16.900000000000002">layer 0</tspan></text>
+  <rect x="397.25874999999985" y="84" width="107.158" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="450.83774999999986" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="450.83774999999986" dy="-3.9000000000000012">Embedding</tspan><tspan x="450.83774999999986" dy="16.900000000000002">layer 0</tspan></text>
 </g>
 <g class="node" data-id="D1" data-label="Layer 1" data-shape="rectangle">
-  <rect x="416.08774999999986" y="185.8" width="84.18700000000001" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="458.18124999999986" y="204.25" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Layer 1</text>
+  <rect x="416.08774999999986" y="185.8" width="84.18700000000001" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="458.18124999999986" y="204.25" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">Layer 1</text>
 </g>
 <g class="node" data-id="D2" data-label="Layer 2" data-shape="rectangle">
-  <rect x="405.03924999999987" y="270.70000000000005" width="88.633" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="449.3557499999999" y="289.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Layer 2</text>
+  <rect x="405.03924999999987" y="270.70000000000005" width="88.633" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="449.3557499999999" y="289.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">Layer 2</text>
 </g>
 <g class="node" data-id="D3" data-label="Layer 3" data-shape="rectangle">
-  <rect x="416.08774999999986" y="355.6" width="88.633" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="460.4042499999999" y="374.05" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Layer 3</text>
+  <rect x="416.08774999999986" y="355.6" width="88.633" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="460.4042499999999" y="374.05" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">Layer 3</text>
 </g>
 <g class="node" data-id="DSKIP" data-label="... layers 4-12
 SKIPPED
 (no compute, no KV write)" data-shape="rectangle">
-  <rect x="360.3939999999999" y="440.5" width="185.70399999999998" height="70.7" rx="0" ry="0" fill="#fee2e2" stroke="#ef4444" stroke-width="0.75" />
-  <text x="453.24599999999987" y="475.85" text-anchor="middle" font-size="13" font-weight="500" fill="#7f1d1d"><tspan x="453.24599999999987" dy="-12.350000000000001">... layers 4-12</tspan><tspan x="453.24599999999987" dy="16.900000000000002">SKIPPED</tspan><tspan x="453.24599999999987" dy="16.900000000000002">(no compute, no KV write)</tspan></text>
+  <rect x="360.3939999999999" y="440.5" width="185.70399999999998" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="453.24599999999987" y="475.85" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="453.24599999999987" dy="-12.350000000000001">... layers 4-12</tspan><tspan x="453.24599999999987" dy="16.900000000000002">SKIPPED</tspan><tspan x="453.24599999999987" dy="16.900000000000002">(no compute, no KV write)</tspan></text>
 </g>
 <g class="node" data-id="D13" data-label="Layer 13" data-shape="rectangle">
-  <rect x="405.03924999999987" y="559.2" width="91.59700000000001" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="450.83774999999986" y="577.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Layer 13</text>
+  <rect x="405.03924999999987" y="559.2" width="91.59700000000001" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="450.83774999999986" y="577.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">Layer 13</text>
 </g>
 <g class="node" data-id="D14" data-label="..." data-shape="rectangle">
-  <rect x="416.08774999999986" y="644.1" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="446.08774999999986" y="662.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">...</text>
+  <rect x="416.08774999999986" y="644.1" width="60" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="446.08774999999986" y="662.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">...</text>
 </g>
 <g class="node" data-id="D32" data-label="Layer 32
 (output head)" data-shape="rectangle">
-  <rect x="397.25874999999985" y="729" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="455.6542499999998" y="755.9" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="455.6542499999998" dy="-3.9000000000000012">Layer 32</tspan><tspan x="455.6542499999998" dy="16.900000000000002">(output head)</tspan></text>
+  <rect x="397.25874999999985" y="729" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="455.6542499999998" y="755.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="455.6542499999998" dy="-3.9000000000000012">Layer 32</tspan><tspan x="455.6542499999998" dy="16.900000000000002">(output head)</tspan></text>
 </g>
 <g class="node" data-id="DraftOut" data-label="Draft
 Proposals" data-shape="rectangle">
-  <rect x="405.03924999999987" y="913.4" width="104.194" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="457.13624999999985" y="940.3" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="457.13624999999985" dy="-3.9000000000000012">Draft</tspan><tspan x="457.13624999999985" dy="16.900000000000002">Proposals</tspan></text>
+  <rect x="405.03924999999987" y="913.4" width="104.194" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="457.13624999999985" y="940.3" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="457.13624999999985" dy="-3.9000000000000012">Draft</tspan><tspan x="457.13624999999985" dy="16.900000000000002">Proposals</tspan></text>
 </g>
 <g class="node" data-id="VE" data-label="Embedding
 layer 0" data-shape="rectangle">
-  <rect x="767.0872499999998" y="752.3" width="107.158" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="820.6662499999998" y="779.1999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="820.6662499999998" dy="-3.9000000000000012">Embedding</tspan><tspan x="820.6662499999998" dy="16.900000000000002">layer 0</tspan></text>
+  <rect x="767.0872499999998" y="752.3" width="107.158" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="820.6662499999998" y="779.1999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="820.6662499999998" dy="-3.9000000000000012">Embedding</tspan><tspan x="820.6662499999998" dy="16.900000000000002">layer 0</tspan></text>
 </g>
 <g class="node" data-id="V1" data-label="Layer 1" data-shape="rectangle">
-  <rect x="780.2399999999999" y="854.0999999999999" width="84.18700000000001" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="822.3335" y="872.55" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Layer 1</text>
+  <rect x="780.2399999999999" y="854.0999999999999" width="84.18700000000001" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="822.3335" y="872.55" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">Layer 1</text>
 </g>
 <g class="node" data-id="V2" data-label="...all layers..." data-shape="rectangle">
-  <rect x="767.0872499999998" y="939" width="113.827" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="824.0007499999998" y="957.45" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">...all layers...</text>
+  <rect x="767.0872499999998" y="939" width="113.827" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="824.0007499999998" y="957.45" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">...all layers...</text>
 </g>
 <g class="node" data-id="V32" data-label="Layer 32
 (output head)" data-shape="rectangle">
-  <rect x="763.9379999999999" y="1023.9" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="822.3334999999998" y="1050.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="822.3334999999998" dy="-3.9000000000000012">Layer 32</tspan><tspan x="822.3334999999998" dy="16.900000000000002">(output head)</tspan></text>
+  <rect x="763.9379999999999" y="1023.9" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="822.3334999999998" y="1050.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="822.3334999999998" dy="-3.9000000000000012">Layer 32</tspan><tspan x="822.3334999999998" dy="16.900000000000002">(output head)</tspan></text>
 </g>
 <g class="node" data-id="VerifyOut" data-label="Acceptance
 Walk" data-shape="rectangle">
-  <rect x="767.0872499999998" y="1208.3" width="113.086" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="823.6302499999998" y="1235.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="823.6302499999998" dy="-3.9000000000000012">Acceptance</tspan><tspan x="823.6302499999998" dy="16.900000000000002">Walk</tspan></text>
+  <rect x="767.0872499999998" y="1208.3" width="113.086" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="823.6302499999998" y="1235.2" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="823.6302499999998" dy="-3.9000000000000012">Acceptance</tspan><tspan x="823.6302499999998" dy="16.900000000000002">Walk</tspan></text>
 </g>
 <g class="node" data-id="KV" data-label="Single KV store
 Draft writes partial activations
 Verify overwrites with full activations
 setKvSeqLen() rolls back on reject" data-shape="rectangle">
-  <rect x="56" y="84" width="252.3939999999999" height="87.60000000000001" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="182.19699999999995" y="127.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="182.19699999999995" dy="-20.8">Single KV store</tspan><tspan x="182.19699999999995" dy="16.900000000000002">Draft writes partial activations</tspan><tspan x="182.19699999999995" dy="16.900000000000002">Verify overwrites with full activations</tspan><tspan x="182.19699999999995" dy="16.900000000000002">setKvSeqLen() rolls back on reject</tspan></text>
+  <rect x="56" y="84" width="252.3939999999999" height="87.60000000000001" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="182.19699999999995" y="127.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="182.19699999999995" dy="-20.8">Single KV store</tspan><tspan x="182.19699999999995" dy="16.900000000000002">Draft writes partial activations</tspan><tspan x="182.19699999999995" dy="16.900000000000002">Verify overwrites with full activations</tspan><tspan x="182.19699999999995" dy="16.900000000000002">setKvSeqLen() rolls back on reject</tspan></text>
 </g>
 </svg>

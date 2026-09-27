@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 898.884 1362.65" width="898.884" height="1362.65" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 898.884 1362.65" width="898.884" height="1362.65" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -86,55 +92,55 @@ built up">
   <text x="449.442" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="449.442" dy="-12.350000000000001">&quot;Prompt tokens</tspan><tspan x="449.442" dy="16.900000000000002">\&quot;The capital of France is\&quot;</tspan><tspan x="449.442" dy="16.900000000000002">[464, 3361, 286, 4881, 318</tspan></text>
 </g>
 <g class="node" data-id="Done" data-label="Generation complete" data-shape="rectangle">
-  <rect x="570.6827083333333" y="1285.75" width="161.251" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="651.3082083333333" y="1304.2" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Generation complete</text>
+  <rect x="570.6827083333333" y="1285.75" width="161.251" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="651.3082083333333" y="1304.2" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Generation complete</text>
 </g>
 <g class="node" data-id="P1" data-label="token 464
 'The'" data-shape="rectangle">
-  <rect x="56" y="202.7" width="99.007" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="105.5035" y="229.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="105.5035" dy="-3.9000000000000012">token 464</tspan><tspan x="105.5035" dy="16.900000000000002">&#39;The&#39;</tspan></text>
+  <rect x="56" y="202.7" width="99.007" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="105.5035" y="229.6" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="105.5035" dy="-3.9000000000000012">token 464</tspan><tspan x="105.5035" dy="16.900000000000002">&#39;The&#39;</tspan></text>
 </g>
 <g class="node" data-id="Fwd1" data-label="forward()" data-shape="rectangle">
-  <rect x="203.007" y="211.14999999999998" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="250.65800000000002" y="229.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">forward()</text>
+  <rect x="203.007" y="211.14999999999998" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="250.65800000000002" y="229.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">forward()</text>
 </g>
 <g class="node" data-id="P2" data-label="token 3361
 'capital'" data-shape="rectangle">
-  <rect x="346.30899999999997" y="277.3125" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="397.29449999999997" y="304.2125" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="397.29449999999997" dy="-3.9000000000000012">token 3361</tspan><tspan x="397.29449999999997" dy="16.900000000000002">&#39;capital&#39;</tspan></text>
+  <rect x="346.30899999999997" y="277.3125" width="101.971" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="397.29449999999997" y="304.2125" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="397.29449999999997" dy="-3.9000000000000012">token 3361</tspan><tspan x="397.29449999999997" dy="16.900000000000002">&#39;capital&#39;</tspan></text>
 </g>
 <g class="node" data-id="Fwd2" data-label="forward()" data-shape="rectangle">
-  <rect x="496.28" y="247.39999999999998" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="543.9309999999999" y="265.84999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">forward()</text>
+  <rect x="496.28" y="247.39999999999998" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="543.9309999999999" y="265.84999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">forward()</text>
 </g>
 <g class="node" data-id="P3" data-label="..." data-shape="rectangle">
-  <rect x="639.582" y="311.45" width="60" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="669.582" y="329.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">...</text>
+  <rect x="639.582" y="311.45" width="60" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="669.582" y="329.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">...</text>
 </g>
 <g class="node" data-id="FwdN" data-label="forward()" data-shape="rectangle">
-  <rect x="747.582" y="277.3125" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="795.233" y="295.7625" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">forward()</text>
+  <rect x="747.582" y="277.3125" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="795.233" y="295.7625" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">forward()</text>
 </g>
 <g class="node" data-id="ArgMax" data-label="argmax(logits)
 pick best token" data-shape="rectangle">
-  <rect x="503.39870833333333" y="915.25" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="568.0927083333333" y="942.15" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="568.0927083333333" dy="-3.9000000000000012">argmax(logits)</tspan><tspan x="568.0927083333333" dy="16.900000000000002">pick best token</tspan></text>
+  <rect x="503.39870833333333" y="915.25" width="129.388" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="568.0927083333333" y="942.15" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="568.0927083333333" dy="-3.9000000000000012">argmax(logits)</tspan><tspan x="568.0927083333333" dy="16.900000000000002">pick best token</tspan></text>
 </g>
 <g class="node" data-id="Print" data-label="Output token
 to terminal" data-shape="rectangle">
-  <rect x="465.442" y="1099.65" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="522.3555" y="1126.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="522.3555" dy="-3.9000000000000012">Output token</tspan><tspan x="522.3555" dy="16.900000000000002">to terminal</tspan></text>
+  <rect x="465.442" y="1099.65" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="522.3555" y="1126.5500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="522.3555" dy="-3.9000000000000012">Output token</tspan><tspan x="522.3555" dy="16.900000000000002">to terminal</tspan></text>
 </g>
 <g class="node" data-id="EmbNew" data-label="embed new token
 feed back as input" data-shape="rectangle">
-  <rect x="494.87720833333333" y="694.75" width="146.43099999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="568.0927083333333" y="721.65" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="568.0927083333333" dy="-3.9000000000000012">embed new token</tspan><tspan x="568.0927083333333" dy="16.900000000000002">feed back as input</tspan></text>
+  <rect x="494.87720833333333" y="694.75" width="146.43099999999998" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="568.0927083333333" y="721.65" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="568.0927083333333" dy="-3.9000000000000012">embed new token</tspan><tspan x="568.0927083333333" dy="16.900000000000002">feed back as input</tspan></text>
 </g>
 <g class="node" data-id="ForwardNew" data-label="forward()
 one more pass
 through the model" data-shape="rectangle">
-  <rect x="495.98870833333336" y="796.5500000000001" width="144.208" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="568.0927083333333" y="831.9000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="568.0927083333333" dy="-12.350000000000001">forward()</tspan><tspan x="568.0927083333333" dy="16.900000000000002">one more pass</tspan><tspan x="568.0927083333333" dy="16.900000000000002">through the model</tspan></text>
+  <rect x="495.98870833333336" y="796.5500000000001" width="144.208" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="568.0927083333333" y="831.9000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="568.0927083333333" dy="-12.350000000000001">forward()</tspan><tspan x="568.0927083333333" dy="16.900000000000002">one more pass</tspan><tspan x="568.0927083333333" dy="16.900000000000002">through the model</tspan></text>
 </g>
 <g class="node" data-id="Check" data-label="next == EOS?
 or max_tokens?" data-shape="hexagon">

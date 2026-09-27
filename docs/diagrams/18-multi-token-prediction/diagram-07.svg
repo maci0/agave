@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 633.1455 548" width="633.1455" height="548" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 633.1455 548" width="633.1455" height="548" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -56,49 +62,49 @@
   <text x="512.7570000000001" y="288" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="512.7570000000001" dy="-3.3000000000000007">pre-norm hidden</tspan><tspan x="512.7570000000001" dy="14.3">(shared repr)</tspan></text>
 </g>
 <g class="node" data-id="SharedEmbed" data-label="Shared Embedding Table" data-shape="rectangle">
-  <rect x="341.276" y="84" width="190.14999999999998" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="436.351" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">Shared Embedding Table</text>
+  <rect x="341.276" y="84" width="190.14999999999998" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="436.351" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Shared Embedding Table</text>
 </g>
 <g class="node" data-id="MainLayers" data-label="Main Model Layers
 (all N layers)" data-shape="rectangle">
-  <rect x="358.31899999999996" y="177.35000000000002" width="156.06400000000002" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="436.351" y="204.25000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="436.351" dy="-3.9000000000000012">Main Model Layers</tspan><tspan x="436.351" dy="16.900000000000002">(all N layers)</tspan></text>
+  <rect x="358.31899999999996" y="177.35000000000002" width="156.06400000000002" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="436.351" y="204.25000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="436.351" dy="-3.9000000000000012">Main Model Layers</tspan><tspan x="436.351" dy="16.900000000000002">(all N layers)</tspan></text>
 </g>
 <g class="node" data-id="MTPHead1" data-label="MTP Head 0
 (1 layer)" data-shape="rectangle">
-  <rect x="302.9665" y="348.9" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="359.88" y="375.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="359.88" dy="-3.9000000000000012">MTP Head 0</tspan><tspan x="359.88" dy="16.900000000000002">(1 layer)</tspan></text>
+  <rect x="302.9665" y="348.9" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="359.88" y="375.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="359.88" dy="-3.9000000000000012">MTP Head 0</tspan><tspan x="359.88" dy="16.900000000000002">(1 layer)</tspan></text>
 </g>
 <g class="node" data-id="MTPHead2" data-label="MTP Head 1
 (1 layer, depth 1)" data-shape="rectangle">
-  <rect x="448.4985" y="348.9" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="512.822" y="375.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="512.822" dy="-3.9000000000000012">MTP Head 1</tspan><tspan x="512.822" dy="16.900000000000002">(1 layer, depth 1)</tspan></text>
+  <rect x="448.4985" y="348.9" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="512.822" y="375.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="512.822" dy="-3.9000000000000012">MTP Head 1</tspan><tspan x="512.822" dy="16.900000000000002">(1 layer, depth 1)</tspan></text>
 </g>
 <g class="node" data-id="Draft1" data-label="Draft token t+2" data-shape="rectangle">
-  <rect x="297.409" y="455.1" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="359.88" y="473.55" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Draft token t+2</text>
+  <rect x="297.409" y="455.1" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="359.88" y="473.55" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Draft token t+2</text>
 </g>
 <g class="node" data-id="Draft2" data-label="Draft token t+3" data-shape="rectangle">
-  <rect x="450.351" y="455.1" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="512.822" y="473.55" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Draft token t+3</text>
+  <rect x="450.351" y="455.1" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="512.822" y="473.55" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Draft token t+3</text>
 </g>
 <g class="node" data-id="TargetModel" data-label="Target Model
 (e.g. 27B, all N layers)" data-shape="rectangle">
-  <rect x="56" y="84" width="166.43800000000005" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="139.21900000000002" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="139.21900000000002" dy="-3.9000000000000012">Target Model</tspan><tspan x="139.21900000000002" dy="16.900000000000002">(e.g. 27B, all N layers)</tspan></text>
+  <rect x="56" y="84" width="166.43800000000005" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="139.21900000000002" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="139.21900000000002" dy="-3.9000000000000012">Target Model</tspan><tspan x="139.21900000000002" dy="16.900000000000002">(e.g. 27B, all N layers)</tspan></text>
 </g>
 <g class="node" data-id="DraftModel" data-label="Draft Model
 (e.g. 1.5B, M layers)" data-shape="rectangle">
-  <rect x="74.89549999999998" y="242.70000000000002" width="151.618" height="53.800000000000004" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="150.7045" y="269.6" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="150.7045" dy="-3.9000000000000012">Draft Model</tspan><tspan x="150.7045" dy="16.900000000000002">(e.g. 1.5B, M layers)</tspan></text>
+  <rect x="74.89549999999998" y="242.70000000000002" width="151.618" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="150.7045" y="269.6" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="150.7045" dy="-3.9000000000000012">Draft Model</tspan><tspan x="150.7045" dy="16.900000000000002">(e.g. 1.5B, M layers)</tspan></text>
 </g>
 <g class="node" data-id="TTarget" data-label="Token t+1" data-shape="rectangle">
-  <rect x="91.19750000000002" y="177.35000000000002" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="139.21900000000002" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d" dy="4.55">Token t+1</text>
+  <rect x="91.19750000000002" y="177.35000000000002" width="96.043" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="139.21900000000002" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Token t+1</text>
 </g>
 <g class="node" data-id="TDraft" data-label="Draft token t+2
 (independent distribution)" data-shape="rectangle">
-  <rect x="56" y="348.9" width="189.40899999999996" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="150.7045" y="375.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="150.7045" dy="-3.9000000000000012">Draft token t+2</tspan><tspan x="150.7045" dy="16.900000000000002">(independent distribution)</tspan></text>
+  <rect x="56" y="348.9" width="189.40899999999996" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="150.7045" y="375.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="150.7045" dy="-3.9000000000000012">Draft token t+2</tspan><tspan x="150.7045" dy="16.900000000000002">(independent distribution)</tspan></text>
 </g>
 </svg>

@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760.23825 1021.3000000000001" width="1760.23825" height="1021.3000000000001" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760.23825 1021.3000000000001" width="1760.23825" height="1021.3000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -86,54 +92,54 @@
   <text x="1453.976" y="179.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">chatTemplate()</text>
 </g>
 <g class="node" data-id="A1" data-label="gemma3" data-shape="rectangle">
-  <rect x="56" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="100.687" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">gemma3</text>
+  <rect x="56" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="100.687" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">gemma3</text>
 </g>
 <g class="node" data-id="A2" data-label="gemma4" data-shape="rectangle">
-  <rect x="165.374" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="210.06099999999998" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">gemma4</text>
+  <rect x="165.374" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="210.06099999999998" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">gemma4</text>
 </g>
 <g class="node" data-id="A3" data-label="qwen35" data-shape="rectangle">
-  <rect x="264.9945" y="84" width="87.892" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="308.94050000000004" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">qwen35</text>
+  <rect x="264.9945" y="84" width="87.892" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="308.94050000000004" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">qwen35</text>
 </g>
 <g class="node" data-id="A4" data-label="gpt_oss" data-shape="rectangle">
-  <rect x="382.64" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="427.327" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">gpt_oss</text>
+  <rect x="382.64" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="427.327" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">gpt_oss</text>
 </g>
 <g class="node" data-id="A5" data-label="glm4" data-shape="rectangle">
-  <rect x="492.014" y="84" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="526.327" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">glm4</text>
+  <rect x="492.014" y="84" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="526.327" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">glm4</text>
 </g>
 <g class="node" data-id="A6" data-label="llama4" data-shape="rectangle">
-  <rect x="580.64" y="84" width="79" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="620.14" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">llama4</text>
+  <rect x="580.64" y="84" width="79" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="620.14" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">llama4</text>
 </g>
 <g class="node" data-id="A7" data-label="nemotron_h
 nemotron_nano
 (else branch)" data-shape="rectangle">
-  <rect x="679.64" y="84" width="133.834" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="746.557" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="746.557" dy="-12.350000000000001">nemotron_h</tspan><tspan x="746.557" dy="16.900000000000002">nemotron_nano</tspan><tspan x="746.557" dy="16.900000000000002">(else branch)</tspan></text>
+  <rect x="679.64" y="84" width="133.834" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="746.557" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="746.557" dy="-12.350000000000001">nemotron_h</tspan><tspan x="746.557" dy="16.900000000000002">nemotron_nano</tspan><tspan x="746.557" dy="16.900000000000002">(else branch)</tspan></text>
 </g>
 <g class="node" data-id="T1" data-label="ChatTemplate.gemma
 &lt;start_of_turn&gt; style" data-shape="rectangle">
-  <rect x="264.9945" y="434.50000000000006" width="164.95600000000002" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="347.4725" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="347.4725" dy="-3.9000000000000012">ChatTemplate.gemma</tspan><tspan x="347.4725" dy="16.900000000000002">&lt;start_of_turn&gt; style</tspan></text>
+  <rect x="264.9945" y="434.50000000000006" width="164.95600000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="347.4725" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="347.4725" dy="-3.9000000000000012">ChatTemplate.gemma</tspan><tspan x="347.4725" dy="16.900000000000002">&lt;start_of_turn&gt; style</tspan></text>
 </g>
 <g class="node" data-id="T2" data-label="ChatTemplate.gemma4
 &lt;|turn&gt; + channel style" data-shape="rectangle">
-  <rect x="440.197" y="434.50000000000006" width="173.10699999999997" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="526.7505" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="526.7505" dy="-3.9000000000000012">ChatTemplate.gemma4</tspan><tspan x="526.7505" dy="16.900000000000002">&lt;|turn&gt; + channel style</tspan></text>
+  <rect x="440.197" y="434.50000000000006" width="173.10699999999997" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="526.7505" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="526.7505" dy="-3.9000000000000012">ChatTemplate.gemma4</tspan><tspan x="526.7505" dy="16.900000000000002">&lt;|turn&gt; + channel style</tspan></text>
 </g>
 <g class="node" data-id="T3" data-label="ChatTemplate.qwen35
 ChatML + generation_prefix" data-shape="rectangle">
-  <rect x="633.304" y="434.50000000000006" width="205.71099999999996" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="736.1595" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="736.1595" dy="-3.9000000000000012">ChatTemplate.qwen35</tspan><tspan x="736.1595" dy="16.900000000000002">ChatML + generation_prefix</tspan></text>
+  <rect x="633.304" y="434.50000000000006" width="205.71099999999996" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="736.1595" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="736.1595" dy="-3.9000000000000012">ChatTemplate.qwen35</tspan><tspan x="736.1595" dy="16.900000000000002">ChatML + generation_prefix</tspan></text>
 </g>
 <g class="node" data-id="T4" data-label="ChatTemplate.gpt_oss
 &lt;|start|&gt; + developer role" data-shape="rectangle">
-  <rect x="859.0149999999999" y="434.50000000000006" width="187.92699999999996" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="952.9784999999998" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="952.9784999999998" dy="-3.9000000000000012">ChatTemplate.gpt_oss</tspan><tspan x="952.9784999999998" dy="16.900000000000002">&lt;|start|&gt; + developer role</tspan></text>
+  <rect x="859.0149999999999" y="434.50000000000006" width="187.92699999999996" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="952.9784999999998" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="952.9784999999998" dy="-3.9000000000000012">ChatTemplate.gpt_oss</tspan><tspan x="952.9784999999998" dy="16.900000000000002">&lt;|start|&gt; + developer role</tspan></text>
 </g>
 <g class="node" data-id="T5" data-label="&quot;ChatTemplate.glm4
 [gMASK" data-shape="rectangle">
@@ -142,31 +148,31 @@ ChatML + generation_prefix" data-shape="rectangle">
 </g>
 <g class="node" data-id="T6" data-label="ChatTemplate.llama4
 &lt;|header_id|&gt; style" data-shape="rectangle">
-  <rect x="1242.2649999999999" y="434.50000000000006" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="1323.261" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1323.261" dy="-3.9000000000000012">ChatTemplate.llama4</tspan><tspan x="1323.261" dy="16.900000000000002">&lt;|header_id|&gt; style</tspan></text>
+  <rect x="1242.2649999999999" y="434.50000000000006" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1323.261" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1323.261" dy="-3.9000000000000012">ChatTemplate.llama4</tspan><tspan x="1323.261" dy="16.900000000000002">&lt;|header_id|&gt; style</tspan></text>
 </g>
 <g class="node" data-id="T7" data-label="ChatTemplate.chatml
 standard ChatML" data-shape="rectangle">
-  <rect x="1436.5686249999999" y="434.50000000000006" width="161.992" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="1517.564625" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="1517.564625" dy="-3.9000000000000012">ChatTemplate.chatml</tspan><tspan x="1517.564625" dy="16.900000000000002">standard ChatML</tspan></text>
+  <rect x="1436.5686249999999" y="434.50000000000006" width="161.992" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1517.564625" y="461.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1517.564625" dy="-3.9000000000000012">ChatTemplate.chatml</tspan><tspan x="1517.564625" dy="16.900000000000002">standard ChatML</tspan></text>
 </g>
 <g class="node" data-id="Format" data-label="template.format()
 or formatConversation()
 -&gt; rendered prompt string" data-shape="rectangle">
-  <rect x="1486.4860000000003" y="640.3000000000001" width="190.14999999999995" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="1581.5610000000004" y="675.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1581.5610000000004" dy="-12.350000000000001">template.format()</tspan><tspan x="1581.5610000000004" dy="16.900000000000002">or formatConversation()</tspan><tspan x="1581.5610000000004" dy="16.900000000000002">-&gt; rendered prompt string</tspan></text>
+  <rect x="1486.4860000000003" y="640.3000000000001" width="190.14999999999995" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1581.5610000000004" y="675.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1581.5610000000004" dy="-12.350000000000001">template.format()</tspan><tspan x="1581.5610000000004" dy="16.900000000000002">or formatConversation()</tspan><tspan x="1581.5610000000004" dy="16.900000000000002">-&gt; rendered prompt string</tspan></text>
 </g>
 <g class="node" data-id="EOGRes" data-label="EOG token resolution
 for each eog_tokens name:
   tokenizer.special_tokens.get(name)
   -&gt; resolved ID set" data-shape="rectangle">
-  <rect x="1436.5686249999999" y="759" width="255.35799999999998" height="87.60000000000001" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="1564.247625" y="802.8" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1564.247625" dy="-20.8">EOG token resolution</tspan><tspan x="1564.247625" dy="16.900000000000002">for each eog_tokens name:</tspan><tspan x="1564.247625" dy="16.900000000000002">  tokenizer.special_tokens.get(name)</tspan><tspan x="1564.247625" dy="16.900000000000002">  -&gt; resolved ID set</tspan></text>
+  <rect x="1436.5686249999999" y="759" width="255.35799999999998" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1564.247625" y="802.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1564.247625" dy="-20.8">EOG token resolution</tspan><tspan x="1564.247625" dy="16.900000000000002">for each eog_tokens name:</tspan><tspan x="1564.247625" dy="16.900000000000002">  tokenizer.special_tokens.get(name)</tspan><tspan x="1564.247625" dy="16.900000000000002">  -&gt; resolved ID set</tspan></text>
 </g>
 <g class="node" data-id="GenLoop" data-label="generation loop
   if token_id in eog_ids:
     stop" data-shape="rectangle">
-  <rect x="1486.4860000000003" y="894.6000000000001" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="1571.5575000000003" y="929.9500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="1571.5575000000003" dy="-12.350000000000001">generation loop</tspan><tspan x="1571.5575000000003" dy="16.900000000000002">  if token_id in eog_ids:</tspan><tspan x="1571.5575000000003" dy="16.900000000000002">    stop</tspan></text>
+  <rect x="1486.4860000000003" y="894.6000000000001" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1571.5575000000003" y="929.9500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1571.5575000000003" dy="-12.350000000000001">generation loop</tspan><tspan x="1571.5575000000003" dy="16.900000000000002">  if token_id in eog_ids:</tspan><tspan x="1571.5575000000003" dy="16.900000000000002">    stop</tspan></text>
 </g>
 </svg>

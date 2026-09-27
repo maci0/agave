@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 271.921 1146.3999999999996" width="271.921" height="1146.3999999999996" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 271.921 1146.3999999999996" width="271.921" height="1146.3999999999996" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -53,83 +59,83 @@
 <polyline class="edge" data-from="Q14" data-to="KV3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="113.82400000000001,967.0499999999997 131.216,967.0499999999997 131.216,934.5999999999998 148.608,934.5999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Q15" data-to="KV3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="113.82400000000001,1031.9499999999998 131.216,1031.9499999999998 131.216,934.5999999999998 148.608,934.5999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Q0" data-label="Q0" data-shape="rectangle">
-  <rect x="52.608000000000004" y="40" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q0</text>
+  <rect x="52.608000000000004" y="40" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q0</text>
 </g>
 <g class="node" data-id="Q1" data-label="Q1" data-shape="rectangle">
-  <rect x="52.608000000000004" y="104.89999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q1</text>
+  <rect x="52.608000000000004" y="104.89999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="123.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q1</text>
 </g>
 <g class="node" data-id="Q2" data-label="Q2" data-shape="rectangle">
-  <rect x="52.608000000000004" y="169.79999999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="188.25" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q2</text>
+  <rect x="52.608000000000004" y="169.79999999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="188.25" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q2</text>
 </g>
 <g class="node" data-id="Q3" data-label="Q3" data-shape="rectangle">
-  <rect x="52.608000000000004" y="234.7" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="253.14999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q3</text>
+  <rect x="52.608000000000004" y="234.7" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="253.14999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q3</text>
 </g>
 <g class="node" data-id="Q4" data-label="Q4" data-shape="rectangle">
-  <rect x="52.608000000000004" y="299.59999999999997" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="318.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q4</text>
+  <rect x="52.608000000000004" y="299.59999999999997" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="318.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q4</text>
 </g>
 <g class="node" data-id="Q5" data-label="Q5" data-shape="rectangle">
-  <rect x="52.608000000000004" y="364.49999999999994" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="382.94999999999993" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q5</text>
+  <rect x="52.608000000000004" y="364.49999999999994" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="382.94999999999993" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q5</text>
 </g>
 <g class="node" data-id="Q6" data-label="Q6" data-shape="rectangle">
-  <rect x="52.608000000000004" y="429.3999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="447.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q6</text>
+  <rect x="52.608000000000004" y="429.3999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="447.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q6</text>
 </g>
 <g class="node" data-id="Q7" data-label="Q7" data-shape="rectangle">
-  <rect x="52.608000000000004" y="494.2999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="512.7499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q7</text>
+  <rect x="52.608000000000004" y="494.2999999999999" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="512.7499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q7</text>
 </g>
 <g class="node" data-id="Q8" data-label="Q8" data-shape="rectangle">
-  <rect x="52.608000000000004" y="559.1999999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="577.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q8</text>
+  <rect x="52.608000000000004" y="559.1999999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="577.6499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q8</text>
 </g>
 <g class="node" data-id="Q9" data-label="Q9" data-shape="rectangle">
-  <rect x="52.608000000000004" y="624.0999999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="642.5499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q9</text>
+  <rect x="52.608000000000004" y="624.0999999999998" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="642.5499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q9</text>
 </g>
 <g class="node" data-id="Q10" data-label="Q10" data-shape="rectangle">
-  <rect x="52.608000000000004" y="688.9999999999998" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="83.21600000000001" y="707.4499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q10</text>
+  <rect x="52.608000000000004" y="688.9999999999998" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="83.21600000000001" y="707.4499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q10</text>
 </g>
 <g class="node" data-id="Q11" data-label="Q11" data-shape="rectangle">
-  <rect x="52.608000000000004" y="753.8999999999997" width="60" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="82.608" y="772.3499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q11</text>
+  <rect x="52.608000000000004" y="753.8999999999997" width="60" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="82.608" y="772.3499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q11</text>
 </g>
 <g class="node" data-id="Q12" data-label="Q12" data-shape="rectangle">
-  <rect x="52.608000000000004" y="818.7999999999997" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="83.21600000000001" y="837.2499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q12</text>
+  <rect x="52.608000000000004" y="818.7999999999997" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="83.21600000000001" y="837.2499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q12</text>
 </g>
 <g class="node" data-id="Q13" data-label="Q13" data-shape="rectangle">
-  <rect x="52.608000000000004" y="883.6999999999997" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="83.21600000000001" y="902.1499999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q13</text>
+  <rect x="52.608000000000004" y="883.6999999999997" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="83.21600000000001" y="902.1499999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q13</text>
 </g>
 <g class="node" data-id="Q14" data-label="Q14" data-shape="rectangle">
-  <rect x="52.608000000000004" y="948.5999999999997" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="83.21600000000001" y="967.0499999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q14</text>
+  <rect x="52.608000000000004" y="948.5999999999997" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="83.21600000000001" y="967.0499999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q14</text>
 </g>
 <g class="node" data-id="Q15" data-label="Q15" data-shape="rectangle">
-  <rect x="52.608000000000004" y="1013.4999999999998" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="83.21600000000001" y="1031.9499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12" dy="4.55">Q15</text>
+  <rect x="52.608000000000004" y="1013.4999999999998" width="61.216" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="83.21600000000001" y="1031.9499999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Q15</text>
 </g>
 <g class="node" data-id="KV0" data-label="K0 / V0" data-shape="rectangle">
-  <rect x="148.608" y="137.34999999999997" width="82.705" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="189.9605" y="155.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">K0 / V0</text>
+  <rect x="148.608" y="137.34999999999997" width="82.705" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="189.9605" y="155.79999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">K0 / V0</text>
 </g>
 <g class="node" data-id="KV1" data-label="K1 / V1" data-shape="rectangle">
-  <rect x="148.608" y="396.94999999999993" width="73.813" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="185.5145" y="415.3999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">K1 / V1</text>
+  <rect x="148.608" y="396.94999999999993" width="73.813" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="185.5145" y="415.3999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">K1 / V1</text>
 </g>
 <g class="node" data-id="KV2" data-label="K2 / V2" data-shape="rectangle">
-  <rect x="148.608" y="656.5499999999998" width="82.705" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="189.9605" y="674.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">K2 / V2</text>
+  <rect x="148.608" y="656.5499999999998" width="82.705" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="189.9605" y="674.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">K2 / V2</text>
 </g>
 <g class="node" data-id="KV3" data-label="K3 / V3" data-shape="rectangle">
-  <rect x="148.608" y="916.1499999999997" width="82.705" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="189.9605" y="934.5999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">K3 / V3</text>
+  <rect x="148.608" y="916.1499999999997" width="82.705" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="189.9605" y="934.5999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">K3 / V3</text>
 </g>
 </svg>

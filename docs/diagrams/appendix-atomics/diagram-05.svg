@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 737.99 1164.4920000000002" width="737.99" height="1164.4920000000002" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 737.99 1164.4920000000002" width="737.99" height="1164.4920000000002" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -75,8 +81,8 @@ sees all release writes">
 <g class="node" data-id="Dispatch" data-label="Dispatch work
 active = n_workers
 (.acq_rel CAS)" data-shape="rectangle">
-  <rect x="483.408" y="987.792" width="154.582" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="560.6990000000001" y="1023.142" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="560.6990000000001" dy="-12.350000000000001">Dispatch work</tspan><tspan x="560.6990000000001" dy="16.900000000000002">active = n_workers</tspan><tspan x="560.6990000000001" dy="16.900000000000002">(.acq_rel CAS)</tspan></text>
+  <rect x="483.408" y="987.792" width="154.582" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="560.6990000000001" y="1023.142" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="560.6990000000001" dy="-12.350000000000001">Dispatch work</tspan><tspan x="560.6990000000001" dy="16.900000000000002">active = n_workers</tspan><tspan x="560.6990000000001" dy="16.900000000000002">(.acq_rel CAS)</tspan></text>
 </g>
 <g class="node" data-id="Spin" data-label="active.load(.acquire)
 == 0?" data-shape="diamond">
@@ -85,45 +91,45 @@ active = n_workers
 </g>
 <g class="node" data-id="Hint" data-label="spinLoopHint()
 CPU pause / yield" data-shape="rectangle">
-  <rect x="318.6895" y="501.1" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#f3e8ff" stroke="#9333ea" stroke-width="0.75" />
-  <text x="390.7935" y="528" text-anchor="middle" font-size="13" font-weight="500" fill="#581c87"><tspan x="390.7935" dy="-3.9000000000000012">spinLoopHint()</tspan><tspan x="390.7935" dy="16.900000000000002">CPU pause / yield</tspan></text>
+  <rect x="318.6895" y="501.1" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="390.7935" y="528" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="390.7935" dy="-3.9000000000000012">spinLoopHint()</tspan><tspan x="390.7935" dy="16.900000000000002">CPU pause / yield</tspan></text>
 </g>
 <g class="node" data-id="Done" data-label="All worker output
 visible — safe to read results" data-shape="stadium">
-  <rect x="251.17900000000003" y="987.792" width="204.229" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="353.29350000000005" y="1014.692" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="353.29350000000005" dy="-3.9000000000000012">All worker output</tspan><tspan x="353.29350000000005" dy="16.900000000000002">visible — safe to read results</tspan></text>
+  <rect x="251.17900000000003" y="987.792" width="204.229" height="53.800000000000004" rx="26.900000000000002" ry="26.900000000000002" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="353.29350000000005" y="1014.692" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="353.29350000000005" dy="-3.9000000000000012">All worker output</tspan><tspan x="353.29350000000005" dy="16.900000000000002">visible — safe to read results</tspan></text>
 </g>
 <g class="node" data-id="W1" data-label="Worker 1
 doWork() → chunk A
 writes output buffer" data-shape="rectangle">
-  <rect x="65.63299999999998" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="143.665" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="143.665" dy="-12.350000000000001">Worker 1</tspan><tspan x="143.665" dy="16.900000000000002">doWork() → chunk A</tspan><tspan x="143.665" dy="16.900000000000002">writes output buffer</tspan></text>
+  <rect x="65.63299999999998" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="143.665" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="143.665" dy="-12.350000000000001">Worker 1</tspan><tspan x="143.665" dy="16.900000000000002">doWork() → chunk A</tspan><tspan x="143.665" dy="16.900000000000002">writes output buffer</tspan></text>
 </g>
 <g class="node" data-id="W2" data-label="Worker 2
 doWork() → chunk B
 writes output buffer" data-shape="rectangle">
-  <rect x="268.96299999999997" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="346.995" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="346.995" dy="-12.350000000000001">Worker 2</tspan><tspan x="346.995" dy="16.900000000000002">doWork() → chunk B</tspan><tspan x="346.995" dy="16.900000000000002">writes output buffer</tspan></text>
+  <rect x="268.96299999999997" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="346.995" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="346.995" dy="-12.350000000000001">Worker 2</tspan><tspan x="346.995" dy="16.900000000000002">doWork() → chunk B</tspan><tspan x="346.995" dy="16.900000000000002">writes output buffer</tspan></text>
 </g>
 <g class="node" data-id="WN" data-label="Worker N
 doWork() → chunk N
 writes output buffer" data-shape="rectangle">
-  <rect x="472.293" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#dcfce7" stroke="#22c55e" stroke-width="0.75" />
-  <text x="550.325" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="550.325" dy="-12.350000000000001">Worker N</tspan><tspan x="550.325" dy="16.900000000000002">doWork() → chunk N</tspan><tspan x="550.325" dy="16.900000000000002">writes output buffer</tspan></text>
+  <rect x="472.293" y="126" width="156.06400000000002" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="550.325" y="161.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="550.325" dy="-12.350000000000001">Worker N</tspan><tspan x="550.325" dy="16.900000000000002">doWork() → chunk N</tspan><tspan x="550.325" dy="16.900000000000002">writes output buffer</tspan></text>
 </g>
 <g class="node" data-id="Sub1" data-label="fetchSub(1, .release)
 publishes output writes" data-shape="rectangle">
-  <rect x="56" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="143.665" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="143.665" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="143.665" dy="16.900000000000002">publishes output writes</tspan></text>
+  <rect x="56" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="143.665" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="143.665" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="143.665" dy="16.900000000000002">publishes output writes</tspan></text>
 </g>
 <g class="node" data-id="Sub2" data-label="fetchSub(1, .release)
 publishes output writes" data-shape="rectangle">
-  <rect x="259.33" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="346.995" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="346.995" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="346.995" dy="16.900000000000002">publishes output writes</tspan></text>
+  <rect x="259.33" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="346.995" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="346.995" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="346.995" dy="16.900000000000002">publishes output writes</tspan></text>
 </g>
 <g class="node" data-id="SubN" data-label="fetchSub(1, .release)
 publishes output writes" data-shape="rectangle">
-  <rect x="462.65999999999997" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="550.3249999999999" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="550.3249999999999" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="550.3249999999999" dy="16.900000000000002">publishes output writes</tspan></text>
+  <rect x="462.65999999999997" y="244.7" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="550.3249999999999" y="271.59999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="550.3249999999999" dy="-3.9000000000000012">fetchSub(1, .release)</tspan><tspan x="550.3249999999999" dy="16.900000000000002">publishes output writes</tspan></text>
 </g>
 </svg>

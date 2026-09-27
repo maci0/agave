@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 437.66350000000006 507.49999999999994" width="437.66350000000006" height="507.49999999999994" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 437.66350000000006 507.49999999999994" width="437.66350000000006" height="507.49999999999994" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -52,14 +58,14 @@
 <g class="node" data-id="ST_Raw" data-label="A_log tensor
 raw log value
 (e.g. -3.2)" data-shape="rectangle">
-  <rect x="54.4495" y="40" width="119.014" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="113.9565" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="113.9565" dy="-12.350000000000001">A_log tensor</tspan><tspan x="113.9565" dy="16.900000000000002">raw log value</tspan><tspan x="113.9565" dy="16.900000000000002">(e.g. -3.2)</tspan></text>
+  <rect x="54.4495" y="40" width="119.014" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="113.9565" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="113.9565" dy="-12.350000000000001">A_log tensor</tspan><tspan x="113.9565" dy="16.900000000000002">raw log value</tspan><tspan x="113.9565" dy="16.900000000000002">(e.g. -3.2)</tspan></text>
 </g>
 <g class="node" data-id="ST_Conv" data-label="init() conversion
 -exp(A_log)
 once at model load" data-shape="rectangle">
-  <rect x="40" y="227" width="147.913" height="70.7" rx="0" ry="0" fill="#fef9c3" stroke="#eab308" stroke-width="0.75" />
-  <text x="113.9565" y="262.35" text-anchor="middle" font-size="13" font-weight="500" fill="#713f12"><tspan x="113.9565" dy="-12.350000000000001">init() conversion</tspan><tspan x="113.9565" dy="16.900000000000002">-exp(A_log)</tspan><tspan x="113.9565" dy="16.900000000000002">once at model load</tspan></text>
+  <rect x="40" y="227" width="147.913" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="113.9565" y="262.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="113.9565" dy="-12.350000000000001">init() conversion</tspan><tspan x="113.9565" dy="16.900000000000002">-exp(A_log)</tspan><tspan x="113.9565" dy="16.900000000000002">once at model load</tspan></text>
 </g>
 <g class="node" data-id="ST_Use" data-label="&quot;ssm_a[h" data-shape="rectangle">
   <rect x="66.30550000000001" y="345.7" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
@@ -68,8 +74,8 @@ once at model load" data-shape="rectangle">
 <g class="node" data-id="GG_Pre" data-label="A_log tensor
 pre-converted by llama.cpp
 -exp(A_log) on disk" data-shape="rectangle">
-  <rect x="196.39850000000004" y="108.3" width="201.26500000000001" height="70.7" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="297.03100000000006" y="143.65" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f"><tspan x="297.03100000000006" dy="-12.350000000000001">A_log tensor</tspan><tspan x="297.03100000000006" dy="16.900000000000002">pre-converted by llama.cpp</tspan><tspan x="297.03100000000006" dy="16.900000000000002">-exp(A_log) on disk</tspan></text>
+  <rect x="196.39850000000004" y="108.3" width="201.26500000000001" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="297.03100000000006" y="143.65" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="297.03100000000006" dy="-12.350000000000001">A_log tensor</tspan><tspan x="297.03100000000006" dy="16.900000000000002">pre-converted by llama.cpp</tspan><tspan x="297.03100000000006" dy="16.900000000000002">-exp(A_log) on disk</tspan></text>
 </g>
 <g class="node" data-id="GG_Use" data-label="&quot;ssm_a[h" data-shape="rectangle">
   <rect x="249.38000000000005" y="345.7" width="95.30199999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />

@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 757.1647499999999 1092.541" width="757.1647499999999" height="1092.541" style="--bg:#FFFFFF;--fg:#27272A;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 757.1647499999999 1092.541" width="757.1647499999999" height="1092.541" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap');
-  text { font-family: 'Inter', system-ui, sans-serif; }
+  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
+     diagram sits in the same product as the app. No webfont fetch. */
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
+  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
   svg {
-    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
-    --_text:          #1a1a2e;
-    --_text-sec:      var(--muted, color-mix(in srgb, #1a1a2e 60%, #ffffff));
-    --_text-muted:    var(--muted, color-mix(in srgb, #1a1a2e 40%, #ffffff));
-    --_text-faint:    color-mix(in srgb, #1a1a2e 25%, #ffffff);
-    --_line:          var(--line, color-mix(in srgb, #1a1a2e 50%, #ffffff));
-    --_arrow:         var(--accent, color-mix(in srgb, #1a1a2e 85%, #ffffff));
-    --_node-fill:     var(--surface, color-mix(in srgb, #1a1a2e 3%, #ffffff));
-    --_node-stroke:   var(--border, color-mix(in srgb, #1a1a2e 20%, #ffffff));
+    /* Desert-night inks on a white canvas: --_text is the light-surface
+       counterpart of the app's --text (docs/logo.svg), and the rest are
+       hand-picked steps of it rather than mixes toward white, which would wash
+       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
+       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    --_text:          #2a2522;
+    --_text-sec:      var(--muted, #75716f);
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          var(--line, #94908c);
+    --_arrow:         #504b47;
+    --_node-fill:     var(--surface, #f1efec);
+    --_node-stroke:   var(--border, #9c938a);
     --_group-fill:    #ffffff;
-    --_group-hdr:     color-mix(in srgb, #1a1a2e 5%, #ffffff);
-    --_inner-stroke:  color-mix(in srgb, #1a1a2e 12%, #ffffff);
-    --_key-badge:     color-mix(in srgb, #1a1a2e 10%, #ffffff);
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
   }
 </style>
 <defs>
@@ -73,41 +79,41 @@
   <text x="647.73075" y="899.6909999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">General conversation</text>
 </g>
 <g class="node" data-id="Start" data-label="What are you generating?" data-shape="rectangle">
-  <rect x="98.75899999999996" y="40" width="191.63199999999995" height="36.900000000000006" rx="0" ry="0" fill="#dbeafe" stroke="#3b82f6" stroke-width="0.75" />
-  <text x="194.57499999999993" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e3a5f" dy="4.55">What are you generating?</text>
+  <rect x="98.75899999999996" y="40" width="191.63199999999995" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="194.57499999999993" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">What are you generating?</text>
 </g>
 <g class="node" data-id="Greedy" data-label="temperature=0
 greedy argmax" data-shape="rectangle">
-  <rect x="40" y="617.6410000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="105.8055" y="644.541" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="105.8055" dy="-3.9000000000000012">temperature=0</tspan><tspan x="105.8055" dy="16.900000000000002">greedy argmax</tspan></text>
+  <rect x="40" y="617.6410000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="105.8055" y="644.541" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="105.8055" dy="-3.9000000000000012">temperature=0</tspan><tspan x="105.8055" dy="16.900000000000002">greedy argmax</tspan></text>
 </g>
 <g class="node" data-id="Grammar" data-label="--json-schema / --grammar
 grammar mask handles the rest" data-shape="rectangle">
-  <rect x="79.31586666666658" y="787.741" width="222.75399999999996" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="190.69286666666656" y="814.641" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="190.69286666666656" dy="-3.9000000000000012">--json-schema / --grammar</tspan><tspan x="190.69286666666656" dy="16.900000000000002">grammar mask handles the rest</tspan></text>
+  <rect x="79.31586666666658" y="787.741" width="222.75399999999996" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="190.69286666666656" y="814.641" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="190.69286666666656" dy="-3.9000000000000012">--json-schema / --grammar</tspan><tspan x="190.69286666666656" dy="16.900000000000002">grammar mask handles the rest</tspan></text>
 </g>
 <g class="node" data-id="LongForm" data-label="repeat_penalty=1.1
 DRY multiplier=1.5
 temperature=0.8" data-shape="rectangle">
-  <rect x="63.74274999999989" y="969.8409999999999" width="147.17200000000003" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="137.3287499999999" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="137.3287499999999" dy="-12.350000000000001">repeat_penalty=1.1</tspan><tspan x="137.3287499999999" dy="16.900000000000002">DRY multiplier=1.5</tspan><tspan x="137.3287499999999" dy="16.900000000000002">temperature=0.8</tspan></text>
+  <rect x="63.74274999999989" y="969.8409999999999" width="147.17200000000003" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="137.3287499999999" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="137.3287499999999" dy="-12.350000000000001">repeat_penalty=1.1</tspan><tspan x="137.3287499999999" dy="16.900000000000002">DRY multiplier=1.5</tspan><tspan x="137.3287499999999" dy="16.900000000000002">temperature=0.8</tspan></text>
 </g>
 <g class="node" data-id="Creative" data-label="temperature=1.2
 min_p=0.05
 or XTC for variety" data-shape="rectangle">
-  <rect x="238.9147499999999" y="969.8409999999999" width="146.431" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="312.13024999999993" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="312.13024999999993" dy="-12.350000000000001">temperature=1.2</tspan><tspan x="312.13024999999993" dy="16.900000000000002">min_p=0.05</tspan><tspan x="312.13024999999993" dy="16.900000000000002">or XTC for variety</tspan></text>
+  <rect x="238.9147499999999" y="969.8409999999999" width="146.431" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="312.13024999999993" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="312.13024999999993" dy="-12.350000000000001">temperature=1.2</tspan><tspan x="312.13024999999993" dy="16.900000000000002">min_p=0.05</tspan><tspan x="312.13024999999993" dy="16.900000000000002">or XTC for variety</tspan></text>
 </g>
 <g class="node" data-id="Mirostat" data-label="mirostat=2
 tau=5.0
 (ignores top-k/p)" data-shape="rectangle">
-  <rect x="413.34574999999995" y="969.8409999999999" width="137.539" height="70.7" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="482.11524999999995" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="482.11524999999995" dy="-12.350000000000001">mirostat=2</tspan><tspan x="482.11524999999995" dy="16.900000000000002">tau=5.0</tspan><tspan x="482.11524999999995" dy="16.900000000000002">(ignores top-k/p)</tspan></text>
+  <rect x="413.34574999999995" y="969.8409999999999" width="137.539" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="482.11524999999995" y="1005.1909999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="482.11524999999995" dy="-12.350000000000001">mirostat=2</tspan><tspan x="482.11524999999995" dy="16.900000000000002">tau=5.0</tspan><tspan x="482.11524999999995" dy="16.900000000000002">(ignores top-k/p)</tspan></text>
 </g>
 <g class="node" data-id="Balanced" data-label="temperature=0.7
 top-p=0.9" data-shape="rectangle">
-  <rect x="578.8847499999999" y="969.8409999999999" width="138.28" height="53.800000000000004" rx="0" ry="0" fill="#bbf7d0" stroke="#16a34a" stroke-width="0.75" />
-  <text x="648.0247499999999" y="996.7409999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#14532d"><tspan x="648.0247499999999" dy="-3.9000000000000012">temperature=0.7</tspan><tspan x="648.0247499999999" dy="16.900000000000002">top-p=0.9</tspan></text>
+  <rect x="578.8847499999999" y="969.8409999999999" width="138.28" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="648.0247499999999" y="996.7409999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="648.0247499999999" dy="-3.9000000000000012">temperature=0.7</tspan><tspan x="648.0247499999999" dy="16.900000000000002">top-p=0.9</tspan></text>
 </g>
 <g class="node" data-id="Q1" data-label="Need exact,
 reproducible output?" data-shape="diamond">
