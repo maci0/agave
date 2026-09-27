@@ -68,6 +68,11 @@ fn getenv(name: []const u8) ?[]const u8 {
     return std.mem.sliceTo(ptr, 0);
 }
 
+/// Errors the wait helpers are asked to report. A parameter typed `anyerror`
+/// widened every caller's inferred error set to the global set, which
+/// `model.zig` cannot narrow to ForwardError for the multi-GPU models.
+const WaitError = error{ ConnectFailed, AcceptFailed, ShmSendTimeout, ShmRecvTimeout };
+
 /// Poll `fd` for `events` until ready or `budget_ms` elapse on the injectable
 /// clock. Returns the poll result (0 on timeout), or `poll_error` if poll(2)
 /// itself fails.
@@ -78,7 +83,7 @@ fn getenv(name: []const u8) ?[]const u8 {
 /// therefore sliced, the deadline is read from sim_clock, and under an
 /// override the probe is non-blocking with virtual time advanced by the slice,
 /// so the timeout lands after the same number of probes on every host.
-fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_error: anyerror) !usize {
+fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_error: WaitError) WaitError!usize {
     const deadline = sim_clock.monoMilli() + budget_ms;
     while (true) {
         const virtual = sim_clock.isOverridden();
@@ -95,7 +100,7 @@ fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_err
 /// reached. Production keeps the spin count; under a clock override the bound
 /// is `shm_wait_budget_ms` of virtual time, so the same number of iterations
 /// elapse on every host.
-fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, timeout_error: anyerror) !void {
+fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, timeout_error: WaitError) WaitError!void {
     if (sim_clock.isOverridden()) {
         const deadline = sim_clock.monoMilli() + shm_wait_budget_ms;
         while (flag.load(.acquire) != want) {

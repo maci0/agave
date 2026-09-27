@@ -7795,6 +7795,16 @@ test "chat UI head pulls no third-party asset" {
     try std.testing.expect(std.mem.indexOf(u8, html_page, "function loadMarkdown()") != null);
 }
 
+test "chat UI streams by appending and times out a stalled CDN script" {
+    // Each stream flush used to reset textContent, rewriting the whole message
+    // every 60ms; the DOM keeps one text node and appends the delta instead.
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "function appendStreamText(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "appendStreamText(p.el, p.content)") != null);
+    // A CDN that stalls fires no load or error event, so the load promise has
+    // to give up on its own for the plain-text fallback to settle.
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "cdn_script_timeout_ms") != null);
+}
+
 test "sanitizeClientRequestId accepts correlation tokens" {
     var buf: [max_client_request_id_len]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 3), sanitizeClientRequestId("abc", &buf));
