@@ -812,7 +812,11 @@ pub inline fn signalCancel(cancelled: *std.atomic.Value(bool)) void {
 ///
 /// The model struct must have fields: tiered_cache, paged_cache,
 /// kv_seq_len, seq_table, tiered_block_allocator, block_allocator.
-pub fn ensureKvBlock(self: anytype) !void {
+///
+/// The error set is spelled out: a generic function with an inferred error
+/// set gets the global one, which every model's forward() then inherits and
+/// the vtable cannot narrow back to ForwardError.
+pub fn ensureKvBlock(self: anytype) error{ OutOfBlocks, OutOfMemory }!void {
     const bs: usize = if (self.tiered_cache) |tc| tc.block_size else self.paged_cache.block_size;
     const current_blocks = self.seq_table.block_table[0].len;
     const needed_blocks = (self.kv_seq_len + 1 + bs - 1) / bs;
