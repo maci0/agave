@@ -392,6 +392,39 @@ jobs:
       - name: Committed web artifacts are fresh
         run: bash scripts/check-web-artifacts.sh
 
+  # The build strips ReleaseFast so the binary should not carry the path or
+  # the time it was built. Nothing measured that, so an absolute path in a
+  # panic message or an @src().file would have shipped silently. This job
+  # builds the same source twice, from two different directories, with
+  # different prefixes, cache dirs, epochs, timezone and locale, and requires
+  # the two binaries to be byte-identical. scripts/check-reproducible.sh is
+  # the single entry point, so `zig build check-reproducible` runs the same
+  # check locally.
+  reproducible-build:
+    name: Reproducible release binary
+    needs: fmt-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-zig
+        id: zig
+
+      - name: Cache Zig build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          key: zig-${{ steps.zig.outputs.version }}-repro-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-repro-
+
+      - name: Build twice and byte-compare
+        run: scripts/check-reproducible.sh
+
   # The auxiliary Python (scripts/check-docs.py runs in docs-check, plus the
   # golden harness and tools/) had no analyzer: an undefined name or a leaked
   # file handle merged unseen. Blocking. scripts/lint-python.sh is the single
@@ -430,7 +463,7 @@ jobs:
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, lint-web, lint-shell, lint-python]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, reproducible-build, lint-web, lint-shell, lint-python]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:

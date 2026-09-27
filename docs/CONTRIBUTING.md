@@ -28,6 +28,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `.oxlintrc.json` | `bash scripts/check-web-lint-scope.sh` (an `ignorePatterns` entry that is not known debt fails; entries may leave the list, never join it) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
+| `build.zig` or anything that can put a path, timestamp or hostname in a binary | `zig build check-reproducible` (blocking CI job `reproducible-build`; builds twice from different paths and byte-compares) |
 | `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` (blocking CI job `lint-python`) |
 
 Weights for golden and e2e tests go in a local `./models` directory (gitignored). Do not commit a symlink.
@@ -42,7 +43,9 @@ gh workflow run golden_tests.yml -f runner=self-hosted
 
 Leaving `runner` empty keeps the matrix on the GitHub-hosted labels, where the run stops at the `Require local GGUF models` step. Without `runner` there is no way to reach a machine that has weights, so the workflow always fails.
 
-`ci-pass` also requires the `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, and `kernel-artifacts` jobs. `zig build ci` does not cover them. Fuzz smoke runs anywhere (`zig build test --fuzz=1000 --summary all`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
+`ci-pass` also requires the `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, `kernel-artifacts`, and `reproducible-build` jobs. `zig build ci` does not cover them. Fuzz smoke runs anywhere (`zig build test --fuzz=1000 --summary all`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
+
+`reproducible-build` runs `scripts/check-reproducible.sh` (`zig build check-reproducible` locally). It builds the same source twice, from two different directories, with different install prefixes, cache dirs, `SOURCE_DATE_EPOCH`, timezone and locale, and requires the two `agave` binaries to be byte-identical. A mismatch means the build root, the clock or the locale is leaking into a release artifact; the script names the differing SHA256 and, when `diffoscope` is installed, what changed. Run it after touching `build.zig`, the release module options, or anything that can put a path, timestamp or hostname into a binary.
 
 ## Where New Code Goes
 

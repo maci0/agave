@@ -639,6 +639,14 @@ pub fn build(b: *std.Build) void {
         const check_pins_step = b.step("check-pins", "Zig / Debian / SOURCE_DATE_EPOCH pins agree (CI fmt-check job)");
         check_pins_step.dependOn(&check_pins_cmd.step);
 
+        // Two builds of the same source, byte-compared. Not in `check`: it
+        // compiles the engine twice and needs its own CI job, not every
+        // contributor's gate.
+        const reproducible_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-reproducible.sh" });
+        reproducible_cmd.has_side_effects = true;
+        const reproducible_step = b.step("check-reproducible", "Build twice from different paths and byte-compare (CI reproducible-build job)");
+        reproducible_step.dependOn(&reproducible_cmd.step);
+
         const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + unit tests");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
