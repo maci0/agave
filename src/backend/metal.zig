@@ -4695,42 +4695,6 @@ test "MetalBackend.compileComposedMegakernel signature" {
     }
 }
 
-test "MetalBackend.sdpaPrefill signature" {
-    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    comptime {
-        const F = @TypeOf(MetalBackend.sdpaPrefill);
-        const info = @typeInfo(F);
-        _ = info;
-    }
-}
-
-test "MetalBackend.sdpaPaged signature" {
-    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    comptime {
-        const F = @TypeOf(MetalBackend.sdpaPaged);
-        const info = @typeInfo(F);
-        _ = info;
-    }
-}
-
-test "MetalBackend.sdpaTree signature" {
-    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    comptime {
-        const F = @TypeOf(MetalBackend.sdpaTree);
-        const info = @typeInfo(F);
-        _ = info;
-    }
-}
-
-test "MetalBackend.deltaNet signature" {
-    if (comptime builtin.os.tag != .macos) return error.SkipZigTest;
-    comptime {
-        const F = @TypeOf(MetalBackend.deltaNet);
-        const info = @typeInfo(F);
-        _ = info;
-    }
-}
-
 test "MetalBackend.batch mode affects barrier counts" {
     var be = try getTestBackend();
     defer be.deinit();

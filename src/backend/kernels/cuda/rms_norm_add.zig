@@ -32,7 +32,3 @@ export fn rms_norm_add_kernel(
         b[i] += a[i] * weight[i] * scale;
     }
 }
-
-test "constants valid" {
-    _ = @sizeOf(u8);
-}
