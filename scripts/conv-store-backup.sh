@@ -542,11 +542,11 @@ do_self_test() {
     # `--help` hides the flags an operator needs to find.
     local help
     help="$("$self_path" --help)"
-    [[ "$help" == "conv-store-backup.sh, back up, verify, and restore the web-UI conversation"* ]] &&
-        [[ "$help" == *"Runbook: docs/DURABILITY.md"* ]] || {
+    if [[ "$help" != "conv-store-backup.sh, back up, verify, and restore the web-UI conversation"* ||
+        "$help" != *"Runbook: docs/DURABILITY.md"* ]]; then
         echo "conv-store-backup: self-test FAILED: --help does not print the whole header" >&2
         status=1
-    }
+    fi
 
     if (( status == 0 )); then
         note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
