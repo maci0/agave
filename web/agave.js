@@ -64,22 +64,24 @@ const required_exports = [
     'agave_last_error',
     'agave_free',
 ];
-const wrapFetchError = (error, code, label) => {
-    if (error instanceof AgaveError) {
-        return error;
+const wrapFetchError = (cause, code, label) => {
+    if (cause instanceof AgaveError) {
+        return cause;
     }
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = cause instanceof Error ? cause.message : String(cause);
     return new AgaveError(code, `Failed to download ${label}: ${msg}`);
 };
-const fetchBuffer = async (url, code, label, signal) => {
-    const init = signal === undefined ? undefined : { signal };
-    let response;
+const fetchOrThrow = async (url, init, code, label) => {
     try {
-        response = await fetch(url, init);
+        return await fetch(url, init);
     }
     catch (error) {
         throw wrapFetchError(error, code, label);
     }
+};
+const fetchBuffer = async (url, code, label, signal) => {
+    const init = signal === undefined ? undefined : { signal };
+    const response = await fetchOrThrow(url, init, code, label);
     if (!response.ok) {
         throw new AgaveError(code, `Failed to download ${label} (HTTP ${String(response.status)})`, response.status);
     }
@@ -167,9 +169,6 @@ const initErrorCode = (wasm_code) => {
         }
         case wasm_err.tokenizer: {
             return 'tokenizer';
-        }
-        case wasm_err.model_init: {
-            return 'init_failed';
         }
         default: {
             return 'init_failed';
@@ -305,10 +304,10 @@ class AgaveEngine {
         }
         const exp = wasmExports(this.wasm);
         const requested = options.maxTokens;
-        if (requested !== undefined && requested !== 0) {
-            if (!Number.isInteger(requested) || requested < 0 || requested > max_u32) {
-                throw new AgaveError('invalid_argument', 'maxTokens must be a non-negative integer that fits in 32 bits (0 uses the default)');
-            }
+        const out_of_range = requested !== undefined && requested !== 0
+            && (!Number.isInteger(requested) || requested < 0 || requested > max_u32);
+        if (out_of_range) {
+            throw new AgaveError('invalid_argument', 'maxTokens must be a non-negative integer that fits in 32 bits (0 uses the default)');
         }
         // Both an omitted and an explicitly zero budget mean "use the default".
         const maxTokens = requested === undefined || requested === 0

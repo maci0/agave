@@ -9,11 +9,12 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 ```bash
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe)
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
-zig build ci                        # local CI gate: check + lint-web (CI runs more, see below)
+zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell (CI runs more, see below)
 zig build check                    # fmt-check + docs hygiene + unit tests (local CI gate)
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
 zig build lint-web                 # oxlint + tsc (CI lint-web; needs bun 1.4.0)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
+zig build check-web                # committed src/web/app.js + web/*.js match a fresh tsc build (CI lint-web)
 zig build fmt                      # apply zig fmt to the paths CI checks
 zig build fmt-check                # check formatting without writing
 bun run lint                       # oxlint (web TypeScript; blocking in CI)
