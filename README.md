@@ -60,7 +60,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
 - **19 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, NVFP4-MLA, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
-- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch (`--kv-tiers vram+ram+ssd`)
+- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`)
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS, Llama 4)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Model Download**: `agave pull <org/repo>`, download GGUF models from HuggingFace Hub with auto quant selection
@@ -207,6 +207,8 @@ HF_TOKEN=hf_xxxxx ./zig-out/bin/agave pull org/private-model
 ```
 
 Downloads are stored in the standard HuggingFace cache layout with an agave convenience symlink. Supports resume on interrupted downloads.
+
+Exit codes: `0` success, `2` bad invocation (unknown flag, missing or malformed `org/repo`), `1` the pull itself failed, including a `--quant` the repo does not publish. Scripts that treat any nonzero as a usage error should key on `2` only.
 
 ## Calibration
 
@@ -392,7 +394,7 @@ agave [OPTIONS] <model> [prompt]
       --json-schema <S>    JSON schema for structured output
       --json-output        Constrain generation to valid JSON via grammar (not output format; see --json)
       --kv-type <TYPE>     KV cache quantization: f32, f16, q8_0/q8, int8/i8, fp8/fp8_e4m3, nvfp4/fp4, nvfp4_ds_mla, turbo2/tq2, turbo3/tq3, turbo4/tq4, planar2/pq2 through planar4/pq4, iso2/iq2 through iso4/iq4, rotor2/rq2 through rotor4/rq4, turbo (preset: K=q8_0, V=turbo4) [default: f16]
-      --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]
+      --kv-tiers <TIERS>   Enable tiered KV cache: vram+ram, vram+ram+ssd, unified-memory backends only [default: off]
       --kv-ram-budget <GB> RAM tier budget in GB, requires --kv-tiers [default: 50% of free RAM]
       --kv-ssd-path <PATH> SSD tier file path, requires --kv-tiers with ssd
       --kv-ssd-budget <GB> SSD tier budget in GB, requires --kv-tiers with ssd [default: 10]

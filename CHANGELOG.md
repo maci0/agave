@@ -11,9 +11,42 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Breaking
+- `--kv-tiers` now refuses to start on a discrete GPU:
+  `Error: --kv-tiers requires a unified-memory backend`. It previously started
+  and could produce incorrect output, because demoted blocks still pointed at
+  device memory. Use it on unified-memory backends (Apple silicon, UMA) only.
+- `agave pull` exit codes split: usage errors (`InvalidArgument`,
+  `InvalidRepoFormat`) exit **2**, operational failures exit **1**. Previously
+  every failure exited 2, so a download failure was reported as a usage error.
+  Scripts that treat exit 2 as "the invocation was wrong" need updating.
+- GGUF and SafeTensors readers reject a tensor whose data offset is not
+  4-byte aligned (GGUF: `OffsetOutOfBounds`; SafeTensors: logged, tensor
+  skipped). A repacked or hand-crafted model that loaded before now errors at
+  load time. Every real writer pads to 64 bytes, so no shipped model changes.
+
 ### Added
 - `docs/OBSERVABILITY.md`: `--serve` Prometheus metrics, `/health` and
   `/ready` fields, and `X-Request-Id` log correlation.
+- `docs/DURABILITY.md`: what state is on disk, RPO/RTO, and the conversation
+  store backup/restore runbook.
+- `scripts/conv-store-backup.sh` (`path`, `backup`, `verify FILE`,
+  `restore FILE`, `--self-test`), shipped into the Docker image at
+  `/usr/local/bin/conv-store-backup.sh`. Backups go to `$AGAVE_BACKUP_DIR`
+  (default `$HOME/.agave-backups`) as `conversations-<UTC stamp>.json`, pruned
+  to `$AGAVE_KEEP` (default 14). `restore` snapshots the outgoing store to
+  `conversations-prerestore-<stamp>.json` first. `zig build conv-store-backup-test`
+  runs the self-test.
+- `zig build ci`: the full local gate (`check` plus `lint-web` and
+  `lint-shell`). `zig build check` alone does not cover the web lint.
+- `zig build check-web`: regenerates `src/web/app.js` and `web/*.js` with tsc
+  into a scratch dir and byte-compares them, so a `.ts` edit without rerunning
+  `scripts/build-web.sh` fails the gate (`STALE: <path> differs from a fresh
+  tsc build`). It is a dependency of `zig build lint-web` and `zig build ci`.
+- `tools/quality-testing/collect_continuations.py`: `--out` is a resume
+  ledger, rewritten atomically after every call. A rerun skips prompts that
+  already succeeded for the same `--model` and retries recorded errors, so an
+  interrupted run no longer re-bills every completed call.
 
 ### Changed
 - Docker Compose forwards `AGAVE_DF2_DEBUG` (documented in `.env.example` and
@@ -22,6 +55,82 @@ must still appear under **Changed** or **Breaking** below. See
   SSE header overflow, and cancelled stream prefill. Image decode failures
   (a `400` client error, not a server fault) log at `warn` instead of `err`,
   so alerts keyed on error level stop firing for them.
+- Server: `POST /v1/chat` and the regenerate endpoint rate-limit before the
+  durable append, so a `429` no longer leaves an unanswered user message in
+  the store that replays as context on the next turn, and regenerate no longer
+  drops the last assistant reply before returning `429`. A tokenizer encode
+  failure on those paths now returns `500` instead of proceeding.
+- Server: a conversation save whose file close fails now reports the failure
+  and does not rename, so a store whose data may not have reached disk is never
+  published over the last good one.
+- Server: a conversation store truncated mid-object, or carrying an
+  `id`/`active_id`/`next_id` past `u32`, is quarantined to `<path>.corrupt`
+  instead of panicking at start or loading the lost tail and rewriting the file
+  without it. Loading a store that exceeds the save cap now logs how much was
+  dropped.
+- Split-GGUF discovery keys on shard `00001-of-NNNNN` only, so opening
+  `model-00003-of-00005.gguf` directly no longer merges shard 3 twice. Shard
+  indexes wider than the padding width, and shard totals that overflow, are
+  ignored rather than mis-sliced.
+- `agave pull` aborts with a `SymlinkFailed` error when a sidecar
+  (`model.safetensors.index.json`, `config.json`, `tokenizer.json`,
+  `tokenizer_config.json`) or shard symlink cannot be created or renamed,
+  instead of warning and leaving a dangling path that fails later at model-open
+  time. A failed download of those files is fatal too. An integrity-check read
+  error on an already complete blob now warns and keeps the file, rather than
+  deleting a multi-GB finished download on a transient `EIO`.
+- `--color=<mode>` outside `auto|always|never` now prints
+  `Error: unknown --color value '<x>'` with the valid options and exits 2 on
+  the `--version` fast path as well as the full parse.
+- Browser WASM shell (`web/`): load, drop-zone, file-input, model-URL, and
+  clear controls are disabled while generating and re-enabled after, so
+  swapping or clearing the model mid-generation no longer tears down the WASM
+  engine mid-decode.
+- Web UI (`--serve`): the per-response stats panel (tokens, tok/s, time,
+  prefill) no longer disappears on a streamed reply, and the mobile drawer
+  closes on every outcome of selecting a conversation, including the empty and
+  error branches. Opening a long conversation restores in one layout pass, and
+  an unchanged `/v1/conversations` response no longer rebuilds the sidebar.
+- BPE pretokenizer cache is bounded by owned bytes (32 MiB) in addition to the
+  8192-entry cap, so a long-lived `--serve` process holds a flat heap. Entries
+  larger than the budget are not cached.
+- `tools/synth-moe/moeify_gguf.py` refuses `--out` equal to `--in` (exit 2) and
+  publishes by atomic rename, so a rerun can no longer destroy the only dense
+  copy or leave a truncated GGUF that reads as a bad source.
+- `scripts/build-web.sh` takes an optional out-root argument; with no argument
+  it behaves as before. `zig build ptx` and `zig build amdgcn` now name the
+  missing tool instead of failing with a bare exec error.
+- Docker: both build stages drop the base image's `debian.sources` before
+  writing the `snapshot.debian.org` pin, so two builds of the same commit no
+  longer pick up different live `deb.debian.org` package versions. CI fails the
+  build if fewer than two stages do this.
+- Build: `tests/uv.lock` is committed and the e2e harness sets up with
+  `uv sync --frozen --directory tests`, so a stale lock fails loudly instead of
+  silently re-resolving.
+- `src/kvcache/checkpoint.zig` is removed. No CLI flag or on-disk format ever
+  shipped, so no file is affected; `docs/tutorial/24-advanced-features.md`
+  records that KV checkpointing is not built and why.
+
+### Fixed
+- `agave pull` reports a shard whose filename cannot be built as `Error:`
+  plus exit 1 rather than skipping it.
+- `--serve --sleep-after` no longer hangs on shutdown waiting for the
+  sleep-monitor thread.
+- Chat-template prompt formatting no longer leaks its buffer when an
+  allocation fails mid-format.
+- `scripts/conv-store-backup.sh` no longer fails with `unbalanced braces` on a
+  valid store whose message text or title contains `{` or `}`; brace counting
+  now skips string literals and backslash escapes. A `restore` that previously
+  exited 1 and left the live store alone now succeeds.
+- `/health`, `/ready`, and the model-info response read `kv_seq_len` under the
+  model lock, so `kv_seq_len` and `kv_cache_used` can no longer come from
+  different moments.
+- Tiered KV cache no longer double-counts a block promoted from SSD, so
+  `kv_cache_used` stops drifting during SSD-tier runs.
+- SafeTensors: a `num_hidden_layers` above `u32` no longer traps; it disables
+  the layer aliases instead.
+- `tools/quality-testing/collect_continuations.py` error records now carry the
+  model, so a retry after a model switch is not skipped.
 
 ## [0.3.0] - 2026-09-02
 
@@ -820,3 +929,6 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
+[unreleased]: https://github.com/maci0/agave/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/maci0/agave/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/maci0/agave/releases/tag/v0.2.0

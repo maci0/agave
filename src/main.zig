@@ -481,7 +481,7 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "kv-type-v", .kind = .option, .help = "KV cache value quantization (overrides --kv-type for values)." },
     .{ .long = "cache-type-k", .kind = .option, .help = "Alias for --kv-type-k." },
     .{ .long = "cache-type-v", .kind = .option, .help = "Alias for --kv-type-v." },
-    .{ .long = "kv-tiers", .kind = .option, .help = "Enable tiered KV cache: vram+ram, vram+ram+ssd [default: off]." },
+    .{ .long = "kv-tiers", .kind = .option, .help = "Enable tiered KV cache: vram+ram, vram+ram+ssd, unified-memory backends only [default: off]." },
     .{ .long = "kv-ram-budget", .kind = .option, .help = "RAM tier budget, integer GB, requires --kv-tiers [default: 50% of free RAM]." },
     .{ .long = "kv-ssd-path", .kind = .option, .help = "SSD tier file path, requires --kv-tiers with ssd." },
     .{ .long = "kv-ssd-budget", .kind = .option, .help = "SSD tier budget, integer GB, requires --kv-tiers with ssd [default: 10]." },
@@ -2241,7 +2241,7 @@ const usage_text =
     \\                            Preset: turbo (K=q8_0, V=turbo4)
     \\      --kv-type-k <TYPE>    KV key quantization (overrides --kv-type, alias: --cache-type-k)
     \\      --kv-type-v <TYPE>    KV value quantization (overrides --kv-type, alias: --cache-type-v)
-    \\      --kv-tiers <TIERS>    Tiered KV cache: vram+ram, vram+ram+ssd [default: off]
+    \\      --kv-tiers <TIERS>    Tiered KV cache (unified-memory backends only): vram+ram, vram+ram+ssd [default: off]
     \\      --kv-ram-budget <GB>  RAM tier budget, integer GB (requires --kv-tiers) [default: 50% of free RAM]
     \\      --kv-ssd-path <PATH>  SSD tier file path (requires --kv-tiers with ssd)
     \\      --kv-ssd-budget <GB>  SSD tier budget, integer GB (requires --kv-tiers with ssd) [default: 10]
