@@ -12,6 +12,7 @@ zig build test                     # unit tests at ReleaseSafe so asserts fire. 
 zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python
 zig build check                    # fmt-check + docs hygiene + pin consistency + unit tests + conv-store backup self-test (local CI gate)
 zig build check-pins               # Zig/Docker reproducibility pins, uv.lock freshness, and exact third-party version pins agree (CI fmt-check job)
+zig build check-reproducible       # build twice from different paths and byte-compare the binaries (CI reproducible-build job; compiles the engine twice)
 zig build docs-check               # docs link and count hygiene (scripts/check-docs.py)
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
 zig build lint-web                 # oxlint + tsc + ignorePatterns ratchet (CI lint-web; needs bun 1.4.0)
