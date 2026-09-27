@@ -232,17 +232,19 @@ const UniqTokenSet = struct {
 
     /// Right-sizes the table to ~2x `n` so the load factor stays under 50%,
     /// which is what makes the probe loop terminate on a miss.
-    fn init(n: usize) UniqTokenSet {
+    ///
+    /// Fills the caller's instance: `set` points into `self.buf`, so a
+    /// by-value `init` would leave it aimed at the callee's dead stack frame.
+    fn init(self: *UniqTokenSet, n: usize) void {
         const needed = std.math.mul(usize, n, 2) catch (1 << uniq_set_max_bits);
         var bits: u5 = uniq_set_min_bits;
         while (bits < uniq_set_max_bits) : (bits += 1) {
             if ((@as(usize, 1) << bits) >= needed) break;
         }
         const size = @as(usize, 1) << bits;
-        var self: UniqTokenSet = .{ .set = undefined, .mask = @intCast(size - 1) };
+        self.mask = @intCast(size - 1);
         self.set = self.buf[0..size];
         @memset(self.set, uniq_set_empty);
-        return self;
     }
 
     /// True the first time `tok` is inserted, false on every later repeat.
@@ -273,7 +275,8 @@ const UniqTokenSet = struct {
 pub fn applyRepeatPenalty(logits: []f32, recent_ids: []const u32, penalty: f32) void {
     std.debug.assert(penalty > 0);
     if (penalty == 1.0 or recent_ids.len == 0) return;
-    var seen = UniqTokenSet.init(recent_ids.len);
+    var seen: UniqTokenSet = undefined;
+    seen.init(recent_ids.len);
     for (recent_ids) |tok_id| {
         if (tok_id >= logits.len) continue;
         if (!seen.insert(tok_id)) continue;
@@ -352,7 +355,8 @@ pub fn applyPenalties(logits: []f32, gen_tokens: []const u32, frequency_penalty:
     }
 
     // Single pass: frequency penalty per occurrence + presence penalty per unique token.
-    var seen = UniqTokenSet.init(gen_tokens.len);
+    var seen: UniqTokenSet = undefined;
+    seen.init(gen_tokens.len);
     for (gen_tokens) |tid| {
         if (tid >= logits.len) continue;
         if (frequency_penalty != 0) logits[tid] -= frequency_penalty;

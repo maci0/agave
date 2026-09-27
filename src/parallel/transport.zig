@@ -73,10 +73,6 @@ fn getenv(name: []const u8) ?[]const u8 {
 /// cannot be coerced into `model.ForwardError` at the model vtable.
 const PollError = error{ AcceptFailed, ConnectFailed };
 
-/// Errors a shared-memory flag wait can surface. Kept separate from
-/// `PollError` so a caller of one never widens the other's error set.
-const ShmWaitError = error{ ShmRecvTimeout, ShmSendTimeout };
-
 /// Poll `fd` for `events` until ready or `budget_ms` elapse on the injectable
 /// clock. Returns the poll result (0 on timeout), or `poll_error` if poll(2)
 /// itself fails.
@@ -100,19 +96,17 @@ fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_err
     unreachable;
 }
 
-/// Wait until `flag` equals `want`, or return `timeout_error` once the bound is
+/// Wait until `flag` equals `want`, or return `error.Timeout` once the bound is
 /// reached. Production keeps the spin count; under a clock override the bound
 /// is `shm_wait_budget_ms` of virtual time, so the same number of iterations
-/// elapse on every host.
-/// `timeout_error` is comptime and its type is `ShmWaitError`, so the return
-/// type stays a named set narrower than `TransportError`: a runtime `anyerror`
-/// parameter would widen every caller to the global error set, and a
-/// `TransportError` return would let a wait failure take on unrelated tags.
-fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, comptime timeout_error: ShmWaitError) ShmWaitError!void {
+/// elapse on every host. The timeout stays concrete so callers pick their own
+/// error: a `!void` inferred from an `anyerror` parameter would widen every
+/// caller's error set to the global one all the way up to the model vtable.
+fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32) error{Timeout}!void {
     if (sim_clock.isOverridden()) {
         const deadline = sim_clock.monoMilli() + shm_wait_budget_ms;
         while (flag.load(.acquire) != want) {
-            if (sim_clock.monoMilli() >= deadline) return timeout_error;
+            if (sim_clock.monoMilli() >= deadline) return error.Timeout;
             // Virtual time costs no wall time, so the loop would otherwise burn
             // the whole budget before the peer thread is ever scheduled. Yield
             // so the waiter stays a waiter.
@@ -123,7 +117,7 @@ fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, comptime timeout_e
     }
     var spins: u32 = 0;
     while (flag.load(.acquire) != want) : (spins += 1) {
-        if (spins >= shm_spin_max) return timeout_error;
+        if (spins >= shm_spin_max) return error.Timeout;
         std.atomic.spinLoopHint();
     }
 }
@@ -379,7 +373,7 @@ pub const Transport = struct {
         const hdr: *ShmHeader = @ptrCast(@alignCast(send));
         // Wait until the receiver consumed the previous message (bounded so a
         // peer crash cannot hang this rank).
-        try waitShmFlag(&hdr.ready, 0, error.ShmSendTimeout);
+        waitShmFlag(&hdr.ready, 0) catch return error.ShmSendTimeout;
         const payload = send + @sizeOf(ShmHeader);
         @memcpy(payload[0..byte_len], data[0..byte_len]);
         hdr.size = @intCast(byte_len);
@@ -392,7 +386,7 @@ pub const Transport = struct {
         const hdr: *ShmHeader = @ptrCast(@alignCast(recv));
         // Wait until the sender has data ready (bounded so a peer crash cannot
         // hang this rank).
-        try waitShmFlag(&hdr.ready, 1, error.ShmRecvTimeout);
+        waitShmFlag(&hdr.ready, 1) catch return error.ShmRecvTimeout;
         const payload = recv + @sizeOf(ShmHeader);
         @memcpy(data[0..byte_len], payload[0..byte_len]);
         hdr.ready.store(0, .release);
@@ -515,7 +509,9 @@ pub const Transport = struct {
             if (self.nccl_comm == null) {
                 // ensureNcclComm sets kind=.tcp on failure, fall through to TCP path
                 if (self.tcp_connected > 0) try self.tcpAllReduce(buf, n);
-                return;
+                // No peer: returning here would leave buf un-reduced and report
+                // success, so the split silently disagrees with the other rank.
+                return error.NotConnected;
             }
             // Get CUDA device pointer, if buf is dirty on device, use it directly.
             // If stale (CPU fallback wrote to host), fall back to TCP for this call.
@@ -557,7 +553,9 @@ pub const Transport = struct {
             simdAddF32(buf, recv.ptr, n);
             return;
         }
-        if (self.tcp_connected > 0) try self.tcpAllReduce(buf, n);
+        // A TCP transport with no peer cannot reduce anything: say so instead
+        // of returning an unreduced buffer as if the sum had happened.
+        if (self.tcp_connected > 0) try self.tcpAllReduce(buf, n) else return error.NotConnected;
     }
 
     fn tcpAllReduce(self: *Transport, buf: [*]f32, n: usize) !void {
@@ -807,13 +805,13 @@ test "shm wait times out on virtual time, not host speed" {
     // A flag stuck at the wrong value burns exactly the virtual budget, so a
     // replay reaches the timeout after the same simulated duration regardless
     // of how fast the host spins.
-    try std.testing.expectError(error.ShmRecvTimeout, waitShmFlag(&flag, 1, error.ShmRecvTimeout));
+    try std.testing.expectError(error.Timeout, waitShmFlag(&flag, 1));
     try std.testing.expectEqual(1_000 + shm_wait_budget_ms, sim_clock.monoMilli());
 
     // A flag already at the target returns without advancing time.
     flag.store(1, .release);
     const before = sim_clock.monoMilli();
-    try waitShmFlag(&flag, 1, error.ShmRecvTimeout);
+    try waitShmFlag(&flag, 1);
     try std.testing.expectEqual(before, sim_clock.monoMilli());
 }
 
@@ -832,7 +830,7 @@ test "shm wait returns as soon as the flag is set under override" {
     const t = try std.Thread.spawn(.{}, Watcher.run, .{ &flag, &started });
     defer t.join();
     while (!started.load(.acquire)) std.atomic.spinLoopHint();
-    try waitShmFlag(&flag, 1, error.ShmRecvTimeout);
+    try waitShmFlag(&flag, 1);
     try std.testing.expect(sim_clock.monoMilli() - 1_000 <= shm_wait_budget_ms);
 }
 

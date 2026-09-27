@@ -398,14 +398,19 @@ pub const GGUFFile = struct {
                     const rc = std.os.linux.statx(sfd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &buf2);
                     if (rc != 0) {
                         closeFd(sfd);
-                        continue;
+                        // A silently dropped shard leaves tensors missing from the
+                        // merged table, which surfaces later as an unrelated
+                        // "tensor not found" or as weights quietly left out.
+                        std.log.err("split GGUF: cannot stat shard {d}/{d} '{s}': errno {d}", .{ si, total, shard_name, rc });
+                        return error.InvalidFormat;
                     }
                     break :blk @intCast(buf2.size);
                 } else {
                     var ss: posix.Stat = undefined;
                     if (std.c.fstat(sfd, &ss) != 0) {
                         closeFd(sfd);
-                        continue;
+                        std.log.err("split GGUF: cannot stat shard {d}/{d} '{s}': errno {d}", .{ si, total, shard_name, std.c._errno().* });
+                        return error.InvalidFormat;
                     }
                     break :blk @intCast(ss.size);
                 }
@@ -413,17 +418,21 @@ pub const GGUFFile = struct {
             closeFd(sfd); // close the stat fd; re-open for mmap below
 
             // mmap the shard and parse its tensor table.
-            const sfd2 = posix.openat(posix.AT.FDCWD, shard_name, .{}, 0) catch continue;
-            const smapped = posix.mmap(null, sfsize, .{ .READ = true }, .{ .TYPE = .SHARED }, sfd2, 0) catch {
+            const sfd2 = posix.openat(posix.AT.FDCWD, shard_name, .{}, 0) catch |err| {
+                std.log.err("split GGUF: cannot reopen shard {d}/{d} '{s}': {}", .{ si, total, shard_name, err });
+                return error.InvalidFormat;
+            };
+            const smapped = posix.mmap(null, sfsize, .{ .READ = true }, .{ .TYPE = .SHARED }, sfd2, 0) catch |err| {
                 closeFd(sfd2);
-                continue;
+                std.log.err("split GGUF: cannot mmap shard {d}/{d} '{s}' ({d} bytes): {}", .{ si, total, shard_name, sfsize, err });
+                return error.InvalidFormat;
             };
             closeFd(sfd2);
             posix.madvise(smapped.ptr, smapped.len, posix.MADV.SEQUENTIAL) catch {};
 
-            self.extra_shards.append(self.allocator, smapped) catch {
+            self.extra_shards.append(self.allocator, smapped) catch |err| {
                 posix.munmap(smapped);
-                continue;
+                return err;
             };
 
             // Parse the shard header and merge tensors into self.tensors.
@@ -434,7 +443,7 @@ pub const GGUFFile = struct {
                 .tensors = std.StringHashMap(TensorInfo).init(self.allocator),
                 .allocator = self.allocator,
             };
-            shard_gguf.parseHeader() catch {
+            shard_gguf.parseHeader() catch |err| {
                 shard_gguf.metadata.deinit();
                 shard_gguf.tensors.deinit();
                 for (shard_gguf.owned_strings.items) |s| self.allocator.free(s);
@@ -447,7 +456,11 @@ pub const GGUFFile = struct {
                 shard_gguf.owned_array_lens.deinit(self.allocator);
                 for (shard_gguf.owned_u32_arrays.items) |s| self.allocator.free(s);
                 shard_gguf.owned_u32_arrays.deinit(self.allocator);
-                continue;
+                // The shard is present but unreadable (truncated download, wrong
+                // file). Skipping it would merge a partial tensor table, so the
+                // load fails with the shard named instead.
+                std.log.err("split GGUF: shard {d}/{d} '{s}' is unreadable: {}", .{ si, total, shard_name, err });
+                return error.InvalidFormat;
             };
             // Merge tensors: move all entries into self, computing absolute pointers
             // so tensorData() resolves correctly against shard 2's mmap (not shard 1's).

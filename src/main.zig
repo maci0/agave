@@ -3480,8 +3480,16 @@ fn initAndRun(
             // Wall nanos: the tag must stay unique across concurrent agave
             // processes; monotonic time is boot-relative and can collide.
             const tmp_dir_slice = std.fmt.bufPrint(&tmp_buf, "{s}/agave_video_{d}", .{ tmp_base, nanoTimestamp(g_io) }) catch video_tmp_fallback;
-            Io.Dir.cwd().createDir(g_io, tmp_dir_slice, .default_dir) catch {};
-            defer Io.Dir.cwd().deleteTree(g_io, tmp_dir_slice) catch {};
+            // The directory is pid+time unique, so createDir can only fail for
+            // a real reason. Continuing would make ffmpeg fail on a missing
+            // output path and report a video problem instead.
+            Io.Dir.cwd().createDirPath(g_io, tmp_dir_slice) catch |err| {
+                eprint("Error: could not create video temp directory '{s}': {s}\n", .{ tmp_dir_slice, @errorName(err) });
+                return false;
+            };
+            defer Io.Dir.cwd().deleteTree(g_io, tmp_dir_slice) catch |err| {
+                eprint("Warning: could not remove video temp directory '{s}': {s}\n", .{ tmp_dir_slice, @errorName(err) });
+            };
 
             // Extract frames using ffmpeg: one PNG per second (or custom fps)
             var fps_buf: [32]u8 = undefined;
