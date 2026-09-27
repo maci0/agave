@@ -683,7 +683,10 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
 
         // Collect top-N probabilities via min-replacement scan (O(n))
         for (logits) |v| {
-            if (v <= 0) continue;
+            // Negated so NaN drops out too: every NaN comparison is false, so
+            // `v <= 0` would admit it and poison cumsum, leaving the threshold
+            // at 0 and silently disabling top-p.
+            if (!(v > 0)) continue;
             if (n_top < nucleus_max_candidates) {
                 top_vals[n_top] = v;
                 n_top += 1;

@@ -2169,7 +2169,9 @@ fn loadHealthView() HealthView {
     const settled = completed + failed;
     return .{
         .shutting_down = g_server.shutdown_requested.load(.acquire),
-        .kv_pressure = kv_total > 0 and kv_used * 100 / kv_total >= kv_cache_degradation_pct,
+        // Widen before the multiply: kv_total is a u32 block count, so kv_used * 100
+        // wraps past 2^32 and reports "no pressure" on a full cache.
+        .kv_pressure = kv_total > 0 and @as(u64, kv_used) * 100 / kv_total >= kv_cache_degradation_pct,
         .high_error_rate = settled >= error_rate_min_requests and failed * 100 / settled >= error_rate_degradation_pct,
         .kv_used = kv_used,
         .kv_total = kv_total,

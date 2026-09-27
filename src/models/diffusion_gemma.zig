@@ -728,7 +728,7 @@ pub const DiffusionGemmaModel = struct {
             w.* = @exp(w.* - max_w);
             w_sum += w.*;
         }
-        const inv_w = 1.0 / w_sum;
+        const inv_w = if (w_sum > 0) 1.0 / w_sum else 0.0;
         for (top_weights[0..n_sel]) |*w| w.* *= inv_w;
 
         // Accumulate expert outputs.
@@ -934,7 +934,7 @@ pub const DiffusionGemmaModel = struct {
             w.* = @exp(w.* - max_w);
             w_sum += w.*;
         }
-        const inv_w = 1.0 / w_sum;
+        const inv_w = if (w_sum > 0) 1.0 / w_sum else 0.0;
         for (top_weights[0..n_sel]) |*w| w.* *= inv_w;
 
         @memset(self.expert_out, 0);

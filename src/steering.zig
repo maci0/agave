@@ -102,6 +102,15 @@ pub const DirectionalSteering = struct {
             return error.SteeringFileSizeMismatch;
         }
 
+        // A single non-finite value makes the dot product NaN, which spreads
+        // through the whole hidden state and silences every later layer.
+        for (directions, 0..) |d, i| {
+            if (!std.math.isFinite(d)) {
+                std.log.err("steering: non-finite direction at index {d}", .{i});
+                return error.SteeringFileNotFinite;
+            }
+        }
+
         return DirectionalSteering{
             .directions = directions,
             .n_layers = n_layers,
