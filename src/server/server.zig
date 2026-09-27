@@ -1211,16 +1211,50 @@ fn wipeFreeTokens(allocator: Allocator, ids: []u32) void {
     allocator.free(ids);
 }
 
-/// Sanitize a string for safe terminal output by replacing control characters
-/// (bytes < 0x20 except space, and DEL 0x7F) with '?'. Prevents log injection
-/// via terminal escape sequences (CWE-117).
+/// Sanitize a string for safe terminal output: replace control codepoints
+/// (C0 below space except space, DEL, and the C1 range 0x80-0x9F) with '?', and
+/// replace bytes that are not valid UTF-8 the same way. Decoding per codepoint
+/// is what makes the C1 range reachable: its UTF-8 form (C2 80-C2 9F) is two
+/// ordinary-looking bytes, so a byte filter passes it and the terminal reads it
+/// as CSI. Prevents log injection via terminal escape sequences (CWE-117).
+///
+/// Clips on a character boundary, so a path longer than `buf` never leaves half
+/// a character in the log. The output is always valid UTF-8.
 fn sanitizeForLog(input: []const u8, buf: []u8) []const u8 {
-    const len = @min(input.len, buf.len);
-    for (0..len) |i| {
-        const c = input[i];
-        buf[i] = if ((c < 0x20 and c != ' ') or c == 0x7F) '?' else c;
+    var i: usize = 0;
+    var out: usize = 0;
+    while (i < input.len) {
+        const seq_len = utf8SequenceLen(input, i) orelse {
+            if (out < buf.len) {
+                buf[out] = '?';
+                out += 1;
+            }
+            i += 1;
+            continue;
+        };
+        const cp = std.unicode.utf8Decode(input[i..][0..seq_len]) catch unreachable;
+        const is_control = (cp < 0x20 and cp != ' ') or cp == 0x7F or (cp >= 0x80 and cp <= 0x9F);
+        if (is_control or out + seq_len > buf.len) {
+            if (out < buf.len) {
+                buf[out] = '?';
+                out += 1;
+            }
+        } else {
+            @memcpy(buf[out..][0..seq_len], input[i..][0..seq_len]);
+            out += seq_len;
+        }
+        i += seq_len;
     }
-    return buf[0..len];
+    return buf[0..out];
+}
+
+/// Length of the complete UTF-8 sequence at `i`, or null when those bytes are
+/// not one valid, fully present character.
+fn utf8SequenceLen(s: []const u8, i: usize) ?usize {
+    const seq_len = std.unicode.utf8ByteSequenceLength(s[i]) catch return null;
+    if (i + seq_len > s.len) return null;
+    _ = std.unicode.utf8Decode(s[i..][0..seq_len]) catch return null;
+    return seq_len;
 }
 
 fn logRequest(method: []const u8, path: []const u8) void {
@@ -5466,7 +5500,12 @@ fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_t
         while (piece_start < gen.raw.len) {
             var piece_end = @min(piece_start + anthropic_delta_piece_len, gen.raw.len);
             // Never split a UTF-8 sequence across events.
-            while (piece_end > piece_start and piece_end < gen.raw.len and (gen.raw[piece_end] & 0xC0) == 0x80) piece_end -= 1;
+            if (piece_end < gen.raw.len) {
+                while (piece_end > piece_start and (gen.raw[piece_end] & 0xC0) == 0x80) piece_end -= 1;
+                // More continuation bytes than the piece is long leaves no lead
+                // byte in range. Step forward so the walk always progresses.
+                if (piece_end == piece_start) piece_end = piece_start + 1;
+            }
             if (!emitAnthropicDeltaPiece(stream, gen.raw[piece_start..piece_end])) return;
             piece_start = piece_end;
         }
@@ -8361,12 +8400,14 @@ test "fuzz: all server functions" {
                 }
                 var out_buf: [32]u8 = undefined;
                 const result = sanitizeForLog(input_buf[0..len], &out_buf);
-                std.debug.assert(result.len == len);
-                // Control chars and DEL are replaced; output must be printable.
+                std.debug.assert(result.len <= len);
+                // Control chars, DEL, and invalid sequences are replaced; output
+                // must be printable and valid UTF-8.
                 for (result) |ch| {
                     try std.testing.expect(ch >= 0x20);
                     try std.testing.expect(ch != 0x7F);
                 }
+                try std.testing.expect(std.unicode.utf8ValidateSlice(result));
             }
 
             // hasHeader, fixed well-formed cases plus random header blobs
@@ -8764,4 +8805,27 @@ test "auth chokepoint denies every protected route" {
     try std.testing.expectEqual(AuthPolicy.required, authPolicyFor("/v1/nope"));
     try std.testing.expect(!authorizedForPath(&server, "/v1/nope", bad));
     try std.testing.expect(!authorizedForPath(&server, "/V1/MODELS", bad));
+}
+
+test "sanitizeForLog replaces C1 controls and invalid UTF-8" {
+    var buf: [64]u8 = undefined;
+    // U+009B (CSI) reaches the log as two ordinary bytes (C2 9B); a byte filter
+    // would pass it and the terminal would run the escape that follows.
+    const csi = sanitizeForLog("/x\xc2\x9b\x31m", &buf);
+    try std.testing.expectEqualStrings("/x?1m", csi);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(csi));
+}
+
+test "sanitizeForLog clips on a character boundary" {
+    var buf: [3]u8 = undefined;
+    // "aaé" is 4 bytes; a 3-byte cap would leave half of the é behind.
+    const s = sanitizeForLog("aa\xc3\xa9", &buf);
+    try std.testing.expectEqualStrings("aa?", s);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(s));
+}
+
+test "sanitizeForLog keeps printable multibyte text intact" {
+    var buf: [64]u8 = undefined;
+    const s = sanitizeForLog("/模型/🌵", &buf);
+    try std.testing.expectEqualStrings("/模型/🌵", s);
 }
