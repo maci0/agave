@@ -10,7 +10,8 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe)
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
 zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python (CI runs more, see below)
-zig build check                    # fmt-check + docs hygiene + unit tests (local CI gate)
+zig build check                    # fmt-check + docs hygiene + pin consistency + unit tests (local CI gate)
+zig build check-pins               # Zig/Docker reproducibility pins agree (CI fmt-check job)
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
 zig build lint-web                 # oxlint + tsc (CI lint-web; needs bun 1.4.0)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
