@@ -14,7 +14,18 @@ echo ""
 benchmark_model() {
     local name="$1"
     local model="$2"
-    local extra_args="${3:-}"
+    # Third argument is a flag string ("--kq-type q8 -ctk q8"); split it once
+    # so each flag stays a separate argv entry.
+    local -a extra_args=()
+    if [[ -n "${3:-}" ]]; then
+        read -r -a extra_args <<< "$3"
+    fi
+    # bash 3.2 (the macOS default) treats "${arr[@]}" on an empty array as
+    # unset under set -u, so the extras are spliced in only when present.
+    local -a base=("$AGAVE" "$model" --ssd-streaming)
+    if [[ ${#extra_args[@]} -gt 0 ]]; then
+        base+=("${extra_args[@]}")
+    fi
     
     echo "--- $name ---"
     
@@ -26,19 +37,19 @@ benchmark_model() {
     fi
     
     # Warmup
-    $AGAVE "$model" --ssd-streaming $extra_args --max-tokens 8 --ctx-size 512 -t 0.0 "Hi" > /dev/null 2>&1 || true
+    "${base[@]}" --max-tokens 8 --ctx-size 512 -t 0.0 "Hi" > /dev/null 2>&1 || true
     sleep 1
     
     # Speed benchmark (3 runs, report all)
     echo "  Speed (128 tok, t=0.0):"
     for run in 1 2 3; do
-        result=$($AGAVE "$model" --ssd-streaming $extra_args --max-tokens 128 --ctx-size 512 -t 0.0 "Hello" 2>&1 | grep "tok/s" || echo "FAIL")
+        result=$("${base[@]}" --max-tokens 128 --ctx-size 512 -t 0.0 "Hello" 2>&1 | grep "tok/s" || echo "FAIL")
         echo "    Run $run: $result"
     done
     
     # Coherence check (t=0.7 for more natural output)
     echo "  Coherence (t=0.7):"
-    output=$($AGAVE "$model" --ssd-streaming $extra_args --max-tokens 64 --ctx-size 512 -t 0.7 "$PROMPT" 2>&1 | grep -v "^info:\|^agave\|^system:\|^loading\|^recipe:\|^context:\|^loaded:\|^ssd-\|^error")
+    output=$("${base[@]}" --max-tokens 64 --ctx-size 512 -t 0.7 "$PROMPT" 2>&1 | grep -v "^info:\|^agave\|^system:\|^loading\|^recipe:\|^context:\|^loaded:\|^ssd-\|^error")
     echo "    $output"
     echo ""
 }

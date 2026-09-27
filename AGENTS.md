@@ -11,6 +11,7 @@ zig build                          # agave (ReleaseFast, stripped) + agave-debug
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
 zig build check                    # fmt-check + docs hygiene + unit tests (local CI gate)
 zig build lint-web                 # oxlint + tsc (CI lint-web; needs bun 1.4.0)
+zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
 zig build fmt                      # apply zig fmt to the paths CI checks
 zig build fmt-check                # check formatting without writing
 bun run lint                       # oxlint (web TypeScript; blocking in CI)

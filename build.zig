@@ -669,6 +669,11 @@ pub fn build(b: *std.Build) void {
         const lint_web_step = b.step("lint-web", "oxlint + tsc (CI lint-web job)");
         lint_web_step.dependOn(&lint_web_cmd.step);
 
+        const lint_shell_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-shell.sh" });
+        lint_shell_cmd.has_side_effects = true;
+        const lint_shell_step = b.step("lint-shell", "shellcheck (CI lint-shell job)");
+        lint_shell_step.dependOn(&lint_shell_cmd.step);
+
         const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
