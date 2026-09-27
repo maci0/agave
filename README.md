@@ -647,6 +647,7 @@ zig build -Dtarget=aarch64-linux-musl \
 - **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.3.0`, 0.x SemVer)
 - **[API Reference](docs/API.md)**: HTTP API endpoints, request/response formats
 - **[Observability](docs/OBSERVABILITY.md)**: `--serve` Prometheus metrics, health endpoints, request log correlation
+- **[Durability and recovery](docs/DURABILITY.md)**: On-disk state, RPO/RTO, conversation-store backup and restore
 - **[Megakernel System](docs/MEGAKERNEL.md)**: Composable fused GPU dispatch
 - **[CLAUDE.md](CLAUDE.md)**: Engineering standards for contributors
 - **[research/kernels/](research/kernels/)**: Kernel research tools (benchmarks, golden tests)

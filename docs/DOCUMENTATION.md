@@ -45,6 +45,7 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 
 - **[HTTP API](API.md)**: server endpoints, sampling parameters, structured output, streaming
 - **[Threat model](THREAT_MODEL.md)**: attack surface, trust boundaries, mitigations vs gaps
+- **[Durability and recovery](DURABILITY.md)**: on-disk state inventory, RPO/RTO, conversation-store backup and restore
 - **[Observability](OBSERVABILITY.md)**: `--serve` metrics, health endpoints, log correlation IDs, debugging path
 - **[Security](../SECURITY.md)**: supported versions and vulnerability reporting
 - **[Architecture](ARCHITECTURE.md)**: project structure, Design Decisions table, module reference, inference pipeline

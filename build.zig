@@ -674,10 +674,20 @@ pub fn build(b: *std.Build) void {
         const lint_shell_step = b.step("lint-shell", "shellcheck (CI lint-shell job)");
         lint_shell_step.dependOn(&lint_shell_cmd.step);
 
+        // A backup nobody has restored is a hypothesis. This runs the
+        // conversation-store backup, verify, and restore path end to end
+        // against a scratch store, so the runbook in docs/DURABILITY.md is
+        // exercised rather than described.
+        const conv_backup_cmd = b.addSystemCommand(&.{ "bash", "scripts/conv-store-backup.sh", "--self-test" });
+        conv_backup_cmd.has_side_effects = true;
+        const conv_backup_step = b.step("conv-store-backup-test", "Conversation store backup + restore self-test (docs/DURABILITY.md)");
+        conv_backup_step.dependOn(&conv_backup_cmd.step);
+
         const check_step = b.step("check", "Local CI gate: format check + docs hygiene + unit tests");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
         check_step.dependOn(test_step);
+        check_step.dependOn(conv_backup_step);
 
         // The blocking ci-pass jobs a workstation can reproduce. Docker,
         // cross-compile, wasm, fuzz and PTX freshness stay in CI (or the

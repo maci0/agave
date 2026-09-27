@@ -185,7 +185,13 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
     }
 
     var i: usize = 1;
-    while (i < arr.len and convs.items.len < max_conversations) {
+    while (i < arr.len) {
+        // The next save writes back only what loaded here, so hitting the cap
+        // deletes the overflow with no record. Name it instead of dropping it.
+        if (convs.items.len == max_conversations) {
+            std.log.warn("conversation store: more than {d} conversations; the rest are dropped on the next save", .{max_conversations});
+            break;
+        }
         while (i < arr.len and (arr[i] == ' ' or arr[i] == '\n' or arr[i] == '\r' or arr[i] == '\t' or arr[i] == ',')) : (i += 1) {}
         if (i >= arr.len or arr[i] == ']') break;
         if (arr[i] != '{') return error.CorruptStore;
@@ -264,7 +270,11 @@ fn parseMessages(allocator: Allocator, arr: []const u8) ![]Message {
     }
 
     var i: usize = 1;
-    while (i < arr.len and list.items.len < max_messages_per_conv) {
+    while (i < arr.len) {
+        if (list.items.len == max_messages_per_conv) {
+            std.log.warn("conversation store: more than {d} messages in one conversation; the rest are dropped on the next save", .{max_messages_per_conv});
+            break;
+        }
         while (i < arr.len and (arr[i] == ' ' or arr[i] == '\n' or arr[i] == '\r' or arr[i] == '\t' or arr[i] == ',')) : (i += 1) {}
         if (i >= arr.len or arr[i] == ']') break;
         if (arr[i] != '{') return error.CorruptStore;
@@ -385,6 +395,17 @@ fn mkdirP(path: []const u8) void {
     }
 }
 
+/// Pid-unique test path: test binaries run in parallel in one working
+/// directory, so a shared name lets one truncate or quarantine another's
+/// store mid-test.
+fn testPath(buf: []u8, name: []const u8) []u8 {
+    return std.fmt.bufPrint(buf, "test_conv_store_{d}_{s}", .{ std.c.getpid(), name }) catch unreachable;
+}
+
+fn testPathSuffix(buf: []u8, path: []const u8, suffix: []const u8) []u8 {
+    return std.fmt.bufPrint(buf, "{s}{s}", .{ path, suffix }) catch unreachable;
+}
+
 fn deleteTestPath(path: []const u8) void {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     if (path.len >= buf.len) return;
@@ -411,12 +432,42 @@ test "defaultPath prefers XDG_CACHE_HOME then HOME/.cache" {
     try std.testing.expect(formatDefaultPath(&buf, "", "") == null);
 }
 
+test "load caps conversations at the save cap instead of dropping silently" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "capped.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(path);
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+
+    // One more conversation than the server will ever write, as a hand-edited
+    // or externally written store can carry.
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try buf.appendSlice(allocator, "{\"version\":1,\"active_id\":0,\"next_id\":1,\"conversations\":[");
+    for (0..max_conversations + 1) |n| {
+        if (n > 0) try buf.append(allocator, ',');
+        try buf.print(allocator, "{{\"id\":{d},\"title\":\"c{d}\",\"messages\":[]}}", .{ n, n });
+    }
+    try buf.appendSlice(allocator, "]}");
+    try durable.replace(path, buf.items);
+
+    var snap = try load(allocator, path);
+    defer snap.deinit();
+    // Capped, not rejected: the file is still usable and the overflow is
+    // logged by parse.
+    try std.testing.expectEqual(max_conversations, snap.conversations.len);
+}
+
 test "save/load round-trips conversations and tool ids" {
     const allocator = std.testing.allocator;
-    const path = "test_conv_store.json";
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "roundtrip.json");
+    var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var corrupt_buf: [std.fs.max_path_bytes]u8 = undefined;
     defer deleteTestPath(path);
-    defer deleteTestPath(path ++ ".tmp");
-    defer deleteTestPath(path ++ ".corrupt");
+    defer deleteTestPath(testPathSuffix(&tmp_buf, path, ".tmp"));
+    defer deleteTestPath(testPathSuffix(&corrupt_buf, path, ".corrupt"));
 
     const msgs = [_]Message{
         .{ .role = .user, .content = "hello \"world\"" },
@@ -444,9 +495,11 @@ test "save/load round-trips conversations and tool ids" {
 
 test "load quarantines corrupt store" {
     const allocator = std.testing.allocator;
-    const path = "test_conv_store_corrupt.json";
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "corrupt.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
     defer deleteTestPath(path);
-    defer deleteTestPath("test_conv_store_corrupt.json.corrupt");
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
 
     try durable.replace(path, "{\"not\": \"a store\"}");
     try std.testing.expectError(error.CorruptStore, load(allocator, path));
@@ -460,14 +513,17 @@ test "load quarantines corrupt store" {
 }
 
 test "load missing file is FileNotFound" {
-    try std.testing.expectError(error.FileNotFound, load(std.testing.allocator, "test_conv_store_missing.json"));
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    try std.testing.expectError(error.FileNotFound, load(std.testing.allocator, testPath(&path_buf, "missing.json")));
 }
 
 test "load OOM does not quarantine a valid store" {
     const allocator = std.testing.allocator;
-    const path = "test_conv_store_oom.json";
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "oom.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
     defer deleteTestPath(path);
-    defer deleteTestPath(path ++ ".corrupt");
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
 
     const msgs = [_]Message{
         .{ .role = .user, .content = "keep me" },
@@ -484,7 +540,7 @@ test "load OOM does not quarantine a valid store" {
     const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{}, 0) catch return error.StoreDeletedOnOom;
     _ = std.posix.system.close(fd);
 
-    _ = std.posix.openat(std.posix.AT.FDCWD, path ++ ".corrupt", .{}, 0) catch |err| {
+    _ = std.posix.openat(std.posix.AT.FDCWD, testPathSuffix(&suf_buf, path, ".corrupt"), .{}, 0) catch |err| {
         try std.testing.expect(err == error.FileNotFound);
         return;
     };

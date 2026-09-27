@@ -49,6 +49,12 @@ services:
       - ${AGAVE_MODELS_DIR:-./models}:/models:ro
       # Survives container replace: conversation store, Vulkan pipeline cache,
       # HuggingFace / agave pull blobs (HOME is otherwise tmpfs).
+      # This volume is the ONLY copy of the conversation store. `down -v` and a
+      # pruned Docker data root delete it with no undo. Back it up to another
+      # filesystem: docs/DURABILITY.md, or
+      #   docker run --rm --entrypoint conv-store-backup.sh \
+      #     -v agave-cache:/home/agave/.cache:ro -v "$PWD/backups:/backups" \
+      #     -e AGAVE_BACKUP_DIR=/backups agave:local backup
       - ${AGAVE_CACHE_DIR:-agave-cache}:/home/agave/.cache
     # ENTRYPOINT is already: agave --host 0.0.0.0
     command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]

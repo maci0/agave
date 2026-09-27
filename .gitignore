@@ -93,6 +93,10 @@ docs/changelogs/
 
 # Local scratch / generated files
 .scratch/
+
+# Host-path cache (AGAVE_CACHE_DIR=./.agave-cache in .env.example). Holds the
+# plaintext conversation store, Hub blobs, and the Vulkan pipeline cache.
+.agave-cache/
 graphify-out/
 .ralph/
 .worktrees/

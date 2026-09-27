@@ -144,9 +144,18 @@ fn readPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return buf;
 }
 
+/// Pid-unique test path. `zig build test` runs several test binaries in
+/// parallel in one working directory, and every binary that links
+/// `backend.zig` compiles these tests, so a shared name lets one rename the
+/// other's `*.tmp` away mid-write.
+fn testPath(buf: []u8, name: []const u8) []u8 {
+    return std.fmt.bufPrint(buf, "test_durable_file_{d}_{s}", .{ std.c.getpid(), name }) catch unreachable;
+}
+
 test "replace round-trips bytes and removes tmp" {
     if (comptime !posix_sync) return;
-    const path = "test_durable_file.bin";
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "roundtrip.bin");
     const payload = "agave-durable-replace";
     try replace(path, payload);
     defer deletePath(path);
@@ -156,18 +165,21 @@ test "replace round-trips bytes and removes tmp" {
     try std.testing.expectEqualStrings(payload, got);
 
     // Sibling tmp must not remain after a successful replace.
-    const tmp_fd = std.posix.openat(std.posix.AT.FDCWD, path ++ ".tmp", .{}, 0) catch |err| {
+    var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = tmpPath(&tmp_buf, path) catch unreachable;
+    const tmp_fd = std.posix.openat(std.posix.AT.FDCWD, tmp_path, .{}, 0) catch |err| {
         try std.testing.expect(err == error.FileNotFound);
         return;
     };
     closeFd(tmp_fd);
-    deletePath(path ++ ".tmp");
+    deletePath(tmp_path);
     return error.TmpLeftBehind;
 }
 
 test "replace overwrites previous contents atomically" {
     if (comptime !posix_sync) return;
-    const path = "test_durable_file_overwrite.bin";
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "overwrite.bin");
     try replace(path, "v1");
     defer deletePath(path);
     try replace(path, "v2-longer");
