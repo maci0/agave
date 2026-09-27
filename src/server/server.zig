@@ -903,6 +903,16 @@ fn invalidateKvBookkeeping() void {
     g_server.clearCachedPromptIds();
 }
 
+/// Whether the KV prefix memo applies to a request that carried `n_visual`
+/// image embeddings. The memo is keyed on token IDs alone, and image
+/// placeholders are the same IDs for every image, so a prompt with an image
+/// must neither read nor publish it: two different images behind an identical
+/// token sequence would share KV, and the answer would come from the earlier
+/// request's picture. Text prompts keep the full prefix reuse.
+fn prefixCacheApplies(n_visual: u32) bool {
+    return n_visual == 0;
+}
+
 /// Acquire the scheduler's model mutex so direct-path forward loops
 /// (grammar / json_mode fallbacks) cannot run concurrently with the
 /// scheduler thread's Phase A/B forwards on the same KV cache.
@@ -4352,6 +4362,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    const n_visual = pending_visual_tokens;
     applyPendingVisionEmbeddings();
 
     // Re-check kv_valid under mutex, the caller's `reset` flag may be stale
@@ -4364,7 +4375,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     // those tokens (KV cache already has them). Roll back KV to the shared prefix
     // length and only process new tokens.
     var prefix_len: usize = 0;
-    if (actual_reset and g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
+    if (actual_reset and prefixCacheApplies(n_visual) and g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
         const max_match = @min(g_server.cached_prompt_ids.len, token_ids.len);
         while (prefix_len < max_match and g_server.cached_prompt_ids[prefix_len] == token_ids[prefix_len]) {
             prefix_len += 1;
@@ -4414,10 +4425,12 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 
     // Cache the prompt token IDs for next request's prefix matching (zeros old IDs).
     g_server.clearCachedPromptIds();
-    g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch blk: {
-        std.log.warn("req={d} prefix-cache OOM ({d} tokens); next request will re-prefill", .{ log_request_id, token_ids.len });
-        break :blk &.{};
-    };
+    if (prefixCacheApplies(n_visual)) {
+        g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch blk: {
+            std.log.warn("req={d} prefix-cache OOM ({d} tokens); next request will re-prefill", .{ log_request_id, token_ids.len });
+            break :blk &.{};
+        };
+    }
     const prefill_ms: u64 = elapsedMs(prefill_start);
     const prefill_tps: f32 = tokensPerSec(prompt_token_count, prefill_ms);
     g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
@@ -6838,11 +6851,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     lockModelWithScheduler();
     defer unlockModelWithScheduler();
     const model = g_server.model;
+    const n_visual = pending_visual_tokens;
     applyPendingVisionEmbeddings();
 
     // Prompt prefix caching (streaming): reuse KV cache for shared prefix
     var s_prefix_len: usize = 0;
-    if (g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
+    if (prefixCacheApplies(n_visual) and g_server.cached_prompt_ids.len > 0 and token_ids.len > 0) {
         const s_max_match = @min(g_server.cached_prompt_ids.len, token_ids.len);
         while (s_prefix_len < s_max_match and g_server.cached_prompt_ids[s_prefix_len] == token_ids[s_prefix_len]) {
             s_prefix_len += 1;
@@ -8250,6 +8264,15 @@ test "Utf8Holdback releases invalid continuation raw like batch decode" {
     // Held bytes pass through raw rather than being dropped.
     try std.testing.expectEqualStrings("\xe4\xb8", pieces.head);
     try std.testing.expectEqualStrings("z", pieces.body);
+}
+
+test "prefixCacheApplies excludes prompts that carried an image" {
+    // Image placeholders are the same token IDs for every image, so a
+    // prompt with visual embeddings must never read or publish the KV
+    // prefix memo; two different images would otherwise share KV.
+    try std.testing.expect(prefixCacheApplies(0));
+    try std.testing.expect(!prefixCacheApplies(1));
+    try std.testing.expect(!prefixCacheApplies(256));
 }
 
 test "Conversation.freeMessages releases tool_call_id" {

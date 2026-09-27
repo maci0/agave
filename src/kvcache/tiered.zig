@@ -422,6 +422,7 @@ pub const TieredKvCache = struct {
                 const keys = try self.allocator.alloc(f32, slot_size);
                 errdefer self.allocator.free(keys);
                 const values = try self.allocator.alloc(f32, slot_size);
+                errdefer self.allocator.free(values);
                 self.blocks[block_id].base.keys = keys;
                 self.blocks[block_id].base.values = values;
                 self.blocks[block_id].tier = .ram;
@@ -755,7 +756,14 @@ pub const TieredKvCache = struct {
                 _ = self.ram_used.fetchSub(1, .monotonic);
                 self.ram_free_list.appendAssumeCapacity(block_id);
             },
-            .ssd => self.ssd_free_list.appendAssumeCapacity(block_id),
+            .ssd => {
+                // The spill slot still holds the released sequence's keys and
+                // values. Drop the offset so the next allocation of this block
+                // takes the fresh-backing path instead of promoting stale KV
+                // into a block that belongs to a different request.
+                blk.ssd_offset = null;
+                self.ssd_free_list.appendAssumeCapacity(block_id);
+            },
         }
     }
 
@@ -1082,6 +1090,35 @@ test "TieredKvCache SSD round-trip preserves data" {
     }
 
     cache.freeBlock(b0);
+}
+
+test "freed SSD slot is not resurrected with a stale spill" {
+    const allocator = std.testing.allocator;
+    var path_buf: [128]u8 = undefined;
+    const ssd_path = std.fmt.bufPrint(&path_buf, "test_ssd_free_{d}.tmp", .{std.c.getpid()}) catch unreachable;
+
+    // 0 VRAM, 0 RAM, 1 SSD: every allocation comes off the SSD free list.
+    var cache = try TieredKvCache.init(allocator, 1, 4, 0, 0, 1, 16, ssd_path);
+    defer {
+        cache.deinit();
+        deleteFileByPath(ssd_path);
+    }
+
+    const b0 = try cache.allocBlock();
+    @memset(cache.blocks[b0].base.keys, 7.0);
+    try cache.demoteToSsd(b0);
+    cache.freeBlock(b0);
+
+    // Same physical block, handed out again: it must come back as fresh
+    // uninitialized RAM backing, not the spill of the sequence that just
+    // released it.
+    const b1 = try cache.allocBlock();
+    try std.testing.expectEqual(b0, b1);
+    try std.testing.expectEqual(@as(?u64, null), cache.blocks[b1].ssd_offset);
+    try std.testing.expectEqual(@as(usize, 16 * 4), cache.blocks[b1].base.keys.len);
+    try std.testing.expectEqual(BlockTier.ram, cache.blocks[b1].tier);
+
+    cache.freeBlock(b1);
 }
 
 test "fuzz: all tiered functions" {
