@@ -140,7 +140,7 @@ body {
   border: none;
   color: var(--text-3);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-sm);
   min-width: 44px;
   min-height: 44px;
   display: flex;
@@ -385,8 +385,8 @@ body.show-stats .stats { display: flex; }
 .stats .val { color: var(--accent); font-weight: 500; }
 
 /* Error & info toasts */
-.error-msg { background: var(--red-bg); border: 1px solid var(--red); color: var(--red-text); padding: 12px 18px; border-radius: var(--r); margin: 8px 0; font-size: 14px; }
-.info-msg { background: var(--accent-bg); border: 1px solid var(--border-hl); color: var(--text-2); padding: 12px 18px; border-radius: var(--r); margin: 8px 0; font-size: 14px; }
+.error-msg { background: var(--red-bg); border: 1px solid var(--red); color: var(--red-text); padding: 12px 18px; border-radius: var(--r); margin: 8px 0; font-size: var(--fs-sm); }
+.info-msg { background: var(--accent-bg); border: 1px solid var(--border-hl); color: var(--text-2); padding: 12px 18px; border-radius: var(--r); margin: 8px 0; font-size: var(--fs-sm); }
 .toast { display: flex; align-items: center; gap: 8px; }
 .toast-dismiss { background: none; border: none; color: inherit; cursor: pointer; font-size: var(--fs-lg); padding: 2px 4px; opacity: 0.7; flex-shrink: 0; line-height: 1; min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 .toast-dismiss:hover { opacity: 1; }
@@ -402,12 +402,12 @@ body.show-stats .stats { display: flex; }
 #msg:disabled { opacity: 0.5; cursor: not-allowed; }
 #msg::placeholder { color: var(--text-3); }
 
-.send-btn { font-family: var(--mono); padding: 12px 20px; border-radius: var(--r); border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent); font-size: 14px; font-weight: 500; cursor: pointer; transition: background .2s, color .2s; white-space: nowrap; min-height: 44px; }
+.send-btn { font-family: var(--mono); padding: 12px 20px; border-radius: var(--r); border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent); font-size: var(--fs-sm); font-weight: 500; cursor: pointer; transition: background .2s, color .2s; white-space: nowrap; min-height: 44px; }
 .send-btn:hover { background: var(--accent); color: var(--bg); }
 .send-btn:disabled { opacity: .4; cursor: not-allowed; }
 .send-btn:disabled:hover { background: var(--accent-bg); color: var(--accent); }
 
-.stop-btn { font-family: var(--mono); padding: 12px 20px; border-radius: var(--r); border: 1px solid var(--red); background: var(--red-bg); color: var(--red); font-size: 14px; font-weight: 500; cursor: pointer; transition: background .2s, color .2s; white-space: nowrap; display: none; min-height: 44px; }
+.stop-btn { font-family: var(--mono); padding: 12px 20px; border-radius: var(--r); border: 1px solid var(--red); background: var(--red-bg); color: var(--red); font-size: var(--fs-sm); font-weight: 500; cursor: pointer; transition: background .2s, color .2s; white-space: nowrap; display: none; min-height: 44px; }
 .stop-btn:hover { background: var(--red); color: var(--bg); }
 
 .input-hint { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text-3); text-align: center; margin-top: 8px; }
@@ -523,7 +523,7 @@ body.show-stats .stats { display: flex; }
 }
 .system-prompt-clear {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   background: none;
   border: 1px solid var(--border);
   color: var(--text-3);
@@ -645,7 +645,7 @@ body.show-stats .stats { display: flex; }
 .modal-body code { font-family: var(--mono); background: var(--surface); padding: 2px 6px; border-radius: var(--r-xs); font-size: 0.85em; color: var(--accent); }
 .modal-body h3 { font-family: var(--mono); color: var(--accent); margin: 16px 0 8px; font-size: var(--fs-sm); }
 .modal-body ul { margin: 4px 0; padding-inline-start: 20px; }
-.modal-body li { margin: 4px 0; font-size: 14px; }
+.modal-body li { margin: 4px 0; font-size: var(--fs-sm); }
 .info-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
 .info-row:last-child { border: none; }
 .info-label { color: var(--text-3); }
@@ -731,6 +731,8 @@ button.hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
   .ctx-badge { margin-inline-start: 4px; }
   #chat { padding: 16px 16px 8px; }
   #chat-form { padding: 12px 16px 16px; }
+  /* 16px, not a ramp step: iOS Safari zooms the viewport on focus for any
+     input under 16px. Paired with the same rule on #prompt in web/index.html. */
   #msg { font-size: 16px; }
   .btn-text { display: none; }
   .btn-text-keep { display: none; }
