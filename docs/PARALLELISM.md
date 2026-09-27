@@ -214,7 +214,7 @@ Implemented in `src/parallel/peer_discovery.zig`.
 | File | Purpose |
 | :--- | :--- |
 | `src/parallel/transport.zig` | Transport layer: TCP, shm, NCCL |
-| `src/parallel/tp.zig` | Tensor parallelism weight sharding and all-reduce logic |
+| `src/models/tp.zig` | Tensor parallelism weight sharding and all-reduce logic |
 | `src/parallel/peer_discovery.zig` | UDP peer discovery (LAN broadcast/join) |
 | `src/main.zig` | CLI parsing, transport setup, NCCL wiring |
 | `src/models/qwen35.zig` | TP/PP model integration (sharding, all-reduce, send/recv) |
