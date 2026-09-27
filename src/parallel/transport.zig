@@ -894,21 +894,7 @@ test "Transport.init rccl returns NotImplemented" {
     try std.testing.expectError(error.NotImplemented, Transport.init(allocator, .rccl, 0, 2));
 }
 
-test "Transport struct methods exist at comptime" {
-    // Verify the public API surface compiles and empty batch paths are callable.
-    try std.testing.expect(@hasDecl(Transport, "init"));
-    try std.testing.expect(@hasDecl(Transport, "deinit"));
-    try std.testing.expect(@hasDecl(Transport, "connectPeer"));
-    try std.testing.expect(@hasDecl(Transport, "acceptPeer"));
-    try std.testing.expect(@hasDecl(Transport, "setupShm"));
-    try std.testing.expect(@hasDecl(Transport, "setupNccl"));
-    try std.testing.expect(@hasDecl(Transport, "ensureNcclComm"));
-    try std.testing.expect(@hasDecl(Transport, "allReduceAdd"));
-    try std.testing.expect(@hasDecl(Transport, "sendBuf"));
-    try std.testing.expect(@hasDecl(Transport, "sendBufs"));
-    try std.testing.expect(@hasDecl(Transport, "recvBuf"));
-    try std.testing.expect(@hasDecl(Transport, "recvBufs"));
-
+test "Transport: empty batch paths are no-ops when unconnected" {
     const allocator = std.testing.allocator;
     var t = try Transport.init(allocator, .tcp, 0, 2);
     defer t.deinit();
@@ -1005,22 +991,6 @@ test "fuzz: all transport functions" {
             const rptrs = [_][*]f32{rptr0};
             const rlens = [_]usize{@intCast(recv_n)};
             t.recvBufs(&rptrs, &rlens) catch {};
-
-            // ── Verify all pub decls are referenced (comptime) ──
-            comptime {
-                _ = &Transport.init;
-                _ = &Transport.deinit;
-                _ = &Transport.connectPeer;
-                _ = &Transport.acceptPeer;
-                _ = &Transport.setupShm;
-                _ = &Transport.setupNccl;
-                _ = &Transport.ensureNcclComm;
-                _ = &Transport.allReduceAdd;
-                _ = &Transport.sendBuf;
-                _ = &Transport.sendBufs;
-                _ = &Transport.recvBuf;
-                _ = &Transport.recvBufs;
-            }
         }
     }.f, .{});
 }

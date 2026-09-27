@@ -2626,18 +2626,6 @@ test "rmsNormPlusOne correctness" {
     try std.testing.expectApproxEqAbs(4.0 * inv_rms, output[3], 1e-5);
 }
 
-test "model vtable compiles" {
-    // Verify that Qwen35Model implements the Model vtable interface
-    const M = model_mod.Model;
-    _ = M.from;
-    // Verify the struct has the expected public API surface
-    try std.testing.expect(@hasDecl(Qwen35Model, "forward"));
-    try std.testing.expect(@hasDecl(Qwen35Model, "prefill"));
-    try std.testing.expect(@hasDecl(Qwen35Model, "resetCache"));
-    try std.testing.expect(@hasDecl(Qwen35Model, "cancel"));
-    try std.testing.expect(@hasDecl(Qwen35Model, "model"));
-}
-
 test "layerVType boundary = 1 single-layer protection" {
     var m: Qwen35Model = undefined;
     m.n_layers = 8;

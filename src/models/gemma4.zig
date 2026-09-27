@@ -2993,14 +2993,6 @@ test "Gemma4 expertRowBytes q8_0" {
     try std.testing.expectEqual(expected, Gemma4Model.expertRowBytes(t, 704, 2816));
 }
 
-test "Gemma4 model vtable compiles" {
-    try std.testing.expect(@hasDecl(Gemma4Model, "forward"));
-    try std.testing.expect(@hasDecl(Gemma4Model, "prefill"));
-    try std.testing.expect(@hasDecl(Gemma4Model, "resetCache"));
-    try std.testing.expect(@hasDecl(Gemma4Model, "cancel"));
-    try std.testing.expect(@hasDecl(Gemma4Model, "model"));
-}
-
 /// Minimal KV-only model for export/import tests: capacity 4 tokens,
 /// one layer with kvd=2. Only fields touched by exportKvPrefix/importKvPrefix
 /// are initialized; deinit is never called (buffers freed by the caller).

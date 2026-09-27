@@ -5509,7 +5509,6 @@ test {
     _ = @import("server/tools.zig");
     _ = @import("server/rate_limiter.zig");
     _ = @import("server/metrics.zig");
-    _ = @import("server/fixed_buf_stream.zig");
     _ = @import("server/scheduler.zig");
     _ = @import("sim_clock.zig");
     _ = @import("kvcache/block_allocator.zig");

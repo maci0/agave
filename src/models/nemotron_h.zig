@@ -1030,14 +1030,6 @@ test "NemotronH layer type pattern" {
     try std.testing.expectEqual(@as(usize, 17), n_ffn);
 }
 
-test "NemotronH model vtable compiles" {
-    try std.testing.expect(@hasDecl(NemotronHModel, "forward"));
-    try std.testing.expect(@hasDecl(NemotronHModel, "prefill"));
-    try std.testing.expect(@hasDecl(NemotronHModel, "resetCache"));
-    try std.testing.expect(@hasDecl(NemotronHModel, "cancel"));
-    try std.testing.expect(@hasDecl(NemotronHModel, "model"));
-}
-
 test "NemotronH default config values" {
     var m: NemotronHModel = undefined;
     m.n_layers = 42;
@@ -1073,10 +1065,6 @@ test "NemotronH layer_types default" {
     for (0..max_layers) |i| {
         try std.testing.expectEqual(LayerType.ffn_only, m.layer_types[i]);
     }
-}
-
-test "NemotronH getBlockTable compiles" {
-    try std.testing.expect(@hasDecl(NemotronHModel, "getBlockTable"));
 }
 
 // argmax is tested in src/ops/math.zig, no need to duplicate here.

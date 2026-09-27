@@ -44,7 +44,6 @@ agave/
 │   │   ├── rate_limiter.zig # Token bucket rate limiter
 │   │   ├── json.zig        # JSON field extraction, encoding, and form-parsing
 │   │   ├── idempotency.zig # Bounded replay ledger for mutating chat routes (X-Request-Id)
-│   │   └── fixed_buf_stream.zig # Allocation-free fixed buffer writer (server responses)
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
 │   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS, Llama 4)
 │   ├── recipe.zig         # Optional preset configs per model/hardware/quant combo

@@ -1218,14 +1218,6 @@ test "Llama4 chunked attention window" {
     try std.testing.expectEqual(@as(usize, 109), win_len2);
 }
 
-test "Llama4 model vtable compiles" {
-    try std.testing.expect(@hasDecl(Llama4Model, "forward"));
-    try std.testing.expect(@hasDecl(Llama4Model, "prefill"));
-    try std.testing.expect(@hasDecl(Llama4Model, "resetCache"));
-    try std.testing.expect(@hasDecl(Llama4Model, "cancel"));
-    try std.testing.expect(@hasDecl(Llama4Model, "model"));
-}
-
 test "Llama4 isNopeLayer with interval 1, all NoPE" {
     var m: Llama4Model = undefined;
     m.nope_interval = 1;

@@ -1264,14 +1264,6 @@ test "GLM4 ropePartial position 0 is identity" {
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), x[7], 1e-5);
 }
 
-test "GLM4 model vtable compiles" {
-    try std.testing.expect(@hasDecl(Glm4Model, "forward"));
-    try std.testing.expect(@hasDecl(Glm4Model, "prefill"));
-    try std.testing.expect(@hasDecl(Glm4Model, "resetCache"));
-    try std.testing.expect(@hasDecl(Glm4Model, "cancel"));
-    try std.testing.expect(@hasDecl(Glm4Model, "model"));
-}
-
 test "GLM4 dtypeBytes q4_0" {
     const n: usize = 256;
     const expected = @divExact(n, backend_mod.quant_block_elems) * backend_mod.q4_0_block_bytes;

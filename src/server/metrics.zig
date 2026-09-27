@@ -5,8 +5,6 @@
 
 const std = @import("std");
 
-const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
-
 /// Finite histogram bucket: observation bound + Prometheus `le` label.
 /// Recording and rendering share this table so bounds and labels cannot drift.
 const HistBucket = struct { bound: u64, le: []const u8 };
@@ -803,12 +801,11 @@ test "Metrics: renderPrometheus outputs valid format" {
 
     // Render to buffer
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    const writer = fbs.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
 
-    try metrics.renderPrometheus(writer);
+    try metrics.renderPrometheus(&writer);
 
-    const output = fbs.getWritten();
+    const output = writer.buffered();
 
     // ── Structural validation ─────────────────────────────────────
     // Parse lines into a set and verify required metrics exist.
@@ -902,9 +899,9 @@ test "Metrics: updateKvBlocks sets gauge values" {
 
     // Verify rendered in Prometheus output
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_blocks_used 42\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_blocks_total 100\n") != null);
 }
@@ -917,9 +914,9 @@ test "Metrics: cache counters exposed in Prometheus output" {
     metrics.recordCacheMiss(100);
 
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_hits_total 2\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_misses_total 1\n") != null);
@@ -1032,9 +1029,9 @@ test "Metrics: updateKvTiers sets per-tier gauges" {
     metrics.updateKvTiers(50, 200, 30, 100, 10, 40);
 
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_tier_blocks{tier=\"vram\",state=\"used\"} 50\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_tier_blocks{tier=\"vram\",state=\"total\"} 200\n") != null);
@@ -1048,9 +1045,9 @@ test "Metrics: setKvDemotions publishes both tiers" {
     var metrics = Metrics{};
     metrics.setKvDemotions(7, 3);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_demotions_vram_to_ram_total 7\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_demotions_ram_to_ssd_total 3\n") != null);
@@ -1230,9 +1227,9 @@ test "Metrics: renderPrometheus with process_start_time" {
     var metrics = Metrics{};
     metrics.process_start_time.store(1700000000, .monotonic);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_process_start_time_seconds 1700000000\n") != null);
 }
 
@@ -1240,9 +1237,9 @@ test "Metrics: renderPrometheus, TPOT histogram rendered" {
     var metrics = Metrics{};
     metrics.recordTPOT(10, 50); // 5ms/tok → tpot_5ms bucket
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     // The name alone also appears in the unconditional # HELP / # TYPE lines,
     // so the series lines have to be checked for the data to be covered.
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_time_per_output_token_seconds_bucket{le=\"0.005\"} 1\n") != null);
@@ -1255,9 +1252,9 @@ test "Metrics: renderPrometheus, queue time histogram rendered" {
     var metrics = Metrics{};
     metrics.recordQueueTime(25);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_bucket{le=\"0.01\"} 0\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_bucket{le=\"0.05\"} 1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_queue_time_seconds_sum 0.025\n") != null);
@@ -1268,9 +1265,9 @@ test "Metrics: renderPrometheus, prompt token histogram rendered" {
     var metrics = Metrics{};
     metrics.recordPromptTokens(100);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_bucket{le=\"64\"} 0\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_bucket{le=\"128\"} 1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_prompt_tokens_sum 100\n") != null);
@@ -1281,9 +1278,9 @@ test "Metrics: renderPrometheus, generation token histogram rendered" {
     var metrics = Metrics{};
     metrics.recordGenerationTokens(200);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_bucket{le=\"128\"} 0\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_bucket{le=\"256\"} 1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_request_generation_tokens_sum 200\n") != null);
@@ -1294,9 +1291,9 @@ test "Metrics: renderPrometheus, GPU KV cache rendered" {
     var metrics = Metrics{};
     metrics.updateKvTiers(75, 300, 0, 0, 0, 0);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_gpu_cache_usage_perc 0.2500\n") != null);
 }
 
@@ -1304,9 +1301,9 @@ test "Metrics: renderPrometheus, ITL histogram rendered" {
     var metrics = Metrics{};
     metrics.recordInterTokenLatency(10);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_bucket{le=\"0.005\"} 0\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_bucket{le=\"0.01\"} 1\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds_sum 0.010\n") != null);
@@ -1317,9 +1314,9 @@ test "Metrics: renderPrometheus, cache config rendered" {
     var metrics = Metrics{};
     metrics.setCacheConfig(16, 512);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_cache_config_info{block_size=\"16\",num_gpu_blocks=\"512\"} 1\n") != null);
 }
 
@@ -1327,9 +1324,9 @@ test "Metrics: renderPrometheus, kv_cache_usage_perc calculated" {
     var metrics = Metrics{};
     metrics.updateKvBlocks(50, 100);
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_usage_perc 0.5000\n") != null);
 }
 
@@ -1341,9 +1338,9 @@ test "Metrics: renderPrometheus, prefix cache hit rate calculated" {
     metrics.recordCacheMiss(100);
     // 3 hits, 1 miss → hit rate = 3/4 = 0.75
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_prefix_cache_hit_rate 0.7500\n") != null);
 }
 
@@ -1395,8 +1392,8 @@ test "fuzz: all Metrics recording functions" {
 
             // Invariant: renderPrometheus must not crash with any combination of metrics.
             var buf: [test_render_buf_size]u8 = undefined;
-            var fbs = FixedBufStream.init(&buf);
-            metrics.renderPrometheus(fbs.writer()) catch {};
+            var writer: std.Io.Writer = .fixed(&buf);
+            metrics.renderPrometheus(&writer) catch {};
 
             // Invariant: counters must be positive (at least 1 from calls above).
             try std.testing.expect(metrics.requests_total.load(.monotonic) >= 1);
@@ -1409,8 +1406,8 @@ test "Metrics: renderPrometheus, throughput rendered" {
     var metrics = Metrics{};
     metrics.recordThroughput(50, 1000); // 50 tok/s → tps_x100 = 5000
     var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
+    var writer: std.Io.Writer = .fixed(&buf);
+    try metrics.renderPrometheus(&writer);
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_tokens_per_second 50.00\n") != null);
 }
