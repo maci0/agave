@@ -13,10 +13,11 @@ None. The tree is upstream as copied.
 
 ## Pinning
 
-The upstream commit this was copied from is **not recorded**: it was vendored
-before this manifest existed and the source revision is not recoverable from the
-files. Re-vendor from a known commit and write the hash here the next time these
-rules are updated, so a future diff against upstream is meaningful.
+`VENDORED.sha256` records the sha256 of every vendored `.ts` file, and
+`zig build check-pins` fails when the tree stops matching it. The upstream
+commit is still unrecorded, so the manifest is the provenance anchor until
+someone re-vendors from a named commit; that change also copies upstream's
+LICENSE file here. See `NOTICE.md`.
 
 `tools/oxlint/anti-slop/**` is in `.oxlintrc.json` `ignorePatterns`: the rules
 are third-party source and are not held to this repo's lint config.
