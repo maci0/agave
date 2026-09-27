@@ -6,9 +6,13 @@
   /* Borders must meet WCAG 1.4.11 (≥3:1) against bg/surface/elevated */
   --border: #77716d;
   --border-hl: #8a837c;
+  /* Three text steps, warm-tinted to match the surfaces, each dimmer than the
+     last and each >=4.5:1 on the lightest surface (--elevated): text 11.5:1,
+     text-2 5.9:1, text-3 4.8:1. Tertiary used to be lighter than secondary,
+     which inverted the hierarchy. */
   --text: #ebe3db;
-  --text-2: #a09890;
-  --text-3: #a8a29e;
+  --text-2: #aba39b;
+  --text-3: #9a928b;
   --accent: #d4a574;
   --accent-hover: #e0b88a;
   --accent-bg: rgba(212, 165, 116, 0.1);
@@ -503,7 +507,8 @@ body.show-stats .stats { display: flex; }
   align-items: center;
   justify-content: center;
 }
-/* --red-text (6.29:1 on elevated) not --red (4.44:1): hover label must meet 1.4.3. */
+/* --red-text (6.93:1 on elevated) over --red (4.89:1): the hover state sits on
+   --elevated and gets the lighter red for 1.4.3 headroom. */
 .system-prompt-clear:hover { color: var(--red-text); border-color: var(--red); background: var(--red-bg); }
 
 #system-prompt {
