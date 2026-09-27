@@ -393,11 +393,10 @@ pub const LineEditor = struct {
             } else if (s[i] < ascii_printable_start) {
                 i += 1;
             } else {
-                // Measure the next grapheme cluster
-                const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
-                const end = @min(i + cp_len, s.len);
-                cols += term.displayWidth(s[i..end]);
-                i = end;
+                // Measure the next grapheme cluster as the terminal renders it
+                const cluster = term.nextCluster(s, i);
+                cols += cluster.width;
+                i = cluster.end;
             }
         }
         return cols;

@@ -240,27 +240,78 @@ pub const Parser = struct {
 // ── Display Width ────────────────────────────────────────────
 
 /// Compute the display width of a UTF-8 string.
-/// Handles ASCII (width 1), CJK fullwidth (width 2), zero-width combining marks.
+/// Widths are counted per extended grapheme cluster, not per codepoint, so a
+/// ZWJ emoji sequence, a flag, or a base plus combining marks takes the columns
+/// the terminal actually gives it.
 /// Pure Zig, no libc wcwidth.
 pub fn displayWidth(s: []const u8) usize {
     var w: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
-        const len = std.unicode.utf8ByteSequenceLength(s[i]) catch {
-            i += 1;
-            w += 1; // replacement char
-            continue;
-        };
-        if (i + len > s.len) break;
-        const cp = std.unicode.utf8Decode(s[i..][0..len]) catch {
-            i += 1;
-            w += 1;
-            continue;
-        };
-        i += len;
-        w += codepointWidth(cp);
+        const cluster = nextCluster(s, i);
+        w += cluster.width;
+        i = cluster.end;
     }
     return w;
+}
+
+/// One step of the grapheme walk: the cluster's leading codepoint, the byte
+/// index just past the cluster, and the terminal columns it occupies.
+pub const Cluster = struct {
+    cp: u21,
+    end: usize,
+    width: usize,
+};
+
+/// Decode the codepoint at `i`, or null when the bytes there are not one valid
+/// complete sequence (bad lead byte, overlong form, surrogate, truncated tail).
+fn decodeAt(s: []const u8, i: usize) ?struct { cp: u21, end: usize } {
+    const seq_len = std.unicode.utf8ByteSequenceLength(s[i]) catch return null;
+    if (i + seq_len > s.len) return null;
+    const cp = std.unicode.utf8Decode(s[i..][0..seq_len]) catch return null;
+    return .{ .cp = cp, .end = i + seq_len };
+}
+
+/// Advance past one extended grapheme cluster starting at `i`.
+///
+/// A cluster is the leading codepoint plus whatever attaches to it without
+/// advancing the cursor: trailing combining marks, variation selectors, skin
+/// tones, a ZWJ-joined chain, or a paired regional indicator. Bytes that are not
+/// valid UTF-8 step one at a time at one column, so invalid input still makes
+/// progress instead of stalling the walk.
+pub fn nextCluster(s: []const u8, i: usize) Cluster {
+    const first = decodeAt(s, i) orelse return .{ .cp = 0xFFFD, .end = i + 1, .width = 1 };
+    const cp = first.cp;
+    var end = first.end;
+
+    // A regional indicator pair renders as one 2-column flag; a lone one is
+    // still 2 columns on its own.
+    if (cp >= cp_ri_lo and cp <= cp_ri_hi) {
+        if (decodeAt(s, end)) |second| {
+            if (second.cp >= cp_ri_lo and second.cp <= cp_ri_hi) {
+                return .{ .cp = cp, .end = second.end, .width = 2 };
+            }
+        }
+        return .{ .cp = cp, .end = end, .width = 2 };
+    }
+
+    // The joined characters keep the leading element's width: 👨‍👩‍👧 is one
+    // 2-column glyph, not three.
+    while (end < s.len) {
+        const d = decodeAt(s, end) orelse break;
+        if (d.cp == cp_zwj) {
+            // ZWJ only glues pictographs (width 2 here). A ZWJ before an
+            // ordinary letter is a zero-width mark like any other, so it must
+            // not swallow the letter into the previous cluster.
+            const joined = decodeAt(s, d.end) orelse break;
+            if (codepointWidth(joined.cp) != 2) break;
+            end = joined.end;
+            continue;
+        }
+        if (codepointWidth(d.cp) != 0) break;
+        end = d.end;
+    }
+    return .{ .cp = cp, .end = end, .width = codepointWidth(cp) };
 }
 
 /// Longest prefix of `s` with byte length ≤ `max_bytes` that does not split a
@@ -289,6 +340,11 @@ pub fn utf8BytePrefix(s: []const u8, max_bytes: usize) []const u8 {
     return s[0..len];
 }
 
+/// Zero-width joiner: glues the characters around it into one cluster.
+const cp_zwj: u21 = 0x200D;
+/// Regional indicators: a pair of them is one flag glyph.
+const cp_ri_lo: u21 = 0x1F1E6;
+const cp_ri_hi: u21 = 0x1F1FF;
 /// Fitzpatrick emoji skin-tone modifiers (👋🏻..👋🏿). Combine with the preceding emoji.
 const cp_emoji_skin_tone_lo: u21 = 0x1F3FB;
 const cp_emoji_skin_tone_hi: u21 = 0x1F3FF;
@@ -758,6 +814,35 @@ test "utf8BytePrefix does not split multi-byte characters" {
 
     try std.testing.expectEqualStrings("", utf8BytePrefix("\xc3\xa9", 1));
     try std.testing.expectEqualStrings("", utf8BytePrefix("", 8));
+}
+
+test "displayWidth ZWJ emoji sequence is one glyph" {
+    // 👨‍👩‍👧‍👦 is four emoji joined by three ZWJ: 2 columns, not 8.
+    const family = "\xf0\x9f\x91\xa8\xe2\x80\x8d\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x91\xa7\xe2\x80\x8d\xf0\x9f\x91\xa6";
+    try std.testing.expectEqual(@as(usize, 2), displayWidth(family));
+    try std.testing.expectEqual(@as(usize, 3), displayWidth("a" ++ family));
+    // A ZWJ before an ordinary letter glues nothing: the letter is its own cluster.
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("a\xe2\x80\x8d" ++ "b"));
+}
+
+test "displayWidth regional indicator pair is one flag" {
+    // 🇯🇵 (U+1F1EF U+1F1F5): one 2-column glyph.
+    try std.testing.expectEqual(@as(usize, 2), displayWidth("\xf0\x9f\x87\xaf\xf0\x9f\x87\xb5"));
+    // A lone indicator is still 2 columns; the next one is not absorbed.
+    try std.testing.expectEqual(@as(usize, 3), displayWidth("\xf0\x9f\x87\xafx"));
+}
+
+test "nextCluster never loops on invalid bytes" {
+    const bad = "a\xff\x80b";
+    var i: usize = 0;
+    var cols: usize = 0;
+    while (i < bad.len) {
+        const c = nextCluster(bad, i);
+        try std.testing.expect(c.end > i);
+        cols += c.width;
+        i = c.end;
+    }
+    try std.testing.expectEqual(@as(usize, 4), cols);
 }
 
 test "parser: backspace" {
