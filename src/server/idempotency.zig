@@ -15,6 +15,12 @@
 //! blocking retries forever.
 //!
 //! Not thread-safe on its own: the server touches it under `Server.mutex`.
+//!
+//! `complete` versus `release` is the caller's contract. Release a claim only
+//! while the request left nothing behind: a rolled-back append, a rejected
+//! rate limit, a failed allocation. Once the operation has changed stored state
+//! and persisted it, a failure response completes the key instead, so the retry
+//! collapses onto what the first execution left rather than applying it twice.
 
 const std = @import("std");
 

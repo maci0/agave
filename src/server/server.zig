@@ -80,6 +80,10 @@ const TcpStream = struct {
 const slog_buf_size: usize = 4096;
 const models_json_buf_size: usize = 1024;
 const response_buf_size: usize = 65536;
+/// Page sent when a response cannot be escaped (OOM). Recorded in the replay
+/// ledger alongside the failed request: the turn is already stored, so a retry
+/// has to collapse onto this page rather than append a second one.
+const render_error_page: []const u8 = "<div class=\"msg assistant\">Error: could not render response</div>";
 const cmd_buf_size: usize = 1024;
 const gen_ids_buf_size: usize = 4096;
 /// Hard cap on `max_tokens` per request. Equal to `gen_ids_buf_size` by design: the
@@ -512,6 +516,16 @@ const Conversation = struct {
             @memset(t, 0);
             allocator.free(t);
         }
+    }
+
+    /// Put a held message back at the end of `self`. Used to undo a pop on a
+    /// regenerate that fails before the reply is replaced: the conversation is
+    /// then left exactly as one run left it, so the retry the released
+    /// idempotency key invites has the same reply to work from.
+    fn restoreHeldMessage(self: *Conversation, allocator: Allocator, msg: Message) void {
+        self.messages.append(allocator, msg) catch {
+            freeOwnedMessage(allocator, msg);
+        };
     }
 
     fn freeMessageContents(self: *Conversation, allocator: Allocator) void {
@@ -3489,6 +3503,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             }
 
             if (regen_conv.messages.items.len == 0) {
+                if (removed_assistant) |m| regen_conv.restoreHeldMessage(g_server.allocator, m);
                 sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "No user message to regenerate from", null, "no_user_message");
                 g_server.metrics.recordClientError();
                 logRequestDone(method, path, 400, elapsedMs(request_start));
@@ -3502,6 +3517,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 regen_conv.messages.items,
             ) catch |err| {
                 std.log.err("req={d} conversation format failed: {}", .{ log_request_id, err });
+                if (removed_assistant) |m| regen_conv.restoreHeldMessage(g_server.allocator, m);
                 sendJsonError(stream, "500 Internal Server Error", "server_error", "Failed to format conversation");
                 g_server.metrics.recordFailure();
                 logRequestDone(method, path, 500, elapsedMs(request_start));
@@ -3510,15 +3526,13 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             // Rate limit while the reply is still recoverable.
             const regen_ids_owned = g_server.tokenizer.encode(regen_formatted) catch |err| {
                 std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+                wipeFree(g_server.allocator, @constCast(regen_formatted));
+                if (removed_assistant) |m| regen_conv.restoreHeldMessage(g_server.allocator, m);
                 break :blk null;
             };
             const regen_prompt_tokens = estimatePromptTokens(regen_ids_owned.len, regen_formatted.len);
             if (checkRateLimit(g_server, regen_prompt_tokens)) |retry| {
-                if (removed_assistant) |m| {
-                    regen_conv.messages.append(g_server.allocator, m) catch {
-                        Conversation.freeOwnedMessage(g_server.allocator, m);
-                    };
-                }
+                if (removed_assistant) |m| regen_conv.restoreHeldMessage(g_server.allocator, m);
                 wipeFree(g_server.allocator, @constCast(regen_formatted));
                 wipeFreeTokens(g_server.allocator, regen_ids_owned);
                 send429(stream, retry);
@@ -3547,7 +3561,9 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         if (wants_stream_regen) {
             if (!sendSseHeaders(stream)) {
                 g_server.metrics.recordCancellation();
-                g_server.releaseIdempotencyKey();
+                // The assistant message is already popped and persisted, so the
+                // claim cannot be released: a retry would pop a second reply.
+                g_server.completeIdempotencyKey("200 OK", "text/event-stream", "");
                 return;
             }
             const regen_result = chatStreamGeneratePre(stream, regen_formatted, true, regen_max_tokens, regen_sampling, regen_prompt_ids_owned);
@@ -3572,8 +3588,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Never fall back to unescaped model output, OOM must not enable XSS (CWE-79).
         const regen_escaped = json.htmlEscape(g_server.allocator, regen_result.data) catch {
-            sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
-            g_server.releaseIdempotencyKey();
+            sendHtml(stream, render_error_page);
+            g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", render_error_page);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         };
@@ -3728,6 +3744,12 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             // replays as context on the next turn.
             const prompt_ids_owned = g_server.tokenizer.encode(formatted) catch |err| {
                 std.log.warn("req={d} tokenizer encode failed: {}", .{ log_request_id, err });
+                // Undo the append above so the stored conversation is what one
+                // run leaves, and the retry the released key invites starts
+                // from the same state instead of a second copy of this turn.
+                const appended = conv.messages.pop();
+                if (appended) |dropped| Conversation.freeOwnedMessage(g_server.allocator, dropped);
+                if (formatted.ptr != trimmed.ptr) wipeFree(g_server.allocator, @constCast(formatted));
                 break :blk null;
             };
             // Ownership moves to the caller on the success path only.
@@ -3768,7 +3790,10 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         if (wants_stream) {
             if (!sendSseHeaders(stream)) {
                 g_server.metrics.recordCancellation();
-                g_server.releaseIdempotencyKey();
+                // The user turn is already appended and persisted, so the claim
+                // cannot be released: a retry would append the turn a second
+                // time. Same treatment as a stream that ran and was recorded.
+                g_server.completeIdempotencyKey("200 OK", "text/event-stream", "");
                 return;
             }
             const result = chatStreamGeneratePre(stream, formatted, need_reset, chat_max_tokens, chat_sampling, chat_prompt_ids_owned);
@@ -3792,15 +3817,15 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
         // Never fall back to unescaped input, send a safe error page on OOM (CWE-79).
         const escaped_user = json.htmlEscape(g_server.allocator, decoded) catch {
-            sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
-            g_server.releaseIdempotencyKey();
+            sendHtml(stream, render_error_page);
+            g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", render_error_page);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         };
         defer if (escaped_user.ptr != decoded.ptr) wipeFree(g_server.allocator, escaped_user);
         const escaped_resp = json.htmlEscape(g_server.allocator, result.data) catch {
-            sendHtml(stream, "<div class=\"msg assistant\">Error: could not render response</div>");
-            g_server.releaseIdempotencyKey();
+            sendHtml(stream, render_error_page);
+            g_server.completeIdempotencyKey("200 OK", "text/html; charset=utf-8", render_error_page);
             logRequestDone(method, path, 200, elapsedMs(request_start));
             return;
         };
