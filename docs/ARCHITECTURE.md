@@ -145,7 +145,7 @@ agave/
 │   │   ├── app.ts         # Chat UI TypeScript (SSE streaming, conversation management)
 │   │   ├── app.js         # Generated classic script; embedded by server.zig
 │   │   ├── body.html      # Chat UI HTML body
-│   │   ├── head.html      # Chat UI HTML head (meta, deferred markdown CDN)
+│   │   ├── head.html      # Chat UI HTML head (meta, inlined stylesheet)
 │   │   └── style.css      # Chat UI stylesheet
 │   └── tokenizer/
 │       ├── tokenizer.zig  # Tokenizer interface

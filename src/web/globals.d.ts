@@ -1,5 +1,5 @@
-/** CDN globals. marked and DOMPurify load with `defer` in `head.html`.
- * highlight.js is fetched on the first fenced code block. */
+/** CDN globals. marked and DOMPurify are fetched on the first rendered response
+ * (`loadMarkdown`), highlight.js on the first fenced code block. */
 
 type MarkedOptions = {
   breaks?: boolean;
