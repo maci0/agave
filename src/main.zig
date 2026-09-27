@@ -3028,6 +3028,13 @@ fn initAndRun(
         if (arch != .gemma3) {
             eprint("Warning: --kv-tiers is only fully implemented for Gemma 3. Other models may produce incorrect output.\n", .{});
         }
+        // The RAM and VRAM tiers are a residency budget over one shared address
+        // space, so a demoted block's slices still point at device memory on a
+        // discrete GPU. Refuse rather than mislabel it.
+        if (!be.backendInfo().is_uma) {
+            eprint("Error: --kv-tiers requires a unified-memory backend\n", .{});
+            return false;
+        }
         const has_ram = std.mem.indexOf(u8, tiers_str, "ram") != null;
         const has_ssd = std.mem.indexOf(u8, tiers_str, "ssd") != null;
 
@@ -5545,7 +5552,6 @@ test {
     _ = @import("kvcache/view.zig");
     _ = @import("kvcache/manager.zig");
     _ = @import("kvcache/tiered.zig");
-    _ = @import("kvcache/checkpoint.zig");
     _ = @import("models/model.zig");
     _ = @import("models/gemma3.zig");
     _ = @import("models/gemma4.zig");

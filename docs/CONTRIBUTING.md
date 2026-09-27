@@ -598,7 +598,6 @@ Until **1.0.0**, there is no multi-version support matrix and no promised LTS:
 - **Supported (opt-in)**: `--rate-limit-rpm` / `--rate-limit-tpm` token-bucket
   limits (default off). Treat removals or default changes as **Breaking**.
 - **Experimental / incomplete**: endpoints that return `501 Not Implemented` in
-  `docs/API.md` (for example `/v1/embeddings`), disk KV checkpoint
-  (`checkpoint.KVC` in `src/kvcache/checkpoint.zig`, not CLI-exposed yet), and
-  the unversioned `/v1/kv_cache` HTTP blob (not the KVC disk header). Still
+  `docs/API.md` (for example `/v1/embeddings`), the unversioned
+  `/v1/kv_cache` HTTP blob, and `--kv-tiers` (unified-memory backends only). Still
   changelog user-visible breaks; do not assume long-term wire stability.

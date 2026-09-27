@@ -4,7 +4,7 @@
 
 **Time:** ~20 min
 
-> After this chapter you can explain directional steering (CLI), NLL quality scoring (library), expert profiling (CLI), KV checkpoint headers (library), mixed-quant splicing (tooling), SSD expert streaming (CLI), power throttling (CLI), frontier benchmarking (CLI), and distributed prefix hashing (library).
+> After this chapter you can explain directional steering (CLI), NLL quality scoring (library), expert profiling (CLI), mixed-quant splicing (tooling), SSD expert streaming (CLI), power throttling (CLI), frontier benchmarking (CLI), and distributed prefix hashing (library).
 
 This chapter covers nine related capabilities. **Directional steering**, **SSD expert streaming**, **expert profiling**, **power throttling**, and **frontier benchmarking** are wired to CLI flags. The others ship as library modules and/or Python tools.
 
@@ -118,26 +118,13 @@ The profile records per-layer, per-expert activation counts. `topExperts()` extr
 
 ---
 
-## 4. KV Cache Disk Checkpointing: header only
+## 4. KV Cache Disk Checkpointing: not built
 
-**KV checkpointing** is intended to serialize KV cache state to disk so long system prompts need not be re-prefilled after a restart.
+**KV checkpointing** would serialize KV cache state to disk so long system prompts need not be re-prefilled after a restart. It is **not built**: there is no on-disk KV format, no payload I/O, and no CLI flag.
 
-Today [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) implements the **versioned 28-byte header** only (`writeHeader` / `readHeader` / `validateHeader`). Full payload `save` / `load` and CLI flags are **not wired yet**.
+The obstacle is the data model, not the I/O. Every per-layer cache in the tree (GQA, MLA, dual attention) has its own K and V dimensions, and the quantized KV types pack bytes at different rates, so a single `kv_dim` per file cannot describe a model's state. A format would need per-layer dimensions plus a quantization tag per tensor.
 
-Planned file format:
-
-```text
-[4 bytes] magic: "KVC\x01"
-[4 bytes] version: u32
-[4 bytes] payload_abi: u32 (bumped when KV layout changes)
-[4 bytes] n_layers, [4 bytes] kv_dim, [4 bytes] n_tokens
-[4 bytes] reserved
-[payload] K data, then V data
-```
-
-The `payload_abi` field is separate from the file version: the outer envelope stays stable while internal KV layout (quantization type, dimension order) can change between releases without silent corruption.
-
-**Implementation:** [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (header format and validation).
+The one KV export that does exist is the unversioned f32 interleaved blob behind `POST /v1/kv_cache` (`exportKvPrefix` / `importKvPrefix`). It is a live HTTP wire format with no compatibility promise, not a disk format.
 
 ---
 
@@ -268,13 +255,13 @@ The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is
 
 - **Steering direction quality depends on prompt diversity.** A direction built from 5 prompt pairs will be noisy and may cause repetition or nonsense at strong scales. Use 50-100 pairs for reliable results. Start with FFN scales between `-1` and `2`; if the model degrades, reduce the scale.
 - **NLL scoring requires greedy (temperature=0) reference continuations.** If the reference was sampled with temperature > 0, the NLL metric becomes a noisy measure of sampling luck rather than model quality.
-- **KV checkpoint payload ABI must match exactly** once payload I/O exists. A checkpoint saved with one KV quantization type cannot load into a session using a different type. The `payload_abi` field is meant to catch that.
+- **KV checkpointing would need per-layer dimensions and a per-tensor quantization tag.** Every architecture in the tree stores a different K and V width per layer, so a single `kv_dim` per file cannot describe a model's state. Design the envelope before writing the I/O.
 - **SSD streaming adds latency variance** when wired. Cache hits are free; misses incur SSD read latency. Expert profiling + pinning reduces but does not eliminate variance.
 - **Mixed-quant splicing requires compatible GGUFs.** The base and donor files must share architecture, layer count, expert count, and tensor naming. Splicing incompatible files produces silent corruption, not an error.
 
 ---
 
-**In the code:** [`src/steering.zig`](../../src/steering.zig) (directional steering), [`src/eval.zig`](../../src/eval.zig) (NLL `scoreCase`), [`src/expert_profile.zig`](../../src/expert_profile.zig) (expert profiling + `loadJson`), [`src/kvcache/checkpoint.zig`](../../src/kvcache/checkpoint.zig) (checkpoint header), [`src/expert_cache.zig`](../../src/expert_cache.zig) (SSD expert streaming + `admit_prepin`), [`src/parallel/transport.zig`](../../src/parallel/transport.zig) (rolling prefix hash), [`src/main.zig`](../../src/main.zig) (`runFrontierBench`, power throttling, expert cache init), [`tools/`](../../tools/) (Python tooling)
+**In the code:** [`src/steering.zig`](../../src/steering.zig) (directional steering), [`src/eval.zig`](../../src/eval.zig) (NLL `scoreCase`), [`src/expert_profile.zig`](../../src/expert_profile.zig) (expert profiling + `loadJson`), [`src/expert_cache.zig`](../../src/expert_cache.zig) (SSD expert streaming + `admit_prepin`), [`src/parallel/transport.zig`](../../src/parallel/transport.zig) (rolling prefix hash), [`src/main.zig`](../../src/main.zig) (`runFrontierBench`, power throttling, expert cache init), [`tools/`](../../tools/) (Python tooling)
 
 **Next:** [Appendix: Troubleshooting →](appendix-troubleshooting.md) | **Back:** [Chapter 23: Server / HTTP API ←](23-server-http-api.md)
 
@@ -289,8 +276,6 @@ The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is
 **expert cache**, A fixed-size LRU cache of MoE routed-expert weight slabs, enabling SSD streaming for models that don't fit in RAM.
 
 **expert hotlist**, The set of most-frequently-routed experts per layer, identified by profiling and optionally pinned in the expert cache to guarantee fast-path access.
-
-**KV checkpoint**, A versioned binary envelope for serialized KV cache state; header encode/validate ships today, full save/load is not wired yet.
 
 **mixed-quant splicing**, Creating a GGUF where selected layers' routed experts use a higher quantization from a donor file while other layers keep the base file's aggressive quantization.
 

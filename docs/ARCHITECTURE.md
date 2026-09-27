@@ -141,7 +141,6 @@ agave/
 │   │   ├── block_allocator.zig # Block allocation for paged KV cache
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
-│   │   └── checkpoint.zig # KV checkpoint header encode/validate (payload I/O not wired yet)
 │   ├── web/
 │   │   ├── app.ts         # Chat UI TypeScript (SSE streaming, conversation management)
 │   │   ├── app.js         # Generated classic script; embedded by server.zig
