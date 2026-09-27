@@ -2,7 +2,6 @@
 //! One workgroup per v-head (single-threaded, recurrence is sequential).
 
 const cu = @import("common.zig");
-const math = @import("std").math;
 
 export fn deltanet_recurrence_kernel(
     q_ptr: [*]const f32,

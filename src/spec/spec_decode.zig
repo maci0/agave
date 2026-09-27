@@ -16,7 +16,6 @@ const std = @import("std");
 const Model = @import("../models/model.zig").Model;
 const math_ops = @import("../ops/math.zig");
 const ddtree = @import("ddtree.zig");
-const dspark = @import("dspark.zig");
 const ngram_mod = @import("ngram.zig");
 
 pub const max_draft_tokens: usize = 32;

@@ -39,7 +39,6 @@ const BlockAllocator = block_alloc_mod.BlockAllocator;
 const TieredBlockAllocator = block_alloc_mod.TieredBlockAllocator;
 const TieredKvCache = @import("../kvcache/tiered.zig").TieredKvCache;
 const TransportMod = @import("../parallel/transport.zig");
-const NgramCache = @import("../ngram_cache.zig").NgramCache;
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
 const TensorInfo = format_mod.TensorInfo;

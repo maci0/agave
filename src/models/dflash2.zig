@@ -20,7 +20,6 @@
 //! `dispatchGemv` (dequantization happens inside the kernel).
 
 const std = @import("std");
-const math_ops = @import("../ops/math.zig");
 const quant = @import("../ops/quant.zig");
 const kv_quant = @import("../ops/kv_quant.zig");
 const backend_mod = @import("../backend/backend.zig");

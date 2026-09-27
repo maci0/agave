@@ -10,9 +10,6 @@ const Allocator = std.mem.Allocator;
 const format_mod = @import("../format/format.zig");
 const DType = format_mod.DType;
 
-/// Maximum MTP depth (number of draft tokens per target forward).
-pub const max_mtp_depth: u32 = 3;
-
 /// Lightweight tensor reference into mmap'd safetensors data.
 pub const MtpTensor = struct {
     data_ptr: [*]const u8,

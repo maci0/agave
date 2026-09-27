@@ -29,10 +29,6 @@ const std = @import("std");
 /// the bandwidth ceiling the kernel is trying to reach.
 pub const weight_blocks_ahead: usize = 8;
 
-/// Bytes of lookahead for the activation vector. One 64-byte line per SIMD
-/// group is enough: the vector is small, hot, and re-read by every row.
-pub const act_bytes_ahead: usize = 128;
-
 /// Hint that a weight block will be read once and not reused.
 pub inline fn weight(ptr: [*]const u8, byte_offset: usize) void {
     @prefetch(ptr + byte_offset, .{ .rw = .read, .locality = 0, .cache = .data });
