@@ -49,7 +49,7 @@ def cmd_info(args: list[str]):
             print(f"  Description: {k.description}")
             print(f"  Reference:   reference.py:{k.reference_fn}()" if k.reference_fn else "  Reference:   (none)")
             print(f"  Bench quants: {', '.join(k.bench_quants) if k.bench_quants else '(no bench model)'}")
-            print(f"  Sources:")
+            print("  Sources:")
             for backend, path in k.sources.items():
                 paths = [path] if isinstance(path, str) else path
                 for p in paths:
@@ -58,7 +58,7 @@ def cmd_info(args: list[str]):
             if gf:
                 print(f"  Golden files: {len(gf)} files ({k.golden_prefix}_*.bin)")
             else:
-                print(f"  Golden files: (none)")
+                print("  Golden files: (none)")
 
 
 def cmd_diff(args: list[str]):
@@ -75,8 +75,8 @@ def cmd_diff(args: list[str]):
         backends = ", ".join(k.sources.keys())
         print(f"  {k.name:<20} [{backends}]")
 
-    print(f"\nRecommended:")
-    print(f"  uv run run.py bench --changed")
+    print("\nRecommended:")
+    print("  uv run run.py bench --changed")
 
 
 def cmd_list(args: list[str]):
@@ -86,7 +86,7 @@ def cmd_list(args: list[str]):
     for group_name, kerns in sorted(groups().items()):
         print(f"\n  {group_name}:")
         for k in kerns:
-            quants = ", ".join(k.bench_quants) if k.bench_quants else "-"
+            ", ".join(k.bench_quants) if k.bench_quants else "-"
             backends = ", ".join(k.sources.keys())
             print(f"    {k.name:<20} {k.description:<45} [{backends}]")
 
@@ -138,7 +138,7 @@ def cmd_coverage(args: list[str]):
 
 def delegate(script: str, args: list[str]):
     """Delegate to a sub-script, forwarding args."""
-    cmd = [sys.executable, str(RESEARCH_DIR / script)] + args
+    cmd = [sys.executable, str(RESEARCH_DIR / script), *args]
     sys.exit(subprocess.run(cmd, cwd=str(RESEARCH_DIR)).returncode)
 
 
@@ -191,7 +191,7 @@ def main():
         # Maybe it's a kernel name, show info
         from registry import find_kernels
         if find_kernels(cmd):
-            cmd_info([cmd] + rest)
+            cmd_info([cmd, *rest])
         else:
             print(f"Unknown command: {cmd!r}", file=sys.stderr)
             print("Run with --help for usage.", file=sys.stderr)

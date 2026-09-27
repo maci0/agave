@@ -77,7 +77,6 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 try:
     from rich.console import Console
@@ -181,11 +180,11 @@ class KvConfig:
         return ["--cache-type-k", self.type_k, "--cache-type-v", self.type_v]
 
     @staticmethod
-    def default() -> "KvConfig":
+    def default() -> KvConfig:
         return KvConfig(type_k="", type_v="")
 
     @staticmethod
-    def parse_asym(spec: str) -> "KvConfig":
+    def parse_asym(spec: str) -> KvConfig:
         """Parse 'k_type:v_type' spec."""
         parts = spec.split(":")
         if len(parts) != 2:
@@ -296,7 +295,7 @@ class RepeatStats:
         return math.sqrt(sum((v - avg) ** 2 for v in vals) / (len(vals) - 1))
 
     @property
-    def best(self) -> Optional[RunResult]:
+    def best(self) -> RunResult | None:
         """Best (or first) passing run."""
         passing = self.passing
         if not passing:
@@ -317,7 +316,7 @@ class BenchResult:
 # Model discovery
 # ---------------------------------------------------------------------------
 
-def detect_arch(name: str) -> Optional[str]:
+def detect_arch(name: str) -> str | None:
     """Detect model architecture from file/directory name."""
     lower = name.lower()
     # Check nemotron variants carefully (nano-30b vs nano-4b)
@@ -356,9 +355,8 @@ def detect_quant(name: str) -> str:
 
 def detect_format(path: Path) -> str:
     """Detect weight format (gguf or safetensors)."""
-    if path.is_dir():
-        if any(path.glob("*.safetensors")) or (path / "model.safetensors.index.json").exists():
-            return "safetensors"
+    if path.is_dir() and (any(path.glob("*.safetensors")) or (path / "model.safetensors.index.json").exists()):
+        return "safetensors"
     if path.suffix == ".gguf":
         return "gguf"
     return "unknown"
@@ -420,16 +418,13 @@ def detect_available_backends() -> list[str]:
     available = []
 
     for be in candidates:
-        if be == "cpu":
-            available.append(be)
-        elif be == "metal" and system == "Darwin":
+        if be == "cpu" or (be == "metal" and system == "Darwin"):
             available.append(be)
         elif be == "vulkan":
             if shutil.which("vulkaninfo"):
                 available.append(be)
-        elif be == "cuda":
-            if shutil.which("nvidia-smi"):
-                available.append(be)
+        elif be == "cuda" and shutil.which("nvidia-smi"):
+            available.append(be)
 
     return available if available else ["cpu"]
 
@@ -477,9 +472,9 @@ def check_coherence(text: str) -> str:
         most_common_word, most_common_wcount = word_counts.most_common(1)[0]
         # Exclude common English words from this check
         common_words = {"the", "a", "an", "is", "of", "to", "and", "in", "for", "it", "i"}
-        if most_common_word.lower() not in common_words:
-            if most_common_wcount / len(words) > COHERENCE_MAX_WORD_REPEAT_RATIO:
-                return f"word '{most_common_word}' repeated ({most_common_wcount}/{len(words)} words)"
+        if (most_common_word.lower() not in common_words
+                and most_common_wcount / len(words) > COHERENCE_MAX_WORD_REPEAT_RATIO):
+            return f"word '{most_common_word}' repeated ({most_common_wcount}/{len(words)} words)"
 
         # Check unique word ratio (pathological loops have very low uniqueness)
         unique_ratio = len(word_counts) / len(words)
@@ -808,7 +803,7 @@ def run_smoke(
             combined = proc.stdout + proc.stderr
             # Check for panic
             if "panic:" in combined:
-                panic_line = next((l for l in combined.splitlines() if "panic:" in l), "")
+                panic_line = next((line for line in combined.splitlines() if "panic:" in line), "")
                 result.status = "crash"
                 result.error_message = f"Panic: {_truncate(panic_line, 120)}"
             else:
@@ -906,7 +901,9 @@ def check_golden(result: RunResult, model: ModelInfo) -> str:
         if golden_text[:n] == result.output_text[:n]:
             return "match"
         # Case-insensitive fuzzy match (95% threshold)
-        matches = sum(1 for a, b in zip(golden_text[:n].lower(), result.output_text[:n].lower()) if a == b)
+        matches = sum(
+            1 for a, b in zip(golden_text[:n].lower(), result.output_text[:n].lower(), strict=False) if a == b
+        )
         if matches / n >= 0.95:
             return "match"
         return "mismatch"
@@ -948,8 +945,7 @@ def profile_with_instruments(
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
         if proc.returncode == 0 and trace_path.exists():
             return trace_path
-        else:
-            console.print(f"  [red]Instruments failed: {_truncate(proc.stderr, 200)}[/]")
+        console.print(f"  [red]Instruments failed: {_truncate(proc.stderr, 200)}[/]")
     except Exception as e:
         console.print(f"  [red]Instruments error: {e}[/]")
 
@@ -1132,10 +1128,7 @@ def print_inference_table(results: list[RunResult], show_golden: bool = False) -
     for r in results:
         kv_label = ""
         if r.kv_type_k:
-            if r.kv_type_k == r.kv_type_v:
-                kv_label = r.kv_type_k
-            else:
-                kv_label = f"{r.kv_type_k}-K/{r.kv_type_v}-V"
+            kv_label = r.kv_type_k if r.kv_type_k == r.kv_type_v else f"{r.kv_type_k}-K/{r.kv_type_v}-V"
 
         row = []
         if r.status == "pass":
@@ -1317,7 +1310,10 @@ def print_summary(
             f"Fastest:      [bold cyan]{best.arch}/{best.quant}[/] on [cyan]{best.backend}[/] "
             f"@ [bold]{best.tokens_per_sec:.1f}[/] tok/s"
         )
-        fastest_ttft = min(passing, key=lambda r: r.time_to_first_token_ms if r.time_to_first_token_ms > 0 else float("inf"))
+        fastest_ttft = min(
+            passing,
+            key=lambda r: r.time_to_first_token_ms if r.time_to_first_token_ms > 0 else float("inf"),
+        )
         if fastest_ttft.time_to_first_token_ms > 0:
             summary_lines.append(
                 f"Best TTFT:    [bold cyan]{fastest_ttft.arch}/{fastest_ttft.quant}[/] on "
@@ -1566,10 +1562,10 @@ def main() -> int:
         models = discover_models(search_dirs)
 
     if args.arch:
-        arch_set = set(a.lower() for a in args.arch)
+        arch_set = {a.lower() for a in args.arch}
         models = [m for m in models if m.arch.lower() in arch_set]
     if args.quant:
-        quant_set = set(q.upper().replace("-", "_") for q in args.quant)
+        quant_set = {q.upper().replace("-", "_") for q in args.quant}
         models = [m for m in models if m.quant.upper().replace("-", "_") in quant_set]
 
     # Model table
@@ -1650,7 +1646,10 @@ def main() -> int:
             for m, be, kv in test_matrix:
                 repeat_str = f" [dim](x{args.repeat})[/]" if args.repeat > 1 else ""
                 kv_str = f" [dim]{' '.join(kv.cli_flags())}[/]" if not kv.is_default else ""
-                console.print(f"  [dim]agave[/] {m.path.name} [dim]--backend[/] {be}{kv_str} [dim]--json -n[/] {args.max_tokens}{repeat_str}")
+                console.print(
+                    f"  [dim]agave[/] {m.path.name} [dim]--backend[/] {be}{kv_str} "
+                    f"[dim]--json -n[/] {args.max_tokens}{repeat_str}"
+                )
         if do_bench:
             for be in backends:
                 console.print(f"  [dim]agave-bench[/] gemv_f32 [dim]--backend=[/]{be}")
@@ -1671,9 +1670,9 @@ def main() -> int:
         with console.status("[bold]Running zig unit tests...[/]"):
             test_output, test_rc = run_zig_tests(args.timeout * 2)
         if test_rc == 0:
-            console.print(f"  Zig unit tests: [bold green]PASS[/]")
+            console.print("  Zig unit tests: [bold green]PASS[/]")
         else:
-            console.print(f"  Zig unit tests: [bold red]FAIL[/]")
+            console.print("  Zig unit tests: [bold red]FAIL[/]")
             if args.verbose:
                 console.print(f"[dim]{_truncate(test_output, 500)}[/]")
 

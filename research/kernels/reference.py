@@ -75,7 +75,7 @@ def sdpa(
     n_heads: int,
     n_kv_heads: int,
     head_dim: int,
-    scale: float = None,
+    scale: float | None = None,
 ) -> torch.Tensor:
     """
     Scaled dot-product attention (naive, for reference).
@@ -120,7 +120,7 @@ def sdpa_online(
     n_heads: int,
     n_kv_heads: int,
     head_dim: int,
-    scale: float = None,
+    scale: float | None = None,
 ) -> torch.Tensor:
     """
     FlashAttention-style SDPA with online softmax.
@@ -247,7 +247,7 @@ def conv1d_causal(x: torch.Tensor, weight: torch.Tensor, state: torch.Tensor) ->
 
     Implementation: shift state left, append x at end, dot product with weight.
     """
-    d_conv = weight.shape[0]
+    weight.shape[0]
     n_ch = weight.shape[1]
 
     new_state = state.clone()
@@ -413,7 +413,7 @@ def paged_sdpa(
     head_dim: int,
     seq_len: int,
     block_size: int,
-    scale: float = None,
+    scale: float | None = None,
 ) -> torch.Tensor:
     """
     Paged SDPA: attention with block-table indirection into a paged KV cache.
@@ -432,7 +432,7 @@ def paged_sdpa(
     if scale is None:
         scale = 1.0 / math.sqrt(head_dim)
 
-    kvd = n_kv_heads * head_dim
+    n_kv_heads * head_dim
     hpg = n_heads // n_kv_heads
     output = torch.zeros(n_heads * head_dim)
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 
@@ -33,7 +33,7 @@ ROOT = find_root()
 
 def check_links() -> list[str]:
     errors: list[str] = []
-    md_files = list((ROOT / "docs").rglob("*.md")) + [ROOT / "README.md"]
+    md_files = [*list((ROOT / "docs").rglob("*.md")), ROOT / "README.md"]
     link_re = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
     for f in md_files:
         text = f.read_text(encoding="utf-8", errors="replace")
@@ -294,7 +294,7 @@ def check_debian_snapshot_pin() -> list[str]:
             f"must all equal {from_day}"
         )
     expected = int(
-        datetime.strptime(from_day, "%Y%m%d").replace(tzinfo=timezone.utc).timestamp()
+        datetime.strptime(from_day, "%Y%m%d").replace(tzinfo=UTC).timestamp()
     )
     got = int(epoch_m.group(1))
     if got != expected:
@@ -333,7 +333,7 @@ def check_docker_packaging() -> list[str]:
         day = from_days[0]
         expected_epoch = int(
             datetime(
-                int(day[:4]), int(day[4:6]), int(day[6:8]), tzinfo=timezone.utc
+                int(day[:4]), int(day[4:6]), int(day[6:8]), tzinfo=UTC
             ).timestamp()
         )
         epoch_m = re.search(r"SOURCE_DATE_EPOCH=(\d+)", dockerfile)
@@ -460,11 +460,6 @@ def check_ci_runner_pins() -> list[str]:
 
 
 def main() -> int:
-    if sys.version_info < (3, 11):
-        sys.exit(
-            f"check-docs: Python {sys.version.split()[0]} is too old; need 3.11+ "
-            "(PEP 723 requires-python in this file)"
-        )
     errors: list[str] = []
     errors.extend(check_links())
     errors.extend(check_diagram_counts())

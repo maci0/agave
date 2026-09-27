@@ -29,10 +29,7 @@ Requires: numpy
 
 import argparse
 import json
-import struct
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -76,7 +73,7 @@ def main():
         sys.exit(2)
 
     print(f"Building {args.component} direction from {len(good_prompts)} prompt pairs")
-    print(f"Model: {args.model} ({args.n_layers} layers × {args.n_embd} embd)")
+    print(f"Model: {args.model} ({args.n_layers} layers x {args.n_embd} embd)")
 
     # Collect activations
     good_acts = []

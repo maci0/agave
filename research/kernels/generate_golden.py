@@ -14,7 +14,6 @@ Usage:
 
 import os
 import sys
-import numpy as np
 import torch
 
 from reference import (

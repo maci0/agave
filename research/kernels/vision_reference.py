@@ -7,8 +7,6 @@ against the Zig implementation.
 """
 
 import os
-import sys
-import struct
 import numpy as np
 from gguf import GGUFReader
 
@@ -25,7 +23,10 @@ N_BLOCKS = 27
 PROJECTION_DIM = 2816
 NORM_EPS = 1e-6
 
-GGUF_PATH = os.path.join(os.path.dirname(__file__), "../../models/lmstudio-community/gemma-4-26B-A4B-it-GGUF/mmproj-gemma-4-26B-A4B-it-BF16.gguf")
+GGUF_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "../../models/lmstudio-community/gemma-4-26B-A4B-it-GGUF/mmproj-gemma-4-26B-A4B-it-BF16.gguf",
+)
 OUT_DIR = "vision_ref_dumps"
 
 
@@ -37,7 +38,7 @@ def bf16_to_f32(raw_bytes: np.ndarray, shape: tuple) -> np.ndarray:
     """
     # raw_bytes is uint8 with shape (..., n*2) where last dim is byte-packed
     flat = raw_bytes.reshape(-1)
-    n_elements = len(flat) // 2
+    len(flat) // 2
     # Interpret as uint16 (little-endian)
     u16 = np.frombuffer(flat.tobytes(), dtype=np.uint16)
     # Zero-extend to uint32 and shift left 16
@@ -77,11 +78,10 @@ class GGUFWeights:
         if t.data.dtype == np.float32:
             # F32: data is already shaped correctly (reversed from GGUF dims)
             return t.data.copy()
-        else:
-            # BF16 (dtype=30): data is uint8 raw bytes
-            # Reversed shape from GGUF: (dim_last, ..., dim0*2)
-            reversed_shape = list(gguf_shape[::-1])
-            return bf16_to_f32(t.data, reversed_shape)
+        # BF16 (dtype=30): data is uint8 raw bytes
+        # Reversed shape from GGUF: (dim_last, ..., dim0*2)
+        reversed_shape = list(gguf_shape[::-1])
+        return bf16_to_f32(t.data, reversed_shape)
 
     def has(self, name: str) -> bool:
         return name in self._tensors
