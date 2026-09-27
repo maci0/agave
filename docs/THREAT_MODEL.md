@@ -29,9 +29,9 @@ Highest-value correction for operators: **the API key protects only TCP 49453**.
 ## Assets
 
 - Model weights on disk and in VRAM: expensive to obtain, exfiltration target.
-- Prompt and conversation content: in memory; in the bounded conversation store (`max_conversations` = 100 `src/server/server.zig:151`, `max_messages_per_conv` = 1000 `:152`); on disk via `src/server/conv_store.zig` (`defaultPath` `:72`, `$XDG_CACHE_HOME/agave` or `$HOME/.cache/agave`); latent in the KV cache and radix prefix cache (`src/server/scheduler.zig` `radix_tree: RadixTree` field `:309`, `matchPrefix` call `:429`, `insert` call `:715`).
+- Prompt and conversation content: in memory; in the bounded conversation store (`max_conversations` = 100 `src/server/server.zig:150`, `max_messages_per_conv` = 1000 `:151`); on disk via `src/server/conv_store.zig` (`defaultPath` `:72`, `$XDG_CACHE_HOME/agave` or `$HOME/.cache/agave`); latent in the KV cache and radix prefix cache (`src/server/scheduler.zig` `radix_tree: RadixTree` field `:309`, `matchPrefix` call `:429`, `insert` call `:715`).
 - Generated response bodies retained for replay (`src/server/idempotency.zig` `body: []u8` `:52`, `max_body_len` 64 KiB `:34`, `retention_ms` 1 h `:39`).
-- Hidden states: `/v1/kv_cache` export returns raw per-layer KV blocks, capped at 64 MiB (`kv_export_max_bytes` `src/server/server.zig:148`, size math `:110-124`).
+- Hidden states: `/v1/kv_cache` export returns raw per-layer KV blocks, capped at 64 MiB (`kv_export_max_bytes` `src/server/server.zig:147`, size math `:110-124`).
 - `HF_TOKEN` (`src/pull.zig:311` `config.getenv("HF_TOKEN")`) and `AGAVE_API_KEY` (`src/main.zig:1333` `preferredSecret`, definition `:1621`): credentials in process env.
 - GPU compute and availability: generation is the costly resource; DoS converts directly to cost.
 - Output integrity: poisoned weights or a poisoned allReduce silently corrupt every answer.
@@ -42,8 +42,8 @@ Entry points found in code:
 
 | Entry point | Location | Notes |
 |---|---|---|
-| HTTP API, default 49453 | endpoint table `src/server/server.zig:417-435` (`KnownEndpoint` `:416`), dispatcher `handleRequest` `:2161` | OpenAI/Anthropic-compatible endpoints; embedded web UI via `@embedFile` (`:1227-1230`); no filesystem serving |
-| TCP listen call | `src/server/server.zig:7468` `net.IpAddress.listen` | The only listener in `src/server/`; every other socket in the tree is in `src/parallel/` |
+| HTTP API, default 49453 | endpoint table `src/server/server.zig:435-456` (`KnownEndpoint` `:428`, auth policy per entry), dispatcher `handleRequest` `:2217` | OpenAI/Anthropic-compatible endpoints; embedded web UI via `@embedFile` (`:1266-1269`); no filesystem serving |
+| TCP listen call | `src/server/server.zig:7485` `net.IpAddress.listen` | The only listener in `src/server/`; every other socket in the tree is in `src/parallel/` |
 | Generation endpoints | `/v1/chat/completions` (dispatch `:2382`), `/v1/completions` (`:2575`), `/v1/messages` (`:3088`), `/v1/responses` (`:2994`), `/v1/chat` (`:3607`), `/v1/chat/regenerate` (`:3452`); allow-list rows `:418-424` | Streaming SSE and batch decode; `validateAuth` gate at each dispatch, e.g. `:2387`, `:2579`, `:3092` |
 | `/v1/models` | dispatch `:2354` | Auth-gated at `:2357`; discloses model id, backend, layer/embedding/vocab counts, ctx size, KV position, MTP depth |
 | `/v1/embeddings` | dispatch `:2980` | Auth-gated at `:2982` |
@@ -52,7 +52,7 @@ Entry points found in code:
 | Metrics | `/metrics` `:2302` | Auth-required at `:2304` when a key is set; includes `agave_build_info` |
 | KV cache export/import | `/v1/kv_cache` GET+POST `:2865`, `/v1/kv_cache/info` GET `:2817` | Raw hidden states in/out, cap 64 MiB (`:148`) |
 | Conversations API | `/v1/conversations` `:3267` | Auth-gated at `:3270`; backed by in-memory store + optional disk persist |
-| Replay ledger on mutating routes | `claimIdempotencyKey` `src/server/server.zig:742`, ledger `src/server/idempotency.zig` `claim` `:100`, `complete` `:135`, `sendIdempotentReplay` `src/server/server.zig:1613` | Keyed on the sanitized `X-Request-Id` alone, one ledger per server: T8 |
+| Replay ledger on mutating routes | `claimIdempotencyKey` `src/server/server.zig:781`, ledger `src/server/idempotency.zig` `claim` `:100`, `complete` `:135`, `sendIdempotentReplay` `src/server/server.zig:1669` | Keyed on the sanitized `X-Request-Id` alone, one ledger per server: T8 |
 | Static UI assets | `/` `:2342` and `/favicon.ico` `:2335` | No directory listing, no path join from request data |
 | CLI arguments | `src/main.zig` (option table `:461-560`) | Model path, prompts, `--lora` `:525`, `--mmproj` `:527`, `--image`/ PPM `--video` `:528-529`, `--draft-model` `:532`, `--mtp-model` `:533`, `--spec-token-map` `:537`, `--dir-steering-file` `:553`, `--grammar` file `:481`, `--conv-store` write path `:522`, `--kv-ssd-path` `:509`: all become parsed inputs |
 | Stdin prompt pipe | `src/main.zig` `max_stdin_prompt_size` `:142` (1 MiB) | Piped prompt mode |
@@ -75,7 +75,7 @@ Entry points found in code:
 
 ## 2. Trust boundaries and data flow
 
-1. **Client -> HTTP API.** Authn point: `validateAuth` (`src/server/server.zig:1508`, constant-time compare helper `constantTimeEql` `:1536`), called per endpoint (`:2241`, `:2262`, `:2304`, `:2344`, `:2357`, `:2387`, ...). Policy: non-loopback binds refuse to start without a key (`src/main.zig:1337-1346`); loopback binds are open by design. Unauthenticated mode also rejects non-loopback `Host` (DNS rebind, `isRebindHostUnauthenticated` `src/server/server.zig:1118`, backed by `isLoopbackHttpHost` `:1087`) and mismatched `Origin` vs `Host` (CSRF, `isCrossOriginUnauthenticated` `:1127` over `originMatchesHost` `:1051`).
+1. **Client -> HTTP API.** Authn point: one dispatcher chokepoint, `authorizedForPath` (`src/server/server.zig:1581`, table lookup `authPolicyFor` `:459`), which calls `validateAuth` (`:1554`, constant-time compare helper `constantTimeEql` `:1592`) for every route whose `known_endpoints` entry is `AuthPolicy.required`. The default for a new or unlisted path is `required`, so a route cannot become reachable without the key by omitting a check; only `/health` and `/ready` (`.optional`) and `/favicon.ico` (`.public`) opt out, and the first two still trim their body when `validateAuth` fails. Deny side pinned by `test "auth chokepoint denies every protected route"`. Policy: non-loopback binds refuse to start without a key (`src/main.zig:1337-1346`); loopback binds are open by design. Unauthenticated mode also rejects non-loopback `Host` (DNS rebind, `isRebindHostUnauthenticated` `src/server/server.zig:1157`, backed by `isLoopbackHttpHost` `:1126`) and mismatched `Origin` vs `Host` (CSRF, `isCrossOriginUnauthenticated` `:1166` over `originMatchesHost` `:1090`).
 2. **Client -> client (same server).** No principal is derived from the key. The KV cache, radix prefix cache, conversation store, and idempotency ledger are all per-server singletons shared by every request: T3, T8.
 3. **Artifact -> loader.** Whoever supplies the file (local user, Hub download, LoRA adapter, mmproj, PNG/PPM) crosses into mmap/decode native code. Validation lives inside the parsers (see mitigations).
 4. **HF Hub -> local cache.** Transport-authenticated (TLS) but content-unverified; blobs land under `$HF_HOME`-derived paths with `O_NOFOLLOW` writes (`src/pull.zig:1190`). Commit SHA is used for snapshot directory naming, not as a pin on the download URL (`resolve/main` `:1027`).
@@ -83,15 +83,15 @@ Entry points found in code:
 6. **Same-host processes -> shm segments.** Only uid/file-mode checks; names are fixed.
 7. **Secrets -> process.** Env vars enter once at startup; nonempty `AGAVE_API_KEY` wins over CLI to avoid `ps` exposure (`src/main.zig:1183-1186`, `preferredSecret` `:1621`); empty env is unset (`:1331`). Rotation: process restart. Storage: env only. Prompt-derived buffers are wiped before free (`wipeFree` / `wipeFreeTokens` `src/server/server.zig:1164,1170`), the per-connection read buffer that carries `Authorization` / `x-api-key` is zeroed before it is freed (`:7244`), and Hub `Authorization` buffers are zeroed (`src/pull.zig:739,1089`).
 8. **Process -> conversation file.** Prompts written to the cache-path conversation store unless `--no-conv-store` (`src/server/conv_store.zig:72`). Compose maps this under `agave-cache` (`docker-compose.yml:58`).
-9. **Embedded UI -> jsDelivr.** `src/web/app.ts` fetches marked / DOMPurify / highlight.js from `cdn.jsdelivr.net` with SRI hashes (`:733-736`, `:769-772`, loader `:740`) on the first response and the first code block rather than on page load (`loadMarkdown` `:759`, `loadHighlightJs` `:777`). CSP allowlists that origin (`src/server/server.zig:1492`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
+9. **Embedded UI -> jsDelivr.** `src/web/app.ts` fetches marked / DOMPurify / highlight.js from `cdn.jsdelivr.net` with SRI hashes (`:733-736`, `:769-772`, loader `:740`) on the first response and the first code block rather than on page load (`loadMarkdown` `:759`, `loadHighlightJs` `:777`). CSP allowlists that origin (`src/server/server.zig:1538`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
 
 Privilege transitions: none at runtime. The process starts and stays at its launching privilege; the Dockerfile drops to `agave` before exec (`Dockerfile:231`), and compose adds `no-new-privileges` (`docker-compose.yml:66-67`).
 
 ## 3. Threats per boundary
 
 **Client -> HTTP API**
-- Spoofing: key guessing. Mitigated: constant-time compare, non-empty key enforcement (`src/server/server.zig:1508,1536`, `src/main.zig:1333-1346`).
-- Information disclosure: `/health` and `/ready` reachable unauthenticated (reduced bodies; `docs/API.md` health/ready sections match code at `src/server/server.zig:2231-2300`). Residual: build info on `/metrics` requires auth (`:2304`); `/v1/models` (`:2354-2380`) discloses model geometry to any key holder.
+- Spoofing: key guessing. Mitigated: constant-time compare, non-empty key enforcement (`src/server/server.zig:1554,1592`, `src/main.zig:1333-1346`).
+- Information disclosure: `/health` and `/ready` reachable unauthenticated (reduced bodies; `docs/API.md` health/ready sections match code at `src/server/server.zig:2306-2376`). Residual: build info on `/metrics` requires auth (`:2377`); `/v1/models` (`:2418-2444`) discloses model geometry to any key holder.
 - Tampering/DoS: oversized or hostile JSON. Mitigated: 1 MiB body cap (`http_buf_size` `:129` / `max_request_body_size` `:146`), duplicate `Content-Length` rejection (`parseContentLength` `:1412`), `Transfer-Encoding` rejected to avoid request smuggling (`:1459`), scan-based JSON with message/tool caps (`src/server/json.zig:19,39`), connection cap 64 (`max_concurrent_connections` `:154`), 30 s read timeout (`connection_read_timeout_sec` `:439`, applied `:7214`).
 - CSRF / DNS rebind on no-key loopback: mitigated by Origin vs Host (`:1127`) and loopback-only Host (`:1118`). Residual: any local process can still call the no-key loopback API (curl, scripts).
 - DoS: budget exhaustion. Partially mitigated: rate limiter exists but is one global bucket (`src/server/rate_limiter.zig:1-2`, struct doc `:57-59`). CLI default is 0 = limiter disabled (`src/main.zig:660,662`, parsed `:1457-1458`, wired `:7406-7408`; unset side falls back to `rate_limit_unlimited_rpm` / `_tpm` `src/server/server.zig:163-164`). Grammar and `json_mode` bypass the scheduler and serialize under the model mutex (`src/server/server.zig:4201-4205`, repeated for the other routes `:4819-4821`, `:5553-5555`, `:6007-6009`, comment `:6677`).
@@ -123,10 +123,10 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 
 | Control | Covers | Reference |
 |---|---|---|
-| API key authn, constant-time | Client spoofing on 49453 | `src/server/server.zig:1508,1536`, `src/main.zig:1333-1346` |
+| API key authn, constant-time | Client spoofing on 49453 | `src/server/server.zig:1554,1592`, `src/main.zig:1333-1346` |
 | Bind policy: non-loopback requires key | Accidental internet exposure | `src/main.zig:1337-1346` |
-| Origin/CSRF check when no key | Drive-by browser attacks on loopback servers | `src/server/server.zig:1127` |
-| Loopback-only Host when no key | DNS rebinding (CWE-350) | `src/server/server.zig:1087,1118` |
+| Origin/CSRF check when no key | Drive-by browser attacks on loopback servers | `src/server/server.zig:1166` |
+| Loopback-only Host when no key | DNS rebinding (CWE-350) | `src/server/server.zig:1126,1157` |
 | Empty CORS (`corsHeaders` returns `""`) | Cross-site read of a local server | `src/server/server.zig:975` |
 | Body/header/connection/timeout caps; reject duplicate `Content-Length` and any `Transfer-Encoding` | Request DoS, HTTP smuggling | `src/server/server.zig:129,135,146,154,439,1412,1459,7214` |
 | Token-bucket rate limits (opt-in, global) | Compute DoS when flags set | `src/server/rate_limiter.zig`; defaults off `src/main.zig:660,662` |
@@ -151,12 +151,12 @@ Docs-vs-code check (2026-09-27): `docs/API.md` auth / CORS / Host-rebind / rate-
 ## 5. Abuse cases (authenticated-hostile-user scenarios)
 
 1. **Budget denial:** one key holder streams maximal requests. With limits unset, nothing throttles GPU time. With limits set, the single global TPM/RPM bucket starves every other client (`src/server/rate_limiter.zig:1-2`).
-2. **Cross-request state reach:** a key holder exports `/v1/kv_cache` after other users' traffic and receives hidden-state blocks derived from their prompts on a shared single-key deployment (`src/server/server.zig:2865`; the radix prefix cache is likewise global, `src/server/scheduler.zig:309,429,715`).
-3. **Replay theft:** a key holder re-sends another holder's `X-Request-Id` to `/v1/chat` and receives their stored completion, up to 64 KiB, for an hour after the original request (`src/server/idempotency.zig:100`, replay path `src/server/server.zig:1613`). T8.
+2. **Cross-request state reach:** a key holder exports `/v1/kv_cache` after other users' traffic and receives hidden-state blocks derived from their prompts on a shared single-key deployment (`src/server/server.zig:2904`; the radix prefix cache is likewise global, `src/server/scheduler.zig:309,429,715`).
+3. **Replay theft:** a key holder re-sends another holder's `X-Request-Id` to `/v1/chat` and receives their stored completion, up to 64 KiB, for an hour after the original request (`src/server/idempotency.zig:100`, replay path `src/server/server.zig:1669`). T8.
 4. **Retry suppression:** presenting a key that is still `in_flight` collapses into a duplicate rejection, so a hostile holder can deny a victim's in-progress retry (`src/server/idempotency.zig:36,100-127`).
 5. **Latency gaming:** repeated user-supplied GBNF grammars or `json_mode` force inline parse-and-constrain outside the batch scheduler, degrading concurrent clients (`src/server/server.zig:4201-4205`).
-6. **Tokenizer abuse:** `/v1/tokenize` and `/v1/detokenize` accept arbitrary attacker text and run the vocabulary scan under the same single global bucket as generation, so a cheap endpoint can occupy the tokenizer's share of request time (`src/server/server.zig:2666,2755`; caps `src/server/json.zig:19`). T7.
-7. **Model fingerprinting:** `/v1/models` names the loaded model, backend, layer/embedding/vocab counts, context size, and MTP depth to any holder of one key, which narrows the set of suitable attacks against that deployment (`src/server/server.zig:2354-2380`).
+6. **Tokenizer abuse:** `/v1/tokenize` and `/v1/detokenize` accept arbitrary attacker text and run the vocabulary scan under the same single global bucket as generation, so a cheap endpoint can occupy the tokenizer's share of request time (`src/server/server.zig:2715,2801`; caps `src/server/json.zig:19`). T7.
+7. **Model fingerprinting:** `/v1/models` names the loaded model, backend, layer/embedding/vocab counts, context size, and MTP depth to any holder of one key, which narrows the set of suitable attacks against that deployment (`src/server/server.zig:2418-2444`).
 8. **Cluster hijack (no auth needed):** a LAN host answers the UDP beacon first or wins the TCP connect race and becomes a trusted rank, then feeds arbitrary f32 tensors (`src/parallel/transport.zig:300-301`, `src/parallel/peer_discovery.zig:24-25`).
 9. **Prompt harvest from disk:** on a shared Unix user or a leaked compose volume, read `conversations.json` (`src/server/conv_store.zig:72`).
 10. **Client-side trust note:** the `--serve` web UI enforces nothing itself; all checks are server-side (correct posture). The standalone browser demo will load any model URL a visitor types (`web/agave.ts` `loadModel` `:307`), so a linked model can serve attacker-chosen completions locally, inside the sandbox.
