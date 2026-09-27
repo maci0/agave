@@ -241,7 +241,10 @@ pub const SafeTensorsDir = struct {
             // working set on the DS4 2-node TP, stalling decode for ~1h).
             std.posix.madvise(mapped.ptr, mapped.len, std.posix.MADV.RANDOM) catch {};
             const json_len = std.mem.readInt(u64, mapped[0..8], .little);
-            const total_header_size = std.math.add(u64, 8, json_len) catch return error.InvalidSafeTensors;
+            const total_header_size = std.math.add(u64, 8, json_len) catch {
+                std.posix.munmap(mapped);
+                return error.InvalidSafeTensors;
+            };
             if (total_header_size > max_header_json_size or total_header_size > file_size) {
                 std.posix.munmap(mapped);
                 return error.InvalidSafeTensors;
