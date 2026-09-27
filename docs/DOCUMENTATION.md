@@ -23,7 +23,7 @@ A progressive tutorial series that builds understanding layer by layer:
 14. [Format Conventions](tutorial/14-format-conventions.md), GGUF vs SafeTensors, tensor layout
 15. [Chat Templates](tutorial/15-chat-templates.md), data-driven role markers, EOG tokens
 16. [Recipe System](tutorial/16-recipe-system.md), per-model/hardware defaults, user overrides
-17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md), 15 modes: auto, standard, DDTree, self-spec, n-gram, suffix, lookahead, MTP/Medusa, EAGLE, EAGLE-3, MLP Speculator, PFlash, DSpark, DFlash2 (plus FR-Spec vocab map)
+17. [Speculative Decoding & DDTree](tutorial/17-speculative-decoding.md), 15 modes: auto, standard, DDTree, self-spec, n-gram, suffix, lookahead, MTP, Medusa, EAGLE, EAGLE-3, MLP Speculator, PFlash, DSpark, DFlash2 (plus FR-Spec vocab map)
 18. [Multi-Token Prediction](tutorial/18-multi-token-prediction.md), MTP heads, +1 offset norm, draft/verify loop
 19. [PFlash and Block Sparse Attention](tutorial/19-pflash-and-block-sparse.md), block sparsity, speculative prefill, alpha tuning, scoring models, PFlash+DDTree composition
 20. [Diffusion Language Models](tutorial/20-diffusion-lm.md), DiffusionGemma, block diffusion, uniform state diffusion, bidirectional canvas attention, confidence-based acceptance, block autoregressive chaining

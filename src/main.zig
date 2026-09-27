@@ -2816,7 +2816,6 @@ fn loadImage(allocator: std.mem.Allocator, path: []const u8, target_size: u32) !
     }
 }
 
-/// Initialize the model and run inference/server/REPL. Returns false on failure.
 /// Fraction of a checkpoint's bytes that end up as cached weight uploads. The
 /// rest is metadata, the tokenizer, and tensors the GPU never sees.
 ///

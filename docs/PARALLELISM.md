@@ -50,7 +50,7 @@ agave model.gguf --backend vulkan --device 1   # select GPU by index
 
 ### Transport Layer
 
-All distributed communication goes through `src/parallel/transport.zig`. Three transport backends:
+All distributed communication goes through `src/parallel/transport.zig`. Four transport backends:
 
 | Transport | Mechanism | Best For | Bandwidth |
 | :--- | :--- | :--- | :--- |

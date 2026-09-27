@@ -5,12 +5,14 @@
 //! that keeps hot experts resident and streams cold experts from the mmap'd
 //! model file on demand via madvise(WILLNEED).
 //!
-//! The cache holds `cache_experts` expert weight slabs. When the router selects
-//! an expert not in the cache, the least-recently-used slab is evicted and the
+//! The cache holds `n_slots` expert weight slabs. When the router selects an
+//! expert not in the cache, the least-recently-used slab is evicted and the
 //! new expert's weights are faulted in from the mmap'd file.
 //!
-//! Library API (no `--ssd-streaming` CLI yet; wire from MoE forward paths):
-//!   var cache = try ExpertCache.init(allocator, n_layers, n_experts, cache_size);
+//! Enabled by `--ssd-streaming`, which sizes the cache from system memory
+//! unless `--ssd-cache-slots` pins it, and wired into the model through
+//! `setExpertCache`.
+//!   var cache = try ExpertCache.init(allocator, n_layers, n_experts, n_cache_slots);
 //!   defer cache.deinit(allocator);
 //!
 //!   // Before MoE forward, ensure selected experts are resident:

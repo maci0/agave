@@ -53,7 +53,7 @@ Largest gains on models with mixed quantization (Q4_K_M = Q4_K + Q6_K layers) wh
 
 ### Tier 2: True Megakernels
 
-True megakernels execute an entire transformer layer in a single GPU dispatch using composable building blocks with atomic grid sync. 18 primitives in `mega_common.metal` (730 lines) include cooperative RMS norm, per-format GEMV, activations, RoPE, KV cache append with TurboQuant encoding, and inline SDPA with TQ+ dequant and sparse V.
+True megakernels execute an entire transformer layer in a single GPU dispatch using composable building blocks with atomic grid sync. 18 primitives in `mega_common.metal` (752 lines) include cooperative RMS norm, per-format GEMV, activations, RoPE, KV cache append with TurboQuant encoding, and inline SDPA with TQ+ dequant and sparse V.
 
 **Implementations**: 5 Metal (Qwen Q8/Q4K, Gemma Q4K/Q8, Nemotron-H Q8), 3 CUDA (Qwen Q8, Gemma Q4K/Q8), 1 ROCm (Qwen Q8). Total megakernel code: ~4,923 lines across 16 files.
 
@@ -160,7 +160,7 @@ Vision encoding uses GPU GEMM (BF16 Metal) + parallel CPU attention (thread pool
 Notes:
 - UMA zero-copy: mmap'd weights registered via `cuMemHostRegister`, accessed directly by GPU
 - Q4_K/Q6_K fall back to CPU (Zig LLVM nvptx aliasee bug prevents PTX recompilation)
-- 61 CUDA PTX kernels loaded via sm_90 forward compatibility to sm_121
+- 61 CUDA PTX kernels, committed for sm_120 and loaded on sm_121 by PTX forward compatibility
 - Server mode (`--serve`) works correctly (cuCtxSetCurrent on scheduler thread)
 
 ## Distributed Inference (Multi-Node)
@@ -401,7 +401,7 @@ agave-bench gemv_q6_k --n 1024 --k 896 --backend rocm --validate   # one kernel
 zig build validate -Dvalidate-backend=rocm                          # the whole sweep
 ```
 
-`zig build validate` runs all 41 kernels at both k values and fails the build on any
+`zig build validate` runs all 44 kernels at both k values and fails the build on any
 mismatch. It is deliberately not part of `zig build test`, which has to pass on a CI runner or
 a cross-compile host with no GPU. Verified to catch a regression: re-introducing the Q3_K scale
 transposition makes it exit 1.

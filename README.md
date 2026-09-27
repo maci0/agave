@@ -343,15 +343,14 @@ Measured on Apple M4 Pro (48 GB unified memory). See [docs/BENCHMARKS.md](docs/B
 
 | Model | Config | Transport | Decode (tok/s) |
 |-------|--------|-----------|---------------:|
-| 9B Q8_0 | Single GPU | n/a | 9.1 |
-| 9B Q8_0 | PP=2 | NCCL RoCE | **8.5** |
-| 9B Q8_0 | TP=2 | NCCL RoCE | 5.1 |
-| 9B Q8_0 | TP=2 | TCP RoCE | 4.9 |
-| 27B Q4_K_M | Single GPU | n/a | 2.2 |
-| 27B Q4_K_M | PP=2 | NCCL RoCE | 2.2 |
-| 27B Q4_K_M | TP=2 | NCCL RoCE | 1.7 |
+| Qwen3.5 0.8B Q8_0 | Single GPU | n/a | 9.2 |
+| Qwen3.5 0.8B Q8_0 | PP=2 | NCCL RoCE | **40.2** |
+| Qwen3.5 0.8B Q8_0 | TP=2 | NCCL RoCE | 5.1 |
+| Qwen3.5 9B Q4_K_M | Single GPU | n/a | 2.2 |
+| Qwen3.5 9B Q4_K_M | PP=2 | NCCL RoCE | 2.2 |
+| Qwen3.5 9B Q4_K_M | TP=2 | NCCL RoCE | 1.7 |
 
-†Canonical decode numbers from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) (2026-05-26 sparse GEMV + Accelerate). Other tables may reflect older runs.
+†Canonical decode numbers from [docs/BENCHMARKS.md](docs/BENCHMARKS.md). Other tables may reflect older runs.
 
 All quant formats supported on all backends: Q8_0 (GPU), Q4_0/Q4_K/Q5_K/Q6_K (GPU or CPU fallback on UMA). See [docs/KERNELS.md](docs/KERNELS.md) for details.
 
@@ -461,15 +460,12 @@ agave [OPTIONS] <model> [prompt]
       --rank <N>           This node's rank [default: 0]
       --transport <TYPE>   IPC transport: auto, tcp, shm, nccl [default: auto]
       --disagg             Disaggregated prefill/decode
-      --power <N>          Target GPU utilisation percent (1-100) [default: 100]
       --vram-budget <GIB>  Cap GPU memory for cached weights (GiB, e.g. 20, 0.5, or auto)
       --vram-budget-policy <P>  Weight eviction when full: mru (default) or lru
       --ssd-streaming      Stream MoE experts from SSD
       --ssd-cache-slots <N> LRU expert cache size [default: 256]
       --expert-profile-out <FILE>  Save expert activation profile
       --expert-profile-in <FILE>   Load expert activation profile for cache warming
-      --frontier-bench     Frontier benchmark (snapshot KV at each context)
-      --frontier-ctx <LIST> Comma-separated context lengths for frontier bench
 ```
 
 ## Build Options

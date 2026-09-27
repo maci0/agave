@@ -5,7 +5,7 @@
 //! and CI regression tracking.
 //!
 //! Usage:
-//!   agave-bench <kernel_name> [--n N] [--k K] [--iters N] [--backend cpu|metal|vulkan|cuda]
+//!   agave-bench <kernel_name> [--n N] [--k K] [--iters N] [--backend auto|cpu|metal|vulkan|cuda|rocm|webgpu]
 //!   agave-bench e2e --model <path> --backend X -n N
 //!
 //! Examples:

@@ -261,7 +261,7 @@ When you run `agave model.gguf "Hello"`:
 | `gemvT(x, W, y, out_dim, in_dim)` | Transposed GEMV for Q8_0 3D weights (MLA) | Yes |
 | `gemvNvfp4St(x, w, scale, y, n, k)` | NVFP4 SafeTensors GEMV (separate scale tensor) | Yes |
 | `gemvMlxQ(x, w, scales, biases, y, n, k, bits, group_size)` | MLX affine quantized GEMV (2/4/6/8-bit, variable group_size) | Yes |
-| `gemvMxfp4St(x, w, scale, y, n, k)` | MXFP4 SafeTensors GEMV | Yes |
+| `gemvMxfp4St(x, w, scale, y, n, k, gs, sf)` | MXFP4 SafeTensors GEMV | Yes |
 | `rmsNormMulti(data, w, n_heads, hd, eps)` | Per-head RMS norm (QK norm) | Yes |
 | `deinterleave(in, out_a, out_b, stride, n)` | Split interleaved Q/K pairs | Yes |
 | `splitQGate(qg, q, g, hd, nh)` | Split concatenated Q+gate (Qwen3.5) | Yes |
@@ -528,9 +528,9 @@ DDTree speculative decode -> output tokens
 | `f32` | 32 | Full precision |
 | `f16` | 16 | Half precision |
 | `q8_0` | 8.5 | Block-quantized |
-| `int8` | 8 | Symmetric INT8 |
+| `int8` | 9 | Symmetric INT8 |
 | `fp8_e4m3` | 8 | FP8 E4M3 |
-| `nvfp4` | 4.25 | NVFP4 microscaled |
+| `nvfp4` | 4.5 | NVFP4 microscaled |
 | `nvfp4_ds_mla` | 5.94 | DeepSeek MLA: NVFP4 on 448 NoPE dims, f16 on 64 RoPE dims (380 B/token) |
 | `turbo2` | 2.5 | TurboQuant 2-bit (WHT-32 + Lloyd-Max codebook) |
 | `turbo3` | 3.5 | TurboQuant 3-bit (WHT-32 + Lloyd-Max codebook) |
@@ -604,7 +604,7 @@ Vision support is implemented in `src/models/vision.zig` with three auto-detecte
 - Dual Conv2D patch embedding (with bias), learned 1D position embedding.
 - ViT blocks with fused QKV projection, LayerNorm (with bias), GELU FFN, no QK norms.
 - Post-encoder LayerNorm (`v.post_ln`), then 4x MLP merge projector (`mm.0` + GELU + `mm.2`) -> n\_patches/4 output tokens.
-- M-RoPE (multi-dimensional rotary position embedding): 4 sections `[temporal, height, height, width]` with theta=10000.
+- ViT RoPE is 2D `rotate_half` (height then width), not llama.cpp's 4-section M-RoPE, with theta=10000.
 
 ### Vision Pipeline
 

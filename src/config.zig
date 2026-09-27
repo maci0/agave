@@ -1,10 +1,12 @@
 //! Environment variable access, shared by every module that reads config.
 //!
 //! One place decides what an unset variable means, so a debug flag, a secret,
-//! and a cache path cannot disagree about the same string. Every reader goes
-//! through here: `src/pull.zig` (HF_TOKEN, HF_HOME, cache roots),
-//! `src/main.zig` (AGAVE_* server settings), `src/models/vision.zig`
-//! (AGAVE_VISION_DEBUG), and the Vulkan / conversation-store cache paths.
+//! and a cache path cannot disagree about the same string. Readers go through
+//! here: `src/pull.zig` (HF_TOKEN, HF_HOME, cache roots), `src/main.zig`
+//! (AGAVE_* server settings), `src/models/vision.zig` (AGAVE_VISION_DEBUG), and
+//! the Vulkan / conversation-store cache paths. Two modules read the
+//! environment directly and are the exceptions: `src/display.zig` (TERM,
+//! NO_COLOR) and `src/parallel/transport.zig` (per-process IPC discovery).
 
 const std = @import("std");
 

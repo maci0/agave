@@ -193,7 +193,8 @@ pub const VisionEncoder = struct {
     v_buf: []f32 = &.{},
     /// Attention output buffer: [n_patches, embd_dim].
     attn_out: []f32 = &.{},
-    /// Attention scores buffer: [n_heads, n_patches, n_patches].
+    /// Attention scores buffer: [n_heads, attention_chunk_size, n_patches],
+    /// sized for chunked attention.
     scores: []f32 = &.{},
     /// FFN gate buffer: [n_patches, ffn_dim] (only used for SwiGLU variants).
     ffn_gate: []f32 = &.{},
@@ -1221,10 +1222,9 @@ pub const VisionEncoder = struct {
     }
 
     /// Project vision embeddings to LLM hidden dimension.
-    ///   Gemma4: RMSNorm (no weights) → mm.input_projection.weight
-    ///           HuggingFace pipeline: VisionPooler(sqrt(hidden_size)) → RMSNorm(no_weight) → linear.
-    ///           The VisionPooler scaling is absorbed by the RMSNorm (normalizes to unit RMS),
-    ///           so we only need the unweighted RMSNorm followed by the linear projection.
+    ///   Gemma4: mm.input_projection.weight → RMSNorm (no weights)
+    ///           The unweighted RMSNorm runs after the linear, unlike the
+    ///           Gemma3 order below.
     ///   Gemma3: mm.soft_emb_norm → mm.input_projection.weight
     ///   Qwen:   MLP projector: GELU(x @ mm.0.weight + mm.0.bias) @ mm.2.weight + mm.2.bias
     fn projectToLlm(self: *VisionEncoder) !void {
@@ -1604,7 +1604,7 @@ fn rmsNormInPlace(x: []f32, weight: [*]const f32, n: usize, eps: f32) void {
 
 /// CPU-side in-place RMS normalization without learned weights.
 /// x[i] = x[i] / rms(x)
-/// Used for the Gemma4 embedding_pre_projection_norm (with_scale=False).
+/// Used for the Gemma4 post-projection norm (with_scale=False).
 fn rmsNormInPlaceNoWeight(x: []f32, n: usize, eps: f32) void {
     const sum_sq = math_ops.simdDotF32(x.ptr, x.ptr, n);
     const inv_rms = 1.0 / @sqrt(sum_sq / @as(f32, @floatFromInt(n)) + eps);

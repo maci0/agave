@@ -44,7 +44,7 @@ Fuses gate GEMV + up GEMV + activation into a single dispatch per FFN layer. Sav
 
 ### CUDA: 4 kernel files (Q8_0, Q4_K, Q5_K, Q6_K)
 
-SiLU + GELU variants per quant format. PTX compiled and appended to `all.ptx`.
+SiLU for Q8_0/Q4_K/Q5_K/Q6_K, GELU for Q8_0. PTX compiled and appended to `all.ptx`.
 
 ### Performance (M4 Pro 48GB)
 
