@@ -98,6 +98,7 @@ pub const ChatTemplate = struct {
         }
         var result = std.ArrayList(u8).empty;
         try result.ensureTotalCapacity(allocator, total_len);
+        errdefer result.deinit(allocator);
         // Fixed default system message (e.g. GPT-OSS reasoning preamble)
         if (self.default_system) |ds| {
             try result.appendSlice(allocator, self.system_prefix);
@@ -174,6 +175,7 @@ pub const ChatTemplate = struct {
         var result = std.ArrayList(u8).empty;
         const total = std.math.add(usize, self.assistant_suffix.len + self.user_prefix.len, std.math.add(usize, user_msg.len, self.user_suffix.len + self.assistant_prefix.len + self.generation_prefix.len) catch return error.OutOfMemory) catch return error.OutOfMemory;
         try result.ensureTotalCapacity(allocator, total);
+        errdefer result.deinit(allocator);
         try result.appendSlice(allocator, self.assistant_suffix);
         try result.appendSlice(allocator, self.user_prefix);
         try self.writeUntrusted(allocator, &result, user_msg);

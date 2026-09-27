@@ -7201,7 +7201,12 @@ pub fn run(config: ServerConfig) !void {
         if (sleep_thread == null) std.log.warn("server: failed to start sleep monitor thread", .{});
         if (sleep_thread != null) std.log.info("server: sleep mode enabled (idle timeout: {d}s)", .{config.sleep_after_s});
     }
-    defer if (sleep_thread) |t| t.join();
+    // The monitor only exits once the shutdown flag is set, and it runs before
+    // the errdefer that sets it, so set it here: joining first would hang.
+    defer if (sleep_thread) |t| {
+        server.scheduler_shutdown.store(true, .release);
+        t.join();
+    };
 
     const address = net.IpAddress{ .ip4 = .{ .bytes = host, .port = port } };
     var tcp = net.IpAddress.listen(&address, io, .{ .reuse_address = true }) catch |err| {
