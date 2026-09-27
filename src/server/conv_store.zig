@@ -12,6 +12,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const durable = @import("../durable_file.zig");
 const json = @import("json.zig");
+const term = @import("../term.zig");
 const Message = @import("../chat_template.zig").Message;
 const Role = @import("../chat_template.zig").Role;
 
@@ -241,8 +242,11 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
         const id: u32 = try castId(id_raw);
         const title_raw = json.extractField(obj, "title") orelse "";
         const title_un = try json.jsonUnescapeOwned(allocator, title_raw);
-        const title_len = @min(title_un.len, max_title_len);
-        const title = allocator.dupe(u8, title_un[0..title_len]) catch |err| {
+        // The writer clips titles on a character boundary, but this file is
+        // user-editable, so clip again on load: a hand-edited title over the
+        // cap must not reach the UI as a half-encoded character.
+        const title_prefix = term.utf8BytePrefix(title_un, max_title_len);
+        const title = allocator.dupe(u8, title_prefix) catch |err| {
             allocator.free(title_un);
             return err;
         };
@@ -470,6 +474,25 @@ test "load caps conversations at the save cap instead of dropping silently" {
     // Capped, not rejected: the file is still usable and the overflow is
     // logged by parse.
     try std.testing.expectEqual(max_conversations, snap.conversations.len);
+}
+
+test "load clips an over-long non-ASCII title on a character boundary" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "utf8_title.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(path);
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+
+    // 47 ASCII bytes then a 3-byte "世": the cap of 48 lands inside it.
+    const raw = "{\"version\":1,\"active_id\":0,\"next_id\":1,\"conversations\":" ++
+        "[{\"id\":0,\"title\":\"" ++ ("a" ** 47) ++ "\\u4e16 extra\",\"messages\":[]}]}";
+    try durable.replace(path, raw);
+
+    var snap = try load(allocator, path);
+    defer snap.deinit();
+    try std.testing.expectEqualStrings("a" ** 47, snap.conversations[0].title);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(snap.conversations[0].title));
 }
 
 test "save/load round-trips conversations and tool ids" {

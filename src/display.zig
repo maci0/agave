@@ -274,17 +274,16 @@ fn bufAppend(b: []u8, p: *usize, comptime fmt_str: []const u8, args: anytype) vo
 // ── Internal Helpers ─────────────────────────────────────────────
 
 /// Returns a byte-slice prefix of `s` whose display width does not exceed `max_cols`.
-/// Cuts on UTF-8 codepoint boundaries to avoid invalid sequences.
+/// Cuts on grapheme cluster boundaries, so a truncated emoji sequence or a
+/// multi-byte character is dropped whole rather than left half-encoded.
 fn truncateToWidth(s: []const u8, max_cols: usize) []const u8 {
     var cols: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
-        const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
-        const end = @min(i + cp_len, s.len);
-        const w = term.displayWidth(s[i..end]);
-        if (cols + w > max_cols) break;
-        cols += w;
-        i = end;
+        const cluster = term.nextCluster(s, i);
+        if (cols + cluster.width > max_cols) break;
+        cols += cluster.width;
+        i = cluster.end;
     }
     return s[0..i];
 }
