@@ -59,6 +59,13 @@ pub const MtpWeights = struct {
 
         // mmap the entire file
         const mapped = try posix.mmap(null, file_size, .{ .READ = true }, .{ .TYPE = .SHARED }, fd, 0);
+        // Every later step can fail after the mapping and the dupe'd tensor
+        // names exist, and the caller keeps the struct, so release them here
+        // and leave a clean, reusable value behind.
+        errdefer {
+            self.deinit(allocator);
+            self.* = init(allocator);
+        }
         self.mmap_ptr = mapped.ptr;
         self.mmap_len = file_size;
 
