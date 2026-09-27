@@ -4,11 +4,11 @@
 # ///
 """Lightweight docs hygiene checks for Agave.
 
-Validates relative links, mermaid vs diagram asset counts, backend kernel
-count claims against source constants, product SemVer / Zig version
-alignment across build.zig.zon, CHANGELOG, API docs, README, SECURITY, and
-.zigversion, and Docker image packaging (Debian pin, OCI license, LICENSE
-shipment).
+Validates relative links, `path:line` claims in the security docs, mermaid vs
+diagram asset counts, backend kernel count claims against source constants,
+product SemVer / Zig version alignment across build.zig.zon, CHANGELOG, API
+docs, README, SECURITY, and .zigversion, and Docker image packaging (Debian
+pin, OCI license, LICENSE shipment).
 """
 
 from __future__ import annotations
@@ -49,6 +49,42 @@ def check_links() -> list[str]:
             if not target.exists():
                 line = text[: m.start()].count("\n") + 1
                 errors.append(f"{f.relative_to(ROOT)}:{line}: broken link -> {url}")
+    return errors
+
+
+LINE_REF_DOCS = ("docs/THREAT_MODEL.md", "SECURITY.md")
+LINE_REF_RE = re.compile(
+    r"(?:\.\./)?((?:src|web|scripts|docs|tests|tools|research)/[A-Za-z0-9_./-]+\.(?:zig|ts|js|py|sh|md|html)"
+    r"|Dockerfile|docker-compose\.yml|build\.zig\.zon):(\d+)(?:-(\d+))?"
+)
+
+
+def check_doc_line_refs() -> list[str]:
+    """Every `path:line` claim in the security docs must land inside the file.
+
+    Catches the gross drift mode: a renamed file, a deleted file, or a section
+    that shrank past a cited line. Line shifts within a surviving file are not
+    detectable here and need a re-anchoring pass.
+    """
+    errors: list[str] = []
+    for rel in LINE_REF_DOCS:
+        doc = ROOT / rel
+        if not doc.is_file():
+            continue
+        text = doc.read_text(encoding="utf-8", errors="replace")
+        for m in LINE_REF_RE.finditer(text):
+            ref = m.group(1)
+            target = (ROOT / ref).resolve()
+            line = text[: m.start()].count("\n") + 1
+            if not target.is_file():
+                errors.append(f"{rel}:{line}: line ref to missing file -> {ref}")
+                continue
+            count = target.read_text(encoding="utf-8", errors="replace").count("\n") + 1
+            for num in filter(None, (m.group(2), m.group(3))):
+                if int(num) > count:
+                    errors.append(
+                        f"{rel}:{line}: line ref past EOF -> {ref}:{num} (file has {count} lines)"
+                    )
     return errors
 
 
@@ -521,6 +557,7 @@ def check_ci_runner_pins() -> list[str]:
 def main() -> int:
     errors: list[str] = []
     errors.extend(check_links())
+    errors.extend(check_doc_line_refs())
     errors.extend(check_diagram_counts())
     errors.extend(check_kernel_constants())
     errors.extend(check_version_consistency())
