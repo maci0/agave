@@ -192,8 +192,8 @@ curl http://localhost:49453/v1/messages -d '{
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| messages | array | required | `[{"role": "user/assistant", "content": "..."}]` |
-| system | string | null | System prompt (separate from messages, per Anthropic format) |
+| messages | array | required | `[{"role": "user/assistant", "content": "..."}]`; `content` may also be an array of content parts, and a `tool_result` part becomes a tool turn (capped at 16 KiB of text) |
+| system | string or array | null | System prompt (separate from messages, per Anthropic format); an array of `{"type": "text"}` blocks is joined in order |
 | max_tokens | int | 512 | Maximum tokens to generate, capped at 4096 |
 | stop_sequences | array | null | Stop sequence(s) |
 | stream | bool | false | Server-Sent Events streaming |

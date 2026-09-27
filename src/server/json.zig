@@ -602,23 +602,7 @@ pub fn parseToolsAnthropic(body: []const u8) ToolParams {
     // Walk each object element of the array.
     var search_pos: usize = 0;
     while (result.tool_count < max_tools) {
-        const obj_pos = findObjectStart(tools_arr, &search_pos) orelse break;
-        var depth: usize = 1;
-        var obj_end = obj_pos + 1;
-        while (obj_end < tools_arr.len and depth > 0) : (obj_end += 1) {
-            if (tools_arr[obj_end] == '{') {
-                depth += 1;
-            } else if (tools_arr[obj_end] == '}') {
-                depth -= 1;
-            } else if (tools_arr[obj_end] == '"') {
-                obj_end += 1;
-                while (obj_end < tools_arr.len and tools_arr[obj_end] != '"') : (obj_end += 1) {
-                    if (tools_arr[obj_end] == '\\' and obj_end + 1 < tools_arr.len) obj_end += 1;
-                }
-            }
-        }
-        const obj = tools_arr[obj_pos..obj_end];
-        search_pos = obj_end;
+        const obj = nextArrayObject(tools_arr, &search_pos) orelse break;
 
         const name = extractField(obj, "name") orelse continue;
         const desc = extractField(obj, "description") orelse "";
@@ -629,6 +613,110 @@ pub fn parseToolsAnthropic(body: []const u8) ToolParams {
         result.tool_count += 1;
     }
     return result;
+}
+
+/// Return the interior of the next `{...}` element of the JSON array slice
+/// `arr` at or after `*pos`, advancing `*pos` past it. Returns null at the
+/// closing bracket or on a non-object element. Brace depth and string escapes
+/// are tracked so nested objects and braces inside strings do not end the scan.
+fn nextArrayObject(arr: []const u8, pos: *usize) ?[]const u8 {
+    const obj_pos = findObjectStart(arr, pos) orelse return null;
+    var depth: usize = 1;
+    var obj_end = obj_pos + 1;
+    while (obj_end < arr.len and depth > 0) : (obj_end += 1) {
+        if (arr[obj_end] == '{') {
+            depth += 1;
+        } else if (arr[obj_end] == '}') {
+            depth -= 1;
+        } else if (arr[obj_end] == '"') {
+            obj_end += 1;
+            while (obj_end < arr.len and arr[obj_end] != '"') : (obj_end += 1) {
+                if (arr[obj_end] == '\\' and obj_end + 1 < arr.len) obj_end += 1;
+            }
+        }
+    }
+    pos.* = obj_end;
+    return arr[obj_pos..obj_end];
+}
+
+/// Decoded text of every `"type": "text"` element of the JSON array `arr`,
+/// joined with newlines in order. Elements of any other type are skipped.
+/// Returns an owned slice; an array with no text element yields "".
+fn joinTextElements(allocator: Allocator, arr: []const u8) ![]u8 {
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var pos: usize = 0;
+    var first = true;
+    while (nextArrayObject(arr, &pos)) |part| {
+        const type_val = extractField(part, "type") orelse continue;
+        if (!std.mem.eql(u8, type_val, "text")) continue;
+        const raw = extractField(part, "text") orelse "";
+        const decoded = try jsonUnescapeOwned(allocator, raw);
+        defer allocator.free(decoded);
+        if (!first) try out.append(allocator, '\n');
+        first = false;
+        try out.appendSlice(allocator, decoded);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Decoded text of `field` in `part` when it is a JSON string or an array of
+/// text elements. Returns null when `field` is absent or is neither form.
+fn decodeContentValue(allocator: Allocator, part: []const u8, field: []const u8) !?[]u8 {
+    if (extractField(part, field)) |s| return try jsonUnescapeOwned(allocator, s);
+    const arr = extractObjectField(part, field) orelse return null;
+    if (arr.len == 0 or arr[0] != '[') return null;
+    return try joinTextElements(allocator, arr);
+}
+
+/// Text of a message `content` array plus the `tool_use_id` of its first
+/// `tool_result` element.
+const JoinedContent = struct {
+    /// Decoded text of every text-bearing element, joined with newlines.
+    text: []u8,
+    /// `tool_use_id` of the first `tool_result` element, when the array holds
+    /// an Anthropic tool result. Callers keep the tool role for that turn.
+    tool_use_id: ?[]const u8 = null,
+};
+
+/// Join the text of a message `content` array: `text` elements contribute
+/// their `text`, Anthropic `tool_result` elements contribute their `content`.
+/// Image and other non-text elements are skipped. Returns null when
+/// `content` is absent or is not an array. Caller owns `text`.
+fn joinContentParts(allocator: Allocator, obj: []const u8) !?JoinedContent {
+    const arr = extractObjectField(obj, "content") orelse return null;
+    if (arr.len == 0 or arr[0] != '[') return null;
+    var out = std.ArrayList(u8).empty;
+    errdefer out.deinit(allocator);
+    var tool_use_id: ?[]const u8 = null;
+    var pos: usize = 0;
+    var first = true;
+    while (nextArrayObject(arr, &pos)) |part| {
+        const type_val = extractField(part, "type") orelse continue;
+        const is_tool_result = std.mem.eql(u8, type_val, "tool_result");
+        if (!is_tool_result and !std.mem.eql(u8, type_val, "text")) continue;
+        if (is_tool_result and tool_use_id == null) {
+            tool_use_id = extractField(part, "tool_use_id");
+        }
+        const text = (try decodeContentValue(allocator, part, if (is_tool_result) "content" else "text")) orelse continue;
+        defer allocator.free(text);
+        if (!first) try out.append(allocator, '\n');
+        first = false;
+        try out.appendSlice(allocator, text);
+    }
+    return .{ .text = try out.toOwnedSlice(allocator), .tool_use_id = tool_use_id };
+}
+
+/// Anthropic top-level `system`: a string or an array of text blocks. Returns
+/// the decoded text (caller owns it), or null when the field is absent or is
+/// neither form.
+pub fn extractSystemOwned(allocator: Allocator, body: []const u8) !?[]u8 {
+    if (extractField(body, "system")) |s| return try jsonUnescapeOwned(allocator, s);
+    if (extractObjectField(body, "system")) |arr| {
+        if (arr.len == 0 or arr[0] != '[') return null;
+        return try joinTextElements(allocator, arr);
+    }
+    return null;
 }
 
 /// Find the start index of the next `{` object at or after `*pos`, skipping
@@ -699,15 +787,30 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
         // Assistant tool-call turns legitimately carry "content": null; keep them
         // with empty text so multi-turn tool conversations stay intact.
         const is_assistant = std.mem.eql(u8, role_str, "assistant");
-        const content = extractField(obj_slice, "content") orelse
-            extractTextFromContentArray(obj_slice) orelse
-            (if (is_assistant) "" else continue);
-        const owned_content = jsonUnescapeOwned(allocator, content) catch continue;
+        // An Anthropic tool result is a user message whose content array holds
+        // a `tool_result` block; keep the tool role and its id for that turn.
+        var tool_use_id: ?[]const u8 = null;
+        // The array form is checked first: extractField retries past a key whose
+        // value is not a string, so on `"content": [{...}]` it would return the
+        // first nested string (a part's type, or a tool result's content).
+        const owned_content: []u8 = if (joinContentParts(allocator, obj_slice) catch continue) |joined| blk: {
+            tool_use_id = joined.tool_use_id;
+            break :blk joined.text;
+        } else if (extractField(obj_slice, "content")) |c|
+            (jsonUnescapeOwned(allocator, c) catch continue)
+        else if (is_assistant) (allocator.dupe(u8, "") catch continue) else continue;
 
         // OpenAI o1/o3 SDK sends "developer" role instead of "system", normalize.
         if (std.mem.eql(u8, role_str, "system") or std.mem.eql(u8, role_str, "developer")) {
             if (system_msg) |prev_sys| wipeFree(allocator, @constCast(prev_sys));
             system_msg = owned_content;
+        } else if (tool_use_id != null or std.mem.eql(u8, role_str, "tool")) {
+            const tcid = if (std.mem.eql(u8, role_str, "tool"))
+                extractField(obj_slice, "tool_call_id")
+            else
+                tool_use_id;
+            messages_buf[count] = .{ .role = .tool, .content = owned_content, .tool_call_id = tcid };
+            count += 1;
         } else if (std.mem.eql(u8, role_str, "user")) {
             messages_buf[count] = .{ .role = .user, .content = owned_content };
             count += 1;
@@ -815,42 +918,6 @@ pub fn extractFormImage(body: []const u8) ?[]const u8 {
         return field_val[idx + encoded_marker.len ..];
     }
     return null;
-}
-
-/// Extract text from an OpenAI-format content array.
-/// Handles `"content": [{"type":"text","text":"What's in this image?"}, ...]`
-/// Returns the "text" field from the first text-type part (key order inside
-/// the part does not matter). Returns `""` when `content` is an array with no
-/// text part (image-only turns) so callers keep the message. Returns null when
-/// `content` is missing or not an array.
-fn extractTextFromContentArray(obj: []const u8) ?[]const u8 {
-    const arr = extractObjectField(obj, "content") orelse return null;
-    if (arr.len == 0 or arr[0] != '[') return null;
-    var pos: usize = 0;
-    while (findObjectStart(arr, &pos)) |obj_pos| {
-        var depth: usize = 1;
-        var obj_end: usize = obj_pos + 1;
-        while (obj_end < arr.len and depth > 0) : (obj_end += 1) {
-            if (arr[obj_end] == '{') {
-                depth += 1;
-            } else if (arr[obj_end] == '}') {
-                depth -= 1;
-            } else if (arr[obj_end] == '"') {
-                obj_end += 1;
-                while (obj_end < arr.len and arr[obj_end] != '"') : (obj_end += 1) {
-                    if (arr[obj_end] == '\\' and obj_end + 1 < arr.len) obj_end += 1;
-                }
-            }
-        }
-        const part = arr[obj_pos..obj_end];
-        pos = obj_end;
-        const type_val = extractField(part, "type") orelse continue;
-        if (std.mem.eql(u8, type_val, "text")) {
-            return extractField(part, "text") orelse "";
-        }
-    }
-    // Content is a part array (vision, etc.) but none of the parts is text.
-    return "";
 }
 
 /// Extract base64 image data from a JSON body.
@@ -1861,35 +1928,91 @@ test "fuzz: parseToolsAnthropic" {
     }.f, .{});
 }
 
-test "extractTextFromContentArray" {
+test "joinContentParts" {
+    const allocator = std.testing.allocator;
     const obj =
         \\{"role":"user","content":[{"type":"text","text":"What is in this image?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
     ;
-    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("What is in this image?", text);
+    const joined = (try joinContentParts(allocator, obj)).?;
+    defer allocator.free(joined.text);
+    try std.testing.expectEqualStrings("What is in this image?", joined.text);
+    try std.testing.expect(joined.tool_use_id == null);
 }
 
-test "extractTextFromContentArray text key before type" {
+test "joinContentParts joins every text part in order" {
+    const allocator = std.testing.allocator;
     const obj =
-        \\{"role":"user","content":[{"text":"What is in this image?","type":"text"}]}
+        \\{"role":"user","content":[{"type":"text","text":"first"},{"type":"image_url","image_url":{}},{"text":"second","type":"text"}]}
     ;
-    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("What is in this image?", text);
+    const joined = (try joinContentParts(allocator, obj)).?;
+    defer allocator.free(joined.text);
+    try std.testing.expectEqualStrings("first\nsecond", joined.text);
 }
 
-test "extractTextFromContentArray image-only returns empty string" {
+test "joinContentParts image-only returns empty string" {
+    const allocator = std.testing.allocator;
     const obj =
         \\{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,abc"}}]}
     ;
-    const text = extractTextFromContentArray(obj) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("", text);
+    const joined = (try joinContentParts(allocator, obj)).?;
+    defer allocator.free(joined.text);
+    try std.testing.expectEqualStrings("", joined.text);
 }
 
-test "extractTextFromContentArray string content" {
+test "joinContentParts string content" {
+    const allocator = std.testing.allocator;
     const obj =
         \\{"role":"user","content":"hello"}
     ;
-    try std.testing.expect(extractTextFromContentArray(obj) == null);
+    try std.testing.expect((try joinContentParts(allocator, obj)) == null);
+}
+
+test "joinContentParts reads an anthropic tool_result" {
+    const allocator = std.testing.allocator;
+    const obj =
+        \\{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"18 degrees"}]}
+    ;
+    const joined = (try joinContentParts(allocator, obj)).?;
+    defer allocator.free(joined.text);
+    try std.testing.expectEqualStrings("18 degrees", joined.text);
+    try std.testing.expectEqualStrings("toolu_1", joined.tool_use_id.?);
+}
+
+test "extractMessages keeps an anthropic tool result turn" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\{"messages": [
+        \\  {"role": "user", "content": "Weather in Paris?"},
+        \\  {"role": "assistant", "content": [{"type": "text", "text": "checking"}]},
+        \\  {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "{\"temp\": 18}"}]}
+        \\]}
+    ;
+    const extracted = extractMessages(json, allocator) orelse return error.TestUnexpectedResult;
+    defer extracted.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 3), extracted.messages.len);
+    try std.testing.expectEqual(Role.tool, extracted.messages[2].role);
+    try std.testing.expectEqualStrings("toolu_1", extracted.messages[2].tool_call_id.?);
+    try std.testing.expectEqualStrings("{\"temp\": 18}", extracted.messages[2].content);
+}
+
+test "extractSystemOwned accepts a string and a block array" {
+    const allocator = std.testing.allocator;
+    const as_string = try extractSystemOwned(allocator,
+        \\{"system": "be brief", "messages": []}
+    );
+    defer allocator.free(as_string.?);
+    try std.testing.expectEqualStrings("be brief", as_string.?);
+
+    const as_array = try extractSystemOwned(allocator,
+        \\{"system": [{"type": "text", "text": "be brief"}, {"type": "text", "text": "be kind"}]}
+    );
+    defer allocator.free(as_array.?);
+    try std.testing.expectEqualStrings("be brief\nbe kind", as_array.?);
+}
+
+test "extractSystemOwned returns null when absent" {
+    const allocator = std.testing.allocator;
+    try std.testing.expect((try extractSystemOwned(allocator, "{\"messages\": []}")) == null);
 }
 
 test "extractMessages keeps image-only user turns" {
