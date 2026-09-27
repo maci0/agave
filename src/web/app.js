@@ -441,6 +441,33 @@ chat.addEventListener('scroll', function () {
 function scrollBottom() { if (autoScroll) {
     chat.scrollTop = chat.scrollHeight;
 } }
+/// Where new messages are appended. `startChatBatch` points it at a
+/// DocumentFragment so a restored history lays out once instead of once per
+/// message.
+let chat_sink = chat;
+let chat_batch_depth = 0;
+/// Append new messages to a detached fragment. Each `scrollBottom` would
+/// otherwise force a full-document reflow, making a long history cost O(n)
+/// layouts. Close with `finishChatBatch`, which attaches and scrolls once.
+function startChatBatch() {
+    const frag = document.createDocumentFragment();
+    if (chat_batch_depth === 0) {
+        chat_sink = frag;
+    }
+    chat_batch_depth += 1;
+    return frag;
+}
+function finishChatBatch(frag) {
+    chat_batch_depth -= 1;
+    if (chat_batch_depth > 0) {
+        return;
+    }
+    chat_sink = chat;
+    if (frag.childNodes.length > 0) {
+        chat.append(frag);
+    }
+    scrollBottom();
+}
 function setStreaming(s) {
     isStreaming = s;
     sendBtn.style.display = s ? 'none' : '';
@@ -637,8 +664,10 @@ function addUser(text, imageSrc) {
     m.dataset.content = text;
     w.append(r);
     w.append(m);
-    chat.append(w);
-    scrollBottom();
+    chat_sink.append(w);
+    if (chat_batch_depth === 0) {
+        scrollBottom();
+    }
 }
 function addAssistant() {
     const emptyEl = qs('#empty');
@@ -661,8 +690,10 @@ function addAssistant() {
     m.textContent = '\u2026';
     w.append(r);
     w.append(m);
-    chat.append(w);
-    scrollBottom();
+    chat_sink.append(w);
+    if (chat_batch_depth === 0) {
+        scrollBottom();
+    }
     return m;
 }
 const hljs_script_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js';
@@ -908,7 +939,9 @@ function renderFinal(el, content) {
     const respondedText = truncateAnnounce(el.textContent, 200);
     attachCopyButton(el, content);
     announceToSR(`Agave responded: ${respondedText}`);
-    scrollBottom();
+    if (chat_batch_depth === 0) {
+        scrollBottom();
+    }
 }
 function renderContent(el, content, final) {
     // Streaming: keep pending content fresh and flush at most every 60ms.
@@ -1079,7 +1112,9 @@ function sendMessage(text) {
     }
 }
 function addRegenBtn(msgEl, actionLabel) {
-    const oldBtns = chat.querySelectorAll('.regen-btn');
+    // Scoped to the sink: during a history restore that is the fragment, so the
+    // sweep stays O(batch) instead of re-querying the whole document per message.
+    const oldBtns = chat_sink.querySelectorAll('.regen-btn');
     for (const oldBtn of oldBtns) {
         oldBtn.remove();
     }
@@ -1350,8 +1385,17 @@ function syncSidebarForViewport() {
     }
 }
 window.addEventListener('resize', syncSidebarForViewport);
+/** Last conversation list rendered, so an unchanged refresh is a no-op.
+ *  `loadConvs` also runs after every generated turn; rebuilding the sidebar
+ *  each time churns the DOM and drops focus for no visible change. */
+let rendered_convs_json = '';
 function loadConvs() {
     fetch('/v1/conversations').then(function (r) { return r.json(); }).then(function (convs) {
+        const json = JSON.stringify(convs);
+        if (json === rendered_convs_json) {
+            return;
+        }
+        rendered_convs_json = json;
         const list = qs('#conv-list');
         list.replaceChildren();
         if (convs.length === 0) {
@@ -1399,6 +1443,9 @@ function loadConvs() {
             list.append(item);
         }
     }).catch(function () {
+        // The error state replaced the list, so the memo no longer describes what
+        // is on screen; clear it or the retry would render nothing.
+        rendered_convs_json = '';
         const list = qs('#conv-list');
         list.replaceChildren();
         list.removeAttribute('role');
@@ -1468,16 +1515,21 @@ function selectConv(id) {
             inp.focus();
             return;
         }
-        for (const m of data.messages) {
-            if (m.role === 'user') {
-                addUser(m.content);
-            }
-            else {
-                renderContent(addAssistant(), m.content, true);
+        const frag = startChatBatch();
+        try {
+            for (const m of data.messages) {
+                if (m.role === 'user') {
+                    addUser(m.content);
+                }
+                else {
+                    renderContent(addAssistant(), m.content, true);
+                }
             }
         }
+        finally {
+            finishChatBatch(frag);
+        }
         loadConvs();
-        scrollBottom();
         if (qs('#sidebar').classList.contains('open')) {
             toggleSidebar();
         }
