@@ -220,6 +220,10 @@ COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 # Authoritative product version parsed from build.zig.zon (see build-stage check).
 COPY --link --from=build /agave-version /usr/share/agave/version
 # GPL-3.0-or-later: the notice must accompany the binary (keep LICENSE in context).
+# The directory is created first: COPY --chmod stamps the parents it creates with
+# the same mode, and a 0644 /usr/share/doc/agave is not traversable by the
+# non-root runtime user (uid 10001), so `cat .../copyright` fails with EACCES.
+RUN mkdir -p -m 0755 /usr/share/doc/agave
 COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
 # Conversation-store backup/restore. Shipped so an operator can reach a store
 # that lives only in a volume, without a checkout on the host.
