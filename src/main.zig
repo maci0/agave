@@ -3372,13 +3372,6 @@ fn initAndRun(
             eprint("Error: failed to init vision encoder: {}\n", .{err});
             return false;
         };
-        {
-            const ve = &vision_enc.?;
-            if (ve.patch_size == 0 or ve.projection_dim == 0) {
-                eprint("Error: vision encoder has invalid patch_size or projection_dim\n", .{});
-                return false;
-            }
-        }
         if (!g_quiet) {
             const ve = &vision_enc.?;
             eprint("vision: {d} layers, {d}x{d} patches -> {d}D\n", .{
@@ -3395,13 +3388,6 @@ fn initAndRun(
                 eprint("Error: failed to init in-checkpoint vision encoder: {}\n", .{err});
                 return false;
             };
-            {
-                const ve = &vision_enc.?;
-                if (ve.patch_size == 0 or ve.projection_dim == 0) {
-                    eprint("Error: vision encoder has invalid patch_size or projection_dim\n", .{});
-                    return false;
-                }
-            }
             if (!g_quiet) {
                 const ve = &vision_enc.?;
                 eprint("vision: in-checkpoint {d} layers, {d}x{d} patches -> {d}D\n", .{

@@ -580,7 +580,10 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
             const size = siblingSize(sibling);
             shards[st_idx] = rfilename.string;
             shard_sizes[st_idx] = size;
-            total_size = std.math.add(u64, total_size, size) catch total_size;
+            // Sizes come from a remote listing, so a sum can exceed u64.
+            // Saturate: keeping the pre-overflow total would advertise a
+            // download size smaller than the sum of its own shards.
+            total_size = std.math.add(u64, total_size, size) catch std.math.maxInt(u64);
             st_idx += 1;
         }
 

@@ -214,9 +214,35 @@ pub const VisionEncoder = struct {
     /// MLP projector intermediate dimension (Qwen: mm.0 output rows).
     mlp_intermediate_dim: u32 = 0,
 
+    /// Header dimensions that must be sane before any of them is divided by.
+    const Dims = struct {
+        patch_size: u32,
+        image_size: u32,
+        embd_dim: u32,
+        n_heads: u32,
+        projection_dim: u32,
+    };
+
+    /// Reject metadata that would divide by zero or silently truncate a
+    /// derived size. Every field is read from the model file header, so a
+    /// corrupt or hand-edited file reaches these checks.
+    ///
+    /// `patch_size == 0` divides by zero in `patches_per_side` and in the
+    /// per-patch element count; `image_size < patch_size` yields zero patches
+    /// and empty working buffers; `embd_dim % n_heads != 0` truncates
+    /// `head_dim`; a zero `projection_dim` produces a zero-width output.
+    fn validateDims(d: Dims) error{InvalidMetadata}!void {
+        if (d.patch_size == 0) return error.InvalidMetadata;
+        if (d.image_size < d.patch_size) return error.InvalidMetadata;
+        if (d.embd_dim == 0 or d.embd_dim % d.n_heads != 0) return error.InvalidMetadata;
+        if (d.projection_dim == 0) return error.InvalidMetadata;
+    }
+
     /// Initialize the vision encoder from mmproj format metadata.
     /// Auto-detects the architecture variant from available tensors and
     /// allocates all working buffers.
+    /// Returns `error.InvalidMetadata` when a header dimension would divide by
+    /// zero or truncate a derived size.
     pub fn init(allocator: Allocator, fmt: Format, be: Backend, pool: ?*ThreadPool) !VisionEncoder {
         const arch = "clip.vision";
 
@@ -246,6 +272,13 @@ pub const VisionEncoder = struct {
         // E2B/E4B SigLIP-2 uses 224×224 without merge, patches_per_side=14 is not divisible by 3.
         const n_merge: u32 = if (variant == .gemma4_siglip2 and has_std_tensors) gemma4_merge_kernel else 0;
         const image_size: u32 = if (n_merge > 0) gemma4_effective_image_size else meta_image_size;
+        try validateDims(.{
+            .patch_size = patch_size,
+            .image_size = image_size,
+            .embd_dim = embd_dim,
+            .n_heads = n_heads,
+            .projection_dim = projection_dim,
+        });
 
         const patches_per_side = image_size / patch_size;
         const n_patches = patches_per_side * patches_per_side;
@@ -297,8 +330,12 @@ pub const VisionEncoder = struct {
             if (n_out > 0 and n_elem >= n_out) {
                 patch_in_dim = n_elem / n_out;
                 if (patch_in_dim % (@as(usize, patch_size) * patch_size * n_channels) == 0) {
-                    const t_from_w: u32 = @intCast(patch_in_dim / (@as(usize, patch_size) * patch_size * n_channels));
-                    if (t_from_w > temporal_patch_size) temporal_patch_size = t_from_w;
+                    // numElements() comes from the file header, so the ratio can
+                    // exceed u32 on a crafted file: keep the metadata value
+                    // instead of truncating it into a wrong temporal patch size.
+                    if (std.math.cast(u32, patch_in_dim / (@as(usize, patch_size) * patch_size * n_channels))) |t_from_w| {
+                        if (t_from_w > temporal_patch_size) temporal_patch_size = t_from_w;
+                    }
                 }
             }
             // Folded Conv3d: PyTorch [out,C,T,H,W] keeps dims[1]==C.
@@ -1883,6 +1920,38 @@ test "visionDebugEnabled requires trimmed 1" {
     try std.testing.expect(!visionDebugEnabled("true"));
     try std.testing.expect(visionDebugEnabled("1"));
     try std.testing.expect(visionDebugEnabled(" 1 "));
+}
+
+test "validateDims rejects degenerate header dimensions" {
+    const good: VisionEncoder.Dims = .{
+        .patch_size = default_patch_size,
+        .image_size = default_image_size,
+        .embd_dim = default_embd_dim,
+        .n_heads = default_n_heads,
+        .projection_dim = default_projection_dim,
+    };
+    try VisionEncoder.validateDims(good);
+
+    var d: VisionEncoder.Dims = good;
+    d.patch_size = 0;
+    try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
+
+    d = good;
+    d.image_size = d.patch_size - 1;
+    try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
+
+    d = good;
+    d.embd_dim = 0;
+    try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
+
+    d = good;
+    // head_dim would truncate from 43.5 to 43.
+    d.embd_dim = default_n_heads * 43 + 1;
+    try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
+
+    d = good;
+    d.projection_dim = 0;
+    try std.testing.expectError(error.InvalidMetadata, VisionEncoder.validateDims(d));
 }
 
 test "VisionEncoder config defaults" {
