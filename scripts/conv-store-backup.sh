@@ -15,12 +15,18 @@
 # In the compose image that is /home/agave/.cache/agave/conversations.json,
 # inside the `agave-cache` volume.
 #
+# --store PATH names the store explicitly, for a server started with
+# `--conv-store PATH`. Without it the store is resolved from the environment
+# only, and a store the operator moved is silently not the one backed up.
+# Options go before the command; the command follows.
+#
 # Usage:
 #   scripts/conv-store-backup.sh path                 # print the live path
 #   scripts/conv-store-backup.sh backup               # copy + verify, prune old
 #   scripts/conv-store-backup.sh verify FILE          # check a backup is loadable
 #   scripts/conv-store-backup.sh restore FILE         # verify, snapshot, install
 #   scripts/conv-store-backup.sh check                # backup tier is fresh and loadable
+#   scripts/conv-store-backup.sh --store PATH backup  # store is not at the default path
 #   scripts/conv-store-backup.sh --self-test          # exercise all of the above
 #
 # Environment:
@@ -51,8 +57,17 @@ KEEP_SNAPSHOT="${AGAVE_KEEP_SNAPSHOT:-5}"
 MAX_AGE_HOURS="${AGAVE_MAX_AGE_HOURS:-26}"
 HOUR_SECONDS=3600
 
+# Set by --store PATH. Empty means "resolve from the environment", which is
+# what conv_store.defaultPath does. A server run with `--conv-store PATH` puts
+# its store somewhere this resolution cannot see, so without the override the
+# script would back up (or find nothing at) a path the operator never writes.
+STORE_OVERRIDE=""
+
+# The header comment, minus the shebang. Bounded by the first non-comment line
+# rather than a line number, so adding a line to the header cannot silently
+# truncate the help.
 usage() {
-    sed -n '3,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'
 }
 
 die() {
@@ -78,9 +93,14 @@ if [[ ! "$MAX_AGE_HOURS" =~ ^[0-9]+$ ]]; then
     die "AGAVE_MAX_AGE_HOURS must be a non-negative integer, got '${MAX_AGE_HOURS}'"
 fi
 
-# Same precedence as conv_store.defaultPath: XDG wins when non-empty, HOME is
-# the fallback, and neither set means the store has no path at all.
+# Same precedence as conv_store.defaultPath: --store wins (it is what
+# `--conv-store` told the server), then XDG when non-empty, then HOME, and
+# neither set means the store has no path at all.
 live_store_path() {
+    if [[ -n "$STORE_OVERRIDE" ]]; then
+        printf '%s\n' "$STORE_OVERRIDE"
+        return 0
+    fi
     local xdg="${XDG_CACHE_HOME:-}"
     local home="${HOME:-}"
     if [[ -n "$xdg" ]]; then
@@ -183,14 +203,20 @@ verify_store() {
 }
 
 # Copy through a sibling tmp so a killed backup never leaves a partial file
-# that a later restore would happily install.
+# that a later restore would happily install. The rename is followed by a sync
+# of the destination directory, matching the tmp+fsync+rename+fsync-parent
+# sequence the server itself uses (src/durable_file.zig): without it a power
+# loss can drop the renamed entry and leave a backup directory that verifies
+# while holding no backup at all.
 copy_atomic() {
     local src="$1" dest="$2"
     cp -- "$src" "$dest.tmp" || die "copy $src -> $dest.tmp failed"
-    if command -v sync >/dev/null 2>&1; then
-        sync "$dest.tmp" 2>/dev/null || true
+    if ! command -v sync >/dev/null 2>&1; then
+        die "no sync command available; cannot flush $dest.tmp to disk (install coreutils or busybox)"
     fi
+    sync "$dest.tmp" || die "could not flush $dest.tmp to disk"
     mv -- "$dest.tmp" "$dest" || die "rename $dest.tmp -> $dest failed"
+    sync -- "$(dirname -- "$dest")" || die "could not flush the directory holding $dest"
 }
 
 do_backup() {
@@ -392,6 +418,38 @@ do_self_test() {
         status=1
     fi
 
+    # A server started with `--conv-store PATH` writes outside the resolved
+    # default, so the override is the only way that store gets protected. It
+    # must win over XDG_CACHE_HOME, and a store it names must back up that
+    # file's bytes rather than the default one.
+    local self_path="${BASH_SOURCE[0]}"
+    mkdir -p "$tmp/moved"
+    printf '%s' '{"version":1,"active_id":7,"next_id":8,"conversations":[{"id":7,"title":"moved","messages":[{"role":"user","content":"elsewhere"}]}]}' >"$tmp/moved/store.json"
+    local moved_backup
+    AGAVE_BACKUP_DIR="$tmp/moved-backups" "$self_path" --store "$tmp/moved/store.json" backup >/dev/null
+    moved_backup="$(find "$tmp/moved-backups" -name 'conversations-2*.json' | head -1)"
+    if [[ -z "$moved_backup" ]] || ! cmp -s "$moved_backup" "$tmp/moved/store.json"; then
+        echo "conv-store-backup: self-test FAILED: --store did not back up the store it names" >&2
+        status=1
+    fi
+    [[ "$("$self_path" --store "$tmp/moved/store.json" path)" == "$tmp/moved/store.json" ]] || {
+        echo "conv-store-backup: self-test FAILED: --store= or --store PATH did not set the store path" >&2
+        status=1
+    }
+    [[ "$("$self_path" --store="$tmp/moved/store.json" path)" == "$tmp/moved/store.json" ]] || {
+        echo "conv-store-backup: self-test FAILED: --store=PATH was not accepted" >&2
+        status=1
+    }
+    # Without the override the default path wins, so the flag cannot be ignored.
+    [[ "$("$self_path" path)" != "$tmp/moved/store.json" ]] || {
+        echo "conv-store-backup: self-test FAILED: a store path survived without --store" >&2
+        status=1
+    }
+    if "$self_path" --store backup >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: --store with no path was accepted" >&2
+        status=1
+    fi
+
     # Freshness: a backup job that stopped running is only visible if `check`
     # is asked, so exercise the passing case, a missing tier, and a stale copy.
     AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check >/dev/null || {
@@ -411,7 +469,6 @@ do_self_test() {
     # A retention value of 0 or below prunes the whole tier, so the guard
     # rejects it before do_backup can run. It lives at load time, so exercise
     # it by re-entering the script rather than calling do_backup here.
-    local self_path="${BASH_SOURCE[0]}"
     local bad_keep
     for bad_keep in 0 -3 abc '1.5' ' '; do
         if AGAVE_KEEP="$bad_keep" "$self_path" path >/dev/null 2>&1; then
@@ -432,13 +489,50 @@ do_self_test() {
         fi
     done
 
+    # Help must be the whole header, not a fragment of it: a truncated
+    # `--help` hides the flags an operator needs to find.
+    local help
+    help="$("$self_path" --help)"
+    [[ "$help" == "conv-store-backup.sh, back up, verify, and restore the web-UI conversation"* ]] &&
+        [[ "$help" == *"Runbook: docs/DURABILITY.md"* ]] || {
+        echo "conv-store-backup: self-test FAILED: --help does not print the whole header" >&2
+        status=1
+    }
+
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention"
+        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }
 
 main() {
+    # Options come before the command, so --store is consumed here and the
+    # command is whatever remains. An unknown option is a die rather than a
+    # silent no-op: a mistyped --store would otherwise back up the default
+    # path and report success.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --store)
+                [[ $# -ge 2 ]] || die "--store needs a path: scripts/conv-store-backup.sh --store PATH backup"
+                # `--store backup` is a missing value, not a store literally
+                # named "backup" that silently swallows the command.
+                case "$2" in
+                    path | backup | verify | restore | check | --self-test)
+                        die "--store needs a path, got the command '$2': scripts/conv-store-backup.sh --store PATH backup"
+                        ;;
+                esac
+                STORE_OVERRIDE="$2"
+                shift 2
+                ;;
+            --store=*)
+                STORE_OVERRIDE="${1#--store=}"
+                [[ -n "$STORE_OVERRIDE" ]] || die "--store needs a non-empty path"
+                shift
+                ;;
+            *) break ;;
+        esac
+    done
+
     case "${1:-}" in
         path) live_store_path || die "neither XDG_CACHE_HOME nor HOME is set" ;;
         backup) do_backup ;;
@@ -450,7 +544,10 @@ main() {
         check) do_check ;;
         --self-test) do_self_test ;;
         -h | --help | '') usage ;;
-        *) die "unknown command '$1' (path, backup, verify, restore, check, --self-test)" ;;
+        *)
+            [[ -n "${1:-}" ]] || die "no command given (path, backup, verify, restore, check, --self-test)"
+            die "unknown command '$1' (path, backup, verify, restore, check, --self-test)"
+            ;;
     esac
 }
 
