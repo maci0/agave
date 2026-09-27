@@ -122,6 +122,8 @@ must still appear under **Changed** or **Breaking** below. See
   interrupted run no longer re-bills every completed call.
 
 ### Changed
+- Docker image pin is `debian:bookworm-20260918-slim`. `DEBIAN_SNAPSHOT` and
+  `SOURCE_DATE_EPOCH` match that day (2026-09-18 00:00:00 UTC).
 - API key authentication is enforced at one dispatcher chokepoint
   (`authorizedForPath`), not per handler, and a path absent from the endpoint
   table is treated as protected. The reachable behavior for a configured key
