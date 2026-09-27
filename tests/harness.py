@@ -928,7 +928,10 @@ def profile_with_instruments(
 
     trace_dir = AGAVE_ROOT / "tests" / "traces"
     trace_dir.mkdir(exist_ok=True)
-    trace_path = trace_dir / f"{model.arch}_{model.quant}_{backend}_{int(time.time())}.trace"
+    # Nanosecond stamp, not int(time.time()): two profiles launched in the same
+    # second wrote the same name and the second xctrace overwrote the first
+    # trace. Also wall-clock-derived, so an NTP step can repeat a value.
+    trace_path = trace_dir / f"{model.arch}_{model.quant}_{backend}_{time.time_ns()}.trace"
 
     cmd = [
         "xctrace", "record",
