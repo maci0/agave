@@ -49,6 +49,8 @@ Rate and error signals (PromQL uses `rate()` or `increase()` over these):
 | `agave_requests_rate_limited_total` | Rejected by the rate limiter. |
 | `agave_connections_rejected_total` | Rejected at connection capacity. |
 | `agave_scheduler_errors_total` | Scheduler step failures. |
+| `agave_kv_promote_failures_total` | Block promotions to the VRAM tier that failed. Blocks stay on a slower tier, so a rising rate is the cause behind latency the demotion counters would otherwise read as cache pressure. One log line per scheduler step names the count and the first error. |
+| `agave_conv_store_save_failures_total` | Conversation store writes that failed. Requests still succeed, so this counter is the only signal that user history is being dropped. |
 
 Latency histograms (use `histogram_quantile` over `_bucket`):
 
