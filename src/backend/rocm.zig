@@ -656,6 +656,7 @@ pub const RocmBackend = struct {
         const addr = @intFromPtr(ptr);
         if (self.buf_cache.fetchRemove(addr)) |kv| {
             _ = self.hipFree(@ptrFromInt(kv.value.dptr));
+            if (self.weight_budget) |*wb| _ = wb.remove(addr);
         }
     }
 

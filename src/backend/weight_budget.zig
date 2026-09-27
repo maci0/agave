@@ -158,6 +158,26 @@ pub const WeightBudget = struct {
         tracked: bool,
     };
 
+    /// Evict policy-ordered entries until `used_bytes + bytes` fits the budget,
+    /// never choosing `skip`. Stops at `evict_buf.len` and reports how many
+    /// victims were written into it.
+    fn makeRoom(self: *WeightBudget, bytes: usize, skip: ?usize, evict_buf: []usize) usize {
+        var n: usize = 0;
+        while (self.used_bytes + bytes > self.budget_bytes or self.free_head == nil) {
+            if (n == evict_buf.len) break;
+            var victim = if (self.policy == .lru) self.lru else self.mru;
+            while (victim != nil and self.nodes[victim].key == skip) {
+                victim = self.nodes[victim].next;
+            }
+            if (victim == nil) break;
+            evict_buf[n] = self.nodes[victim].key;
+            n += 1;
+            _ = self.remove(self.nodes[victim].key);
+            self.evictions += 1;
+        }
+        return n;
+    }
+
     /// Make room for `bytes` under `key` and take a node for it.
     ///
     /// Evicts least-recently-used entries until the new entry fits, writing
@@ -175,7 +195,18 @@ pub const WeightBudget = struct {
             self.nodes[i].bytes = bytes;
             self.unlink(i);
             self.linkMru(i);
-            return .{ .evicted = evict_buf[0..0], .tracked = true };
+            if (self.used_bytes <= self.budget_bytes) {
+                return .{ .evicted = evict_buf[0..0], .tracked = true };
+            }
+            // The same key re-admitted larger than the room left in the budget.
+            // Evict the other entries to make room; if it still does not fit on
+            // its own, untrack it rather than leave used_bytes over budget.
+            const n_evicted = self.makeRoom(0, key, evict_buf);
+            if (self.used_bytes > self.budget_bytes) {
+                _ = self.remove(key);
+                return .{ .evicted = evict_buf[0..n_evicted], .tracked = false };
+            }
+            return .{ .evicted = evict_buf[0..n_evicted], .tracked = true };
         }
 
         // A single weight larger than the whole budget can never be resident
@@ -298,6 +329,39 @@ test "WeightBudget, re-admitting a live key resizes in place" {
     try testing.expectEqual(@as(usize, 0), a.evicted.len);
     try testing.expectEqual(@as(usize, 250), wb.used_bytes);
     try testing.expectEqual(@as(?usize, 250), wb.bytesOf(1));
+}
+
+test "WeightBudget, re-admitting a live key past the budget evicts others" {
+    var wb = try WeightBudget.init(testing.allocator, 8, 300);
+    defer wb.deinit(testing.allocator);
+    var buf: [8]usize = undefined;
+    for ([_]usize{ 1, 2, 3 }) |k| _ = wb.admit(k, 100, &buf);
+
+    // Growing 1 from 100 to 250 does not fit alongside 2 and 3: evict both,
+    // least recently used first, and keep 1 resident at its new size.
+    const a = wb.admit(1, 250, &buf);
+    try testing.expect(a.tracked);
+    try testing.expectEqualSlices(usize, &.{ 2, 3 }, a.evicted);
+    try testing.expect(wb.used_bytes <= wb.budget_bytes);
+    try testing.expectEqual(@as(usize, 250), wb.used_bytes);
+    try testing.expectEqual(@as(?usize, 250), wb.bytesOf(1));
+    try testing.expect(!wb.touch(2));
+    try testing.expect(!wb.touch(3));
+}
+
+test "WeightBudget, re-admitting a key that cannot fit alone is untracked" {
+    var wb = try WeightBudget.init(testing.allocator, 8, 300);
+    defer wb.deinit(testing.allocator);
+    var buf: [8]usize = undefined;
+    for ([_]usize{ 1, 2 }) |k| _ = wb.admit(k, 100, &buf);
+
+    // 400 exceeds the whole budget, so every other entry goes and 1 is untracked
+    // rather than leaving used_bytes over budget.
+    const a = wb.admit(1, 400, &buf);
+    try testing.expect(!a.tracked);
+    try testing.expectEqualSlices(usize, &.{2}, a.evicted);
+    try testing.expect(wb.used_bytes <= wb.budget_bytes);
+    try testing.expect(!wb.touch(1));
 }
 
 test "WeightBudget, capacity exhaustion evicts to reclaim a node" {

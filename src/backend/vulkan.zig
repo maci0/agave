@@ -1449,6 +1449,7 @@ pub const VulkanBackend = struct {
         if (self.buf_cache.getPtr(addr)) |cached| {
             self.destroyBuffer(cached.vk_buf);
             _ = self.buf_cache.remove(addr);
+            if (self.weight_budget) |*wb| _ = wb.remove(addr);
         }
     }
 

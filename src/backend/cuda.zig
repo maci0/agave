@@ -1192,6 +1192,9 @@ pub const CudaBackend = struct {
         if (self.buf_cache.getPtr(addr)) |cached| {
             if (!cached.is_registered) _ = self.cuMemFree(cached.dptr);
             _ = self.buf_cache.remove(addr);
+            // The budget charges the host address, so dropping the cache entry
+            // without uncharging leaves used_bytes counting memory that is gone.
+            if (self.weight_budget) |*wb| _ = wb.remove(addr);
         }
     }
 
