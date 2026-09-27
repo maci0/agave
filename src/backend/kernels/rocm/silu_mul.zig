@@ -13,11 +13,6 @@ export fn silu_mul_kernel(a: [*]const f32, b: [*]const f32, out: [*]f32, n: u32)
 
 const std = @import("std");
 
-test "constants valid" {
-    // No module-level numeric constants in this file.
-    _ = @sizeOf(u8);
-}
-
 test "fuzz: silu_mul functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

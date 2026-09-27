@@ -12,11 +12,6 @@ export fn sigmoid_mul_kernel(data: [*]f32, gate: [*]const f32, n: u32) callconv(
 
 const std = @import("std");
 
-test "constants valid" {
-    // No module-level numeric constants in this file.
-    _ = @sizeOf(u8);
-}
-
 test "fuzz: sigmoid_mul functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

@@ -38,11 +38,6 @@ export fn gemv_fp8_e5m2_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u3
 
 const std = @import("std");
 
-test "constants valid" {
-    comptime std.debug.assert(@as(f32, 0.005) > 0);
-    comptime std.debug.assert(@as(u32, 32) > 0);
-}
-
 test "fuzz: gemv_fp8_e5m2 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

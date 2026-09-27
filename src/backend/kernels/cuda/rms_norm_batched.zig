@@ -34,11 +34,6 @@ export fn rms_norm_batched_kernel(input: [*]const f32, weight: [*]const f32, out
 
 const std = @import("std");
 
-test "constants valid" {
-    // No module-level numeric constants in this file.
-    _ = @sizeOf(u8);
-}
-
 test "fuzz: rms_norm_batched functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

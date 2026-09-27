@@ -60,14 +60,6 @@ export fn gemv_mlx_q4_kernel(
 
 const std = @import("std");
 
-test "constants valid" {
-    // No module-level numeric constants in this file; group_size and words-per-group
-    // are defined as local constants inside the kernel function.
-    // Verify their expected values via comptime.
-    comptime std.debug.assert(64 > 0); // gs: group size
-    comptime std.debug.assert(8 > 0); // wpg: u32 words per group
-}
-
 test "fuzz: gemv_mlx_q4 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {
