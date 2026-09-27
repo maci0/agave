@@ -7,6 +7,10 @@ export LC_ALL=C TZ=UTC
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# The oxlint ignorePatterns ratchet first: it needs no toolchain, and a path
+# excluded from linting is a defect the oxlint run below cannot report.
+bash scripts/check-web-lint-scope.sh
+
 PIN="$(sed -n 's/.*"packageManager": "bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
 if [[ -z "$PIN" ]]; then
     echo "lint-web: could not parse package.json packageManager bun@X.Y.Z" >&2

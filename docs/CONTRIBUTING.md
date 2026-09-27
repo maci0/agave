@@ -15,7 +15,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness), `lint-shell` (shellcheck) and `lint-python` (ruff). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness + the oxlint `ignorePatterns` ratchet), `lint-shell` (shellcheck) and `lint-python` (ruff). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -25,6 +25,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, the ruff and bun versions, and the committed `uv.lock` files must agree) |
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
+| `.oxlintrc.json` | `bash scripts/check-web-lint-scope.sh` (an `ignorePatterns` entry that is not known debt fails; entries may leave the list, never join it) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 | `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` (blocking CI job `lint-python`) |
 
@@ -385,7 +386,7 @@ zig build check
 
 # Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
 zig build lint-web
-# equivalent: bun run lint && bun run typecheck
+# equivalent: bash scripts/lint-web.sh (bun pin check, oxlint ignorePatterns ratchet, oxlint, tsc)
 
 # Shell scripts (blocking CI job lint-shell). Needs shellcheck.
 zig build lint-shell

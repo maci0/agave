@@ -14,7 +14,7 @@ zig build check                    # fmt-check + docs hygiene + pin consistency 
 zig build check-pins               # Zig/Docker reproducibility pins and uv.lock freshness agree (CI fmt-check job)
 zig build docs-check               # docs link and count hygiene (scripts/check-docs.py)
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
-zig build lint-web                 # oxlint + tsc (CI lint-web; needs bun 1.4.0)
+zig build lint-web                 # oxlint + tsc + ignorePatterns ratchet (CI lint-web; needs bun 1.4.0)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
 zig build lint-python              # ruff on scripts/, tests/, tools/, research/ Python (CI lint-python)
 zig build check-web                # committed src/web/app.js + web/*.js match a fresh tsc build (CI lint-web)
