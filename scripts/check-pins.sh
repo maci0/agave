@@ -205,3 +205,56 @@ else
     done
     echo "uv lock OK: tests/uv.lock, research/kernels/uv.lock match their pyproject.toml"
 fi
+
+# Every third-party requirement names one version. A range ("torch>=2.10",
+# "oxlint@^1.57.0", "~1.2") resolves to a different tree on every resolve, so
+# the lock stops describing what anyone reviewed, and a compromised or merely
+# surprising release lands without a manifest diff. Exact pins move by a
+# deliberate commit (Dependabot opens one), which is the record the audit trail
+# is made of. Both manifest dialects express that: npm/bun write a bare version
+# ("oxlint": "1.57.0"), PEP 508 writes "==". Extras and environment markers are
+# compared on the specifier text, not resolved.
+exact_pin_fail=0
+check_exact_pins() {
+    local file=$1
+    local spec
+    while IFS= read -r spec; do
+        [[ -n "$spec" ]] || continue
+        if [[ ! "$spec" =~ ^[A-Za-z0-9._-]+(==)?[0-9][A-Za-z0-9._+-]*(\[[^]]+\])?(\;.*)?$ ]]; then
+            echo "check-pins: $file: '$spec' does not pin one exact version" >&2
+            exact_pin_fail=1
+        fi
+    done
+}
+
+# package.json devDependencies (npm/bun semver) and pyproject dependencies
+# (PEP 508) sit behind different syntaxes, so each is listed with its own
+# parser rather than a regex that would have to cover both.
+check_exact_pins "package.json devDependencies" < <(
+    sed -n '/"devDependencies"/,/^[[:space:]]*}/p' package.json |
+        sed -n 's/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+)
+
+# Every quoted requirement token inside a dependency array, optional extras
+# and markers included. Only the arrays are read, so the quoted values of other
+# fields (name, description, requires-python) cannot be mistaken for a pin.
+# shellcheck disable=SC2016  # awk's $0 and /"[^"]+"/ below are the awk language, not the shell
+check_exact_pins "pyproject dependencies" < <(
+    find tests research -name pyproject.toml -not -path '*/.venv/*' -print0 |
+        xargs -0 awk '
+            /^[[:space:]]*(dependencies|\[project\.optional-dependencies\])/ { in_deps = 1 }
+            in_deps {
+                while (match($0, /"[^"]+"/)) {
+                    print substr($0, RSTART + 1, RLENGTH - 2)
+                    $0 = substr($0, RSTART + RLENGTH)
+                }
+                if ($0 ~ /\]/) { in_deps = 0 }
+            }
+        '
+)
+
+if ((exact_pin_fail)); then
+    echo "check-pins: every third-party requirement must pin one exact version" >&2
+    exit 1
+fi
+echo "Dependency pins OK: package.json devDependencies and pyproject requirements are exact"

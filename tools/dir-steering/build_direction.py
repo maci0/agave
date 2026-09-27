@@ -24,7 +24,7 @@ Each prompt file has one prompt per line. Prompts should be paired:
 line N in good-file and line N in bad-file ask for the same information
 but in the target vs contrast style.
 
-Requires: numpy
+Requires: numpy (pinned in research/kernels/pyproject.toml)
 """
 
 import argparse

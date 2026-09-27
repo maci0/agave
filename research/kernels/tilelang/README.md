@@ -156,7 +156,7 @@ bench-validator pattern (host reference vs device output) to the remaining
 GEMV dtypes (q5_0/q6_k/q2_k...) and to rms_norm/rope/sdpa, then bisect the
 E2E divergence per layer.
 
-## Gotchas found (would bite anyone adopting TileLang)## Gotchas found (would bite anyone adopting TileLang)
+## Gotchas found (would bite anyone adopting TileLang)
 
 - Eager-mode annotations must NOT use `from __future__ import annotations`:
   dims referenced only in string annotations are not closure cells and raise
