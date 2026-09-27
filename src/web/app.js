@@ -9,6 +9,17 @@ function qs(sel) {
     }
     return el;
 }
+/** Reference to a symbol in the body.html icon sprite. Decorative: callers set the accessible name. */
+function icon(name) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'icon');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(NS, 'use');
+    use.setAttribute('href', `#i-${name}`);
+    svg.append(use);
+    return svg;
+}
 /** Truncate by Unicode code points so surrogate pairs (emoji, some CJK) are not split. */
 function truncateAnnounce(text, maxChars) {
     const chars = [...text];
@@ -305,7 +316,7 @@ function showToast(text, type) {
     const close = document.createElement('button');
     close.type = 'button';
     close.className = 'toast-dismiss';
-    close.textContent = '\u00D7';
+    close.append(icon('close'));
     close.setAttribute('aria-label', 'Dismiss');
     close.addEventListener('click', function () { toast.remove(); });
     toast.append(span);
@@ -802,7 +813,7 @@ function decorateCodeBlock(b) {
     c.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
     c.addEventListener('click', function () {
         navigator.clipboard.writeText(b.textContent ?? '').then(function () {
-            c.textContent = 'Copied!';
+            c.textContent = 'Copied';
             announceToSR('Code copied to clipboard');
             setTimeout(function () { c.textContent = 'Copy'; }, 2000);
         }).catch(function () { c.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function () { c.textContent = 'Copy'; }, 2000); });
@@ -938,7 +949,7 @@ function attachCopyButton(el, content) {
     cb.setAttribute('aria-label', 'Copy response');
     cb.addEventListener('click', function () {
         navigator.clipboard.writeText(content).then(function () {
-            cb.textContent = 'Copied!';
+            cb.textContent = 'Copied';
             announceToSR('Response copied to clipboard');
             setTimeout(function () { cb.textContent = 'Copy'; }, 2000);
         }).catch(function () { cb.textContent = 'Failed'; announceToSR('Copy failed'); setTimeout(function () { cb.textContent = 'Copy'; }, 2000); });
@@ -1239,7 +1250,8 @@ function addRegenBtn(msgEl, actionLabel) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'regen-btn';
-    btn.textContent = `\u21BB ${label}`;
+    btn.append(icon('retry'));
+    btn.append(document.createTextNode(` ${label}`));
     btn.setAttribute('aria-label', label === 'Retry' ? 'Retry generating response' : 'Regenerate response');
     btn.addEventListener('click', function () { regenerate(); });
     wrap.append(btn);
@@ -1548,7 +1560,7 @@ function loadConvs() {
             const del = document.createElement('button');
             del.type = 'button';
             del.className = 'conv-del';
-            del.textContent = '\u00D7';
+            del.append(icon('close'));
             del.setAttribute('aria-label', `Delete conversation: ${c.title ?? 'New chat'}`);
             del.addEventListener('click', function (e) { e.stopPropagation(); deleteConv(c.id); });
             item.append(selectBtn);

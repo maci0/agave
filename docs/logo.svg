@@ -22,8 +22,10 @@
     <path d="M0,10 Q-38,5 -55,-8" stroke="url(#ag)" stroke-width="3.5" fill="none" stroke-linecap="round"/>
     <path d="M0,10 Q38,5 55,-8" stroke="url(#ag)" stroke-width="3.5" fill="none" stroke-linecap="round"/>
   </g>
-  <!-- Text -->
-  <text x="130" y="125" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="80" font-weight="700" fill="#1a1a1a" letter-spacing="-2">agave</text>
+  <!-- Wordmark: the product renders "agave" in its mono stack over warm
+       neutrals, so the lockup does too. Ink is the light-surface counterpart of
+       the app's primary text, and the tagline steps back to the secondary. -->
+  <text x="130" y="125" font-family="ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace" font-size="80" font-weight="700" fill="#2a2522">agave</text>
   <!-- Tagline -->
-  <text x="134" y="158" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="18" fill="#666" letter-spacing="4" font-weight="300">LLM INFERENCE ENGINE</text>
+  <text x="134" y="158" font-family="ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace" font-size="18" fill="#6b625b" letter-spacing="2" font-weight="500">LLM INFERENCE ENGINE</text>
 </svg>
