@@ -11,6 +11,24 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Changed
+- **Chat UI and browser shell are React + Tailwind 4 + shadcn/ui.** Both
+  surfaces moved from hand-written CSS and DOM calls to a React tree styled by
+  Tailwind 4, with the shadcn primitives copied into `src/web/ui/` and the
+  design tokens in one shared `src/web/ui/theme.css`. Behavior is unchanged:
+  SSE streaming, conversation history, the slash commands, image attachment,
+  the sampling panel, and the About dialog all work as before. The served page
+  grows from 26 KB to 122 KB gzipped, which is React's share of the bundle.
+- `scripts/build-web.sh` now runs bun and the Tailwind CLI, so the committed
+  `src/web/app.js`, `src/web/style.css`, `web/shell.js`, `web/style.css` and
+  `web/agave.js` are bundle and stylesheet outputs. `scripts/check-web-artifacts.sh`
+  compares all five.
+
+### Fixed
+- The chat UI read the deferred marked and DOMPurify globals as bare
+  identifiers, so a first message on a cold page could throw before the CDN
+  script had run. They are read off `globalThis` now.
+
 ## [0.4.0] - 2026-09-27
 
 ### Breaking

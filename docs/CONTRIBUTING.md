@@ -24,7 +24,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
 | `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, the ruff and bun versions, the committed `uv.lock` files, the vendored anti-slop source against `tools/oxlint/anti-slop/VENDORED.sha256`, and every exact third-party version in `package.json` and the `pyproject.toml` files must agree) |
 | `tools/oxlint/anti-slop/**` (re-vendoring) | `zig build check-pins` after regenerating `tools/oxlint/anti-slop/VENDORED.sha256`; record the upstream commit in that directory's `README.md` and copy upstream's LICENSE file there |
-| Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
+| Built-in chat UI and browser shell (React + Tailwind 4) | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `.oxlintrc.json` | `bash scripts/check-web-lint-scope.sh` (an `ignorePatterns` entry that is not known debt fails; entries may leave the list, never join it) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
@@ -73,8 +73,8 @@ Leaving `runner` empty keeps the matrix on the GitHub-hosted labels, where the r
 | KV cache policy | `src/kvcache/` |
 | Speculative decoding | `src/spec/` |
 | HTTP API / scheduler / metrics | `src/server/` |
-| Built-in `--serve` chat UI | `src/web/` (TypeScript in `app.ts`; `scripts/build-web.sh` refreshes `app.js`, needs `bun`) |
-| Browser WASM shell | `web/` (not `src/web/`; TypeScript in `agave.ts` / `shell.ts`, same compile script) |
+| Built-in `--serve` chat UI | `src/web/` (React in `app.tsx`, state in `chat/`, shadcn primitives in `ui/`; `scripts/build-web.sh` refreshes `app.js` and `style.css`, needs `bun`) |
+| Browser WASM shell | `web/` (not `src/web/`; TypeScript in `agave.ts`, React in `shell.tsx`, same build script) |
 | Tokenizer | `src/tokenizer/` |
 | Distributed TP/PP transport | `src/parallel/` |
 | Local GPU enumeration | `src/devices/` |
@@ -259,7 +259,7 @@ Run `python3 scripts/check-docs.py` (when present) for link and count hygiene.
 ## Diagram Palette
 
 Mermaid blocks and the SVGs rendered from them share one palette, derived from
-the chat UI tokens in `src/web/style.css` and the wordmark in `docs/logo.svg`.
+the chat UI tokens in `src/web/ui/theme.css` and the wordmark in `docs/logo.svg`.
 Copy these classDef lines into a new diagram rather than picking colors:
 
 ```text

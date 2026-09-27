@@ -148,11 +148,14 @@ agave/
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
 │   ├── web/
-│   │   ├── app.ts         # Chat UI TypeScript (SSE streaming, conversation management)
+│   │   ├── app.tsx        # Chat UI entry (React; SSE streaming, conversation management)
+│   │   ├── chat/          # Chat UI state (hooks) and components
+│   │   ├── ui/            # shadcn primitives + the shared Tailwind 4 theme
+│   │   ├── app.css        # Tailwind 4 entry for this surface
 │   │   ├── app.js         # Generated classic script; embedded by server.zig
+│   │   ├── style.css      # Generated stylesheet; embedded by server.zig
 │   │   ├── body.html      # Chat UI HTML body
-│   │   ├── head.html      # Chat UI HTML head (meta, inlined stylesheet)
-│   │   └── style.css      # Chat UI stylesheet
+│   │   └── head.html      # Chat UI HTML head (meta, inlined stylesheet)
 │   └── tokenizer/
 │       ├── tokenizer.zig  # Tokenizer interface
 │       └── bpe.zig        # BPE + SPM tokenizer with byte-level encoding
@@ -160,8 +163,10 @@ agave/
 │   ├── index.html         # Standalone WASM demo page
 │   ├── agave.ts           # Typed glue for agave.wasm (AgaveEngine)
 │   ├── agave.js           # Generated classic script
-│   ├── shell.ts           # Demo page logic
-│   └── shell.js           # Generated classic script
+│   ├── shell.tsx          # Demo page (React)
+│   ├── shell.css          # Tailwind 4 entry for this surface
+│   ├── shell.js           # Generated classic script
+│   └── style.css          # Generated stylesheet
 ├── tools/                 # Offline model-prep utilities and vendored lint plugins (never linked into agave)
 │   ├── gguf_io.py         # Shared GGUF header read/write for the scripts below
 │   ├── dir-steering/      # Directional steering matrix builder (--dir-steering-file input)
