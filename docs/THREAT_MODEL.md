@@ -18,7 +18,7 @@ Disclosure and supported-version policy: [SECURITY.md](../SECURITY.md). HTTP con
 | T3 | Single-key deployments have no tenant separation: `/v1/kv_cache` export and the global prompt-prefix / radix cache cross request owners | Client -> client (same server) | One API-key holder reads KV state derived from another user's prompts | Documented limitation, unmitigated |
 | T4 | Rate limiting is one global bucket, default off; grammar/json_mode bypass the batch scheduler | Client -> compute | One client exhausts GPU time / latency for all | Partial: caps exist, identity does not |
 | T5 | Predictable shared-memory names let any same-uid local process read/inject tensors | Local process -> shm | Local tensor injection during `--tp 2` same-host runs | Mode 0600 + `O_EXCL` after `shm_unlink` only |
-| T6 | Conversation store persists prompts to disk (`~/.cache/agave/conversations.json`) | Process -> filesystem | Prompt transcript survives process exit; compose volume `agave-cache` holds it | Bounded file, durable replace; no encryption |
+| T6 | Conversation store persists prompts to disk (`~/.cache/agave/conversations.json`) | Process -> filesystem | Prompt transcript survives process exit; compose volume `agave-cache` holds it | Bounded file, durable replace, no encryption; no backup tier, so the volume is the only copy (`docs/DURABILITY.md`) |
 
 Highest-value correction for operators: **the API key protects only TCP 49453**. The TP/PP/disagg data ports and UDP discovery are separate listeners that never see it.
 
@@ -96,7 +96,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 - Tampering/disclosure by same-uid processes on predictable names (`transport.zig:227-241`). `shm_unlink` then `O_EXCL` create discards a pre-planted send segment, then fails if a racer recreates it; it does not randomize the name: T5. Send-size guard is a ReleaseFast-stripped assert (`transport.zig:282`).
 
 **Process -> conversation file**
-- Disclosure: the JSON store is plaintext prompts (`conv_store.zig`). Load refuses files > 64 MiB (:21). Compose persists it in `agave-cache` (`docker-compose.yml:44-48`): T6.
+- Disclosure: the JSON store is plaintext prompts (`conv_store.zig`). Load refuses files > 64 MiB (:21). Compose persists it in `agave-cache` (`docker-compose.yml:52-58`): T6. That volume is the only copy; backup and restore are in `docs/DURABILITY.md`.
 
 ## 4. Mitigations map
 

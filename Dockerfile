@@ -204,6 +204,12 @@ COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 COPY --link --from=build /agave-version /usr/share/agave/version
 # GPL-3.0-or-later: the notice must accompany the binary (keep LICENSE in context).
 COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
+# Conversation-store backup/restore. Shipped so an operator can reach a store
+# that lives only in a volume, without a checkout on the host.
+# Run: docker run --rm --entrypoint conv-store-backup.sh \
+#   -v agave-cache:/home/agave/.cache -v "$PWD/backups:/backups" \
+#   -e AGAVE_BACKUP_DIR=/backups agave:local backup
+COPY --link --chmod=0755 scripts/conv-store-backup.sh /usr/local/bin/conv-store-backup.sh
 
 # Writable workdir for non-root runtime (logs, temp files, bind-mount targets).
 WORKDIR /home/agave
