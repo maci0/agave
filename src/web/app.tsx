@@ -126,7 +126,7 @@ const useFocusToken = () => {
 
 /** The chrome around the conversation: the About dialog, the mobile drawer, the
  *  viewport breakpoint, and the Escape ladder that closes one layer at a time. */
-const useShellChrome = (announce: Announce, stopGeneration: () => void) => {
+const useShellChrome = (settings: ReturnType<typeof useSettings>, stopGeneration: () => void) => {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isDrawer, setIsDrawer] = useState(false);
@@ -144,7 +144,7 @@ const useShellChrome = (announce: Announce, stopGeneration: () => void) => {
     return function () { query.removeEventListener('change', sync); };
   }, []);
 
-  const { togglePanel: closeSettings, open: settingsOpen } = useSettings(announce);
+  const { togglePanel: closeSettings, open: settingsOpen } = settings;
   const onEscapeKey = useCallback(function (event: KeyboardEvent) {
     if (event.key !== 'Escape') {return;}
     if (aboutOpen) { setAboutOpen(false); }
@@ -325,7 +325,7 @@ const ChatApp = () => {
   const { announcement, announce } = useAnnouncer();
   const { focusToken, focusComposer } = useFocusToken();
   const { toasts, pushToast, dismissToast, model, log, convs, image, turn, settings } = useChatState(announce, focusComposer);
-  const chrome = useShellChrome(announce, turn.stop);
+  const chrome = useShellChrome(settings, turn.stop);
   const commands = { ...useChatCommands({ log, model, convs, image, turn, settings, announce, pushToast, focusComposer }), announce };
   const sidebarProps: SidebarProps = {
     conversations: convs.conversations,
