@@ -6,12 +6,99 @@
 //! store, Vulkan pipeline cache, expert profiles, and Hub download publish.
 //!
 //! Not a hot-path helper: callers are one-shot CLI/server I/O.
+//!
+//! The publish sequence is fault-injectable (see `armFault`) so a deterministic
+//! simulator can reproduce a crash or an I/O failure at any step from a single
+//! (step, mode) seed, then restart from the on-disk state and assert the live
+//! file was never torn.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
 /// fsync is a no-op on targets without a real POSIX file descriptor.
 const posix_sync = builtin.os.tag != .wasi and builtin.os.tag != .freestanding;
+
+// ── Deterministic fault injection ────────────────────────────────────────
+//
+// `replace` is the single chokepoint every crash-safe durable write goes
+// through, so it is where a simulator arms a reproducible fault. Faults are
+// keyed to a named step in the publish sequence, never random, so a failing
+// scenario replays from (step, mode) alone. The fault state is process-global
+// and disarmed by default: with nothing armed, `replace` executes exactly the
+// production sequence below.
+//
+// `fail` models a recoverable I/O error the running process observes and
+// cleans up (the `errdefer` still removes the tmp). `crash` models process
+// death: no cleanup runs, the partially-written tmp is left on disk exactly as
+// a real crash would leave it, and the live path is untouched unless the
+// rename already landed. A simulator uses `crash` to tear down in-memory state
+// and restart from disk, which is only meaningful because the live file and
+// the tmp are kept distinct.
+
+/// A point in the `replace` publish sequence where a fault can be armed.
+pub const Step = enum {
+    /// Before the tmp file is created.
+    open,
+    /// After the tmp is created/truncated, before any bytes are written.
+    write,
+    /// After the bytes are written, before the tmp is fsynced.
+    file_sync,
+    /// After the tmp is fsynced, before its descriptor is closed.
+    file_close,
+    /// After the tmp is renamed over the live path, before the dir is fsynced.
+    rename,
+    /// After the parent directory is fsynced.
+    dir_sync,
+};
+
+/// How an armed fault manifests.
+pub const Mode = enum {
+    /// Recoverable: the caller sees an error and normal cleanup runs.
+    fail,
+    /// Unrecoverable: models process death, so cleanup is skipped.
+    crash,
+};
+
+/// 0 = disarmed. Otherwise `1 + step * 2 + mode`, matching `encodeFault`.
+const fault_disarmed: u8 = 0;
+var fault_armed = std.atomic.Value(u8).init(fault_disarmed);
+
+fn encodeFault(step: Step, mode: Mode) u8 {
+    return 1 + @as(u8, @intFromEnum(step)) * 2 + @as(u8, @intFromEnum(mode));
+}
+
+/// Arm `mode` at `step` for the next `replace` that reaches it. One-shot:
+/// the fault fires at most once, then disarms, so a retry after a recoverable
+/// fault makes progress instead of failing forever.
+pub fn armFault(step: Step, mode: Mode) void {
+    fault_armed.store(encodeFault(step, mode), .release);
+}
+
+/// Disarm any pending fault. Tests defer this so a fault never leaks into a
+/// later test in the same process.
+pub fn clearFault() void {
+    fault_armed.store(fault_disarmed, .release);
+}
+
+/// Return the armed mode if `step` is the armed one, else null.
+fn injectIfArmed(step: Step) ?Mode {
+    const want = encodeFault(step, .fail); // low bit 0 => fail
+    const crash = encodeFault(step, .crash);
+    const cur = fault_armed.load(.acquire);
+    if (cur != want and cur != crash) return null;
+    // Consume the one-shot so a resumed sequence advances past the fault.
+    _ = fault_armed.cmpxchgStrong(cur, fault_disarmed, .acq_rel, .acquire);
+    return if (cur == crash) .crash else .fail;
+}
+
+/// The error a faulted step returns. `crash` is distinct so `replace`'s
+/// `errdefer` can skip cleanup the way process death would.
+fn faultError(mode: Mode) error{ InjectedFault, InjectedCrash }!void {
+    return switch (mode) {
+        .fail => error.InjectedFault,
+        .crash => error.InjectedCrash,
+    };
+}
 
 /// Flush file contents and metadata for `fd`. No-op on WASI/freestanding.
 pub fn syncFd(fd: std.posix.fd_t) !void {
@@ -57,17 +144,22 @@ pub fn replace(path: []const u8, data: []const u8) !void {
     var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
     const tmp_path = try tmpPath(&tmp_buf, path);
 
+    if (injectIfArmed(.open)) |mode| return faultError(mode);
     const fd = try std.posix.openat(std.posix.AT.FDCWD, tmp_path, .{
         .ACCMODE = .WRONLY,
         .CREAT = true,
         .TRUNC = true,
     }, 0o644);
     var fd_open = true;
-    errdefer {
+    errdefer |e| {
+        // Whether or not the process is faulting, the descriptor is released;
+        // only a recoverable fault removes the tmp. A `crash` leaves the
+        // partially-written tmp on disk, as process death would.
         if (fd_open) closeFd(fd);
-        deletePath(tmp_path);
+        if (e != error.InjectedCrash) deletePath(tmp_path);
     }
 
+    if (injectIfArmed(.write)) |mode| return faultError(mode);
     var off: usize = 0;
     while (off < data.len) {
         const n = std.posix.system.write(fd, data[off..].ptr, data.len - off);
@@ -75,14 +167,18 @@ pub fn replace(path: []const u8, data: []const u8) !void {
         off += @intCast(n);
     }
 
+    if (injectIfArmed(.file_sync)) |mode| return faultError(mode);
     try syncFd(fd);
     // A failed close on a write path means the data may never reach disk, so
     // the rename must not publish the file. The descriptor is released even on
     // a close error, so clear `fd_open` first and let the errdefer drop the tmp.
+    if (injectIfArmed(.file_close)) |mode| return faultError(mode);
     fd_open = false;
     try closeFdChecked(fd);
     try renameOver(tmp_path, path);
+    if (injectIfArmed(.rename)) |mode| return faultError(mode);
     syncParent(path);
+    if (injectIfArmed(.dir_sync)) |mode| return faultError(mode);
 }
 
 fn tmpPath(buf: []u8, path: []const u8) ![]u8 {
@@ -186,4 +282,129 @@ test "replace overwrites previous contents atomically" {
     const got = try readPath(std.testing.allocator, path);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("v2-longer", got);
+}
+
+// ── Crash-consistency tests driven by the fault seam ─────────────────────
+//
+// The invariant every step must uphold: a crash anywhere in the sequence
+// leaves the live file holding either the complete old contents or the
+// complete new contents, never a partial write. The tmp/live split is what
+// makes that true, so each step is faulted in turn and the live file re-read.
+
+// Steps at or before the rename has not yet touched the live path.
+const pre_rename_steps = [_]Step{ .open, .write, .file_sync, .file_close };
+// Steps at or after the rename has already published the new contents.
+const post_rename_steps = [_]Step{ .rename, .dir_sync };
+
+test "injected crash before rename leaves the live file intact" {
+    if (comptime !posix_sync) return;
+    for (pre_rename_steps) |step| {
+        var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "crash_pre_{s}.bin", .{@tagName(step)});
+        const path = testPath(&path_buf, name);
+        try replace(path, "old");
+        defer deletePath(path);
+        var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const tmp_path = try tmpPath(&tmp_buf, path);
+        defer deletePath(tmp_path);
+
+        armFault(step, .crash);
+        defer clearFault();
+        try std.testing.expectError(error.InjectedCrash, replace(path, "new"));
+        clearFault();
+
+        // A pre-rename crash must not disturb the live file.
+        const got = try readPath(std.testing.allocator, path);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings("old", got);
+    }
+}
+
+test "injected crash after rename publishes the new contents" {
+    if (comptime !posix_sync) return;
+    for (post_rename_steps) |step| {
+        var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "crash_post_{s}.bin", .{@tagName(step)});
+        const path = testPath(&path_buf, name);
+        try replace(path, "old");
+        defer deletePath(path);
+
+        armFault(step, .crash);
+        defer clearFault();
+        try std.testing.expectError(error.InjectedCrash, replace(path, "new"));
+        clearFault();
+
+        // The rename is atomic, so a post-rename crash shows the whole new
+        // file, never a mixture of old and new.
+        const got = try readPath(std.testing.allocator, path);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings("new", got);
+    }
+}
+
+test "injected crash is a one-shot that a retry clears" {
+    if (comptime !posix_sync) return;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "crash_retry.bin");
+    try replace(path, "old");
+    defer deletePath(path);
+    var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = try tmpPath(&tmp_buf, path);
+    defer deletePath(tmp_path);
+
+    armFault(.file_sync, .crash);
+    defer clearFault();
+    try std.testing.expectError(error.InjectedCrash, replace(path, "new"));
+    // The fault was consumed, so a restart-from-disk retry makes progress.
+    clearFault();
+    try replace(path, "new");
+    const got = try readPath(std.testing.allocator, path);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("new", got);
+}
+
+test "injected recoverable fault returns error and cleans the tmp" {
+    if (comptime !posix_sync) return;
+    for (pre_rename_steps) |step| {
+        var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "fail_{s}.bin", .{@tagName(step)});
+        const path = testPath(&path_buf, name);
+        try replace(path, "old");
+        defer deletePath(path);
+        var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const tmp_path = try tmpPath(&tmp_buf, path);
+        defer deletePath(tmp_path);
+
+        armFault(step, .fail);
+        defer clearFault();
+        try std.testing.expectError(error.InjectedFault, replace(path, "new"));
+        clearFault();
+
+        // A recoverable fault keeps the live file and removes the tmp.
+        const got = try readPath(std.testing.allocator, path);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings("old", got);
+        const leftover = std.posix.openat(std.posix.AT.FDCWD, tmp_path, .{}, 0);
+        if (leftover) |fd| {
+            closeFd(fd);
+            return error.TmpLeftBehind;
+        } else |_| {}
+    }
+}
+
+test "fault is disarmed by default and after clearFault" {
+    if (comptime !posix_sync) return;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "fault_disarmed.bin");
+    defer deletePath(path);
+    // Arming then clearing must restore the plain production sequence.
+    armFault(.write, .crash);
+    clearFault();
+    try replace(path, "clean");
+    const got = try readPath(std.testing.allocator, path);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("clean", got);
 }
