@@ -11,7 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Optuna-backed Bayesian search in autotune.py (lazy import)
-bayesian = ["optuna==4.8.0"]
+bayesian = ["optuna==5.0.0"]
 
 [tool.uv]
 # Reference kernels and benchmarks only; nothing here is an importable package
