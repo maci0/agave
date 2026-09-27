@@ -31,11 +31,15 @@ must still appear under **Changed** or **Breaking** below. See
 - `docs/DURABILITY.md`: what state is on disk, RPO/RTO, and the conversation
   store backup/restore runbook.
 - `scripts/conv-store-backup.sh` (`path`, `backup`, `verify FILE`,
-  `restore FILE`, `--self-test`), shipped into the Docker image at
+  `restore FILE`, `check`, `--self-test`), shipped into the Docker image at
   `/usr/local/bin/conv-store-backup.sh`. Backups go to `$AGAVE_BACKUP_DIR`
   (default `$HOME/.agave-backups`) as `conversations-<UTC stamp>.json`, pruned
   to `$AGAVE_KEEP` (default 14). `restore` snapshots the outgoing store to
-  `conversations-prerestore-<stamp>.json` first. `zig build conv-store-backup-test`
+  `conversations-prerestore-<stamp>.json` first. `check` fails when the newest
+  backup is older than `$AGAVE_MAX_AGE_HOURS` or no longer verifies, so a
+  stopped job is not indistinguishable from a job with nothing to do.
+  `--store PATH` names the store of a server started with `--conv-store`,
+  which the environment-based default path cannot resolve. `zig build conv-store-backup-test`
   runs the self-test.
 - `zig build ci`: the full local gate (`check` plus `lint-web` and
   `lint-shell`). `zig build check` alone does not cover the web lint.

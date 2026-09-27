@@ -44,7 +44,13 @@ Other verified properties, so a future pass leaves them alone:
   persistence for that run instead of overwriting the file with an empty list
   (`src/server/server.zig`, `loadConversationsLocked`).
 - `--conv-store PATH` points the store anywhere; `--no-conv-store` keeps
-  conversations in memory only.
+  conversations in memory only. The backup script follows a relocated store
+  with `--store PATH`.
+- The backup copy uses the same discipline as the server: a sibling tmp,
+  `sync` on the file, rename, then `sync` on the destination directory, so a
+  power loss cannot leave a backup directory that verifies while holding no
+  backup. A missing `sync` command fails the backup rather than passing it
+  (`copy_atomic` in `scripts/conv-store-backup.sh`).
 
 ## RPO and RTO
 
@@ -74,6 +80,7 @@ class of corruption. Keep the frequency low enough for that to be tolerable.
 ```bash
 scripts/conv-store-backup.sh path      # where the store is
 scripts/conv-store-backup.sh backup    # copy + verify + prune old
+scripts/conv-store-backup.sh --store /srv/agave/conversations.json backup
 ```
 
 `backup` resolves the path the same way the server does, copies through a
@@ -81,6 +88,14 @@ temporary file and renames (so a killed backup never leaves a partial file
 that a later restore would install), verifies the copy, also copies a
 `.corrupt` store when one exists, and prunes. It exits nonzero on every
 failure; it has no quiet failure mode.
+
+A server started with `--conv-store PATH` writes its store wherever it was
+told, which the environment-based resolution above cannot see. Pass
+`--store PATH` to `backup`, `check`, `restore`, or `path` for that
+deployment; the flag goes before the command and wins over
+`XDG_CACHE_HOME`. Without it the job either backs up a path nothing writes or
+fails on a missing file, and a store the operator moved is the one kind of
+state here with no protection at all.
 
 Retention has two tiers, because the three kinds of file in the backup
 directory are not interchangeable:
@@ -163,6 +178,10 @@ scripts/conv-store-backup.sh restore ~/.agave-backups/conversations-20260927T120
 docker compose restart agave
 ```
 
+Add `--store PATH` to `restore` when the server was started with
+`--conv-store PATH`; without it the restore installs the backup at the
+default path and leaves the relocated store untouched.
+
 `restore` verifies the backup before touching anything, refuses a file that is
 truncated, unbalanced, or written in a different envelope version, snapshots
 the current live store to `{backup dir}/conversations-prerestore-<stamp>.json`
@@ -180,7 +199,8 @@ whole path in CI and locally:
 zig build conv-store-backup-test     # backup, verify, reject-truncated,
                                     # restore, pre-restore snapshot, retention,
                                     # retention scope, same-filesystem refusal,
-                                    # check fresh/missing/stale
+                                    # check fresh/missing/stale,
+                                    # --store override, whole help text
 scripts/conv-store-backup.sh --self-test   # same, standalone
 ```
 
