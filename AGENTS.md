@@ -27,12 +27,12 @@ zig build run -- model.gguf "hi"   # run the ReleaseFast binary without installi
 ./zig-out/bin/agave model.gguf "prompt"
 ./zig-out/bin/agave model.gguf --serve
 ./zig-out/bin/agave model.gguf --backend cpu|webgpu|vulkan|cuda|rocm|metal
-zig build -Denable-<model>=false   # one per model, named after the architectures listed under Build
+zig build -Denable-<model>=false   # one per model; the flag slugs are not the display names, see Build
 zig build -Denable-<backend>=false # cpu cuda metal rocm vulkan webgpu
 zig build -Denable-debug=false     # skip agave-debug
 zig build -Denable-bench=false     # skip installing agave-bench
 zig build test -Dtest-filter=<str> # only tests whose name contains <str>. Repeat to AND filters. A filter matching no `test "..."` name aborts the build (an empty match would otherwise exit 0).
-zig build wasm                     # browser WASM module (web/), not src/web/
+zig build wasm                     # browser WASM module (web/), not src/web/. Compile only, see Gotchas.
 zig build validate                 # every GPU kernel against the CPU backend. Needs the GPU; -Dvalidate-backend= picks it (default rocm).
 zig build ptx                      # CUDA kernels to zig-out/ptx/*.ptx (see Build: commit them)
 zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.o (see Build)
@@ -42,7 +42,7 @@ zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.o (
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 
-`zig build ci` is what a workstation can reproduce. CI additionally runs the cross-compile matrix, the wasm build, kernel artifact freshness, a bounded fuzz pass, and golden tests, none of which a local run covers. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+`zig build ci` is what a workstation can reproduce. CI additionally runs the macOS test job, the Docker build, the cross-compile matrix, the wasm build, kernel artifact freshness (PTX), and a bounded fuzz pass, none of which a local run covers. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (`scripts/build-web.sh` compiles the `.ts` sources and refreshes the committed `src/web/app.js` and `web/*.js`). Browser WASM shell is `web/`, not `src/web/`.
 
@@ -91,6 +91,7 @@ Non-negotiable. Every change must respect all of them.
 - Cross-compile must keep working, matching `.github/workflows/ci.yml`: `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` (Metal off), `x86_64-linux-musl`, `aarch64-linux-musl` (static, CPU-only), plus the separate `wasm32-freestanding` build.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast — that no-ops `std.debug.assert`.
 - 11 model architectures: Gemma3, Gemma4, DiffusionGemma, Qwen3.5, Qwen4-Exp, GPT-OSS, Nemotron-H, Nemotron-Nano, GLM-4, DeepSeek V4, Llama 4. DFlash2 is a block-diffusion drafter (`-Denable-dflash2`).
+- The model build flags are slugs, not the display names: `gemma3`, `gemma4`, `diffusion-gemma`, `qwen35`, `qwen4-exp`, `gpt-oss`, `nemotron-h`, `nemotron-nano`, `glm4`, `deepseek4`, `llama4`, `dflash2`.
 - Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate and commit:
   - PTX: `zig build ptx`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`.
   - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
@@ -115,6 +116,8 @@ Non-negotiable. Every change must respect all of them.
 **GPU sync before argmax.** GPU writes logits. CPU argmax must `be.sync()` first or UMA platforms read stale data.
 
 **Metal threadgroup memory ≤ 32KB.** Sum `q_local + kv_block + out_acc + scores + shared`. `makePipeline` fails silently without its error logging.
+
+**WASM runs init, parse, and tokenize only.** A Zig 0.16 + LLVM 21 wasm32 codegen bug (invalid cast in SIMD vector lowering) blocks the full forward pass, so `agave_generate` does not run. `zig build wasm` compiles the module with Gemma3 only; every other arch is off there.
 
 **Kernel targets.** NVIDIA `nvptx64-cuda`, AMD `amdgcn-amdhsa`. Vulkan = GLSL compute → embedded SPIR-V. WebGPU = WGSL. No OpenCL or PAL.
 
