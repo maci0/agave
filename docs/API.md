@@ -339,7 +339,7 @@ The `sleeping` field is `true` when the server has been idle longer than `--slee
  "uptime_s":120,"active_connections":1,"requests_total":5,"requests_completed":5,
  "requests_failed":0,"requests_cancelled":0,"queue_depth":0,
  "kv_cache_used":100,"kv_cache_total":8192,"kv_seq_len":42,"ctx_size":4096,
- "scheduler_errors":0,"preemptions":0,"sleeping":false}
+ "scheduler_errors":0,"kv_demotions":0,"sleeping":false}
 ```
 
 ### GET /ready

@@ -110,11 +110,23 @@ pub const Metrics = struct {
     active_requests: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     scheduler_errors: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    preemptions_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Occupied blocks per KV tier. A tier at its total while the aggregate
+    /// looks half empty means live blocks are spilling down the hierarchy,
+    /// which is what turns into slow prefill and re-promotion stalls.
+    vram_kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    vram_kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    ram_kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    ram_kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    ssd_kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    ssd_kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Blocks demoted VRAM→RAM since start. Rises only when the VRAM tier is
+    /// over its eviction threshold, so any sustained rate is KV pressure.
+    kv_demotions_vram_to_ram: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Blocks demoted RAM→SSD since start. Rises when RAM is full, one tier
+    /// deeper than VRAM pressure and far more expensive per access.
+    kv_demotions_ram_to_ssd: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    gpu_kv_blocks_used: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    gpu_kv_blocks_total: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     _pad2: [cache_line]u8 = undefined,
 
     // ── Group 4: Latency histogram (per-request completion) ──
@@ -290,9 +302,12 @@ pub const Metrics = struct {
         _ = self.scheduler_errors.fetchAdd(1, .monotonic);
     }
 
-    /// Increment KV cache preemption counter (eviction under memory pressure).
-    pub fn recordPreemption(self: *Metrics) void {
-        _ = self.preemptions_total.fetchAdd(1, .monotonic);
+    /// Publish the tiered cache's cumulative demotion counts. Absolute, not
+    /// deltas: the cache owns the counters, so a step that skips or repeats
+    /// cannot double-count them.
+    pub fn setKvDemotions(self: *Metrics, vram_to_ram: u64, ram_to_ssd: u64) void {
+        self.kv_demotions_vram_to_ram.store(vram_to_ram, .monotonic);
+        self.kv_demotions_ram_to_ssd.store(ram_to_ssd, .monotonic);
     }
 
     /// Record an inter-token latency sample into the ITL histogram buckets
@@ -305,10 +320,24 @@ pub const Metrics = struct {
         _ = self.itl_sum.fetchAdd(duration_ms, .monotonic);
     }
 
-    /// Update the GPU KV cache block usage gauges (used / total).
-    pub fn updateGpuKvBlocks(self: *Metrics, used: u32, total: u32) void {
-        self.gpu_kv_blocks_used.store(used, .monotonic);
-        self.gpu_kv_blocks_total.store(total, .monotonic);
+    /// Update per-tier KV cache block occupancy (used and total per tier).
+    /// The aggregate `kv_blocks_used`/`kv_blocks_total` gauges stay separate:
+    /// they are what a capacity alert reads, the tiers say where the pressure is.
+    pub fn updateKvTiers(
+        self: *Metrics,
+        vram_used: u32,
+        vram_total: u32,
+        ram_used: u32,
+        ram_total: u32,
+        ssd_used: u32,
+        ssd_total: u32,
+    ) void {
+        self.vram_kv_blocks_used.store(vram_used, .monotonic);
+        self.vram_kv_blocks_total.store(vram_total, .monotonic);
+        self.ram_kv_blocks_used.store(ram_used, .monotonic);
+        self.ram_kv_blocks_total.store(ram_total, .monotonic);
+        self.ssd_kv_blocks_used.store(ssd_used, .monotonic);
+        self.ssd_kv_blocks_total.store(ssd_total, .monotonic);
     }
 
     /// Increment tokens generated counter.
@@ -657,13 +686,13 @@ pub const Metrics = struct {
             "gen_tok_inf",
         }, comptime histLes(&token_buckets), "gen_tok_sum", false);
 
-        // GPU KV cache usage (separate from combined kv_cache_usage_perc)
-        const gpu_kv_used = self.gpu_kv_blocks_used.load(.monotonic);
-        const gpu_kv_total = self.gpu_kv_blocks_total.load(.monotonic);
-        const gpu_kv_perc: f64 = if (gpu_kv_total > 0) @as(f64, @floatFromInt(gpu_kv_used)) / @as(f64, @floatFromInt(gpu_kv_total)) else 0.0;
-        try writer.writeAll("# HELP agave_gpu_cache_usage_perc Fraction of GPU KV cache blocks in use (0-1)\n");
+        // VRAM (GPU-resident) tier occupancy, the tier capacity alerts watch.
+        const vram_used = self.vram_kv_blocks_used.load(.monotonic);
+        const vram_total = self.vram_kv_blocks_total.load(.monotonic);
+        const vram_perc: f64 = if (vram_total > 0) @as(f64, @floatFromInt(vram_used)) / @as(f64, @floatFromInt(vram_total)) else 0.0;
+        try writer.writeAll("# HELP agave_gpu_cache_usage_perc Fraction of GPU (VRAM) KV cache blocks in use (0-1)\n");
         try writer.writeAll("# TYPE agave_gpu_cache_usage_perc gauge\n");
-        try writer.print("agave_gpu_cache_usage_perc {d:.4}\n", .{gpu_kv_perc});
+        try writer.print("agave_gpu_cache_usage_perc {d:.4}\n", .{vram_perc});
 
         // Inter-token latency histogram
         try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency: wall-clock time between consecutive tokens", .{
@@ -672,10 +701,28 @@ pub const Metrics = struct {
             "itl_inf",
         }, comptime histLes(&itl_buckets), "itl_sum", true);
 
-        // Preemptions (KV cache eviction under memory pressure)
-        try writer.writeAll("# HELP agave_num_preemptions_total Requests preempted due to KV cache pressure\n");
-        try writer.writeAll("# TYPE agave_num_preemptions_total counter\n");
-        try writer.print("agave_num_preemptions_total {d}\n", .{self.preemptions_total.load(.monotonic)});
+        // Per-tier KV occupancy. `state` has two values, `tier` three, so the
+        // series count is fixed: cardinality does not grow with cache pressure.
+        inline for (.{
+            .{ .tier = "vram", .used = self.vram_kv_blocks_used, .total = self.vram_kv_blocks_total },
+            .{ .tier = "ram", .used = self.ram_kv_blocks_used, .total = self.ram_kv_blocks_total },
+            .{ .tier = "ssd", .used = self.ssd_kv_blocks_used, .total = self.ssd_kv_blocks_total },
+        }) |t| {
+            const used = t.used.load(.monotonic);
+            const total = t.total.load(.monotonic);
+            try writer.print("agave_kv_cache_tier_blocks{{tier=\"{s}\",state=\"used\"}} {d}\n", .{ t.tier, used });
+            try writer.print("agave_kv_cache_tier_blocks{{tier=\"{s}\",state=\"total\"}} {d}\n", .{ t.tier, total });
+        }
+
+        // Tier demotions. A sustained rate on either counter is KV pressure;
+        // rate(vram_to_ram) climbing while latency climbs points at VRAM sizing.
+        try writer.writeAll("# HELP agave_kv_cache_demotions_vram_to_ram_total Blocks demoted from the VRAM to the RAM tier under cache pressure\n");
+        try writer.writeAll("# TYPE agave_kv_cache_demotions_vram_to_ram_total counter\n");
+        try writer.print("agave_kv_cache_demotions_vram_to_ram_total {d}\n", .{self.kv_demotions_vram_to_ram.load(.monotonic)});
+
+        try writer.writeAll("# HELP agave_kv_cache_demotions_ram_to_ssd_total Blocks demoted from the RAM to the SSD tier under cache pressure\n");
+        try writer.writeAll("# TYPE agave_kv_cache_demotions_ram_to_ssd_total counter\n");
+        try writer.print("agave_kv_cache_demotions_ram_to_ssd_total {d}\n", .{self.kv_demotions_ram_to_ssd.load(.monotonic)});
     }
 };
 
@@ -935,11 +982,34 @@ test "Metrics: recordSchedulerError increments counter" {
     try std.testing.expectEqual(@as(u64, 2), metrics.scheduler_errors.load(.monotonic));
 }
 
-test "Metrics: recordPreemption increments counter" {
+test "Metrics: updateKvTiers sets per-tier gauges" {
     var metrics = Metrics{};
-    try std.testing.expectEqual(@as(u64, 0), metrics.preemptions_total.load(.monotonic));
-    metrics.recordPreemption();
-    try std.testing.expectEqual(@as(u64, 1), metrics.preemptions_total.load(.monotonic));
+
+    metrics.updateKvTiers(50, 200, 30, 100, 10, 40);
+
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_tier_blocks{tier=\"vram\",state=\"used\"} 50\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_tier_blocks{tier=\"vram\",state=\"total\"} 200\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_tier_blocks{tier=\"ram\",state=\"used\"} 30\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_tier_blocks{tier=\"ssd\",state=\"total\"} 40\n") != null);
+    // VRAM tier feeds the derived GPU ratio.
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_gpu_cache_usage_perc 0.2500\n") != null);
+}
+
+test "Metrics: setKvDemotions publishes both tiers" {
+    var metrics = Metrics{};
+    metrics.setKvDemotions(7, 3);
+    var buf: [test_render_buf_size]u8 = undefined;
+    var fbs = FixedBufStream.init(&buf);
+    try metrics.renderPrometheus(fbs.writer());
+    const output = fbs.getWritten();
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_demotions_vram_to_ram_total 7\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "agave_kv_cache_demotions_ram_to_ssd_total 3\n") != null);
 }
 
 test "Metrics: recordInterTokenLatency updates histogram and sum" {
@@ -960,16 +1030,13 @@ test "Metrics: recordInterTokenLatency updates histogram and sum" {
     try std.testing.expectEqual(@as(u64, 1), metrics.itl_inf.load(.monotonic));
 }
 
-test "Metrics: updateGpuKvBlocks sets gauges" {
+test "Metrics: updateKvTiers overwrites prior tier occupancy" {
     var metrics = Metrics{};
-    try std.testing.expectEqual(@as(u32, 0), metrics.gpu_kv_blocks_used.load(.monotonic));
-    try std.testing.expectEqual(@as(u32, 0), metrics.gpu_kv_blocks_total.load(.monotonic));
-    metrics.updateGpuKvBlocks(50, 200);
-    try std.testing.expectEqual(@as(u32, 50), metrics.gpu_kv_blocks_used.load(.monotonic));
-    try std.testing.expectEqual(@as(u32, 200), metrics.gpu_kv_blocks_total.load(.monotonic));
-    // Update again, should overwrite
-    metrics.updateGpuKvBlocks(100, 200);
-    try std.testing.expectEqual(@as(u32, 100), metrics.gpu_kv_blocks_used.load(.monotonic));
+    metrics.updateKvTiers(50, 200, 0, 0, 0, 0);
+    try std.testing.expectEqual(@as(u32, 50), metrics.vram_kv_blocks_used.load(.monotonic));
+    metrics.updateKvTiers(100, 200, 0, 0, 0, 0);
+    try std.testing.expectEqual(@as(u32, 100), metrics.vram_kv_blocks_used.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 200), metrics.vram_kv_blocks_total.load(.monotonic));
 }
 
 test "Metrics: recordTokens accumulates count" {
@@ -1167,7 +1234,7 @@ test "Metrics: renderPrometheus, generation token histogram rendered" {
 
 test "Metrics: renderPrometheus, GPU KV cache rendered" {
     var metrics = Metrics{};
-    metrics.updateGpuKvBlocks(75, 300);
+    metrics.updateKvTiers(75, 300, 0, 0, 0, 0);
     var buf: [test_render_buf_size]u8 = undefined;
     var fbs = FixedBufStream.init(&buf);
     try metrics.renderPrometheus(fbs.writer());
@@ -1183,17 +1250,6 @@ test "Metrics: renderPrometheus, ITL histogram rendered" {
     try metrics.renderPrometheus(fbs.writer());
     const output = fbs.getWritten();
     try std.testing.expect(std.mem.indexOf(u8, output, "agave_inter_token_latency_seconds") != null);
-}
-
-test "Metrics: renderPrometheus, preemptions rendered" {
-    var metrics = Metrics{};
-    metrics.recordPreemption();
-    metrics.recordPreemption();
-    var buf: [test_render_buf_size]u8 = undefined;
-    var fbs = FixedBufStream.init(&buf);
-    try metrics.renderPrometheus(fbs.writer());
-    const output = fbs.getWritten();
-    try std.testing.expect(std.mem.indexOf(u8, output, "agave_num_preemptions_total 2\n") != null);
 }
 
 test "Metrics: renderPrometheus, cache config rendered" {
@@ -1257,7 +1313,7 @@ test "fuzz: all Metrics recording functions" {
             metrics.recordConnectionRejection();
             metrics.recordTimeout();
             metrics.recordSchedulerError();
-            metrics.recordPreemption();
+            metrics.setKvDemotions(latency_ms, token_count);
             metrics.recordTokens(token_count);
             metrics.recordLatency(latency_ms);
             metrics.recordTTFT(latency_ms, token_count);
@@ -1265,7 +1321,7 @@ test "fuzz: all Metrics recording functions" {
             metrics.updateQueueDepth(queue_depth_val);
             metrics.updateActiveRequests(queue_depth_val);
             metrics.updateKvBlocks(kv_used % kv_total_val, kv_total_val);
-            metrics.updateGpuKvBlocks(kv_used % kv_total_val, kv_total_val);
+            metrics.updateKvTiers(kv_used % kv_total_val, kv_total_val, kv_used % kv_total_val, kv_total_val, kv_used % kv_total_val, kv_total_val);
             metrics.setCacheConfig(16, kv_total_val);
             metrics.updateInputTokensInFlight(token_count);
             metrics.recordCacheHit(token_count, token_count + 1);

@@ -3,7 +3,8 @@
 What the `--serve` runtime exposes, and how to pivot between the three signals.
 
 Source of truth: `src/server/metrics.zig` (`renderPrometheus`), `src/server/server.zig`
-(access log, health endpoints), `src/server/scheduler.zig` (queue, cache, preemption).
+(access log, health endpoints), `src/server/scheduler.zig` (queue, cache, prefill load),
+`src/kvcache/tiered.zig` (tier demotion counters).
 
 ## Correlation
 
@@ -63,9 +64,10 @@ Saturation and cache:
 |---|---|
 | `agave_queue_depth`, `agave_active_requests`, `agave_active_connections` | Load in flight. |
 | `agave_kv_blocks_used` / `agave_kv_blocks_total` | KV occupancy; `agave_kv_cache_usage_perc` and `agave_gpu_cache_usage_perc` are the derived ratios. |
-| `agave_num_preemptions_total` | Requests evicted under KV pressure. |
+| `agave_kv_cache_tier_blocks{tier,state}` | Per-tier occupancy, `state` in `used`/`total`, `tier` in `vram`/`ram`/`ssd`. A full VRAM tier under a half-empty total is blocks spilling down the hierarchy. |
+| `agave_kv_cache_demotions_vram_to_ram_total`, `agave_kv_cache_demotions_ram_to_ssd_total` | Blocks demoted out of VRAM and out of RAM under cache pressure. A sustained rate is the KV-pressure signal; a rising `ram_to_ssd` rate is the expensive one. |
 | `agave_kv_cache_hits_total`, `agave_kv_cache_misses_total`, `agave_prefix_tokens_reused_total`, `agave_prefix_cache_hit_rate` | Prefix-cache behavior. |
-| `agave_input_tokens_in_flight` | Prompt tokens being prefilled. |
+| `agave_input_tokens_in_flight` | Prompt tokens still to prefill across running requests. Drops before `agave_active_requests` as prefill completes, so it is the load signal for routing decisions. |
 | `agave_tokens_per_second`, `agave_avg_prompt_throughput_toks_per_s`, `agave_avg_generation_throughput_toks_per_s` | Throughput; the first is the last request, the other two are since-start averages. |
 | `agave_tokens_generated_total`, `agave_prefill_tokens_total` | Token counters. |
 
@@ -84,7 +86,7 @@ regardless of client mix.
 3. Grep the access log for `-> 5` to get the request IDs and their durations.
 4. Grep those IDs for the `std.log` line naming the failed dependency (tokenizer,
    prefill forward, scheduler enqueue, grammar setup).
-5. `agave_scheduler_errors_total` and `agave_num_preemptions_total` separate
+5. `agave_scheduler_errors_total` and `agave_kv_cache_demotions_*_total` separate
    inference faults from cache pressure.
 
 Every path that increments `agave_requests_cancelled_total` emits a

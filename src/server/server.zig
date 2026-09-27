@@ -1883,7 +1883,7 @@ const HealthView = struct {
     failed: u64,
     cancelled: u64,
     sched_errs: u64,
-    preemptions: u64,
+    kv_demotions: u64,
     sleeping: bool,
 
     fn state(self: HealthView) HealthState {
@@ -1935,7 +1935,7 @@ fn loadHealthView() HealthView {
         .failed = failed,
         .cancelled = m.requests_cancelled.load(.monotonic),
         .sched_errs = m.scheduler_errors.load(.monotonic),
-        .preemptions = m.preemptions_total.load(.monotonic),
+        .kv_demotions = m.kv_demotions_vram_to_ram.load(.monotonic) + m.kv_demotions_ram_to_ssd.load(.monotonic),
         .sleeping = g_server.sleeping.load(.acquire),
     };
 }
@@ -2104,8 +2104,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         }
         const kv_seq_len = kvSeqLenSnapshot();
         const json_body = std.fmt.bufPrint(&buf,
-            \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"preemptions":{d},"sleeping":{s}}}
-        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), hv.completed, hv.failed, hv.cancelled, hv.queue, hv.kv_used, hv.kv_total, kv_seq_len, g_server.ctx_size, hv.sched_errs, hv.preemptions, if (hv.sleeping) "true" else "false" }) catch
+            \\{{"status":"{s}","reason":"{s}","version":"{s}","model":"{s}","backend":"{s}","uptime_s":{d},"active_connections":{d},"requests_total":{d},"requests_completed":{d},"requests_failed":{d},"requests_cancelled":{d},"queue_depth":{d},"kv_cache_used":{d},"kv_cache_total":{d},"kv_seq_len":{d},"ctx_size":{d},"scheduler_errors":{d},"kv_demotions":{d},"sleeping":{s}}}
+        , .{ status, reason, engine_version, g_server.model_name, g_server.backend_name, uptime, g_server.metrics.active_connections.load(.monotonic), g_server.metrics.requests_total.load(.monotonic), hv.completed, hv.failed, hv.cancelled, hv.queue, hv.kv_used, hv.kv_total, kv_seq_len, g_server.ctx_size, hv.sched_errs, hv.kv_demotions, if (hv.sleeping) "true" else "false" }) catch
             std.fmt.bufPrint(&buf, "{{\"status\":\"{s}\"}}", .{status}) catch return;
         sendResponse(stream, http_status, "application/json", json_body);
         return;
@@ -7656,7 +7656,7 @@ test "HealthView maps degradation reasons" {
         .failed = 0,
         .cancelled = 0,
         .sched_errs = 0,
-        .preemptions = 0,
+        .kv_demotions = 0,
         .sleeping = false,
     };
     try std.testing.expect(hv.ready());

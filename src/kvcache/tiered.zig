@@ -135,6 +135,14 @@ pub const TieredKvCache = struct {
     /// Atomic: accessed by both scheduler and prefetch worker threads.
     ram_used: std.atomic.Value(usize),
 
+    /// Blocks demoted VRAM→RAM since init. Read by the scheduler each step
+    /// to publish `agave_kv_cache_demotions_vram_to_ram_total`; the only
+    /// in-band signal of VRAM pressure, since the per-event log is debug-level.
+    demotions_vram_to_ram: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Blocks demoted RAM→SSD since init. Same publication path as
+    /// `demotions_vram_to_ram`.
+    demotions_ram_to_ssd: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     /// Block size (tokens per block).
     block_size: u16,
     /// KV dimension per position.
@@ -477,6 +485,7 @@ pub const TieredKvCache = struct {
         self.blocks[victim_id].tier = .ram;
         _ = self.vram_used.fetchSub(1, .monotonic);
         _ = self.ram_used.fetchAdd(1, .monotonic);
+        _ = self.demotions_vram_to_ram.fetchAdd(1, .monotonic);
 
         return victim_id;
     }
@@ -542,6 +551,7 @@ pub const TieredKvCache = struct {
         blk.tier = .ssd;
         blk.ssd_offset = offset;
         _ = self.ram_used.fetchSub(1, .monotonic);
+        _ = self.demotions_ram_to_ssd.fetchAdd(1, .monotonic);
 
         std.log.debug("Demoted block {d} from RAM to SSD (offset: {d})", .{ block_id, offset });
     }
@@ -830,6 +840,16 @@ pub const TieredKvCache = struct {
         return blk.base.ref_count > 0 and blk.tier != .vram;
     }
 
+    /// Cumulative demotion counts since init, for metrics publication.
+    /// Monotonic and lock-free: readers take a torn pair at worst, and each
+    /// counter only ever grows.
+    pub fn demotionCounts(self: *const TieredKvCache) struct { vram_to_ram: u64, ram_to_ssd: u64 } {
+        return .{
+            .vram_to_ram = self.demotions_vram_to_ram.load(.monotonic),
+            .ram_to_ssd = self.demotions_ram_to_ssd.load(.monotonic),
+        };
+    }
+
     /// Snapshot this block's key/value slices under `tier_lock`.
     ///
     /// The prefetch worker assigns `keys`/`values` when promoting SSD→RAM, so a
@@ -895,13 +915,35 @@ test "TieredKvCache allocBlock falls back to RAM when VRAM full" {
 
     const b0 = try cache.allocBlock();
     try std.testing.expectEqual(BlockTier.vram, cache.blocks[b0].tier);
+    try std.testing.expectEqual(@as(u64, 0), cache.demotionCounts().vram_to_ram);
 
     // VRAM full, next alloc demotes b0 to RAM then falls back to RAM free list
     const b1 = try cache.allocBlock();
     try std.testing.expectEqual(BlockTier.ram, cache.blocks[b1].tier);
+    // The demotion is the only in-band signal of VRAM pressure, so it has to
+    // be counted: the per-event log line is debug-level and gone in ReleaseFast.
+    try std.testing.expectEqual(@as(u64, 1), cache.demotionCounts().vram_to_ram);
+    try std.testing.expectEqual(@as(u64, 0), cache.demotionCounts().ram_to_ssd);
 
     cache.freeBlock(b0);
     cache.freeBlock(b1);
+}
+
+test "TieredKvCache demotion counts start at zero and never decrement" {
+    const allocator = std.testing.allocator;
+    var cache = try TieredKvCache.init(allocator, 1, 2, 2, 2, 0, 16, null);
+    defer cache.deinit();
+
+    const counts = cache.demotionCounts();
+    try std.testing.expectEqual(@as(u64, 0), counts.vram_to_ram);
+    try std.testing.expectEqual(@as(u64, 0), counts.ram_to_ssd);
+
+    _ = try cache.allocBlock();
+    _ = try cache.allocBlock();
+    _ = try cache.allocBlock();
+    const after = cache.demotionCounts();
+    try std.testing.expect(after.vram_to_ram >= 1);
+    try std.testing.expectEqual(@as(u64, 0), after.ram_to_ssd);
 }
 
 test "TieredKvCache needsPromotion" {
