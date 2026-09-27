@@ -76,8 +76,11 @@ pub fn replace(path: []const u8, data: []const u8) !void {
     }
 
     try syncFd(fd);
-    closeFd(fd);
+    // A failed close on a write path means the data may never reach disk, so
+    // the rename must not publish the file. The descriptor is released even on
+    // a close error, so clear `fd_open` first and let the errdefer drop the tmp.
     fd_open = false;
+    try closeFdChecked(fd);
     try renameOver(tmp_path, path);
     syncParent(path);
 }
@@ -92,6 +95,17 @@ fn closeFd(fd: std.posix.fd_t) void {
     } else {
         _ = std.c.close(fd);
     }
+}
+
+/// Close a descriptor and report failure. Not retried on EINTR: POSIX leaves
+/// the descriptor released when close reports an error, so a retry could close
+/// a descriptor another thread opened in the meantime.
+fn closeFdChecked(fd: std.posix.fd_t) !void {
+    const rc: isize = if (comptime builtin.os.tag == .linux)
+        @intCast(std.posix.system.close(fd))
+    else
+        @intCast(std.c.close(fd));
+    if (rc != 0) return error.CloseFailed;
 }
 
 fn deletePath(path: []const u8) void {
