@@ -9,10 +9,8 @@
 //! Forked from qwen35.zig — keep in sync for shared DeltaNet/MoE paths.
 //!
 //! PLE ngram embedding (20M vocab, 128 shards, 51B, FP8 E4M3) at layer 1 is
-//! mmap'd; for SSD-constrained runs use --ssd-streaming which demand-pages
-//! via NgramCache (src/ngram_cache.zig, 16 shards, LRU). The 51B table is
-//! accessed once per token via ngram hash; only a few shards are hot per
-//! sequence.
+//! mmap'd but NOT yet read by the forward pass, and NgramCache
+//! (src/ngram_cache.zig) is not wired to --ssd-streaming yet.
 //!
 //! Cutlass NVFP4 SM12x blockscaled GEMM (perm_m=128/perm_k=64, strided N
 //! (8,2,2):(1,16,8)) is the kernel-level tuning for this model's NVFP4
@@ -1428,6 +1426,11 @@ pub const Qwen4ExpModel = struct {
         const uw_raw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
         const gw = self.shardColumnWeight(gw_raw, self.n_ff, e);
         const uw = self.shardColumnWeight(uw_raw, self.n_ff, e);
+        // A backend can lack the fused kernel for the weight dtype (CUDA has no
+        // Q4_0 variant), so the fused branch is only taken when a dispatch
+        // actually ran. Otherwise ff_buf1 keeps stale values and the down
+        // projection below emits garbage.
+        var fused_ffn = false;
         if (self.megakernel_enabled and self.tp_degree <= 1 and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
             // Fused: gate GEMV + up GEMV + SiLU*mul in a single dispatch (3→1)
             // Use inline else to avoid compiling Metal-specific code on Linux
@@ -1435,21 +1438,33 @@ pub const Qwen4ExpModel = struct {
                 inline else => |be| {
                     if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ8")) {
                         switch (gw.dtype) {
-                            .q8_0 => be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ4K"))
-                                be.fusedFfnGateUpSiluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ5K"))
-                                be.fusedFfnGateUpSiluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ6K"))
-                                be.fusedFfnGateUpSiluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
-                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ40"))
-                                be.fusedFfnGateUpSiluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e),
+                            .q8_0 => {
+                                be.fusedFfnGateUpSiluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ4K")) {
+                                be.fusedFfnGateUpSiluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ5K")) {
+                                be.fusedFfnGateUpSiluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ6K")) {
+                                be.fusedFfnGateUpSiluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ40")) {
+                                be.fusedFfnGateUpSiluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.ff_buf1.ptr, ff, e);
+                                fused_ffn = true;
+                            },
                             else => {},
                         }
                     }
                 },
             }
-        } else {
+        }
+        if (!fused_ffn) {
             // Standard path: 3 dispatches (gate GEMV + up GEMV + siluMul)
             self.doGemvBatch2(self.hidden2.ptr, gw, self.ff_buf1.ptr, ff, uw, self.ff_buf2.ptr, ff, e);
             self.syncProfile();

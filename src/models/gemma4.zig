@@ -2142,27 +2142,44 @@ pub const Gemma4Model = struct {
         t = self.perf.start();
         const gw = self.fmt.layerTensor(li, "ffn_gate.weight") orelse return error.MissingTensor;
         const uw = self.fmt.layerTensor(li, "ffn_up.weight") orelse return error.MissingTensor;
+        // Backends lack fused kernels for some dtypes (CUDA has no Q4_0
+        // variant), so fall through to the standard path unless a dispatch
+        // actually ran; otherwise dense_gate keeps stale values and the down
+        // projection below emits garbage.
+        var fused_ffn = false;
         if (self.megakernel_enabled and (gw.dtype == .q8_0 or gw.dtype == .q4_k or gw.dtype == .q4_0 or gw.dtype == .q5_k or gw.dtype == .q6_k)) {
             // Fused: gate GEMV + up GEMV + GELU*mul in a single dispatch (3→1)
             switch (self.be) {
                 inline else => |be| {
                     if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
                         switch (gw.dtype) {
-                            .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
-                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
-                                be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
-                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
-                                be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
-                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
-                                be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
-                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
-                                be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e),
+                            .q8_0 => {
+                                be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K")) {
+                                be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K")) {
+                                be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K")) {
+                                be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e);
+                                fused_ffn = true;
+                            },
+                            .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40")) {
+                                be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gw.data_ptr, uw.data_ptr, self.dense_gate.ptr, ff, e);
+                                fused_ffn = true;
+                            },
                             else => {},
                         }
                     }
                 },
             }
-        } else {
+        }
+        if (!fused_ffn) {
             self.doGemv(self.hidden2.ptr, gw, self.dense_gate.ptr, ff, e);
             self.doGemv(self.hidden2.ptr, uw, self.dense_up.ptr, ff, e);
             self.perf.end(.gemv_ffn, t);
@@ -2315,22 +2332,33 @@ pub const Gemma4Model = struct {
                         inline else => |be| {
                             if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
                                 switch (fused_t.dtype) {
-                                    .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
-                                        be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
-                                        be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
-                                        be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
-                                        be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q8_0 => {
+                                        be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K")) {
+                                        be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K")) {
+                                        be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K")) {
+                                        be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40")) {
+                                        be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
                                     else => {},
                                 }
                             }
                         },
                     }
-                    used_fused_kernel = true;
-                } else {
+                }
+                if (!used_fused_kernel) {
                     // Batch gate+up into single thread pool dispatch
                     const ops = [_]backend_mod.GemvOp{
                         .{ .w = .{ .data = gate_data, .dtype = fused_t.dtype }, .y = self.ff_buf.ptr, .n = ff },
@@ -2349,22 +2377,33 @@ pub const Gemma4Model = struct {
                         inline else => |be| {
                             if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ8")) {
                                 switch (dtype) {
-                                    .q8_0 => be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K"))
-                                        be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K"))
-                                        be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K"))
-                                        be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
-                                    .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40"))
-                                        be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e),
+                                    .q8_0 => {
+                                        be.fusedFfnGateUpGeluQ8(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q4_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ4K")) {
+                                        be.fusedFfnGateUpGeluQ4K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q5_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ5K")) {
+                                        be.fusedFfnGateUpGeluQ5K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q6_k => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ6K")) {
+                                        be.fusedFfnGateUpGeluQ6K(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
+                                    .q4_0 => if (comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpGeluQ40")) {
+                                        be.fusedFfnGateUpGeluQ40(self.hidden2.ptr, gate_data, up_data, self.ff_buf.ptr, ff, e);
+                                        used_fused_kernel = true;
+                                    },
                                     else => {},
                                 }
                             }
                         },
                     }
-                    used_fused_kernel = true;
-                } else {
+                }
+                if (!used_fused_kernel) {
                     // Batch gate+up into single thread pool dispatch
                     const gate_d = gate_exps.?.data_ptr + ei * gate_stride;
                     const up_d = up_exps.?.data_ptr + ei * up_stride;
