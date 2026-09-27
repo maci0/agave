@@ -216,19 +216,29 @@ async function loadModelFromBuffer(file: File): Promise<void> {
   }, false);
 }
 
-async function initAndLoad(loadFn: () => Promise<void>, fromUrl: boolean): Promise<void> {
+/** Enable or disable the controls that must not run while a reply generates. */
+function setModelControlsEnabled(on: boolean): void {
   const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
   const dropZoneEl = document.getElementById('drop-zone') as HTMLElement;
   const fileInput = document.getElementById('file-input') as HTMLInputElement;
+  const urlInput = document.getElementById('model-url') as HTMLInputElement;
+  const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement | null;
+  loadBtn.disabled = !on;
+  dropZoneEl.setAttribute('aria-disabled', on ? 'false' : 'true');
+  fileInput.disabled = !on;
+  urlInput.disabled = !on;
+  if (clearBtn) {clearBtn.disabled = !on;}
+}
+
+async function initAndLoad(loadFn: () => Promise<void>, fromUrl: boolean): Promise<void> {
+  const loadBtn = document.getElementById('load-btn') as HTMLButtonElement;
   const urlInput = document.getElementById('model-url') as HTMLInputElement;
   const sendBtn = document.getElementById('send-btn') as HTMLButtonElement;
   const hadModel = Boolean(engine.ctx);
   loadBtn.disabled = true;
   loadBtn.setAttribute('aria-busy', 'true');
   loadBtn.textContent = 'Loading…';
-  dropZoneEl.setAttribute('aria-disabled', 'true');
-  fileInput.disabled = true;
-  urlInput.disabled = true;
+  setModelControlsEnabled(false);
   promptInput.disabled = true;
   sendBtn.disabled = true;
   statusEl.textContent = 'Initializing engine…';
@@ -264,12 +274,9 @@ async function initAndLoad(loadFn: () => Promise<void>, fromUrl: boolean): Promi
       sendBtn.disabled = false;
     }
   }
-  loadBtn.disabled = false;
   loadBtn.removeAttribute('aria-busy');
   loadBtn.textContent = 'Load model';
-  dropZoneEl.removeAttribute('aria-disabled');
-  fileInput.disabled = false;
-  urlInput.disabled = false;
+  setModelControlsEnabled(true);
 }
 
 function restoreEmptyChat(): void {
@@ -309,6 +316,9 @@ async function send(): Promise<void> {
   sendBtn.disabled = true;
   sendBtn.setAttribute('aria-busy', 'true');
   sendBtn.textContent = 'Generating…';
+  // Swapping or clearing the model mid-generation would tear down the engine
+  // while it is decoding, so those controls go dark until the reply lands.
+  setModelControlsEnabled(false);
   chat.setAttribute('aria-busy', 'true');
   statusEl.textContent = 'Generating…';
   announceToSR('Generating response…');
@@ -344,6 +354,7 @@ async function send(): Promise<void> {
   sendBtn.disabled = false;
   sendBtn.removeAttribute('aria-busy');
   sendBtn.textContent = 'Send';
+  setModelControlsEnabled(true);
   chat.setAttribute('aria-busy', 'false');
   statusEl.textContent = 'Ready';
   promptInput.focus();

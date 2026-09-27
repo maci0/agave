@@ -703,7 +703,9 @@ button.hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
   .regen-btn { opacity: 1; min-height: 44px; display: inline-flex; align-items: center; }
   .conv-del { opacity: 1; }
   .copy-btn { opacity: 1; padding: 6px 10px; min-height: 44px; min-width: 44px; display: flex; align-items: center; justify-content: center; }
-  .msg-copy { opacity: 1; padding: 8px 12px; min-height: 44px; min-width: 44px; display: flex; align-items: center; justify-content: center; }
+  /* Always-visible on touch, so move the copy button out of the text flow
+     instead of letting a 44px target cover the first line of every reply. */
+  .msg-copy { position: static; opacity: 1; margin-top: 8px; padding: 8px 12px; min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
   .toast-dismiss { min-height: 44px; min-width: 44px; display: flex; align-items: center; justify-content: center; }
   button.hint { min-height: 44px; display: inline-flex; align-items: center; }
 }
