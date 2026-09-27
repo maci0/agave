@@ -13,7 +13,7 @@ zig build                                          # Build (ReleaseFast + Debug)
 ./zig-out/bin/agave model.gguf                     # Interactive REPL
 ./zig-out/bin/agave model.gguf "What is 2+2?"      # Single prompt
 ./zig-out/bin/agave model.gguf --serve              # HTTP server (OpenAI + Anthropic API)
-./zig-out/bin/agave model.gguf -q "Hello" > out.txt # Quiet mode (pipe-friendly)
+./zig-out/bin/agave model.gguf --quiet "Hello" > out.txt # Quiet mode (pipe-friendly)
 ./zig-out/bin/agave model.gguf --backend cpu        # Force CPU backend
 ./zig-out/bin/agave model.gguf --megakernel "Hi"    # Fused FFN megakernel (Metal/CUDA)
 ```

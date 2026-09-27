@@ -37,5 +37,5 @@ echo ""
     --rank "$RANK" \
     --peers "$PEER" \
     --transport nccl \
-    -n "$N_TOKENS" \
+    --max-tokens "$N_TOKENS" \
     "What is quantum computing?"
