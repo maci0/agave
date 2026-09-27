@@ -199,6 +199,14 @@ must still appear under **Changed** or **Breaking** below. See
   stamps (RFC 3339 with offset), and the `scripts/fetch-changelogs.sh` header.
 
 ### Fixed
+- `--pflash-alpha` and `--diffusion-confidence` reject `nan` and out-of-range
+  values instead of accepting them. `nan` compares false against every bound, so
+  the old range check let it through and silently disabled block selection or
+  diffusion confidence. `--dir-steering-ffn` and `--dir-steering-attn` also
+  reject non-finite values now, like every other float option.
+- `--diffusion-steps 0` and `--diffusion-canvas 0` exit 2 with
+  `--flag must be >= 1` instead of silently running with 1 step or a 1-token
+  canvas, and `--pflash-block-size 0` errors instead of warning and using 64.
 - `agave pull` reports a shard whose filename cannot be built as `Error:`
   plus exit 1 rather than skipping it.
 - `--serve --sleep-after` no longer hangs on shutdown waiting for the

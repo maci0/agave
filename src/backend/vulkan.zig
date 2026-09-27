@@ -15,6 +15,7 @@ const KvQuantType = backend_mod.KvQuantType;
 const PagedKvView = backend_mod.PagedKvView;
 const kv_quant = @import("../ops/kv_quant.zig");
 const CpuBackend = @import("cpu.zig").CpuBackend;
+const config = @import("../config.zig");
 
 // ── Vulkan types (native Zig definitions) ───────────────────────
 
@@ -498,8 +499,8 @@ fn formatVkCachePath(buf: []u8, xdg: ?[]const u8, home: ?[]const u8) ?[]u8 {
 }
 
 fn vkCachePath(buf: *[512]u8) ?[]u8 {
-    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
-    const home = if (std.c.getenv("HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
+    const xdg = config.getenv("XDG_CACHE_HOME");
+    const home = config.getenv("HOME");
     return formatVkCachePath(buf, xdg, home);
 }
 
