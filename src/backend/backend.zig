@@ -47,9 +47,9 @@ pub const GemvOp = struct {
     mlx_group_size: u32 = 64,
 };
 
-/// Supported tensor data types, canonical definition in format/format.zig,
+/// Supported tensor data types, canonical definition in format/dtype.zig,
 /// re-exported here for backend consumers.
-pub const DType = @import("../format/format.zig").DType;
+pub const DType = @import("../format/dtype.zig").DType;
 
 /// KV cache quantization type, re-exported for backend consumers.
 pub const KvQuantType = @import("../ops/kv_quant.zig").KvQuantType;

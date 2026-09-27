@@ -4,7 +4,7 @@
 //! dequantize during GEMV; GPU backends use native shader/PTX equivalents.
 
 const std = @import("std");
-const DType = @import("../format/format.zig").DType;
+const DType = @import("../format/dtype.zig").DType;
 
 /// IEEE 754 f32 exponent bias.
 const f32_exp_bias: u32 = 127;
