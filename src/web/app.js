@@ -58,6 +58,8 @@ const stopBtn = qs('#stop-btn');
 let modelName = '';
 let abortCtrl = null;
 let isStreaming = false;
+/** The current turn ended because the user pressed Stop, not because it finished. */
+let streamStopped = false;
 let autoScroll = true;
 let renderTimer = null;
 /** Latest stream paint target, updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
@@ -74,13 +76,34 @@ let streamStartTime = 0;
 // Floods screen readers with announcements. Refresh at most once per second.
 const TOKS_UPDATE_INTERVAL_MS = 1000;
 let lastToksUpdate = 0;
+/** Write the model badge, first demoting an offline retry button back to a plain
+ *  badge. The button carries an "Offline" label and a retry handler, so leaving
+ *  it in place after the server answers shows the model name on a control that
+ *  still announces as offline and still refetches on click. */
+function setModelBadge(text, ariaLabel) {
+    let badge = qs('#model-name');
+    if (badge.tagName === 'BUTTON') {
+        const span = document.createElement('span');
+        span.id = 'model-name';
+        span.className = 'model-badge';
+        span.setAttribute('aria-live', 'polite');
+        badge.replaceWith(span);
+        badge = span;
+    }
+    badge.textContent = text;
+    if (ariaLabel === undefined) {
+        badge.removeAttribute('aria-label');
+    }
+    else {
+        badge.setAttribute('aria-label', ariaLabel);
+    }
+    badge.title = text;
+}
 /** Apply model metadata from /v1/models to the header, context badge, and image attach. */
 function applyModelInfo(modelData) {
     modelName = modelData.id;
     backendName = modelData.backend ?? '';
-    const badge = qs('#model-name');
-    badge.textContent = modelName;
-    badge.title = modelName;
+    setModelBadge(modelName);
     updateCtxBadge(modelData);
     setVisionUi(modelData.vision === true);
 }
@@ -132,49 +155,48 @@ function userFacingError(error) {
     return String(error);
 }
 // oxlint-disable-next-line unicorn/prefer-top-level-await, promise/prefer-await-to-then -- classic script: top-level await requires module semantics
-fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
-    if (d.data?.[0]) {
-        applyModelInfo(d.data[0]);
-    }
-    else {
-        setOfflineBadge();
-    }
-}).catch(function () { setOfflineBadge(); });
+function loadModelInfo() {
+    fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
+        if (d.data?.[0]) {
+            applyModelInfo(d.data[0]);
+        }
+        else {
+            setOfflineBadge();
+        }
+    }).catch(function () { setOfflineBadge(); });
+}
+loadModelInfo();
 function setOfflineBadge() {
     const imgBtn = document.getElementById('img-btn');
     if (imgBtn && !hasVision) {
         imgBtn.hidden = true;
     }
-    const badge = qs('#model-name');
-    // Prefer a native button over role="button" on a live region span (4.1.2)
-    let btn = badge;
-    if (badge.tagName !== 'BUTTON') {
-        const next = document.createElement('button');
-        next.type = 'button';
-        btn = next;
-        btn.id = 'model-name';
-        btn.className = 'model-badge';
-        btn.setAttribute('aria-live', 'polite');
-        badge.replaceWith(btn);
-    }
+    // Prefer a native button over role="button" on a live region span (4.1.2).
+    // Always a fresh node: reusing the old one stacked a second retry listener on
+    // every failed refresh, so one click refetched once per past failure.
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'model-name';
+    btn.className = 'model-badge';
+    btn.setAttribute('aria-live', 'polite');
     btn.textContent = 'offline - click to retry';
     btn.setAttribute('aria-label', 'Offline. Activate to retry connection');
-    btn.addEventListener('click', function () {
-        const loading = document.createElement('span');
-        loading.id = 'model-name';
-        loading.className = 'model-badge';
-        loading.setAttribute('aria-live', 'polite');
-        loading.textContent = 'Loading…';
-        btn.replaceWith(loading);
-        fetch('/v1/models').then(function (r) { return r.json(); }).then(function (d) {
-            if (d.data?.[0]) {
-                applyModelInfo(d.data[0]);
-            }
-            else {
-                setOfflineBadge();
-            }
-        }).catch(function () { setOfflineBadge(); });
-    });
+    btn.addEventListener('click', function () { retryModelLookup(); });
+    qs('#model-name').replaceWith(btn);
+}
+// oxlint-disable-next-line no-unused-vars -- bound as the offline badge click handler
+function retryModelLookup() {
+    const badge = qs('#model-name');
+    if (badge.tagName !== 'BUTTON') {
+        return;
+    }
+    const loading = document.createElement('span');
+    loading.id = 'model-name';
+    loading.className = 'model-badge';
+    loading.setAttribute('aria-live', 'polite');
+    loading.textContent = 'Loading…';
+    badge.replaceWith(loading);
+    loadModelInfo();
 }
 // System prompt: sessionStorage only (tab lifetime). Migrate away from older
 // LocalStorage key so sensitive prompt text does not persist across sessions.
@@ -522,6 +544,7 @@ function setStreaming(s) {
         streamTokenCount = 0;
         streamStartTime = performance.now();
         lastToksUpdate = 0;
+        streamStopped = false;
         tc.textContent = `${fmtNum(0, 1)} tok/s`;
         tc.classList.add('visible');
         announceToSR('Generating response…');
@@ -530,7 +553,7 @@ function setStreaming(s) {
     }
     else {
         tc.classList.remove('visible');
-        announceToSR('Response complete.');
+        announceToSR(streamStopped ? 'Generation stopped.' : 'Response complete.');
     }
 }
 function updateToksCounter() {
@@ -1198,6 +1221,7 @@ async function streamResponse(body, errLabel, url) {
     }
     catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- errors are surfaced to the user as an alert region with a Retry action
         if (error instanceof Error && error.name === 'AbortError') {
+            streamStopped = true;
             renderContent(el, content || 'Stopped.', true);
             addRegenBtn(el);
         }
@@ -1315,6 +1339,13 @@ function onSubmit(e) {
     e.preventDefault();
     const text = inp.value.trim();
     if ((!text && !pendingImage) || isStreaming) {
+        return false;
+    }
+    // Commands run client-side and never post an image, so the bubble would show
+    // an attachment the model never received and the preview would reattach to
+    // the next message. Refuse and keep both, so nothing is silently dropped.
+    if (pendingImage && text.startsWith('/')) {
+        showToast('Slash commands do not send images. Remove the image or send it as a message.');
         return false;
     }
     const imgSrc = pendingImage;
