@@ -8,6 +8,8 @@ where values diverge.
 
 Usage:
     python3 research/gemma3_ref.py models/lmstudio-community/gemma-3-12b-it-GGUF/gemma-3-12b-it-Q8_0.gguf
+
+Requires: numpy (pinned in research/kernels/pyproject.toml)
 """
 
 import struct
