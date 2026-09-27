@@ -176,15 +176,19 @@ LABEL org.opencontainers.image.title="agave" \
       org.opencontainers.image.version="${AGAVE_VERSION}" \
       org.opencontainers.image.licenses="GPL-3.0-or-later"
 
-ENV DEBIAN_FRONTEND=noninteractive \
-    LC_ALL=C \
-    TZ=UTC \
-    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+ENV LC_ALL=C \
+    TZ=UTC
 
+# DEBIAN_FRONTEND and SOURCE_DATE_EPOCH are build-only: scoping them to the RUN
+# keeps them out of the image env the inference process inherits. LC_ALL and
+# TZ stay in ENV because the process needs them (log timestamps, sort order).
 # curl is only used by HEALTHCHECK (not on the inference hot path).
 # Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
 # Apt packages come from snapshot.debian.org (not live bookworm) for hermeticity.
 RUN set -eux; \
+    # Prefixed, not `VAR=x set -eux`: the assignment must reach apt, which runs
+    # in a later command of the same RUN.
+    export DEBIAN_FRONTEND=noninteractive SOURCE_DATE_EPOCH; \
     # Drop the base image's deb822 debian.sources (live deb.debian.org) so the
     # snapshot pin below is the only configured source.
     rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
