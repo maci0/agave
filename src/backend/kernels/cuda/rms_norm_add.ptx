@@ -6,15 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry rms_norm_add_kernel
-(
-	.param .b64 rms_norm_add_$_rms_norm_add_kernel_param_0,
-	.param .b64 rms_norm_add_$_rms_norm_add_kernel_param_1,
-	.param .b64 rms_norm_add_$_rms_norm_add_kernel_param_2,
-	.param .b32 rms_norm_add_$_rms_norm_add_kernel_param_3,
-	.param .b32 rms_norm_add_$_rms_norm_add_kernel_param_4
-)
-;
 
 .entry rms_norm_add_kernel(
 	.param .b64 rms_norm_add_$_rms_norm_add_kernel_param_0,

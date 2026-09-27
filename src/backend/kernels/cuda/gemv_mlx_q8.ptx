@@ -6,17 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gemv_mlx_q8_kernel
-(
-	.param .b64 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_0,
-	.param .b64 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_1,
-	.param .b64 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_2,
-	.param .b64 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_3,
-	.param .b64 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_4,
-	.param .b32 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_5,
-	.param .b32 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_6
-)
-;
 
 .entry gemv_mlx_q8_kernel(
 	.param .b64 gemv_mlx_q8_$_gemv_mlx_q8_kernel_param_0,

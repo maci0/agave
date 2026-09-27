@@ -6,24 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gemv_q4_0_batch_kernel
-(
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_0,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_1,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_2,
-	.param .b32 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_3,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_4,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_5,
-	.param .b32 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_6,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_7,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_8,
-	.param .b32 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_9,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_10,
-	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_11,
-	.param .b32 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_12,
-	.param .b32 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_13
-)
-;
 
 .entry gemv_q4_0_batch_kernel(
 	.param .b64 gemv_q4_0_batch_$_gemv_q4_0_batch_kernel_param_0,

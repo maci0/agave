@@ -6,14 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry silu_mul_kernel
-(
-	.param .b64 silu_mul_$_silu_mul_kernel_param_0,
-	.param .b64 silu_mul_$_silu_mul_kernel_param_1,
-	.param .b64 silu_mul_$_silu_mul_kernel_param_2,
-	.param .b32 silu_mul_$_silu_mul_kernel_param_3
-)
-;
 
 .entry silu_mul_kernel(
 	.param .b64 silu_mul_$_silu_mul_kernel_param_0,

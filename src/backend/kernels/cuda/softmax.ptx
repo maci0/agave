@@ -6,12 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry softmax_kernel
-(
-	.param .b64 softmax_$_softmax_kernel_param_0,
-	.param .b32 softmax_$_softmax_kernel_param_1
-)
-;
 
 .entry softmax_kernel(
 	.param .b64 softmax_$_softmax_kernel_param_0,

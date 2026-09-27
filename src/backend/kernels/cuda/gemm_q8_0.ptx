@@ -6,16 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gemm_q8_0_kernel
-(
-	.param .b64 gemm_q8_0_$_gemm_q8_0_kernel_param_0,
-	.param .b64 gemm_q8_0_$_gemm_q8_0_kernel_param_1,
-	.param .b64 gemm_q8_0_$_gemm_q8_0_kernel_param_2,
-	.param .b32 gemm_q8_0_$_gemm_q8_0_kernel_param_3,
-	.param .b32 gemm_q8_0_$_gemm_q8_0_kernel_param_4,
-	.param .b32 gemm_q8_0_$_gemm_q8_0_kernel_param_5
-)
-;
 
 .entry gemm_q8_0_kernel(
 	.param .b64 gemm_q8_0_$_gemm_q8_0_kernel_param_0,

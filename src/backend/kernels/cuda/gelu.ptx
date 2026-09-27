@@ -6,13 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gelu_kernel
-(
-	.param .b64 gelu_$_gelu_kernel_param_0,
-	.param .b64 gelu_$_gelu_kernel_param_1,
-	.param .b32 gelu_$_gelu_kernel_param_2
-)
-;
 
 .entry gelu_kernel(
 	.param .b64 gelu_$_gelu_kernel_param_0,

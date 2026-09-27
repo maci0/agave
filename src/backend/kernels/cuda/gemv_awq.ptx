@@ -6,18 +6,6 @@
 .target sm_120
 .address_size 64
 
-.entry gemv_awq_kernel
-(
-	.param .b64 gemv_awq_$_gemv_awq_kernel_param_0,
-	.param .b64 gemv_awq_$_gemv_awq_kernel_param_1,
-	.param .b64 gemv_awq_$_gemv_awq_kernel_param_2,
-	.param .b64 gemv_awq_$_gemv_awq_kernel_param_3,
-	.param .b64 gemv_awq_$_gemv_awq_kernel_param_4,
-	.param .b32 gemv_awq_$_gemv_awq_kernel_param_5,
-	.param .b32 gemv_awq_$_gemv_awq_kernel_param_6,
-	.param .b32 gemv_awq_$_gemv_awq_kernel_param_7
-)
-;
 .global .align 1 .b8 __anon_513[8] = {0, 4, 1, 5, 2, 6, 3, 7};
 
 .entry gemv_awq_kernel(
