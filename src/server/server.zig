@@ -5562,26 +5562,59 @@ const ResolvedToolInput = struct {
     owned: ?[]u8 = null,
 };
 
+/// True when `s` is a single JSON object that closes on its last byte.
+/// Braces inside strings do not count, and the object must end where the
+/// brace depth returns to zero, so an object truncated mid-body is not
+/// complete. `extractObjectField` returns the remaining text when a value
+/// never closes, so its result needs this check before it goes on the wire.
+fn isCompleteJsonObject(s: []const u8) bool {
+    if (s.len < 2 or s[0] != '{') return false;
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        switch (s[i]) {
+            '"' => {
+                i += 1;
+                while (i < s.len and s[i] != '"') : (i += 1) {
+                    if (s[i] == '\\' and i + 1 < s.len) i += 1;
+                }
+            },
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if (depth == 0) return i + 1 == s.len;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 /// Resolve the `input` object text for a <tool_call> payload: object arguments
 /// are embedded verbatim; string arguments are unwrapped when they decode to an
 /// object, otherwise `{}` is substituted (with a warning). Anthropic requires
 /// `input` to be a JSON object, an invalid value would break spec-compliant
-/// clients, so unparseable arguments never reach the wire verbatim.
+/// clients, so unparseable arguments never reach the wire verbatim. A payload
+/// the model truncated mid-object counts as unparseable.
 fn resolveAnthropicToolInput(allocator: Allocator, tc_json: []const u8, call_idx: usize) ResolvedToolInput {
-    if (json.extractObjectField(tc_json, "arguments")) |o| return .{ .obj = o };
+    if (json.extractObjectField(tc_json, "arguments")) |o| {
+        if (isCompleteJsonObject(o)) return .{ .obj = o };
+        std.log.warn("req={d} tool call {d}: arguments object is truncated, substituting {{}}", .{ log_request_id, call_idx });
+        return .{ .obj = "{}" };
+    }
     const s = json.extractField(tc_json, "arguments") orelse return .{ .obj = "{}" };
     const unescaped = json.jsonUnescape(allocator, s) catch s;
     if (unescaped.ptr == s.ptr) {
         // No allocation happened (nothing to unescape); borrow the input slice.
         const trimmed_borrowed = std.mem.trim(u8, unescaped, " \t\r\n");
-        if (trimmed_borrowed.len > 0 and trimmed_borrowed[0] == '{') return .{ .obj = trimmed_borrowed };
+        if (isCompleteJsonObject(trimmed_borrowed)) return .{ .obj = trimmed_borrowed };
         std.log.warn("req={d} tool call {d}: arguments not a JSON object, substituting {{}}", .{ log_request_id, call_idx });
         return .{ .obj = "{}" };
     }
     // Unescape allocated a new buffer; hand ownership to the caller.
     errdefer allocator.free(@constCast(unescaped));
     const trimmed = std.mem.trim(u8, unescaped, " \t\r\n");
-    if (trimmed.len > 0 and trimmed[0] == '{') return .{ .obj = trimmed, .owned = @constCast(unescaped) };
+    if (isCompleteJsonObject(trimmed)) return .{ .obj = trimmed, .owned = @constCast(unescaped) };
     std.log.warn("req={d} tool call {d}: arguments not a JSON object, substituting {{}}", .{ log_request_id, call_idx });
     allocator.free(@constCast(unescaped));
     return .{ .obj = "{}" };
@@ -8110,6 +8143,35 @@ test "nextAllowedToolCall rejects payload without name" {
     try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
 }
 
+test "resolveAnthropicToolInput keeps a complete object and drops a truncated one" {
+    const allocator = std.testing.allocator;
+    const good = resolveAnthropicToolInput(allocator, "{\"arguments\": {\"city\": \"Paris\"}}", 0);
+    defer if (good.owned) |p| allocator.free(p);
+    try std.testing.expectEqualStrings("{\"city\": \"Paris\"}", good.obj);
+
+    // The model ran out of tokens mid-object: the payload's own closing
+    // braces do not close the arguments value, and emitting the remainder
+    // verbatim would hand the client a half-written tool_use block.
+    const cut = resolveAnthropicToolInput(allocator, "{\"arguments\": {\"city\": {\"name\": \"Pa", 0);
+    defer if (cut.owned) |p| allocator.free(p);
+    try std.testing.expectEqualStrings("{}", cut.obj);
+
+    // String arguments are unwrapped, and the unwrapped text is held to the
+    // same rule.
+    const uncut = resolveAnthropicToolInput(allocator, "{\"arguments\": \"{\\\"city\\\": \\\"Paris\\\"}\"}", 0);
+    defer if (uncut.owned) |p| allocator.free(p);
+    try std.testing.expectEqualStrings("{\"city\": \"Paris\"}", uncut.obj);
+
+    const cut_str = resolveAnthropicToolInput(allocator, "{\"arguments\": \"{\\\"city\\\": \\\"Pa", 0);
+    defer if (cut_str.owned) |p| allocator.free(p);
+    try std.testing.expectEqualStrings("{}", cut_str.obj);
+
+    // A complete object whose braces sit inside a string value is complete.
+    const braced = resolveAnthropicToolInput(allocator, "{\"arguments\": {\"city\": \"{Paris}\"}}", 0);
+    defer if (braced.owned) |p| allocator.free(p);
+    try std.testing.expectEqualStrings("{\"city\": \"{Paris}\"}", braced.obj);
+}
+
 test "anthropicStatusLine maps known codes" {
     try std.testing.expectEqualStrings("400 Bad Request", anthropicStatusLine("400"));
     try std.testing.expectEqualStrings("401 Unauthorized", anthropicStatusLine("401"));
@@ -8922,4 +8984,71 @@ test "sanitizeForLog keeps printable multibyte text intact" {
     var buf: [64]u8 = undefined;
     const s = sanitizeForLog("/模型/🌵", &buf);
     try std.testing.expectEqualStrings("/模型/🌵", s);
+}
+
+/// True when `part` points inside `whole` (both are borrowed from one buffer).
+fn sliceWithin(whole: []const u8, part: []const u8) bool {
+    const base = @intFromPtr(whole.ptr);
+    const start = @intFromPtr(part.ptr);
+    return start >= base and start + part.len <= base + whole.len;
+}
+
+test "fuzz: model output tool-call, thinking, and tool-input parsers" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            var noise: [256]u8 = undefined;
+            smith.bytesWithHash(&noise, 0);
+            const noise_len = smith.indexWithHash(noise.len + 1, 1);
+            const n = noise[0..noise_len];
+
+            var tp = json.ToolParams{};
+            tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
+            tp.tool_count = 1;
+            var reg = tools_mod.Registry{};
+
+            // Model output, not a request body: build payloads that name a
+            // declared tool and carry the three shapes `arguments` takes on
+            // the wire, so the parse runs on nested, truncated, and escaped
+            // bodies instead of only unrelated bytes.
+            var args_buf: [320]u8 = undefined;
+            const args = switch (smith.indexWithHash(3, 2)) {
+                0 => std.fmt.bufPrint(&args_buf, "{s}", .{n}) catch return,
+                1 => std.fmt.bufPrint(&args_buf, "\"{{\\\"{s}\"", .{n}) catch return,
+                else => std.fmt.bufPrint(&args_buf, "[\"{s}\"]", .{n}) catch return,
+            };
+            var payload_buf: [512]u8 = undefined;
+            const payload = std.fmt.bufPrint(&payload_buf, "{{\"name\":\"get_weather\",\"arguments\":{s}}}", .{args}) catch return;
+
+            var text_buf: [1024]u8 = undefined;
+            const text = std.fmt.bufPrint(&text_buf, "{s}<tool_call>{s}</tool_call><think>{s}</think>{s}", .{ n, payload, n, n }) catch return;
+
+            var pos: usize = 0;
+            var accepted: usize = 0;
+            while (true) {
+                const before = pos;
+                const tc_json = nextAllowedToolCall(text, &pos, &tp, &reg) orelse break;
+                accepted += 1;
+                // The scan must move forward every call, and a payload can
+                // only be accepted once per occurrence in the output.
+                try std.testing.expect(pos > before);
+                try std.testing.expect(accepted <= text.len);
+                try std.testing.expect(sliceWithin(text, tc_json));
+                const name = json.extractField(tc_json, "name") orelse return error.TestUnexpectedResult;
+                try std.testing.expect(tp.hasTool(name) or reg.hasName(name));
+
+                // The Anthropic response embeds this text verbatim as
+                // `input`, so it has to be a complete JSON object.
+                const resolved = resolveAnthropicToolInput(allocator, tc_json, accepted);
+                defer if (resolved.owned) |p| allocator.free(p);
+                try std.testing.expect(isCompleteJsonObject(resolved.obj));
+            }
+
+            const split = splitThinkingContent(text);
+            try std.testing.expect(sliceWithin(text, split.reasoning));
+            try std.testing.expect(sliceWithin(text, split.content));
+            try std.testing.expect(hasToolCalls(text));
+        }
+    }.f, .{});
 }

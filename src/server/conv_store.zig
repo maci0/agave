@@ -107,8 +107,22 @@ pub fn save(
     convs: []const ConvView,
 ) !void {
     ensureParent(path);
+    const bytes = try encode(allocator, active_id, next_id, convs);
+    defer allocator.free(bytes);
+    try durable.replacePrivate(path, bytes);
+}
+
+/// Serialize a store envelope. The result is owned by the caller; every slice
+/// of `convs` is only read, so a `Snapshot` can be written back without
+/// copying it into a `ConvView` first.
+pub fn encode(
+    allocator: Allocator,
+    active_id: u32,
+    next_id: u32,
+    convs: []const ConvView,
+) ![]u8 {
     var buf: std.ArrayList(u8) = .empty;
-    defer buf.deinit(allocator);
+    errdefer buf.deinit(allocator);
 
     try buf.appendSlice(allocator, "{\"version\":");
     try buf.print(allocator, "{d},\"active_id\":{d},\"next_id\":{d},\"conversations\":[", .{
@@ -141,7 +155,7 @@ pub fn save(
     }
     try buf.appendSlice(allocator, "]}");
 
-    try durable.replacePrivate(path, buf.items);
+    return buf.toOwnedSlice(allocator);
 }
 
 /// Load a store from `path`. FileNotFound if missing. Quarantines a corrupt
@@ -724,6 +738,75 @@ test "load OOM does not quarantine a valid store" {
         return;
     };
     return error.QuarantinedOnOom;
+}
+
+test "fuzz: store parse caps, and a load/save round trip preserves what loaded" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // A body spliced between the envelope fields so the parser sees
+            // structurally plausible stores, not only unrelated bytes.
+            var body: [256]u8 = undefined;
+            smith.bytesWithHash(&body, 0);
+            const body_len = smith.indexWithHash(body.len + 1, 1);
+            var envelope: [512]u8 = undefined;
+            const data = std.fmt.bufPrint(&envelope, "{{\"version\":1,\"active_id\":{d},\"next_id\":{d},\"conversations\":{s}", .{
+                smith.indexWithHash(8, 2),
+                @as(u32, @intCast(smith.indexWithHash(8, 3))) + 1,
+                body[0..body_len],
+            }) catch return;
+
+            const result = parse(allocator, data) catch return;
+            var snap = result.snap;
+            defer snap.deinit();
+
+            try std.testing.expect(snap.conversations.len <= max_conversations);
+            try std.testing.expect(snap.next_id >= 1);
+            for (snap.conversations) |conv| {
+                try std.testing.expect(conv.title.len <= max_title_len);
+                try std.testing.expect(conv.messages.len <= max_messages_per_conv);
+            }
+
+            // Pair assertion across the persistence boundary: what load
+            // accepted must come back byte-identical through the writer, or
+            // the next save silently rewrites the user's conversations.
+            const views = try allocator.alloc(ConvView, snap.conversations.len);
+            defer allocator.free(views);
+            for (snap.conversations, views) |conv, *view| {
+                view.* = .{ .id = conv.id, .title = conv.title, .messages = conv.messages };
+            }
+            const encoded = try encode(allocator, snap.active_id, snap.next_id, views);
+            defer allocator.free(encoded);
+
+            const reloaded = parse(allocator, encoded) catch |err| {
+                // The writer emits what the reader accepts, so a store it
+                // cannot read back is a writer bug, not bad input.
+                std.debug.print("store the writer emitted did not parse: {s}\n{any}\n", .{ @errorName(err), encoded });
+                return err;
+            };
+            var again = reloaded.snap;
+            defer again.deinit();
+
+            try std.testing.expectEqual(snap.active_id, again.active_id);
+            try std.testing.expectEqual(snap.next_id, again.next_id);
+            try std.testing.expectEqual(snap.conversations.len, again.conversations.len);
+            for (snap.conversations, again.conversations) |a, b| {
+                try std.testing.expectEqual(a.id, b.id);
+                try std.testing.expectEqualStrings(a.title, b.title);
+                try std.testing.expectEqual(a.messages.len, b.messages.len);
+                for (a.messages, b.messages) |ma, mb| {
+                    try std.testing.expectEqual(ma.role, mb.role);
+                    try std.testing.expectEqualStrings(ma.content, mb.content);
+                    if (ma.tool_call_id) |tcid| {
+                        try std.testing.expectEqualStrings(tcid, mb.tool_call_id.?);
+                    } else {
+                        try std.testing.expect(mb.tool_call_id == null);
+                    }
+                }
+            }
+        }
+    }.f, .{});
 }
 
 const FailAfterN = struct {

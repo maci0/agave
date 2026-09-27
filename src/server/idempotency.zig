@@ -131,16 +131,18 @@ pub const Ledger = struct {
             if (!s.matches(key)) continue;
             if (s.live(now_ms)) {
                 if (s.state == .in_flight) return .duplicate;
-                return .{ .replay = .{
-                    .status_line = s.status_line,
-                    .content_type = s.content_type,
-                    // Copied out under the ledger lock: the slot body is freed
-                    // as soon as any other request claims, evicts, or completes.
-                    .body = blk: {
-                        if (s.body.len == 0) break :blk @as([]u8, @constCast(""));
-                        break :blk self.allocator.dupe(u8, s.body) catch @as([]u8, @constCast(""));
+                return .{
+                    .replay = .{
+                        .status_line = s.status_line,
+                        .content_type = s.content_type,
+                        // Copied out under the ledger lock: the slot body is freed
+                        // as soon as any other request claims, evicts, or completes.
+                        .body = blk: {
+                            if (s.body.len == 0) break :blk @as([]u8, @constCast(""));
+                            break :blk self.allocator.dupe(u8, s.body) catch @as([]u8, @constCast(""));
+                        },
                     },
-                } };
+                };
             }
             // Expired: reuse this slot rather than leaving its body resident.
             self.discard(s);
@@ -333,7 +335,7 @@ test "ring eviction keeps a bounded replay set" {
     for (0..capacity * 2) |i| {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
-        const t = try claimKey(&k, 0);
+        const t = try claimKey(&l, k, 0);
         l.complete(k, t, 1, "200 OK", "text/html", "body");
     }
     // The first `capacity` keys are gone; the newest `capacity` replay.
@@ -373,7 +375,7 @@ test "slot reuse does not leak the previous body" {
     for (0..capacity + 4) |i| {
         var buf: [16]u8 = undefined;
         const k = try std.fmt.bufPrint(&buf, "k{d}", .{i});
-        const t = try claimKey(&k, 0);
+        const t = try claimKey(&l, k, 0);
         l.complete(k, t, 0, "200 OK", "text/html", "secret-body");
     }
     // One body per live slot, never one per completed operation.
