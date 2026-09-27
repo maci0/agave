@@ -349,7 +349,8 @@ jobs:
   # oxlint + tsc are configured in-tree but never ran on GitHub: the chat UI
   # and WASM shell could regress without a red check. Blocking. IgnorePatterns
   # in .oxlintrc.json still exclude src/web/app.ts and web/shell.ts until those
-  # files are migrated; tsc --noEmit covers both regardless.
+  # files are migrated; tsc --noEmit covers both regardless, and
+  # scripts/check-web-lint-scope.sh keeps that list from growing.
   lint-web:
     name: Lint and typecheck TypeScript
     runs-on: ubuntu-24.04
@@ -377,11 +378,13 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
-      - name: oxlint
-        run: bun run lint
-
-      - name: Typecheck
-        run: bun run typecheck
+      # scripts/lint-web.sh is the single entry point, so this job and
+      # `zig build lint-web` run the same rules, the same bun version check and
+      # the same lint-scope ratchet. Raw `bun run lint` / `bun run typecheck`
+      # here would let a check added to the script pass locally and never run
+      # remotely.
+      - name: oxlint, tsc and lint-scope ratchet
+        run: bash scripts/lint-web.sh
 
       # src/web/app.js and web/*.js are committed tsc outputs (embedded by the
       # server, shipped as the browser shell). tsc --noEmit passes on stale

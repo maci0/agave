@@ -98,6 +98,12 @@ must still appear under **Changed** or **Breaking** below. See
   into a scratch dir and byte-compares them, so a `.ts` edit without rerunning
   `scripts/build-web.sh` fails the gate (`STALE: <path> differs from a fresh
   tsc build`). It is a dependency of `zig build lint-web` and `zig build ci`.
+- `scripts/check-web-lint-scope.sh`: ratchets the `.oxlintrc.json`
+  `ignorePatterns` list. An entry that is not already known debt, or a
+  literal path that no longer exists, fails the gate. It runs first in
+  `scripts/lint-web.sh`, so `zig build lint-web` and CI job `lint-web` both
+  enforce it, and the list can shrink as `src/web/app.ts` and `web/shell.ts`
+  are migrated but cannot grow.
 - `tools/quality-testing/collect_continuations.py`: `--out` is a resume
   ledger, rewritten atomically after every call. A rerun skips prompts that
   already succeeded for the same `--model` and retries recorded errors, so an
