@@ -308,7 +308,7 @@ pub const iq4_nl_block_bytes: usize = quant_ops.iq4_nl_block_bytes;
 /// IQ4_XS: 136 bytes per 256-element super-block.
 /// Layout: f16 d (2) + u16 scales_h (2) + u8 scales_l[4] (4) + u8 qs[128] (128).
 pub const iq4_xs_block_bytes: usize = quant_ops.iq4_xs_block_bytes;
-/// MXFP4: 16B quants + 1B scale = 17 bytes per 32-element block.
+/// MXFP4: 16B quants + 1B shared scale = 17 bytes per 16-element block.
 pub const mxfp4_block_bytes: usize = 17;
 /// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.
 pub const nvfp4_block_bytes: usize = 9;
@@ -577,7 +577,7 @@ pub const NullBackend = struct {
     }
 
     /// Batched MXFP4 expert GEMV (one launch for many slots). Only CUDA
-    /// implements it; other backends fall back to per-slot calls.
+    /// implements it; other backends trap here.
     pub fn gemvMxfp4StBatched(_: *NullBackend, _: []const u64, _: []const u64, _: []const u64, _: []const [*]f32, _: usize, _: usize, _: usize, _: Mxfp4ScaleFormat) void {
         unreachable;
     }
@@ -1171,8 +1171,9 @@ pub const Backend = union(enum) {
     }
 
     /// Batched MXFP4 expert GEMV: one launch for n_slots independent
-    /// row-reductions (active experts' gate+up or down). Falls back to the
-    /// per-slot path on backends without the batched kernel.
+    /// row-reductions (active experts' gate+up or down). Only CUDA declares
+    /// the batched form; a backend without it is a programming error, not a
+    /// silent fallback, so that a missing kernel cannot look like a slow one.
     pub inline fn gemvMxfp4StBatched(self: Backend, x_devs: []const u64, w_devs: []const u64, s_devs: []const u64, y_hosts: []const [*]f32, n: usize, k: usize, gs: usize, sf: Mxfp4ScaleFormat) void {
         switch (self) {
             inline else => |be| {

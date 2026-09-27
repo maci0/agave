@@ -77,7 +77,7 @@ Canonical inventory: [KERNELS.md](KERNELS.md) (DeepSeek V4 Metal Kernels). `ds4_
 - Zero-cost `sync()` fast path (skip when no GPU work pending)
 - Conditional sync in `gemvMlxQ`/`gemvMxfp4St` CPU fallback
 - CPU thresholds for rmsNorm (≤8192), clampedSiluMul (≤16384), SDPA (≤8192)
-- `poolExpert` / `poolCompanion`, heap staging for SSD-streamed expert data
+- `Ds4Model.heapTensorData`, heap staging for SSD-streamed expert data
 - CPU `max_head_dim=512`, enables CPU SDPA for DS4's kv_lora_rank=512
 
 ### Key Bug Fixes

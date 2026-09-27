@@ -194,13 +194,13 @@ ggml-org's uniform Q2_K quantizes everything equally, destroying the precision o
 | **Expert cache** | LRU, 256-4096 slots | LRU + memory budget (NGB) | None (mmap only) | None (mmap only) |
 | **Prefetch** | `madvise(WILLNEED)` per-expert | Overlapped streaming prefill (2 full layers reserved) | OS page cache | OS page cache |
 | **Hot expert preload** | via `--expert-profile-in` JSON | Auto-seeded popularity preload | N/A | N/A |
-| **Cache sizing** | `--ssd-cache-slots N` (fixed count) | `--ssd-streaming-cache-experts NGB` (memory budget, auto or manual) | N/A | N/A |
+| **Cache sizing** | `--ssd-cache-slots N` (default: auto from system memory, capped at 4096 slots) | `--ssd-streaming-cache-experts NGB` (memory budget, auto or manual) | N/A | N/A |
 | **Integration** | Separate from model forward() | Integrated into Metal graph, routed expert dispatch tables | N/A | N/A |
 | **Prefill during streaming** | Sequential (HC dependencies) | Chunked, overlapped between cache and compute | N/A | N/A |
 
 ### Why ds4 is faster at SSD streaming
 
-1. **Smarter cache budget.** ds4 auto-sizes the expert cache from available memory (80% working set minus non-routed weights), with explicit memory budgets. Agave uses a fixed slot count.
+1. **Smarter cache budget.** ds4 auto-sizes the expert cache from available memory (80% working set minus non-routed weights), with explicit memory budgets. Agave also auto-sizes (system memory minus 8 GB overhead, capped at 4096 slots) and takes an explicit count via `--ssd-cache-slots`.
 2. **Overlapped prefill.** ds4 reserves two full routed layers so it can overlap SSD reads with GPU compute during prefill. Agave processes sequentially.
 3. **Hot expert preload.** ds4 auto-seeds the cache with popular experts at startup. Agave supports profile-based preloading but it's opt-in.
 4. **Smaller coherent model.** ds4's Q2 imatrix (81GB) is 48% smaller than MXFP4 (155GB), so more of the model fits in RAM and fewer SSD reads are needed per token.
@@ -398,7 +398,7 @@ Eight bugs were fixed in Agave's DS4 implementation:
 
 4. **Suffix max_k 48→96** (iter 20): Longer suffix draft sequences allow more tokens per round when the model generates repetitive patterns (code, structured text).
 
-5. **Special token filter** (iter 67): Exclude chat template tokens (ID ≥128000) from suffix history. Prevents suffix from echoing `<?Assistant?></think>` formatting.
+5. **Special token filter** (iter 67): Exclude tokens the tokenizer marks special from suffix history (membership, not an ID range, so Gemma-style vocabularies work). Prevents suffix from echoing `<?Assistant?></think>` formatting.
 
 6. **Expert cache key fix** (iter 64): `n_routed_experts` config key (used by DS4) was missing from the metadata lookup chain. Expert LRU cache was never initialized.
 
@@ -426,7 +426,7 @@ Eight bugs were fixed in Agave's DS4 implementation:
 **Shipped infrastructure:**
 - `gemv_mlx_q4_exact`: float4 fma pairs matching CPU NEON `@mulAdd` + pairwise `@reduce(.Add)`
 - `gemv_mxfp4_st_exact`: E8M0 + dynamic gs with vec8 accumulation
-- `prefaultPages()`: touches mmap pages before Metal `getBufRef` wraps them (GPU can't trigger page faults)
+- `prefaultLocalExperts()`: touches mmap pages before Metal `getBufRef` wraps them (GPU can't trigger page faults)
 - buf_cache no-flush on `sync()`: UMA shared memory wraps are always valid
 
 **Root cause of Metal GEMV CPU fallback:** Apple Silicon GPU FMA and CPU NEON FMA produce ~0.02% different intermediate rounding per operation. Over 43 Hyper Connection layers, this compounds to completely different first tokens. This is a **hardware-level FPU difference**, not a software bug. The ds4 reference (5.9 tok/s) uses GGUF Q2 imatrix format with Metal kernels designed for that format.

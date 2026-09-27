@@ -38,8 +38,8 @@ pub fn getClass(name: [*:0]const u8) ?Class {
     return objc_getClass(name);
 }
 
-/// Helper to build function pointer type at comptime. Recursively builds the function
-/// signature by prepending argument types one by one.
+/// Helper to build function pointer type at comptime. Switches on the argument
+/// count and appends the argument types as trailing parameters after SEL.
 fn MsgSendFn(comptime R: type, comptime T: type, comptime Args: type) type {
     const fields = @typeInfo(Args).@"struct".fields;
 

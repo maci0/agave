@@ -6,7 +6,8 @@
 //!   2. SSD streaming cache policy (which experts to keep resident)
 //!   3. Quality diagnostics (expert load balance)
 //!
-//! Library API (no CLI flag yet; call from model/MoE paths or tests):
+//! Library API, recorded by `src/main.zig` when `--expert-profile-out` is set
+//! and replayed from `--expert-profile-in`:
 //!   var profile = try ExpertProfile.init(allocator, n_layers, n_experts);
 //!   defer profile.deinit(allocator);
 //!   profile.record(layer, expert_id);  // hot path: zero-alloc

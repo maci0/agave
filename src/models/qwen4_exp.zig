@@ -63,7 +63,8 @@ const default_moe_expert_ff_dim: u32 = 512;
 /// Default MLX quantization bit width (4-bit). Canonical source: model.zig.
 const default_mlx_bits = model_mod.default_mlx_bits;
 
-/// Qwen3.5 hybrid model with DeltaNet SSM, full attention layers, and optional MoE FFN.
+/// Qwen4-Exp (Qwen3.8) hybrid model: DeltaNet SSM layers, full attention
+/// layers, optional MoE FFN. Shares its layer plumbing with Qwen3.5.
 pub const Qwen4ExpModel = struct {
     /// Norm weight cache: permanently dequantized BF16 norm weights keyed by data pointer.
     /// Avoids reusing dequant_buf for GPU ops (Metal buf_cache would serve stale data).
@@ -249,7 +250,7 @@ pub const Qwen4ExpModel = struct {
     capture_count: usize = 0,
     capture_scratch: []f32 = &.{},
 
-    /// Returns the generic Model interface for this Qwen3.5 instance.
+    /// Returns the generic Model interface for this Qwen4-Exp instance.
     pub fn model(self: *Qwen4ExpModel) Model {
         return Model.from(Qwen4ExpModel, self);
     }
@@ -282,7 +283,7 @@ pub const Qwen4ExpModel = struct {
         self.be.ropeMrope(x, thw[0], thw[1], thw[2], n_heads, self.head_dim, self.rope_dim, self.rope_theta);
     }
 
-    /// Initialize a Qwen3.5 model from format metadata and weights.
+    /// Initialize a Qwen4-Exp model from format metadata and weights.
     /// When `tiered_cache` is provided, uses tiered block allocation instead of PagedKvCache.
     pub fn init(allocator: Allocator, f: Format, be: Backend, ctx_size: u32, kv_type_k: kv_quant.KvQuantType, kv_type_v: kv_quant.KvQuantType, tiered_cache: ?*TieredKvCache) !Qwen4ExpModel {
         var self = Qwen4ExpModel{

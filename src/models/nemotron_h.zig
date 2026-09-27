@@ -86,9 +86,10 @@ pub const NemotronHModel = struct {
     ssm_d_state: u32 = 128,
     /// Number of SSM groups (B/C vectors shared within group).
     ssm_n_group: u32 = 8,
-    /// Number of Mamba-2 heads (= dt_rank).
+    /// Mamba-2 state (dt) rank. The head dim is derived as
+    /// `ssm_d_inner / ssm_dt_rank`, not the other way round.
     ssm_dt_rank: u32 = 96,
-    /// Mamba-2 inner dimension (= num_heads * head_dim).
+    /// Mamba-2 inner dimension (divided into heads of `ssm_d_inner / ssm_dt_rank`).
     ssm_d_inner: u32 = 7680,
 
     // ── Layer-type map (populated at init) ────────────────────────

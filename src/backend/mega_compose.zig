@@ -6,11 +6,13 @@
 //!
 //! Architecture:
 //!   Model metadata (GGUF) → ModelDesc → composeMSL() → MSL source string
-//!   Metal backend compiles the source at init via newLibraryWithSource.
+//!   MetalBackend.compileComposedMegakernel prepends the base MSL and
+//!   compiles the joined source via newLibraryWithSource.
 //!
 //! The generated kernel processes ALL layers in a single GPU dispatch using
-//! atomic grid sync between stages. Building blocks from mega_common.metal
-//! are referenced by the generated code (they're concatenated before it).
+//! atomic grid sync between stages. Building blocks from the base MSL
+//! (mega_common.metal among the embedded files) are referenced by the
+//! generated code, which is concatenated after them.
 
 const std = @import("std");
 
@@ -48,7 +50,8 @@ const max_layers: usize = 64;
 /// Model descriptor, everything needed to compose a megakernel.
 /// Populated from GGUF/SafeTensors metadata at model init time.
 pub const ModelDesc = struct {
-    /// Model architecture name (for kernel function naming).
+    /// Model architecture name, used by callers to pick a composition template.
+    /// The generated entry point is always `megakernel_auto`.
     name: []const u8,
     /// Number of transformer layers.
     n_layers: u32,

@@ -37,7 +37,7 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA Tree (DDTree verify) | Native (SIMD) | Native (f32 + turbo) | Native (f32) | Native (f32) | Native (f32) | Native (f32) |
 | Paged SDPA | Native | Native | Native | Native | Native | Native |
 | Causal Conv1d | Native | Native (DeltaNet) | Native | In DeltaNet | In DeltaNet | Native |
-| DeltaNet (4 kernels) | Native | Native | Native | Hybrid (GPU recur if PTX)⁴ | Hybrid (GPU norm+recur)⁶ | Native |
+| DeltaNet (4 kernels) | Native | Native | Native | Hybrid (GPU recur)⁴ | Hybrid (GPU norm+recur)⁶ | Native |
 | Argmax / Final Logits | Native | CPU perf | CPU perf | CPU perf | CPU perf | CPU perf |
 | **Batched Prefill Ops** | | | | | | |
 | GEMM (batched matmul) | Native (SIMD) | Native (f32/Q8_0/Q4_0/BF16) | Loop-of-GEMV | Native (Q8_0) | Loop-of-GEMV | Loop-of-GEMV |
@@ -46,14 +46,14 @@ This document tracks the implementation status of all compute kernels across bac
 | SDPA Prefill (causal FA2) | Native (SIMD) | Native (dual-source FA2) | Loop-of-SDPA | Native | Loop-of-SDPA | Loop-of-SDPA |
 | **Fused FFN (Megakernel Tier 1)** | | | | | | |
 | Fused Gate+Up+SiLU (Q8_0) | N/A | Native | N/A | Native | N/A | N/A |
-| Fused Gate+Up+SiLU (Q4_K/Q5_K/Q6_K/Q4_0/MLX_Q4) | N/A | Native | N/A | Native (Q4_K), Source only (Q5_K/Q6_K)⁵ | N/A | N/A |
+| Fused Gate+Up+SiLU (Q4_K/Q5_K/Q6_K/Q4_0/MLX_Q4) | N/A | Native | N/A | Native⁵ | N/A | N/A |
 | Fused Gate+Up+GELU (Q8_0/Q4_K/Q5_K/Q6_K/Q4_0) | N/A | Native | N/A | Native (Q8_0) | N/A | N/A |
 
 ¹ Single-row table read, CPU memcpy is faster than GPU dispatch + sync overhead.
 ² Metal FlashAttention-2 with block_size=16 (fits 32KB threadgroup memory). Online softmax, no blit encoders. **Sparse V threshold** (1e-6) is applied in all GPU SDPA kernels (Metal, CUDA, ROCm): positions where the softmax weight falls below the threshold skip V dequantization entirely, yielding +22.8% decode speed at 32K context with zero measured PPL impact. The CPU windowed-attention fallback path (`src/ops/attention.zig`) also uses sparse V dequantization.
 ³ `sdpaWithStats` on CPU computes real per-head max/sum. GPU backends still fill identity stats (max=0, sum=1) after a normal SDPA. **Mixed-tier** split-attention (`--kv-tiers` with both VRAM and RAM/SSD blocks) therefore runs full-sequence CPU SDPA for exact results until GPU backends emit real stats. All-GPU and all-CPU partitions keep their fast paths.
-⁴ CUDA DeltaNet: `deltanet_recurrence.zig` is in-tree. `zig build ptx` must be re-run to bake the kernel into `all.ptx`. Until then `getFunction` fails and decode uses the CPU recurrence (same as ROCm's conv/gate CPU split). Qwen3.8-27B uses 48 V heads (`max_deltanet_v_heads=128`).
-⁵ CUDA fused FFN kernel source files exist for Q4_K/Q5_K/Q6_K but Q5_K/Q6_K are blocked by Zig LLVM nvptx64 aliasee bug (cross-file kernel imports create forbidden GlobalAlias). Q4_K compiles and runs.
+⁴ CUDA DeltaNet: `deltanet_recurrence.zig` is in-tree and baked into `all.ptx` as `deltanet_recurrence_kernel`, so the recurrence runs on GPU; the conv and gate still split to CPU (same split as ROCm's). Re-run `zig build ptx` after editing the kernel source. Qwen3.8-27B uses 48 V heads (`max_deltanet_v_heads=128`).
+⁵ The CUDA fused FFN entries for Q4_K/Q5_K/Q6_K need `callconv(.nvptx_device)` plus `fix_kernel_alias.py`, because Zig 0.16 + LLVM NVPTX rejects `callconv(.kernel)` aliases (cross-file kernel imports create a forbidden GlobalAlias). The committed `all.ptx` already contains all three.
 ⁶ ROCm DeltaNet: conv1d on CPU, L2 norm + recurrence kernel on GPU. Gate/beta computed on CPU. Not fully native but recurrence (the expensive part) runs on GPU.
 
 ## True Megakernels (Tier 2)
@@ -185,7 +185,6 @@ Vision ViT (Vision Transformer) kernels run on CPU for patch embedding, position
 **All backends**: Every quantized GEMV format (q2_k through q8_0, q4_0/q4_1/q5_0, q4_k/q5_k/q6_k, iq4_nl/iq4_xs, f16/bf16/fp8, nvfp4_st/mxfp4, mlx_q, gptq, awq, hqq, tq1_0/tq2_0) is native on all 6 backends.
 
 **CUDA**, functional gaps (CPU fallback):
-- DeltaNet native GPU kernels (sequential recurrence delegates to CPU)
 - Causal Conv1d (delegates to CPU)
 
 **CUDA PTX build**: Zig 0.16 + LLVM NVPTX rejects `callconv(.kernel)` aliases. Workaround: use `callconv(.nvptx_device)` (emits `.func`), then `src/backend/kernels/cuda/fix_kernel_alias.py` (wired into the build graph) promotes `*_kernel` functions to `.entry`. Run `zig build ptx` (default `-Dcuda-sm=sm_120`) then copy `zig-out/ptx/*.ptx` to `src/backend/kernels/cuda/` before building with `-Denable-cuda=true`. Verify freshness with `scripts/check-shader-artifacts.sh --ptx-only`.

@@ -205,7 +205,7 @@ The composer selects the correct GEMV, activation, residual pattern, and SDPA bu
 2. Implement GEMV kernel: CPU SIMD in `src/backend/kernels/cpu/` and native GPU versions per backend (no CPU fallback in GPU backends). Dequantization happens in-kernel, never pre-dequant to f32
 3. Add conversion helpers in `src/ops/quant.zig` if the format needs custom type conversions (e.g., `fp8e4m3ToF32`)
 4. Update backend dispatch to include new format (add GEMV variant in `backend.zig`)
-5. Add GEMM kernel for batched prefill: Metal in `gemm.metal` (reuse `block_dot` from GEMV), pipeline in `metal.zig`, dispatch in `gemm()`. Pattern: one threadgroup per output row, loop over n_tok tokens
+5. Add GEMM kernel for batched prefill: Metal in `gemm.metal` (reuse the `<format>_block_dot` helpers from `gemv.metal`), pipeline in `metal.zig`, dispatch in `gemm()`. Pattern: one threadgroup per output row, loop over n_tok tokens
 6. For compressed-tensors formats (NVFP4, etc.): add fusion logic in `safetensors.zig` `fuseNvfp4Experts()` to combine per-expert weight_packed/weight_scale/weight_global_scale into GGUF-named entries
 7. Benchmark against existing formats
 8. Add to Quantization Types table in `docs/ARCHITECTURE.md`
@@ -512,7 +512,8 @@ Transports are implemented in `src/parallel/transport.zig`. Each transport must 
 Transports are selected via `--transport auto|tcp|shm|nccl`:
 - `auto`: shm for localhost, tcp for remote
 - `nccl`: NCCL over RoCE RDMA (requires libnccl2, ConnectX NICs)
-- `rccl`: AMD's NCCL equivalent (declared, not yet implemented)
+
+`TransportKind.rccl` (AMD's NCCL equivalent) is declared in `src/parallel/transport.zig` but has no CLI choice or implementation yet.
 
 UDP peer discovery (`src/parallel/peer_discovery.zig`) is a separate mechanism: rank 0 broadcasts a beacon on port 49460, other ranks discover it automatically on the same subnet.
 

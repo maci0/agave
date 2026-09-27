@@ -1119,7 +1119,7 @@ pub const NemotronNanoModel = struct {
         return self.fmt.getTensor(name);
     }
 
-    /// Look up scale companion for a tensor: tries `.weight_scale` then `.scales`.
+    /// Look up scale companion for a tensor: tries `.scales` then `.weight_scale`.
     fn findScaleTensor(self: *NemotronNanoModel, li: u32, comptime prefix: []const u8) ?TensorInfo {
         return self.stLayerTensor(li, prefix ++ ".scales") orelse
             self.stLayerTensor(li, prefix ++ ".weight_scale");
@@ -1274,7 +1274,7 @@ fn bf16ToF32Buf(data: [*]const u8, out: []f32) void {
 /// Convert a tensor's data to f32, dispatching on its dtype.
 /// Handles F32 (direct copy) and BF16 (conversion). Other types
 /// (e.g. unknown scalars) are treated as BF16 since that's the
-/// most common non-f32 scalar type in NemotronH SafeTensors.
+/// most common non-f32 scalar type in NemotronNano SafeTensors.
 fn tensorToF32Buf(t: TensorInfo, out: []f32) void {
     if (t.dtype == .f32) {
         const f32s: [*]const f32 = @ptrCast(@alignCast(t.data_ptr));

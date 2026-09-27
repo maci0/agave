@@ -113,7 +113,7 @@ Distributed inference flags from [`src/main.zig`](../../src/main.zig):
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--tp N` | | `1` | Tensor parallelism degree (blocked at CLI today for N>1) |
+| `--tp N` | | `1` | Tensor parallelism degree (1-2; needs `--peers` to do anything) |
 | `--pp N` | | `1` | Pipeline parallelism stages |
 | `--rank N` | | `0` | This node's rank for TP/PP/disagg |
 | `--peers ADDR` | | | Peer address (e.g. `192.168.0.2` or `192.168.0.2:9999`) |

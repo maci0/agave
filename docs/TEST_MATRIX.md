@@ -2,7 +2,7 @@
 
 **Date**: 2026-05-19 (last full re-run). **GPU kernel correctness (2026-09-01):** there is now a
 harness for it, `agave-bench <kernel> --validate`, which re-runs the kernel on the CPU backend with
-byte-identical inputs and exits non-zero past a 2% relative tolerance. 41 kernels x ROCm/Vulkan, all 82 pairs pass at two values of k, covering all 18 GEMV dtypes;
+byte-identical inputs and exits non-zero past a 2% relative tolerance. 44 kernels x ROCm/Vulkan, all 88 pairs pass at two values of k, covering all 18 GEMV dtypes;
 run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE forward path is checked with `tools/synth-moe/moeify_gguf.py`, which derives an identity-preserving MoE model from any dense checkpoint; see "GPU Kernel Validation" in BENCHMARKS.md for what it found. **Status note (2026-07-21):** matrix coverage lags shipped features. Placeholder rows added for Llama 4, DiffusionGemma, GPT-OSS, Nemotron-H (not yet tested); the DeepSeek V4 placeholder has since been filled in. Still missing: full Vulkan/ROCm/WebGPU correctness, LoRA, and newer `--spec-mode` values. Re-run before release; treat PASS cells below as historical, not complete coverage.
 
 **Hardware**:
@@ -21,7 +21,7 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 | 2 | Gemma 4 E2B | Q4_K_S | 2.8 GB | PASS | PASS | n/a | Dense, 35 layers |
 | 3 | Gemma 4 E4B | Q4_K_S | 4.5 GB | PASS "4" | PASS (slow) | n/a | Dense, 42 layers, ~60s CPU prefill |
 | 4 | Gemma 3 27B QAT | Q4_0 | 14.5 GB | PASS "Four." | PASS "Four." | n/a | |
-| 5 | Qwen 3.5 0.8B | Q8_0 | 774 MB | PASS "Four" | PASS "Four" | PASS "4" (71 tok/s) | |
+| 5 | Qwen 3.5 0.8B | Q8_0 | 764 MB | PASS "Four" | PASS "Four" | PASS "4" (71 tok/s) | |
 | 6 | Qwen 3.5 9B | Q4_K_M | 5.2 GB | PASS "Four" | PASS "Four" | n/a | |
 | 7 | Qwen 3.5 9B | Q8_0 | 8.9 GB | PASS "4" | PASS "4" | n/a | |
 | 7b | Qwen 3.8 27B | MLX-4bit ST | 15.0 GB | PASS "Hi" | PASS "Hi" | n/a | Dense hybrid. Greedy "Say hi in one word." EOS after Hi. WebGPU PASS "Hi" (vocab GEMV chunked at 65535; DeltaNet cache must not bump generation on SSM download). Vulkan: no ICD here (CPU fallback PASS). BF16/GGUF not on disk. Skip extra RMSNorm +1 on MLX-sanitized ST. |
@@ -33,7 +33,7 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 | 13 | GPT-OSS Harmony | n/a | n/a | Not tested | Not tested | n/a | |
 | 14 | Nemotron-H | n/a | n/a | Not tested | Not tested | n/a | |
 
-**Result: 9/14 architectures pass on Metal+CPU (row 7b is an extra Qwen configuration, 15 rows total). 1 failure (GLM-4) also broken in llama.cpp. 4 architectures not yet tested.**
+**Result: 10/14 architectures pass on Metal+CPU (row 7b is an extra Qwen configuration, 15 rows total). 1 failure (GLM-4) also broken in llama.cpp. 4 architectures not yet tested.**
 
 ## KV Cache Quantization (Gemma 4 26B, Metal)
 
@@ -91,14 +91,14 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 | Q4_0 native GPU | PASS | GPU kernels unaffected by K-quant spill |
 | UMA zero-copy | PASS | cuMemHostRegister for mmap'd weights |
 | Cross-compiled binary | PASS | Statically linked, runs on aarch64 Linux |
-| NCCL RoCE RDMA | PASS | PP=2 8.5 tok/s (93% of single GPU), TP=2 5.1 tok/s |
+| NCCL RoCE RDMA | PASS | PP=2 40.2 tok/s (112% of single GPU), TP=2 5.1 tok/s |
 | Server mode | PASS | cuCtxSetCurrent on scheduler thread |
 
 ## Distributed Inference (2026-05-18)
 
 | Config | Transport | Model | Status | Notes |
 |--------|-----------|-------|:------:|-------|
-| PP=2 dual GB10 | NCCL RoCE | 0.8B Q8_0 | PASS | 8.5 tok/s, 93% of single GPU |
+| PP=2 dual GB10 | NCCL RoCE | 0.8B Q8_0 | PASS | 40.2 tok/s, 112% of single GPU |
 | TP=2 dual GB10 | NCCL RoCE | 0.8B Q8_0 | PASS | 5.1 tok/s |
 | PP=2 dual GB10 | NCCL RoCE | 9B Q4_K_M | PASS | 2.2 tok/s (CPU fb for K-quant) |
 | TP=2 dual GB10 | NCCL RoCE | 9B Q4_K_M | PASS | 1.7 tok/s |
@@ -123,17 +123,17 @@ run the whole sweep with `zig build validate -Dvalidate-backend=<be>`; the MoE f
 
 | Category | Passed | Failed | Total |
 |----------|:------:|:------:|:-----:|
-| Model × Metal | 8 | 1 (GLM-4) | 9 |
-| Model × CPU | 8 | 1 (GLM-4) | 9 |
+| Model × Metal | 10 | 1 (GLM-4) | 11 |
+| Model × CPU | 10 | 1 (GLM-4) | 11 |
 | Model × CUDA | 5 | 0 | 5 |
 | KV Quantization | 7 | 0 | 7 |
 | KV Eviction | 2 | 0 | 2 |
 | Vision | 1 | 0 | 1 |
 | Linux KV types | 5 | 0 | 5 |
 | Distributed | 8 | 0 | 8 |
-| **Total** | **44** | **2** | **46** |
+| **Total** | **48** | **2** | **50** |
 
-**Overall: 44/46 tests pass (96%). The 2 failures are GLM-4 which also fails in llama.cpp (broken GGUF conversion).**
+**Overall: 48/50 tests pass (96%). The 2 failures are GLM-4 which also fails in llama.cpp (broken GGUF conversion).**
 
 ## Additional Quant Format Tests (2026-04-16)
 

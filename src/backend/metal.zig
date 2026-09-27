@@ -2284,8 +2284,9 @@ pub const MetalBackend = struct {
         self.endEncodeThreadgroups(enc, n, threadgroup_size);
     }
 
-    /// MLX affine quantized GEMV on GPU (2/4/6/8-bit).
-    /// Dispatches to a native Metal kernel for the 3-buffer MLX-Q layout
+    /// MLX affine quantized GEMV (2/4/6/8-bit) on CPU, so weights that are not
+    /// GPU-safe (mmap'd, evictable) still get a correct result.
+    /// `gemvMlxQGpu` is the native-Metal path for the 3-buffer MLX-Q layout
     /// (packed u32 weights + bf16 scales + bf16 biases, group_size=64).
     pub fn gemvMlxQ(self: *MetalBackend, x: [*]const f32, weight: [*]const u8, scales: [*]const u8, biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, gs: u32) void {
         if (self.active_cmd != null) self.sync();
@@ -2618,10 +2619,9 @@ pub const MetalBackend = struct {
     /// than GPU dispatch + sync overhead (~50µs). At sl=1-2, SDPA is just
     /// nh dot products of hd dims + nh×hd V copy, ~10µs on CPU NEON.
     /// GPU only wins when parallelism across many positions amortizes dispatch.
-    /// SDPA GPU threshold: CPU SDPA is used for very short sequences (sl≤4)
-    /// where GPU dispatch overhead exceeds benefit. For longer sequences,
-    /// GPU SDPA batches with surrounding GPU GEMVs in the same command buffer.
-    /// SDPA GPU threshold: CPU SDPA for decode (all syncs eliminated).
+    /// Positions up to this threshold take the GPU path (and batch with the
+    /// surrounding GPU GEMVs in the same command buffer); only head_dim above
+    /// `gpu_sdpa_max_head_dim` falls back to the CPU.
     const sdpa_gpu_threshold: usize = 8192;
 
     pub fn sdpa(self: *MetalBackend, q: [*]const f32, keys: []u8, values: []u8, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, seq_len: usize, scale: f32, kv_type_k: backend_mod.KvQuantType, kv_type_v: backend_mod.KvQuantType) void {

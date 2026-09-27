@@ -230,24 +230,7 @@ Each frontier prefills incrementally from where the last one stopped. KV state i
 
 **Rolling prefix hash** (from [ds4](https://github.com/antirez/ds4)) detects transcript divergence in pipeline-parallel inference. When the coordinator restarts at position 0 while a worker is at position N, the hashes immediately diverge, allowing the coordinator to trigger a transcript replay instead of silently producing corrupt activations.
 
-The hash is available on the `Transport` struct:
-
-```zig
-// Coordinator: advance after each token is committed
-transport.advanceTokenHash(token_id);
-
-// Worker: verify the coordinator's hash matches
-if (!transport.verifyTokenHash(received_hash)) {
-    // trigger coordinator-side transcript replay
-}
-
-// Reset at session start
-transport.resetTokenHash();
-```
-
-The hash uses Wyhash accumulation: `h = Wyhash(prev_h, token_id_bytes)`. This is an O(1) update per token. The wire protocol does not yet carry the hash field automatically, integration with `sendBuf`/`recvBuf` is planned once the side-channel format is finalized.
-
-**Implementation:** `Transport.advanceTokenHash`, `verifyTokenHash`, `resetTokenHash` in [`src/parallel/transport.zig`](../../src/parallel/transport.zig).
+**Not implemented.** `src/parallel/transport.zig` carries no hash state today: there is no `advanceTokenHash`, `verifyTokenHash`, or `resetTokenHash`, and the wire protocol has no hash field, so a coordinator restart still yields corrupt activations rather than a detected divergence. The design would accumulate a Wyhash per committed token, `h = Wyhash(prev_h, token_id_bytes)`, which is O(1) per token, and carry it on the side channel beside `sendBuf`/`recvBuf`.
 
 ---
 

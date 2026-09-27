@@ -1,10 +1,13 @@
-//! Ngram cache for Qwen3.8-Flash-Next PLE (N-gram lookup embedding).
+//! Ngram cache for Qwen4-Exp PLE (N-gram lookup embedding).
 //! Mirrors src/expert_cache.zig but for the PLE ngram table.
 //! 20M ngrams × 2560 hidden ≈ 51B, 128 shards (~400MB each). Demand-paged
-//! via ExpertCache's SSD streaming: same --ssd-streaming flag, same
-//! madvise(WILLNEED)/mlock pattern. Keep this module standalone so it
-//! doesn't pollute ExpertCache's MoE semantics — the ngram working set is
-//! tiny (a few shards per sequence) vs MoE's per-layer routing.
+//! the same way as ExpertCache, with madvise(WILLNEED) prefetch. Keep this
+//! module standalone so it doesn't pollute ExpertCache's MoE semantics — the
+//! ngram working set is tiny (a few shards per sequence) vs MoE's per-layer
+//! routing.
+//!
+//! Not wired into `src/main.zig` yet: `--ssd-streaming` builds an ExpertCache
+//! for MoE experts only, so the PLE ngram path currently has no page source.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

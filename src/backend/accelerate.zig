@@ -4,8 +4,9 @@
 //! dispatch to Apple's AMX matrix coprocessor on M1+ hardware. ~4× faster
 //! than NEON SIMD for F32 matrix operations.
 //!
-//! Only compiled on macOS (guarded by comptime os check). Other platforms
-//! get no-op stubs that are never called.
+//! The wrappers `unreachable` off macOS; callers guard on `accelerate.is_macos`
+//! (or a comptime `is_macos` of their own) before calling, so the non-macOS
+//! build never reaches the Accelerate symbols.
 
 const std = @import("std");
 const builtin = @import("builtin");
