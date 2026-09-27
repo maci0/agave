@@ -52,11 +52,6 @@ export fn gemv_awq_kernel(
 
 const std = @import("std");
 
-test "constants valid" {
-    // gemv_awq_kernel has no module-level numeric constants; verify nibble mask is sensible
-    comptime std.debug.assert(0xF > 0);
-}
-
 test "fuzz: gemv_awq functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

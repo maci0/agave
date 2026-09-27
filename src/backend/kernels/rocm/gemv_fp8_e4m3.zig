@@ -38,12 +38,6 @@ export fn gemv_fp8_e4m3_kernel(x: [*]const f32, w: [*]const u8, y: [*]f32, n: u3
 
 const std = @import("std");
 
-test "constants valid" {
-    // sparse_threshold and chunk_size are function-local; verify their values here
-    comptime std.debug.assert(0.005 > 0.0);
-    comptime std.debug.assert(32 > 0);
-}
-
 test "fuzz: gemv_fp8_e4m3 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

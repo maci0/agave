@@ -612,6 +612,101 @@ test "dequantToF32 q4_0" {
     }
 }
 
+test "dequantToF32 f16" {
+    // 9 elements exercises the 8-wide vector path plus the scalar tail.
+    const input = [_]f16{ 1.0, -1.0, 0.0, 2.0, -2.5, 0.5, -0.25, 1024.0, 3.5 };
+    const data: [*]const u8 = @ptrCast(&input);
+    var output: [input.len]f32 = undefined;
+    dequantToF32(&output, data, .f16, input.len);
+    for (0..input.len) |i| {
+        try std.testing.expectEqual(@as(f32, @floatCast(input[i])), output[i]);
+    }
+}
+
+test "dequantToF32 q8_0 partial trailing block" {
+    // n is not a multiple of 32: block 0 is full, block 1 contributes 5 elements.
+    const n = quant_block_elems + 5;
+    var blocks: [2 * q8_0_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, blocks[0..2], 0x4000, .little); // f16(2.0)
+    for (0..quant_block_elems) |i| blocks[2 + i] = @intCast(i + 1);
+    std.mem.writeInt(u16, blocks[q8_0_block_bytes..][0..2], 0x3C00, .little); // f16(1.0)
+    for (0..5) |i| blocks[q8_0_block_bytes + 2 + i] = @intCast(10 + i);
+
+    var output: [n]f32 = undefined;
+    dequantToF32(&output, &blocks, .q8_0, n);
+    for (0..quant_block_elems) |i| {
+        try std.testing.expectApproxEqAbs(2.0 * @as(f32, @floatFromInt(i + 1)), output[i], 0.01);
+    }
+    for (0..5) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, @floatFromInt(10 + i)), output[quant_block_elems + i], 0.01);
+    }
+}
+
+test "dequantToF32 q4_0 partial trailing block" {
+    // n = 20 of a 32-element block: low nibbles fill [0..16), high nibbles [16..20).
+    const n: usize = 20;
+    var block: [q4_0_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, block[0..2], 0x3C00, .little); // f16(1.0)
+    for (2..q4_0_block_bytes) |i| block[i] = 0xF3;
+
+    var output: [n]f32 = undefined;
+    dequantToF32(&output, &block, .q4_0, n);
+    for (0..n) |i| {
+        const expected: f32 = if (i < quant_block_elems / 2) -5.0 else 7.0;
+        try std.testing.expectApproxEqAbs(expected, output[i], 0.01);
+    }
+}
+
+test "dequantToF32 iq4_nl" {
+    // 18 bytes/32 elements: f16 scale + 16 nibble bytes, split packing.
+    // iq4nl_table[0xF] = 113, iq4nl_table[0x0] = -127. Byte 0x0F: lo → element j, hi → element j+16.
+    var block: [iq4_nl_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, block[0..2], 0x3C00, .little); // f16(1.0)
+    for (2..iq4_nl_block_bytes) |i| block[i] = 0x0F;
+
+    var output: [quant_block_elems]f32 = undefined;
+    dequantToF32(&output, &block, .iq4_nl, quant_block_elems);
+    for (0..quant_block_elems) |i| {
+        const expected: f32 = if (i < quant_block_elems / 2) 113.0 else -127.0;
+        try std.testing.expectApproxEqAbs(expected, output[i], 0.01);
+    }
+}
+
+test "dequantToF32 iq4_xs per-sub-block scales" {
+    // 136 bytes/256 elements. d = 1.0, high 2 bits of every sub-block scale are 0,
+    // the 4-bit low field holds the sub-block index, so sub-scale = (ib - 32) * 0.0625.
+    // qs bytes 0x5A: even elements take the low nibble (0xA -> 25), odd the high (0x5 -> -35).
+    var block: [iq4_xs_block_bytes]u8 align(2) = undefined;
+    std.mem.writeInt(u16, block[0..2], 0x3C00, .little); // f16(1.0)
+    @memset(block[2..8], 0); // scales_h = 0, scales_l = 0
+    // scales_l packs two 4-bit sub-block scales per byte: [ib0 lo][ib1 hi][ib2 lo][ib3 hi]...
+    for (0..4) |byte_idx| {
+        block[4 + byte_idx] = (@as(u8, @intCast(2 * byte_idx + 1)) << 4) | @as(u8, @intCast(2 * byte_idx));
+    }
+    @memset(block[8..iq4_xs_block_bytes], 0x5A);
+
+    var output: [iq4_xs_block_elems]f32 = undefined;
+    dequantToF32(&output, &block, .iq4_xs, iq4_xs_block_elems);
+    for (0..iq4_xs_block_elems) |i| {
+        const sub_block: i32 = @intCast(i / quant_block_elems);
+        const code: i32 = if (i % 2 == 0) 25 else -35;
+        const expected: f32 = @as(f32, @floatFromInt(sub_block - 32)) * iq4_xs_scale_unit * @as(f32, @floatFromInt(code));
+        try std.testing.expectApproxEqAbs(expected, output[i], 0.001);
+    }
+}
+
+test "dequantToF32 unsupported dtype zeroes output" {
+    // Unhandled dtypes take the else branch: the LoRA merge skips the tensor
+    // rather than crashing, so the buffer must be fully zeroed.
+    var block: [64]u8 align(4) = @splat(0xAB);
+    const data: [*]const u8 = &block;
+    for ([_]DType{ .mlx_q, .q4_k, .unknown }) |dtype| {
+        var output: [64]f32 = @splat(1.0);
+        dequantToF32(&output, data, dtype, output.len);
+        for (0..output.len) |i| try std.testing.expectEqual(@as(f32, 0.0), output[i]);
+    }
+}
+
 test "fuzz: all quant functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {

@@ -46,12 +46,6 @@ export fn gemv_fp8_e5m2_kernel(
 
 const std = @import("std");
 
-test "constants valid" {
-    // No module-level numeric constants exist in this file (sparse_threshold and
-    // chunk_size are local variables inside the kernel function).
-    _ = @sizeOf(u8);
-}
-
 test "fuzz: gemv_fp8_e5m2 functions" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, _: *std.testing.Smith) !void {

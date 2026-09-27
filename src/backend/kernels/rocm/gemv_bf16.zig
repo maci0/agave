@@ -48,9 +48,3 @@ export fn gemv_bf16_kernel(x: [*]const f32, w: [*]const u16, y: [*]f32, n: u32, 
     sum = cu.blockReduceAdd(sum);
     if (tid == 0) y[row] = sum;
 }
-
-const std = @import("std");
-
-test "constants valid" {
-    comptime std.debug.assert(true);
-}
