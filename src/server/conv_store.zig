@@ -161,12 +161,49 @@ pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
     return snap;
 }
 
+/// Narrow a decoded JSON integer to the u32 the store keeps ids in.
+/// `json.extractIntField` yields any `usize`, so a value past `maxInt(u32)`
+/// means the file is corrupt: returning error.CorruptStore lets `load`
+/// quarantine it, where an unchecked `@intCast` would panic on every start.
+fn castId(raw: usize) !u32 {
+    return std.math.cast(u32, raw) orelse error.CorruptStore;
+}
+
+/// Scan the `{...}` object whose opening brace is at `arr[idx.*]` and return its
+/// body (between the braces), advancing `idx` past the closing brace. Braces
+/// inside strings do not count. An object that runs to the end of the array
+/// without closing is corruption: a truncated store must not load as if the
+/// lost tail were complete, because the next save would then rewrite the file
+/// without it.
+fn scanObject(arr: []const u8, idx: *usize) ![]const u8 {
+    std.debug.assert(idx.* < arr.len and arr[idx.*] == '{');
+    const start = idx.* + 1;
+    var depth: usize = 1;
+    var i = start;
+    while (i < arr.len and depth > 0) : (i += 1) {
+        switch (arr[i]) {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            '"' => {
+                i += 1;
+                while (i < arr.len and arr[i] != '"') : (i += 1) {
+                    if (arr[i] == '\\' and i + 1 < arr.len) i += 1;
+                }
+            },
+            else => {},
+        }
+    }
+    if (depth != 0) return error.CorruptStore;
+    idx.* = i;
+    return arr[start .. i - 1];
+}
+
 fn parse(allocator: Allocator, data: []const u8) !Snapshot {
     const version = json.extractIntField(data, "version") orelse return error.CorruptStore;
     if (version != format_version) return error.UnsupportedVersion;
-    const active_id: u32 = @intCast(json.extractIntField(data, "active_id") orelse 0);
+    const active_id: u32 = try castId(json.extractIntField(data, "active_id") orelse 0);
     const next_id_raw = json.extractIntField(data, "next_id") orelse 1;
-    const next_id: u32 = @intCast(@max(next_id_raw, 1));
+    const next_id: u32 = try castId(@max(next_id_raw, 1));
 
     const arr = json.extractObjectField(data, "conversations") orelse return error.CorruptStore;
     if (arr.len < 2 or arr[0] != '[') return error.CorruptStore;
@@ -196,28 +233,10 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
         if (i >= arr.len or arr[i] == ']') break;
         if (arr[i] != '{') return error.CorruptStore;
 
-        var depth: usize = 1;
-        const obj_start = i + 1;
-        i += 1;
-        while (i < arr.len and depth > 0) : (i += 1) {
-            if (arr[i] == '{') {
-                depth += 1;
-            } else if (arr[i] == '}') {
-                depth -= 1;
-            } else if (arr[i] == '"') {
-                i += 1;
-                while (i < arr.len and arr[i] != '"') : (i += 1) {
-                    if (arr[i] == '\\' and i + 1 < arr.len) i += 1;
-                }
-            }
-        }
-        if (i == 0) return error.CorruptStore;
-        const obj_end = i - 1;
-        if (obj_end < obj_start) return error.CorruptStore;
-        const obj = arr[obj_start..obj_end];
+        const obj = try scanObject(arr, &i);
 
         const id_raw = json.extractIntField(obj, "id") orelse return error.CorruptStore;
-        const id: u32 = @intCast(id_raw);
+        const id: u32 = try castId(id_raw);
         const title_raw = json.extractField(obj, "title") orelse "";
         const title_un = try json.jsonUnescapeOwned(allocator, title_raw);
         const title_len = @min(title_un.len, max_title_len);
@@ -279,23 +298,7 @@ fn parseMessages(allocator: Allocator, arr: []const u8) ![]Message {
         if (i >= arr.len or arr[i] == ']') break;
         if (arr[i] != '{') return error.CorruptStore;
 
-        var depth: usize = 1;
-        const obj_start = i + 1;
-        i += 1;
-        while (i < arr.len and depth > 0) : (i += 1) {
-            if (arr[i] == '{') {
-                depth += 1;
-            } else if (arr[i] == '}') {
-                depth -= 1;
-            } else if (arr[i] == '"') {
-                i += 1;
-                while (i < arr.len and arr[i] != '"') : (i += 1) {
-                    if (arr[i] == '\\' and i + 1 < arr.len) i += 1;
-                }
-            }
-        }
-        if (i == 0) return error.CorruptStore;
-        const obj = arr[obj_start .. i - 1];
+        const obj = try scanObject(arr, &i);
 
         const role_str = json.extractField(obj, "role") orelse return error.CorruptStore;
         const role: Role = if (std.mem.eql(u8, role_str, "user"))
@@ -343,6 +346,7 @@ fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
             var st: std.os.linux.Statx = undefined;
             const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .SIZE = true }, &st);
             if (rc != 0) return error.StatFailed;
+            if (st.size < 0) return error.StatFailed;
             break :blk @intCast(st.size);
         } else {
             var st: std.c.Stat = undefined;
@@ -510,6 +514,39 @@ test "load quarantines corrupt store" {
         return;
     };
     return error.CorruptNotQuarantined;
+}
+
+test "load quarantines a store whose ids overflow u32" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "wideid.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(path);
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+
+    // extractIntField yields any usize, so a hand-edited store decodes this
+    // cleanly. It must be treated as corruption, not truncated or @intCast.
+    try durable.replace(path,
+        \\{"version": 1, "active_id": 0, "next_id": 2, "conversations": [{"id": 4294967296, "title": "x", "messages": []}]}
+    );
+    try std.testing.expectError(error.CorruptStore, load(allocator, path));
+}
+
+test "load quarantines a store truncated mid-object" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "truncated.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(path);
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+
+    // The array closes but the conversation object before it never does:
+    // loading that as a whole conversation would let the next save rewrite the
+    // file without the lost tail.
+    try durable.replace(path,
+        \\{"version": 1, "active_id": 0, "next_id": 2, "conversations": [{"id": 1, "title": "x", "messages": []
+    );
+    try std.testing.expectError(error.CorruptStore, load(allocator, path));
 }
 
 test "load missing file is FileNotFound" {

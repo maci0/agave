@@ -425,7 +425,9 @@ pub const SafeTensorsDir = struct {
         var alias_buf: [name_buf_size]u8 = undefined;
         const n_layers: u32 = blk: {
             if (self.config_meta.get("num_hidden_layers")) |v| switch (v) {
-                .uint => |u| break :blk @intCast(u),
+                // Bounded like every other config-meta read: a value past u32
+                // would trap in the @intCast, and 0 just disables the aliases.
+                .uint => |u| break :blk if (u <= std.math.maxInt(u32)) @intCast(u) else 0,
                 else => {},
             };
             break :blk 0;

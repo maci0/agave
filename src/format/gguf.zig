@@ -32,6 +32,9 @@ const max_alignment: u32 = 1 << 20;
 /// crafted file may place a tensor at any byte offset. Unaligned access traps
 /// under safety checks and is undefined behaviour once they are compiled out.
 const min_tensor_data_alignment: usize = 4;
+/// Digit width of the zero-padded shard index and shard total in a split-GGUF
+/// filename (`model-00001-of-00005.gguf`). Every real shard count fits.
+const shard_digits: usize = 10;
 /// Buffer size for tensor/metadata name formatting (must fit longest GGUF key).
 const name_buf_size: usize = 256;
 
@@ -353,23 +356,30 @@ pub const GGUFFile = struct {
         const pre = stem[0..of_pos];
         const dash_pos = std.mem.lastIndexOfScalar(u8, pre, '-') orelse return;
         const idx1_str = pre[dash_pos + 1 .. of_pos];
-        _ = std.fmt.parseInt(u32, idx1_str, 10) catch return;
+        // The padded name below is built from a [shard_digits]u8 buffer, so a
+        // wider first-shard index would slice past it.
+        if (idx1_str.len > shard_digits) return;
+        // Only the first shard drives discovery; opening shard 3 of 5 would
+        // otherwise merge shard 3 a second time.
+        if ((std.fmt.parseInt(u32, idx1_str, 10) catch return) != 1) return;
         const idx_width = idx1_str.len;
         const base_prefix = pre[0 .. dash_pos + 1]; // includes trailing '-'
+        // `total` comes from the filename, so the exclusive loop bound can wrap.
+        const shard_end = std.math.add(u32, total, 1) catch return;
 
         self.extra_shards = .empty;
 
-        for (2..total + 1) |si| {
+        for (2..shard_end) |si| {
             // Build shard path.
-            var idx_raw_buf: [16]u8 = undefined;
-            var tot_raw_buf: [16]u8 = undefined;
+            var idx_raw_buf: [shard_digits]u8 = undefined;
+            var tot_raw_buf: [shard_digits]u8 = undefined;
             const idx_raw = std.fmt.bufPrint(&idx_raw_buf, "{d}", .{si}) catch continue;
             const tot_raw = std.fmt.bufPrint(&tot_raw_buf, "{d}", .{total}) catch continue;
             // Skip if formatted index/total is wider than the first shard's padding width
             // (e.g., shard "1-of-10" → idx_width=1, but shard 10 formats as "10" len=2).
             if (idx_raw.len > idx_width or tot_raw.len > idx_width) continue;
-            var idx_buf: [16]u8 = [_]u8{'0'} ** 16;
-            var tot_buf: [16]u8 = [_]u8{'0'} ** 16;
+            var idx_buf = [_]u8{'0'} ** shard_digits;
+            var tot_buf = [_]u8{'0'} ** shard_digits;
             @memcpy(idx_buf[idx_width - idx_raw.len .. idx_width], idx_raw);
             @memcpy(tot_buf[idx_width - tot_raw.len .. idx_width], tot_raw);
 
