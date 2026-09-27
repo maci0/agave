@@ -95,7 +95,9 @@ fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_err
 /// reached. Production keeps the spin count; under a clock override the bound
 /// is `shm_wait_budget_ms` of virtual time, so the same number of iterations
 /// elapse on every host.
-fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, timeout_error: anyerror) !void {
+/// `timeout_error` is comptime so the return type stays a named set: a runtime
+/// `anyerror` parameter would widen every caller to the global error set.
+fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, comptime timeout_error: TransportError) TransportError!void {
     if (sim_clock.isOverridden()) {
         const deadline = sim_clock.monoMilli() + shm_wait_budget_ms;
         while (flag.load(.acquire) != want) {
@@ -136,6 +138,32 @@ const ShmHeader = extern struct {
     ready: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     size: u32 = 0,
     _pad: [56]u8 = [_]u8{0} ** 56,
+};
+
+/// Errors the collective and point-to-point entry points can return.
+/// Named, not inferred: these calls sit in a model forward pass, and an
+/// inferred set that reaches back into the model resolves to the global error
+/// set, which the model vtable cannot coerce into `models.ForwardError`.
+/// Every member is a member of `models.ForwardError`, so `try` composes.
+pub const TransportError = error{
+    /// Buffer length overflows size_t when scaled to bytes.
+    BufferTooLarge,
+    /// A point-to-point or collective transfer did not reach every peer.
+    NotConnected,
+    ShmNotConnected,
+    ShmSendTimeout,
+    ShmRecvTimeout,
+    SendFailed,
+    RecvFailed,
+    NcclNotAvailable,
+    NcclAllReduceFailed,
+    NcclSendFailed,
+    NcclRecvFailed,
+    /// The CUDA driver entry points the transport needs were not loaded.
+    CudaNotAvailable,
+    /// cudaMalloc for the NCCL staging buffer failed.
+    StagingAllocFailed,
+    OutOfMemory,
 };
 
 /// Network transport for distributed inference (TCP, POSIX shared memory, or NCCL).
@@ -334,7 +362,7 @@ pub const Transport = struct {
         std.log.info("shm: connected ({s} → {s})", .{ send_name, recv_name });
     }
 
-    fn shmSend(self: *Transport, data: [*]const u8, byte_len: usize) !void {
+    fn shmSend(self: *Transport, data: [*]const u8, byte_len: usize) TransportError!void {
         const send = self.shm_send orelse return error.ShmNotConnected;
         std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(send));
@@ -347,7 +375,7 @@ pub const Transport = struct {
         hdr.ready.store(1, .release);
     }
 
-    fn shmRecv(self: *Transport, data: [*]u8, byte_len: usize) !void {
+    fn shmRecv(self: *Transport, data: [*]u8, byte_len: usize) TransportError!void {
         const recv = self.shm_recv orelse return error.ShmNotConnected;
         std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(recv));
@@ -470,7 +498,7 @@ pub const Transport = struct {
     /// Sum-reduce `n` floats in `buf` across all peers (in-place).
     /// Dispatches to NCCL (GPU-direct or staging), SHM, or TCP depending on transport kind.
     /// Falls back to TCP when the NCCL communicator is unavailable.
-    pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) !void {
+    pub fn allReduceAdd(self: *Transport, buf: [*]f32, n: usize) TransportError!void {
         if (self.kind == .nccl) {
             self.ensureNcclComm();
             if (self.nccl_comm == null) {
@@ -572,7 +600,7 @@ pub const Transport = struct {
     }
 
     /// Point-to-point send: send buffer to peer.
-    pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) !void {
+    pub fn sendBuf(self: *Transport, buf: [*]const f32, n: usize) TransportError!void {
         const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
         if (self.kind == .nccl and self.nccl_send != null) {
             self.ensureNcclComm();
@@ -606,12 +634,12 @@ pub const Transport = struct {
     }
 
     /// Batched send: send multiple buffers sequentially.
-    pub fn sendBufs(self: *Transport, bufs: []const [*]const f32, lens: []const usize) !void {
+    pub fn sendBufs(self: *Transport, bufs: []const [*]const f32, lens: []const usize) TransportError!void {
         for (bufs, lens) |buf, n| try self.sendBuf(buf, n);
     }
 
     /// Batched recv: receive multiple buffers sequentially.
-    pub fn recvBufs(self: *Transport, bufs: []const [*]f32, lens: []const usize) !void {
+    pub fn recvBufs(self: *Transport, bufs: []const [*]f32, lens: []const usize) TransportError!void {
         for (bufs, lens) |buf, n| try self.recvBuf(buf, n);
     }
 
@@ -665,7 +693,7 @@ pub const Transport = struct {
     /// Receive `n` floats from the peer into `buf`.
     /// Uses NCCL point-to-point recv (with device staging), SHM, or TCP
     /// depending on transport kind. Falls back to TCP when NCCL is unavailable.
-    pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) !void {
+    pub fn recvBuf(self: *Transport, buf: [*]f32, n: usize) TransportError!void {
         const byte_len = std.math.mul(usize, n, @sizeOf(f32)) catch return error.BufferTooLarge;
         if (self.kind == .nccl and self.nccl_recv != null) {
             self.ensureNcclComm();
