@@ -19,6 +19,13 @@
  *     }
  *     throw e;
  *   }
+ *   agave.destroy();
+ *
+ * `generate()` resolves with the engine's output string for the prompt; until
+ * the wasm32 forward pass lands, that is the tokenization report, not model
+ * output. A large download can be streamed and observed first:
+ *   const bytes = await agave.fetchModel(url, { onProgress: (p) => report(p) });
+ *   await agave.loadModel(bytes);
  */
 /**
  * Recoverable engine failure. `code` is stable; `message` is diagnostic text.
@@ -179,13 +186,30 @@ const generateErrorCode = (wasm_code) => {
     if (wasm_code === wasm_err.not_ready || wasm_code === wasm_err.invalid_handle) {
         return 'no_model';
     }
+    if (wasm_code === wasm_err.tokenize) {
+        return 'tokenize';
+    }
     return 'generate_failed';
 };
 class AgaveEngine {
-    wasm = null;
-    ctx = 0;
-    ready = false;
-    initMessage = '';
+    /* The instance and the context pointer are engine state, not part of the
+       public contract: a caller writing them corrupts the engine. `ready`,
+       `hasModel`, and `initMessage` are the read-only view. */
+    #wasm = null;
+    #ctx = 0;
+    #init_message = '';
+    /** True once `init()` has instantiated a module. `destroy()` keeps it true. */
+    get ready() {
+        return this.#wasm !== null;
+    }
+    /** True while a model is loaded and `generate()` can run. */
+    get hasModel() {
+        return this.#ctx !== 0;
+    }
+    /** Model banner from the last successful `loadModel()` ('' when none). */
+    get initMessage() {
+        return this.#init_message;
+    }
     /**
      * Instantiate `agave.wasm`. Pass a URL or an already-fetched module buffer to
      * skip the default same-origin fetch (tests, custom hosting). `signal` aborts
@@ -226,12 +250,11 @@ class AgaveEngine {
         /* Swap only after the new module is valid so a failed re-init keeps the
            previous engine. Free the old context against the old instance: its
            pointer is meaningless in the new linear memory. */
-        const prev = this.wasm;
-        const prev_ctx = this.ctx;
-        this.wasm = instance;
-        this.ctx = 0;
-        this.initMessage = '';
-        this.ready = true;
+        const prev = this.#wasm;
+        const prev_ctx = this.#ctx;
+        this.#wasm = instance;
+        this.#ctx = 0;
+        this.#init_message = '';
         if (prev && prev_ctx) {
             wasmExports(prev).agave_free(prev_ctx);
         }
@@ -239,18 +262,76 @@ class AgaveEngine {
         console.log('Agave WASM engine initialized');
     }
     /**
+     * Download a GGUF file from a URL, reporting progress as it arrives.
+     * `signal` aborts the download. Pair with `loadModel()` when you want the
+     * progress bar; `loadModel(url)` alone never reports progress.
+     *
+     * Throws `AgaveError` with code `download_failed`, carrying `httpStatus` for
+     * an HTTP error response.
+     */
+    // oxlint-disable-next-line eslint/class-methods-use-this -- engine instance method for discoverability; it touches no engine state
+    async fetchModel(url, options = {}) {
+        const init = options.signal === undefined
+            ? undefined
+            : { signal: options.signal };
+        const response = await fetchOrThrow(url, init, 'download_failed', 'model');
+        if (!response.ok) {
+            throw new AgaveError('download_failed', `Failed to download model (HTTP ${String(response.status)})`, response.status);
+        }
+        if (!options.onProgress) {
+            try {
+                return await response.arrayBuffer();
+            }
+            catch (error) {
+                throw wrapFetchError(error, 'download_failed', 'model');
+            }
+        }
+        const total = Number(response.headers.get('content-length')) || 0;
+        const reader = response.body?.getReader();
+        if (!reader) {
+            const buffer = await response.arrayBuffer();
+            options.onProgress({ received: buffer.byteLength, total });
+            return buffer;
+        }
+        const chunks = [];
+        let received = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            chunks.push(value);
+            received += value.byteLength;
+            options.onProgress({ received, total });
+        }
+        const out = new Uint8Array(received);
+        let offset = 0;
+        for (const chunk of chunks) {
+            out.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return out.buffer;
+    }
+    /**
      * Load a model from a URL, ArrayBuffer, or typed-array view. `signal` aborts
      * the URL fetch; a model already copied into WASM is not cancelled.
+     *
+     * Throws `AgaveError` with code `gguf_parse`, `unsupported_arch`, `no_vocab`,
+     * `tokenizer`, or `init_failed` when the bytes are not a model this engine can
+     * use. A failed load leaves any previously loaded model in place.
      */
     async loadModel(source, signal) {
-        if (!this.wasm) {
+        if (!this.#wasm) {
             throw new AgaveError('not_initialized', 'Engine not initialized');
         }
-        const exp = wasmExports(this.wasm);
+        const exp = wasmExports(this.#wasm);
         // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|buffer union; no schema parser to delegate to
         const data = typeof source === 'string'
             ? new Uint8Array(await fetchBuffer(source, 'download_failed', 'model', signal))
             : bytesFromBuffer(source);
+        if (data.byteLength === 0) {
+            throw new AgaveError('invalid_argument', 'Model source is empty');
+        }
         // Allocate WASM memory and copy model data
         const ptr = exp.agave_alloc(data.byteLength);
         if (ptr === 0) {
@@ -283,26 +364,35 @@ class AgaveEngine {
             exp.agave_free(newCtx);
             throw new AgaveError(initErrorCode(wasm_code), initMessage || 'Failed to initialize model');
         }
-        if (this.ctx) {
-            exp.agave_free(this.ctx);
+        if (this.#ctx) {
+            exp.agave_free(this.#ctx);
         }
-        this.ctx = newCtx;
-        this.initMessage = initMessage;
+        this.#ctx = newCtx;
+        this.#init_message = initMessage;
         // oxlint-disable-next-line no-console -- engine diagnostics for WASM debugging
-        console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB, ${this.initMessage}`);
+        console.log(`Model loaded: ${(data.byteLength / 1024 / 1024).toFixed(1)} MB, ${this.#init_message}`);
     }
     /**
-     * Generate text from a prompt.
+     * Run a prompt and return the engine's output for it.
+     *
+     * `maxTokens` is the generation budget; omit it or pass 0 for the default
+     * (100). Anything else must be a non-negative integer that fits in 32 bits,
+     * else `invalid_argument`.
+     *
+     * Throws `AgaveError` with code `no_model` before `loadModel()`,
+     * `tokenize` when the prompt cannot be encoded, and `generate_failed`
+     * otherwise. Until the wasm32 forward pass lands, the returned string is the
+     * tokenization report, not model output.
      */
     // oxlint-disable-next-line eslint/require-await, typescript-eslint/require-await -- async signature is the documented Promise API contract
     async generate(prompt, options = {}) {
-        if (!this.wasm) {
+        if (!this.#wasm) {
             throw new AgaveError('not_initialized', 'Engine not initialized');
         }
-        if (!this.ctx) {
+        if (!this.#ctx) {
             throw new AgaveError('no_model', 'No model loaded');
         }
-        const exp = wasmExports(this.wasm);
+        const exp = wasmExports(this.#wasm);
         const requested = options.maxTokens;
         const out_of_range = requested !== undefined && requested !== 0
             && (!Number.isInteger(requested) || requested < 0 || requested > max_u32);
@@ -326,9 +416,9 @@ class AgaveEngine {
                 const promptMem = new Uint8Array(exp.memory.buffer, promptPtr, promptBytes.length);
                 promptMem.set(promptBytes);
             }
-            exp.agave_generate(this.ctx, promptPtr, promptBytes.length, maxTokens);
-            const output = readCtxOutput(exp, this.ctx);
-            const wasm_code = exp.agave_last_error(this.ctx);
+            exp.agave_generate(this.#ctx, promptPtr, promptBytes.length, maxTokens);
+            const output = readCtxOutput(exp, this.#ctx);
+            const wasm_code = exp.agave_last_error(this.#ctx);
             if (wasm_code !== wasm_err.ok) {
                 throw new AgaveError(generateErrorCode(wasm_code), output || 'Generation failed');
             }
@@ -341,15 +431,15 @@ class AgaveEngine {
         }
     }
     /**
-     * Free the loaded model. The WASM instance stays so `loadModel` can run again
-     * without another `init()`.
+     * Free the loaded model. The WASM instance stays, so `loadModel()` can run
+     * again without another `init()`. Safe to call twice.
      */
     destroy() {
-        if (this.wasm && this.ctx) {
-            wasmExports(this.wasm).agave_free(this.ctx);
+        if (this.#wasm && this.#ctx) {
+            wasmExports(this.#wasm).agave_free(this.#ctx);
         }
-        this.ctx = 0;
-        this.initMessage = '';
+        this.#ctx = 0;
+        this.#init_message = '';
     }
 }
 // Explicit binding: classic scripts should not rely on declaration-position magic.

@@ -375,7 +375,7 @@ Activated via `--grammar <file.gbnf>` or `--json-schema <schema>` CLI flags, or 
 
 ### WASM (`src/wasm_entry.zig`)
 
-Browser inference entry point for running Agave in WebAssembly environments. Provides GGUF parsing from an in-memory buffer. CPU backend only (no GPU in wasm32 freestanding). The JS glue (`web/agave.ts`) exposes `AgaveEngine` and typed `AgaveError` codes; `agave_free` owns the model buffer passed to `agave_init`. Full forward-pass inference is blocked by a Zig 0.16 + LLVM 21 wasm32 codegen bug; init, parse, and tokenize work.
+Browser inference entry point for running Agave in WebAssembly environments. Provides GGUF parsing from an in-memory buffer. CPU backend only (no GPU in wasm32 freestanding). The JS glue (`web/agave.ts`) exposes `AgaveEngine` and typed `AgaveError` codes; engine state is read through `ready`, `hasModel`, and `initMessage`, and `fetchModel()` streams a model with progress before `loadModel()` takes the buffer. `agave_free` owns the model buffer passed to `agave_init`. Full forward-pass inference is blocked by a Zig 0.16 + LLVM 21 wasm32 codegen bug; init, parse, and tokenize work.
 
 ### Speculative Decoding (`src/spec/`)
 
