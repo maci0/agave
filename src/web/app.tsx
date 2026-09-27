@@ -1,6 +1,6 @@
 // Server chat UI (embedded by src/server/server.zig). Not the WASM browser shell in web/.
 // Source of truth: compile with `scripts/build-web.sh` (bun + Tailwind) to refresh
-// the committed app.js and style.css.
+// The committed app.js and style.css.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -24,20 +24,7 @@ import {
 } from './chat/api';
 import { fmtInt, fmtNum, localDateYmd } from './chat/format';
 import { loadMarkdown } from './chat/markdown';
-import {
-  clearSystemPrompt as clearStoredSystemPrompt,
-  isMaxTokensValid,
-  readMaxTokens,
-  readShowStats,
-  readSystemPrompt,
-  readTemperature,
-  readTopP,
-  writeMaxTokens,
-  writeShowStats,
-  writeSystemPrompt,
-  writeTemperature,
-  writeTopP,
-} from './chat/storage';
+import { clearStoredSystemPrompt, readSampling, readShowStats, writeSampling, writeShowStats } from './chat/storage';
 import type { Bubble, ConvRecord, ModelRecord, Sampling, Toast } from './chat/types';
 
 /** One paint per window: faster than the eye, far cheaper than one per token. */
@@ -76,12 +63,7 @@ const ChatApp = () => {
   const [vision, setVision] = useState(false);
   const [visionKnown, setVisionKnown] = useState(false);
   const [pendingImage, setPendingImage] = useState<string | null>(null);
-  const [sampling, setSampling] = useState<Sampling>({
-    temperature: readTemperature(),
-    topP: readTopP(),
-    maxTokens: readMaxTokens(),
-    system: readSystemPrompt(),
-  });
+  const [sampling, setSampling] = useState<Sampling>(readSampling);
   const [showStats, setShowStats] = useState(readShowStats);
   const [toasts, setToasts] = useState<Array<Toast>>([]);
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -160,12 +142,12 @@ const ChatApp = () => {
 
   const offline = useCallback(function () {
     // A failed refresh after a name is known only means the numbers are stale,
-    // so a live model is never replaced by an offline badge.
+    // So a live model is never replaced by an offline badge.
     if (!modelResolvedRef.current) { setModelResolved(false); }
   }, []);
 
   // A loaded model without a vision encoder cannot read an attached image, so
-  // the pending one is dropped rather than silently sent.
+  // The pending one is dropped rather than silently sent.
   useEffect(function () {
     if (visionKnown && !vision && pendingImage) {
       setPendingImage(null);
@@ -197,7 +179,7 @@ const ChatApp = () => {
     const sync = function () {
       setIsDrawer(query.matches);
       // Leaving the drawer breakpoint must drop the sheet, or the chat stays
-      // behind a scrim with no visible way to close it.
+      // Behind a scrim with no visible way to close it.
       if (!query.matches) { setDrawerOpen(false); }
     };
     sync();
@@ -254,7 +236,7 @@ const ChatApp = () => {
     nextBubbleId.current += 1;
     setBubbles(function (previous) { return [...previous, { id, role: 'assistant', text: '', phase: 'thinking' }]; });
     // Start the markdown fetch alongside the request: by the time the last chunk
-    // renders, marked and DOMPurify are normally already in place.
+    // Renders, marked and DOMPurify are normally already in place.
     void loadMarkdown();
 
     const controller = new AbortController();
@@ -394,7 +376,7 @@ const ChatApp = () => {
         if (data.cleared) { setBubbles([]); }
         focusComposer();
         // Deleting another conversation changes nothing on screen, so the row
-        // vanishing is the only feedback; say it landed.
+        // Vanishing is the only feedback; say it landed.
         pushToast('Conversation deleted.', 'info');
       },
       function () { pushToast('Could not delete that conversation. Check that the server is running.'); },
@@ -449,7 +431,7 @@ const ChatApp = () => {
     if (command === '/model') { reply(`Model: **${modelName || 'unknown'}**`); return; }
     if (command === '/reset' || command === '/clear') { clearChat(); return; }
     // Unknown command: give feedback like the REPL does, instead of silently
-    // sending the "/..." text to the model as a chat message.
+    // Sending the "/..." text to the model as a chat message.
     reply(`Unknown command: \`${command}\`\n\nType \`/help\` to see the available commands.`);
     announce(`Unknown command ${command}`);
   }, [announce, clearChat, modelName, refreshModel]);
@@ -465,7 +447,7 @@ const ChatApp = () => {
   const submitMessage = useCallback(function (text: string, image: string | null) {
     if (streaming) {return;}
     // Commands run client-side and never post an image, so the bubble would
-    // show an attachment the model never received. Refuse and keep both.
+    // Show an attachment the model never received. Refuse and keep both.
     if (image && text.startsWith('/')) {
       pushToast('Slash commands do not send images. Remove the image or send it as a message.');
       return;
@@ -514,12 +496,7 @@ const ChatApp = () => {
 
   const updateSampling = useCallback(function (next: Sampling) {
     setSampling(next);
-    writeTemperature(next.temperature);
-    writeTopP(next.topP);
-    // Only a value that will be sent is stored, so a half-typed field cannot
-    // survive a reload.
-    if (isMaxTokensValid(next.maxTokens)) { writeMaxTokens(next.maxTokens); }
-    writeSystemPrompt(next.system);
+    writeSampling(next);
   }, []);
 
   const clearSystem = useCallback(function () {
@@ -611,7 +588,7 @@ const ChatApp = () => {
       <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} modelName={modelName} backendName={backendName} />
       {isDrawer ? (
         // Radix supplies the scrim, the focus trap and the inert backdrop the
-        // hand-rolled drawer reimplemented.
+        // Hand-rolled drawer reimplemented.
         <Dialog open={drawerOpen} onOpenChange={setDrawerOpen}>
           <DialogContent side="left" hideClose className="p-0">
             <Sidebar {...sidebarProps} onClose={function () { setDrawerOpen(false); }} />

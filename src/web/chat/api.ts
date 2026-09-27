@@ -10,9 +10,9 @@ const FORM_HEADERS = { 'Content-Type': 'application/x-www-form-urlencoded' } as 
 /** Idempotency key for one mutating request. A fresh key is minted per user
  *  action, never per attempt, so an intentional second action still runs. */
 export const newRequestId = (): string => {
-  // randomUUID needs a secure context; the UI is also reachable over plain
-  // http on a LAN address, where the fallback keeps every key inside the
-  // server's A-Za-z0-9-_. sanitize set.
+  // RandomUUID needs a secure context; the UI is also reachable over plain
+  // Http on a LAN address, where the fallback keeps every key inside the
+  // Server's A-Za-z0-9-_. sanitize set.
   if (typeof crypto.randomUUID === 'function') {return crypto.randomUUID();}
   return `${Date.now().toString(16)}.${Math.random().toString(16).slice(2, 10)}`;
 };
@@ -43,50 +43,44 @@ export const userFacingError = (error: unknown): string => {
   return String(error);
 };
 
-async function getJson<T>(url: string): Promise<T> {
+const getJson = async <T>(url: string): Promise<T> => {
   const response = await fetch(url);
+  // SAFETY: every route below answers with the JSON shape named by the caller,
+  // And the server is the same binary that serves this page.
   return (await response.json()) as T;
-}
+};
+
+/** Post a conversation action. `id` is required by select and delete only;
+ *  `requestId` is the idempotency key, which the mutating routes need. */
+const postConversation = async (action: string, id?: string, requestId?: string): Promise<ConvMessages> => {
+  const target = id === undefined ? `action=${action}` : `action=${action}&id=${encodeURIComponent(id)}`;
+  const headers = requestId === undefined ? FORM_HEADERS : { ...FORM_HEADERS, 'X-Request-Id': requestId };
+  const response = await fetch('/v1/conversations', { method: 'POST', headers, body: target });
+  // SAFETY: the /v1/conversations POST always answers with the ConvMessages
+  // Shape; a non-JSON body surfaces as a parse error the caller toasts.
+  return (await response.json()) as ConvMessages;
+};
 
 /** First model in `/v1/models`, or null when the server reports none. */
-export async function loadModels(): Promise<ModelRecord | null> {
+export const loadModels = async (): Promise<ModelRecord | null> => {
   const data = await getJson<{ data?: Array<ModelRecord> }>('/v1/models');
   return data.data?.[0] ?? null;
-}
+};
 
-export const loadConversations = (): Promise<Array<ConvRecord>> =>
-  getJson<Array<ConvRecord>>('/v1/conversations');;
+export const loadConversations = (): Promise<Array<ConvRecord>> => getJson<Array<ConvRecord>>('/v1/conversations');
 
-export async function createConversation(): Promise<void> {
-  await fetch('/v1/conversations', {
-    method: 'POST',
-    headers: { ...FORM_HEADERS, 'X-Request-Id': newRequestId() },
-    body: 'action=new',
-  });
-}
+export const createConversation = async (): Promise<void> => {
+  await postConversation('new', undefined, newRequestId());
+};
 
-export async function selectConversation(id: string): Promise<ConvMessages> {
-  const response = await fetch('/v1/conversations', {
-    method: 'POST',
-    headers: FORM_HEADERS,
-    body: `action=select&id=${encodeURIComponent(id)}`,
-  });
-  return (await response.json()) as ConvMessages;
-}
+export const selectConversation = (id: string): Promise<ConvMessages> => postConversation('select', id);
 
-export async function deleteConversation(id: string): Promise<ConvMessages> {
-  const response = await fetch('/v1/conversations', {
-    method: 'POST',
-    headers: FORM_HEADERS,
-    body: `action=delete&id=${encodeURIComponent(id)}`,
-  });
-  return (await response.json()) as ConvMessages;
-}
+export const deleteConversation = (id: string): Promise<ConvMessages> => postConversation('delete', id);
 
 /** Clear the server-side conversation and KV cache. */
-export async function clearServerConversation(): Promise<void> {
+export const clearServerConversation = async (): Promise<void> => {
   await fetch('/v1/chat', { method: 'POST', headers: FORM_HEADERS, body: 'message=%2Fclear' });
-}
+};
 
 /** Query string for the sampling settings and the system prompt. */
 export const samplingParams = (sampling: Sampling): string => {
@@ -117,7 +111,7 @@ export type StreamRequest = {
 /** Consume a `stream=1` response, calling back per token and once with the
  *  final statistics. Throws on a non-2xx response, an empty body, a decode
  *  failure, or the abort signal; the caller turns that into UI state. */
-export async function streamChat(request: StreamRequest, callbacks: StreamCallbacks): Promise<void> {
+export const streamChat = async (request: StreamRequest, callbacks: StreamCallbacks): Promise<void> => {
   const response = await fetch(request.url ?? '/v1/chat', {
     method: 'POST',
     headers: { ...FORM_HEADERS, 'X-Request-Id': request.requestId },
@@ -143,9 +137,11 @@ export async function streamChat(request: StreamRequest, callbacks: StreamCallba
       if (payload === '[DONE]') {return;}
       let frame: StreamFrame;
       try {
+        // SAFETY: the server emits these frames itself (docs/API.md, streaming);
+        // A frame that does not match is dropped by the field checks below.
         frame = JSON.parse(payload) as StreamFrame;
       } catch (error) { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- one malformed SSE frame must not kill the stream
-        // oxlint-disable-next-line no-console -- stream diagnostics; toasts would spam the UI per token
+        // Oxlint-disable-next-line no-console -- stream diagnostics; toasts would spam the UI per token
         console.warn('SSE parse:', error);
         continue;
       }
@@ -165,4 +161,4 @@ export async function streamChat(request: StreamRequest, callbacks: StreamCallba
       }
     }
   }
-}
+};

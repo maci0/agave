@@ -80,25 +80,23 @@ const ConversationList = ({ conversations, loadError, onSelect, onDelete, onRetr
 
 /** The conversation drawer body, shared by the desktop column and the mobile
  *  sheet so both surfaces stay identical. */
-export const Sidebar = (props: SidebarProps) => {
-  return (
-    <div className="flex h-full w-full flex-col bg-card">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-3">
-        <h2 className="font-mono text-xs font-medium text-faint">Chats</h2>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {props.onClose ? (
-            <Button type="button" size="iconSm" onClick={props.onClose} aria-label="Close sidebar" className="max-drawer:inline-flex">
-              <X className="size-5" aria-hidden="true" />
-            </Button>
-          ) : null}
-          <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} aria-label="New conversation">
-            + New
+export const Sidebar = (props: SidebarProps) => (
+  <div className="flex h-full w-full flex-col bg-card">
+    <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-3">
+      <h2 className="font-mono text-xs font-medium text-faint">Chats</h2>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {props.onClose ? (
+          <Button type="button" size="iconSm" onClick={props.onClose} aria-label="Close sidebar" className="max-drawer:inline-flex">
+            <X className="size-5" aria-hidden="true" />
           </Button>
-        </div>
-      </div>
-      <div className="agave-scroll flex-1 overflow-y-auto p-2">
-        <ConversationList {...props} />
+        ) : null}
+        <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} aria-label="New conversation">
+          + New
+        </Button>
       </div>
     </div>
-  );
-};
+    <div className="agave-scroll flex-1 overflow-y-auto p-2">
+      <ConversationList {...props} />
+    </div>
+  </div>
+);

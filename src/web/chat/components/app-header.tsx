@@ -64,7 +64,7 @@ export const AppHeader = (props: AppHeaderProps) => {
           </Badge>
         ) : (
           // Prefer a native button over role="button" on a live region (4.1.2),
-          // and keep the label honest: it is a control until the server answers.
+          // And keep the label honest: it is a control until the server answers.
           <Button
             type="button"
             size="sm"

@@ -33,7 +33,7 @@ type Message = {
 const ROLE_LABELS: Record<Role, string> = { user: 'You', assistant: 'Agave', system: 'System', error: 'Error' };
 
 const fmtMb = (bytes: number): string =>
-  (bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });;
+  (bytes / 1024 / 1024).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 });
 
 const truncateAnnounce = (text: string, maxChars: number): string => {
   const chars = Array.from(text);
@@ -42,7 +42,7 @@ const truncateAnnounce = (text: string, maxChars: number): string => {
 };
 
 const isGgufName = (name: string): boolean =>
-  name.toLowerCase().endsWith('.gguf');;
+  name.toLowerCase().endsWith('.gguf');
 
 const isGgufBuffer = (data: ArrayBuffer): boolean => {
   if (data.byteLength < GGUF_MAGIC.length) {return false;}
@@ -447,7 +447,7 @@ const Shell = () => {
             onChange={function (event) { setPrompt(event.target.value); }}
             onKeyDown={function (event) {
               // Ignore Enter during IME composition (CJK input): Enter there
-              // confirms the conversion, it must not send.
+              // Confirms the conversion, it must not send.
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 send();
