@@ -650,9 +650,9 @@ OpenAI-shaped error for a 400 or 413.
 | Status | When |
 |--------|------|
 | `400 Bad Request` | Malformed JSON, missing required fields, invalid parameter values |
-| `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` or `X-API-Key` when `--api-key` is set |
+| `401 Unauthorized` | Missing or invalid `Authorization: Bearer <key>` or `X-API-Key` when `--api-key` is set. Checked before routing, so an unknown path answers `401` rather than `404` or `405` when the key is wrong; `/health`, `/ready` (reduced body) and `/favicon.ico` are exempt |
 | `403 Forbidden` | Cross-origin request, or non-loopback `Host`, when no `--api-key` is configured |
-| `404 Not Found` | Unknown endpoint or conversation not found |
+| `404 Not Found` | Unknown endpoint, or conversation not found |
 | `405 Method Not Allowed` | Known endpoint with wrong HTTP method (includes `Allow` header) |
 | `409 Conflict` | Repeated `X-Request-Id` still in flight, or a replay whose response cannot be re-sent (see [Idempotency](#idempotency)) |
 | `413 Payload Too Large` | Request body exceeds 1 MB server limit |

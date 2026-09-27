@@ -31,7 +31,10 @@ FILES: dict[str, str] = {
         '    .minimum_zig_version = "0.16.0",\n}\n'
     ),
     "CHANGELOG.md": (
-        f"Product version is **{PRODUCT}**\n\n## [Unreleased]\n\n## [{PRODUCT}]\n"
+        f"Product version is **{PRODUCT}**\n\n## [Unreleased]\n\n"
+        f"## [{PRODUCT}] - 2026-01-01\n\n"
+        f"[unreleased]: https://example.invalid/compare/v{PRODUCT}...HEAD\n"
+        f"[{PRODUCT}]: https://example.invalid/compare/v0.0.1...v{PRODUCT}\n"
     ),
     "docs/API.md": f'Product version **{PRODUCT}**\n\n"system_fingerprint": "agave-v{PRODUCT}"\n',
     "docs/CONTRIBUTING.md": f"Product version: **{PRODUCT}**\n",
@@ -89,6 +92,31 @@ class VersionConsistencyTest(unittest.TestCase):
     def test_zig_pin_mismatch_still_reported(self) -> None:
         errors = self._errors({".zigversion": "0.15.0\n"})
         self.assertTrue(any(".zigversion" in e for e in errors), errors)
+
+    def test_released_section_without_link_definition_is_reported(self) -> None:
+        changelog = FILES["CHANGELOG.md"].replace(
+            f"\n[{PRODUCT}]: https://example.invalid/compare/v0.0.1...v{PRODUCT}\n", ""
+        )
+        errors = self._errors({"CHANGELOG.md": changelog})
+        self.assertTrue(any("has no" in e and "link definition" in e for e in errors), errors)
+
+    def test_unreleased_compare_against_stale_tag_is_reported(self) -> None:
+        changelog = FILES["CHANGELOG.md"].replace(
+            f"[unreleased]: https://example.invalid/compare/v{PRODUCT}...HEAD",
+            "[unreleased]: https://example.invalid/compare/v0.1.0...HEAD",
+        )
+        errors = self._errors({"CHANGELOG.md": changelog})
+        self.assertTrue(any("[unreleased]" in e for e in errors), errors)
+
+    def test_release_tag_disagreeing_with_manifest_is_reported(self) -> None:
+        with patch.object(check_docs, "_tags_at_head", return_value=["v0.4.0"]):
+            errors = self._errors()
+        self.assertTrue(any("tagged v0.4.0" in e for e in errors), errors)
+
+    def test_milestone_tag_is_not_a_release_tag(self) -> None:
+        with patch.object(check_docs, "_tags_at_head", return_value=["v1.0"]):
+            errors = self._errors()
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

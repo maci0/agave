@@ -617,7 +617,9 @@ maintainers (avoid commit hashes as the only description).
 ### Release checklist
 
 1. Move `## [Unreleased]` items into a dated/versioned section; bump
-   `build.zig.zon` `.version` when cutting a release.
+   `build.zig.zon` `.version` when cutting a release. Add the
+   `[X.Y.Z]:` link definition for the new section and repoint `[unreleased]`
+   at the new tag (`compare/vX.Y.Z...HEAD`).
 2. Confirm `CHANGELOG.md` and `build.zig.zon` `.version` agree (`agave --version`).
 3. Tag `vX.Y.Z` matching the product version (do not reuse or mutate tags).
 4. Smoke: `agave --version`, one short CPU inference, and `GET /health` if serving.
@@ -626,6 +628,10 @@ maintainers (avoid commit hashes as the only description).
 6. Run `python3 scripts/check-docs.py` (SemVer string must match across
    `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, `docs/CONTRIBUTING.md`,
    `README.md`, `SECURITY.md`, and `docs/DOCUMENTATION.md`;
+   every released `[X.Y.Z]` section must have a link definition and
+   `[unreleased]` must compare against the current tag;
+   a HEAD tag matching `v[0-9]+.[0-9]+.[0-9]+` must equal `.version`
+   (a milestone name like `v1.0` is exempt);
    every `cli_specs` flag must appear in the README CLI Options block; every
    model `-Denable-*` must appear in README, `Dockerfile`, and the Gemma3-only
    Compose override).
