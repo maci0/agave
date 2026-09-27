@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Reproducibility pins that CI's fmt-check job and `zig build check` both run.
 #
-# A green `zig build check` must not disagree with CI: these five pins
+# A green `zig build check` must not disagree with CI: these pins
 # (Zig toolchain, Debian snapshot day, SOURCE_DATE_EPOCH, apt source
-# isolation, ruff version) are what make a build or a gate reproducible, and a
-# mismatch only surfaced in CI, so a contributor learned about it after
-# pushing.
+# isolation, listen port, ruff version, bun version) are what make a build or a
+# gate reproducible, and a mismatch only surfaced in CI, so a contributor
+# learned about it after pushing.
 #
 # Exit 0 when every pin agrees, 1 on a mismatch or an unparseable file.
 set -euo pipefail
@@ -95,3 +95,23 @@ if [[ "$ruff_pin" != "$ci_ruff_pin" ]]; then
     exit 1
 fi
 echo "Ruff pin OK: $ruff_pin"
+
+# package.json packageManager is what scripts/lint-web.sh gates a local run on;
+# ci.yml names the same version for setup-bun. If the two drift, CI lints with a
+# different bun than the one a developer's `zig build lint-web` verified.
+bun_pin="$(sed -n 's/.*"packageManager": "bun@\([^"]*\)".*/\1/p' package.json | head -n1)"
+ci_bun_pin="$(sed -n 's/.*bun-version: "\([^"]*\)".*/\1/p' .github/workflows/ci.yml | head -n1)"
+if [[ -z "$bun_pin" || -z "$ci_bun_pin" ]]; then
+    echo "check-pins: could not parse packageManager bun@<version> from package.json and bun-version from ci.yml" >&2
+    exit 1
+fi
+if [[ "$bun_pin" != "$ci_bun_pin" ]]; then
+    echo "check-pins: package.json packageManager (bun@$bun_pin) != ci.yml setup-bun bun-version ($ci_bun_pin)" >&2
+    exit 1
+fi
+engines_bun="$(sed -n 's/^[[:space:]]*"bun": "\([^"]*\)".*/\1/p' package.json | head -n1)"
+if [[ "$engines_bun" != "$bun_pin" ]]; then
+    echo "check-pins: package.json engines.bun ($engines_bun) != packageManager (bun@$bun_pin)" >&2
+    exit 1
+fi
+echo "Bun pin OK: $bun_pin (packageManager, engines.bun, ci.yml setup-bun)"

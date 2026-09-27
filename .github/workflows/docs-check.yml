@@ -60,7 +60,8 @@ permissions:
 
 concurrency:
   group: docs-check-${{ github.ref }}
-  cancel-in-progress: true
+  # See ci.yml: cancel superseded PR runs, let a main run finish.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   LC_ALL: C
