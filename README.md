@@ -74,7 +74,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **Speculative Decoding**: Modes: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark, dflash2; plus FR-Spec vocab map and LoRA (`--lora`)
 - **Fused Megakernels**: Composable GPU megakernels, gate+up+SiLU fused into single dispatch (3→1)
 - **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
-- **SSD Expert Streaming**: `--ssd-streaming` demand-pages MoE experts (and Qwen4-Exp PLE ngrams) from disk via an LRU cache; `--vram-budget` caps resident GPU weights
+- **SSD Expert Streaming**: `--ssd-streaming` demand-pages MoE experts from disk via an LRU cache; `--vram-budget` caps resident GPU weights
 - **~125 tok/s** on Qwen3.5 0.8B Q8_0 Metal (M4 Pro; see [docs/BENCHMARKS.md](docs/BENCHMARKS.md) as the source of truth), **24.9 tok/s** on Qwen3.5 9B MLX-4bit
 
 ## Quick Start

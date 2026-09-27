@@ -3285,50 +3285,10 @@ fn initAndRun(
         const prof_ptr = if (expert_profile_opt) |*ep| ep else null;
         mdl.setExpertCache(ec, prof_ptr);
     }
-    // PLE ngram SSD (Qwen4-Exp, 128 shards, 51B): same --ssd-streaming flag.
-    // The ngram table at layer 1 (ple.ple_embedding.ngram_embedding.*) is
-    // accessed once per token via hashed ngrams. Only a few shards are hot
-    // per sequence, so LRU over 16 shards covers decode. NgramCache is
-    // 1-D by shard (not layer×expert). Wired if the model has an
-    // ngram_cache field and the shards are present.
-    {
-        const NgramCache = @import("ngram_cache.zig").NgramCache;
-        if (cli.ssd_streaming) {
-            var has_ple = false;
-            for (0..4) |i| { // probe 4 shard names — if any present, model has PLE
-                var buf: [128]u8 = undefined;
-                const name = std.fmt.bufPrint(&buf, "ple_ngram_{d}.weight", .{i}) catch continue;
-                if (fmt.getTensor(name) != null) {
-                    has_ple = true;
-                    break;
-                }
-            }
-            if (!has_ple) {
-                for (0..2) |i| {
-                    var buf: [256]u8 = undefined;
-                    const name = std.fmt.bufPrint(&buf, "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_{d}.weight", .{i}) catch continue;
-                    if (fmt.getTensor(name) != null) {
-                        has_ple = true;
-                        break;
-                    }
-                }
-            }
-            if (has_ple) {
-                const ngram_slots: u32 = 16;
-                var ngram_cache = NgramCache.init(allocator, 128, ngram_slots) catch null;
-                if (ngram_cache) |*nc| {
-                    if (comptime @hasField(@TypeOf(mdl), "ngram_cache")) {
-                        // Transfer ownership: store pointer to heap-allocated copy
-                        // (stack ngram_cache would dangle after this block). For now
-                        // just report; full ownership transfer is TODO when the model
-                        // field is stabilized as ?*NgramCache.
-                        eprint("ssd-streaming: ngram cache {d} slots (128 shards, 51B PLE)\n", .{ngram_slots});
-                    }
-                    nc.deinit(allocator);
-                }
-            }
-        }
-    }
+    // PLE ngram SSD (Qwen4-Exp) is not wired up: the model has no
+    // `ngram_cache` field and its forward pass does not read the PLE ngram
+    // embedding, so there is nothing to page. --ssd-streaming covers MoE
+    // experts only. Adding the PLE path to the model comes first.
 
     // ── MTP weight loading ──────────────────────────────────────
     const MtpWeights = model_mod.MtpWeights;
@@ -3811,6 +3771,12 @@ fn initAndRun(
         // scheduler does not provide yet; serve autoregressively instead.
         if (cli.spec_mode == .dflash2) {
             eprint("Warning: DFlash2 speculative decoding is CLI-only right now; server starts without speculation\n", .{});
+        }
+        // The server scheduler has no DDTree verify path, so it falls back to
+        // linear draft + verify. --tree-budget only feeds the CLI DDTree path.
+        if (cli.spec_mode == .ddtree) {
+            eprint("Warning: DDTree speculation is CLI-only right now; server uses linear draft + verify instead\n", .{});
+            eprint("         (--tree-budget has no effect in --serve mode)\n", .{});
         }
         // Initialize shared n-gram pool for cross-request history sharing.
         // Server slots use this as a fallback when their own history has no match.
@@ -5479,6 +5445,7 @@ test {
     _ = @import("eval.zig");
     _ = @import("expert_profile.zig");
     _ = @import("expert_cache.zig");
+    _ = @import("ngram_cache.zig");
     _ = @import("durable_file.zig");
     _ = @import("dynlib.zig");
     _ = @import("server/conv_store.zig");
