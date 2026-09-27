@@ -1709,8 +1709,14 @@ pub fn run(allocator: Allocator, process_args: std.process.Args, io: Io) u8 {
     _ = args_iter.skip(); // Skip program name (argv[0]).
     _ = args_iter.skip(); // Skip "pull" subcommand (already verified by main.zig).
 
-    const maybe_args = parseArgs(&args_iter) catch {
-        return 2;
+    // Both parse-time failures are usage errors: the message is already on
+    // stderr, and scripts distinguish a bad invocation from a failed download.
+    const maybe_args = parseArgs(&args_iter) catch |err| switch (err) {
+        PullError.InvalidArgument, PullError.InvalidRepoFormat => return 2,
+        else => {
+            eprint("Error: {}\n", .{err});
+            return 1;
+        },
     };
 
     const args = maybe_args orelse return 0; // --help was shown.

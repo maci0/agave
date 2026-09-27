@@ -97,7 +97,7 @@ zig build
 ./zig-out/bin/agave model.gguf --serve
 
 # Quiet mode (pipe-friendly, no banner/stats)
-./zig-out/bin/agave model.gguf -q "Hello" > output.txt
+./zig-out/bin/agave model.gguf --quiet "Hello" > output.txt
 
 # Force CPU backend
 ./zig-out/bin/agave model.gguf --backend cpu

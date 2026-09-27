@@ -124,7 +124,7 @@ def write_results(path, results, order):
     os.replace(tmp, path)
 
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Collect official continuations for NLL testing")
     parser.add_argument("--endpoint", required=True, help="Chat completions API endpoint URL")
     parser.add_argument("--model", required=True, help="Model name for the API")
@@ -170,7 +170,10 @@ def main():
 
     n_ok = sum(1 for p in order if is_done(results, p, args.model))
     print(f"Wrote {out_path} ({n_ok}/{len(order)} successful)")
+    # A run where every request failed still writes the error records, so exit
+    # nonzero instead of reporting success to whatever drives the loop.
+    return 0 if n_ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

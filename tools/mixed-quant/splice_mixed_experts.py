@@ -84,6 +84,10 @@ def main():
     args = parser.parse_args()
 
     target_layers = parse_layer_ranges(args.layers)
+    for label, path in (("--base", args.base), ("--donor", args.donor)):
+        if not Path(path).is_file():
+            print(f"Error: {label} file not found: '{path}'", file=sys.stderr)
+            sys.exit(2)
     print(f"Target layers: {target_layers}")
     print(f"Base: {args.base} ({Path(args.base).stat().st_size / 1e9:.1f} GB)")
     print(f"Donor: {args.donor} ({Path(args.donor).stat().st_size / 1e9:.1f} GB)")

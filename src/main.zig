@@ -247,6 +247,22 @@ fn noteSeed(cli: *const CliArgs) void {
     }
 }
 
+/// Reject an unsupported `--color` value. Both the `--version` fast path and
+/// the full parse call it so a bad mode fails the same way either way.
+fn colorModeOrExit(mode: []const u8) void {
+    if (isColorMode(mode)) return;
+    eprint("Error: unknown --color value '{s}'\n", .{mode});
+    eprint("  Valid options: auto, always, never\n", .{});
+    std.process.exit(2);
+}
+
+/// True when `s` is one of the accepted `--color` modes.
+fn isColorMode(s: []const u8) bool {
+    return std.mem.eql(u8, s, "auto") or
+        std.mem.eql(u8, s, "always") or
+        std.mem.eql(u8, s, "never");
+}
+
 /// Parse a KV quantization type from an optional per-component override and
 /// a shared --kv-type fallback. Exits on unrecognized values.
 fn kvTypeOrExit(s: []const u8, flag_name: []const u8) KvQuantType {
@@ -750,6 +766,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         const decorate = blk: {
             if (res.flag("no-color")) break :blk false;
             if (res.option("color")) |cm| {
+                colorModeOrExit(cm);
                 if (std.mem.eql(u8, cm, "never")) break :blk false;
                 if (std.mem.eql(u8, cm, "always")) break :blk true;
             }
@@ -795,13 +812,9 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
         // --color=always|never|auto takes precedence
         if (res.option("color")) |cm| {
+            colorModeOrExit(cm);
             if (std.mem.eql(u8, cm, "always")) break :blk true;
             if (std.mem.eql(u8, cm, "never")) break :blk false;
-            if (!std.mem.eql(u8, cm, "auto")) {
-                eprint("Error: unknown --color value '{s}'\n", .{cm});
-                eprint("  Valid options: auto, always, never\n", .{});
-                std.process.exit(2);
-            }
         }
         // --no-color flag
         if (res.flag("no-color")) break :blk false;

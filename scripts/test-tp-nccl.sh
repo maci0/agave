@@ -51,7 +51,7 @@ echo ""
     --peers "$PEER" \
     --transport "$TRANSPORT" \
     --kv-type "$KV_TYPE" \
-    -n "$N_TOKENS" \
+    --max-tokens "$N_TOKENS" \
     "What is quantum computing?"
 
 echo ""

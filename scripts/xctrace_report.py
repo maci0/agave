@@ -59,7 +59,7 @@ def read_export(path: str) -> str | None:
         with open(path, encoding="utf-8", errors="replace") as handle:
             return handle.read()
     except OSError as exc:
-        print(f"  (read error: {exc})")
+        print(f"error: cannot read '{path}': {exc}", file=sys.stderr)
         return None
 
 
@@ -126,7 +126,7 @@ def accumulate_time_profile(data: str, keep: str) -> tuple[dict[str, int], dict[
 def report_hot(args: argparse.Namespace) -> int:
     data = read_export(args.export)
     if data is None:
-        return 0
+        return 1
 
     self_ns, total_ns = accumulate_time_profile(data, args.filter)
     if not self_ns:
@@ -157,7 +157,7 @@ def report_hot(args: argparse.Namespace) -> int:
 def report_gpu(args: argparse.Namespace) -> int:
     data = read_export(args.export)
     if data is None:
-        return 0
+        return 1
     data = data.replace("&amp;", "&")
 
     duration_vals: dict[str, int] = {
@@ -237,7 +237,7 @@ def report_gpu(args: argparse.Namespace) -> int:
 def report_labels(args: argparse.Namespace) -> int:
     data = read_export(args.export)
     if data is None:
-        return 0
+        return 1
     seen: list[str] = []
     for match in ANY_NAME_RE.finditer(data):
         if match.group(1) not in seen:
