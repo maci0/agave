@@ -51,21 +51,41 @@ pub fn hqqGemvRows(
         const s_row = scale + row * n_groups;
         const z_row = zero + row * n_groups;
 
-        for (0..k_in) |ki| {
-            const xv = x[ki];
-            if (@abs(xv) < sparse_threshold) continue;
-
-            const byte = w_row[ki / 2];
-            const nibble: f32 = if (ki % 2 == 0)
-                @floatFromInt(byte & 0xF)
-            else
-                @floatFromInt(byte >> 4);
-
-            const g = ki / gs;
+        // Group is the outer loop so the bf16 scale/zero pair is decoded once
+        // per group instead of once per element, and each packed byte is read
+        // once for both of its nibbles.
+        for (0..n_groups) |g| {
             const s = bf16ToF32(s_row[g]);
             const z = bf16ToF32(z_row[g]);
+            const k_end = @min((g + 1) * gs, k_in);
+            var ki = g * gs;
 
-            acc += (nibble - z) * s * xv;
+            // A byte holds the even element in its low nibble, so a group that
+            // starts on an odd element has a half pair to consume first.
+            if (ki % 2 == 1 and ki < k_end) {
+                const xv = x[ki];
+                if (@abs(xv) >= sparse_threshold) {
+                    const byte = w_row[ki / 2];
+                    acc += (@as(f32, @floatFromInt(byte >> 4)) - z) * s * xv;
+                }
+                ki += 1;
+            }
+            while (ki + 1 < k_end) : (ki += 2) {
+                const byte = w_row[ki / 2];
+                const lo: f32 = @floatFromInt(byte & 0xF);
+                const hi: f32 = @floatFromInt(byte >> 4);
+                const x_lo = x[ki];
+                if (@abs(x_lo) >= sparse_threshold) acc += (lo - z) * s * x_lo;
+                const x_hi = x[ki + 1];
+                if (@abs(x_hi) >= sparse_threshold) acc += (hi - z) * s * x_hi;
+            }
+            if (ki < k_end) {
+                const xv = x[ki];
+                if (@abs(xv) >= sparse_threshold) {
+                    const byte = w_row[ki / 2];
+                    acc += (@as(f32, @floatFromInt(byte & 0xF)) - z) * s * xv;
+                }
+            }
         }
         y[row] = acc;
     }

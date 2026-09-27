@@ -216,30 +216,28 @@ pub fn groupRmsNormSiluGate(
         const z_g = z + off;
         const w_g = norm_w + w_off;
 
-        // 1. Apply SiLU gate in-place: y = y * silu(z), SIMD vectorized
+        // 1. Apply SiLU gate in-place: y = y * silu(z), SIMD vectorized.
+        // The sum of squares is accumulated from the gated value while it is
+        // still in a register, so the group needs two passes, not three.
         const ones: V8 = @splat(1.0);
+        var ss_acc: V8 = @splat(0.0);
+        var ss: f32 = 0;
         var j: usize = 0;
         while (j + 8 <= elem_per_group) : (j += 8) {
             const yv: V8 = y_g[j..][0..8].*;
             const zv: V8 = z_g[j..][0..8].*;
             const sig: V8 = ones / (ones + @exp(-zv));
-            y_g[j..][0..8].* = yv * zv * sig;
+            const gated: V8 = yv * zv * sig;
+            y_g[j..][0..8].* = gated;
+            ss_acc = @mulAdd(V8, gated, gated, ss_acc);
         }
+        ss = @reduce(.Add, ss_acc);
         while (j < elem_per_group) : (j += 1) {
             y_g[j] *= silu(z_g[j]);
+            ss += y_g[j] * y_g[j];
         }
 
-        // 2. SIMD sum of squares on gated values
-        var ss_acc: V8 = @splat(0.0);
-        var i: usize = 0;
-        while (i + 8 <= elem_per_group) : (i += 8) {
-            const v: V8 = y_g[i..][0..8].*;
-            ss_acc = @mulAdd(V8, v, v, ss_acc);
-        }
-        var ss: f32 = @reduce(.Add, ss_acc);
-        while (i < elem_per_group) : (i += 1) ss += y_g[i] * y_g[i];
-
-        // 3. RMS normalize and apply weight, SIMD vectorized
+        // 2. RMS normalize and apply weight, SIMD vectorized
         const inv_rms = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(elem_per_group)) + eps);
         const inv_rms_v: V8 = @splat(inv_rms);
         var k: usize = 0;

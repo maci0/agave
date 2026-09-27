@@ -65,16 +65,23 @@ pub fn gptqGemvRows(
             const elems = @min(gs, k - base);
             const full_words = elems / gptq_nibbles_per_u32;
 
-            var group_sum: f32 = 0.0;
+            // The 8 nibbles of a word are independent, so accumulate them in a
+            // vector and reduce once per word instead of chaining 8 scalar FMAs.
+            const V8 = @Vector(8, f32);
+            const zero_v: V8 = @splat(zero);
+            const scale_v: V8 = @splat(scale);
+            var group_acc: V8 = @splat(0.0);
             for (0..full_words) |wi| {
                 const word = w_row[base / gptq_nibbles_per_u32 + wi];
+                var vals: V8 = undefined;
                 inline for (0..8) |ni| {
                     const nibble: u4 = @truncate(word >> @as(u5, ni * 4));
-                    const val = (@as(f32, @floatFromInt(@as(i32, nibble))) - zero) * scale;
-                    group_sum += val * x[base + wi * 8 + ni];
+                    vals[ni] = @floatFromInt(@as(i32, nibble));
                 }
+                const xv: V8 = x[base + wi * gptq_nibbles_per_u32 ..][0..8].*;
+                group_acc += (vals - zero_v) * scale_v * xv;
             }
-            sum += group_sum;
+            sum += @reduce(.Add, group_acc);
         }
         y[row] = sum;
     }
