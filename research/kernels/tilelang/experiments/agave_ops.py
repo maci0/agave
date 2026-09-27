@@ -12,8 +12,8 @@ Ops chosen from src/backend/kernels/ (decode path, batch size 1):
   - gemv_bf16  : y[n] = sum_k W[n,k] * x[k]                 (4096x5120 class)
   - gemv_q8_0  : block-wise Q8_0 dequant-in-kernel GEMV     (agave's workhorse)
 
-All kernels execute on AMD ROCm here (`target="hip"`); TileLang emits CUDA
-for NVIDIA boxes with identical source semantics.
+All kernels target the backend of the installed torch build: `hip` on a ROCm
+wheel, `cuda` on an NVIDIA one. Source semantics are identical.
 
 Run: .venv/bin/python experiments/agave_ops.py [--bench]
 """
@@ -154,6 +154,7 @@ def pack_q8_0(w: torch.Tensor, block: int = 32):
 
 
 DEV = "cuda"  # rocm torch exposes HIP through the cuda API
+TILELANG_TARGET = "hip" if torch.version.hip else "cuda"
 
 
 def bench(fn, iters: int = 300, warmup: int = 30) -> float:
@@ -183,7 +184,7 @@ def main() -> int:
 
     # ── rms_norm (Qwen3.8 hidden size) ────────────────────────────
     n = 5120
-    k_rms = tilelang.JITKernel(make_rms_norm(n), target="hip", out_idx=[-1])
+    k_rms = tilelang.JITKernel(make_rms_norm(n), target=TILELANG_TARGET, out_idx=[-1])
     x = torch.randn(n, device=DEV, dtype=torch.float32)
     w = 1.0 + torch.randn(n, device=DEV, dtype=torch.float32)
     y = k_rms(x, w)
@@ -197,7 +198,7 @@ def main() -> int:
 
     # ── silu_mul (Qwen3.8 ff size) ────────────────────────────────
     n_ff = 17408
-    k_silu = tilelang.JITKernel(make_silu_mul(n_ff), target="hip", out_idx=[-1])
+    k_silu = tilelang.JITKernel(make_silu_mul(n_ff), target=TILELANG_TARGET, out_idx=[-1])
     g = torch.randn(n_ff, device=DEV, dtype=torch.float32)
     u = torch.randn(n_ff, device=DEV, dtype=torch.float32)
     y = k_silu(g, u)
@@ -211,7 +212,7 @@ def main() -> int:
 
     # ── gemv bf16 ────────────────────────────────────────────────
     m, kk = 4096, 5120
-    k_gemv = tilelang.JITKernel(make_gemv_bf16(m, kk), target="hip", out_idx=[-1])
+    k_gemv = tilelang.JITKernel(make_gemv_bf16(m, kk), target=TILELANG_TARGET, out_idx=[-1])
     wm = (torch.randn(m, kk, device=DEV) * 0.02).to(torch.bfloat16)
     xv = torch.randn(kk, device=DEV, dtype=torch.bfloat16)
     y = k_gemv(wm, xv).float()
@@ -226,7 +227,7 @@ def main() -> int:
 
     # ── gemv q8_0 (dequant in kernel) ────────────────────────────
     m, kk = 4096, 5120
-    k_q80 = tilelang.JITKernel(make_gemv_q8_0(m, kk), target="hip", out_idx=[-1])
+    k_q80 = tilelang.JITKernel(make_gemv_q8_0(m, kk), target=TILELANG_TARGET, out_idx=[-1])
     wf = torch.randn(m, kk, device=DEV) * 0.05
     d, q = pack_q8_0(wf)
     xv = torch.randn(kk, device=DEV, dtype=torch.bfloat16)

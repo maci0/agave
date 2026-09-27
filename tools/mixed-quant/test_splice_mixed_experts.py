@@ -19,7 +19,7 @@ FFN = [BLOCKS, 8]
 
 
 def make_gguf(path: Path, expert_type: int, expert_byte: int,
-              ffn_dims: list[int] = None) -> None:
+              ffn_dims: list[int] | None = None) -> None:
     """A two-layer model: F32 everywhere except the expert tensors."""
     ffn_dims = ffn_dims or FFN
     kv = [(b"general.architecture", 8, b"qwen35"), (b"qwen35.block_count", T_U32, 2)]

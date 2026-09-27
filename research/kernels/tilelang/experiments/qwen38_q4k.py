@@ -15,7 +15,7 @@ Thread map: one output row per workgroup; 128 threads = 16 copies x 8 lanes;
 a lane owns one 32-elem sub-block, copies split the superblock range; one
 block-wide all-reduce produces the dot product.
 
-Run: .venv/bin/python experiments/qwen38_q4k.py [--bench]
+Run: .venv/bin/python experiments/qwen38_q4k.py --gguf <path/to/Qwen3.8-27B-Q4_K_M.gguf> [--bench]
 """
 
 import argparse
@@ -27,7 +27,9 @@ import tilelang
 import tilelang.language as T
 import gguf
 
-GGUF_PATH = "/home/maci/.cache/models-e2e/qwen38-27b/Qwen3.8-27B-Q4_K_M.gguf"
+# TileLang target follows the torch build: a ROCm wheel sets torch.version.hip,
+# an NVIDIA wheel leaves it None.
+TILELANG_TARGET = "hip" if torch.version.hip else "cuda"
 DEV = "cuda"
 
 
@@ -177,8 +179,8 @@ def make_gemv_q4k_v2(m, k, lanes=8, threads=128):
     return gemv
 
 
-def load_tensor(name):
-    r = gguf.GGUFReader(GGUF_PATH)
+def load_tensor(path, name):
+    r = gguf.GGUFReader(path)
     ts = next(t for t in r.tensors if t.name == name)
     assert ts.tensor_type == gguf.GGMLQuantizationType.Q4_K, ts.tensor_type
     ne = list(ts.shape)              # [k, m] gguf order (fastest first)
@@ -204,6 +206,7 @@ def bench(fn, iters=200, warmup=30):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--gguf", required=True, help="path to the Q4_K_M checkpoint")
     ap.add_argument("--bench", action="store_true")
     ap.add_argument("--val-rows", type=int, default=512, help="rows for validation")
     ap.add_argument("--threads", type=int, default=128)
@@ -213,13 +216,13 @@ def main():
     ok = True
 
     # ---- validation on a real tensor slice --------------------------------
-    raw_full, M, K = load_tensor("blk.1.ffn_gate.weight")
+    raw_full, M, K = load_tensor(args.gguf, "blk.1.ffn_gate.weight")
     vr = args.val_rows
     wq_u8 = torch.from_numpy(np.ascontiguousarray(raw_full[: vr * (K // 256) * 144])).to(DEV)
     wq_h = wq_u8.view(torch.float16).reshape(-1)
     wq32 = wq_u8.view(torch.uint32).reshape(-1)
     x = torch.randn(K, device=DEV, dtype=torch.bfloat16)
-    kern = tilelang.JITKernel(make_gemv_q4k(vr, K), target="hip", out_idx=[-1])
+    kern = tilelang.JITKernel(make_gemv_q4k(vr, K), target=TILELANG_TARGET, out_idx=[-1])
     y = kern(wq_u8, wq_h, x).float()
 
     deq = dequant_q4_k_rows(raw_full, vr, K)
@@ -232,7 +235,7 @@ def main():
 
     # v2 validation (fp16 activations)
     x16 = x.to(torch.float16)
-    kern2 = tilelang.JITKernel(make_gemv_q4k_v2(vr, K, threads=args.threads), target="hip", out_idx=[-1])
+    kern2 = tilelang.JITKernel(make_gemv_q4k_v2(vr, K, threads=args.threads), target=TILELANG_TARGET, out_idx=[-1])
     y2 = kern2(wq_u8, wq32, wq_h, x16).float()
     ref2 = torch.from_numpy(deq).to(DEV) @ x16.float()
     rel2 = ((y2 - ref2).abs().max() / ref2.abs().max()).item()
@@ -246,7 +249,7 @@ def main():
             ("ffn_gate/up_v2", "blk.1.ffn_gate.weight", True),
             ("ffn_down_v2", "blk.1.ffn_down.weight", True),
         ]:
-            raw_t, tm, tk = load_tensor(tname)
+            raw_t, tm, tk = load_tensor(args.gguf, tname)
             nbytes_row = tk // 256 * 144
             need = tm * nbytes_row
             u8 = torch.from_numpy(np.ascontiguousarray(raw_t)).to(DEV)
@@ -255,7 +258,7 @@ def main():
             xv16 = torch.randn(tk, device=DEV, dtype=torch.float16)
             xvbf = xv16.to(torch.bfloat16)
             maker = make_gemv_q4k_v2 if use_v2 else make_gemv_q4k
-            kt = tilelang.JITKernel(maker(tm, tk, threads=args.threads), target="hip", out_idx=[-1])
+            kt = tilelang.JITKernel(maker(tm, tk, threads=args.threads), target=TILELANG_TARGET, out_idx=[-1])
             if use_v2:
                 us = bench(lambda: kt(u8, w32, h16, xv16))
             else:
