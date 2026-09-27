@@ -128,11 +128,6 @@ let autoScroll = true;
 let renderTimer: ReturnType<typeof setTimeout> | null = null;
 /** Latest stream paint target, updated on every token so the throttled flush shows current text, not the stale closure from schedule time. */
 let pendingStreamRender: PendingStreamPaint | null = null;
-/** Element whose streaming text is already on screen. The flush appends only
- *  the new tail instead of rewriting the whole message, so a long response costs
- *  one text node per 60ms window instead of one per token. Reset whenever the
- *  element is rebuilt or refilled. */
-let streamTextEl: HTMLElement | null = null;
 let msgRoleIdSeq = 0;
 sendBtn.disabled = true;
 let backendName = '';
@@ -735,8 +730,14 @@ const marked_script_integrity = 'sha384-zbcZAIxlvJtNE3Dp5nxLXdXtXyxwOdnILY1TDPVm
 const purify_script_url = 'https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js';
 const purify_script_integrity = 'sha384-46dPGH1XlTmj7bc50bqLjTdORXs/3EP2QpA/6EWbelYWOY9VGp+87RT61S3Mcslb';
 
-/** Append a pinned CDN script. Resolves false on load failure; every caller has
- *  a working fallback, so a blocked CDN degrades the page instead of breaking it. */
+/** Give up on a CDN script that neither loads nor errors. A proxy that accepts
+ *  the connection and then stalls fires no event, which left the load promise
+ *  pending forever: the plain-text fallback rendered and the upgrade never ran. */
+const cdn_script_timeout_ms = 10_000;
+
+/** Append a pinned CDN script. Resolves false on load failure or timeout; every
+ *  caller has a working fallback, so a blocked CDN degrades the page instead of
+ *  breaking it. */
 function loadCdnScript(url: string, integrity: string): Promise<boolean> {
   return new Promise(function(resolve) {
     const s = document.createElement('script');
@@ -744,8 +745,13 @@ function loadCdnScript(url: string, integrity: string): Promise<boolean> {
     s.integrity = integrity;
     s.crossOrigin = 'anonymous';
     s.referrerPolicy = 'no-referrer';
-    s.addEventListener('load', function() { resolve(true); });
-    s.addEventListener('error', function() { resolve(false); });
+    const timer = setTimeout(function() { settle(false); }, cdn_script_timeout_ms);
+    function settle(ok: boolean) {
+      clearTimeout(timer);
+      resolve(ok);
+    }
+    s.addEventListener('load', function() { settle(true); });
+    s.addEventListener('error', function() { settle(false); });
     document.head.append(s);
   });
 }
@@ -1030,24 +1036,47 @@ function renderContent(el: HTMLElement, content: string, final: boolean) {
       pendingStreamRender = null;
       if (!p) {return;}
       p.el.classList.remove('thinking');
-      // Append only what the last flush did not paint. A different element, or
-      // text on screen that is no longer a prefix of the stream (a rebuild, a
-      // regenerated turn), means the DOM and the stream have diverged: refill.
-      const painted = p.el === streamTextEl ? p.el.textContent ?? '' : null;
-      if (painted !== null && p.content.startsWith(painted)) {
-        p.el.append(document.createTextNode(p.content.slice(painted.length)));
-      } else {
-        p.el.textContent = p.content;
-      }
-      streamTextEl = p.el;
+      appendStreamText(p.el, p.content);
       scrollBottom();
-    }, 60);
+    }, stream_flush_ms);
     return;
   }
   if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
   pendingStreamRender = null;
-  streamTextEl = null;
+  resetStreamText();
   renderFinal(el, content);
+}
+
+/** Streaming paints every stream_flush_ms, and each flush used to reset
+ *  textContent: a new text node, the whole string copied, and line wrapping
+ *  recomputed for the message. Appending only the delta to the node already in
+ *  place keeps a flush proportional to the tokens that arrived. */
+const stream_flush_ms = 60;
+let stream_text_el: HTMLElement | null = null;
+let stream_text_node: Text | null = null;
+let stream_text_done = '';
+
+function resetStreamText() {
+  stream_text_el = null;
+  stream_text_node = null;
+  stream_text_done = '';
+}
+
+function appendStreamText(el: HTMLElement, content: string) {
+  const appendable = el === stream_text_el && el.firstChild === stream_text_node
+    && content.startsWith(stream_text_done);
+  if (!appendable) {
+    el.textContent = content;
+    stream_text_el = el;
+    stream_text_node = el.firstChild as Text | null;
+    stream_text_done = content;
+    return;
+  }
+  if (content.length > stream_text_done.length) {
+    if (stream_text_node) { stream_text_node.appendData(content.slice(stream_text_done.length)); }
+    else { el.textContent = content; stream_text_node = el.firstChild as Text | null; }
+  }
+  stream_text_done = content;
 }
 
 function mkStat(label: string, val: string, unit?: string) {
@@ -1128,7 +1157,7 @@ async function streamResponse(body: string, errLabel: string, url?: string, requ
       err.setAttribute('role', 'alert');
       err.textContent = errMsg;
       el.textContent = ''; el.append(err);
-      streamTextEl = null;
+      resetStreamText();
       announceToSR(errMsg);
       // Same server path as regenerate: last user turn is already stored when the
       // Request reached prep; Retry re-runs from that turn without retyping.

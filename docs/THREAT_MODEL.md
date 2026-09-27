@@ -84,7 +84,7 @@ Entry points found in code:
 6. **Same-host processes -> shm segments.** Only uid/file-mode checks; names are fixed.
 7. **Secrets -> process.** Env vars enter once at startup; nonempty `AGAVE_API_KEY` wins over CLI to avoid `ps` exposure (`src/main.zig:1183-1186`, `preferredSecret` `:1621`); empty env is unset (`:1331`). Rotation: process restart. Storage: env only. Prompt-derived buffers are wiped before free (`wipeFree` / `wipeFreeTokens` `src/server/server.zig:1213,1219`), the per-connection read buffer that carries `Authorization` / `x-api-key` is zeroed before it is freed (`:7309`), and Hub `Authorization` buffers are zeroed (`src/pull.zig:739,1089`).
 8. **Process -> conversation file.** Prompts written to the cache-path conversation store unless `--no-conv-store` (`src/server/conv_store.zig:72`). Compose maps this under `agave-cache` (`docker-compose.yml:58`).
-9. **Embedded UI -> jsDelivr.** `src/web/app.ts` fetches marked / DOMPurify / highlight.js from `cdn.jsdelivr.net` with SRI hashes (`:733-736`, `:769-772`, loader `:740`) on the first response and the first code block rather than on page load (`loadMarkdown` `:759`, `loadHighlightJs` `:777`). CSP allowlists that origin (`src/server/server.zig:1582`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
+9. **Embedded UI -> jsDelivr.** `src/web/app.ts` fetches marked / DOMPurify / highlight.js from `cdn.jsdelivr.net` with SRI hashes (`:728-731`) on the first response and the first code block rather than on page load (`loadMarkdown` `:765`, `loadHighlightJs` `:783`). A stalled CDN resolves false after `cdn_script_timeout_ms` (`:736`, `loadCdnScript` `:741`) so the plain-text fallback settles. CSP allowlists that origin (`src/server/server.zig:1582`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
 
 Privilege transitions: none at runtime. The process starts and stays at its launching privilege; the Dockerfile drops to `agave` before exec (`Dockerfile:231`), and compose adds `no-new-privileges` (`docker-compose.yml:66-67`).
 
@@ -137,7 +137,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 | Bounded idempotency ledger (fixed ring, byte cap, TTL) | Retry storms re-running mutating routes | `src/server/idempotency.zig:28,30,34,36,39`. Does not bind a key to a principal: T8 |
 | Container hardening | Container escape blast radius | `Dockerfile:231`, `docker-compose.yml:66-70` |
 | Bounded grammar/schema parsing (input size, rule count, JSON schema depth/property count), each over-cap case a typed `error` | Grammar DoS from a hostile grammar or JSON schema | `src/grammar.zig:22-31` (caps) |
-| SRI on jsDelivr scripts | UI CDN swap | `src/web/app.ts:733-736,769-772` |
+| SRI on jsDelivr scripts | UI CDN swap | `src/web/app.ts:728-731,741` |
 | Response security headers (nosniff, DENY, no-referrer, HSTS, CSP, no-store) | Clickjacking, MIME sniff, cache | `src/server/server.zig:1576-1585`; claims match `docs/API.md` Response Headers |
 
 Single points of failure: the API key alone carries all client-side authn on 49453 and, because no principal is derived from it, also all of the shared-state isolation that does not exist; the loopback-bind default carries all safety for no-key users; neither extends to the distributed ports.

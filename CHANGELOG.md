@@ -413,6 +413,9 @@ must still appear under **Changed** or **Breaking** below. See
   init/generate on that context (`0` = ok).
 
 ### Fixed
+- Chat UI: a streaming reply appends the new text instead of rewriting the
+  whole message on each flush. A CDN script that neither loads nor errors
+  falls back to plain text after 10 seconds.
 - Browser WASM (`web/agave.ts`): `fetch` network, CORS, and abort failures
   throw `AgaveError` (`wasm_fetch_failed` / `download_failed`) instead of a
   raw `TypeError`. Re-`init()` frees the previous model against the old
