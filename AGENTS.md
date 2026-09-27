@@ -10,8 +10,9 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe)
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
 zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python (CI runs more, see below)
-zig build check                    # fmt-check + docs hygiene + pin consistency + unit tests (local CI gate)
+zig build check                    # fmt-check + docs hygiene + pin consistency + unit tests + conv-store backup self-test (local CI gate)
 zig build check-pins               # Zig/Docker reproducibility pins agree (CI fmt-check job)
+zig build docs-check               # docs link and count hygiene (scripts/check-docs.py)
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
 zig build lint-web                 # oxlint + tsc (CI lint-web; needs bun 1.4.0)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
@@ -87,13 +88,17 @@ Non-negotiable. Every change must respect all of them.
 ### Build
 - Build system is `build.zig` + `build.zig.zon` only. Do not add a Makefile or C/C++ inference libraries. `scripts/` is profiling, docs, and the web bundle — not the build.
 - `build.zig.zon` has zero Zig package dependencies. Keep it that way. CLI is `src/cli.zig`. Terminal I/O is `src/term.zig` (posix + `std.unicode`, no libc, no `wcwidth`, no terminal frameworks).
-- Cross-compile must keep working: Linux x86_64, Linux aarch64, macOS aarch64.
+- Cross-compile must keep working, matching `.github/workflows/ci.yml`: `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` (Metal off), `x86_64-linux-musl`, `aarch64-linux-musl` (static, CPU-only), plus the separate `wasm32-freestanding` build.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast — that no-ops `std.debug.assert`.
 - 11 model architectures: Gemma3, Gemma4, DiffusionGemma, Qwen3.5, Qwen4-Exp, GPT-OSS, Nemotron-H, Nemotron-Nano, GLM-4, DeepSeek V4, Llama 4. DFlash2 is a block-diffusion drafter (`-Denable-dflash2`).
-- Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate: PTX via `zig build ptx` then copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`; SPIR-V via `glslangValidator -V --target-env vulkan1.1`; ROCm via `zig build amdgcn` then copy `zig-out/rocm/kernels.o` to `kernels.hsaco`; Metal and WGSL are hand-written. Commit the regenerated artifacts.
+- Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate and commit:
+  - PTX: `zig build ptx`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`.
+  - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
+  - ROCm: `zig build amdgcn`, copy `zig-out/rocm/kernels.o` to `src/backend/kernels/rocm/kernels.hsaco`.
+  - Metal and WGSL are hand-written; no compile step.
 
 ### Errors, docs, tests
-- Explicit error sets and `try`/`catch`. Never `catch {}` except shutdown. Never `catch undefined`.
+- Explicit error sets and `try`/`catch`. Never `catch undefined`. `catch {}` only where the failure provably cannot affect state (advisory syscalls like `madvise`, thread affinity, best-effort cleanup) or in test cleanup; never to swallow an error that loses data or hides a failed operation.
 - `std.debug.assert` for internal invariants. `pub` only for intended API.
 - Public functions and structs get `///` (purpose, ownership, returns, errors). Files get `//!`.
 - `test` blocks at the bottom of the relevant file. Backend tests use target guards.
