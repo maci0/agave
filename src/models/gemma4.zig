@@ -283,8 +283,6 @@ pub const Gemma4Model = struct {
     kv_eviction_budget: u32 = 0,
     /// Dynamic budget: tracks eviction count for adaptive budget adjustment.
     eviction_count: u32 = 0,
-    /// Last token ID after eviction, used to detect degenerate output.
-    last_eviction_token: u32 = 0,
     /// TriAttention calibration data (loaded from .cal file via --kv-eviction tri).
     tri_calibrations: ?[]const kv_evict.TriCalibration = null,
     /// Scratch buffer for eviction scores [max_seq_len].

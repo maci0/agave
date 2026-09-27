@@ -408,14 +408,6 @@ pub const Ds4Model = struct {
     pf_attn_out: []f32 = &.{}, // [cs * n_head * kv_lora_rank]
     pf_positions: []u32 = &.{},
 
-    /// Pre-dequantized f32 attention weights for forwardTree fast path.
-    /// Allocated at first forwardTree call, covers skip..n_layers.
-    pf_dequant_q_a: []f32 = &.{}, // [n_verify_layers * q_lora_rank * n_embd]
-    pf_dequant_kv: []f32 = &.{}, // [n_verify_layers * kv_lora_rank * n_embd]
-    pf_dequant_q_b: []f32 = &.{}, // [n_verify_layers * n_head * kv_lora_rank * q_lora_rank]
-    pf_dequant_wo_b: []f32 = &.{}, // [n_verify_layers * n_embd * o_groups * o_lora_rank]
-    pf_dequant_ready: bool = false,
-
     // Norm weight cache (dequantized to f32)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
@@ -3275,18 +3267,7 @@ pub const Ds4Model = struct {
 
             // Q projection: [n, e] → [n, ql] → norm → [n, nh*kd]
             const q_a = try self.layerTensorReq(li, "attn_q_a.weight");
-            if (self.pf_dequant_ready and li >= ft_skip) {
-                // Use pre-dequanted f32 weights + Accelerate SGEMM
-                const rel = li - ft_skip;
-                if (comptime @import("builtin").os.tag == .macos and build_options.enable_metal) {
-                    const accel = backend_mod.accelerate;
-                    accel.sgemm(n, ql, e, self.pf_hidden2.ptr, self.pf_dequant_q_a.ptr + rel * ql * e, self.pf_q_a.ptr);
-                } else {
-                    self.batchedGemm(self.pf_hidden2.ptr, q_a, self.pf_q_a.ptr, n, ql, e);
-                }
-            } else {
-                self.batchedGemm(self.pf_hidden2.ptr, q_a, self.pf_q_a.ptr, n, ql, e);
-            }
+            self.batchedGemm(self.pf_hidden2.ptr, q_a, self.pf_q_a.ptr, n, ql, e);
             const q_an = try self.layerTensorReq(li, "attn_q_a_norm.weight");
             self.computeBackend().rmsNormBatched(self.pf_q_a.ptr, self.normAsF32(q_an, ql), self.pf_q_a.ptr, n, ql, self.rms_eps);
             const q_b = try self.layerTensorReq(li, "attn_q_b.weight");
@@ -3390,18 +3371,8 @@ pub const Ds4Model = struct {
                     const yp = self.lora_out.ptr + g * olr;
                     self.computeBackend().gemv(xp, .{ .data = wo_a.data_ptr + g * wo_a_group_stride, .dtype = wo_a.dtype }, yp, olr, group_in);
                 }
-                // wo_b: use pre-dequanted f32 + SGEMM per-token (single-row SGEMM = GEMV)
-                if (self.pf_dequant_ready) {
-                    if (comptime @import("builtin").os.tag == .macos and build_options.enable_metal) {
-                        const rel3 = li - ft_skip;
-                        const accel3 = backend_mod.accelerate;
-                        accel3.sgemm(1, e, og * olr, self.lora_out.ptr, self.pf_dequant_wo_b.ptr + rel3 * e * og * olr, self.pf_hidden.ptr + t * e);
-                    } else {
-                        self.doGemv(self.lora_out.ptr, wo_b, self.pf_hidden.ptr + t * e, e, og * olr);
-                    }
-                } else {
-                    self.doGemv(self.lora_out.ptr, wo_b, self.pf_hidden.ptr + t * e, e, og * olr);
-                }
+                // wo_b: single-row SGEMM is a GEMV
+                self.doGemv(self.lora_out.ptr, wo_b, self.pf_hidden.ptr + t * e, e, og * olr);
             }
             self.be.sync();
 

@@ -411,8 +411,6 @@ pub const WebGpuBackend = struct {
 
     // Batched command encoding
     batch_encoder: WGPUCommandEncoder = null,
-    batch_pass: WGPUComputePassEncoder = null,
-    in_batch: bool = false,
 
     // Lazy readback: GPU results cached by CPU pointer, downloaded on sync()
     dirty_bufs: [max_dirty_entries]DirtyEntry = undefined,

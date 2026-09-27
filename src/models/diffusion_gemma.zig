@@ -155,8 +155,6 @@ pub const DiffusionGemmaModel = struct {
     pf_hidden: []f32 = &.{},
     /// Batch scratch: canvas_length * n_embd.
     pf_scratch: []f32 = &.{},
-    /// Batch logits: canvas_length * vocab_size (set lazily during diffusion).
-    pf_logits: []f32 = &.{},
     /// Pre-allocated canvas K buffer: canvas_length * max_kv_dim (avoids per-layer alloc).
     canvas_k_buf: []f32 = &.{},
     /// Pre-allocated canvas V buffer: canvas_length * max_kv_dim.

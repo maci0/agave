@@ -144,10 +144,6 @@ pub const ModelInfo = struct {
     system_mem: usize = 0, // Available system memory in bytes
     // Optional extended info
     format_name: []const u8 = "", // "GGUF v3", "SafeTensors"
-    attention_desc: []const u8 = "", // "full", "sliding (128)", "hybrid: attn every 4"
-    active_params: u64 = 0, // For MoE: params active per forward pass
-    server_mode: bool = false,
-    server_port: u16 = 0,
     batch_size: u32 = 0,
     mtp_depth: u32 = 0,
     has_vision: bool = false,
