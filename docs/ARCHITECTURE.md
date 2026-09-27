@@ -43,6 +43,7 @@ agave/
 │   │   ├── metrics.zig    # Prometheus metrics collector
 │   │   ├── rate_limiter.zig # Token bucket rate limiter
 │   │   ├── json.zig        # JSON field extraction, encoding, and form-parsing
+│   │   ├── idempotency.zig # Bounded replay ledger for mutating chat routes (X-Request-Id)
 │   │   └── fixed_buf_stream.zig # Allocation-free fixed buffer writer (server responses)
 │   ├── display.zig        # Rich CLI output (banner, stats, progress)
 │   ├── chat_template.zig  # Data-driven chat prompt templates (ChatML, Gemma, Gemma 4, Qwen35, GLM-4, GPT-OSS, Llama 4)
@@ -56,6 +57,9 @@ agave/
 │   ├── ngram_cache.zig    # PLE ngram shard LRU (library; not yet wired to a CLI flag)
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
 │   ├── test_exports.zig   # Test bridge re-exporting backend types for out-of-tree tests
+│   ├── test_stdout.zig    # Test-only fd-1 silencer for the server-mode test runner
+│   ├── config.zig         # Environment variable access (AGAVE_*, HF_*, cache roots)
+│   ├── dynlib.zig         # dlopen helper probing distro and Homebrew prefixes
 │   ├── thread_pool.zig    # Futex-based work-stealing thread pool (one worker per physical core, pinned)
 │   ├── sim_clock.zig      # Injectable wall/monotonic clock (tests, and --sim-clock-ms runs)
 │   ├── perf.zig           # Performance timer utilities
@@ -125,6 +129,7 @@ agave/
 │   │       └── webgpu/    # WGSL compute shaders
 │   ├── parallel/
 │   │   ├── transport.zig  # Distributed transport: TCP, POSIX shm, NCCL (RoCE RDMA)
+│   │   ├── peer_link.zig  # --peers address syntax, TCP handshake, RTT probe, NCCL interop
 │   │   └── peer_discovery.zig # UDP peer discovery (LAN broadcast, auto-connect; not devices/discovery)
 │   ├── spec/
 │   │   ├── spec_decode.zig # Speculative decoding orchestrator (draft, verify, accept)
@@ -157,6 +162,13 @@ agave/
 │   ├── agave.js           # Generated classic script
 │   ├── shell.ts           # Demo page logic
 │   └── shell.js           # Generated classic script
+├── tools/                 # Offline model-prep utilities and vendored lint plugins (never linked into agave)
+│   ├── gguf_io.py         # Shared GGUF header read/write for the scripts below
+│   ├── dir-steering/      # Directional steering matrix builder (--dir-steering-file input)
+│   ├── mixed-quant/       # Mixed-quantization expert splicer
+│   ├── synth-moe/         # Dense-to-routed-MoE GGUF converter (MoE test path)
+│   ├── quality-testing/   # Token NLL scoring against official outputs
+│   └── oxlint/            # Vendored anti-slop oxlint plugin (see tools/README.md)
 ```
 
 ## Design Decisions
