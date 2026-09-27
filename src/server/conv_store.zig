@@ -6,7 +6,9 @@
 //! Written with `durable_file.replace` so a crash cannot truncate the live
 //! file. Load is best-effort: missing file starts empty; a corrupt file is
 //! quarantined to `{path}.corrupt` so the next save cannot overwrite the
-//! only remaining copy.
+//! only remaining copy. A store larger than the load caps keeps its full
+//! bytes at `{path}.overflow`, because the next save writes back only what
+//! loaded.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -148,7 +150,7 @@ pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
     };
     defer allocator.free(data);
 
-    const snap = parse(allocator, data) catch |err| {
+    const result = parse(allocator, data) catch |err| {
         // OOM is not corruption: quarantining would rename a valid store away
         // and the next save would replace it with an empty one.
         if (err == error.OutOfMemory) return err;
@@ -160,7 +162,28 @@ pub fn load(allocator: Allocator, path: []const u8) !Snapshot {
         };
         return err;
     };
-    return snap;
+    // The caps in parse dropped part of a file that parsed cleanly, and the
+    // next save writes back only what loaded, so the dropped tail is destroyed
+    // on the first save after this load. Keep the original bytes beside the
+    // live path until then.
+    if (result.truncated) preserveOverflow(path, data);
+    return result.snap;
+}
+
+/// Write the full bytes of a store that `parse` capped to `{path}.overflow`.
+/// Best-effort: the copy is a second chance, and the live file is still intact
+/// at this point, so a failure here costs the sidecar, not the store.
+fn preserveOverflow(path: []const u8, data: []const u8) void {
+    var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dest = std.fmt.bufPrint(&dest_buf, "{s}.overflow", .{path}) catch {
+        std.log.err("conversation store: store at {s} exceeds the load caps and its name does not fit {d} bytes; the part past the caps is lost on the next save", .{ path, std.fs.max_path_bytes });
+        return;
+    };
+    durable.replace(dest, data) catch |err| {
+        std.log.err("conversation store: failed to preserve {s} ({}); the part past the load caps is lost on the next save", .{ dest, err });
+        return;
+    };
+    std.log.warn("conversation store: {s} exceeds the load caps; the full store is kept at {s} until the next save rewrites the live path", .{ path, dest });
 }
 
 /// Narrow a decoded JSON integer to the u32 the store keeps ids in.
@@ -200,7 +223,15 @@ fn scanObject(arr: []const u8, idx: *usize) ![]const u8 {
     return arr[start .. i - 1];
 }
 
-fn parse(allocator: Allocator, data: []const u8) !Snapshot {
+/// A parsed store plus whether a cap dropped part of the file. The dropped
+/// part is not recoverable from the Snapshot, so `load` preserves the original
+/// bytes when this is set.
+const ParseResult = struct {
+    snap: Snapshot,
+    truncated: bool,
+};
+
+fn parse(allocator: Allocator, data: []const u8) !ParseResult {
     const version = json.extractIntField(data, "version") orelse return error.CorruptStore;
     if (version != format_version) return error.UnsupportedVersion;
     // extractIntField rejects negatives but accepts values above u32 max; a
@@ -213,6 +244,7 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
     if (arr.len < 2 or arr[0] != '[') return error.CorruptStore;
 
     var convs: std.ArrayList(LoadedConv) = .empty;
+    var truncated = false;
     errdefer {
         for (convs.items) |*conv| {
             allocator.free(conv.title);
@@ -230,6 +262,7 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
         // The next save writes back only what loaded here, so hitting the cap
         // deletes the overflow with no record. Name it instead of dropping it.
         if (convs.items.len == max_conversations) {
+            truncated = true;
             std.log.warn("conversation store: more than {d} conversations; the rest are dropped on the next save", .{max_conversations});
             break;
         }
@@ -255,7 +288,7 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
 
         var messages: []Message = &.{};
         if (json.extractObjectField(obj, "messages")) |msgs_arr| {
-            messages = parseMessages(allocator, msgs_arr) catch |err| {
+            messages = parseMessages(allocator, msgs_arr, &truncated) catch |err| {
                 allocator.free(title);
                 return err;
             };
@@ -276,15 +309,18 @@ fn parse(allocator: Allocator, data: []const u8) !Snapshot {
         };
     }
 
-    return Snapshot{
-        .allocator = allocator,
-        .active_id = active_id,
-        .next_id = next_id,
-        .conversations = try convs.toOwnedSlice(allocator),
+    return ParseResult{
+        .snap = .{
+            .allocator = allocator,
+            .active_id = active_id,
+            .next_id = next_id,
+            .conversations = try convs.toOwnedSlice(allocator),
+        },
+        .truncated = truncated,
     };
 }
 
-fn parseMessages(allocator: Allocator, arr: []const u8) ![]Message {
+fn parseMessages(allocator: Allocator, arr: []const u8, truncated: *bool) ![]Message {
     if (arr.len < 2 or arr[0] != '[') return error.CorruptStore;
     var list: std.ArrayList(Message) = .empty;
     errdefer {
@@ -298,6 +334,7 @@ fn parseMessages(allocator: Allocator, arr: []const u8) ![]Message {
     var i: usize = 1;
     while (i < arr.len) {
         if (list.items.len == max_messages_per_conv) {
+            truncated.* = true;
             std.log.warn("conversation store: more than {d} messages in one conversation; the rest are dropped on the next save", .{max_messages_per_conv});
             break;
         }
@@ -457,6 +494,7 @@ test "load caps conversations at the save cap instead of dropping silently" {
     var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
     defer deleteTestPath(path);
     defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".overflow"));
 
     // One more conversation than the server will ever write, as a hand-edited
     // or externally written store can carry.
@@ -475,6 +513,12 @@ test "load caps conversations at the save cap instead of dropping silently" {
     // Capped, not rejected: the file is still usable and the overflow is
     // logged by parse.
     try std.testing.expectEqual(max_conversations, snap.conversations.len);
+
+    // The next save writes back only these 100, so the conversation past the
+    // cap is destroyed then. It has to be recoverable before that happens.
+    const kept = try readFile(allocator, testPathSuffix(&suf_buf, path, ".overflow"));
+    defer allocator.free(kept);
+    try std.testing.expectEqualStrings(buf.items, kept);
 }
 
 test "load clips an over-long non-ASCII title on a character boundary" {

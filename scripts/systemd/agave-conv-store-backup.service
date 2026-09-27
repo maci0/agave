@@ -1,0 +1,39 @@
+# Scheduled backup of the web-UI conversation store, the only state Agave
+# owns that cannot be regenerated. Install both this file and
+# agave-conv-store-backup.timer under /etc/systemd/system/, then:
+#
+#   systemctl daemon-reload
+#   systemctl enable --now agave-conv-store-backup.timer
+#
+# Edit the two settings marked below before enabling. Runbook:
+# docs/DURABILITY.md.
+[Unit]
+Description=Back up the Agave conversation store
+After=local-fs.target
+# A run that keeps failing is stopped rather than retried for an hour: the
+# alert belongs to the operator, and a destination that stays unwritable is
+# not fixed by a retry.
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+# The account the server runs as: it has to read the store, and the backup
+# directory has to be writable by it.
+User=agave
+# Must be a different filesystem than the conversation store's directory, or
+# `backup` refuses to run. `df -P` decides.
+Environment=AGAVE_BACKUP_DIR=/var/backups/agave
+ExecStart=/usr/local/bin/conv-store-backup.sh backup
+# Freshness and loadability of the newest copy. A nonzero exit from either
+# command is the alert.
+ExecStartPost=/usr/local/bin/conv-store-backup.sh check
+Restart=on-failure
+RestartSec=5min
+
+# The script reads the store and writes the backup tier. Nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/backups/agave

@@ -1,0 +1,16 @@
+# Hourly backup of the Agave conversation store. Pair with
+# agave-conv-store-backup.service; see docs/DURABILITY.md for the RPO this
+# interval buys and for the same schedule as a plain cron line.
+[Unit]
+Description=Hourly Agave conversation store backup
+
+[Timer]
+# Off the hour, where every other timer on the host fires.
+OnCalendar=*-*-* *:17:00
+RandomizedDelaySec=10m
+# A missed run (host off, laptop asleep) runs on the next boot. Without this
+# the gap is silent until the next hourly tick.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
