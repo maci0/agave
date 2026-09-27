@@ -86,7 +86,7 @@ Non-negotiable. Every change must respect all of them.
 - No magic numbers. Thresholds are named module-level `const`s.
 
 ### Build
-- Build system is `build.zig` + `build.zig.zon` only. Do not add a Makefile or C/C++ inference libraries. `scripts/` is profiling, docs, and the web bundle — not the build. `tools/` is offline model-prep utilities (`tools/README.md`), never linked into `agave`; anything the build or CI must run goes in `scripts/`.
+- Build system is `build.zig` + `build.zig.zon` only. Do not add a Makefile or C/C++ inference libraries. `scripts/` holds the profiling, lint, pin, and web-bundle helpers; `build.zig` shells out to its lint, pin, docs, and artifact checks, but the build graph itself is Zig-only. `tools/` is offline model-prep utilities (`tools/README.md`), never linked into `agave`; anything the build or CI must run goes in `scripts/`.
 - `build.zig.zon` has zero Zig package dependencies. Keep it that way. CLI is `src/cli.zig`. Terminal I/O is `src/term.zig` (posix + `std.unicode`, no libc, no `wcwidth`, no terminal frameworks).
 - Cross-compile must keep working, matching `.github/workflows/ci.yml`: `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` (Metal off), `x86_64-linux-musl`, `aarch64-linux-musl` (static, CPU-only), plus the separate `wasm32-freestanding` build.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast — that no-ops `std.debug.assert`.
@@ -103,8 +103,8 @@ Non-negotiable. Every change must respect all of them.
 - `std.debug.assert` for internal invariants. `pub` only for intended API.
 - Public functions and structs get `///` (purpose, ownership, returns, errors). Files get `//!`.
 - `test` blocks at the bottom of the relevant file. Backend tests use target guards.
-- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `--profile "prompt"` and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change.
-- Research prototypes (Triton/CUTLASS/TVM) stay in `research/kernels/`. Port to native Zig + target IR before merging into `src/`.
+- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `agave model.gguf "prompt" --profile` (`--profile` is a boolean flag) and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change.
+- Kernel research and reference implementations stay in `research/kernels/` (Python/torch tooling plus `tilelang/` experiments). Port to native Zig + target IR before merging into `src/`.
 
 ### Models
 - New models: `megakernel_enabled` field so `setMegakernel()` vtable dispatch works; `ModelDesc` in `src/backend/mega_compose.zig` ([docs/MEGAKERNEL.md](docs/MEGAKERNEL.md) Tier 3).

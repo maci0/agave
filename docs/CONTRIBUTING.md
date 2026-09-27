@@ -352,7 +352,7 @@ See `src/spec/ddtree.zig` for the tree construction algorithm and `src/backend/k
 
 ## How to Debug Performance Regressions
 
-1. **Profile per-op timing**: `./zig-out/bin/agave model.gguf --profile "prompt"` (adds GPU syncs, ~50% throughput loss)
+1. **Profile per-op timing**: `./zig-out/bin/agave model.gguf "prompt" --profile` (`--profile` is a boolean flag; the prompt is positional, and profiling adds GPU syncs for ~50% throughput loss)
 2. **Micro-benchmarks**: `zig build bench && ./zig-out/bin/agave-bench gemv_f32 --n=4096 --k=4096 --backend=metal`
 3. **Research kernels**: `cd research/kernels && uv run run.py bench sdpa --backend cpu`
 4. **Check allocations**: Use `std.testing.allocator` in tests (detects leaks automatically)
