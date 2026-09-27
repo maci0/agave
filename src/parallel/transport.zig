@@ -18,6 +18,17 @@ const shm_peer_retry_ns: u64 = 1_000_000;
 /// ~100M spins ≈ several seconds at GHz clock rates. Prevents infinite hang
 /// when a peer process crashes mid-transfer.
 const shm_spin_max: u32 = 100_000_000;
+/// Virtual-time budget for an SHM send/recv wait, in milliseconds. A spin
+/// count is a wall-clock bound in disguise: at 100M spins the wait lasts
+/// seconds on a fast host and minutes on a loaded one, so a replay would time
+/// out at a different point. Under a clock override the wait is bounded on
+/// the virtual timeline instead, identically on every host.
+const shm_wait_budget_ms: i64 = 5_000;
+/// Virtual time one SHM wait iteration costs under a clock override.
+const shm_wait_step_ms: i64 = 1;
+/// Granularity of the sliced poll(2) wait, in milliseconds. Also the amount of
+/// virtual time one empty probe advances.
+const poll_slice_ms: i32 = 50;
 /// Maximum wall-clock wait for a TCP peer connect before failing. A blocking
 /// connect(2) to an unreachable address otherwise stalls distributed startup
 /// for the kernel's SYN retry window (~2 minutes).
@@ -55,6 +66,53 @@ fn getenv(name: []const u8) ?[]const u8 {
     if (val == null) return null;
     const ptr: [*:0]const u8 = @ptrCast(val.?);
     return std.mem.sliceTo(ptr, 0);
+}
+
+/// Poll `fd` for `events` until ready or `budget_ms` elapse on the injectable
+/// clock. Returns the poll result (0 on timeout), or `poll_error` if poll(2)
+/// itself fails.
+///
+/// A single long poll(2) timeout is host-timed: under a clock override the
+/// call would still block for that many milliseconds of wall time, and the
+/// point at which a peer gives up would depend on host speed. The wait is
+/// therefore sliced, the deadline is read from sim_clock, and under an
+/// override the probe is non-blocking with virtual time advanced by the slice,
+/// so the timeout lands after the same number of probes on every host.
+fn waitReady(fd: c_int, events: @TypeOf(posix.POLL.IN), budget_ms: i64, poll_error: anyerror) !usize {
+    const deadline = sim_clock.monoMilli() + budget_ms;
+    while (true) {
+        const virtual = sim_clock.isOverridden();
+        var pfd = [1]posix.pollfd{.{ .fd = fd, .events = events, .revents = 0 }};
+        const ready = posix.poll(&pfd, if (virtual) 0 else poll_slice_ms) catch return poll_error;
+        if (ready != 0) return ready;
+        if (sim_clock.monoMilli() >= deadline) return 0;
+        if (virtual) sim_clock.advanceMs(poll_slice_ms);
+    }
+    unreachable;
+}
+
+/// Wait until `flag` equals `want`, or return `timeout_error` once the bound is
+/// reached. Production keeps the spin count; under a clock override the bound
+/// is `shm_wait_budget_ms` of virtual time, so the same number of iterations
+/// elapse on every host.
+fn waitShmFlag(flag: *const std.atomic.Value(u32), want: u32, timeout_error: anyerror) !void {
+    if (sim_clock.isOverridden()) {
+        const deadline = sim_clock.monoMilli() + shm_wait_budget_ms;
+        while (flag.load(.acquire) != want) {
+            if (sim_clock.monoMilli() >= deadline) return timeout_error;
+            // Virtual time costs no wall time, so the loop would otherwise burn
+            // the whole budget before the peer thread is ever scheduled. Yield
+            // so the waiter stays a waiter.
+            std.Thread.yield() catch {};
+            sim_clock.advanceMs(shm_wait_step_ms);
+        }
+        return;
+    }
+    var spins: u32 = 0;
+    while (flag.load(.acquire) != want) : (spins += 1) {
+        if (spins >= shm_spin_max) return timeout_error;
+        std.atomic.spinLoopHint();
+    }
 }
 
 // NCCL types and constants
@@ -182,8 +240,7 @@ pub const Transport = struct {
         if (c.fcntl(fd, c.F.SETFL, old_fl | nonblock_bits) < 0) return error.ConnectFailed;
 
         if (c.connect(fd, @ptrCast(&addr), @sizeOf(@TypeOf(addr))) != 0) {
-            var pfd: [1]posix.pollfd = .{.{ .fd = fd, .events = posix.POLL.OUT, .revents = 0 }};
-            const ready = posix.poll(&pfd, tcp_connect_timeout_ms) catch return error.ConnectFailed;
+            const ready = waitReady(fd, posix.POLL.OUT, tcp_connect_timeout_ms, error.ConnectFailed) catch return error.ConnectFailed;
             if (ready == 0) return error.ConnectTimeout;
             if (ready < 1) return error.ConnectFailed;
             var so_err: c_int = 0;
@@ -211,8 +268,7 @@ pub const Transport = struct {
         if (self.tcp_connected >= max_peers) return error.TooManyPeers;
         // A blocking accept(2) never returns when the peer never starts, which
         // strands rank 0 on a listen socket for the life of the process.
-        var pfd: [1]posix.pollfd = .{.{ .fd = listen_fd, .events = posix.POLL.IN, .revents = 0 }};
-        const ready = posix.poll(&pfd, tcp_accept_timeout_ms) catch return error.AcceptFailed;
+        const ready = waitReady(listen_fd, posix.POLL.IN, tcp_accept_timeout_ms, error.AcceptFailed) catch return error.AcceptFailed;
         if (ready == 0) return error.AcceptTimeout;
         if (ready < 1) return error.AcceptFailed;
         var addr: std.posix.sockaddr.in = undefined;
@@ -282,14 +338,9 @@ pub const Transport = struct {
         const send = self.shm_send orelse return error.ShmNotConnected;
         std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(send));
-        // Spin until receiver consumed previous message (bounded to prevent hang on peer crash)
-        var spins: u32 = 0;
-        while (hdr.ready.load(.acquire) != 0) : (spins += 1) {
-            if (spins >= shm_spin_max) {
-                return error.ShmSendTimeout;
-            }
-            std.atomic.spinLoopHint();
-        }
+        // Wait until the receiver consumed the previous message (bounded so a
+        // peer crash cannot hang this rank).
+        try waitShmFlag(&hdr.ready, 0, error.ShmSendTimeout);
         const payload = send + @sizeOf(ShmHeader);
         @memcpy(payload[0..byte_len], data[0..byte_len]);
         hdr.size = @intCast(byte_len);
@@ -300,14 +351,9 @@ pub const Transport = struct {
         const recv = self.shm_recv orelse return error.ShmNotConnected;
         std.debug.assert(byte_len <= shm_buf_size);
         const hdr: *ShmHeader = @ptrCast(@alignCast(recv));
-        // Spin until sender has data ready (bounded to prevent hang on peer crash)
-        var spins: u32 = 0;
-        while (hdr.ready.load(.acquire) == 0) : (spins += 1) {
-            if (spins >= shm_spin_max) {
-                return error.ShmRecvTimeout;
-            }
-            std.atomic.spinLoopHint();
-        }
+        // Wait until the sender has data ready (bounded so a peer crash cannot
+        // hang this rank).
+        try waitShmFlag(&hdr.ready, 1, error.ShmRecvTimeout);
         const payload = recv + @sizeOf(ShmHeader);
         @memcpy(data[0..byte_len], payload[0..byte_len]);
         hdr.ready.store(0, .release);
@@ -712,6 +758,65 @@ test "simdAddF32 partial SIMD width" {
 test "getenv returns null for nonexistent var" {
     const result = getenv("AGAVE_TEST_NONEXISTENT_ENV_VAR_12345");
     try std.testing.expectEqual(@as(?[]const u8, null), result);
+}
+
+test "shm wait times out on virtual time, not host speed" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+
+    var flag = std.atomic.Value(u32).init(0);
+    // A flag stuck at the wrong value burns exactly the virtual budget, so a
+    // replay reaches the timeout after the same simulated duration regardless
+    // of how fast the host spins.
+    try std.testing.expectError(error.ShmRecvTimeout, waitShmFlag(&flag, 1, error.ShmRecvTimeout));
+    try std.testing.expectEqual(1_000 + shm_wait_budget_ms, sim_clock.monoMilli());
+
+    // A flag already at the target returns without advancing time.
+    flag.store(1, .release);
+    const before = sim_clock.monoMilli();
+    try waitShmFlag(&flag, 1, error.ShmRecvTimeout);
+    try std.testing.expectEqual(before, sim_clock.monoMilli());
+}
+
+test "shm wait returns as soon as the flag is set under override" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+
+    var flag = std.atomic.Value(u32).init(0);
+    var started = std.atomic.Value(bool).init(false);
+    const Watcher = struct {
+        fn run(f: *std.atomic.Value(u32), s: *std.atomic.Value(bool)) void {
+            s.store(true, .release);
+            f.store(1, .release);
+        }
+    };
+    const t = try std.Thread.spawn(.{}, Watcher.run, .{ &flag, &started });
+    defer t.join();
+    while (!started.load(.acquire)) std.atomic.spinLoopHint();
+    try waitShmFlag(&flag, 1, error.ShmRecvTimeout);
+    try std.testing.expect(sim_clock.monoMilli() - 1_000 <= shm_wait_budget_ms);
+}
+
+test "poll wait times out on virtual time" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(1_000);
+
+    // A listening socket with no peer connection is never readable, so the
+    // wait can only end at the virtual deadline. Without the override-aware
+    // probe this would block poll_slice_ms of wall time per iteration.
+    const fd = c.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    try std.testing.expect(fd >= 0);
+    defer _ = c.close(fd);
+    var addr: posix.sockaddr.in = .{
+        .port = std.mem.nativeToBig(u16, 0),
+        .addr = 0,
+    };
+    try std.testing.expectEqual(@as(c_int, 0), c.bind(fd, @ptrCast(&addr), @sizeOf(@TypeOf(addr))));
+    try std.testing.expectEqual(@as(c_int, 0), c.listen(fd, 1));
+
+    const ready = try waitReady(fd, posix.POLL.IN, 1_000, error.AcceptFailed);
+    try std.testing.expectEqual(@as(usize, 0), ready);
+    try std.testing.expectEqual(1_000 + 1_000, sim_clock.monoMilli());
 }
 
 test "TransportKind enum has all expected variants" {
