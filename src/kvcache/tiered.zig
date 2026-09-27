@@ -138,10 +138,15 @@ pub const TieredKvCache = struct {
     /// Blocks demoted VRAM→RAM since init. Read by the scheduler each step
     /// to publish `agave_kv_cache_demotions_vram_to_ram_total`; the only
     /// in-band signal of VRAM pressure, since the per-event log is debug-level.
-    demotions_vram_to_ram: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-    /// Blocks demoted RAM→SSD since init. Same publication path as
-    /// `demotions_vram_to_ram`.
-    demotions_ram_to_ssd: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    ///
+    /// `usize`, not `u64`: this file is in the wasm32 graph (`zig build wasm`),
+    /// whose baseline CPU has no 64-bit atomics at all. A `Value(u64)` here is
+    /// a compile error there; `usize` is 64-bit on the 64-bit targets and 32-bit
+    /// on wasm32, and a monotonic demotion count cannot overflow either.
+    demotions_vram_to_ram: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    /// Blocks demoted RAM→SSD since init. Same publication path and same
+    /// `usize` width as `demotions_vram_to_ram`.
+    demotions_ram_to_ssd: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     /// Block size (tokens per block).
     block_size: u16,
@@ -853,8 +858,8 @@ pub const TieredKvCache = struct {
     /// counter only ever grows.
     pub fn demotionCounts(self: *const TieredKvCache) struct { vram_to_ram: u64, ram_to_ssd: u64 } {
         return .{
-            .vram_to_ram = self.demotions_vram_to_ram.load(.monotonic),
-            .ram_to_ssd = self.demotions_ram_to_ssd.load(.monotonic),
+            .vram_to_ram = @as(u64, self.demotions_vram_to_ram.load(.monotonic)),
+            .ram_to_ssd = @as(u64, self.demotions_ram_to_ssd.load(.monotonic)),
         };
     }
 
