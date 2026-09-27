@@ -708,7 +708,7 @@ retries. A key that collides with an unrelated operation is the caller's
 responsibility: generate one per logical request, not per attempt.
 
 The bundled chat UI mints a key per send, per regenerate, and per new chat
-(`newRequestId` in `src/web/app.ts`). A request that fails after the server
+(`newRequestId` in `src/web/chat/api.ts`). A request that fails after the server
 persisted the turn records its response under the key and completes it, so the
 UI's Retry cannot append the same turn twice.
 

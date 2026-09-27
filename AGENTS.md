@@ -18,7 +18,7 @@ zig build conv-store-backup-test   # conversation store backup + restore self-te
 zig build lint-web                 # oxlint + tsc + ignorePatterns ratchet (CI lint-web; needs bun 1.4.0)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
 zig build lint-python              # ruff on scripts/, tests/, tools/, research/ Python (CI lint-python)
-zig build check-web                # committed src/web/app.js + web/*.js match a fresh tsc build (CI lint-web)
+zig build check-web                # committed bundles and stylesheets match a fresh bun + Tailwind build (CI lint-web)
 zig build fmt                      # apply zig fmt to the paths CI checks
 zig build fmt-check                # check formatting without writing
 bun run lint                       # oxlint (web TypeScript; blocking in CI)
@@ -45,7 +45,7 @@ After backend or model interface changes run `zig build`, not only `zig build te
 
 `zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (`scripts/build-web.sh` compiles the `.ts` sources and refreshes the committed `src/web/app.js` and `web/*.js`). Browser WASM shell is `web/`, not `src/web/`.
+Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (React in `app.tsx`, Tailwind 4 in `app.css`, shadcn primitives in `ui/`; `scripts/build-web.sh` bundles them into the committed `src/web/app.js` and `src/web/style.css`). Browser WASM shell is `web/` (React in `shell.tsx`, `shell.css`), not `src/web/`.
 
 ## Invariants
 
