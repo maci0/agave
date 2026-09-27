@@ -57,8 +57,8 @@ export type Bubble = {
   id: number;
   role: 'user' | 'assistant';
   text: string;
-  /** Data URL for an attached image on a user turn. */
-  image?: string | null;
+  /** Data URL for an attached image on a user turn; absent when none. */
+  image?: string;
   /** `thinking` before the first token, `streaming` while it grows, `done`
    *  after the final render, `error` when the request failed. */
   phase: 'thinking' | 'streaming' | 'done' | 'error';

@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { copyText, markdownReady, onIdle, renderMarkdown } from '../markdown';
 import { fmtInt, fmtNum, truncateAnnounce } from '../format';
 import type { Bubble, StreamStats } from '../types';
-import { cn } from '../../ui/utils';
+import { cn } from '../../ui/cn';
 
 const THINKING_GLYPH = '…';
 
@@ -27,7 +27,7 @@ type MessageBodyProps = {
   phase: Bubble['phase'];
   /** Called once per finished turn with the rendered response text, for the
    *  screen-reader announcement. A late markdown upgrade must not repeat it. */
-  onRendered?: (rendered: string) => void;
+  onRendered: (rendered: string) => void;
 };
 
 /**
@@ -65,11 +65,11 @@ export const MessageBody = memo(function MessageBody({ text, phase, onRendered }
     renderMarkdown(element, text);
     if (announced.current !== text) {
       announced.current = text;
-      onRendered?.(truncateAnnounce(element.textContent ?? '', 200));
+      onRendered(truncateAnnounce(element.textContent, 200));
     }
     if (!markdownReady()) {
-      // The libraries were still in flight. Rebuild once they land, one message
-      // Per idle slot, so a restored history does not re-render in one task.
+      // The libraries were still in flight, so rebuild once they land,
+      // One message per idle slot, never a whole history in one task.
       onIdle(function () {
         if (element.isConnected) { renderMarkdown(element, text); }
       });
@@ -121,21 +121,46 @@ type MessageProps = {
 
 const COPY_REVERT_MS = 2000;
 
+/** Copy a finished response. Hidden until the bubble is hovered or focused, and
+ *  pinned above the text on touch, where there is no hover. */
+const CopyResponse = ({ text }: { text: string }) => {
+  const [label, setLabel] = useState('Copy');
+  const copy = useCallback(function () {
+    void copyText(text).then(function (result) {
+      setLabel(result === 'copied' ? 'Copied' : 'Failed');
+      setTimeout(function () { setLabel('Copy'); }, COPY_REVERT_MS);
+    });
+  }, [text]);
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      aria-label="Copy response"
+      className="agave-reveal absolute end-2 top-2 inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1 font-mono text-2xs text-faint transition-colors hover:text-primary max-drawer:static max-drawer:mt-2 max-drawer:px-3"
+    >
+      {label === 'Copy' ? <Copy className="size-3.5" aria-hidden="true" /> : label}
+    </button>
+  );
+};
+
+/** Replay the newest assistant turn. */
+const RegenerateButton = ({ retry, onRegenerate }: { retry: boolean; onRegenerate: () => void }) => (
+  <button
+    type="button"
+    onClick={onRegenerate}
+    aria-label={retry ? 'Retry generating response' : 'Regenerate response'}
+    className="agave-reveal inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 font-mono text-2xs text-faint transition-colors hover:border-primary hover:bg-primary/10 hover:text-primary"
+  >
+    <RefreshCw className="size-3.5" aria-hidden="true" />
+    {retry ? 'Retry' : 'Regenerate'}
+  </button>
+);
+
 const Message = memo(function Message({ bubble, showStats, canRegenerate, onRegenerate, onRendered }: MessageProps) {
-  const [copyLabel, setCopyLabel] = useState('Copy');
   const isUser = bubble.role === 'user';
   const roleId = `msg-role-${bubble.id}`;
   const failed = bubble.phase === 'error';
-  const regenLabel = failed ? 'Retry' : 'Regenerate';
-
   const handleRendered = useCallback((rendered: string) => { onRendered(bubble.id, rendered); }, [bubble.id, onRendered]);
-  const handleCopy = useCallback(function () {
-    void copyText(bubble.text).then(function (result) {
-      setCopyLabel(result === 'copied' ? 'Copied' : 'Failed');
-      setTimeout(function () { setCopyLabel('Copy'); }, COPY_REVERT_MS);
-    });
-  }, [bubble.text]);
-
   return (
     <div
       role="group"
@@ -158,33 +183,14 @@ const Message = memo(function Message({ bubble, showStats, canRegenerate, onRege
           isUser ? 'rounded-ee-[2px] border-border bg-card' : '',
         )}
       >
-        {bubble.image ? (
+        {bubble.image !== undefined ? (
           <img className="mb-2 block max-w-[200px] rounded-lg border border-border" src={bubble.image} alt="Attached image" />
         ) : null}
         {isUser ? <div className="agave-prose min-w-0">{bubble.text}</div> : <MessageBody text={bubble.text} phase={bubble.phase} onRendered={handleRendered} />}
-        {!isUser && !failed && bubble.phase === 'done' ? (
-          <button
-            type="button"
-            onClick={handleCopy}
-            aria-label="Copy response"
-            className="agave-reveal absolute end-2 top-2 inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1 font-mono text-2xs text-faint transition-colors hover:text-primary max-drawer:static max-drawer:mt-2 max-drawer:px-3"
-          >
-            {copyLabel === 'Copy' ? <Copy className="size-3.5" aria-hidden="true" /> : copyLabel}
-          </button>
-        ) : null}
+        {!isUser && !failed && bubble.phase === 'done' ? <CopyResponse text={bubble.text} /> : null}
       </div>
       {bubble.stats && showStats ? <StatsLine stats={bubble.stats} /> : null}
-      {canRegenerate ? (
-        <button
-          type="button"
-          onClick={onRegenerate}
-          aria-label={failed ? 'Retry generating response' : 'Regenerate response'}
-          className="agave-reveal inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 font-mono text-2xs text-faint transition-colors hover:border-primary hover:bg-primary/10 hover:text-primary"
-        >
-          <RefreshCw className="size-3.5" aria-hidden="true" />
-          {regenLabel}
-        </button>
-      ) : null}
+      {canRegenerate ? <RegenerateButton retry={failed} onRegenerate={onRegenerate} /> : null}
     </div>
   );
 });

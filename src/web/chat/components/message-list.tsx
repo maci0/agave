@@ -2,17 +2,17 @@ import { X } from 'lucide-react';
 import { memo, useEffect, useRef, useState } from 'react';
 import { Message } from './message';
 import type { Bubble, Toast } from '../types';
-import { cn } from '../../ui/utils';
+import { cn } from '../../ui/cn';
 
 const TOAST_INFO_MS = 5000;
-const TOAST_ERROR_MS = 12000;
+const TOAST_ERROR_MS = 12_000;
 /** A message the user is reading gets twice as long before it leaves. */
 const REDUCED_MOTION_FACTOR = 2;
 
 const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) => {
   const [paused, setPaused] = useState(false);
   useEffect(function () {
-    if (paused) {return;}
+    if (paused) { return undefined; }
     const base = toast.level === 'error' ? TOAST_ERROR_MS : TOAST_INFO_MS;
     const doubled = globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const timer = setTimeout(function () { onDismiss(toast.id); }, doubled ? base * REDUCED_MOTION_FACTOR : base);

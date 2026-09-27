@@ -108,6 +108,12 @@
     outline-offset: 2px;
   }
 
+  /* Input hint text, in one place for both surfaces. */
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-faint);
+  }
+
   ::selection {
     background: color-mix(in oklab, var(--color-primary) 30%, transparent);
   }

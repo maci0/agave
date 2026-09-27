@@ -1,5 +1,5 @@
 import { Dialog, DialogContent, DialogTitle } from '../../ui/dialog';
-import { cn } from '../../ui/utils';
+import { cn } from '../../ui/cn';
 
 type AboutDialogProps = {
   open: boolean;
@@ -11,7 +11,7 @@ type AboutDialogProps = {
 const Row = ({ label, value, chip }: { label: string; value: string; chip?: boolean }) => (
   <div className="flex justify-between gap-4 border-b border-border py-1.5 text-sm last:border-none">
     <span className="text-faint">{label}</span>
-    <span className={cn('text-foreground', chip ? 'rounded-xs border border-border bg-card px-1.5 py-0.5 font-mono text-xs' : 'font-mono')}>
+    <span className={cn('text-foreground', chip === true ? 'rounded-xs border border-border bg-card px-1.5 py-0.5 font-mono text-xs' : 'font-mono')}>
       {value}
     </span>
   </div>
