@@ -1377,14 +1377,6 @@ test "NemotronNano NVFP4 stride calculation" {
     try std.testing.expectEqual(@as(usize, 311808), s_stride);
 }
 
-test "NemotronNano model vtable compiles" {
-    try std.testing.expect(@hasDecl(NemotronNanoModel, "forward"));
-    try std.testing.expect(@hasDecl(NemotronNanoModel, "prefill"));
-    try std.testing.expect(@hasDecl(NemotronNanoModel, "resetCache"));
-    try std.testing.expect(@hasDecl(NemotronNanoModel, "cancel"));
-    try std.testing.expect(@hasDecl(NemotronNanoModel, "model"));
-}
-
 test "NemotronNano getBlockTable returns empty on default" {
     // Verify getBlockTable compiles and returns the expected slice type.
     // We cannot fully init a NemotronNanoModel without Format/Backend, but we

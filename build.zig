@@ -479,8 +479,6 @@ pub fn build(b: *std.Build) void {
             mod.linkFramework("Accelerate", .{});
         }
         test_step.dependOn(&b.addRunArtifact(t).step);
-        const webgpu_mlx_step = b.step("test-webgpu-mlx", "WebGPU MLX-Q4 GEMV chunking test");
-        webgpu_mlx_step.dependOn(&b.addRunArtifact(t).step);
     }
 
     // Cross-backend op parity against CPU (skips at runtime with no device).

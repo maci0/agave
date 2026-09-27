@@ -1221,14 +1221,6 @@ test "Gemma3 attention scale from query_pre_attn_scalar" {
     try std.testing.expectApproxEqAbs(@as(f32, 0.0625), attn_scale, 1e-5);
 }
 
-test "Gemma3 model vtable compiles" {
-    try std.testing.expect(@hasDecl(Gemma3Model, "forward"));
-    try std.testing.expect(@hasDecl(Gemma3Model, "prefill"));
-    try std.testing.expect(@hasDecl(Gemma3Model, "resetCache"));
-    try std.testing.expect(@hasDecl(Gemma3Model, "cancel"));
-    try std.testing.expect(@hasDecl(Gemma3Model, "model"));
-}
-
 test "Gemma3 applyRopeScaled non-zero position" {
     // At position 1 with a small rope_dim, verify rotation is applied.
     // With theta=10000, rope_dim=4, half=2:

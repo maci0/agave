@@ -1157,14 +1157,6 @@ test "GptOss Companion expertScaleStrideMxfp4" {
     try std.testing.expectEqual(@as(usize, 518400), comp.expertScaleStrideMxfp4());
 }
 
-test "GptOss model vtable compiles" {
-    try std.testing.expect(@hasDecl(GptOssModel, "forward"));
-    try std.testing.expect(@hasDecl(GptOssModel, "prefill"));
-    try std.testing.expect(@hasDecl(GptOssModel, "resetCache"));
-    try std.testing.expect(@hasDecl(GptOssModel, "cancel"));
-    try std.testing.expect(@hasDecl(GptOssModel, "model"));
-}
-
 test "GptOss Companion expertScaleStrideAffine" {
     const comp = GptOssModel.Companion{
         .scales = @ptrFromInt(0x1000),

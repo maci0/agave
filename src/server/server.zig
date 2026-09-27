@@ -26,7 +26,6 @@ const ngram_mod = @import("../spec/ngram.zig");
 const RateLimiter = @import("rate_limiter.zig").RateLimiter;
 const metrics_mod = @import("metrics.zig");
 const Metrics = metrics_mod.Metrics;
-const FixedBufStream = @import("fixed_buf_stream.zig").FixedBufStream;
 const json = @import("json.zig");
 const conv_store = @import("conv_store.zig");
 const Idempotency = @import("idempotency.zig");
@@ -2325,9 +2324,8 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             return;
         }
         var buf: [metrics_render_buf_size]u8 = undefined;
-        var fbs = FixedBufStream.init(&buf);
-        const writer = fbs.writer();
-        g_server.metrics.renderPrometheus(writer) catch {
+        var writer: std.Io.Writer = .fixed(&buf);
+        g_server.metrics.renderPrometheus(&writer) catch {
             std.log.err("req={d} metrics render failed: buffer overflow ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
             g_server.metrics.recordFailure();
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Metrics rendering failed");
@@ -2345,7 +2343,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
         writer.print("# HELP agave_ready 1 when /ready would return 200, 0 when degraded or shutting down\n# TYPE agave_ready gauge\nagave_ready {d}\n", .{@as(u32, if (hv.ready()) 1 else 0)}) catch {
             std.log.warn("req={d} metrics buffer overflow: agave_ready metric truncated ({d} bytes available)", .{ log_request_id, metrics_render_buf_size });
         };
-        sendResponse(stream, "200 OK", "text/plain; version=0.0.4; charset=utf-8", fbs.getWritten());
+        sendResponse(stream, "200 OK", "text/plain; version=0.0.4; charset=utf-8", writer.buffered());
         logRequestDone(method, path, 200, elapsedMs(request_start));
         return;
     }
@@ -3305,8 +3303,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             const response = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
-                var fbs = FixedBufStream.init(&buf);
-                const w = fbs.writer();
+                var w: std.Io.Writer = .fixed(&buf);
                 w.writeByte('[') catch break :blk @as(?[]const u8, null);
                 for (g_server.conversations.items, 0..) |*conv, ci| {
                     if (ci > 0) w.writeByte(',') catch break :blk null;
@@ -3318,7 +3315,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     , .{ conv.id, escaped_title, if (conv.id == g_server.active_id) "true" else "false", conv.messages.items.len }) catch break :blk null;
                 }
                 w.writeByte(']') catch break :blk null;
-                break :blk @as(?[]const u8, fbs.getWritten());
+                break :blk @as(?[]const u8, w.buffered());
             };
             if (response) |json_data| {
                 sendJson(stream, json_data);
@@ -3379,14 +3376,13 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 .value => |v| v,
             };
             var mbuf: [conv_msgs_buf_size]u8 = undefined;
-            var mfbs = FixedBufStream.init(&mbuf);
+            var mw: std.Io.Writer = .fixed(&mbuf);
             const select_result: enum { not_found, format_ok, format_fail } = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
 
                 const conv = g_server.getConvById(id) orelse break :blk .not_found;
                 g_server.selectConv(id);
-                const mw = mfbs.writer();
                 mw.writeAll("{\"messages\":[") catch break :blk .format_fail;
                 for (conv.messages.items, 0..) |msg, mi| {
                     if (mi > 0) mw.writeByte(',') catch break :blk .format_fail;
@@ -3412,7 +3408,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                     return;
                 },
                 .format_ok => {
-                    sendJson(stream, mfbs.getWritten());
+                    sendJson(stream, mw.buffered());
                     g_server.metrics.recordCompletion();
                     logRequestDone(method, path, 200, elapsedMs(request_start));
                 },
