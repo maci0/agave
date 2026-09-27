@@ -157,25 +157,27 @@ fn parseSysfsCacheSize(path: []const u8) usize {
 }
 
 /// Detect total system physical memory in bytes.
+/// Read a kB-denominated `/proc/meminfo` line ("MemTotal:  16342156 kB") and
+/// return it in bytes. Returns 0 when the line is absent or malformed.
+fn parseMeminfoKb(data: []const u8, needle: []const u8) usize {
+    const pos = std.mem.indexOf(u8, data, needle) orelse return 0;
+    var i = pos + needle.len;
+    while (i < data.len and data[i] == ' ') i += 1;
+    var val: usize = 0;
+    while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
+        const d = data[i] - '0';
+        const scaled = std.math.mul(usize, val, 10) catch return 0;
+        val = std.math.add(usize, scaled, d) catch return 0;
+    }
+    return std.math.mul(usize, val, kb_to_bytes) catch 0;
+}
+
 pub fn detectSystemMem() usize {
     if (comptime builtin.os.tag == .macos) {
         return sysctlU64("hw.memsize");
     } else if (comptime builtin.os.tag == .linux) {
         var read_buf: [meminfo_read_buf_size]u8 = undefined;
-        const data = readSmallFile("/proc/meminfo", &read_buf);
-        if (data.len == 0) return 0;
-        const needle = "MemTotal:";
-        if (std.mem.indexOf(u8, data, needle)) |pos| {
-            var i = pos + needle.len;
-            while (i < data.len and data[i] == ' ') i += 1;
-            var val: usize = 0;
-            while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
-                const d = data[i] - '0';
-                const scaled = std.math.mul(usize, val, 10) catch return 0;
-                val = std.math.add(usize, scaled, d) catch return 0;
-            }
-            return std.math.mul(usize, val, kb_to_bytes) catch 0; // kB to bytes
-        }
+        return parseMeminfoKb(readSmallFile("/proc/meminfo", &read_buf), "MemTotal:");
     }
     return 0;
 }
@@ -190,20 +192,7 @@ pub fn detectAvailMem() usize {
         return 0;
     } else if (comptime builtin.os.tag == .linux) {
         var read_buf: [memavail_read_buf_size]u8 = undefined;
-        const data = readSmallFile("/proc/meminfo", &read_buf);
-        if (data.len == 0) return 0;
-        const needle = "MemAvailable:";
-        if (std.mem.indexOf(u8, data, needle)) |pos| {
-            var i = pos + needle.len;
-            while (i < data.len and data[i] == ' ') i += 1;
-            var val: usize = 0;
-            while (i < data.len and data[i] >= '0' and data[i] <= '9') : (i += 1) {
-                const d = data[i] - '0';
-                const scaled = std.math.mul(usize, val, 10) catch return 0;
-                val = std.math.add(usize, scaled, d) catch return 0;
-            }
-            return std.math.mul(usize, val, kb_to_bytes) catch 0; // kB to bytes
-        }
+        return parseMeminfoKb(readSmallFile("/proc/meminfo", &read_buf), "MemAvailable:");
     }
     return 0;
 }
@@ -1160,11 +1149,8 @@ pub const CpuBackend = struct {
         }
     };
 
-    /// CPU scaled dot-product attention with KV cache append, returning per-head
-    /// softmax statistics (max and sum) for online softmax merge in split-attention.
-    /// Same as sdpa() but additionally outputs head_max[nh] and head_sum[nh].
-    /// Parallelizes across query heads when a thread pool is available.
     /// Paged SDPA: block-table-indexed attention for non-contiguous KV cache.
+    /// Parallelizes across query heads when a thread pool is available.
     pub fn sdpaPaged(self: *CpuBackend, q: [*]const f32, kv_view: backend_mod.PagedKvView, k_new: [*]const f32, v_new: [*]const f32, output: [*]f32, nh: usize, nkv: usize, hd: usize, scale: f32, _: KvQuantType, _: KvQuantType) void {
         // Thread-parallel dispatch across query heads
         if (self.pool) |pool| {

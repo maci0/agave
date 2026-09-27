@@ -50,20 +50,7 @@ pub fn build(b: *std.Build) void {
     const enable_llama4 = b.option(bool, "enable-llama4", "Enable Llama 4 model support (default: true)") orelse true;
     const enable_dflash2 = b.option(bool, "enable-dflash2", "Enable DFlash2 block-diffusion drafter support (default: true)") orelse true;
 
-    // ── Helper: link frameworks for macOS ─────────────────────────
-    // Note: Vulkan (libvulkan.so / libvulkan.1.dylib (via KosmicKrisp ICD)) is loaded at runtime
-    // via std.DynLib, no link-time dependency needed.
     const link_metal = enable_metal and target.result.os.tag == .macos;
-    const link_platform = struct {
-        fn apply(mod: *std.Build.Module, compile: *std.Build.Step.Compile, resolved: std.Build.ResolvedTarget) void {
-            mod.link_libc = true;
-            // zig 0.16 ReleaseFast defaults to a non-PIE ET_EXEC on Linux.
-            switch (resolved.result.os.tag) {
-                .linux, .macos => compile.pie = true,
-                else => {},
-            }
-        }
-    }.apply;
 
     const pin_spawned_python = struct {
         fn apply(cmd: *std.Build.Step.Run) void {
@@ -287,12 +274,7 @@ pub fn build(b: *std.Build) void {
     mod_rel.addImport("build_options", backend_options.createModule());
 
     const exe_rel = b.addExecutable(.{ .name = "agave", .root_module = mod_rel });
-    link_platform(mod_rel, exe_rel, target);
-    if (link_metal) {
-        mod_rel.linkFramework("Metal", .{});
-        mod_rel.linkFramework("Foundation", .{});
-        mod_rel.linkFramework("Accelerate", .{});
-    }
+    linkPlatform(mod_rel, exe_rel, target, link_metal);
     b.installArtifact(exe_rel);
 
     // ── Debug executable (also built by default) ─────────────────
@@ -307,12 +289,7 @@ pub fn build(b: *std.Build) void {
     mod_dbg.addImport("build_options", backend_options.createModule());
 
     const exe_dbg = b.addExecutable(.{ .name = "agave-debug", .root_module = mod_dbg });
-    link_platform(mod_dbg, exe_dbg, target);
-    if (link_metal) {
-        mod_dbg.linkFramework("Metal", .{});
-        mod_dbg.linkFramework("Foundation", .{});
-        mod_dbg.linkFramework("Accelerate", .{});
-    }
+    linkPlatform(mod_dbg, exe_dbg, target, link_metal);
     if (enable_debug_binary) b.installArtifact(exe_dbg);
 
     // ── Run step (uses the optimized binary) ─────────────────────
@@ -366,12 +343,7 @@ pub fn build(b: *std.Build) void {
         mod_test.addImport("build_options", backend_options.createModule());
         // No name filters: run the full inline suite from src/ (ReleaseSafe so asserts fire).
         const t = b.addTest(.{ .root_module = mod_test, .test_runner = fuzz_test_runner, .filters = test_filters });
-        link_platform(mod_test, t, target);
-        if (link_metal) {
-            mod_test.linkFramework("Metal", .{});
-            mod_test.linkFramework("Foundation", .{});
-            mod_test.linkFramework("Accelerate", .{});
-        }
+        linkPlatform(mod_test, t, target, link_metal);
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
@@ -422,83 +394,41 @@ pub fn build(b: *std.Build) void {
     sdpa_harness_mod.addImport("backend", backend_test_mod);
     sdpa_harness_mod.addImport("sdpa_oracle", oracle_mod);
 
+    const backend_tests: BackendTest = .{
+        .b = b,
+        .test_step = test_step,
+        .backend_mod = backend_test_mod,
+        .target = target,
+        .optimize = test_optimize,
+        .filters = test_filters,
+        .test_runner = simple_test_runner,
+        .link_metal = link_metal,
+    };
+
     // CUDA SDPA correctness tests (skips at runtime if no CUDA hardware).
     // Skip compile when CUDA is NullBackend: init() is a compileError.
     if (enable_cuda) {
-        const mod = b.createModule(.{
-            .root_source_file = b.path("tests/test_cuda_sdpa.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        });
-        mod.addImport("backend", backend_test_mod);
-        mod.addImport("sdpa_harness", sdpa_harness_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
-        link_platform(mod, t, target);
-        if (link_metal) {
-            mod.linkFramework("Metal", .{});
-            mod.linkFramework("Foundation", .{});
-            mod.linkFramework("Accelerate", .{});
-        }
-        test_step.dependOn(&b.addRunArtifact(t).step);
+        _ = backend_tests.add("tests/test_cuda_sdpa.zig", "sdpa_harness", sdpa_harness_mod);
     }
 
     // Metal SDPA correctness tests (skips at runtime if not macOS).
     // Skip compile when Metal is NullBackend: init() arity does not match.
     if (enable_metal) {
-        const mod = b.createModule(.{
-            .root_source_file = b.path("tests/test_metal_sdpa.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        });
-        mod.addImport("backend", backend_test_mod);
-        mod.addImport("sdpa_harness", sdpa_harness_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
-        link_platform(mod, t, target);
-        if (link_metal) {
-            mod.linkFramework("Metal", .{});
-            mod.linkFramework("Foundation", .{});
-            mod.linkFramework("Accelerate", .{});
-        }
-        test_step.dependOn(&b.addRunArtifact(t).step);
+        _ = backend_tests.add("tests/test_metal_sdpa.zig", "sdpa_harness", sdpa_harness_mod);
     }
 
     // WebGPU MLX GEMV row-chunking (vocab > 65535). Skips if wgpu-native missing.
     // Skip compile when WebGPU is NullBackend: init(allocator) vs init(allocator, device).
     if (enable_webgpu) {
-        const mod = b.createModule(.{
-            .root_source_file = b.path("tests/test_webgpu_mlx_gemv.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        });
-        mod.addImport("backend", backend_test_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
-        link_platform(mod, t, target);
-        if (link_metal) {
-            mod.linkFramework("Metal", .{});
-            mod.linkFramework("Foundation", .{});
-            mod.linkFramework("Accelerate", .{});
-        }
-        test_step.dependOn(&b.addRunArtifact(t).step);
+        const run = backend_tests.add("tests/test_webgpu_mlx_gemv.zig", null, null);
+        b.step("test-webgpu-mlx", "WebGPU MLX-Q4 GEMV chunking test").dependOn(&run.step);
     }
 
     // Cross-backend op parity against CPU (skips at runtime with no device).
     // Compiled only when both GPU backends are real: NullBackend.init is a
     // compileError, and this test instantiates each backend by union tag.
     if (enable_vulkan and enable_rocm) {
-        const mod = b.createModule(.{
-            .root_source_file = b.path("tests/test_backend_parity.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        });
-        mod.addImport("backend", backend_test_mod);
-        const t = b.addTest(.{ .root_module = mod, .test_runner = simple_test_runner, .filters = test_filters });
-        link_platform(mod, t, target);
-        if (link_metal) {
-            mod.linkFramework("Metal", .{});
-            mod.linkFramework("Foundation", .{});
-            mod.linkFramework("Accelerate", .{});
-        }
-        test_step.dependOn(&b.addRunArtifact(t).step);
+        _ = backend_tests.add("tests/test_backend_parity.zig", null, null);
     }
 
     // micro_bench pure-function tests (parseKeyValue, parseKernelName, etc.)
@@ -510,12 +440,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_bench_test.addImport("build_options", backend_options.createModule());
         const t = b.addTest(.{ .root_module = mod_bench_test, .test_runner = simple_test_runner, .filters = test_filters });
-        link_platform(mod_bench_test, t, target);
-        if (link_metal) {
-            mod_bench_test.linkFramework("Metal", .{});
-            mod_bench_test.linkFramework("Foundation", .{});
-            mod_bench_test.linkFramework("Accelerate", .{});
-        }
+        linkPlatform(mod_bench_test, t, target, link_metal);
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
@@ -528,12 +453,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_wasm_test.addImport("build_options", backend_options.createModule());
         const t = b.addTest(.{ .root_module = mod_wasm_test, .test_runner = simple_test_runner, .filters = test_filters });
-        link_platform(mod_wasm_test, t, target);
-        if (link_metal) {
-            mod_wasm_test.linkFramework("Metal", .{});
-            mod_wasm_test.linkFramework("Foundation", .{});
-            mod_wasm_test.linkFramework("Accelerate", .{});
-        }
+        linkPlatform(mod_wasm_test, t, target, link_metal);
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
@@ -547,12 +467,7 @@ pub fn build(b: *std.Build) void {
     mod_bench.addImport("build_options", backend_options.createModule());
 
     const exe_bench = b.addExecutable(.{ .name = "agave-bench", .root_module = mod_bench });
-    link_platform(mod_bench, exe_bench, target);
-    if (link_metal) {
-        mod_bench.linkFramework("Metal", .{});
-        mod_bench.linkFramework("Foundation", .{});
-        mod_bench.linkFramework("Accelerate", .{});
-    }
+    linkPlatform(mod_bench, exe_bench, target, link_metal);
     if (enable_bench) b.installArtifact(exe_bench);
 
     const bench_run = b.addRunArtifact(exe_bench);
@@ -740,6 +655,67 @@ pub fn build(b: *std.Build) void {
         ci_step.dependOn(lint_web_step);
         ci_step.dependOn(lint_shell_step);
         ci_step.dependOn(lint_python_step);
+    }
+}
+
+/// Wiring shared by the GPU correctness tests under `tests/`: each imports the
+/// same `backend` module, compiles at the test optimize mode, and runs under the
+/// platform link settings.
+const BackendTest = struct {
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    backend_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    filters: []const []const u8,
+    test_runner: std.Build.Step.Compile.TestRunner,
+    link_metal: bool,
+
+    /// Compiles `root` with a named `backend` import, adds it to `test_step`, and
+    /// returns the run step. `extra_name`/`extra_mod` add a second named import
+    /// for the SDPA tests, which need the shared harness on top of `backend`.
+    fn add(
+        self: BackendTest,
+        root: []const u8,
+        extra_name: ?[]const u8,
+        extra_mod: ?*std.Build.Module,
+    ) *std.Build.Step.Run {
+        const mod = self.b.createModule(.{
+            .root_source_file = self.b.path(root),
+            .target = self.target,
+            .optimize = self.optimize,
+        });
+        mod.addImport("backend", self.backend_mod);
+        if (extra_name) |name| mod.addImport(name, extra_mod.?);
+        const t = self.b.addTest(.{ .root_module = mod, .test_runner = self.test_runner, .filters = self.filters });
+        linkPlatform(mod, t, self.target, self.link_metal);
+        const run = self.b.addRunArtifact(t);
+        self.test_step.dependOn(&run.step);
+        return run;
+    }
+};
+
+/// Applies the platform link settings every artifact in this build shares: libc
+/// linkage, PIE on the ELF/Mach-O targets, and, when `link_metal` is set, the
+/// three macOS frameworks the Metal backend calls into. Vulkan
+/// (libvulkan.so / libvulkan.1.dylib via the KosmicKrisp ICD) is loaded at
+/// runtime through std.DynLib and needs no link-time dependency.
+fn linkPlatform(
+    mod: *std.Build.Module,
+    compile: *std.Build.Step.Compile,
+    resolved: std.Build.ResolvedTarget,
+    link_metal: bool,
+) void {
+    mod.link_libc = true;
+    // zig 0.16 ReleaseFast defaults to a non-PIE ET_EXEC on Linux.
+    switch (resolved.result.os.tag) {
+        .linux, .macos => compile.pie = true,
+        else => {},
+    }
+    if (link_metal) {
+        mod.linkFramework("Metal", .{});
+        mod.linkFramework("Foundation", .{});
+        mod.linkFramework("Accelerate", .{});
     }
 }
 

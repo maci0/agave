@@ -1316,6 +1316,35 @@ pub const CudaBackend = struct {
 
     // ── Fused FFN Gate+Up+SiLU (megakernel) ──────────────────────
 
+    /// Uploads gate and up weights for `dtype`, packs the six kernel params, and
+    /// dispatches `func` as a single n_ff-block grid. x is f32[n_embd], output is
+    /// f32[n_ff]. Panics when the kernel was not loaded.
+    fn fusedFfnGateUp(
+        self: *CudaBackend,
+        func: CUfunction,
+        dtype: backend_mod.DType,
+        x: [*]const f32,
+        w_gate: [*]const u8,
+        w_up: [*]const u8,
+        ff_out: [*]f32,
+        n_ff: usize,
+        n_embd: usize,
+    ) void {
+        const kernel = func orelse @panic("missing fused FFN kernel for this quant type");
+        const w_bytes = weightBytes(dtype, n_ff, n_embd);
+        var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
+        var d_gate = self.getOrUpload(w_gate, w_bytes);
+        var d_up = self.getOrUpload(w_up, w_bytes);
+        var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
+        var nf: u32 = @intCast(n_ff);
+        var ne: u32 = @intCast(n_embd);
+        var params = [_]?*anyopaque{
+            @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
+            @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
+        };
+        self.launch(kernel, @intCast(n_ff), block_size, reduction_smem, &params);
+    }
+
     /// Fused FFN: silu(W_gate @ x) * (W_up @ x) in a single dispatch.
     /// Q8_0 weights. x is f32[k], output is f32[n_ff].
     pub fn fusedFfnGateUpSiluQ8(
@@ -1327,18 +1356,7 @@ pub const CudaBackend = struct {
         n_ff: usize,
         n_embd: usize,
     ) void {
-        const w_bytes = weightBytes(.q8_0, n_ff, n_embd);
-        var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
-        var d_gate = self.getOrUpload(w_gate, w_bytes);
-        var d_up = self.getOrUpload(w_up, w_bytes);
-        var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
-        var nf: u32 = @intCast(n_ff);
-        var ne: u32 = @intCast(n_embd);
-        var params = [_]?*anyopaque{
-            @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
-            @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
-        };
-        self.launch(self.fn_fused_ffn_q8, @intCast(n_ff), block_size, reduction_smem, &params);
+        self.fusedFfnGateUp(self.fn_fused_ffn_q8, .q8_0, x, w_gate, w_up, ff_out, n_ff, n_embd);
     }
 
     /// Fused FFN: gelu(W_gate @ x) * (W_up @ x) in a single dispatch (Gemma 3/4).
@@ -1351,82 +1369,22 @@ pub const CudaBackend = struct {
         n_ff: usize,
         n_embd: usize,
     ) void {
-        if (self.fn_fused_ffn_gelu_q8) |func| {
-            const w_bytes = weightBytes(.q8_0, n_ff, n_embd);
-            var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
-            var d_gate = self.getOrUpload(w_gate, w_bytes);
-            var d_up = self.getOrUpload(w_up, w_bytes);
-            var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
-            var nf: u32 = @intCast(n_ff);
-            var ne: u32 = @intCast(n_embd);
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
-            };
-            self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
-        } else {
-            @panic("missing fused FFN kernel for this quant type");
-        }
+        self.fusedFfnGateUp(self.fn_fused_ffn_gelu_q8, .q8_0, x, w_gate, w_up, ff_out, n_ff, n_embd);
     }
 
     /// Fused FFN gate+up GEMV with SiLU for Q4_K weights.
     pub fn fusedFfnGateUpSiluQ4K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
-        if (self.fn_fused_ffn_q4k) |func| {
-            const w_bytes = weightBytes(.q4_k, n_ff, n_embd);
-            var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
-            var d_gate = self.getOrUpload(w_gate, w_bytes);
-            var d_up = self.getOrUpload(w_up, w_bytes);
-            var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
-            var nf: u32 = @intCast(n_ff);
-            var ne: u32 = @intCast(n_embd);
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
-            };
-            self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
-        } else {
-            @panic("missing fused FFN kernel for this quant type");
-        }
+        self.fusedFfnGateUp(self.fn_fused_ffn_q4k, .q4_k, x, w_gate, w_up, ff_out, n_ff, n_embd);
     }
 
     /// Fused FFN gate+up GEMV with SiLU for Q5_K weights.
     pub fn fusedFfnGateUpSiluQ5K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
-        if (self.fn_fused_ffn_q5k) |func| {
-            const w_bytes = weightBytes(.q5_k, n_ff, n_embd);
-            var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
-            var d_gate = self.getOrUpload(w_gate, w_bytes);
-            var d_up = self.getOrUpload(w_up, w_bytes);
-            var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
-            var nf: u32 = @intCast(n_ff);
-            var ne: u32 = @intCast(n_embd);
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
-            };
-            self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
-        } else {
-            @panic("missing fused FFN kernel for this quant type");
-        }
+        self.fusedFfnGateUp(self.fn_fused_ffn_q5k, .q5_k, x, w_gate, w_up, ff_out, n_ff, n_embd);
     }
 
     /// Fused FFN gate+up GEMV with SiLU for Q6_K weights.
     pub fn fusedFfnGateUpSiluQ6K(self: *CudaBackend, x: [*]const f32, w_gate: [*]const u8, w_up: [*]const u8, ff_out: [*]f32, n_ff: usize, n_embd: usize) void {
-        if (self.fn_fused_ffn_q6k) |func| {
-            const w_bytes = weightBytes(.q6_k, n_ff, n_embd);
-            var d_x = self.getInputBuf(x, n_embd * @sizeOf(f32));
-            var d_gate = self.getOrUpload(w_gate, w_bytes);
-            var d_up = self.getOrUpload(w_up, w_bytes);
-            var d_out = self.getOutputBuf(ff_out, n_ff * @sizeOf(f32));
-            var nf: u32 = @intCast(n_ff);
-            var ne: u32 = @intCast(n_embd);
-            var params = [_]?*anyopaque{
-                @ptrCast(&d_x),   @ptrCast(&d_gate), @ptrCast(&d_up),
-                @ptrCast(&d_out), @ptrCast(&nf),     @ptrCast(&ne),
-            };
-            self.launch(func, @intCast(n_ff), block_size, reduction_smem, &params);
-        } else {
-            @panic("missing fused FFN kernel for this quant type");
-        }
+        self.fusedFfnGateUp(self.fn_fused_ffn_q6k, .q6_k, x, w_gate, w_up, ff_out, n_ff, n_embd);
     }
 
     // ── True Megakernel Dispatch ──────────────────────────────────
