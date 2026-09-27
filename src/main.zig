@@ -560,6 +560,8 @@ const cli_specs = [_]cli_mod.ArgSpec{
     .{ .long = "ssd-cache-slots", .kind = .option, .help = "Number of expert slots to keep resident in the SSD expert cache [default: 256]. Higher = fewer SSD reads, more RAM." },
     .{ .long = "expert-profile-out", .kind = .option, .help = "Write expert activation profile JSON to this path after inference (for hotlist pre-pinning on future runs)." },
     .{ .long = "expert-profile-in", .kind = .option, .help = "Load expert activation profile JSON and pre-pin top experts into the SSD cache before inference starts." },
+    // Deterministic replay
+    .{ .long = "sim-clock-ms", .kind = .option, .help = "Pin every clock read to a virtual start time in epoch milliseconds, so a run replays from one value: measured durations read 0 and sleeps advance virtual time instead of blocking. Pair with --seed to replay a whole run [default: real clock]." },
     // Power throttling
     .{ .long = "power", .kind = .option, .help = "Target GPU utilisation percent (1-100). Inserts inter-layer sleeps to reduce heat and fan noise without changing outputs [default: 100 = no throttle]." },
     // Frontier benchmarking
@@ -838,6 +840,10 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Reject unknown short options that the parser treated as positionals (e.g. -z, -qv).
     // Letter-only forms only so numeric prompts like "-5" still work. Use -- for odd paths.
     rejectUnknownShortPositionals(&res);
+
+    // Pin the clock before anything reads it, so a pinned run is virtual from
+    // the first log line and every later duration comes from the same timeline.
+    applySimClockOverride(res.option("sim-clock-ms"));
 
     // Auto-detect TTY: disable color when stdout is not a terminal
     g_tty = stdout_file.isTty(g_io) catch false;
@@ -1695,6 +1701,30 @@ fn parseU16(s: ?[]const u8, comptime flag: []const u8) ?u16 {
     return parseUint(u16, s, flag);
 }
 
+/// Install the `sim_clock` override from `--sim-clock-ms`, or leave the real
+/// clock in place when the flag is absent.
+///
+/// This is the only way a non-test caller reaches the override, so a whole run
+/// (CLI or `--serve`) can be pinned to one virtual timeline: measured durations
+/// read 0, `sleepNs` advances virtual time instead of blocking, and
+/// `--seed` alone no longer has to carry replay on its own. The value is
+/// logged, so a recorded run states the clock it ran under.
+fn applySimClockOverride(raw: ?[]const u8) void {
+    const str = raw orelse return;
+    const ms = std.fmt.parseInt(i64, str, 10) catch {
+        eprint("Error: invalid value for --sim-clock-ms: '{s}' is not an integer number of milliseconds since epoch\n", .{str});
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(2);
+    };
+    if (ms < 0) {
+        eprint("Error: --sim-clock-ms must not be negative (got {d})\n", .{ms});
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(2);
+    }
+    sim_clock.setOverrideMs(ms);
+    std.log.info("sim clock: virtual time pinned at {d} ms since epoch", .{ms});
+}
+
 /// Check if a long option name matches any known CLI spec.
 fn isKnownSpec(name: []const u8) bool {
     for (cli_specs) |spec| {
@@ -2088,6 +2118,9 @@ const usage_text =
     \\      --mirostat-tau <T>    Mirostat target entropy [default: 5.0]
     \\      --mirostat-eta <E>    Mirostat learning rate [default: 0.1]
     \\      --seed <N>            Random seed for sampling [default: random]
+    \\      --sim-clock-ms <MS>   Pin every clock read to a virtual epoch-ms start, so a
+    \\                            run replays from one value: durations read 0 and
+    \\                            sleeps advance virtual time [default: real clock]
     \\      --system <TEXT>       System prompt for chat formatting
     \\      --grammar <FILE>      GBNF grammar file for constrained decoding
     \\      --grammar-string <G>  Inline GBNF grammar string
@@ -5734,6 +5767,27 @@ test "noColorRequested follows no-color.org" {
     try std.testing.expect(!noColorRequested(""));
     try std.testing.expect(noColorRequested("1"));
     try std.testing.expect(noColorRequested("true"));
+}
+
+test "sim clock override is opt-in and drives every reader" {
+    defer sim_clock.setOverrideMs(null);
+    applySimClockOverride(null);
+    try std.testing.expect(!sim_clock.isOverridden());
+
+    applySimClockOverride("1700000000000");
+    try std.testing.expect(sim_clock.isOverridden());
+    try std.testing.expectEqual(@as(i64, 1_700_000_000_000), sim_clock.milliNow());
+    try std.testing.expectEqual(sim_clock.milliNow(), sim_clock.monoMilli());
+
+    // A frozen virtual clock yields a zero delta between reads, so a replay
+    // never inherits host execution speed, and sleepNs fast-forwards instead
+    // of blocking wall-clock time.
+    try std.testing.expectEqual(sim_clock.monoMilli(), sim_clock.monoMilli());
+    sim_clock.sleepNs(250 * std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(i64, 1_700_000_000_250), sim_clock.milliNow());
+
+    sim_clock.setOverrideMs(null);
+    try std.testing.expect(!sim_clock.isOverridden());
 }
 
 test "preferredSecret empty env does not override CLI" {

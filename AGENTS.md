@@ -129,7 +129,7 @@ Non-negotiable. Every change must respect all of them.
 - `main()` takes `std.process.Init`: `init.io`, `init.gpa`, `init.minimal.args`. Thread `io` through all I/O.
 - Files: `Io.Dir.cwd().openFile(io, path, .{})`, `file.close(io)`, `file.readPositionalAll(io, buf, offset)`.
 - Stdout/stderr: `Io.File.stdout()` / `Io.File.stderr()`, write with `posix.system.write(file.handle, ...)`.
-- Durations: `sim_clock.monoMilli` / `sim_clock.monoNano` (CLOCK_MONOTONIC; override drives tests). `sim_clock.milliNow` is REALTIME: logs, seeds, epoch only. Raw `clock_gettime` stays in `src/sim_clock.zig` and micro-benchmarks only.
+- Durations: `sim_clock.monoMilli` / `sim_clock.monoNano` (CLOCK_MONOTONIC; override drives tests, and `--sim-clock-ms` drives a whole run). `sim_clock.milliNow` is REALTIME: logs, seeds, epoch only. Raw `clock_gettime` stays in `src/sim_clock.zig` and micro-benchmarks only.
 - Futex: `io.futexWaitUncancelable(u32, &atomic.raw, expected)`, `io.futexWake(u32, &atomic.raw, count)`.
 - Mutex: `Io.Mutex`, `lockUncancelable(io)` / `unlock(io)`, where an `Io` is in scope. Code without one (tokenizer, tiered KV cache, one-time init) locks with a `std.atomic.Value` spinlock.
 - Allocators: `init.gpa`, or `std.heap.DebugAllocator` in standalone tools.

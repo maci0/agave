@@ -9,12 +9,12 @@
 //! Callers outside this module must not invoke clock_gettime; the exception
 //! is micro-benchmarks (`micro_bench.zig`), which measure real hardware.
 //!
-//! Tests and a future sim harness call setOverrideMs / advanceMs to drive
-//! timeouts, rate-limit refill, and scheduling priority from a single seed.
-//! Under override both readers share the one simulated timeline so logic
-//! mixing wall and interval reads stays consistent. Under override, sleepNs
-//! advances virtual time and returns immediately so poll loops do not block
-//! wall-clock time.
+//! Tests call setOverrideMs / advanceMs directly; a run launched with
+//! `--sim-clock-ms <MS>` installs the override at startup so a whole run (CLI
+//! or server) replays from one virtual timeline. Under override both readers
+//! share the one simulated timeline so logic mixing wall and interval reads
+//! stays consistent. Under override, sleepNs advances virtual time and returns
+//! immediately so poll loops do not block wall-clock time.
 //!
 //! The override is process-global (not thread-local). Tests that set it must
 //! `defer setOverrideMs(null)` and must not run concurrently with other tests

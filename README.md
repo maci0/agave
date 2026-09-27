@@ -389,6 +389,9 @@ agave [OPTIONS] <model> [prompt]
       --backend <BE>       auto, cpu, metal, vulkan, cuda, rocm, webgpu [default: auto]
       --ctx-size <N|auto>  Context window size [default: min(model, 4096), 0 = model max, auto = fit to memory]
       --seed <N>           Random seed for sampling [default: random]
+      --sim-clock-ms <MS>  Pin every clock read to a virtual epoch-ms start for
+                           deterministic replay (durations read 0, sleeps advance
+                           virtual time); pair with --seed [default: real clock]
       --grammar <FILE>     GBNF grammar file for constrained decoding
       --grammar-string <G> Inline GBNF grammar string
       --json-schema <S>    JSON schema for structured output
