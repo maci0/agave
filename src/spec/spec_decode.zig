@@ -531,6 +531,39 @@ pub fn draftWithLogits(state: *SpecState, draft_model: *Model, last_token: u32) 
     return n;
 }
 
+/// Logit masks the target's own decode path applies before picking a token
+/// (repeat penalty, DRY). Speculative verification skips the non-spec sampler,
+/// so it must apply the same masks to stay output-equivalent with it.
+pub const Penalties = struct {
+    /// Tokens generated so far, oldest first.
+    history: []const u32 = &.{},
+    repeat_penalty: f32 = 1.0,
+    dry_multiplier: f32 = 0.0,
+    dry_length: u32 = 0,
+
+    pub fn active(self: Penalties) bool {
+        return (self.repeat_penalty != 1.0 or self.dry_multiplier > 0) and self.history.len > 0;
+    }
+};
+
+/// Mask the freshly computed target logits, then argmax. Falls back to the
+/// forward return value when no mask is configured, so the default path is
+/// unchanged and allocation free.
+fn greedyWithPenalties(target_model: *Model, pen: Penalties, fallback: u32) u32 {
+    if (!pen.active()) return fallback;
+    return math_ops.argmax(applyPenalties(target_model, pen));
+}
+
+/// Apply the configured masks in place and return the logits.
+fn applyPenalties(target_model: *Model, pen: Penalties) []f32 {
+    const logits = target_model.getLogits();
+    if (pen.repeat_penalty != 1.0)
+        math_ops.applyRepeatPenalty(logits, pen.history, pen.repeat_penalty);
+    if (pen.dry_multiplier > 0)
+        math_ops.applyDry(logits, pen.history, pen.dry_multiplier, pen.dry_length);
+    return logits;
+}
+
 /// Standard greedy verification: verify single draft path sequentially.
 pub fn verifySequential(
     state: *SpecState,
@@ -538,6 +571,7 @@ pub fn verifySequential(
     draft_model: *Model,
     last_accepted_token: u32,
     pre_draft_pos: usize,
+    pen: Penalties,
 ) SpecResult {
     if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
     target_model.setKvSeqLen(pre_draft_pos);
@@ -549,11 +583,12 @@ pub fn verifySequential(
             std.log.warn("spec verify: target forward failed at draft {d}/{d}: {s}", .{ i, state.n_draft, @errorName(err) });
             break;
         };
+        const chosen = greedyWithPenalties(target_model, pen, target_next);
 
-        if (target_next == state.draft_tokens[i]) {
+        if (chosen == state.draft_tokens[i]) {
             accepted += 1;
         } else {
-            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, target_next);
+            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, chosen);
         }
     }
 
@@ -563,7 +598,7 @@ pub fn verifySequential(
         std.log.warn("spec verify: bonus forward failed: {s}", .{@errorName(err)});
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_draft);
     };
-    return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
+    return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, greedyWithPenalties(target_model, pen, bonus));
 }
 
 /// Rejection sampling verification (Leviathan et al. 2023).
@@ -575,6 +610,7 @@ pub fn verifySampling(
     last_accepted_token: u32,
     pre_draft_pos: usize,
     temperature: f32,
+    pen: Penalties,
     rng: std.Random,
 ) SpecResult {
     if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
@@ -589,7 +625,9 @@ pub fn verifySampling(
             break;
         };
 
-        const target_logits = target_model.getLogits();
+        // p is the target distribution we sample from, so the masks belong on it.
+        // q stays unpenalized: it is only a proposal.
+        const target_logits = applyPenalties(target_model, pen);
         const draft_lp = state.draft_log_probs[i * vs ..][0..vs];
         const tp = state.sampling_buf[0..vs];
         softmaxWithTemp(target_logits, tp, temperature);
@@ -613,7 +651,7 @@ pub fn verifySampling(
         std.log.warn("spec sampling: bonus forward failed: {s}", .{@errorName(err)});
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_draft);
     };
-    const bonus = math_ops.sampleToken(target_model.getLogits(), temperature, 0, 1.0, rng);
+    const bonus = math_ops.sampleToken(applyPenalties(target_model, pen), temperature, 0, 1.0, rng);
     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
 }
 
