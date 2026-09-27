@@ -95,10 +95,10 @@ export const loadHighlightJs = (): Promise<boolean> => {
 };
 
 const escapeHtmlEntities = (text: string): string =>
-  text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');;
+  text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 const escapeHtmlText = (text: string): string =>
-  escapeHtmlEntities(text).replaceAll('\n', '<br>');;
+  escapeHtmlEntities(text).replaceAll('\n', '<br>');
 
 const markdownToHtml = (source: string): string => {
   if (!cdn.marked) {return escapeHtmlText(source);}
@@ -254,7 +254,7 @@ export const renderMarkdown = (target: HTMLElement, content: string): void => {
 /** True when the markdown libraries are in place, so callers know whether a
  *  plain-text render is the final one. */
 export const markdownReady = (): boolean =>
-  Boolean(cdn.marked && cdn.DOMPurify);;
+  Boolean(cdn.marked && cdn.DOMPurify);
 
 const idleQueue: (() => void)[] = [];
 let idleDraining = false;

@@ -1,9 +1,16 @@
-/** Browser-persisted UI state. The system prompt is tab-scoped (sessionStorage)
- *  so prompt text does not survive the tab; the sampling settings and the stats
- *  toggle are per-browser (localStorage). */
+/** Browser-persisted UI state.
+ *
+ *  The system prompt is tab-scoped (sessionStorage) so prompt text does not
+ *  survive the tab; the sampling settings and the stats toggle are
+ *  per-browser (localStorage). One read and one write cover the whole
+ *  sampling record, so a new setting cannot be persisted on one path and
+ *  forgotten on another.
+ */
+
+import type { Sampling } from './types';
 
 /** Key the system prompt used before it moved to sessionStorage. */
-const LEGACY_SYSTEM_PROMPT_KEY = 'agave_system_prompt';
+const SYSTEM_PROMPT_KEY = 'agave_system_prompt';
 
 const TEMPERATURE_KEY = 'agave_temperature';
 const TOP_P_KEY = 'agave_top_p';
@@ -12,29 +19,7 @@ const SHOW_STATS_KEY = 'agave_show_stats';
 
 export const MAX_TOKENS_MIN = 1;
 export const MAX_TOKENS_MAX = 4096;
-
-/** Read the system prompt, migrating the legacy localStorage key once.
- *  The old key is deleted in the same pass, so the prompt cannot linger in a
- *  store the user was told was not used. */
-export const readSystemPrompt = (): string => {
-  const current = sessionStorage.getItem(LEGACY_SYSTEM_PROMPT_KEY);
-  if (current !== null) {return current;}
-  // One-time migration of a legacy storage key; not a runtime environment fallback.
-  const legacy = localStorage.getItem(LEGACY_SYSTEM_PROMPT_KEY);
-  if (legacy === null) {return '';}
-  sessionStorage.setItem(LEGACY_SYSTEM_PROMPT_KEY, legacy);
-  localStorage.removeItem(LEGACY_SYSTEM_PROMPT_KEY);
-  return legacy;
-};
-
-export const writeSystemPrompt = (value: string): void => {
-  sessionStorage.setItem(LEGACY_SYSTEM_PROMPT_KEY, value);
-};
-
-export const clearSystemPrompt = (): void => {
-  sessionStorage.removeItem(LEGACY_SYSTEM_PROMPT_KEY);
-  localStorage.removeItem(LEGACY_SYSTEM_PROMPT_KEY);
-};
+const MAX_TOKENS_DEFAULT = '512';
 
 const readNumber = (key: string, fallback: number): number => {
   const raw = localStorage.getItem(key);
@@ -43,30 +28,18 @@ const readNumber = (key: string, fallback: number): number => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
-export const readTemperature = (): number =>
-  readNumber(TEMPERATURE_KEY, 0);;
-
-export const writeTemperature = (value: number): void => {
-  localStorage.setItem(TEMPERATURE_KEY, String(value));
-};
-
-export const readTopP = (): number =>
-  readNumber(TOP_P_KEY, 1);;
-
-export const writeTopP = (value: number): void => {
-  localStorage.setItem(TOP_P_KEY, String(value));
-};
-
-/** A stored value can be empty or out of range (an older build, or a field the
- *  user left mid-edit), so the reader normalizes instead of trusting it. */
-export const readMaxTokens = (): string => {
-  const raw = localStorage.getItem(MAX_TOKENS_KEY);
-  if (raw === null) {return '512';}
-  return isMaxTokensValid(raw) ? raw : String(clampMaxTokens(raw));
-};
-
-export const writeMaxTokens = (value: string): void => {
-  localStorage.setItem(MAX_TOKENS_KEY, value);
+/** Read the system prompt, migrating the legacy localStorage key once.
+ *  The old key is deleted in the same pass, so the prompt cannot linger in a
+ *  store the user was told was not used. */
+const readSystemPrompt = (): string => {
+  const current = sessionStorage.getItem(SYSTEM_PROMPT_KEY);
+  if (current !== null) {return current;}
+  // One-time migration of a legacy storage key; not a runtime environment fallback.
+  const legacy = localStorage.getItem(SYSTEM_PROMPT_KEY);
+  if (legacy === null) {return '';}
+  sessionStorage.setItem(SYSTEM_PROMPT_KEY, legacy);
+  localStorage.removeItem(SYSTEM_PROMPT_KEY);
+  return legacy;
 };
 
 /** Clamp a raw max-tokens field to the allowed range; unparseable text becomes
@@ -85,8 +58,37 @@ export const isMaxTokensValid = (raw: string): boolean => {
   return !Number.isNaN(parsed) && String(parsed) === raw.trim() && parsed >= MAX_TOKENS_MIN && parsed <= MAX_TOKENS_MAX;
 };
 
-export const readShowStats = (): boolean =>
-  localStorage.getItem(SHOW_STATS_KEY) === '1';;
+/** The stored settings, normalized on the way out. A stored value can be empty
+ *  or out of range (an older build, or a field the user left mid-edit), so the
+ *  reader clamps instead of trusting it. */
+export const readSampling = (): Sampling => {
+  const stored = localStorage.getItem(MAX_TOKENS_KEY);
+  return {
+    temperature: readNumber(TEMPERATURE_KEY, 0),
+    topP: readNumber(TOP_P_KEY, 1),
+    maxTokens: stored === null ? MAX_TOKENS_DEFAULT : (isMaxTokensValid(stored) ? stored : String(clampMaxTokens(stored))),
+    system: readSystemPrompt(),
+  };
+};
+
+/** Persist the sampling record. A max-tokens field the user is still typing
+ *  into is not stored, so a half-typed value cannot survive a reload; the
+ *  system prompt is tab-scoped and the rest is per-browser. */
+export const writeSampling = (next: Sampling): void => {
+  localStorage.setItem(TEMPERATURE_KEY, String(next.temperature));
+  localStorage.setItem(TOP_P_KEY, String(next.topP));
+  if (isMaxTokensValid(next.maxTokens)) { localStorage.setItem(MAX_TOKENS_KEY, next.maxTokens); }
+  sessionStorage.setItem(SYSTEM_PROMPT_KEY, next.system);
+};
+
+/** Drop the system prompt from both stores, so a cleared prompt cannot be
+ *  resurrected by a later migration. */
+export const clearStoredSystemPrompt = (): void => {
+  sessionStorage.removeItem(SYSTEM_PROMPT_KEY);
+  localStorage.removeItem(SYSTEM_PROMPT_KEY);
+};
+
+export const readShowStats = (): boolean => localStorage.getItem(SHOW_STATS_KEY) === '1';
 
 export const writeShowStats = (on: boolean): void => {
   localStorage.setItem(SHOW_STATS_KEY, on ? '1' : '0');

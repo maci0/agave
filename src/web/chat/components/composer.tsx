@@ -96,7 +96,7 @@ export const Composer = (props: ComposerProps) => {
               aria-label="Remove image"
               title="Remove image"
               // The glyph uses --background on --destructive (5.98:1) and on the
-              // lighter hover red (8.47:1): white measured only 2.99:1, below the
+              // Lighter hover red (8.47:1): white measured only 2.99:1, below the
               // 1.4.3 minimum for this label.
               className="absolute -end-2 -top-2 rounded-pill border-none bg-destructive text-background hover:bg-destructive-foreground"
             >
@@ -151,7 +151,7 @@ export const Composer = (props: ComposerProps) => {
           onChange={function (event) { setText(event.target.value); }}
           onKeyDown={function (event) {
             // Ignore Enter while an IME composition is active (CJK input): there
-            // it confirms the conversion, it must not send the message.
+            // It confirms the conversion, it must not send the message.
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
@@ -170,8 +170,8 @@ export const Composer = (props: ComposerProps) => {
               }
             }
           }}
-          // min-width: 0 lets the field shrink below its intrinsic min-content
-          // width, keeping the row inside a 320px viewport (WCAG 1.4.10).
+          // Min-width: 0 lets the field shrink below its intrinsic min-content
+          // Width, keeping the row inside a 320px viewport (WCAG 1.4.10).
           className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-relaxed text-base text-foreground transition-[border-color,box-shadow] outline-none placeholder:text-faint focus:border-primary focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-primary)_10%,transparent)] disabled:opacity-50 max-drawer:text-[16px]"
         />
         <Button

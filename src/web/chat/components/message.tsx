@@ -69,7 +69,7 @@ export const MessageBody = memo(function MessageBody({ text, phase, onRendered }
     }
     if (!markdownReady()) {
       // The libraries were still in flight. Rebuild once they land, one message
-      // per idle slot, so a restored history does not re-render in one task.
+      // Per idle slot, so a restored history does not re-render in one task.
       onIdle(function () {
         if (element.isConnected) { renderMarkdown(element, text); }
       });

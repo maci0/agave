@@ -22,6 +22,6 @@ type BadgeProps = HTMLAttributes<HTMLSpanElement> & VariantProps<typeof badgeVar
 
 /** Span badge. Pass a `title` and `aria-label` when the text is truncated. */
 export const Badge = ({ className, variant, ...props }: BadgeProps) =>
-  <span className={cn(badgeVariants({ variant }), className)} {...props} />;;
+  <span className={cn(badgeVariants({ variant }), className)} {...props} />;
 
 export { badgeVariants };
