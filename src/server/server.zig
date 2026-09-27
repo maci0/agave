@@ -193,9 +193,17 @@ const prng_seed_mix_golden: u64 = 0x9E3779B97F4A7C15;
 
 /// Effective scheduler PRNG seed: honor explicit `sampling.seed`, otherwise
 /// derive from sim_clock and request id (not the enqueue-time id alone).
+///
+/// The request id is handed out per connection thread, so its value depends on
+/// the order the kernel happened to accept connections in. Mixing it in makes
+/// an auto-seed depend on host scheduling, which a replay cannot reproduce, so
+/// under a clock override the seed is the virtual-clock value alone: a run then
+/// samples from one stream seeded by the simulated timeline, and replaying the
+/// same timeline replays the same tokens.
 fn schedulerPrngSeed(req_id: u64, sampling: SamplingParams) u64 {
     const base = prngSeedFromSampling(sampling);
     if (sampling.seed != null) return base;
+    if (sim_clock.isOverridden()) return base;
     return base ^ (req_id *% prng_seed_mix_golden);
 }
 
@@ -7537,9 +7545,19 @@ test "prngSeedFromSampling uses sim_clock when seed omitted" {
     const expected: u64 = @truncate(@as(u96, @bitCast(@as(i96, 1_700_000_000_000) * 1_000_000)));
     try std.testing.expectEqual(expected, seed);
     try std.testing.expectEqual(@as(u64, 99), schedulerPrngSeed(0, .{ .seed = 99 }));
-    const mixed = schedulerPrngSeed(7, sampling);
-    try std.testing.expect(mixed != seed);
-    try std.testing.expectEqual(seed ^ (7 *% prng_seed_mix_golden), mixed);
+    // Under an override the seed is the virtual clock alone, so two requests
+    // admitted at the same virtual millisecond get the same replayable stream
+    // regardless of connection arrival order.
+    try std.testing.expectEqual(seed, schedulerPrngSeed(7, sampling));
+    try std.testing.expectEqual(seed, schedulerPrngSeed(1024, sampling));
+
+    // With the wall clock restored the request id decorrelates concurrent
+    // requests, whose timestamps can collide. The wall clock keeps running
+    // between the two reads, so only the decorrelation is checked, not the
+    // exact value.
+    sim_clock.setOverrideMs(null);
+    const wall = SamplingParams{};
+    try std.testing.expect(schedulerPrngSeed(7, wall) != schedulerPrngSeed(8, wall));
 }
 
 test "shouldNoteAutoSeed only when sampling and seed omitted" {

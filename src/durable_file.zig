@@ -41,6 +41,8 @@ pub const Step = enum {
     open,
     /// After the tmp is created/truncated, before any bytes are written.
     write,
+    /// Partway through writing the bytes, before the tmp is complete.
+    write_partial,
     /// After the bytes are written, before the tmp is fsynced.
     file_sync,
     /// After the tmp is fsynced, before its descriptor is closed.
@@ -160,12 +162,13 @@ pub fn replace(path: []const u8, data: []const u8) !void {
     }
 
     if (injectIfArmed(.write)) |mode| return faultError(mode);
-    var off: usize = 0;
-    while (off < data.len) {
-        const n = std.posix.system.write(fd, data[off..].ptr, data.len - off);
-        if (n <= 0) return error.WriteFailed;
-        off += @intCast(n);
+    // A full disk stops the write partway, so the bytes already on disk stay
+    // there: a `crash` leaves a torn tmp, `fail` removes it.
+    if (injectIfArmed(.write_partial)) |mode| {
+        try writeAll(fd, data[0 .. data.len / 2]);
+        return faultError(mode);
     }
+    try writeAll(fd, data);
 
     if (injectIfArmed(.file_sync)) |mode| return faultError(mode);
     try syncFd(fd);
@@ -179,6 +182,16 @@ pub fn replace(path: []const u8, data: []const u8) !void {
     if (injectIfArmed(.rename)) |mode| return faultError(mode);
     syncParent(path);
     if (injectIfArmed(.dir_sync)) |mode| return faultError(mode);
+}
+
+/// Write every byte, tolerating a short write from the kernel.
+fn writeAll(fd: std.posix.fd_t, data: []const u8) !void {
+    var off: usize = 0;
+    while (off < data.len) {
+        const n = std.posix.system.write(fd, data[off..].ptr, data.len - off);
+        if (n <= 0) return error.WriteFailed;
+        off += @intCast(n);
+    }
 }
 
 fn tmpPath(buf: []u8, path: []const u8) ![]u8 {
@@ -393,6 +406,37 @@ test "injected recoverable fault returns error and cleans the tmp" {
             return error.TmpLeftBehind;
         } else |_| {}
     }
+}
+
+test "torn tmp from a crashed partial write never reaches the live path" {
+    if (comptime !posix_sync) return;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "torn_write.bin");
+    try replace(path, "old");
+    defer deletePath(path);
+    var tmp_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const tmp_path = try tmpPath(&tmp_buf, path);
+    defer deletePath(tmp_path);
+
+    armFault(.write_partial, .crash);
+    defer clearFault();
+    try std.testing.expectError(error.InjectedCrash, replace(path, "new contents"));
+    clearFault();
+
+    // A crash mid-write leaves a half-written tmp on disk, exactly as a full
+    // disk would, and the live file still holds the old contents.
+    const got = try readPath(std.testing.allocator, path);
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings("old", got);
+    const torn = try readPath(std.testing.allocator, tmp_path);
+    defer std.testing.allocator.free(torn);
+    try std.testing.expectEqualStrings("new co", torn);
+
+    // A restart from disk succeeds, so the one-shot fault is recoverable.
+    try replace(path, "new contents");
+    const after = try readPath(std.testing.allocator, path);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualStrings("new contents", after);
 }
 
 test "fault is disarmed by default and after clearFault" {
