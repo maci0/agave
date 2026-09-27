@@ -20,11 +20,16 @@
 #   scripts/conv-store-backup.sh backup               # copy + verify, prune old
 #   scripts/conv-store-backup.sh verify FILE          # check a backup is loadable
 #   scripts/conv-store-backup.sh restore FILE         # verify, snapshot, install
+#   scripts/conv-store-backup.sh check                # backup tier is fresh and loadable
 #   scripts/conv-store-backup.sh --self-test          # exercise all of the above
 #
 # Environment:
 #   AGAVE_BACKUP_DIR   backup destination (default: $HOME/.agave-backups)
-#   AGAVE_KEEP         backups to keep, oldest pruned first (default: 14)
+#   AGAVE_KEEP         dated backups to keep, oldest pruned first (default: 14)
+#   AGAVE_KEEP_SNAPSHOT quarantined-store and pre-restore copies to keep
+#                      (default: 5); ordinary rotation never touches them
+#   AGAVE_MAX_AGE_HOURS newest backup older than this fails `check` (default: 26)
+#   AGAVE_ALLOW_SAME_FS=1 permit a backup dir on the store's own filesystem
 #
 # Exit 0 on success, 1 on any failure. Nothing is silent: every step prints
 # what it did, and a failed copy, a malformed store, or a missing file is a
@@ -42,6 +47,9 @@ cd "$REPO_ROOT"
 # rather than installing a file the current build cannot load.
 STORE_FORMAT_VERSION=1
 KEEP="${AGAVE_KEEP:-14}"
+KEEP_SNAPSHOT="${AGAVE_KEEP_SNAPSHOT:-5}"
+MAX_AGE_HOURS="${AGAVE_MAX_AGE_HOURS:-26}"
+HOUR_SECONDS=3600
 
 usage() {
     sed -n '3,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -62,6 +70,12 @@ note() {
 # a plain positive integer.
 if [[ ! "$KEEP" =~ ^[1-9][0-9]*$ ]]; then
     die "AGAVE_KEEP must be a positive integer, got '${KEEP}'"
+fi
+if [[ ! "$KEEP_SNAPSHOT" =~ ^[1-9][0-9]*$ ]]; then
+    die "AGAVE_KEEP_SNAPSHOT must be a positive integer, got '${KEEP_SNAPSHOT}'"
+fi
+if [[ ! "$MAX_AGE_HOURS" =~ ^[0-9]+$ ]]; then
+    die "AGAVE_MAX_AGE_HOURS must be a non-negative integer, got '${MAX_AGE_HOURS}'"
 fi
 
 # Same precedence as conv_store.defaultPath: XDG wins when non-empty, HOME is
@@ -84,6 +98,46 @@ backup_dir() {
 
 stamp() {
     date -u +%Y%m%dT%H%M%SZ
+}
+
+# The three file kinds have separate retention because they are not
+# interchangeable: a dated backup is one point in time, while a quarantined
+# store and a pre-restore snapshot are the only copies of something the server
+# could not parse or a store an operator replaced by mistake. Rotation of
+# ordinary backups must never decide their fate.
+# find -regex matches the whole path, so each pattern anchors on the basename.
+readonly DATED_RE='.*/conversations-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
+readonly SNAPSHOT_RE='.*/conversations-(corrupt|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
+
+# Newest first, "<mtime> <path>". $1 is a find -regextype pattern.
+list_backups() {
+    local dir="$1" re="$2"
+    find "$dir" -maxdepth 1 -type f -regextype posix-extended -regex "$re" -printf '%T@ %p\n' |
+        sort -rn | cut -d' ' -f2-
+}
+
+# A copy on the store's own filesystem survives a bad save and nothing else:
+# not a lost disk, not `down -v`, not a pruned Docker root. Refuse that
+# configuration rather than let a green backup script imply coverage.
+# AGAVE_ALLOW_SAME_FS=1 opts out (it is a caller decision, not a default).
+assert_separate_fs() {
+    local live_dir="$1" backup="$2"
+    [[ "${AGAVE_ALLOW_SAME_FS:-0}" == "1" ]] && return 0
+    local live_dev backup_dev
+    live_dev="$(device_of "$live_dir")"
+    backup_dev="$(device_of "$backup")"
+    [[ -n "$live_dev" && -n "$backup_dev" ]] ||
+        die "cannot determine the filesystem of '$live_dir' or '$backup' (df -P); set AGAVE_ALLOW_SAME_FS=1 to skip the check"
+    [[ "$live_dev" != "$backup_dev" ]] && return 0
+    die "backup dir $backup and the store's directory $live_dir are on the same filesystem ($live_dev): the backup would not survive loss of that filesystem. Point AGAVE_BACKUP_DIR elsewhere, or set AGAVE_ALLOW_SAME_FS=1 if you accept that"
+}
+
+# `df -P` device of the filesystem holding $1. Two directories under one
+# filesystem, not one disk: a partition per directory is a different device and
+# is not detected, so a shared host disk with two mount points still slips
+# through. docs/DURABILITY.md records the limit.
+device_of() {
+    df -P -- "$1" 2>/dev/null | awk 'NR == 2 { print $1 }'
 }
 
 # Structural check: the server only needs a non-empty object carrying the
@@ -147,35 +201,48 @@ do_backup() {
     if [[ ! -f "$live" ]]; then
         die "no conversation store at $live (nothing to back up; the server writes one on its first conversation)"
     fi
+    assert_separate_fs "$(dirname -- "$live")" "$dir"
     dest="$dir/conversations-$(stamp).json"
-    [[ -e "$dest" ]] && dest="$dir/conversations-$(stamp)-$$.json"
+    [[ -e "$dest" ]] && dest="${dest%.json}-$$.json"
     copy_atomic "$live" "$dest"
     verify_store "$dest"
     # The quarantine copy is the only remaining trace of a store the server
-    # could not parse. Losing it loses the recoverable data.
+    # could not parse. Losing it loses the recoverable data. The name is
+    # stamped once: stamping per use straddles a second boundary and verifies
+    # a file that was never written.
     local corrupt="$live.corrupt"
     if [[ -f "$corrupt" ]]; then
-        copy_atomic "$corrupt" "$dir/conversations-corrupt-$(stamp).json"
-        verify_store "$dir/conversations-corrupt-$(stamp).json" ||
-            note "kept $dir/conversations-corrupt-$(stamp).json even though it does not verify; it is the only copy"
+        local corrupt_copy
+        corrupt_copy="$dir/conversations-corrupt-$(stamp).json"
+        [[ -e "$corrupt_copy" ]] && corrupt_copy="${corrupt_copy%.json}-$$.json"
+        copy_atomic "$corrupt" "$corrupt_copy"
+        verify_store "$corrupt_copy" ||
+            note "kept $corrupt_copy even though it does not verify; it is the only copy"
         note "backed up quarantined store $corrupt"
     fi
     prune "$dir"
     note "backed up $live -> $dest"
 }
 
-# Prune oldest first, never below one backup. A retention job that can reach
-# zero backups is a deletion path with no recovery window.
+# Prune oldest first, never below one file in a tier, and only files this
+# script names: a retention job that can reach zero backups, or that reaches a
+# quarantined store or pre-restore snapshot by counting them as ordinary
+# backups, is a deletion path with no recovery window.
 prune() {
     local dir="$1"
-    local -a keep_files
-    mapfile -t keep_files < <(find "$dir" -maxdepth 1 -type f -name 'conversations-*.json' -printf '%T@ %p\n' |
-        sort -rn | cut -d' ' -f2-)
-    (( ${#keep_files[@]} <= KEEP )) && return 0
+    prune_tier "$dir" "$DATED_RE" "$KEEP"
+    prune_tier "$dir" "$SNAPSHOT_RE" "$KEEP_SNAPSHOT"
+}
+
+prune_tier() {
+    local dir="$1" re="$2" keep="$3"
+    local -a files
+    mapfile -t files < <(list_backups "$dir" "$re")
+    (( ${#files[@]} <= keep )) && return 0
     local i
-    for ((i = KEEP; i < ${#keep_files[@]}; i++)); do
-        rm -f -- "${keep_files[i]}" || die "prune failed: ${keep_files[i]}"
-        note "pruned old backup ${keep_files[i]}"
+    for ((i = keep; i < ${#files[@]}; i++)); do
+        rm -f -- "${files[i]}" || die "prune failed: ${files[i]}"
+        note "pruned old backup ${files[i]}"
     done
 }
 
@@ -192,6 +259,7 @@ do_restore() {
         dir="$(backup_dir)"
         mkdir -p -- "$dir" || die "cannot create $dir"
         snap="$dir/conversations-prerestore-$(stamp).json"
+        [[ -e "$snap" ]] && snap="${snap%.json}-$$.json"
         copy_atomic "$live" "$snap"
         note "snapshotted the live store to $snap"
     fi
@@ -202,9 +270,38 @@ do_restore() {
     note "restart the server (docker compose restart agave) to load it; a store it cannot parse is quarantined, not dropped"
 }
 
+# Is the backup tier still a recovery path? A backup job that stopped running
+# looks exactly like a backup job that has nothing to do, so freshness and
+# loadability of the newest copy are checked rather than assumed. Run this on
+# a schedule alongside the backup and alert on a nonzero exit.
+do_check() {
+    local dir
+    dir="$(backup_dir)"
+    [[ -d "$dir" ]] || die "no backup dir at $dir (the backup job has never run, or AGAVE_BACKUP_DIR moved)"
+    local entry newest
+    entry="$(find "$dir" -maxdepth 1 -type f -regextype posix-extended -regex "$DATED_RE" -printf '%T@ %p\n' | sort -rn | head -1)"
+    [[ -n "$entry" ]] || die "no dated backup in $dir (the backup job has never produced one)"
+    newest="${entry#* }"
+    local age_seconds max_age_seconds
+    age_seconds=$(( $(date -u +%s) - ${entry%%.*} ))
+    (( age_seconds >= 0 )) || die "newest backup $newest has a timestamp in the future; the host clock is wrong"
+    max_age_seconds=$(( MAX_AGE_HOURS * HOUR_SECONDS ))
+    if (( age_seconds > max_age_seconds )); then
+        die "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old, over AGAVE_MAX_AGE_HOURS=$MAX_AGE_HOURS; the backup job is not running or cannot write $dir"
+    fi
+    verify_store "$newest"
+    local snapshots
+    snapshots="$(list_backups "$dir" "$SNAPSHOT_RE" | wc -l)"
+    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/pre-restore copies on file"
+}
+
 do_self_test() {
     local tmp status=0
     tmp="$(mktemp -d)"
+    # mktemp puts the store and the backup tier on one filesystem, which is the
+    # case do_backup refuses. Opt in for the run; the rejection case below turns
+    # it back off explicitly.
+    export AGAVE_ALLOW_SAME_FS=1
     # Global, because the EXIT trap below runs after do_self_test's locals are
     # out of scope.
     SELF_TEST_DIR="$tmp"
@@ -247,14 +344,69 @@ do_self_test() {
         status=1
     }
 
-    # Retention must leave at least one backup and prune the rest.
-    AGAVE_KEEP=1 AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup >/dev/null
+    # Retention must leave at least one backup and prune the rest, and it must
+    # reach only dated backups: the pre-restore snapshot is the only undo for
+    # the restore above, so counting it as an ordinary backup would let the
+    # next run delete it.
+    #
+    # Retention values are read into globals at load time, so they are set in
+    # the subshell rather than as an env prefix on the call: `AGAVE_KEEP=1
+    # do_backup` leaves KEEP at its default and the case below would pass
+    # without ever pruning anything.
+    ( KEEP=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
     local remaining
     remaining=$(find "$tmp/backups" -name 'conversations-2*.json' | wc -l)
-    [[ "$remaining" -ge 1 ]] || {
-        echo "conv-store-backup: self-test FAILED: retention left no backup" >&2
+    [[ "$remaining" -eq 1 ]] || {
+        echo "conv-store-backup: self-test FAILED: AGAVE_KEEP=1 left $remaining dated backups, expected 1" >&2
         status=1
     }
+    find "$tmp/backups" -name 'conversations-prerestore-*.json' | grep -q . || {
+        echo "conv-store-backup: self-test FAILED: retention deleted the pre-restore snapshot" >&2
+        status=1
+    }
+
+    # A quarantined store copied by a later backup is the only remaining trace
+    # of a file the server could not parse, so its tier rotates on its own
+    # retention rather than on the dated-backup count.
+    cp -- "$store" "$tmp/cache/agave/conversations.json.corrupt"
+    ( KEEP_SNAPSHOT=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
+    rm -f -- "$tmp/cache/agave/conversations.json.corrupt"
+    [[ "$(find "$tmp/backups" -name 'conversations-corrupt-*.json' | wc -l)" -ge 1 ]] || {
+        echo "conv-store-backup: self-test FAILED: dated-backup rotation deleted the quarantined-store copy" >&2
+        status=1
+    }
+
+    # Retention must not reach files this script did not name, so a store
+    # dropped into the backup dir by hand survives.
+    printf '%s' '{"version":1}' >"$tmp/backups/conversations-manual.json"
+    ( KEEP=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
+    [[ -f "$tmp/backups/conversations-manual.json" ]] || {
+        echo "conv-store-backup: self-test FAILED: retention deleted a file it did not create" >&2
+        status=1
+    }
+
+    # A backup on the store's own filesystem covers a bad save and nothing
+    # else. The temp dir here is one filesystem, so this is that case.
+    if (AGAVE_ALLOW_SAME_FS=0 AGAVE_BACKUP_DIR="$tmp/cache/backups" XDG_CACHE_HOME="$tmp/cache" do_backup) >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: accepted a backup dir on the store's filesystem" >&2
+        status=1
+    fi
+
+    # Freshness: a backup job that stopped running is only visible if `check`
+    # is asked, so exercise the passing case, a missing tier, and a stale copy.
+    AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check >/dev/null || {
+        echo "conv-store-backup: self-test FAILED: check rejected a fresh, loadable backup" >&2
+        status=1
+    }
+    if (AGAVE_BACKUP_DIR="$tmp/nowhere" XDG_CACHE_HOME="$tmp/cache" do_check) >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: check passed with no backup dir" >&2
+        status=1
+    fi
+    touch -d '2 hours ago' -- "$tmp/backups"/conversations-2*.json
+    if (MAX_AGE_HOURS=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check) >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: check passed on a 2h-old backup with AGAVE_MAX_AGE_HOURS=1" >&2
+        status=1
+    fi
 
     # A retention value of 0 or below prunes the whole tier, so the guard
     # rejects it before do_backup can run. It lives at load time, so exercise
@@ -267,9 +419,21 @@ do_self_test() {
             status=1
         fi
     done
+    for bad_keep in 0 abc '1.5'; do
+        if AGAVE_KEEP_SNAPSHOT="$bad_keep" "$self_path" path >/dev/null 2>&1; then
+            echo "conv-store-backup: self-test FAILED: accepted AGAVE_KEEP_SNAPSHOT='$bad_keep'" >&2
+            status=1
+        fi
+    done
+    for bad_age in -1 abc '26h'; do
+        if AGAVE_MAX_AGE_HOURS="$bad_age" "$self_path" path >/dev/null 2>&1; then
+            echo "conv-store-backup: self-test FAILED: accepted AGAVE_MAX_AGE_HOURS='$bad_age'" >&2
+            status=1
+        fi
+    done
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, reject-bad-retention"
+        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention"
     fi
     return "$status"
 }
@@ -283,9 +447,10 @@ main() {
             verify_store "$2"
             ;;
         restore) do_restore "${2:-}" ;;
+        check) do_check ;;
         --self-test) do_self_test ;;
         -h | --help | '') usage ;;
-        *) die "unknown command '$1' (path, backup, verify, restore, --self-test)" ;;
+        *) die "unknown command '$1' (path, backup, verify, restore, check, --self-test)" ;;
     esac
 }
 
