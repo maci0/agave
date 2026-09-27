@@ -806,8 +806,8 @@ test "PagedKvCache block used field reset on free" {
 
     paged.freeBlock(b0);
 
-    // After free, used and ref_count reset. ref_count 0, not 1: it is the
-    // shared "block is free" marker that TieredKvCache reads (see CacheBlock).
+    // After free, used and ref_count are cleared: ref_count == 0 is the shared
+    // "block is free" marker TieredKvCache uses for its own double-free guard.
     try std.testing.expectEqual(@as(u16, 0), paged.blocks[b0].used);
     try std.testing.expectEqual(@as(u16, 0), paged.blocks[b0].ref_count);
     try std.testing.expectEqual(@as(usize, 4), paged.freeCount());
