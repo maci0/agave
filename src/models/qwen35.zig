@@ -1799,7 +1799,7 @@ pub const Qwen35Model = struct {
     }
 
     /// Run one token through the model, returning the argmax next token ID.
-    pub fn forward(self: *Qwen35Model, token_id: u32) !u32 {
+    pub fn forward(self: *Qwen35Model, token_id: u32) model_mod.ForwardError!u32 {
         if (self.kv_seq_len >= self.max_seq_len) return error.KVCacheFull;
 
         try model_mod.ensureKvBlock(self);
@@ -2039,7 +2039,7 @@ pub const Qwen35Model = struct {
     /// - Models with DeltaNet SSM layers (sequential recurrence)
     /// - Tensor parallelism active (TP > 1)
     /// - Single token or chunk_size ≤ 1
-    pub fn prefill(self: *Qwen35Model, token_ids: []const u32) !u32 {
+    pub fn prefill(self: *Qwen35Model, token_ids: []const u32) model_mod.ForwardError!u32 {
         if (token_ids.len == 0) return error.MissingTensor;
         if (token_ids.len > self.max_seq_len) return error.KVCacheFull;
 
