@@ -4287,12 +4287,11 @@ fn generateDiffusion(
     if (!g_quiet) eprint("diffusion: prompt = {d} tokens\n", .{token_ids.len});
 
     const start_ms = milliTimestamp(g_io);
-    const last_tok = model.prefill(token_ids) catch |e| {
+    model.prefill(token_ids) catch |e| {
         eprint("Error: prefill failed: {}\n", .{e});
         return;
     };
     const prefill_ms = milliTimestamp(g_io) - start_ms;
-    _ = last_tok;
 
     const max_steps = cli.diffusion_steps;
     const canvas_len = cli.diffusion_canvas;
