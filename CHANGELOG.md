@@ -241,6 +241,10 @@ must still appear under **Changed** or **Breaking** below. See
   stamps (RFC 3339 with offset), and the `scripts/fetch-changelogs.sh` header.
 
 ### Fixed
+- Server: a conversation store written in a newer envelope version is no longer
+  quarantined to `<path>.corrupt`. It is an intact file this build cannot read,
+  so it stays at the live path and persistence is disabled for the run, instead
+  of being renamed aside and replaced by an empty store on the next save.
 - Distributed startup: an incoming peer connection is polled with a 300s bound
   instead of a blocking `accept(2)`, so rank 0 no longer waits for the life of
   the process when the other rank never starts, and it fails with

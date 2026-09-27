@@ -290,7 +290,9 @@ override with `--conv-store PATH`, disable with `--no-conv-store`). Saves use a 
 a crash cannot truncate the live file and a second server on the same path
 cannot truncate this one's write. On startup the server loads that file;
 a corrupt file is renamed to `{path}.corrupt` and the server starts empty
-rather than overwriting the only copy. Instance restart RPO is the last
+rather than overwriting the only copy; a file written in a newer envelope
+version is left alone and persistence stays off for the run. Instance restart
+RPO is the last
 completed mutation (create/select/delete, user message, assistant reply, clear).
 KV cache and prefix cache are not in this file: after restore, the next request
 re-prefills. Docker Compose mounts `/home/agave/.cache` on a named volume

@@ -41,9 +41,12 @@ Other verified properties, so a future pass leaves them alone:
   the rename fails, by writing a copy) to `{path}.corrupt` before the live path
   is reused, so a bad parse never destroys the only copy
   (`src/server/conv_store.zig`).
-- Any load failure other than corrupt or unsupported-version disables
-  persistence for that run instead of overwriting the file with an empty list
-  (`src/server/server.zig`, `loadConversationsLocked`).
+- Any load failure other than corruption disables persistence for that run
+  instead of overwriting the file with an empty list (`src/server/server.zig`,
+  `loadConversationsLocked`). A store whose envelope version this build does
+  not read is intact, not corrupt: it is left at the live path and persistence
+  is disabled, so a downgrade to an older agave does not rename the newer
+  build's store aside and replace it with an empty one.
 - A store over the load caps (100 conversations, 1000 messages each) is capped
   rather than rejected, and the next save writes back only what loaded. So the
   load writes the whole original to `{path}.overflow` first: without it, the
@@ -79,7 +82,7 @@ Message content is user data, so every copy of the store is owner-only:
 | `docker compose down -v` | the whole store | n/a | Deletes the volume |
 | Malicious or accidental deletion | last backup taken | same | Only if backups were taken |
 | Logical corruption (a bad build writing a wrong but well-formed store) | the interval between backups | seconds to restore | `verify` checks structure, not meaning; see below |
-| Bad deploy | none expected | n/a | The on-disk envelope is version 1 and validated on load; an unreadable version is quarantined, not silently reinterpreted |
+| Bad deploy | none expected | n/a | The on-disk envelope is version 1 and validated on load; an unreadable version is left in place, not silently reinterpreted and not quarantined, so a downgrade keeps the newer build's store for the build that wrote it |
 
 RPO is "last server save", not "last token": the server persists on conversation
 mutations, so a crash mid-generation loses at most the tokens of the turn in
@@ -218,8 +221,8 @@ truncated, unbalanced, or written in a different envelope version, snapshots
 the current live store to `{backup dir}/conversations-prerestore-<stamp>.json`
 so a wrong restore is undoable, installs through a temporary file and renames,
 then verifies what it installed. Restart the server to load it; a store the
-current build still cannot parse is quarantined to `.corrupt`, not dropped, so
-a failed restore leaves the data recoverable.
+current build still cannot parse is left in place, not dropped, so a failed
+restore leaves the data recoverable.
 
 ## Verify the restore path
 
@@ -238,9 +241,8 @@ scripts/conv-store-backup.sh --self-test   # same, standalone
 `zig build check` depends on it, so a broken backup or restore fails the gate.
 
 What the self-test does not cover: a restore into a store the current build
-rejects at load. The quarantine path above means that copy lands at
-`{path}.corrupt` rather than being dropped, but proving it needs a running
-server.
+rejects at load. The load paths above mean that copy stays at the live path
+rather than being dropped, but proving it needs a running server.
 
 ## Configuration and secrets
 

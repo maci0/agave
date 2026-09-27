@@ -838,10 +838,11 @@ const Server = struct {
                 std.log.info("conversation store: {s} (new)", .{path});
                 return;
             }
-            // Corrupt/unsupported files are quarantined before this error returns,
-            // so persisting a fresh store is safe. Any other failure left the live
-            // file in place: do not overwrite it with an empty in-memory list.
-            if (err == error.CorruptStore or err == error.UnsupportedVersion) {
+            // A corrupt file is quarantined before this error returns, so
+            // persisting a fresh store is safe. Any other failure, including a
+            // store a newer agave wrote, left the live file in place: do not
+            // overwrite it with an empty in-memory list.
+            if (err == error.CorruptStore) {
                 std.log.warn("conversation store load failed ({s}): {}", .{ path, err });
                 return;
             }
