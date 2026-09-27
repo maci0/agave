@@ -30,10 +30,17 @@ is specified in [docs/API.md](docs/API.md) and implemented in
 
 The API key covers the HTTP listener only (default TCP 49453). The
 tensor-parallel, pipeline-parallel, and disaggregated data ports (TCP
-49454/49455/49456, `src/main.zig:145,147,149`) and UDP peer discovery
+49454/49455/49456, `src/main.zig:146,148,150`) and UDP peer discovery
 (49460/49461, `src/parallel/peer_discovery.zig:21`) are separate
 listeners with no authentication, so a deployment that exposes them must
 rely on network-level isolation. See T1 in
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
+
+The key authenticates on 49453 but does not partition: it identifies no
+principal, so the KV cache, the prompt-prefix cache, the conversation
+store, and the `X-Request-Id` replay ledger are shared by every request
+the server accepts. On a single-key deployment, every holder is inside one
+trust domain. See T3, T8 in
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
 
 `docker-compose.yml` publishes 49453 on 127.0.0.1 only
