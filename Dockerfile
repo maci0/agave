@@ -45,6 +45,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 RUN set -eux; \
+    # Debian images ship a deb822 /etc/apt/sources.list.d/debian.sources pointing at
+    # deb.debian.org. apt reads it alongside /etc/apt/sources.list, so leaving it in
+    # place would keep floating live-repo versions in the build despite the pin.
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
     printf 'deb http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list; \
     printf 'deb http://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/security.list; \
     printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99snapshot; \
@@ -181,6 +185,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Pin UID/GID so compose tmpfs mounts (read_only root) can match ownership.
 # Apt packages come from snapshot.debian.org (not live bookworm) for hermeticity.
 RUN set -eux; \
+    # Drop the base image's deb822 debian.sources (live deb.debian.org) so the
+    # snapshot pin below is the only configured source.
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; \
     printf 'deb http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list; \
     printf 'deb http://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SNAPSHOT" > /etc/apt/sources.list.d/security.list; \
     printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "3";\n' > /etc/apt/apt.conf.d/99snapshot; \
