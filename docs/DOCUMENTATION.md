@@ -45,6 +45,7 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 
 - **[HTTP API](API.md)**: server endpoints, sampling parameters, structured output, streaming
 - **[Threat model](THREAT_MODEL.md)**: attack surface, trust boundaries, mitigations vs gaps
+- **[Observability](OBSERVABILITY.md)**: `--serve` metrics, health endpoints, log correlation IDs, debugging path
 - **[Security](../SECURITY.md)**: supported versions and vulnerability reporting
 - **[Architecture](ARCHITECTURE.md)**: project structure, Design Decisions table, module reference, inference pipeline
 - **[Models](MODELS.md)**: 11 supported architectures (incl. Qwen4-Exp, DeepSeek V4, DiffusionGemma), parameters, per-model details, benchmarks
