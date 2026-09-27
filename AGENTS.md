@@ -7,9 +7,9 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 ## Commands
 
 ```bash
-zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe)
+zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe) + agave-bench
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
-zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python (CI runs more, see below)
+zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python
 zig build check                    # fmt-check + docs hygiene + pin consistency + unit tests + conv-store backup self-test (local CI gate)
 zig build check-pins               # Zig/Docker reproducibility pins and uv.lock freshness agree (CI fmt-check job)
 zig build docs-check               # docs link and count hygiene (scripts/check-docs.py)
@@ -42,7 +42,7 @@ zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.o (
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 
-`zig build ci` is what a workstation can reproduce. CI additionally runs the macOS test job, the Docker build, the cross-compile matrix, the wasm build, kernel artifact freshness (PTX), and a bounded fuzz pass, none of which a local run covers. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+`zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (`scripts/build-web.sh` compiles the `.ts` sources and refreshes the committed `src/web/app.js` and `web/*.js`). Browser WASM shell is `web/`, not `src/web/`.
 
@@ -103,12 +103,12 @@ Non-negotiable. Every change must respect all of them.
 - `std.debug.assert` for internal invariants. `pub` only for intended API.
 - Public functions and structs get `///` (purpose, ownership, returns, errors). Files get `//!`.
 - `test` blocks at the bottom of the relevant file. Backend tests use target guards.
-- Changes under `src/backend/`, `src/models/`, `src/kvcache/` include benchmarks (throughput, TTFT, VRAM, bandwidth). A >5% regression needs a written justification in the change.
+- Changes under `src/backend/`, `src/models/`, `src/kvcache/` ship before/after numbers (throughput, TTFT, VRAM, bandwidth) for the touched op. Measure with `--profile "prompt"` and `zig build bench` (see docs/CONTRIBUTING.md, "How to Debug Performance Regressions"). A >5% regression needs a written justification in the change.
 - Research prototypes (Triton/CUTLASS/TVM) stay in `research/kernels/`. Port to native Zig + target IR before merging into `src/`.
 
 ### Models
 - New models: `megakernel_enabled` field so `setMegakernel()` vtable dispatch works; `ModelDesc` in `src/backend/mega_compose.zig` ([docs/MEGAKERNEL.md](docs/MEGAKERNEL.md) Tier 3).
-- Fused FFN: `inline else => |be|` plus `comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUp...")` so Metal methods do not compile on Linux `NullBackend`. Pattern: `qwen35.zig` `mlpLayer`.
+- Fused FFN: `inline else => |be|` plus `comptime @hasDecl(@TypeOf(be.*), "fusedFfnGateUpSiluQ5K")` (exact decl for the quant dispatched on) so Metal methods do not compile on Linux `NullBackend`. Pattern: `qwen35.zig` `mlpLayer`.
 - Chat templates for prompt formatting. No hardcoded role markers.
 
 ## Gotchas

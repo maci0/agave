@@ -334,7 +334,7 @@ The GPU kernel binaries under `src/backend/kernels/` are **generated artifacts c
 |---|---|---|---|
 | CUDA | `src/backend/kernels/cuda/*.zig` | `zig build ptx -Dcuda-sm=sm_120`, then copy `zig-out/ptx/*.ptx` to `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` |
 | Vulkan | `src/backend/kernels/vulkan/*.comp` | `glslangValidator -V --target-env vulkan1.1 foo.comp -o foo.spv` (per shader) | `scripts/check-shader-artifacts.sh` |
-| ROCm | `src/backend/kernels/rocm/all.zig` | `zig build amdgcn` on Linux with ROCm + `ld.lld`; copy `zig-out/rocm/kernels.hsaco` to `src/backend/kernels/rocm/` | manual (needs HIP runtime) |
+| ROCm | `src/backend/kernels/rocm/all.zig` | `zig build amdgcn` on Linux with ROCm + `ld.lld`; copy `zig-out/rocm/kernels.o` to `src/backend/kernels/rocm/kernels.hsaco` | manual (needs HIP runtime) |
 | Metal | `src/backend/kernels/metal/*.metal` | none, MSL is compiled from source at runtime | n/a |
 | WebGPU | `src/backend/kernels/webgpu/*.wgsl` | none, WGSL is the source of truth | n/a |
 
