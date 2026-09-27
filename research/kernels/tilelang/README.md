@@ -10,7 +10,7 @@ porting decisions, not a build dependency.
 | Agave backend | TileLang target | Status here | Verdict |
 |---|---|---|---|
 | ROCm/HIP | `hip` | **Compiles + runs + validates on RX 7900 XTX** | Viable now |
-| CUDA | `cuda` | Needs nvcc (no NVIDIA GPU/toolkit on this box) | Viable on any NVIDIA machine; scripts run unchanged |
+| CUDA | `cuda` | Needs nvcc (no NVIDIA GPU/toolkit on this box) | Viable on any NVIDIA machine; the scripts pick `cuda` from the installed torch build |
 | CPU | `cpu` | Unsupported by TileLang 0.1.13 | Not viable; native Zig stays |
 | Metal | - | No target (macOS-only backend anyway) | Not viable |
 | Vulkan / WebGPU | - | No SPIR-V/WGSL codegen in TileLang | Not viable |
@@ -85,8 +85,8 @@ hipcc and load through agave's existing `hipModuleLoadData` /
 ## Case study: Qwen3.8-27B Q4_K_M (`experiments/qwen38_q4k.py`)
 
 End-to-end on the REAL checkpoint: reads `blk.1.ffn_gate.weight` /
-`blk.1.ffn_down.weight` straight out of the downloaded
-`Qwen3.8-27B-Q4_K_M.gguf`, uploads **only packed bytes**, and runs a fused
+`blk.1.ffn_down.weight` straight out of the checkpoint named by
+`--gguf` (`Qwen3.8-27B-Q4_K_M.gguf`), uploads **only packed bytes**, and runs a fused
 Q4_K dequant-in-kernel GEMV (ggml block layout: 144 B / 256 elems, fp16
 d/dmin, 12 B of 6-bit scale/min pairs, nibble payload). The Python unpacker
 is validated bit-exact against `gguf.dequantize`; both kernel variants match

@@ -137,7 +137,7 @@ class Gguf:
                     f"{path}: tensor {name.decode()} has unsupported ggml type {ttype}")
 
         self.alignment = DEFAULT_ALIGNMENT
-        for key, t, v in self.kv:
+        for key, _t, v in self.kv:
             if key == b"general.alignment":
                 self.alignment = v
         self.data_start = align_up(r.i, self.alignment)
@@ -173,7 +173,7 @@ def write_gguf(version: int, kv, tensors, payloads, alignment: int) -> bytes:
     # so one pass suffices.
     table = bytearray()
     off = 0
-    for t, p in zip(tensors, payloads):
+    for t, p in zip(tensors, payloads, strict=True):
         write_string(table, t["name"])
         table += struct.pack("<I", len(t["dims"]))
         for d in t["dims"]:
