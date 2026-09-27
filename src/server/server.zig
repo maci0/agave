@@ -1096,7 +1096,18 @@ fn isCrossOriginUnauthenticated(headers: []const u8) bool {
 }
 
 /// Broken-down UTC time for request log timestamps.
+///
+/// Every log line that carries this renders it as `[HH:MM:SSZ]`. The `Z` is
+/// not decoration: the surrounding runtime (journald, `docker logs`, a
+/// terminal prompt) prints local time, so a bare `HH:MM:SS` reads as local and
+/// sits an hour off for half of every DST period, on the two transition
+/// weekends and again whenever a host changes zone.
 const TimeComponents = struct { hours: u64, minutes: u64, seconds: u64 };
+
+/// Log-line timestamp prefix, UTC and labelled as such. Concatenated into
+/// every slog format that prints a TimeComponents, so a line added later
+/// cannot drop the marker.
+const log_time_fmt = "[{d:0>2}:{d:0>2}:{d:0>2}Z]";
 
 fn getTimeComponents() TimeComponents {
     const now = timestamp();
@@ -1145,9 +1156,9 @@ fn logRequest(method: []const u8, path: []const u8) void {
     const safe_path = sanitizeForLog(path, &path_buf);
     const rid = log_request_id;
     if (log_client_rid_len > 0) {
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} xid={s} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path });
+        slog(log_time_fmt ++ " req={d} xid={s} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path });
     } else {
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path });
+        slog(log_time_fmt ++ " req={d} {s} {s}\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path });
     }
 }
 
@@ -1160,9 +1171,9 @@ fn logRequestDone(method: []const u8, path: []const u8, status: u16, duration_ms
     const safe_path = sanitizeForLog(path, &path_buf);
     const rid = log_request_id;
     if (log_client_rid_len > 0) {
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} xid={s} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path, status, duration_ms });
+        slog(log_time_fmt ++ " req={d} xid={s} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, log_client_rid[0..log_client_rid_len], safe_method, safe_path, status, duration_ms });
     } else {
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path, status, duration_ms });
+        slog(log_time_fmt ++ " req={d} {s} {s} -> {d} ({d}ms)\n", .{ t.hours, t.minutes, t.seconds, rid, safe_method, safe_path, status, duration_ms });
     }
 }
 
@@ -1170,9 +1181,9 @@ fn logGeneration(tokens: u32, time_ms: u64, tps: f32) void {
     const t = getTimeComponents();
     const rid = log_request_id;
     if (std.c.isatty(stderr_file.handle) != 0) {
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} \x1b[32mGenerated {d} tokens in {d}ms ({d:.2} tok/s)\x1b[0m\n", .{ t.hours, t.minutes, t.seconds, rid, tokens, time_ms, tps });
+        slog(log_time_fmt ++ " req={d} \x1b[32mGenerated {d} tokens in {d}ms ({d:.2} tok/s)\x1b[0m\n", .{ t.hours, t.minutes, t.seconds, rid, tokens, time_ms, tps });
     } else {
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Generated {d} tokens in {d}ms ({d:.2} tok/s)\n", .{ t.hours, t.minutes, t.seconds, rid, tokens, time_ms, tps });
+        slog(log_time_fmt ++ " req={d} Generated {d} tokens in {d}ms ({d:.2} tok/s)\n", .{ t.hours, t.minutes, t.seconds, rid, tokens, time_ms, tps });
     }
 }
 
@@ -7174,7 +7185,7 @@ fn handleConnection(stream: TcpStream) void {
         g_server.metrics.recordRequest();
         g_server.metrics.recordFailure();
         const t = getTimeComponents();
-        slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} OOM allocating {d}-byte connection buffer -> 503\n", .{ t.hours, t.minutes, t.seconds, log_request_id, http_buf_size });
+        slog(log_time_fmt ++ " req={d} OOM allocating {d}-byte connection buffer -> 503\n", .{ t.hours, t.minutes, t.seconds, log_request_id, http_buf_size });
         sendJsonErrorEx(stream, "503 Service Unavailable", "server_error", "Out of memory", null, "server_overloaded");
         return;
     };
@@ -7189,14 +7200,14 @@ fn handleConnection(stream: TcpStream) void {
             g_server.metrics.recordRequest();
             g_server.metrics.recordClientError();
             const t = getTimeComponents();
-            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Rejected oversized request body (>{d} bytes) -> 413\n", .{ t.hours, t.minutes, t.seconds, log_request_id, max_request_body_size });
+            slog(log_time_fmt ++ " req={d} Rejected oversized request body (>{d} bytes) -> 413\n", .{ t.hours, t.minutes, t.seconds, log_request_id, max_request_body_size });
             sendJsonErrorEx(stream, "413 Payload Too Large", "invalid_request_error", "Request body too large", null, "request_too_large");
         },
         .malformed => {
             g_server.metrics.recordRequest();
             g_server.metrics.recordClientError();
             const t = getTimeComponents();
-            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+            slog(log_time_fmt ++ " req={d} Malformed HTTP request -> 400\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
             sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Malformed HTTP request", null, "malformed_request");
         },
         // Connection-level failures below are not client protocol errors: no
@@ -7211,7 +7222,7 @@ fn handleConnection(stream: TcpStream) void {
         .read_error => {
             g_server.metrics.recordRequest();
             const t = getTimeComponents();
-            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Request read failed (timeout or reset) before completion -> closing\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
+            slog(log_time_fmt ++ " req={d} Request read failed (timeout or reset) before completion -> closing\n", .{ t.hours, t.minutes, t.seconds, log_request_id });
         },
     }
 }
@@ -7426,7 +7437,7 @@ pub fn run(config: ServerConfig) !void {
 
     const t = getTimeComponents();
     var buf: [hdr_buf_size]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\n[{d:0>2}:{d:0>2}:{d:0>2}] agave server started on http://{d}.{d}.{d}.{d}:{d}\n  model={s} backend={s}\n  ctx_size={d} max_conn={d} batch={d} timeout={d}s auth={s} rate_limit={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, host[0], host[1], host[2], host[3], port, model_name, backend_name, ctx_size, max_concurrent_connections, admission_limit, scheduler_timeout_sec, if (api_key != null) "yes" else "no", if (server.rate_limiter != null) "yes" else "no" }) catch "";
+    const msg = std.fmt.bufPrint(&buf, "\n" ++ log_time_fmt ++ " agave server started on http://{d}.{d}.{d}.{d}:{d}\n  model={s} backend={s}\n  ctx_size={d} max_conn={d} batch={d} timeout={d}s auth={s} rate_limit={s}\nPress Ctrl+C to stop\n", .{ t.hours, t.minutes, t.seconds, host[0], host[1], host[2], host[3], port, model_name, backend_name, ctx_size, max_concurrent_connections, admission_limit, scheduler_timeout_sec, if (api_key != null) "yes" else "no", if (server.rate_limiter != null) "yes" else "no" }) catch "";
     _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
 
     // Install graceful shutdown handlers for SIGTERM and SIGINT.
@@ -7477,7 +7488,7 @@ pub fn run(config: ServerConfig) !void {
             g_server.metrics.recordRequest();
             g_server.metrics.recordConnectionRejection();
             const tc = getTimeComponents();
-            slog("[{d:0>2}:{d:0>2}:{d:0>2}] req={d} Connection rejected: at capacity ({d}/{d}) -> 503\n", .{ tc.hours, tc.minutes, tc.seconds, log_request_id, max_concurrent_connections, max_concurrent_connections });
+            slog(log_time_fmt ++ " req={d} Connection rejected: at capacity ({d}/{d}) -> 503\n", .{ tc.hours, tc.minutes, tc.seconds, log_request_id, max_concurrent_connections, max_concurrent_connections });
             send503Retry(stream, capacity_503_body, capacity_retry_after_sec);
             stream.close();
             continue;
@@ -7498,7 +7509,7 @@ pub fn run(config: ServerConfig) !void {
     // Log shutdown (signal handler cannot safely log, do it here)
     {
         const tc = getTimeComponents();
-        slog("\n[{d:0>2}:{d:0>2}:{d:0>2}] Server shutting down...\n", .{ tc.hours, tc.minutes, tc.seconds });
+        slog("\n" ++ log_time_fmt ++ " Server shutting down...\n", .{ tc.hours, tc.minutes, tc.seconds });
     }
 
     // Stop scheduler thread before draining connections
@@ -7683,6 +7694,15 @@ test "getTimeComponents wraps pre-epoch timestamps" {
     try std.testing.expectEqual(@as(u64, 1), later.hours);
     try std.testing.expectEqual(@as(u64, 1), later.minutes);
     try std.testing.expectEqual(@as(u64, 1), later.seconds);
+}
+
+test "log timestamps render with an explicit UTC marker" {
+    defer sim_clock.setOverrideMs(null);
+    sim_clock.setOverrideMs(3_661_000); // 1h 1m 1s
+    const t = getTimeComponents();
+    var buf: [32]u8 = undefined;
+    const line = try std.fmt.bufPrint(&buf, log_time_fmt ++ " req={d}\n", .{ t.hours, t.minutes, t.seconds, @as(u64, 7) });
+    try std.testing.expectEqualStrings("[01:01:01Z] req=7\n", line);
 }
 
 test "prngSeedFromSampling uses sim_clock when seed omitted" {
