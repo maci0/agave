@@ -120,14 +120,15 @@ stamp() {
     date -u +%Y%m%dT%H%M%SZ
 }
 
-# The three file kinds have separate retention because they are not
-# interchangeable: a dated backup is one point in time, while a quarantined
-# store and a pre-restore snapshot are the only copies of something the server
-# could not parse or a store an operator replaced by mistake. Rotation of
-# ordinary backups must never decide their fate.
+# The file kinds have separate retention because they are not
+# interchangeable: a dated backup is one point in time, while the quarantined
+# and overflow stores and a pre-restore snapshot are the only copies of
+# something the server could not parse, could not keep whole, or an operator
+# replaced by mistake. Rotation of ordinary backups must never decide their
+# fate.
 # find -regex matches the whole path, so each pattern anchors on the basename.
 readonly DATED_RE='.*/conversations-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
-readonly SNAPSHOT_RE='.*/conversations-(corrupt|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
+readonly SNAPSHOT_RE='.*/conversations-(corrupt|overflow|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
 
 # Newest first, "<mtime> <path>". $1 is a find -regextype pattern.
 list_backups() {
@@ -232,20 +233,23 @@ do_backup() {
     [[ -e "$dest" ]] && dest="${dest%.json}-$$.json"
     copy_atomic "$live" "$dest"
     verify_store "$dest"
-    # The quarantine copy is the only remaining trace of a store the server
-    # could not parse. Losing it loses the recoverable data. The name is
+    # The sidecars are the only remaining trace of state the server did not
+    # keep at the live path: a store it could not parse, and a store it
+    # loaded only in part. Losing either loses recoverable data. The name is
     # stamped once: stamping per use straddles a second boundary and verifies
     # a file that was never written.
-    local corrupt="$live.corrupt"
-    if [[ -f "$corrupt" ]]; then
-        local corrupt_copy
-        corrupt_copy="$dir/conversations-corrupt-$(stamp).json"
-        [[ -e "$corrupt_copy" ]] && corrupt_copy="${corrupt_copy%.json}-$$.json"
-        copy_atomic "$corrupt" "$corrupt_copy"
-        verify_store "$corrupt_copy" ||
-            note "kept $corrupt_copy even though it does not verify; it is the only copy"
-        note "backed up quarantined store $corrupt"
-    fi
+    local suffix
+    for suffix in corrupt overflow; do
+        local sidecar="$live.$suffix"
+        [[ -f "$sidecar" ]] || continue
+        local sidecar_copy
+        sidecar_copy="$dir/conversations-$suffix-$(stamp).json"
+        [[ -e "$sidecar_copy" ]] && sidecar_copy="${sidecar_copy%.json}-$$.json"
+        copy_atomic "$sidecar" "$sidecar_copy"
+        verify_store "$sidecar_copy" ||
+            note "kept $sidecar_copy even though it does not verify; it is the only copy"
+        note "backed up $suffix store $sidecar"
+    done
     prune "$dir"
     note "backed up $live -> $dest"
 }
@@ -318,7 +322,7 @@ do_check() {
     verify_store "$newest"
     local snapshots
     snapshots="$(list_backups "$dir" "$SNAPSHOT_RE" | wc -l)"
-    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/pre-restore copies on file"
+    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/overflow/pre-restore copies on file"
 }
 
 do_self_test() {
@@ -393,12 +397,19 @@ do_self_test() {
 
     # A quarantined store copied by a later backup is the only remaining trace
     # of a file the server could not parse, so its tier rotates on its own
-    # retention rather than on the dated-backup count.
+    # retention rather than on the dated-backup count. The overflow sidecar
+    # holds a store the server loaded only in part, and the next save
+    # destroys the rest, so it travels the same way.
     cp -- "$store" "$tmp/cache/agave/conversations.json.corrupt"
-    ( KEEP_SNAPSHOT=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
-    rm -f -- "$tmp/cache/agave/conversations.json.corrupt"
+    cp -- "$store" "$tmp/cache/agave/conversations.json.overflow"
+    ( KEEP_SNAPSHOT=2; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
+    rm -f -- "$tmp/cache/agave/conversations.json.corrupt" "$tmp/cache/agave/conversations.json.overflow"
     [[ "$(find "$tmp/backups" -name 'conversations-corrupt-*.json' | wc -l)" -ge 1 ]] || {
         echo "conv-store-backup: self-test FAILED: dated-backup rotation deleted the quarantined-store copy" >&2
+        status=1
+    }
+    [[ "$(find "$tmp/backups" -name 'conversations-overflow-*.json' | wc -l)" -ge 1 ]] || {
+        echo "conv-store-backup: self-test FAILED: the overflow sidecar was not backed up" >&2
         status=1
     }
 
@@ -500,7 +511,7 @@ do_self_test() {
     }
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
+        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }

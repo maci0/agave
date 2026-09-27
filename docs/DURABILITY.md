@@ -15,11 +15,12 @@ else `$HOME/.cache/agave/`. In the compose image that is
 |---|---|---|---|
 | Conversation store | `<cache>/agave/conversations.json` | no | Web-UI conversations gone for good |
 | Quarantined store | `<cache>/agave/conversations.json.corrupt` | no | Only remaining copy of a store the server could not parse |
+| Overflow store | `<cache>/agave/conversations.json.overflow` | no | The part of a store past the load caps, which the next save overwrites |
 | Hub model blobs | `<cache>/huggingface/` | yes, `agave pull` re-downloads | Bandwidth and time only |
 | Vulkan pipeline cache | `<cache>/agave/vk_pipeline_cache.bin` | yes, rebuilt on first run | One slower startup |
 | Expert profile | caller-supplied path | yes | Profile re-recorded |
 
-Only the first two cannot be rebuilt. Everything else is a cache with a
+Only the first three cannot be rebuilt. Everything else is a cache with a
 rebuild path, so this document is about the conversation store.
 
 Writes for all of them go through `src/durable_file.zig`: write a sibling
@@ -43,6 +44,11 @@ Other verified properties, so a future pass leaves them alone:
 - Any load failure other than corrupt or unsupported-version disables
   persistence for that run instead of overwriting the file with an empty list
   (`src/server/server.zig`, `loadConversationsLocked`).
+- A store over the load caps (100 conversations, 1000 messages each) is capped
+  rather than rejected, and the next save writes back only what loaded. So the
+  load writes the whole original to `{path}.overflow` first: without it, the
+  part past the caps is destroyed by the first save and the backup taken after
+  that save never saw it (`src/server/conv_store.zig`, `preserveOverflow`).
 - `--conv-store PATH` points the store anywhere; `--no-conv-store` keeps
   conversations in memory only. The backup script follows a relocated store
   with `--store PATH`.
@@ -86,8 +92,8 @@ scripts/conv-store-backup.sh --store /srv/agave/conversations.json backup
 `backup` resolves the path the same way the server does, copies through a
 temporary file and renames (so a killed backup never leaves a partial file
 that a later restore would install), verifies the copy, also copies a
-`.corrupt` store when one exists, and prunes. It exits nonzero on every
-failure; it has no quiet failure mode.
+`.corrupt` or `.overflow` store when one exists, and prunes. It exits nonzero
+on every failure; it has no quiet failure mode.
 
 A server started with `--conv-store PATH` writes its store wherever it was
 told, which the environment-based resolution above cannot see. Pass
@@ -97,17 +103,22 @@ deployment; the flag goes before the command and wins over
 fails on a missing file, and a store the operator moved is the one kind of
 state here with no protection at all.
 
-Retention has two tiers, because the three kinds of file in the backup
+Retention has two tiers, because the kinds of file in the backup
 directory are not interchangeable:
 
 | Kind | Name | Retained by | Default |
 |---|---|---|---|
 | Dated backup | `conversations-<stamp>.json` | `AGAVE_KEEP` | 14 |
-| Quarantined store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-prerestore-<stamp>.json` | `AGAVE_KEEP_SNAPSHOT` | 5 |
+| Quarantined store, overflow store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-overflow-<stamp>.json`, `conversations-prerestore-<stamp>.json` | `AGAVE_KEEP_SNAPSHOT` | 5 |
 
 Rotation of dated backups never touches the snapshot tier: a quarantined store
-is the only remaining copy of a file the server could not parse, and a
-pre-restore snapshot is the only undo for a restore installed by mistake.
+is the only remaining copy of a file the server could not parse, an overflow
+store is the only copy of the part a capped load dropped, and a pre-restore
+snapshot is the only undo for a restore installed by mistake. The snapshot
+tier is a single count, so set `AGAVE_KEEP_SNAPSHOT` above the number of
+snapshot kinds you expect to keep at once (three, if quarantined and overflow
+stores are both present).
+
 Pruning matches the exact names above, so it never deletes a file this script
 did not create.
 
@@ -122,6 +133,14 @@ different partitions of one disk pass it and do not survive losing the disk.
 
 Put it on a schedule (cron, systemd timer, whatever the host runs). The script
 is idempotent and safe to run while the server is serving.
+
+`scripts/systemd/agave-conv-store-backup.service` and
+`agave-conv-store-backup.timer` are that schedule for a systemd host: an
+hourly run that also runs `check` and retries a failed run, with
+`Persistent=true` so a host that was off at :17 backs up at the next boot
+instead of waiting for the next hour. Edit `User=` and `AGAVE_BACKUP_DIR` in
+the service before enabling it. Nothing in this repository installs or starts
+them.
 
 ## Know whether the backup ran
 
