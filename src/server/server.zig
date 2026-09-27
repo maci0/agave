@@ -7625,12 +7625,15 @@ test "gzipAlloc shrinks the chat UI and round-trips" {
     try std.testing.expectEqualSlices(u8, html_page, out[0..writer.end]);
 }
 
-test "chat UI defers markdown CDN and does not render-block highlight.js" {
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "rel=\"preconnect\" href=\"https://cdn.jsdelivr.net\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "marked.min.js") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "referrerpolicy=\"no-referrer\" defer></script>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "<script src=\"https://cdn.jsdelivr.net/gh/highlightjs") == null);
-    try std.testing.expect(std.mem.indexOf(u8, html_page, "rel=\"stylesheet\" href=\"https://cdn.jsdelivr.net/gh/highlightjs") == null);
+test "chat UI head pulls no third-party asset" {
+    // Every jsDelivr script is fetched on demand by app.js (loadMarkdown,
+    // loadHighlightJs), so nothing third-party sits on the first paint.
+    const head_end = std.mem.indexOf(u8, html_page, "</head>").?;
+    const head = html_page[0..head_end];
+    try std.testing.expect(std.mem.indexOf(u8, head, "cdn.jsdelivr.net") == null);
+    try std.testing.expect(std.mem.indexOf(u8, head, "rel=\"preconnect\"") == null);
+    try std.testing.expect(std.mem.indexOf(u8, head, "<script src=") == null);
+    try std.testing.expect(std.mem.indexOf(u8, html_page, "function loadMarkdown()") != null);
 }
 
 test "sanitizeClientRequestId accepts correlation tokens" {

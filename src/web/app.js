@@ -718,6 +718,42 @@ function addAssistant() {
     }
     return m;
 }
+const marked_script_url = 'https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js';
+const marked_script_integrity = 'sha384-zbcZAIxlvJtNE3Dp5nxLXdXtXyxwOdnILY1TDPVmKFhl4r4nSUG1r8bcFXGVa4Te';
+const purify_script_url = 'https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js';
+const purify_script_integrity = 'sha384-46dPGH1XlTmj7bc50bqLjTdORXs/3EP2QpA/6EWbelYWOY9VGp+87RT61S3Mcslb';
+/** Append a pinned CDN script. Resolves false on load failure; every caller has
+ *  a working fallback, so a blocked CDN degrades the page instead of breaking it. */
+function loadCdnScript(url, integrity) {
+    return new Promise(function (resolve) {
+        const s = document.createElement('script');
+        s.src = url;
+        s.integrity = integrity;
+        s.crossOrigin = 'anonymous';
+        s.referrerPolicy = 'no-referrer';
+        s.addEventListener('load', function () { resolve(true); });
+        s.addEventListener('error', function () { resolve(false); });
+        document.head.append(s);
+    });
+}
+let markdownLoad = null;
+/** Fetch marked and DOMPurify. They are needed to render a model response, not to
+ *  paint or to send, so the fetch starts on the first response instead of on page
+ *  load. Resolves false when either fails and the renderers fall back to escaped
+ *  plain text. */
+function loadMarkdown() {
+    if (marked && DOMPurify) {
+        return Promise.resolve(true);
+    }
+    if (markdownLoad) {
+        return markdownLoad;
+    }
+    markdownLoad = Promise.all([
+        loadCdnScript(marked_script_url, marked_script_integrity),
+        loadCdnScript(purify_script_url, purify_script_integrity),
+    ]).then(function () { return Boolean(marked && DOMPurify); });
+    return markdownLoad;
+}
 const hljs_script_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js';
 const hljs_script_integrity = 'sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp';
 const hljs_style_url = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/kimbie-dark.min.css';
@@ -742,14 +778,8 @@ function loadHighlightJs() {
             link.dataset.agaveHljs = '1';
             document.head.append(link);
         }
-        const s = document.createElement('script');
-        s.src = hljs_script_url;
-        s.integrity = hljs_script_integrity;
-        s.crossOrigin = 'anonymous';
-        s.referrerPolicy = 'no-referrer';
-        s.addEventListener('load', function () { resolve(Boolean(hljs)); });
-        s.addEventListener('error', function () { resolve(false); });
-        document.head.append(s);
+        loadCdnScript(hljs_script_url, hljs_script_integrity)
+            .then(function (ok) { resolve(ok && Boolean(hljs)); });
     });
     return hljsLoad;
 }
@@ -806,7 +836,7 @@ function highlightCodeBlocks(el) {
         apply();
     } });
 }
-// NOTE: All HTML rendered via innerHTML is sanitized through DOMPurify (deferred CDN in head.html).
+// NOTE: All HTML rendered via innerHTML is sanitized through DOMPurify (deferred CDN, loadMarkdown).
 // The DOMPurify.sanitize() call strips any script injection from marked.parse() output.
 // This is safe because: (1) user input goes through marked.parse() which escapes HTML,
 // (2) the result is then passed through DOMPurify.sanitize() before DOM insertion,
@@ -915,7 +945,9 @@ function attachCopyButton(el, content) {
     });
     el.append(cb);
 }
-function renderFinal(el, content) {
+/** `quiet` marks a rebuild of a message already announced and already read out,
+ *  so a screen reader is not told the same response twice. */
+function renderFinal(el, content, quiet) {
     el.classList.remove('thinking');
     // Full markdown/sanitize runs once on the final chunk.
     el.textContent = '';
@@ -960,10 +992,66 @@ function renderFinal(el, content) {
     // As part of the response announcement.
     const respondedText = truncateAnnounce(el.textContent, 200);
     attachCopyButton(el, content);
-    announceToSR(`Agave responded: ${respondedText}`);
+    if (!quiet) {
+        announceToSR(`Agave responded: ${respondedText}`);
+    }
+    if (!marked || !DOMPurify) {
+        queueMarkdownUpgrade(el, content);
+    }
     if (chat_batch_depth === 0) {
         scrollBottom();
     }
+}
+/** Responses that finished before the deferred libraries landed are rebuilt one
+ *  message per idle slot, so a restored history does not re-render in one task. */
+const markdown_upgrades = [];
+let markdown_upgrade_scheduled = false;
+function scheduleIdle(fn) {
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(fn);
+    }
+    else {
+        setTimeout(fn, 0);
+    }
+}
+function queueMarkdownUpgrade(el, content) {
+    markdown_upgrades.push({ el, content });
+    if (markdown_upgrade_scheduled) {
+        return;
+    }
+    markdown_upgrade_scheduled = true;
+    const drain = function () {
+        const next = markdown_upgrades.shift();
+        if (!next) {
+            markdown_upgrade_scheduled = false;
+            return;
+        }
+        upgradeToMarkdown(next.el, next.content);
+        if (markdown_upgrades.length > 0) {
+            scheduleIdle(drain);
+        }
+        else {
+            markdown_upgrade_scheduled = false;
+        }
+    };
+    scheduleIdle(drain);
+}
+function upgradeToMarkdown(el, content) {
+    loadMarkdown().then(function (ok) {
+        // A regenerated or deleted message carries different content, and its own
+        // rebuild is already queued.
+        if (!ok || !el.isConnected || el.dataset.content !== content) {
+            return;
+        }
+        // The stats block trails the message body; renderFinal rebuilds the body and
+        // the copy button, so only the stats node has to survive the swap.
+        const stats = el.querySelector('.stats');
+        stats?.remove();
+        renderFinal(el, content, true);
+        if (stats) {
+            el.append(stats);
+        }
+    });
 }
 function renderContent(el, content, final) {
     // Streaming: keep pending content fresh and flush at most every 60ms.
@@ -1022,6 +1110,9 @@ function addStats(el, s) {
     el.append(d);
 }
 async function streamResponse(body, errLabel, url) {
+    // Start the markdown fetch alongside the request: by the time the last chunk
+    // renders, marked and DOMPurify are normally already in place.
+    loadMarkdown();
     const el = addAssistant();
     setStreaming(true);
     abortCtrl = new AbortController();

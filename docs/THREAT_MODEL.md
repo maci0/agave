@@ -76,7 +76,7 @@ Added since the 2026-09-02 pass: `/v1/embeddings`, `/v1/responses`, `/v1/chat`, 
 5. **Same-host processes -> shm segments.** Only uid/file-mode checks; names are fixed.
 6. **Secrets -> process.** Env vars enter once at startup; nonempty `AGAVE_API_KEY` wins over CLI to avoid `ps` exposure (`src/main.zig:1288`, process-list warning `:1137-1139`); empty env is unset. Rotation: process restart. Storage: env only. Prompt-derived buffers are wiped before free (`wipeFree` / `wipeFreeTokens` `src/server/server.zig:1075-1083`, first call sites `:2280`, `:2461`, `:2547`, `:2633`; inline wipes for the detokenize token array `:2612` and the base64 image buffers `:3747`, `:3761`), the per-connection read buffer that carries `Authorization` / `x-api-key` is zeroed before it is freed (`:7027-7031`; responses close the connection, so that buffer is not reused for a later request), and Hub `Authorization` buffers are zeroed (`src/pull.zig:764,1114`).
 7. **Process -> conversation file.** Prompts written to `$HOME/.cache/agave/conversations.json` unless `--no-conv-store` (`src/server/server.zig:7175-7181`, `src/server/conv_store.zig:70-74`). Compose maps this under `agave-cache`.
-8. **Embedded UI -> jsDelivr.** `src/web/head.html:12-14` loads marked / DOMPurify from `cdn.jsdelivr.net` with SRI. CSP allowlists that origin (`src/server/server.zig:1389-1395`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
+8. **Embedded UI -> jsDelivr.** `src/web/app.ts` (`loadMarkdown`, `loadHighlightJs`) fetches marked / DOMPurify / highlight.js from `cdn.jsdelivr.net` with SRI, on the first response and the first code block rather than on page load. CSP allowlists that origin (`src/server/server.zig:1389-1395`). Compromise of the CDN without a matching hash is blocked; a rebuild that changes both script and hash is a build-time event.
 
 Privilege transitions: none at runtime. The process starts and stays at its launching privilege; the Dockerfile drops to `agave` before exec (`Dockerfile:210`).
 
@@ -122,7 +122,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 | Secret and prompt buffer zeroization, env-over-CLI key | Credential leakage via ps / freed heap | `src/main.zig:1137-1139,1288`, `src/server/server.zig:1074-1083,7027-7031`, `src/pull.zig:764,1114` |
 | Container hardening | Container escape blast radius | `Dockerfile:210`, `docker-compose.yml:35,39,61-63` |
 | Bounded grammar/schema recursion; fail-closed generate | Grammar DoS / unconstrained fallback | `src/grammar.zig:22-26`, `src/server/server.zig:4186-4196` |
-| SRI on jsDelivr scripts | UI CDN swap | `src/web/head.html:12-14` |
+| SRI on jsDelivr scripts | UI CDN swap | `src/web/app.ts` (`loadMarkdown`, `loadHighlightJs`) |
 | Response security headers | Clickjacking, MIME sniff, cache | `src/server/server.zig:1389-1398`; claims match `docs/API.md` Response Headers |
 
 Single points of failure: the API key alone carries all client-side authn on 49453; the loopback-bind default carries all safety for no-key users; neither extends to the distributed ports.
