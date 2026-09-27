@@ -1,4 +1,5 @@
-//! Token bucket rate limiter for per-API-key request and token limits.
+//! Token bucket rate limiter for request and token limits. One instance is
+//! shared across all requests regardless of API key.
 //!
 //! Implements the token bucket algorithm with dual buckets (requests/min, tokens/min).
 //! Tokens refill continuously based on elapsed time, clamped to capacity.
