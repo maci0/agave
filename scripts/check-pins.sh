@@ -186,6 +186,54 @@ if [[ "$engines_bun" != "$bun_pin" ]]; then
 fi
 echo "Bun pin OK: $bun_pin (packageManager, engines.bun, ci.yml setup-bun)"
 
+# Vendored third-party source has to be traceable too. tools/oxlint/anti-slop is
+# a copy of dmmulroy/anti-slop, and the upstream commit it was copied from was
+# never recorded, so the sha256 manifest is the only provenance anchor the tree
+# has: a rule that no longer hashes to its recorded value is a local edit wearing
+# third-party clothing, and the lint gate would load it as if it were upstream.
+vendored_dir="tools/oxlint/anti-slop"
+vendored_manifest="$vendored_dir/VENDORED.sha256"
+if command -v sha256sum >/dev/null 2>&1; then
+    sha_cmd=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+    # macOS ships no coreutils sha256sum; shasum is the same tool by another name.
+    sha_cmd=(shasum -a 256)
+else
+    sha_cmd=()
+fi
+if [[ ${#sha_cmd[@]} -eq 0 ]]; then
+    echo "check-pins: no sha256sum or shasum on PATH, skipping the vendored source manifest check"
+elif [[ ! -f "$vendored_manifest" ]]; then
+    echo "check-pins: $vendored_manifest is missing; the vendored anti-slop copy must stay hash-anchored" >&2
+    exit 1
+else
+    vendored_fail=0
+    while read -r want rel; do
+        [[ -n "$want" && -n "$rel" ]] || continue
+        if [[ ! -f "$vendored_dir/$rel" ]]; then
+            echo "check-pins: $vendored_manifest lists $rel, which is no longer in the tree" >&2
+            vendored_fail=1
+            continue
+        fi
+        got="$("${sha_cmd[@]}" "$vendored_dir/$rel" | cut -d' ' -f1)"
+        if [[ "$got" != "$want" ]]; then
+            echo "check-pins: $rel is not the vendored copy $vendored_manifest records ($got != $want)" >&2
+            vendored_fail=1
+        fi
+    done <"$vendored_manifest"
+    # The other direction: an unlisted .ts file loads as a rule nobody anchored.
+    while read -r rel; do
+        if ! grep -qF -- "  $rel" "$vendored_manifest"; then
+            echo "check-pins: $rel is not in $vendored_manifest; re-vendor and regenerate it" >&2
+            vendored_fail=1
+        fi
+    done < <(cd "$vendored_dir" && find . -type f -name '*.ts' | sed 's|^\./||' | LC_ALL=C sort)
+    if [[ "$vendored_fail" -ne 0 ]]; then
+        exit 1
+    fi
+    echo "Vendored source OK: $vendored_dir matches $vendored_manifest"
+fi
+
 # Every pyproject.toml that ships a uv.lock must have that lock agree with its
 # pins. A lock written before a pin tightened (research/kernels/ once recorded
 # "numpy" and "torch" with no specifier) resolves to versions the manifest no
