@@ -244,10 +244,14 @@ agave.destroy();
 `AgaveError.code` is the supported way to distinguish failures (`not_initialized`,
 `no_model`, `alloc_failed`, `wasm_fetch_failed`, `wasm_invalid`, `download_failed`,
 `gguf_parse`, `unsupported_arch`, `no_vocab`, `tokenizer`, `init_failed`,
-`generate_failed`, `invalid_argument`). Network failures from `fetch` (CORS,
-offline, abort) use `wasm_fetch_failed` / `download_failed`, not a raw `TypeError`.
-`init()` and `loadModel()` accept `ArrayBufferView` and an optional `AbortSignal`.
-Serve `web/` as a static directory after `zig build wasm`.
+`tokenize`, `generate_failed`, `invalid_argument`). Network failures from `fetch`
+(CORS, offline, abort) use `wasm_fetch_failed` / `download_failed`, not a raw
+`TypeError`. `init()` and `loadModel()` accept `ArrayBufferView` and an optional
+`AbortSignal`. Engine state is read, never written: `agave.ready`,
+`agave.hasModel`, and `agave.initMessage`. For a multi-hundred-MB model, fetch it
+yourself with `agave.fetchModel(url, { onProgress })` and hand the buffer to
+`loadModel(buffer)`; a bare `loadModel(url)` gives no progress. Serve `web/` as
+a static directory after `zig build wasm`.
 Forward-pass generation in WASM is still blocked by a Zig wasm32 codegen bug;
 load and tokenize work.
 

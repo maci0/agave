@@ -139,6 +139,8 @@ function friendlyGenerateError(error) {
                 return 'Not enough memory to generate a reply. Try a smaller model.';
             case 'invalid_argument':
                 return 'Generation settings are out of range. Reload the page and try again.';
+            case 'tokenize':
+                return 'That message could not be encoded for this model. Try shorter or plain text.';
             case 'wasm_invalid':
                 return 'The inference engine failed. Reload the page.';
             default:
@@ -158,40 +160,18 @@ function friendlyGenerateError(error) {
     }
     return msg.startsWith('Could not') ? msg : `Could not generate a reply: ${msg}`;
 }
-async function downloadModel(url) {
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`Failed to download model (HTTP ${String(response.status)})`);
-    }
-    const total = Number(response.headers.get('content-length')) || 0;
-    const reader = response.body?.getReader();
-    if (!reader) {
-        return response.arrayBuffer();
-    }
-    const chunks = [];
-    let received = 0;
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-            break;
-        }
-        chunks.push(value);
-        received += value.byteLength;
-        if (total > 0) {
-            const pct = Math.round((received / total) * 100);
-            statusEl.textContent = `Downloading model… ${fmtMb(received)} / ${fmtMb(total)} MB (${String(pct)}%)`;
-        }
-        else {
-            statusEl.textContent = `Downloading model… ${fmtMb(received)} MB`;
-        }
-    }
-    const out = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) {
-        out.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    return out.buffer;
+function downloadModel(url) {
+    return engine.fetchModel(url, {
+        onProgress: ({ received, total }) => {
+            if (total > 0) {
+                const pct = Math.round((received / total) * 100);
+                statusEl.textContent = `Downloading model… ${fmtMb(received)} / ${fmtMb(total)} MB (${String(pct)}%)`;
+            }
+            else {
+                statusEl.textContent = `Downloading model… ${fmtMb(received)} MB`;
+            }
+        },
+    });
 }
 // Drag & drop
 dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
@@ -275,7 +255,7 @@ async function initAndLoad(loadFn, fromUrl) {
     const loadBtn = document.getElementById('load-btn');
     const urlInput = document.getElementById('model-url');
     const sendBtn = document.getElementById('send-btn');
-    const hadModel = Boolean(engine.ctx);
+    const hadModel = engine.hasModel;
     loadBtn.disabled = true;
     loadBtn.setAttribute('aria-busy', 'true');
     loadBtn.textContent = 'Loading…';
@@ -317,7 +297,7 @@ async function initAndLoad(loadFn, fromUrl) {
             urlError.textContent = message;
         }
         // A failed reload must not disable chat if the previous model is still loaded.
-        if (hadModel && engine.ctx) {
+        if (hadModel && engine.hasModel) {
             promptInput.disabled = false;
             sendBtn.disabled = false;
         }
@@ -331,7 +311,7 @@ function restoreEmptyChat() {
     const empty = document.createElement('div');
     empty.id = 'chat-empty';
     empty.className = 'msg empty-hint';
-    empty.textContent = engine.ctx
+    empty.textContent = engine.hasModel
         ? 'Send a prompt.'
         : 'Load a GGUF model above, then send a prompt.';
     chat.append(empty);
@@ -348,7 +328,7 @@ function clearChat() {
         return;
     } // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
     restoreEmptyChat();
-    statusEl.textContent = engine.ctx ? 'Ready' : 'Load a GGUF model to begin';
+    statusEl.textContent = engine.hasModel ? 'Ready' : 'Load a GGUF model to begin';
     announceToSR('Conversation cleared');
     promptInput.focus();
 }
