@@ -65,7 +65,7 @@
 <li>Chats stay on this machine</li>
 </ul>
 <h3>Privacy</h3>
-<p>Prompts and chats stay on this machine. Conversations are in-memory only (cleared on server restart or delete). The system prompt is kept in session storage for this browser tab and is not sent to third parties. No analytics or telemetry.</p>
+<p>Prompts and chats stay on this machine. Conversations are saved to a local file (<code>$XDG_CACHE_HOME/agave/conversations.json</code>, or <code>~/.cache/agave/conversations.json</code>) and are restored on restart; they stay in memory only when the server is started with <code>--no-conv-store</code>. The system prompt is kept in session storage for this browser tab and is not sent to third parties. No analytics or telemetry.</p>
 <h3>Shortcuts</h3>
 <div class="info-row"><span class="info-label">Send</span><span class="info-val"><kbd>Enter</kbd></span></div>
 <div class="info-row"><span class="info-label">New line</span><span class="info-val"><kbd>Shift+Enter</kbd></span></div>
@@ -113,7 +113,7 @@
 <button type="button" class="stop-btn" id="stop-btn" onclick="stopGen()" title="Stop generation" aria-label="Stop generation">Stop</button>
 <span class="toks-counter" id="toks-counter" role="status" aria-label="Generation speed"></span>
 </div>
-<div class="input-hint" id="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop</div>
+<div class="input-hint" id="input-hint">Enter to send &middot; Shift+Enter for new line &middot; Escape to stop &middot; /help for commands</div>
 </form>
 </main>
 </div>
