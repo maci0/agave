@@ -215,6 +215,15 @@ pub const FormattedSize = struct {
     unit: []const u8,
 };
 
+/// Product of `factors`, or null when it overflows. Used for sizes derived
+/// from model metadata, where a wrapped product reads as a plausible but
+/// wrong number rather than failing.
+fn mulAll(factors: []const u64) ?u64 {
+    var acc: u64 = 1;
+    for (factors) |f| acc = std.math.mul(u64, acc, f) catch return null;
+    return acc;
+}
+
 // ── Public Functions ─────────────────────────────────────────────
 
 /// Formats a byte count into a human-readable size with appropriate unit.
@@ -444,12 +453,21 @@ pub const Display = struct {
                 var nb: [16]u8 = undefined;
                 const ns = fmtCompact(&nb, info.ctx_size);
                 // Estimate KV cache memory: ctx * n_kv_heads * head_dim * n_layers * 2 (K and V) * bytes_per_elem
-                const kv_elems: u64 = @as(u64, info.ctx_size) * info.n_kv_heads * info.head_dim * info.n_layers * 2;
-                const kv_bytes: u64 = @intFromFloat(@as(f64, @floatFromInt(kv_elems)) * @as(f64, info.kv_bpe) / 8.0);
-                if (kv_bytes > 0) {
+                // Every factor comes from the model header, so the product is
+                // checked: a crafted file wraps it and the banner would print a
+                // size orders of magnitude off (or drop the KV line).
+                const kv_elems: ?u64 = mulAll(&[_]u64{ info.ctx_size, info.n_kv_heads, info.head_dim, info.n_layers, 2 });
+                const kv_bytes: u64 = if (kv_elems) |e|
+                    @intFromFloat(@as(f64, @floatFromInt(e)) * @as(f64, info.kv_bpe) / 8.0)
+                else
+                    0;
+                if (kv_elems != null and kv_bytes > 0) {
                     const kvs = formatSize(kv_bytes);
                     const kv_label = info.kv_type_name;
                     const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} context \xc2\xb7 KV cache {s} ({d:.1}{s})", .{ ns, kv_label, kvs.val, kvs.unit }) catch "";
+                    p += s.len;
+                } else if (kv_elems == null) {
+                    const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} context \xc2\xb7 KV cache n/a (size overflows)", .{ns}) catch "";
                     p += s.len;
                 } else {
                     const s = std.fmt.bufPrint(line_bufs[n_lines][p..], "{s} context", .{ns}) catch "";
@@ -927,6 +945,14 @@ test "formatSize" {
     const gb = formatSize(3 * 1024 * 1024 * 1024);
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), gb.val, 0.01);
     try std.testing.expectEqualStrings("GB", gb.unit);
+}
+
+test "mulAll reports overflow instead of wrapping" {
+    try std.testing.expectEqual(@as(?u64, 2048 * 4 * 64 * 27 * 2), mulAll(&.{ 2048, 4, 64, 27, 2 }));
+    // 2^32 * 2^32 wraps to 0 unchecked.
+    try std.testing.expectEqual(@as(?u64, null), mulAll(&.{ @as(u64, 1) << 32, @as(u64, 1) << 32 }));
+    // A zero factor is a valid product, not an overflow.
+    try std.testing.expectEqual(@as(?u64, 0), mulAll(&.{ 2048, 0, 64 }));
 }
 
 test "displayWidth ascii" {
