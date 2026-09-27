@@ -1,0 +1,384 @@
+/* Agave design system: the Tailwind 4 theme plus the CSS that cannot be
+   expressed as utilities (markdown bodies, scrollbars, the rosette mask,
+ *  forced-colors and reduced-motion fallbacks).
+ *
+ *  Shared by both chat surfaces. `src/web/app.css` (server UI, embedded by
+ *  server.zig) and `web/shell.css` (browser WASM shell) import this file and
+ *  add their own `@source` roots, so one token set drives both.
+ *
+ *  Values are the reviewed ones from the pre-Tailwind stylesheet: the WCAG
+ *  contrast notes travel with them. Borders meet 1.4.11 (>=3:1) against every
+ *  surface; text, text-2 and text-3 clear 4.5:1 on --elevated (11.5:1, 5.9:1,
+ *  4.8:1) and stay in that order, so the hierarchy cannot invert.
+ */
+@import "tailwindcss" source(none);
+
+@theme {
+  /* Surfaces. Desert-night: warm dark greys, the agave rosette on dark. */
+  --color-background: #1a1714;
+  --color-foreground: #ebe3db;
+  --color-card: #231f1c;
+  --color-card-foreground: #ebe3db;
+  --color-popover: #2c2825;
+  --color-popover-foreground: #ebe3db;
+  --color-muted: #2c2825;
+  --color-muted-foreground: #aba39b;
+  /* Tertiary text: one step below muted-foreground, still 4.8:1 on --popover. */
+  --color-faint: #9a928b;
+  --color-border: #77716d;
+  --color-border-strong: #8a837c;
+  --color-input: #77716d;
+  /* Primary is the amber accent the design already used for every action. */
+  --color-primary: #d4a574;
+  --color-primary-foreground: #1a1714;
+  --color-secondary: #2c2825;
+  --color-secondary-foreground: #ebe3db;
+  --color-accent: #2c2825;
+  --color-accent-foreground: #ebe3db;
+  --color-destructive: #e57373;
+  --color-destructive-foreground: #e8a0a0;
+  --color-success: #8faa7b;
+  --color-ring: #d4a574;
+
+  /* Type scale: five steps, ~1.2 apart, used by every level in the UI. Prose is
+     the base step; chrome (labels, badges, stats) is 2xs/xs/sm in the mono face. */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', 'Noto Sans Arabic', 'Noto Sans CJK JP', 'PingFang SC', 'Hiragino Sans', 'Microsoft YaHei', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace;
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-base--line-height: 1.6;
+  --text-lg: 18px;
+
+  /* One radius ramp, deliberately shallow so the UI reads as an instrument
+     panel. xs inline marks, sm small controls, md cards and inputs, lg
+     messages and primary buttons, pill only for the circular image remove. */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+
+  /* Layout constants that both surfaces and the components must agree on. */
+  --container-prose: 860px;
+  --spacing-sidebar: 260px;
+  --breakpoint-drawer: 700px;
+
+  --animate-pulse-soft: pulse-soft 1.2s ease-in-out infinite;
+
+  /* The agave rosette, inlined so both surfaces and the favicon stay in step. */
+  --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-56 -72 112 88' fill='none' stroke='%23000' stroke-linecap='round'%3E%3Cpath stroke-width='6' d='M0-70Q5-35 0 0'/%3E%3Cpath stroke-width='5' d='M0 0Q-20-30-15-65'/%3E%3Cpath stroke-width='5' d='M0 0Q20-30 15-65'/%3E%3Cpath stroke-width='4.5' d='M0 0Q-30-20-35-50'/%3E%3Cpath stroke-width='4.5' d='M0 0Q30-20 35-50'/%3E%3Cpath stroke-width='4' d='M0 5Q-35-5-48-25'/%3E%3Cpath stroke-width='4' d='M0 5Q35-5 48-25'/%3E%3Cpath stroke-width='3.5' d='M0 10Q-38 5-55-8'/%3E%3Cpath stroke-width='3.5' d='M0 10Q38 5 55-8'/%3E%3C/svg%3E");
+
+  @keyframes pulse-soft {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.6;
+    /* Both shells are a fixed-viewport app: the log scrolls, the page does not. */
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  /* One focus ring for every control. The pre-Tailwind sheet listed 17
+     selectors; :where() keeps the specificity at 0 so a component utility
+     still wins where it deliberately differs. */
+  :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-primary) 30%, transparent);
+  }
+}
+
+@layer components {
+  /* The agave rosette (docs/logo.svg), drawn as a mask so it takes the color
+     of whatever it sits in, like the icon set. */
+  .mark {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 22px;
+    height: 18px;
+    background: currentColor;
+    color: var(--color-success);
+    -webkit-mask: var(--mark) center / contain no-repeat;
+    mask: var(--mark) center / contain no-repeat;
+  }
+
+  .mark-lg {
+    display: block;
+    width: 56px;
+    height: 44px;
+    margin: 0 auto 16px;
+  }
+
+  /* Assistant responses are sanitized HTML (marked + DOMPurify), so their
+     typography cannot be composed from utilities. Everything the model can
+     emit is styled here instead. */
+  .agave-prose {
+    overflow-wrap: break-word;
+    word-break: break-word;
+    line-break: loose;
+  }
+
+  .agave-prose p {
+    margin: 0 0 10px;
+  }
+
+  .agave-prose p:last-child {
+    margin: 0;
+  }
+
+  .agave-prose ul,
+  .agave-prose ol {
+    margin: 8px 0;
+    margin-inline-start: 24px;
+  }
+
+  .agave-prose li {
+    margin: 4px 0;
+  }
+
+  .agave-prose blockquote {
+    border-inline-start: 3px solid var(--color-primary);
+    padding-inline-start: 16px;
+    color: var(--color-muted-foreground);
+    margin: 12px 0;
+    font-style: italic;
+  }
+
+  .agave-prose h1,
+  .agave-prose h2,
+  .agave-prose h3 {
+    color: var(--color-primary);
+    margin: 16px 0 8px;
+    font-weight: 600;
+  }
+
+  .agave-prose h1 { font-size: 1.4em; }
+  .agave-prose h2 { font-size: 1.2em; }
+  .agave-prose h3 { font-size: 1.1em; }
+
+  .agave-prose a {
+    color: var(--color-primary);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in oklab, var(--color-primary) 40%, transparent);
+    text-underline-offset: 2px;
+  }
+
+  .agave-prose a:hover {
+    text-decoration-color: var(--color-primary);
+  }
+
+  .agave-prose code:not(pre code) {
+    font-family: var(--font-mono);
+    background: var(--color-card);
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    font-size: 0.87em;
+    color: var(--color-primary);
+  }
+
+  .agave-prose pre {
+    background: var(--color-background);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    overflow-x: auto;
+    margin: 12px 0;
+    position: relative;
+  }
+
+  .agave-prose pre code {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    background: none;
+    padding: 0;
+    border: none;
+    color: inherit;
+  }
+
+  /* kimbie-dark token lifts: two ramps measure below 4.5:1 on --background
+     (#98676a 3.82:1, #dc3958 4.05:1). Lightened within their hue to 5.9:1 and
+     5.7:1. These selectors outrank the highlight.js theme (`.agave-prose .hljs-*`)
+     so they still win after that stylesheet lands on the first code block. */
+  .agave-prose pre .hljs-function,
+  .agave-prose pre .hljs-keyword,
+  .agave-prose pre .hljs-selector-tag {
+    color: #c08488;
+  }
+
+  .agave-prose pre .hljs-meta,
+  .agave-prose pre .hljs-name,
+  .agave-prose pre .hljs-regexp,
+  .agave-prose pre .hljs-selector-class,
+  .agave-prose pre .hljs-selector-id,
+  .agave-prose pre .hljs-tag,
+  .agave-prose pre .hljs-template-variable,
+  .agave-prose pre .hljs-variable {
+    color: #e56b82;
+  }
+
+  .agave-prose .table-wrap {
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+
+  .agave-prose table {
+    border-collapse: collapse;
+    margin: 12px 0;
+    width: 100%;
+  }
+
+  .agave-prose .table-wrap table {
+    margin: 0;
+  }
+
+  .agave-prose th,
+  .agave-prose td {
+    border: 1px solid var(--color-border);
+    padding: 8px 12px;
+    text-align: start;
+  }
+
+  .agave-prose th {
+    background: var(--color-card);
+    font-weight: 600;
+  }
+
+  /* Chain-of-thought block, produced by the markdown pipeline from <think>. */
+  .agave-prose .think-block {
+    margin: 8px 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .agave-prose .think-block summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    background: var(--color-popover);
+    color: var(--color-faint);
+    font-size: 0.85em;
+    user-select: none;
+  }
+
+  .agave-prose .think-block summary:hover {
+    color: var(--color-muted-foreground);
+    background: var(--color-border);
+  }
+
+  .agave-prose .think-block summary::marker {
+    color: var(--color-primary);
+  }
+
+  .agave-prose .think-block[open] summary {
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .agave-prose .think-content {
+    padding: 12px;
+    color: var(--color-faint);
+    font-size: 0.9em;
+    line-height: 1.5;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  .agave-prose kbd {
+    font-family: var(--font-mono);
+    background: var(--color-card);
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--color-border);
+    font-size: var(--text-xs);
+  }
+}
+
+@layer utilities {
+  /* Thin scrollbars in the surface border color, Firefox and WebKit alike. */
+  .agave-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+
+  .agave-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .agave-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .agave-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: var(--radius-xs);
+  }
+
+  .agave-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-border-strong);
+  }
+
+  /* Secondary actions stay out of the way until the row or bubble is hovered,
+     and are always visible where hover does not exist. */
+  .agave-reveal {
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  :hover > .agave-reveal,
+  :focus-within > .agave-reveal,
+  .agave-reveal:focus-visible {
+    opacity: 1;
+  }
+}
+
+@media (hover: none) {
+  .agave-reveal {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agave-reveal {
+    transition: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .mark {
+    background: CanvasText;
+  }
+}
