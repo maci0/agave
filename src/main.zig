@@ -45,6 +45,7 @@ const kv_evict = @import("ops/kv_evict.zig");
 const grammar_mod = @import("grammar.zig");
 const TieredKvCache = @import("kvcache/tiered.zig").TieredKvCache;
 const pull = @import("pull.zig");
+const config = @import("config.zig");
 const image = @import("image.zig");
 const sim_clock = @import("sim_clock.zig");
 
@@ -67,9 +68,9 @@ const tmp_path_buf_size = 256;
 /// where a minute of frames at 2fps would sit in RAM until the process exits.
 /// Returns a slice of `buf` or a static string; the caller owns neither.
 fn videoFrameBase(buf: []u8) []const u8 {
-    if (pull.getenv("TMPDIR")) |dir| return dir;
-    if (pull.getenv("XDG_CACHE_HOME")) |dir| return dir;
-    const home = pull.getenv("HOME") orelse return default_tmp_base;
+    if (config.getenv("TMPDIR")) |dir| return dir;
+    if (config.getenv("XDG_CACHE_HOME")) |dir| return dir;
+    const home = config.getenv("HOME") orelse return default_tmp_base;
     return std.fmt.bufPrint(buf, "{s}/.cache", .{home}) catch default_tmp_base;
 }
 
@@ -1100,7 +1101,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // Validate port range (1-65535, u16 parse already enforces upper bound).
     // CLI --port wins over AGAVE_PORT. Empty AGAVE_PORT is unset (Compose `${VAR:-}`).
     const port_cli = res.option("port");
-    const port_env = pull.nonemptyEnv(g_environ.get("AGAVE_PORT"));
+    const port_env = config.nonemptyEnv(g_environ.get("AGAVE_PORT"));
     const port_raw = port_cli orelse port_env;
     const port_label: []const u8 = if (port_cli != null) "--port" else "AGAVE_PORT";
     const parsed_port: u16 = blk: {
@@ -1152,12 +1153,12 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         }
         if (res.option("host") != null) {
             eprint("Warning: --host has no effect without --serve\n", .{});
-        } else if (pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) != null) {
+        } else if (config.nonemptyEnv(g_environ.get("AGAVE_HOST")) != null) {
             eprint("Warning: AGAVE_HOST has no effect without --serve\n", .{});
         }
         if (res.option("api-key") != null) {
             eprint("Warning: --api-key has no effect without --serve\n", .{});
-        } else if (pull.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
+        } else if (config.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
             eprint("Warning: AGAVE_API_KEY has no effect without --serve\n", .{});
         }
         if (res.option("rate-limit-rpm") != null or res.option("rate-limit-tpm") != null) {
@@ -1179,7 +1180,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         if (res.flag("model-info"))
             eprint("Warning: --model-info exits before server starts; remove --serve or --model-info\n", .{});
         // --api-key appears in `ps`/`/proc/*/cmdline`; nonempty AGAVE_API_KEY wins when both are set.
-        if (res.option("api-key") != null and pull.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
+        if (res.option("api-key") != null and config.nonemptyEnv(g_environ.get("AGAVE_API_KEY")) != null) {
             eprint("Warning: both --api-key and AGAVE_API_KEY set; using AGAVE_API_KEY (CLI value ignored)\n", .{});
         } else if (res.option("api-key") != null) {
             eprint("Warning: --api-key is visible in process listings; prefer AGAVE_API_KEY\n", .{});
@@ -1313,7 +1314,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
     // (entire 127.0.0.0/8), not only the string forms "127.0.0.1"/"localhost".
     // CLI --host wins over AGAVE_HOST. Empty AGAVE_HOST is unset.
     const bind_host: [4]u8 = blk: {
-        const host_str = res.option("host") orelse pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse break :blk [4]u8{ 127, 0, 0, 1 };
+        const host_str = res.option("host") orelse config.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse break :blk [4]u8{ 127, 0, 0, 1 };
         if (std.mem.eql(u8, host_str, "0.0.0.0") or std.mem.eql(u8, host_str, "0")) break :blk [4]u8{ 0, 0, 0, 0 };
         if (std.mem.eql(u8, host_str, "127.0.0.1") or std.mem.eql(u8, host_str, "localhost")) break :blk [4]u8{ 127, 0, 0, 1 };
         var parts: [4]u8 = undefined;
@@ -1333,7 +1334,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         // Non-loopback bind without a key exposes the full inference API.
         const is_loopback = bind_host[0] == 127;
         if (res.flag("serve") and !is_loopback and key == null) {
-            const host_str = res.option("host") orelse pull.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse "127.0.0.1";
+            const host_str = res.option("host") orelse config.nonemptyEnv(g_environ.get("AGAVE_HOST")) orelse "127.0.0.1";
             eprint("Error: --host {s} requires --api-key (or AGAVE_API_KEY) for non-loopback binds\n", .{host_str});
             eprint("  Use --host 127.0.0.1 for local-only access without auth.\n", .{});
             std.process.exit(2);
@@ -1420,7 +1421,7 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         .host = bind_host,
         .api_key = api_key,
         .debug = res.flag("debug"),
-        .df2_debug = pull.envFlagIsOne(g_environ.get("AGAVE_DF2_DEBUG")),
+        .df2_debug = config.envFlagIsOne(g_environ.get("AGAVE_DF2_DEBUG")),
         .json = json_mode,
         .model_info = res.flag("model-info"),
         .benchmark = res.flag("benchmark"),
@@ -1493,66 +1494,25 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             break :blk if (dm != null) SpecMode.ddtree else SpecMode.none;
         },
         .draft_layers = parseU32(res.option("draft-layers"), "draft-layers"),
-        .pflash_alpha = blk: {
-            if (res.option("pflash-alpha")) |s| {
-                const v = std.fmt.parseFloat(f32, s) catch {
-                    eprint("Error: --pflash-alpha must be a number\n", .{});
-                    std.process.exit(2);
-                };
-                if (v < 0.0 or v > 2.0) {
-                    eprint("Error: --pflash-alpha must be in [0.0, 2.0] (got {d:.2})\n", .{v});
-                    std.process.exit(2);
-                }
-                break :blk v;
-            }
-            break :blk 0.85;
-        },
+        .pflash_alpha = floatOrExit(res.option("pflash-alpha"), "pflash-alpha", 0.85, 0.0, 2.0),
         .pflash_block_size = blk: {
             const v = parseU32(res.option("pflash-block-size"), "pflash-block-size") orelse 64;
             if (v == 0) {
-                eprint("Warning: --pflash-block-size must be > 0, using default 64\n", .{});
-                break :blk 64;
+                eprint("Error: --pflash-block-size must be >= 1\n", .{});
+                std.process.exit(2);
             }
             break :blk v;
         },
         .pflash_scorer_path = res.option("pflash-scorer"),
         .spec_token_map = res.option("spec-token-map"),
         .dir_steering_file = res.option("dir-steering-file"),
-        .dir_steering_ffn = blk: {
-            if (res.option("dir-steering-ffn")) |s| {
-                break :blk std.fmt.parseFloat(f32, s) catch {
-                    eprint("Error: --dir-steering-ffn must be a number\n", .{});
-                    std.process.exit(2);
-                };
-            }
+        .dir_steering_ffn = parseF32(res.option("dir-steering-ffn"), "dir-steering-ffn") orelse
             // Default: 1.0 when a steering file is provided, 0 otherwise
-            break :blk if (res.option("dir-steering-file") != null) @as(f32, 1.0) else @as(f32, 0);
-        },
-        .dir_steering_attn = blk: {
-            if (res.option("dir-steering-attn")) |s| {
-                break :blk std.fmt.parseFloat(f32, s) catch {
-                    eprint("Error: --dir-steering-attn must be a number\n", .{});
-                    std.process.exit(2);
-                };
-            }
-            break :blk 0;
-        },
-        .diffusion_steps = @max(1, parseU32(res.option("diffusion-steps"), "diffusion-steps") orelse 16),
-        .diffusion_canvas = @max(1, parseU32(res.option("diffusion-canvas"), "diffusion-canvas") orelse 256),
-        .diffusion_confidence = blk: {
-            if (res.option("diffusion-confidence")) |s| {
-                const v = std.fmt.parseFloat(f32, s) catch {
-                    eprint("Error: --diffusion-confidence must be a number\n", .{});
-                    std.process.exit(2);
-                };
-                if (v < 0.0 or v > 1.0) {
-                    eprint("Error: --diffusion-confidence must be in [0.0, 1.0] (got {d:.2})\n", .{v});
-                    std.process.exit(2);
-                }
-                break :blk v;
-            }
-            break :blk 0.5;
-        },
+            (if (res.option("dir-steering-file") != null) @as(f32, 1.0) else @as(f32, 0)),
+        .dir_steering_attn = parseF32(res.option("dir-steering-attn"), "dir-steering-attn") orelse 0,
+        .diffusion_steps = countOrExit(res.option("diffusion-steps"), "diffusion-steps", 16),
+        .diffusion_canvas = countOrExit(res.option("diffusion-canvas"), "diffusion-canvas", 256),
+        .diffusion_confidence = floatOrExit(res.option("diffusion-confidence"), "diffusion-confidence", 0.5, 0.0, 1.0),
         .ssd_streaming = res.flag("ssd-streaming"),
         .vram_budget_auto = if (res.option("vram-budget")) |raw| std.mem.eql(u8, raw, "auto") else false,
         .vram_budget_policy = blk: {
@@ -1659,7 +1619,7 @@ fn parseUintLabel(comptime T: type, s: ?[]const u8, label: []const u8) ?T {
 
 /// Env wins when nonempty; empty/whitespace env is unset so a CLI value still applies.
 fn preferredSecret(env_val: ?[]const u8, cli_val: ?[]const u8) ?[]const u8 {
-    return pull.nonemptyEnv(env_val) orelse cli_val;
+    return config.nonemptyEnv(env_val) orelse cli_val;
 }
 
 /// Trimmed prompt, or null when absent/whitespace-only (empty piped stdin is not a prompt).
@@ -1879,6 +1839,36 @@ fn parseF32(s: ?[]const u8, comptime flag: []const u8) ?f32 {
     };
     if (!std.math.isFinite(val)) {
         eprint("Error: --" ++ flag ++ " must be a finite number, got '{s}'\n", .{str});
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(2);
+    }
+    return val;
+}
+
+/// Range check a float option. NaN compares false against every bound, so a
+/// bare `<`/`>` test would accept `--pflash-alpha nan` and silently disable the
+/// feature it gates; `inFloatRange` is the guard, `parseF32` rejects the
+/// infinities that would otherwise saturate every comparison.
+fn floatOrExit(s: ?[]const u8, comptime flag: []const u8, default: f32, lo: f32, hi: f32) f32 {
+    const val = parseF32(s, flag) orelse return default;
+    if (!inFloatRange(val, lo, hi)) {
+        eprint("Error: --" ++ flag ++ " must be in [{d:.1}, {d:.1}] (got {d:.2})\n", .{ lo, hi, val });
+        eprint("Run 'agave --help' for more information.\n", .{});
+        std.process.exit(2);
+    }
+    return val;
+}
+
+fn inFloatRange(val: f32, lo: f32, hi: f32) bool {
+    return !std.math.isNan(val) and val >= lo and val <= hi;
+}
+
+/// Count option that must be at least 1. Rejects 0 instead of clamping it, so
+/// the value a run actually used is always the value the operator asked for.
+fn countOrExit(s: ?[]const u8, comptime flag: []const u8, default: u32) u32 {
+    const val = parseU32(s, flag) orelse return default;
+    if (val == 0) {
+        eprint("Error: --" ++ flag ++ " must be >= 1\n", .{});
         eprint("Run 'agave --help' for more information.\n", .{});
         std.process.exit(2);
     }
@@ -5805,6 +5795,17 @@ test "preferredSecret empty env does not override CLI" {
     try std.testing.expectEqualStrings("key", preferredSecret("  key  ", "cli").?);
 }
 
+test "inFloatRange rejects NaN and out-of-range values" {
+    // NaN fails every `<`/`>` comparison, so it needs its own test.
+    try std.testing.expect(!inFloatRange(std.math.nan(f32), 0.0, 2.0));
+    try std.testing.expect(!inFloatRange(-0.01, 0.0, 2.0));
+    try std.testing.expect(!inFloatRange(2.01, 0.0, 2.0));
+    try std.testing.expect(inFloatRange(0.0, 0.0, 2.0));
+    try std.testing.expect(inFloatRange(2.0, 0.0, 2.0));
+    try std.testing.expect(inFloatRange(0.5, 0.0, 1.0));
+    try std.testing.expect(!inFloatRange(std.math.inf(f32), 0.0, 2.0));
+}
+
 test "nonemptyPrompt treats whitespace as absent" {
     try std.testing.expect(nonemptyPrompt(null) == null);
     try std.testing.expect(nonemptyPrompt("") == null);
@@ -5878,6 +5879,9 @@ test "fuzz: main.zig pure functions" {
                 _ = &jsonNeedsPrompt;
                 _ = &eprintJsonRequiresPrompt;
                 _ = &parseF32;
+                _ = &floatOrExit;
+                _ = &inFloatRange;
+                _ = &countOrExit;
                 _ = &noColorRequested;
                 _ = &rejectEqualsOnFlag;
                 _ = &rejectUnknownOptions;

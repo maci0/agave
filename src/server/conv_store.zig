@@ -15,6 +15,7 @@ const json = @import("json.zig");
 const term = @import("../term.zig");
 const Message = @import("../chat_template.zig").Message;
 const Role = @import("../chat_template.zig").Role;
+const config = @import("../config.zig");
 
 /// Current on-disk schema. Bump when the envelope is no longer readable.
 pub const format_version: u32 = 1;
@@ -69,8 +70,8 @@ pub const ConvView = struct {
 /// Default path: `$XDG_CACHE_HOME/agave/conversations.json`, else
 /// `$HOME/.cache/agave/conversations.json`. Null if neither env var is set.
 pub fn defaultPath(buf: []u8) ?[]u8 {
-    const xdg = if (std.c.getenv("XDG_CACHE_HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
-    const home = if (std.c.getenv("HOME")) |c| std.mem.trim(u8, std.mem.span(c), " \t\r\n") else null;
+    const xdg = config.getenv("XDG_CACHE_HOME");
+    const home = config.getenv("HOME");
     return formatDefaultPath(buf, xdg, home);
 }
 

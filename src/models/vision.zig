@@ -41,6 +41,7 @@ const quant = @import("../ops/quant.zig");
 const math_ops = @import("../ops/math.zig");
 const ThreadPool = @import("../thread_pool.zig").ThreadPool;
 const model_mod = @import("model.zig");
+const config = @import("../config.zig");
 
 const Backend = backend_mod.Backend;
 const Format = format_mod.Format;
@@ -96,13 +97,6 @@ const default_norm_eps: f32 = 1e-6;
 
 const gelu_sqrt_2_over_pi = math_ops.sqrt_2_over_pi;
 const gelu_cubic_coeff = math_ops.gelu_coeff;
-
-/// True when the AGAVE_VISION_DEBUG env var enables debug buffer dumping.
-/// Docs promise "=1"; trim so `1` with surrounding whitespace still matches.
-/// "0"/empty/other values stay off.
-fn visionDebugEnabled(val: []const u8) bool {
-    return std.mem.eql(u8, std.mem.trim(u8, val, " \t\r\n"), "1");
-}
 
 /// Vision encoder architecture variant, auto-detected from available tensors.
 const VisionVariant = enum {
@@ -359,9 +353,7 @@ pub const VisionEncoder = struct {
 
         // Debug mode requires AGAVE_VISION_DEBUG=1 exactly (docs promise "=1",
         // so "0"/empty must not turn buffer dumping on).
-        const vision_debug = visionDebugEnabled(std.mem.span(
-            std.c.getenv("AGAVE_VISION_DEBUG") orelse "",
-        ));
+        const vision_debug = config.envFlagIsOne(config.getenv("AGAVE_VISION_DEBUG"));
 
         var self = VisionEncoder{
             .debug = vision_debug,
@@ -1914,14 +1906,6 @@ fn applyQwenVisionRope(buf: []f32, np: usize, nh: usize, hd: usize, pps: usize, 
 
 // ── Tests ─────────────────────────────────────────────────────────
 
-test "visionDebugEnabled requires trimmed 1" {
-    try std.testing.expect(!visionDebugEnabled(""));
-    try std.testing.expect(!visionDebugEnabled("0"));
-    try std.testing.expect(!visionDebugEnabled("true"));
-    try std.testing.expect(visionDebugEnabled("1"));
-    try std.testing.expect(visionDebugEnabled(" 1 "));
-}
-
 test "validateDims rejects degenerate header dimensions" {
     const good: VisionEncoder.Dims = .{
         .patch_size = default_patch_size,
@@ -2215,7 +2199,6 @@ test "fuzz: all vision functions" {
                 _ = &VisionEncoder.init;
                 _ = &VisionEncoder.deinit;
                 _ = &VisionEncoder.encode;
-                _ = &visionDebugEnabled;
             }
         }
     }.f, .{});
