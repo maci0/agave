@@ -440,7 +440,7 @@ Supported image formats over HTTP: PNG only (JPEG is rejected; convert to PNG fi
 
 ## Tool Calling
 
-OpenAI-compatible function/tool calling. Tools are injected into the system prompt; the model decides when to call them. Parsed `<tool_call>` payloads whose `name` is not in the request `tools` list or the process-level registry are dropped (the response falls back to plain text if nothing remains). Tool-result messages are capped at 16 KiB and chat-template control tokens in user/tool content are stripped so they cannot close a role turn.
+OpenAI-compatible function/tool calling. Tools are injected into the system prompt; the model decides when to call them. Parsed `<tool_call>` payloads whose `name` is not in the request `tools` list or the process-level registry are dropped (the response falls back to plain text if nothing remains). Tool-result messages are capped at 16 KiB and chat-template control tokens in user, assistant, and tool content are stripped so they cannot close a role turn. Assistant turns are stripped because they hold earlier model output, which an injection can steer the model into emitting role markers.
 
 **Request with tools:**
 ```bash
