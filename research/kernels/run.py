@@ -139,7 +139,7 @@ def cmd_coverage(args: list[str]):
 def delegate(script: str, args: list[str]):
     """Delegate to a sub-script, forwarding args."""
     cmd = [sys.executable, str(RESEARCH_DIR / script), *args]
-    sys.exit(subprocess.run(cmd, cwd=str(RESEARCH_DIR)).returncode)
+    sys.exit(subprocess.run(cmd, cwd=str(RESEARCH_DIR), check=False).returncode)
 
 
 COMMANDS = {

@@ -39,6 +39,25 @@ select = [
     "ICN",  # import conventions
     "LOG",  # flake8-logging
     "G",    # flake8-logging-format
+    "PLE",  # pylint errors
+    "PLW",  # pylint warnings: unchecked subprocess exit, loop-var reuse, globals
+    # flake8-bandit, code by code. S603 (subprocess) and S607 (partial
+    # executable path) are left off: every call in this tree runs a
+    # repo-local binary or a test harness under a developer's control, so
+    # the check is advisory there and would only ever be suppressed at
+    # each site. The rest are real defect classes and the tree passes them.
+    "S101", # assert used where a disabled-under -O check would vanish
+    "S105", # hardcoded password
+    "S106", # hardcoded password in argument
+    "S110", # try/except/pass swallowing a failure
+    "S112", # try/except/continue swallowing a failure
+    "S301", # pickle deserialization of untrusted data
+    "S310", # urlopen of an unaudited URL scheme
+    "S324", # insecure hash function
+    "S501", # request sending verify=False
+    "S506", # yaml.load without SafeLoader
+    "S602", # popen(shell=True)
+    "S608", # SQL built by string formatting
 ]
 ignore = [
     # Single-line `if cond: return x` early returns are the house style in the

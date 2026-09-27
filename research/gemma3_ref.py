@@ -48,7 +48,7 @@ def read_val(f, vtype):
 def parse_gguf(path):
     f = open(path, 'rb')  # noqa: SIM115 - returned to the caller, which closes it
     magic = f.read(4)
-    assert magic == b'GGUF', f"Not a GGUF file: {magic}"
+    if magic != b'GGUF': raise ValueError(f"Not a GGUF file: {magic}")
     n_tensors = struct.unpack('<Q', f.read(8))[0]
     n_kv = struct.unpack('<Q', f.read(8))[0]
 

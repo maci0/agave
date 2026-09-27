@@ -533,7 +533,7 @@ def run_model_info(
     )
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         if proc.returncode != 0:
             result.status = "fail"
             result.error_message = _truncate(proc.stdout + proc.stderr, 500)
@@ -610,7 +610,7 @@ def run_inference(
     )
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         result.exit_code = proc.returncode
 
         if proc.returncode != 0:
@@ -708,7 +708,7 @@ def run_bench(backend: str, timeout: int) -> BenchResult:
     result = BenchResult(backend=backend, status="error")
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         result.raw_output = proc.stdout + proc.stderr
         result.status = "pass" if proc.returncode == 0 else "fail"
         if proc.returncode != 0:
@@ -729,8 +729,8 @@ def _parse_bench_output(output: str) -> dict:
     metrics = {}
     current_section = "general"
 
-    for line in output.splitlines():
-        line = line.strip()
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
         if not line:
             continue
 
@@ -801,7 +801,7 @@ def run_smoke(
     )
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         result.exit_code = proc.returncode
 
         if proc.returncode < 0:
@@ -860,7 +860,7 @@ def run_smoke(
 def run_zig_tests(timeout: int) -> tuple[str, int]:
     cmd = ["zig", "build", "test"]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(AGAVE_ROOT))
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=str(AGAVE_ROOT), check=False)
         return proc.stdout + proc.stderr, proc.returncode
     except subprocess.TimeoutExpired:
         return f"Timed out after {timeout}s", 1
@@ -955,7 +955,7 @@ def profile_with_instruments(
     ]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30, check=False)
         if proc.returncode == 0 and trace_path.exists():
             return trace_path
         console.print(f"  [red]Instruments failed: {_truncate(proc.stderr, 200)}[/]")
@@ -1253,8 +1253,8 @@ def print_bench_table(results: list[BenchResult]) -> None:
                 table.add_row(key, f"{m['value']:.2f}", m["unit"], bw_str)
             console.print(table)
         else:
-            for line in br.raw_output.splitlines():
-                line = line.strip()
+            for raw_line in br.raw_output.splitlines():
+                line = raw_line.strip()
                 if line:
                     console.print(f"  {line}")
 
@@ -1521,7 +1521,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    global AGAVE_BIN
+    # The command builders below read AGAVE_BIN as a module global; threading
+    # the override through every builder would touch the whole file for one
+    # flag.
+    global AGAVE_BIN  # noqa: PLW0603 - one override, read by the builders
 
     parser = build_parser()
     args = parser.parse_args()
