@@ -23,10 +23,10 @@ bayesian = [
 
 [package.metadata]
 requires-dist = [
-    { name = "gguf", specifier = ">=0.18.0" },
-    { name = "numpy" },
-    { name = "optuna", marker = "extra == 'bayesian'" },
-    { name = "torch" },
+    { name = "gguf", specifier = "==0.18.0" },
+    { name = "numpy", specifier = "==2.4.3" },
+    { name = "optuna", marker = "extra == 'bayesian'", specifier = "==4.8.0" },
+    { name = "torch", specifier = "==2.10.0" },
 ]
 provides-extras = ["bayesian"]
 

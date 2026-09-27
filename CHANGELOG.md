@@ -53,6 +53,12 @@ must still appear under **Changed** or **Breaking** below. See
   interrupted run no longer re-bills every completed call.
 
 ### Changed
+- `scripts/check-pins.sh` also verifies that `tests/uv.lock` and
+  `research/kernels/uv.lock` still agree with their `pyproject.toml`
+  (`uv lock --check`, skipped when uv is not on PATH). The research lock had
+  drifted: it recorded `gguf >=0.18.0` and unpinned `numpy` and `torch` while
+  the manifest pinned exact versions, so `uv sync --frozen` there resolved from
+  a lock no longer matching the pins.
 - The Python lint gate pins ruff. `ruff.toml` sets `required-version`, CI
   fetches that exact version through `uvx`, and `scripts/check-pins.sh` fails
   when the two disagree. Previously `uvx ruff` resolved whatever PyPI served,

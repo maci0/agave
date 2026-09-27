@@ -185,3 +185,23 @@ if [[ "$engines_bun" != "$bun_pin" ]]; then
     exit 1
 fi
 echo "Bun pin OK: $bun_pin (packageManager, engines.bun, ci.yml setup-bun)"
+
+# Every pyproject.toml that ships a uv.lock must have that lock agree with its
+# pins. A lock written before a pin tightened (research/kernels/ once recorded
+# "numpy" and "torch" with no specifier) resolves to versions the manifest no
+# longer allows, and `uv sync --frozen` then installs what the lock says rather
+# than what the manifest pins. `uv lock --check` re-resolves from the lock, so
+# it needs no network. Dirs with no lock (research/kernels/tilelang installs
+# torch from a hardware-specific index) are out of scope: nothing to compare.
+if ! command -v uv >/dev/null 2>&1; then
+    echo "check-pins: uv not on PATH, skipping the uv.lock freshness check"
+else
+    for dir in tests research/kernels; do
+        [[ -f "$dir/pyproject.toml" && -f "$dir/uv.lock" ]] || continue
+        if ! (cd "$dir" && uv lock --check >/dev/null 2>&1); then
+            echo "check-pins: $dir/uv.lock disagrees with $dir/pyproject.toml; run 'uv lock' in $dir" >&2
+            exit 1
+        fi
+    done
+    echo "uv lock OK: tests/uv.lock, research/kernels/uv.lock match their pyproject.toml"
+fi

@@ -22,7 +22,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | CUDA kernel sources under `src/backend/kernels/cuda/` | `scripts/check-shader-artifacts.sh --ptx-only` (then regenerate with `zig build ptx -Dcuda-sm=sm_120` if it drifts) |
 | WASM / `src/wasm_entry.zig` / `web/` | `zig build wasm` |
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
-| `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, and the ruff and bun versions must agree) |
+| `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, the ruff and bun versions, and the committed `uv.lock` files must agree) |
 | Built-in chat UI TypeScript | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
