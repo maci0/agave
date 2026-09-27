@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.3.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.4.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,8 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.4.0] - 2026-09-27
 
 ### Breaking
 - `--kv-tiers` now refuses to start on a discrete GPU:
@@ -1184,6 +1186,7 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.3.0...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/maci0/agave/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/maci0/agave/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/maci0/agave/releases/tag/v0.2.0
