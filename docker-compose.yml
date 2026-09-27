@@ -55,6 +55,7 @@ services:
       #   docker run --rm --entrypoint conv-store-backup.sh \
       #     -v agave-cache:/home/agave/.cache:ro -v "$PWD/backups:/backups" \
       #     -e AGAVE_BACKUP_DIR=/backups agave:local backup
+      # and schedule the same command with `check` to alert on a stopped job.
       - ${AGAVE_CACHE_DIR:-agave-cache}:/home/agave/.cache
     # ENTRYPOINT is already: agave --host 0.0.0.0
     command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]

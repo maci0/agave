@@ -54,12 +54,20 @@ Other verified properties, so a future pass leaves them alone:
 | Host or instance loss, backups current | last server save | seconds to restore a small file | Store is capped at 64 MiB on load |
 | `docker compose down -v` | the whole store | n/a | Deletes the volume |
 | Malicious or accidental deletion | last backup taken | same | Only if backups were taken |
+| Logical corruption (a bad build writing a wrong but well-formed store) | the interval between backups | seconds to restore | `verify` checks structure, not meaning; see below |
 | Bad deploy | none expected | n/a | The on-disk envelope is version 1 and validated on load; an unreadable version is quarantined, not silently reinterpreted |
 
 RPO is "last server save", not "last token": the server persists on conversation
 mutations, so a crash mid-generation loses at most the tokens of the turn in
 flight. Schedule the backup at whatever interval matches how much an in-flight
 turn costs.
+
+There is no point-in-time recovery beyond the backup tier. Each save replaces
+the live file, so the tier is the only history. A store that is valid JSON,
+carries envelope version 1, and has balanced braces but is *wrong* (a title
+mangled, a message attributed to the wrong conversation) passes `verify` and
+will be copied into the next backup, so backup frequency is the RPO for that
+class of corruption. Keep the frequency low enough for that to be tolerable.
 
 ## Back up
 
@@ -71,17 +79,55 @@ scripts/conv-store-backup.sh backup    # copy + verify + prune old
 `backup` resolves the path the same way the server does, copies through a
 temporary file and renames (so a killed backup never leaves a partial file
 that a later restore would install), verifies the copy, also copies a
-`.corrupt` store when one exists, and prunes to `AGAVE_KEEP` (default 14)
-backups, newest first, never below one. It exits nonzero on every failure; it
-has no quiet failure mode.
+`.corrupt` store when one exists, and prunes. It exits nonzero on every
+failure; it has no quiet failure mode.
+
+Retention has two tiers, because the three kinds of file in the backup
+directory are not interchangeable:
+
+| Kind | Name | Retained by | Default |
+|---|---|---|---|
+| Dated backup | `conversations-<stamp>.json` | `AGAVE_KEEP` | 14 |
+| Quarantined store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-prerestore-<stamp>.json` | `AGAVE_KEEP_SNAPSHOT` | 5 |
+
+Rotation of dated backups never touches the snapshot tier: a quarantined store
+is the only remaining copy of a file the server could not parse, and a
+pre-restore snapshot is the only undo for a restore installed by mistake.
+Pruning matches the exact names above, so it never deletes a file this script
+did not create.
 
 Destination is `AGAVE_BACKUP_DIR`, default `$HOME/.agave-backups`. **Set it to
 a different filesystem than the cache directory.** A backup on the same disk
 protects against a bad save, not against losing the disk, which is the case
-that matters.
+that matters, so `backup` refuses to run when both resolve to the same
+filesystem (`df -P` device) and names the device. `AGAVE_ALLOW_SAME_FS=1`
+overrides the refusal when that tradeoff is deliberate, for instance while
+testing. The check is filesystem-level, not disk-level: two directories on
+different partitions of one disk pass it and do not survive losing the disk.
 
 Put it on a schedule (cron, systemd timer, whatever the host runs). The script
 is idempotent and safe to run while the server is serving.
+
+## Know whether the backup ran
+
+A backup job that stopped running, or that cannot write its destination, is
+indistinguishable from a job with nothing to do. `check` asks:
+
+```bash
+scripts/conv-store-backup.sh check      # exit 0 = the tier is a recovery path
+```
+
+It fails when the backup directory does not exist, holds no dated backup, holds
+a newest backup older than `AGAVE_MAX_AGE_HOURS` (default 26), or when the
+newest backup no longer verifies. Schedule it next to the backup and alert on a
+nonzero exit; a monthly `check` against a daily backup is the minimum, since
+`AGAVE_MAX_AGE_HOURS` has to exceed the real backup interval to be meaningful.
+
+```cron
+# Hourly backup, freshness checked every run: a nonzero exit is the alert.
+17 * * * * AGAVE_BACKUP_DIR=/mnt/backup/agave $HOME/agave/scripts/conv-store-backup.sh backup
+23 * * * * AGAVE_BACKUP_DIR=/mnt/backup/agave $HOME/agave/scripts/conv-store-backup.sh check
+```
 
 For the compose deployment the store is inside the `agave-cache` volume. The
 image ships this script at `/usr/local/bin/conv-store-backup.sh`, so a
@@ -132,11 +178,28 @@ whole path in CI and locally:
 
 ```bash
 zig build conv-store-backup-test     # backup, verify, reject-truncated,
-                                    # restore, pre-restore snapshot, retention
+                                    # restore, pre-restore snapshot, retention,
+                                    # retention scope, same-filesystem refusal,
+                                    # check fresh/missing/stale
 scripts/conv-store-backup.sh --self-test   # same, standalone
 ```
 
 `zig build check` depends on it, so a broken backup or restore fails the gate.
+
+What the self-test does not cover: a restore into a store the current build
+rejects at load. The quarantine path above means that copy lands at
+`{path}.corrupt` rather than being dropped, but proving it needs a running
+server.
+
+## Configuration and secrets
+
+`AGAVE_API_KEY` and `HF_TOKEN` exist only in the deployment's `.env`
+(gitignored, never in the image) and in the process environment
+(`docs/THREAT_MODEL.md`). Nothing in the cache volume or the backup tier holds
+them, so a lost `.env` means a new key, not a recovered one: every client has
+to be updated with the replacement. Rotating is a `.env` edit plus
+`docker compose up -d`, which restarts the server. Keep a copy in whatever
+password manager the deployment already uses; the repo cannot supply one.
 
 ## Out of scope
 

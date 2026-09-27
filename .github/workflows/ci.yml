@@ -74,6 +74,12 @@ jobs:
       - name: Run tests
         run: zig build test
 
+      # Backup and restore of the conversation store, the only state Agave
+      # cannot regenerate. Kept in the Linux job because the script is the GNU
+      # find/stat it is written against (docs/DURABILITY.md).
+      - name: Conversation store backup and restore
+        run: zig build conv-store-backup-test
+
   test-macos:
     name: Test on macOS (Apple Silicon)
     needs: fmt-check
