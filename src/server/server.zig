@@ -1593,7 +1593,8 @@ fn hasToolCalls(text: []const u8) bool {
 /// content. The tags are a control channel: when no declared tool parses, the
 /// payload is unvalidated model output, and leaving the tags in place hands a
 /// client that scans for them the same text the server just refused to trust.
-/// Returns the input slice when there is no tag to remove.
+/// Text after an unterminated opening tag is dropped. Returns the input slice
+/// when there is no tag to remove.
 fn stripToolCallTags(allocator: Allocator, text: []const u8) error{OutOfMemory}![]const u8 {
     const tc_start_tag = "<tool_call>";
     const tc_end_tag = "</tool_call>";
@@ -1608,23 +1609,68 @@ fn stripToolCallTags(allocator: Allocator, text: []const u8) error{OutOfMemory}!
         };
         try out.appendSlice(allocator, text[i..start]);
         const body = start + tc_start_tag.len;
-        const end = std.mem.indexOfPos(u8, text, body, tc_end_tag) orelse {
-            i = body;
-            continue;
-        };
+        // No closing tag: the rest of the text is an unfinished payload the
+        // server never validated, so it is dropped rather than returned.
+        const end = std.mem.indexOfPos(u8, text, body, tc_end_tag) orelse break;
         i = end + tc_end_tag.len;
     }
     return out.toOwnedSlice(allocator) catch text;
+}
+
+/// Plain assistant text for a response body: tool-call tag markup removed, then
+/// JSON-escaped. `escaped_fallback` (`gen.escaped`, already escaped) is used
+/// when either step fails to allocate. Nothing is allocated when `raw` has no
+/// tag, so callers can use it on every plain-text fallback.
+const PlainContent = struct {
+    text: []const u8,
+    owned: bool,
+
+    fn deinit(self: PlainContent, allocator: Allocator) void {
+        if (self.owned) allocator.free(@constCast(self.text));
+    }
+};
+
+fn plainContent(allocator: Allocator, raw: []const u8, escaped_fallback: []const u8) PlainContent {
+    const stripped = stripToolCallTags(allocator, raw) catch raw;
+    if (stripped.ptr == raw.ptr) return .{ .text = escaped_fallback, .owned = false };
+    // jsonEscape aliases its input when there is nothing to escape, so the
+    // stripped buffer is either handed to the caller or freed here.
+    const escaped = json.jsonEscape(allocator, stripped) catch {
+        allocator.free(@constCast(stripped));
+        return .{ .text = escaped_fallback, .owned = false };
+    };
+    if (escaped.ptr != stripped.ptr) allocator.free(@constCast(stripped));
+    return .{ .text = escaped, .owned = true };
 }
 
 fn toolCallNameAllowed(name: []const u8, tp: *const json.ToolParams, registry: *const tools_mod.Registry) bool {
     return tp.hasTool(name) or registry.hasName(name);
 }
 
+/// Everything the tool-call scanners and response builders read from the
+/// process. Passed explicitly so those functions do not reach into `g_server`
+/// and stay testable.
+const ToolCallCtx = struct {
+    allocator: Allocator,
+    model_name: []const u8,
+    registry: *const tools_mod.Registry,
+    tp: *const json.ToolParams,
+};
+
+/// The tool-call context of the running server, for the request's own tools.
+fn serverToolCallCtx(tp: *const json.ToolParams) ToolCallCtx {
+    return .{
+        .allocator = g_server.allocator,
+        .model_name = g_server.model_name,
+        .registry = &g_server.tool_registry,
+        .tp = tp,
+    };
+}
+
 /// Advance `search_pos` through `text` to the next `<tool_call>` payload whose
 /// `name` is in the request tools or the process registry. Returns the JSON
 /// between the tags, or null when none remain. Undeclared names are skipped.
-fn nextAllowedToolCall(text: []const u8, search_pos: *usize, tp: *const json.ToolParams, registry: *const tools_mod.Registry) ?[]const u8 {
+fn nextAllowedToolCall(text: []const u8, search_pos: *usize, ctx: ToolCallCtx) ?[]const u8 {
     const tc_start_tag = "<tool_call>";
     const tc_end_tag = "</tool_call>";
     while (search_pos.* < text.len) {
@@ -1634,7 +1680,7 @@ fn nextAllowedToolCall(text: []const u8, search_pos: *usize, tp: *const json.Too
         const tc_json = text[json_start..tc_end];
         search_pos.* = tc_end + tc_end_tag.len;
         const name = json.extractField(tc_json, "name") orelse continue;
-        if (!toolCallNameAllowed(name, tp, registry)) {
+        if (!toolCallNameAllowed(name, ctx.tp, ctx.registry)) {
             if (!@import("builtin").is_test) {
                 std.log.warn("req={d} dropping tool call with undeclared name", .{log_request_id});
             }
@@ -1643,6 +1689,47 @@ fn nextAllowedToolCall(text: []const u8, search_pos: *usize, tp: *const json.Too
         return tc_json;
     }
     return null;
+}
+
+/// A tool call's name and arguments, escaped for a JSON string field. Model
+/// output is untrusted (CWE-116), so neither is ever written raw. `jsonEscape`
+/// aliases its input when there is nothing to escape, and the matching
+/// `owned_*` flag is then false.
+const EscapedToolCall = struct {
+    name: []u8,
+    args: []u8,
+    owned_name: bool,
+    owned_args: bool,
+
+    fn deinit(self: EscapedToolCall, allocator: Allocator) void {
+        if (self.owned_name) allocator.free(self.name);
+        if (self.owned_args) allocator.free(self.args);
+    }
+};
+
+/// Extract the name and arguments of one `<tool_call>` payload and escape both.
+/// Returns null when the payload has no name or an allocation fails; the caller
+/// skips that call.
+fn escapedToolCall(allocator: Allocator, tc_json: []const u8) ?EscapedToolCall {
+    const name = json.extractField(tc_json, "name") orelse return null;
+    const args = json.extractObjectField(tc_json, "arguments") orelse
+        (json.extractField(tc_json, "arguments") orelse "{}");
+
+    const escaped_name = json.jsonEscape(allocator, name) catch {
+        std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
+        return null;
+    };
+    errdefer if (escaped_name.ptr != name.ptr) allocator.free(escaped_name);
+    const escaped_args = json.jsonEscape(allocator, args) catch {
+        std.log.warn("req={d} tool call argument escaping failed (OOM), skipping tool call", .{log_request_id});
+        return null;
+    };
+    return .{
+        .name = escaped_name,
+        .args = escaped_args,
+        .owned_name = escaped_name.ptr != name.ptr,
+        .owned_args = escaped_args.ptr != args.ptr,
+    };
 }
 
 /// Split generated text into (reasoning, content) parts.
@@ -1688,26 +1775,26 @@ fn splitThinkingContent(text: []const u8) ThinkingSplit {
 /// otherwise replaced with `{}` and logged, an invalid `input` would break
 /// spec-compliant clients. Returns "" when no <tool_call> payload parses;
 /// callers fall back to a plain text response.
-fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
+fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, prompt_tokens: u32, completion_tokens: u32, ctx: ToolCallCtx) []const u8 {
     var blocks_buf: [4096]u8 = undefined;
     var blocks_pos: usize = 0;
     var search_pos: usize = 0;
     var call_idx: usize = 0;
 
-    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
+    while (nextAllowedToolCall(raw_text, &search_pos, ctx)) |tc_json| {
         const name = json.extractField(tc_json, "name") orelse continue;
 
         // Resolve input as a JSON object text (see resolveAnthropicToolInput).
-        const resolved = resolveAnthropicToolInput(g_server.allocator, tc_json, call_idx);
-        defer if (resolved.owned) |p| g_server.allocator.free(p);
+        const resolved = resolveAnthropicToolInput(ctx.allocator, tc_json, call_idx);
+        defer if (resolved.owned) |p| ctx.allocator.free(p);
         const args_obj = resolved.obj;
 
         // Escape name only, args are embedded as raw JSON (validated above).
-        const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
+        const escaped_name = json.jsonEscape(ctx.allocator, name) catch {
             std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
             continue;
         };
-        defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
+        defer if (escaped_name.ptr != name.ptr) ctx.allocator.free(escaped_name);
 
         const prefix: []const u8 = if (call_idx > 0) "," else "";
         const entry = std.fmt.bufPrint(blocks_buf[blocks_pos..], "{s}" ++
@@ -1724,12 +1811,12 @@ fn buildAnthropicToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
 
     return std.fmt.bufPrint(buf,
         \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{s}],"model":"{s}","stop_reason":"tool_use","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
-    , .{ req_id, blocks_buf[0..blocks_pos], g_server.model_name, prompt_tokens, completion_tokens }) catch "";
+    , .{ req_id, blocks_buf[0..blocks_pos], ctx.model_name, prompt_tokens, completion_tokens }) catch "";
 }
 
 /// Build tool_calls JSON response from model output containing <tool_call> tags.
 /// Supports multiple tool calls. Arguments are JSON-escaped strings per OpenAI spec.
-fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
+fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32, ctx: ToolCallCtx) []const u8 {
     const total = prompt_tokens + completion_tokens;
 
     // Build tool_calls array entries
@@ -1738,27 +1825,14 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
     var search_pos: usize = 0;
     var call_idx: usize = 0;
 
-    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
-        const name = json.extractField(tc_json, "name") orelse continue;
-        const args = json.extractObjectField(tc_json, "arguments") orelse
-            (json.extractField(tc_json, "arguments") orelse "{}");
-
-        // Escape name and args, model output is untrusted (CWE-116).
-        const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
-            std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
-            continue;
-        };
-        defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
-        const escaped_args = json.jsonEscape(g_server.allocator, args) catch {
-            std.log.warn("req={d} tool call argument escaping failed (OOM), skipping tool call", .{log_request_id});
-            continue;
-        };
-        defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
+    while (nextAllowedToolCall(raw_text, &search_pos, ctx)) |tc_json| {
+        const call = escapedToolCall(ctx.allocator, tc_json) orelse continue;
+        defer call.deinit(ctx.allocator);
 
         const prefix: []const u8 = if (call_idx > 0) "," else "";
         const entry = std.fmt.bufPrint(tc_buf[tc_pos..], "{s}" ++
             \\{{"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}
-        , .{ prefix, req_id, call_idx, escaped_name, escaped_args }) catch {
+        , .{ prefix, req_id, call_idx, call.name, call.args }) catch {
             // Buffer full: remaining <tool_call> tags are dropped. Log loudly so
             // lost calls are diagnosable, the client still sees finish_reason
             // "tool_calls" for the calls that fit.
@@ -1773,7 +1847,7 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
 
     return std.fmt.bufPrint(buf,
         \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":null,"tool_calls":[{s}]}},"finish_reason":"tool_calls"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
-    , .{ req_id, created, g_server.model_name, system_fingerprint, tc_buf[0..tc_pos], prompt_tokens, completion_tokens, total }) catch "";
+    , .{ req_id, created, ctx.model_name, system_fingerprint, tc_buf[0..tc_pos], prompt_tokens, completion_tokens, total }) catch "";
 }
 
 /// Build a Responses API payload from model output containing tool-call tags.
@@ -1782,33 +1856,21 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
 /// the arguments are JSON-escaped, so model output cannot inject extra output
 /// items or fields. Returns "" when no tool-call payload parses; callers fall
 /// back to a plain message item.
-fn buildResponsesToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32, tp: *const json.ToolParams) []const u8 {
+fn buildResponsesToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: i64, prompt_tokens: u32, completion_tokens: u32, ctx: ToolCallCtx) []const u8 {
     var fc_buf: [4096]u8 = undefined;
     var fc_pos: usize = 0;
     var search_pos: usize = 0;
     var call_idx: usize = 0;
     const total = prompt_tokens + completion_tokens;
 
-    while (nextAllowedToolCall(raw_text, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
-        const name = json.extractField(tc_json, "name") orelse continue;
-        const args = json.extractObjectField(tc_json, "arguments") orelse
-            (json.extractField(tc_json, "arguments") orelse "{}");
-        // Escape name and args, model output is untrusted (CWE-116).
-        const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
-            std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
-            continue;
-        };
-        defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
-        const escaped_args = json.jsonEscape(g_server.allocator, args) catch {
-            std.log.warn("req={d} tool call argument escaping failed (OOM), skipping tool call", .{log_request_id});
-            continue;
-        };
-        defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
+    while (nextAllowedToolCall(raw_text, &search_pos, ctx)) |tc_json| {
+        const call = escapedToolCall(ctx.allocator, tc_json) orelse continue;
+        defer call.deinit(ctx.allocator);
 
         const prefix: []const u8 = if (call_idx > 0) "," else "";
         const entry = std.fmt.bufPrint(fc_buf[fc_pos..], "{s}" ++
             \\{{"type":"function_call","id":"fc_{d}_{d}","call_id":"call_{d}_{d}","name":"{s}","arguments":"{s}","status":"completed"}}
-        , .{ prefix, req_id, call_idx, req_id, call_idx, escaped_name, escaped_args }) catch {
+        , .{ prefix, req_id, call_idx, req_id, call_idx, call.name, call.args }) catch {
             std.log.warn("req={d} responses function_call exceeded {d} byte buffer: dropped calls from index {d}", .{ log_request_id, fc_buf.len, call_idx });
             break;
         };
@@ -1820,7 +1882,7 @@ fn buildResponsesToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, 
 
     return std.fmt.bufPrint(buf,
         \\{{"id":"resp-{d}","object":"response","created_at":{d},"status":"completed","model":"{s}","output":[{s}],"usage":{{"input_tokens":{d},"output_tokens":{d},"total_tokens":{d}}}}}
-    , .{ req_id, created, g_server.model_name, fc_buf[0..fc_pos], prompt_tokens, completion_tokens, total }) catch "";
+    , .{ req_id, created, ctx.model_name, fc_buf[0..fc_pos], prompt_tokens, completion_tokens, total }) catch "";
 }
 
 const openai_error_fallback = "{\"error\":{\"message\":\"Internal error\",\"type\":\"server_error\",\"param\":null,\"code\":null}}";
@@ -2432,7 +2494,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         if (json.extractBoolField(body, "stream")) {
             if (toolsWanted(&tool_params)) {
-                startStreamWithTools(stream, formatted, max_tokens, sampling, &tool_params);
+                startStreamWithTools(stream, formatted, max_tokens, sampling, serverToolCallCtx(&tool_params));
             } else {
                 startStream(stream, formatted, true, false, max_tokens, sampling);
             }
@@ -2459,18 +2521,16 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         var resp_buf: [response_buf_size]u8 = undefined;
 
         const json_body = if (toolsWanted(&tool_params) and hasToolCalls(gen.raw)) blk: {
-            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params);
+            const tc_resp = buildToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params));
             if (tc_resp.len > 0) break :blk tc_resp;
             // No declared tool parsed. Return the text without the tag markup:
             // the server just refused this payload, so a client that scans for
             // tags must not find it in the content either.
-            const stripped = stripToolCallTags(g_server.allocator, gen.raw) catch gen.raw;
-            defer if (stripped.ptr != gen.raw.ptr) g_server.allocator.free(@constCast(stripped));
-            const content = json.jsonEscape(g_server.allocator, stripped) catch gen.escaped;
-            defer if (content.ptr != stripped.ptr and content.ptr != gen.escaped.ptr) g_server.allocator.free(@constCast(content));
+            const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+            defer plain.deinit(g_server.allocator);
             break :blk std.fmt.bufPrint(&resp_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion","created":{d},"model":"{s}","system_fingerprint":"{s}","choices":[{{"index":0,"message":{{"role":"assistant","content":"{s}"}},"finish_reason":"{s}"}}],"usage":{{"prompt_tokens":{d},"completion_tokens":{d},"total_tokens":{d}}}}}
-            , .{ req_id, created, g_server.model_name, system_fingerprint, content, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
+            , .{ req_id, created, g_server.model_name, system_fingerprint, plain.text, gen.finish_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
                 std.log.warn("req={d} response buffer overflow: output {d} bytes exceeds {d} byte buffer", .{ log_request_id, gen.escaped.len, response_buf_size });
                 sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
                 g_server.metrics.recordFailure();
@@ -3007,14 +3067,17 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         const resp_stop_reason: []const u8 = if (std.mem.eql(u8, gen.finish_reason, "length")) "max_tokens" else "stop";
         var resp_buf: [response_buf_size]u8 = undefined;
         // A tool-call tag that names no declared tool leaves call_idx at 0 and
-        // returns "", so unparseable output degrades to a plain message item.
+        // returns "", so unparseable output degrades to a plain message item
+        // with the tag markup removed, as on /v1/chat/completions.
         const tc_body = if (toolsWanted(&tool_params_r) and hasToolCalls(gen.raw))
-            buildResponsesToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params_r)
+            buildResponsesToolCallResponse(&resp_buf, gen.raw, req_id, created, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params_r))
         else
             "";
+        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+        defer plain.deinit(g_server.allocator);
         const json_body = if (tc_body.len > 0) tc_body else std.fmt.bufPrint(&resp_buf,
             \\{{"id":"resp-{d}","object":"response","created_at":{d},"status":"completed","model":"{s}","stop_reason":"{s}","output":[{{"type":"message","id":"msg_0","status":"completed","role":"assistant","content":[{{"type":"output_text","text":"{s}"}}]}}],"usage":{{"input_tokens":{d},"output_tokens":{d},"total_tokens":{d}}}}}
-        , .{ req_id, created, g_server.model_name, resp_stop_reason, gen.escaped, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
+        , .{ req_id, created, g_server.model_name, resp_stop_reason, plain.text, gen.stats.prompt_tokens, gen.stats.tokens_generated, total }) catch {
             std.log.warn("req={d} response buffer overflow: output {d} bytes exceeds {d} byte buffer", .{ log_request_id, gen.escaped.len, response_buf_size });
             sendJsonError(stream, "500 Internal Server Error", "server_error", "Response too large");
             g_server.metrics.recordFailure();
@@ -3143,7 +3206,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
         if (json.extractBoolField(body, "stream")) {
             if (want_tools_m) {
-                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, &tool_params_m);
+                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, serverToolCallCtx(&tool_params_m));
             } else {
                 startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
             }
@@ -3172,7 +3235,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         // parses (small-model malformed output), mirroring /v1/chat/completions.
         var resp_buf_tc: [response_buf_size]u8 = undefined;
         if (want_tools_m and hasToolCalls(gen.raw)) {
-            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated, &tool_params_m);
+            const anth_tc = buildAnthropicToolCallResponse(&resp_buf_tc, gen.raw, req_id, gen.stats.prompt_tokens, gen.stats.tokens_generated, serverToolCallCtx(&tool_params_m));
             if (anth_tc.len > 0) {
                 sendJson(stream, anth_tc);
                 g_server.metrics.recordLatency(elapsedMs(req_start_time));
@@ -3184,9 +3247,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         }
 
         var resp_buf: [response_buf_size]u8 = undefined;
+        const plain = plainContent(g_server.allocator, gen.raw, gen.escaped);
+        defer plain.deinit(g_server.allocator);
         const json_body = std.fmt.bufPrint(&resp_buf,
             \\{{"id":"msg_{d}","type":"message","role":"assistant","content":[{{"type":"text","text":"{s}"}}],"model":"{s}","stop_reason":"{s}","stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":{d}}}}}
-        , .{ req_id, gen.escaped, g_server.model_name, stop_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated }) catch {
+        , .{ req_id, plain.text, g_server.model_name, stop_reason, gen.stats.prompt_tokens, gen.stats.tokens_generated }) catch {
             std.log.warn("req={d} response buffer overflow: output {d} bytes exceeds {d} byte buffer", .{ log_request_id, gen.escaped.len, response_buf_size });
             sendAnthropicError(stream, "500", "api_error", "Response too large");
             g_server.metrics.recordFailure();
@@ -5354,7 +5419,7 @@ const anthropic_delta_piece_len: usize = 256;
 /// generation runs to completion first and the parsed result is emitted as
 /// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
 /// the raw text as a `text` block when nothing parses (small-model fallback).
-fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, tp: *const json.ToolParams) void {
+fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, ctx: ToolCallCtx) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -5382,16 +5447,16 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
     if (hasToolCalls(gen.raw)) {
         var search_pos: usize = 0;
 
-        while (nextAllowedToolCall(gen.raw, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
+        while (nextAllowedToolCall(gen.raw, &search_pos, ctx)) |tc_json| {
             const name = json.extractField(tc_json, "name") orelse continue;
-            const resolved_input = resolveAnthropicToolInput(g_server.allocator, tc_json, call_idx);
-            defer if (resolved_input.owned) |p| g_server.allocator.free(p);
+            const resolved_input = resolveAnthropicToolInput(ctx.allocator, tc_json, call_idx);
+            defer if (resolved_input.owned) |p| ctx.allocator.free(p);
             const args_obj = resolved_input.obj;
-            const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
+            const escaped_name = json.jsonEscape(ctx.allocator, name) catch {
                 std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
                 continue;
             };
-            defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
+            defer if (escaped_name.ptr != name.ptr) ctx.allocator.free(escaped_name);
 
             var blk_buf: [sse_event_buf_size]u8 = undefined;
             const block_start = std.fmt.bufPrint(&blk_buf,
@@ -6453,7 +6518,7 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
 
 /// Streaming with tool call support. Generates full output first, then emits
 /// tool_calls delta chunks if tool calls detected, otherwise streams content.
-fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, tp: *const json.ToolParams) void {
+fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, ctx: ToolCallCtx) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -6480,26 +6545,14 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
         // Emit tool calls as delta chunks
         var search_pos: usize = 0;
 
-        while (nextAllowedToolCall(gen.raw, &search_pos, tp, &g_server.tool_registry)) |tc_json| {
-            const name = json.extractField(tc_json, "name") orelse continue;
-            const args = json.extractObjectField(tc_json, "arguments") orelse
-                (json.extractField(tc_json, "arguments") orelse "{}");
-            // Escape name and args, model output is untrusted (CWE-116).
-            const escaped_name = json.jsonEscape(g_server.allocator, name) catch {
-                std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
-                continue;
-            };
-            defer if (escaped_name.ptr != name.ptr) g_server.allocator.free(escaped_name);
-            const escaped_args = json.jsonEscape(g_server.allocator, args) catch {
-                std.log.warn("req={d} tool call argument escaping failed (OOM), skipping tool call", .{log_request_id});
-                continue;
-            };
-            defer if (escaped_args.ptr != args.ptr) g_server.allocator.free(escaped_args);
+        while (nextAllowedToolCall(gen.raw, &search_pos, ctx)) |tc_json| {
+            const call = escapedToolCall(ctx.allocator, tc_json) orelse continue;
+            defer call.deinit(ctx.allocator);
 
             // First chunk: role + tool call header
             const role_chunk = std.fmt.bufPrint(&chunk_buf,
                 \\{{"id":"chatcmpl-{d}","object":"chat.completion.chunk","created":{d},"model":"{s}","choices":[{{"index":0,"delta":{{"role":"assistant","tool_calls":[{{"index":{d},"id":"call_{d}_{d}","type":"function","function":{{"name":"{s}","arguments":"{s}"}}}}]}},"finish_reason":null}}]}}
-            , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, escaped_name, escaped_args }) catch {
+            , .{ req_id, created, g_server.model_name, call_idx, req_id, call_idx, call.name, call.args }) catch {
                 std.log.warn("req={d} stream tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
                 continue;
             };
@@ -6523,11 +6576,9 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
         // empty assistant turn that claims finish_reason "tool_calls". The tag
         // markup itself is dropped, so a client scanning for tags cannot read
         // the payload the server just refused.
-        const stripped = stripToolCallTags(g_server.allocator, gen.raw) catch gen.raw;
-        defer if (stripped.ptr != gen.raw.ptr) g_server.allocator.free(@constCast(stripped));
-        const content = json.jsonEscape(g_server.allocator, stripped) catch gen.escaped;
-        defer if (content.ptr != stripped.ptr and content.ptr != gen.escaped.ptr) g_server.allocator.free(@constCast(content));
-        writeStreamedContent(stream, &chunk_buf, g_server.model_name, req_id, created, content, gen.finish_reason);
+        const plain = plainContent(ctx.allocator, gen.raw, gen.escaped);
+        defer plain.deinit(ctx.allocator);
+        writeStreamedContent(stream, &chunk_buf, g_server.model_name, req_id, created, plain.text, gen.finish_reason);
     }
 
     // Usage chunk + DONE
@@ -8080,6 +8131,17 @@ test "computeLogprobs without top_logprobs still reports the sampled token" {
     try std.testing.expect(info.token_logprob < 0);
 }
 
+/// A tool-call context over the testing allocator and an empty registry, for
+/// tests that must not reach into the process-wide server state.
+fn testToolCallCtx(tp: *const json.ToolParams, reg: *const tools_mod.Registry) ToolCallCtx {
+    return .{
+        .allocator = std.testing.allocator,
+        .model_name = "test-model",
+        .registry = reg,
+        .tp = tp,
+    };
+}
+
 test "nextAllowedToolCall skips undeclared names" {
     var tp = json.ToolParams{};
     tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
@@ -8090,11 +8152,12 @@ test "nextAllowedToolCall skips undeclared names" {
         \\<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>
         \\<tool_call>{"name": "shell", "arguments": {}}</tool_call>
     ;
+    const ctx = testToolCallCtx(&tp, &reg);
     var pos: usize = 0;
-    const first = nextAllowedToolCall(text, &pos, &tp, &reg) orelse return error.TestUnexpectedResult;
+    const first = nextAllowedToolCall(text, &pos, ctx) orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.mem.indexOf(u8, first, "get_weather") != null);
     try std.testing.expect(std.mem.indexOf(u8, first, "rm") == null);
-    try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
+    try std.testing.expect(nextAllowedToolCall(text, &pos, ctx) == null);
 }
 
 test "stripToolCallTags removes tag markup and keeps surrounding text" {
@@ -8115,6 +8178,22 @@ test "stripToolCallTags removes tag markup and keeps surrounding text" {
     try std.testing.expectEqualStrings("keep", open);
 }
 
+test "plainContent drops tags, escapes, and falls back to the pre-escaped text" {
+    const alloc = std.testing.allocator;
+    // Text with no tag is borrowed from the caller's already-escaped copy.
+    const no_tags = plainContent(alloc, "plain", "already");
+    try std.testing.expect(!no_tags.owned);
+    try std.testing.expectEqualStrings("already", no_tags.text);
+    no_tags.deinit(alloc);
+
+    // Tag markup is dropped and the remainder is escaped into one owned buffer.
+    const tagged = "a\"b<tool_call>x</tool_call>c";
+    const stripped = plainContent(alloc, tagged, "fallback");
+    defer stripped.deinit(alloc);
+    try std.testing.expect(stripped.owned);
+    try std.testing.expectEqualStrings("a\\\"bc", stripped.text);
+}
+
 test "buildResponsesToolCallResponse emits function_call items for declared tools" {
     var tp = json.ToolParams{};
     tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
@@ -8123,8 +8202,10 @@ test "buildResponsesToolCallResponse emits function_call items for declared tool
         \\<tool_call>{"name": "rm", "arguments": {"path": "/"}}</tool_call>
         \\<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>
     ;
+    var reg = tools_mod.Registry{};
+    const ctx = testToolCallCtx(&tp, &reg);
     var buf: [response_buf_size]u8 = undefined;
-    const out = buildResponsesToolCallResponse(&buf, text, 7, 100, 3, 4, &tp);
+    const out = buildResponsesToolCallResponse(&buf, text, 7, 100, 3, 4, ctx);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"type\":\"function_call\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"name\":\"get_weather\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"arguments\":\"{\\\"city\\\": \\\"Paris\\\"}\"") != null);
@@ -8136,8 +8217,10 @@ test "buildResponsesToolCallResponse emits function_call items for declared tool
 test "buildResponsesToolCallResponse returns empty when no declared tool is called" {
     var tp = json.ToolParams{};
     const text = "<tool_call>{\"name\": \"rm\", \"arguments\": {}}</tool_call>";
+    var reg = tools_mod.Registry{};
+    const ctx = testToolCallCtx(&tp, &reg);
     var buf: [response_buf_size]u8 = undefined;
-    const out = buildResponsesToolCallResponse(&buf, text, 1, 1, 1, 1, &tp);
+    const out = buildResponsesToolCallResponse(&buf, text, 1, 1, 1, 1, ctx);
     try std.testing.expectEqualStrings("", out);
 }
 
@@ -8148,8 +8231,9 @@ test "nextAllowedToolCall accepts registry names" {
     const text =
         \\<tool_call>{"name": "search", "arguments": {}}</tool_call>
     ;
+    const ctx = testToolCallCtx(&tp, &reg);
     var pos: usize = 0;
-    const hit = nextAllowedToolCall(text, &pos, &tp, &reg) orelse return error.TestUnexpectedResult;
+    const hit = nextAllowedToolCall(text, &pos, ctx) orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.mem.indexOf(u8, hit, "search") != null);
 }
 
@@ -8161,8 +8245,9 @@ test "nextAllowedToolCall rejects payload without name" {
     const text =
         \\<tool_call>{"arguments": {}}</tool_call>
     ;
+    const ctx = testToolCallCtx(&tp, &reg);
     var pos: usize = 0;
-    try std.testing.expect(nextAllowedToolCall(text, &pos, &tp, &reg) == null);
+    try std.testing.expect(nextAllowedToolCall(text, &pos, ctx) == null);
 }
 
 test "resolveAnthropicToolInput keeps a complete object and drops a truncated one" {
@@ -9078,11 +9163,12 @@ test "fuzz: model output tool-call, thinking, and tool-input parsers" {
             var text_buf: [1024]u8 = undefined;
             const text = std.fmt.bufPrint(&text_buf, "{s}<tool_call>{s}</tool_call><think>{s}</think>{s}", .{ n, payload, n, n }) catch return;
 
+            const ctx = testToolCallCtx(&tp, &reg);
             var pos: usize = 0;
             var accepted: usize = 0;
             while (true) {
                 const before = pos;
-                const tc_json = nextAllowedToolCall(text, &pos, &tp, &reg) orelse break;
+                const tc_json = nextAllowedToolCall(text, &pos, ctx) orelse break;
                 accepted += 1;
                 // The scan must move forward every call, and a payload can
                 // only be accepted once per occurrence in the output.
