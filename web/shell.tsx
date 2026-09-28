@@ -49,7 +49,7 @@ const ShellMessage = ({ message }: { message: Message }) => (
     role={message.role === 'error' ? 'alert' : 'group'}
     aria-labelledby={message.role === 'error' ? undefined : `msg-role-${String(message.id)}`}
     className={cn(
-      'mx-auto my-2 flex w-full max-w-[80%] flex-col gap-1',
+      'mx-auto my-2 flex w-full agave-measure flex-col gap-1',
       message.role === 'user' ? 'ms-auto items-end' : 'me-auto items-start',
     )}
   >
@@ -139,6 +139,34 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => (
   </div>
 );
 
+/** Before the first prompt. Same anchor as the serve UI's empty state
+ *  (rosette, mono title, one line, mono hint chips) so the two surfaces read as
+ *  one product rather than a chat page and a demo page. */
+const ShellEmptyState = ({ ready }: { ready: boolean }) => (
+  <div className="m-auto px-5 py-10 text-center">
+    <span className="mark mark-lg" aria-hidden="true" />
+    <h2 className="mb-2 font-mono text-lg font-semibold text-foreground">
+      {ready ? 'Prompt the model' : 'Load a model to start'}
+    </h2>
+    <p className="mb-6 text-base text-muted-foreground">
+      {ready
+        ? 'Inference runs in this tab. Nothing leaves the browser.'
+        : 'Drop a GGUF file or paste a model URL above, then prompt it.'}
+    </p>
+    <div className="flex flex-wrap justify-center gap-2">
+      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
+        GGUF only
+      </span>
+      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
+        Enter to send
+      </span>
+      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
+        {`Replies capped at ${String(MAX_TOKENS)} tokens`}
+      </span>
+    </div>
+  </div>
+);
+
 /** The log: the transcript, the empty hint, and the pending bubble. */
 const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sending: boolean; ready: boolean }) => {
   const logRef = useRef<HTMLDivElement>(null);
@@ -157,20 +185,17 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
       tabIndex={0}
       className="agave-scroll flex-1 overflow-y-auto px-8 py-4 max-drawer:px-4"
     >
-      {messages.length === 0 ? (
-        <div className="mx-auto my-8 max-w-prose text-center text-faint">
-          <span className="mark mark-lg" aria-hidden="true" />
-          {ready ? 'Send a prompt.' : 'Load a GGUF model above, then send a prompt.'}
-        </div>
-      ) : null}
+      {messages.length === 0 ? <ShellEmptyState ready={ready} /> : null}
       {messages.map(function (message) { return <ShellMessage key={message.id} message={message} />; })}
       {sending ? (
-        <div
-          role="status"
-          aria-label="Generating response"
-          className="mx-auto my-2 max-w-[80%] animate-pulse-soft rounded-lg rounded-es-[2px] border border-border bg-popover px-4 py-3 text-base text-faint"
-        >
-          …
+        <div className="mx-auto flex w-full agave-measure flex-col items-start">
+          <div
+            role="status"
+            aria-label="Generating response"
+            className="w-full animate-pulse-soft rounded-lg rounded-es-[2px] border border-border bg-popover px-4 py-3 text-base text-faint"
+          >
+            …
+          </div>
         </div>
       ) : null}
     </div>

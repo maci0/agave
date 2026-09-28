@@ -28,7 +28,7 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       onFocus={function () { setPaused(true); }}
       onBlur={function () { setPaused(false); }}
       className={cn(
-        'mx-auto my-2 flex w-full max-w-prose items-center gap-2 rounded-lg border px-[18px] py-3 text-sm',
+        'mx-auto my-2 flex w-full agave-measure items-center gap-2 rounded-lg border px-[18px] py-3 text-sm',
         toast.level === 'error'
           ? 'border-destructive bg-destructive/10 text-destructive-foreground'
           : 'border-border-strong bg-primary/10 text-muted-foreground',

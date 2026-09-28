@@ -60,8 +60,11 @@
   --radius-lg: 8px;
   --radius-pill: 999px;
 
-  /* Layout constants that both surfaces and the components must agree on. */
-  --container-prose: 860px;
+  /* Layout constants that both surfaces and the components must agree on. The
+     measure is 68ch, not a pixel width, so it follows the type size: every
+     column holding prose or a control (transcript, composer, settings, toasts)
+     reads at this measure on both surfaces, via .agave-measure. */
+  --container-prose: 68ch;
   --spacing-sidebar: 260px;
   --breakpoint-drawer: 700px;
 
@@ -120,8 +123,10 @@
 }
 
 @layer components {
-  /* The agave rosette (docs/logo.svg), drawn as a mask so it takes the color
-     of whatever it sits in, like the icon set. */
+  /* The agave rosette (docs/logo.svg), drawn as a mask so it is one flat
+     shape. Its color is pinned to the rosette green rather than inherited:
+     the mark is the same plant in the header, the empty state, the About
+     dialog and the favicon, whatever text it sits beside. */
   .mark {
     display: inline-block;
     flex-shrink: 0;
@@ -325,6 +330,12 @@
 }
 
 @layer utilities {
+  /* The one reading and control measure. A component reaching for Tailwind's
+     `max-w-prose` instead gets a framework default nobody chose here. */
+  .agave-measure {
+    max-width: var(--container-prose);
+  }
+
   /* Thin scrollbars in the surface border color, Firefox and WebKit alike. */
   .agave-scroll {
     scrollbar-width: thin;
