@@ -1157,7 +1157,7 @@ const download_stall_timeout_sec: i64 = 60;
 /// block forever on a connection that stopped delivering. Advisory: a socket
 /// that cannot take the option (an already-released connection) warns and
 /// leaves the read untimed rather than failing the download.
-fn setSocketReadTimeout(req: *std.http.Client.Request, seconds: i64) void {
+fn setSocketReadTimeout(req: std.http.Client.Request, seconds: i64) void {
     const conn = req.connection orelse {
         eprint("Warning: download connection already released, no read timeout set\n", .{});
         return;
