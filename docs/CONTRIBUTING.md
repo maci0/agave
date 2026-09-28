@@ -9,11 +9,14 @@ Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](
 `zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`zig build lint-python`). `scripts/lint-python.sh` runs a `ruff` on PATH when it already reports the `ruff.toml` pin, and otherwise runs the pinned ruff ephemerally through `uvx`, the same way CI does, so no global tool install is required; with neither available it names both ways to get the pin.
 
 ```bash
+zig build doctor     # what this machine is missing for `zig build ci`, before the gate finds it
 zig version          # must print 0.16.0
 zig build            # agave (ReleaseFast) + agave-debug (ReleaseSafe)
 zig build test       # unit tests
 zig build --help     # all steps
 ```
+
+`zig build doctor` reads the same pins the gates read (`.zigversion`, `package.json`, `ruff.toml`), checks the JS dependencies are installed, and prints one line per tool plus the tools only some CI jobs need. It is a probe, not a gate: it exits 0 whatever it finds, so it is safe on a deliberately part-provisioned machine.
 
 Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness + the oxlint `ignorePatterns` ratchet), `lint-shell` (shellcheck) and `lint-python` (ruff check and ruff format --check). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check) plus the Python unit tests (`zig build test-python`), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
