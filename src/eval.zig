@@ -172,7 +172,10 @@ test "scoreCase empty continuation skips model" {
     try std.testing.expectEqual(@as(f64, 0), r.?.total_nll);
 }
 
-test "EvalResult print does not crash" {
+test "EvalResult print formats every field without a format-string panic" {
+    // The value here is the call itself: a format/argument mismatch in
+    // `print` panics at runtime, and nothing else in the suite renders an
+    // EvalResult. Asserting the fields back would only restate the literal.
     var cases = [_]CaseResult{.{
         .mean_nll = 1.5,
         .n_tokens = 10,
@@ -187,12 +190,37 @@ test "EvalResult print does not crash" {
         .accuracy = 0.7,
         .n_failed = 0,
     };
-    try std.testing.expectEqual(@as(usize, 1), result.cases.len);
-    try std.testing.expectEqual(@as(u32, 10), result.total_tokens);
-    try std.testing.expectEqual(@as(u32, 7), result.total_correct);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.7), result.accuracy, 1e-6);
-    try std.testing.expectEqual(@as(u32, 0), result.n_failed);
     result.print();
+}
+
+test "scoreCase skips out-of-vocab continuation tokens" {
+    // Token ids past the logit length are dropped without counting toward the
+    // mean, so they must not dilute it (documented in scoreCase).
+    const Model = struct {
+        fn resetCache(_: @This()) void {}
+        fn prefill(_: @This(), _: []const u32) !void {}
+        fn forward(_: @This(), _: u32) !void {}
+        fn getLogits(_: @This()) []const f32 {
+            // 4-token vocab; token 2 has the highest logit.
+            return &[_]f32{ 0.0, 1.0, 5.0, 0.5 };
+        }
+    };
+
+    // One in-vocab token (2) followed by two out-of-vocab ones.
+    const r = scoreCase(Model{}, &.{10}, &.{ 2, 99, 4_000_000_000 });
+    try std.testing.expect(r != null);
+    try std.testing.expectEqual(@as(u32, 1), r.?.n_tokens);
+    try std.testing.expectEqual(@as(u32, 1), r.?.n_correct_argmax);
+    try std.testing.expect(std.math.isFinite(r.?.mean_nll));
+    try std.testing.expect(r.?.mean_nll > 0);
+
+    // Every token out of vocab: nothing is scored, so the result is all zero.
+    const none = scoreCase(Model{}, &.{10}, &.{ 99, 4_000_000_000 });
+    try std.testing.expect(none != null);
+    try std.testing.expectEqual(@as(u32, 0), none.?.n_tokens);
+    try std.testing.expectEqual(@as(u32, 0), none.?.n_correct_argmax);
+    try std.testing.expectEqual(@as(f32, 0), none.?.mean_nll);
+    try std.testing.expectEqual(@as(f64, 0), none.?.total_nll);
 }
 
 test "scoreCase scores continuation tokens correctly" {

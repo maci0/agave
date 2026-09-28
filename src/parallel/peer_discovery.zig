@@ -87,6 +87,12 @@ pub fn discoverPeer(rank: u32, world_size: u32, port: u16) ?[4]u8 {
     }
 }
 
+/// The beacon rank 0 broadcasts. Workers parse the payload in
+/// `beaconMatchesThisGroup`, so both ends of the wire format go through here.
+fn formatBeacon(buf: []u8, port: u16, world_size: u32) ?[]const u8 {
+    return std.fmt.bufPrint(buf, "{s}{d}:{d}", .{ beacon_prefix, port, world_size }) catch null;
+}
+
 fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
     // Bind to the rank-0 discovery port to receive responses
     var bind_addr: posix.sockaddr.in = .{
@@ -108,7 +114,7 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
 
     // Format beacon message
     var beacon: [max_msg_len]u8 = undefined;
-    const beacon_msg = std.fmt.bufPrint(&beacon, "{s}{d}:{d}", .{ beacon_prefix, port, world_size }) catch return null;
+    const beacon_msg = formatBeacon(&beacon, port, world_size) orelse return null;
 
     std.log.info("discovery: broadcasting on UDP port {d}...", .{port});
 
@@ -216,38 +222,29 @@ test "discovery, function signatures exist" {
     try std.testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 1, 8080));
 }
 
-test "discovery, beacon prefix detection" {
-    // Verify that std.mem.startsWith correctly identifies beacon vs join messages.
-    const valid_beacon = "AGAVE-DISCOVER:8080:2";
-    const valid_join = "AGAVE-JOIN:1";
-    const garbage = "HTTP/1.1 200 OK";
+test "discovery, beacon the worker parses is the beacon rank 0 sends" {
+    // The send side formats the payload, the worker side parses it. Reformatting
+    // the string in the test would hide a drift between the two, so drive the
+    // real formatter and the real parser against each other.
+    var buf: [max_msg_len]u8 = undefined;
 
-    try std.testing.expect(std.mem.startsWith(u8, valid_beacon, beacon_prefix));
-    try std.testing.expect(!std.mem.startsWith(u8, valid_beacon, join_prefix));
+    const msg = formatBeacon(&buf, 12345, 4).?;
+    try std.testing.expect(std.mem.startsWith(u8, msg, beacon_prefix));
+    try std.testing.expect(!std.mem.startsWith(u8, msg, join_prefix));
+    try std.testing.expect(beaconMatchesThisGroup(msg[beacon_prefix.len..], 12345, 4));
+    // A worker on another port base or world size ignores the same bytes.
+    try std.testing.expect(!beaconMatchesThisGroup(msg[beacon_prefix.len..], 12346, 4));
+    try std.testing.expect(!beaconMatchesThisGroup(msg[beacon_prefix.len..], 12345, 2));
 
-    try std.testing.expect(std.mem.startsWith(u8, valid_join, join_prefix));
-    try std.testing.expect(!std.mem.startsWith(u8, valid_join, beacon_prefix));
+    // The largest values a real run can put on the wire still fit the buffer.
+    const widest = formatBeacon(&buf, 65534, std.math.maxInt(u32)).?;
+    try std.testing.expect(widest.len <= max_msg_len);
+    try std.testing.expect(beaconMatchesThisGroup(widest[beacon_prefix.len..], 65534, std.math.maxInt(u32)));
 
-    try std.testing.expect(!std.mem.startsWith(u8, garbage, beacon_prefix));
-    try std.testing.expect(!std.mem.startsWith(u8, garbage, join_prefix));
-}
-
-test "discovery, beacon parses port and world_size" {
-    // After stripping the beacon prefix, the remaining payload is "<port>:<world_size>".
-    var beacon: [max_msg_len]u8 = undefined;
-    const msg = std.fmt.bufPrint(&beacon, "{s}{d}:{d}", .{ beacon_prefix, @as(u16, 12345), @as(u32, 4) }) catch unreachable;
-
-    // Strip prefix
-    const payload = msg[beacon_prefix.len..];
-    var it = std.mem.splitScalar(u8, payload, ':');
-    const port_str = it.first();
-    const ws_str = it.next() orelse "";
-
-    const port_val = std.fmt.parseInt(u16, port_str, 10) catch 0;
-    const ws_val = std.fmt.parseInt(u32, ws_str, 10) catch 0;
-
-    try std.testing.expectEqual(@as(u16, 12345), port_val);
-    try std.testing.expectEqual(@as(u32, 4), ws_val);
+    // A buffer too small for the message is a formatting failure, not a
+    // truncated packet.
+    var tiny: [4]u8 = undefined;
+    try std.testing.expect(formatBeacon(&tiny, 1, 1) == null);
 }
 
 test "discovery, DiscoveredPeer edge addresses" {

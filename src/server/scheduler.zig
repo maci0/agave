@@ -1051,6 +1051,8 @@ test "step removes finished requests" {
     stats = manager.getStats();
     try std.testing.expectEqual(@as(u32, 1), stats.running_count); // req1 removed, req2 admitted
     try std.testing.expectEqual(@as(u32, 0), stats.waiting_count);
+    try std.testing.expectEqual(@as(u32, 1), stats.completed_total); // req1 counted once
+    try std.testing.expectEqual(@as(u32, 0), stats.cancelled_total);
 }
 
 test "step cancels timed-out requests" {
@@ -1461,17 +1463,29 @@ test "requestPriority older request has lower priority" {
     try std.testing.expect(requestPriority(&req_old, now) < requestPriority(&req_new, now));
 }
 
-test "SchedulerStats fields default zero" {
-    const stats = SchedulerStats{
-        .waiting_count = 0,
-        .running_count = 0,
-        .completed_total = 0,
-        .cancelled_total = 0,
-    };
-    try std.testing.expectEqual(@as(u32, 0), stats.waiting_count);
-    try std.testing.expectEqual(@as(u32, 0), stats.running_count);
-    try std.testing.expectEqual(@as(u32, 0), stats.completed_total);
-    try std.testing.expectEqual(@as(u32, 0), stats.cancelled_total);
+test "getStats reports queue membership on a fresh manager" {
+    const allocator = std.testing.allocator;
+    var metrics = Metrics{};
+    var manager = try RequestManager.init(allocator, &metrics, 4, 30, null, testIo());
+    defer manager.deinit();
+
+    const empty = manager.getStats();
+    try std.testing.expectEqual(@as(u32, 0), empty.waiting_count);
+    try std.testing.expectEqual(@as(u32, 0), empty.running_count);
+    try std.testing.expectEqual(@as(u32, 0), empty.completed_total);
+    try std.testing.expectEqual(@as(u32, 0), empty.cancelled_total);
+
+    const tokens = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    const req = try manager.enqueue(&tokens, 1);
+    markSamplingReady(req);
+    try std.testing.expectEqual(@as(u32, 1), manager.getStats().waiting_count);
+
+    // Admission moves the request between the two queues, not into both.
+    _ = manager.waiting.pop();
+    try manager.running.append(allocator, req);
+    const admitted = manager.getStats();
+    try std.testing.expectEqual(@as(u32, 0), admitted.waiting_count);
+    try std.testing.expectEqual(@as(u32, 1), admitted.running_count);
 }
 
 test "Request.deinit frees tokens" {
