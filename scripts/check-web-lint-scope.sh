@@ -34,6 +34,7 @@ allowed_ignore_patterns=(
     "src/web/app.js"
     "web/agave.js"
     "web/shell.js"
+    "vendor/**"
 )
 
 if [[ ! -f .oxlintrc.json ]]; then

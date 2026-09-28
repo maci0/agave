@@ -319,12 +319,19 @@ fi
 # is made of. Both manifest dialects express that: npm/bun write a bare version
 # ("oxlint": "1.57.0"), PEP 508 writes "==". Extras and environment markers are
 # compared on the specifier text, not resolved.
+#
+# A `file:`/`link:` spec is exempt: it names a directory in this repository
+# (`vendor/react` and `vendor/react-dom`, the preact/compat shims), so it is
+# pinned by the commit, not by a version. Everything from a registry is checked.
 exact_pin_fail=0
 check_exact_pins() {
     local file=$1
     local spec
     while IFS= read -r spec; do
         [[ -n "$spec" ]] || continue
+        if [[ "$spec" == file:* || "$spec" == link:* ]]; then
+            continue
+        fi
         if [[ ! "$spec" =~ ^[A-Za-z0-9._-]+(==)?[0-9][A-Za-z0-9._+-]*(\[[^]]+\])?(\;.*)?$ ]]; then
             echo "check-pins: $file: '$spec' does not pin one exact version" >&2
             exact_pin_fail=1

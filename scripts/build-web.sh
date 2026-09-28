@@ -61,23 +61,26 @@ trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/server" "$STAGE/wasm"
 
 
-# React and Radix are bundled to one IIFE per surface. `--format=iife` keeps the
+# Preact and Radix are bundled to one IIFE per surface. `--format=iife` keeps the
 # result a classic script, which is what the server inlines into <script> and
 # what the shell loads with `defer`.
 #
+# These are Preact bundles: the shadcn/ui components and Radix primitives under
+# src/web/ui/ import from `react` and `react-dom` because that is their published
+# API, and `vendor/react` / `vendor/react-dom` are file: dependencies that
+# re-export preact/compat under those names. bun 1.4.0 has no module aliasing, so
+# the shim packages are how the substitution happens, for the bundler, the test
+# run and tsc alike.
+#
 # The bundles are fully minified, identifiers included. app.js is inlined into
 # the one HTML document server.zig serves, so every cold visit downloads the
-# whole bundle: mangling takes that document from 152 KB to 116 KB gzipped
-# (701 KB to 368 KB raw), a quarter off the only response on the first-paint
-# path. The earlier reason for dropping it does not reproduce: three mangled
-# builds of the same sources came out byte-identical, and the mangled and
-# unmangled bundles agree byte-for-byte between bun 1.4.0 and 1.4.2, so
-# `scripts/check-web-artifacts.sh` byte-compares a deterministic artifact. If a
-# bun release ever makes the mangler unstable again, that gate is what catches
-# it, and the artifact goes back to `--minify-whitespace --minify-syntax`.
+# whole bundle. `scripts/check-web-artifacts.sh` byte-compares the committed
+# output, so the bundler is pinned to bun 1.4.0 above; if a bun release makes the
+# mangler unstable, that gate is what catches it, and the artifact goes back to
+# `--minify-whitespace --minify-syntax`.
 #
-# NODE_ENV=production selects React's production build; without it the bundle
-# carries the development build and its warnings.
+# NODE_ENV=production selects the production build of preact/compat; without it
+# the bundle carries the development build and its warnings.
 export NODE_ENV=production
 bun build src/web/app.tsx --outfile "$STAGE/server/app.js" \
     --format=iife --minify --target browser
@@ -85,17 +88,17 @@ bun build web/shell.tsx --outfile "$STAGE/wasm/shell.js" \
     --format=iife --minify --target browser
 # The SDK stays unminified and framework-free: it is a documented module for
 # embedders that load agave.js next to their own page, so it has to stay
-# readable, and nothing about the React UI changes its contract.
+# readable, and nothing about the UI framework changes its contract.
 bun build web/agave.ts --outfile "$STAGE/wasm/agave.js" \
     --format=iife --target browser
 
 # server.zig concatenates head.html + style.css + body.html + app.js into one
 # page, so app.js is inlined into a <script> element. The HTML parser ends a
-# classic script at the first `</script` even inside a string literal, and React
-# DOM's createElement carries exactly one ("<script></script>" builds a script
-# node from markup). `\/` is the same character in a JS string, so the bundle
-# stays byte-identical outside that one escape. Only the inlined bundle needs
-# it; the shell is loaded from a file.
+# classic script at the first `</script` even inside a string literal, and a
+# bundled dependency that builds a script node from markup carries one
+# ("<script></script>"). `\/` is the same character in a JS string, so the
+# bundle stays byte-identical outside that one escape. Only the inlined bundle
+# needs it; the shell is loaded from a file.
 if grep -q '</script' "$STAGE/server/app.js"; then
     # Write-then-rename rather than `sed -i`: GNU and BSD sed disagree on
     # whether -i takes a suffix argument.

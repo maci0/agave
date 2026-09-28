@@ -630,7 +630,7 @@ pub fn build(b: *std.Build) void {
             ).step);
         }
 
-        // The committed web bundles are minified, so the notices of the React
+        // The committed web bundles are minified, so the notices of the Preact
         // and Radix code inside them exist nowhere in the release. The
         // GPL-3.0-or-later grant requires them to travel with it, and a notices
         // file nobody re-checks goes stale on the first dependency bump.

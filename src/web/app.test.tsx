@@ -1,7 +1,7 @@
 /**
  * Runtime smoke test for the serve chat UI.
  *
- * The UI is a React tree that only exists once it is mounted, so this drives the
+ * The UI is a Preact tree that only exists once it is mounted, so this drives the
  * real entry point against a stubbed server in a DOM: it proves the bundle
  * mounts, the SSE stream paints, and the turn lands in the log. It also pins the
  * two properties the markdown path owes model output: a turn renders as text
@@ -39,7 +39,7 @@ const clearCdn = (): void => {
  *  whatever was in it, so one node serves both. */
 const markdownTarget = document.createElement('div');
 
-/** Let React flush its concurrent render and the stream throttle timer. */
+/** Let Preact flush its render and the stream throttle timer. */
 const settle = (ms = 1): Promise<void> =>
   // oxlint-disable-next-line promise/avoid-new -- a timer is the only clock the test needs
   new Promise(function (resolve) { setTimeout(resolve, ms); });
@@ -48,7 +48,7 @@ const tick = async (times = 4): Promise<void> => {
   for (let index = 0; index < times; index += 1) { await settle(5); }
 };
 
-/** Poll for a condition. React commits on its own scheduler, so a fixed
+/** Poll for a condition. Preact commits on its own scheduler, so a fixed
  *  number of ticks is a guess the loaded machine can lose. */
 const waitFor = async (condition: () => boolean): Promise<boolean> => {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -59,7 +59,7 @@ const waitFor = async (condition: () => boolean): Promise<boolean> => {
 };
 
 afterAll(async function () {
-  // React's scheduler drains through `window`, so let the pending work from
+  // Preact's scheduler drains through `window`, so let the pending work from
   // The mounted trees land before the registrator takes the DOM globals away.
   for (let index = 0; index < 40; index += 1) { await settle(5); }
   await GlobalRegistrator.unregister();
@@ -123,7 +123,7 @@ test('a prompt streams into the log and the model badge resolves', async functio
   expect(input).not.toBeNull();
   if (!input) { throw new Error('composer input missing'); }
 
-  // React installs its own value setter on the node, so the native descriptor
+  // The framework installs its own value setter on the node, so the native descriptor
   // Is the only way to write a value the controlled input will observe.
   // oxlint-disable-next-line typescript-eslint/unbound-method -- `.call` below binds the node, which is the point
   const { set: nativeSetter } = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value') ?? {};

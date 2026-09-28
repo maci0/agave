@@ -4,7 +4,7 @@
 # ///
 """Every third-party package that ships in a committed bundle is listed in THIRD_PARTY_NOTICES.md.
 
-`src/web/app.js` and `web/shell.js` are committed minified bundles of React,
+`src/web/app.js` and `web/shell.js` are committed minified bundles of Preact,
 Radix, lucide and friends. The bundler drops every upstream license header, and
 the project is GPL-3.0-or-later, which requires the copyright and permission
 notices of the bundled code to travel with it. A notices file nobody regenerates
@@ -73,25 +73,47 @@ def read_lock(root: Path) -> dict[str, dict[str, dict[str, str]]]:
     return packages
 
 
+def local_package(root: Path, spec: str) -> Path | None:
+    """Resolve a `file:`/`link:` dependency spec to its directory.
+
+    `vendor/react` and `vendor/react-dom` are repo-local shims that re-export
+    preact/compat under the names the shadcn/ui components and Radix import. They
+    are this project's own source, so they are not third-party notices entries;
+    what they re-export is, so the walk continues into their manifests.
+    """
+    for prefix in ("file:", "link:"):
+        if spec.startswith(prefix):
+            return (root / spec[len(prefix):]).resolve()
+    return None
+
+
 def production_closure(root: Path) -> set[str]:
-    """Every name@version reachable from package.json dependencies, transitively."""
+    """Every third-party name@version reachable from package.json dependencies."""
     manifest = json.loads(strip_jsonc((root / "package.json").read_text()))
     lock = read_lock(root)
 
-    missing = sorted(name for name in manifest["dependencies"] if name not in lock)
+    deps: list[tuple[str, str]] = list(manifest["dependencies"].items())
+    missing = sorted(
+        name for name, spec in deps if name not in lock and local_package(root, spec) is None
+    )
     if missing:
         sys.exit(f"check-third-party-notices: package.json dependencies absent from bun.lock: {', '.join(missing)}")
 
     closure: set[str] = set()
-    queue = list(manifest["dependencies"])
+    queue: list[tuple[str, str]] = deps
     while queue:
-        name = queue.pop()
+        name, spec = queue.pop()
+        shim = local_package(root, spec)
+        if shim is not None:
+            inner = json.loads(strip_jsonc((shim / "package.json").read_text()))
+            queue.extend(inner.get("dependencies", {}).items())
+            continue
         versions = lock.get(name)
         if versions is None:
             sys.exit(f"check-third-party-notices: transitive dependency {name} is absent from bun.lock")
-        for version, deps in versions.items():
+        for version, deps_of in versions.items():
             closure.add(f"{name}@{version}")
-            queue.extend(deps)
+            queue.extend(deps_of.items())
     return closure
 
 

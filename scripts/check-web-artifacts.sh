@@ -67,16 +67,16 @@ done
 # deliberately, with the measurement that justified it, never as a side effect
 # of a dependency bump.
 #
-#   app.js    116052   (whole chat UI, React + Radix, inlined into the page)
-#   style.css   6717   (Tailwind, inlined into the page)
-#   shell.js   84158   (React shell, deferred script next to agave.wasm)
-#   style.css   6081   (Tailwind for the shell page)
+#   app.js     49771   (whole chat UI, Preact + Radix, inlined into the page)
+#   style.css   6737   (Tailwind, inlined into the page)
+#   shell.js   25090   (Preact shell, deferred script next to agave.wasm)
+#   style.css   6089   (Tailwind for the shell page)
 #   agave.js    2795   (hand-written SDK, unminified for embedders, so loose)
 declare -a size_breaches=()
 for spec in \
-    "src/web/app.js 128000" \
+    "src/web/app.js 55000" \
     "src/web/style.css 8000" \
-    "web/shell.js 93000" \
+    "web/shell.js 27000" \
     "web/style.css 7500" \
     "web/agave.js 4000"
 do

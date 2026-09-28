@@ -95,6 +95,10 @@
 		".web-ts-out/**",
 		"src/web/app.js",
 		"web/agave.js",
-		"web/shell.js"
+		"web/shell.js",
+		// Module-substitution shims: they exist only to re-export preact/compat
+		// under the name `react`, so they are barrels with no application code.
+		// See vendor/README.md.
+		"vendor/**"
 	]
 }

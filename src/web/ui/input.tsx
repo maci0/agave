@@ -2,8 +2,8 @@ import type { InputHTMLAttributes, Ref } from 'react';
 import { cn } from './cn';
 
 type InputProps = InputHTMLAttributes<HTMLInputElement> & {
-  /** React 19 passes `ref` as an ordinary prop, so a plain function component
-   *  can forward it without `forwardRef`. */
+  /** The framework passes `ref` as an ordinary prop, so a plain function
+   *  component forwards it without `forwardRef`. */
   ref?: Ref<HTMLInputElement>;
 };
 
