@@ -153,6 +153,9 @@ fn rmsNormStage(
 
     local_ss = cu.blockReduceAdd(local_ss);
 
+    // Nondeterministic accumulator: block arrival order is the GPU's, so `ss`
+    // differs in the low bits between runs with identical inputs. See
+    // mega_qwen35_q8.zig for the full note.
     if (tid == 0 and local_ss != 0.0) {
         _ = asm volatile ("atom.global.add.f32 %[ret], [%[ptr]], %[val];"
             : [ret] "=f" (-> f32),

@@ -125,7 +125,12 @@ fn rmsNormStage(
     // Intra-block reduction
     local_ss = cu.blockReduceAdd(local_ss);
 
-    // Atomic add to global sum (f32 atomic supported on sm_20+)
+    // Nondeterministic accumulator: the arrival order of the blocks is the
+    // GPU's, so two runs with the same inputs land different partial sums in
+    // different orders and `ss` differs in the low bits, which `inv_rms` then
+    // spreads across every normalized weight. A --seed replay is therefore not
+    // bit-exact here. A deterministic version needs one partial slot per block
+    // summed in block-index order, not an atomic add.
     if (tid == 0 and local_ss != 0.0) {
         _ = asm volatile ("atom.global.add.f32 %[ret], [%[ptr]], %[val];"
             : [ret] "=f" (-> f32),

@@ -111,7 +111,12 @@ fn rmsNormStage(
     // Intra-workgroup reduction
     local_ss = cu.blockReduceAdd(local_ss);
 
-    // Atomic float add to global sum
+    // Nondeterministic accumulator: the arrival order of the workgroups is the
+    // GPU's, so two runs with the same inputs land different partial sums in
+    // different orders and `ss` differs in the low bits, which `inv_rms` then
+    // spreads across every normalized weight. A --seed replay is therefore not
+    // bit-exact here. A deterministic version needs one partial slot per
+    // workgroup summed in block-index order, not an atomic add.
     if (tid == 0 and local_ss != 0.0) {
         _ = @atomicRmw(f32, @as(*f32, @ptrCast(ss_buf)), .Add, local_ss, .monotonic);
     }
