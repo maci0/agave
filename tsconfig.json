@@ -23,5 +23,5 @@
     "removeComments": false,
     "types": ["bun"]
   },
-  "include": ["app.tsx", "app.test.tsx", "globals.d.ts", "chat/**/*", "ui/**/*", "../../web/agave.ts", "../../web/shell.tsx", "../../web/load-errors.ts", "../../web/use-model-loader.ts"]
+  "include": ["src/web/app.tsx", "src/web/app.test.tsx", "src/web/globals.d.ts", "src/web/chat/**/*", "src/web/ui/**/*", "web/agave.ts", "web/shell.tsx", "web/load-errors.ts", "web/use-model-loader.ts"]
 }
