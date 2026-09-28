@@ -280,20 +280,27 @@ do_backup() {
     verify_store "$dest"
     # The sidecars are the only remaining trace of state the server did not
     # keep at the live path: a store it could not parse, and a store it
-    # loaded only in part. Losing either loses recoverable data. The name is
+    # loaded only in part. Losing either loses recoverable data. The server
+    # numbers a second sidecar of the same kind (`.corrupt.1`, `.overflow.1`)
+    # instead of overwriting the first, so every slot is copied. The name is
     # stamped once: stamping per use straddles a second boundary and verifies
     # a file that was never written.
-    local suffix
+    local suffix sidecar sidecar_copy index
     for suffix in corrupt overflow; do
-        local sidecar="$live.$suffix"
-        [[ -f "$sidecar" ]] || continue
-        local sidecar_copy
-        sidecar_copy="$dir/conversations-$suffix-$(stamp).json"
-        [[ -e "$sidecar_copy" ]] && sidecar_copy="${sidecar_copy%.json}-$$.json"
-        copy_atomic "$sidecar" "$sidecar_copy"
-        verify_store "$sidecar_copy" ||
-            note "kept $sidecar_copy even though it does not verify; it is the only copy"
-        note "backed up $suffix store $sidecar"
+        for sidecar in "$live.$suffix" "$live.$suffix".[0-9]*; do
+            [[ -f "$sidecar" ]] || continue
+            index="${sidecar##*.}"
+            [[ "$index" == "$suffix" ]] && index=""
+            sidecar_copy="$dir/conversations-$suffix-$(stamp).json"
+            # The slot number goes last, where the same-second collision
+            # suffix already lives, so both stay inside SNAPSHOT_RE.
+            [[ -n "$index" ]] && sidecar_copy="${sidecar_copy%.json}-$index.json"
+            [[ -e "$sidecar_copy" ]] && sidecar_copy="${sidecar_copy%.json}-$$.json"
+            copy_atomic "$sidecar" "$sidecar_copy"
+            verify_store "$sidecar_copy" ||
+                note "kept $sidecar_copy even though it does not verify; it is the only copy"
+            note "backed up $suffix store $sidecar"
+        done
     done
     prune "$dir"
     note "backed up $live -> $dest"
@@ -395,6 +402,19 @@ do_self_test() {
     # other user of the host whatever umask the operator runs with.
     if [[ "$(stat -c '%a' -- "$backup")" != "600" ]]; then
         echo "conv-store-backup: self-test FAILED: backup mode is $(stat -c '%a' -- "$backup"), expected 600" >&2
+        status=1
+    fi
+
+    # A second quarantine of the same kind lands at `.corrupt.1` beside the
+    # first, and both are the only copy of what they hold: every slot is
+    # backed up, and the copies stay distinct.
+    printf '%s' '{"version":1,"active_id":0,"next_id":1,"conversations":[]}' >"$tmp/cache/agave/conversations.json.corrupt"
+    printf '%s' '{"version":1,"active_id":0,"next_id":2,"conversations":[]}' >"$tmp/cache/agave/conversations.json.corrupt.1"
+    AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup >/dev/null
+    local kept_corrupt
+    kept_corrupt="$(find "$tmp/backups" -name 'conversations-corrupt-*.json' | wc -l | tr -d ' ')"
+    if [[ "$kept_corrupt" -lt 2 ]]; then
+        echo "conv-store-backup: self-test FAILED: 2 quarantined stores, $kept_corrupt copies in the tier" >&2
         status=1
     fi
 

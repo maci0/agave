@@ -42,7 +42,10 @@ Other verified properties, so a future pass leaves them alone:
 - A conversation store that fails to parse is quarantined by rename (or, if
   the rename fails, by writing a copy) to `{path}.corrupt` before the live path
   is reused, so a bad parse never destroys the only copy
-  (`src/server/conv_store.zig`).
+  (`src/server/conv_store.zig`). A second quarantine takes `{path}.corrupt.1`
+  rather than replacing the first: each holds a different store, and each is the
+  only copy of it. Up to 8 slots per kind are kept, and a full set is reported
+  with persistence disabled rather than overwriting one of them.
 - Any load failure other than corruption disables persistence for that run
   instead of overwriting the file with an empty list (`src/server/server.zig`,
   `loadConversationsLocked`). A store whose envelope version this build does
@@ -53,7 +56,9 @@ Other verified properties, so a future pass leaves them alone:
   rather than rejected, and the next save writes back only what loaded. So the
   load writes the whole original to `{path}.overflow` first: without it, the
   part past the caps is destroyed by the first save and the backup taken after
-  that save never saw it (`src/server/conv_store.zig`, `preserveOverflow`).
+  that save never saw it (`src/server/conv_store.zig`, `preserveOverflow`). A
+  second capped store takes `{path}.overflow.1` instead of overwriting the
+  first, by the same slot rule as the quarantine copy.
 - A conversation id is the store's primary key, so a store carrying the same id
   twice keeps the first record and drops the later one, which no lookup could
   reach behind it. The drop is treated like a cap overflow: the whole original
@@ -130,7 +135,7 @@ directory are not interchangeable:
 | Kind | Name | Retained by | Default |
 |---|---|---|---|
 | Dated backup | `conversations-<stamp>.json` | `AGAVE_KEEP` | 14 |
-| Quarantined store, overflow store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-overflow-<stamp>.json`, `conversations-prerestore-<stamp>.json` | `AGAVE_KEEP_SNAPSHOT` | 5 |
+| Quarantined store, overflow store, pre-restore snapshot | `conversations-corrupt-<stamp>.json`, `conversations-overflow-<stamp>.json`, `conversations-prerestore-<stamp>.json` (numbered sidecars end in `-<slot>.json`) | `AGAVE_KEEP_SNAPSHOT` | 5 |
 
 Rotation of dated backups never touches the snapshot tier: a quarantined store
 is the only remaining copy of a file the server could not parse, an overflow
