@@ -223,10 +223,54 @@
     background: var(--color-background);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
+    /* The top inset holds the language label and the copy key (both added by
+       the markdown pipeline, see markdown.ts decorateCodeBlock), so neither
+       sits on the first line of code. */
     padding: 14px;
+    padding-top: 40px;
     overflow-x: auto;
     margin: 12px 0;
     position: relative;
+  }
+
+  /* The language label and the copy key are the only controls the markdown
+     pipeline adds, and they are the only things inside a pre. 24px is the
+     WCAG 2.2 AA minimum target (SC 2.5.8); the padding takes the box to 32px. */
+  .agave-prose .code-lang {
+    position: absolute;
+    top: 4px;
+    inset-inline-start: 14px;
+    max-width: calc(100% - 120px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--color-faint);
+  }
+
+  .agave-prose .copy-btn {
+    position: absolute;
+    top: 4px;
+    inset-inline-end: 8px;
+    display: inline-flex;
+    min-height: 24px;
+    min-width: 24px;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--color-card);
+    color: var(--color-muted-foreground);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+
+  .agave-prose .copy-btn:hover {
+    border-color: var(--color-primary);
+    color: var(--color-primary);
   }
 
   .agave-prose pre code {

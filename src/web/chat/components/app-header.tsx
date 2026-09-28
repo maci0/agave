@@ -33,8 +33,14 @@ const ContextBadge = ({ ctx }: { ctx: Context | null }) => {
   const label = `${nearFull ? '!\u00A0' : ''}${fmtCtx(ctx.used)}/${fmtCtx(ctx.max)}`;
   const described = `${nearFull ? 'Context nearly full' : 'Context'}: ${fmtInt(ctx.used)} of ${fmtInt(ctx.max)} tokens used`;
   return (
-    <Badge variant={nearFull ? 'warning' : 'default'} className="ms-2 shrink-0" title={described} aria-label={described}>
-      {label}
+    // A span has the generic role, which takes no accessible name, so the
+    // Label this badge used to carry was dropped: the counter reached a
+    // Screen reader as a bare ratio, with the near-full warning left to a "!"
+    // Glyph and a color. The sentence is real text instead, and the numbers it
+    // Repeats are hidden so the badge is not read twice.
+    <Badge variant={nearFull ? 'warning' : 'default'} className="ms-2 shrink-0" title={described}>
+      <span aria-hidden="true">{label}</span>
+      <span className="sr-only">{described}</span>
     </Badge>
   );
 };
