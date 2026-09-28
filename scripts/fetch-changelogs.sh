@@ -48,25 +48,18 @@ fetch_url() {
 
 # ── Engines ──────────────────────────────────────────────────────────────────
 
-# vLLM
 fetch_github_releases "vllm" "vllm-project/vllm" 4
 
-# SGLang
 fetch_github_releases "sglang" "sgl-project/sglang" 4
 
-# llama.cpp
 fetch_github_releases "llamacpp" "ggml-org/llama.cpp" 4
 
-# TensorRT-LLM
 fetch_github_releases "tensorrt-llm" "NVIDIA/TensorRT-LLM" 4
 
-# HuggingFace TGI
 fetch_github_releases "tgi" "huggingface/text-generation-inference" 4
 
-# Ollama
 fetch_github_releases "ollama" "ollama/ollama" 4
 
-# MLX
 fetch_github_releases "mlx" "ml-explore/mlx" 4
 
 # MLX-LM (language model layer on top of MLX)

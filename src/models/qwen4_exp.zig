@@ -67,7 +67,7 @@ const default_mlx_bits = model_mod.default_mlx_bits;
 /// layers, optional MoE FFN. Shares its layer plumbing with Qwen3.5.
 pub const Qwen4ExpModel = struct {
     /// Norm weight cache: permanently dequantized BF16 norm weights keyed by data pointer.
-    /// Avoids reusing dequant_buf for GPU ops (Metal buf_cache would serve stale data).
+    /// Avoids a shared dequant scratch: Metal's buf_cache would serve stale data.
     // Deepest configs: 64 layers × 5 norms + output + Q/K/V biases ≈ 321+ entries.
     const max_norm_entries: usize = 512;
     const NormCacheEntry = model_mod.NormCacheEntry;
@@ -146,7 +146,6 @@ pub const Qwen4ExpModel = struct {
     ssm_conv_out: []f32 = &.{},
     ssm_alpha_buf: []f32 = &.{},
     ssm_beta_buf: []f32 = &.{},
-    dequant_buf: []f32 = &.{}, // scratch for dequantizing non-F32 tensors (CPU-only, not GPU-safe)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
 
@@ -179,15 +178,6 @@ pub const Qwen4ExpModel = struct {
     /// Per-layer DeltaNet flag: true if this layer is a DeltaNet SSM layer.
     /// Populated during init; uses tensor presence for MTP-aware detection.
     layer_is_deltanet: []bool = &.{},
-
-    // Qwen4-Exp specific (Flash-Next): Gated Residual, PLE, QSA indexer
-    hc_count: u32 = 4,
-    hc_lowrank: u32 = 320,
-    ple_layer_id: u32 = 2, // ple_layer_ids[0]
-    indexer_budget: u32 = 2048,
-    indexer_compress_ratio: u32 = 4,
-    indexer_n_heads: u32 = 4,
-    ple_embed_dim: u32 = 2560,
 
     // KV cache (PagedAttention or TieredKvCache)
     paged_cache: PagedKvCache = undefined,
@@ -377,13 +367,6 @@ pub const Qwen4ExpModel = struct {
                 self.shared_expert_ff_dim = f.getMetaU32("shared_expert_intermediate_size") orelse
                     f.getArchU32(arch, "expert_shared_feed_forward_length") orelse self.expert_ff_dim;
                 self.n_ff = @max(self.expert_ff_dim, self.n_head * self.head_dim);
-                self.hc_count = f.getMetaU32("hc_count") orelse 4;
-                self.hc_lowrank = f.getMetaU32("hc_lowrank") orelse 320;
-                self.ple_layer_id = if (f.getMetaU32("ple_layer_ids") != null) 2 else 2;
-                self.indexer_budget = f.getMetaU32("indexer_budget") orelse 2048;
-                self.indexer_compress_ratio = f.getMetaU32("indexer_compress_ratio") orelse 4;
-                self.indexer_n_heads = f.getMetaU32("indexer_n_heads") orelse 4;
-                self.ple_embed_dim = self.n_embd;
             }
         }
         if (f.getArchF32(arch, "rope.freq_base")) |v| self.rope_theta = v;
@@ -563,10 +546,6 @@ pub const Qwen4ExpModel = struct {
         errdefer allocator.free(self.ssm_alpha_buf);
         self.ssm_beta_buf = try allocator.alloc(f32, self.ssm_dt_rank);
         errdefer allocator.free(self.ssm_beta_buf);
-        // Scratch for dequantizing non-F32 tensors: largest is conv1d weight (d_conv * conv_ch)
-        const dequant_size = @max(self.ssm_d_conv * conv_ch, self.n_embd);
-        self.dequant_buf = try allocator.alloc(f32, dequant_size);
-        errdefer allocator.free(self.dequant_buf);
 
         // MoE-specific buffers
         if (self.is_moe) {
@@ -777,7 +756,6 @@ pub const Qwen4ExpModel = struct {
         self.allocator.free(self.ssm_conv_out);
         self.allocator.free(self.ssm_alpha_buf);
         self.allocator.free(self.ssm_beta_buf);
-        self.allocator.free(self.dequant_buf);
         if (self.is_moe) {
             self.allocator.free(self.router_logits);
             self.allocator.free(self.moe_out);

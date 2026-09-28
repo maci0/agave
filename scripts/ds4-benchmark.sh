@@ -19,21 +19,10 @@ echo ""
 benchmark_model() {
     local name="$1"
     local model="$2"
-    # Third argument is a flag string ("--kq-type q8 -ctk q8"); split it once
-    # so each flag stays a separate argv entry.
-    local -a extra_args=()
-    if [[ -n "${3:-}" ]]; then
-        read -r -a extra_args <<< "$3"
-    fi
-    # bash 3.2 (the macOS default) treats "${arr[@]}" on an empty array as
-    # unset under set -u, so the extras are spliced in only when present.
     local -a base=("$AGAVE" "$model" --ssd-streaming)
-    if [[ ${#extra_args[@]} -gt 0 ]]; then
-        base+=("${extra_args[@]}")
-    fi
-    
+
     echo "--- $name ---"
-    
+
     # Check model exists
     if [[ ! -f "$model" ]]; then
         echo "  SKIP: model not found: $model"

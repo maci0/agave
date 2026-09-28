@@ -50,7 +50,7 @@ const default_mlx_bits = model_mod.default_mlx_bits;
 /// Qwen3.5 hybrid model with DeltaNet SSM, full attention layers, and optional MoE FFN.
 pub const Qwen35Model = struct {
     /// Norm weight cache: permanently dequantized BF16 norm weights keyed by data pointer.
-    /// Avoids reusing dequant_buf for GPU ops (Metal buf_cache would serve stale data).
+    /// A shared dequant scratch would be recycled by Metal's buf_cache and serve stale data.
     // Deepest configs: 64 layers × 5 norms + output + Q/K/V biases ≈ 321+ entries.
     const max_norm_entries: usize = 512;
     const NormCacheEntry = model_mod.NormCacheEntry;
@@ -129,7 +129,6 @@ pub const Qwen35Model = struct {
     ssm_conv_out: []f32 = &.{},
     ssm_alpha_buf: []f32 = &.{},
     ssm_beta_buf: []f32 = &.{},
-    dequant_buf: []f32 = &.{}, // scratch for dequantizing non-F32 tensors (CPU-only, not GPU-safe)
     norm_cache: [max_norm_entries]NormCacheEntry = undefined,
     norm_cache_len: usize = 0,
 
@@ -512,10 +511,6 @@ pub const Qwen35Model = struct {
         errdefer allocator.free(self.ssm_alpha_buf);
         self.ssm_beta_buf = try allocator.alloc(f32, self.ssm_dt_rank);
         errdefer allocator.free(self.ssm_beta_buf);
-        // Scratch for dequantizing non-F32 tensors: largest is conv1d weight (d_conv * conv_ch)
-        const dequant_size = @max(self.ssm_d_conv * conv_ch, self.n_embd);
-        self.dequant_buf = try allocator.alloc(f32, dequant_size);
-        errdefer allocator.free(self.dequant_buf);
 
         // MoE-specific buffers
         if (self.is_moe) {
@@ -726,7 +721,6 @@ pub const Qwen35Model = struct {
         self.allocator.free(self.ssm_conv_out);
         self.allocator.free(self.ssm_alpha_buf);
         self.allocator.free(self.ssm_beta_buf);
-        self.allocator.free(self.dequant_buf);
         if (self.is_moe) {
             self.allocator.free(self.router_logits);
             self.allocator.free(self.moe_out);
