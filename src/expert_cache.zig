@@ -78,10 +78,12 @@ pub const ExpertCache = struct {
         const n_slots = @min(n_cache_slots, @as(u32, @intCast(max_cache_slots)));
         if (n_slots == 0) return error.ZeroCacheSlots;
         const slots = try allocator.alloc(CacheSlot, n_slots);
+        errdefer allocator.free(slots);
         @memset(slots, CacheSlot{});
 
         const lookup_size = @as(usize, n_layers) * @as(usize, n_experts);
         const lookup = try allocator.alloc(?u32, lookup_size);
+        errdefer allocator.free(lookup);
         @memset(lookup, null);
 
         const pinned = try allocator.alloc(PinnedRange, max_pin_ranges);
@@ -376,6 +378,19 @@ test "ExpertCache zero slots rejected; OOR admit is sentinel" {
     // OOR must not evict the resident expert
     try std.testing.expectEqual(std.math.maxInt(u32), cache.admit(99, 0));
     try std.testing.expect(cache.touch(0, 0));
+}
+
+test "ExpertCache init frees the arrays it already built when a later one fails" {
+    // The slot array, lookup table, and pinned ranges are three separate
+    // allocations: an error out of the second or third must not strand the
+    // earlier ones.
+    const initAndDeinit = struct {
+        fn f(allocator: std.mem.Allocator) !void {
+            var cache = try ExpertCache.init(allocator, 2, 4, 2);
+            cache.deinit(allocator);
+        }
+    }.f;
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, initAndDeinit, .{});
 }
 
 test "fuzz: admit + touch out-of-range ids" {
