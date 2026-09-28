@@ -17,7 +17,7 @@ export const Input = ({ className, type, ...props }: InputProps) => (
     className={cn(
       'min-h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground',
       'transition-[border-color,box-shadow] outline-none',
-      'focus:border-primary focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-primary)_10%,transparent)]',
+      'focus:border-primary focus:shadow-focus',
       'disabled:pointer-events-none disabled:opacity-60',
       className,
     )}

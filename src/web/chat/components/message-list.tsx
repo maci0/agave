@@ -3,6 +3,8 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Message } from './message';
 import { Button } from '../../ui/button';
 import type { Bubble, Toast } from '../types';
+import { EmptyState } from '../../ui/empty-state';
+import { HintAction, HintChip } from '../../ui/hint-chip';
 import { cn } from '../../ui/cn';
 
 const TOAST_INFO_MS = 5000;
@@ -57,29 +59,18 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
   );
 };
 
-const EmptyState = ({ vision, onRunCommand }: { vision: boolean; onRunCommand: (command: string) => void }) => (
-  <div className="m-auto px-5 py-10 text-center">
-    <span className="mark mark-lg" aria-hidden="true" />
-    <h2 className="mb-2 font-mono text-lg font-semibold text-foreground">Prompt the model</h2>
-    <p className="mb-6 text-base text-muted-foreground">Runs locally. Conversations stay on this machine.</p>
-    <div className="flex flex-wrap justify-center gap-2">
-      <button
-        type="button"
-        onClick={function () { onRunCommand('/help'); }}
-        className="inline-flex min-h-11 items-center justify-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint underline decoration-primary decoration-2 underline-offset-2 transition-colors hover:border-primary hover:text-primary"
-      >
-        /help for commands
-      </button>
-      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
-        Enter to send
-      </span>
-      {vision ? (
-        <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
-          Paste or drop an image
-        </span>
-      ) : null}
-    </div>
-  </div>
+const TranscriptEmptyState = ({ vision, onRunCommand }: { vision: boolean; onRunCommand: (command: string) => void }) => (
+  <EmptyState
+    title="Prompt the model"
+    line="Runs locally. Conversations stay on this machine."
+    hints={
+      <>
+        <HintAction label="Show the command list" onClick={function () { onRunCommand('/help'); }}>/help for commands</HintAction>
+        <HintChip>Enter to send</HintChip>
+        {vision ? <HintChip>Paste or drop an image</HintChip> : null}
+      </>
+    }
+  />
 );
 type MessageListProps = {
 bubbles: Array<Bubble>;
@@ -160,7 +151,7 @@ return (
     className="agave-scroll flex flex-1 flex-col gap-6 overflow-y-auto px-6 pt-6 pb-2 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary max-drawer:px-4 max-drawer:pt-4"
   >
     {props.bubbles.length === 0 && props.toasts.length === 0 && !props.loading ? (
-      <EmptyState vision={props.vision} onRunCommand={props.onRunCommand} />
+      <TranscriptEmptyState vision={props.vision} onRunCommand={props.onRunCommand} />
     ) : null}
     {props.loading ? <div role="status" className="m-auto font-mono text-xs text-faint">Loading conversation…</div> : null}
     {props.bubbles.map(function (bubble) {

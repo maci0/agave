@@ -100,7 +100,7 @@ const PromptField = (props: PromptFieldProps) => (
       }
     }}
     // Min-width: 0 lets the field shrink below its intrinsic width.
-    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-relaxed text-base text-foreground transition-[border-color,box-shadow] outline-none focus:border-primary focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--color-primary)_10%,transparent)] disabled:opacity-50 max-drawer:text-[16px]"
+    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-relaxed text-base text-foreground transition-[border-color,box-shadow] outline-none focus:border-primary focus:shadow-focus disabled:opacity-50 max-drawer:text-[16px]"
   />
 );
 

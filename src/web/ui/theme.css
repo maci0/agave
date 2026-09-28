@@ -70,6 +70,13 @@
 
   --animate-pulse-soft: pulse-soft 1.2s ease-in-out infinite;
 
+  /* Focus and hover washes: the one soft ring every control wears, in the
+     three strengths it uses. Written once here so a text field, a slider and
+     the composer cannot drift apart on it. */
+  --shadow-focus: 0 0 0 3px color-mix(in oklab, var(--color-primary) 10%, transparent);
+  --shadow-halo: 0 0 0 4px color-mix(in oklab, var(--color-primary) 15%, transparent);
+  --shadow-halo-focus: 0 0 0 4px color-mix(in oklab, var(--color-primary) 25%, transparent);
+
   /* The agave rosette, inlined so both surfaces and the favicon stay in step. */
   --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-56 -72 112 88' fill='none' stroke='%23000' stroke-linecap='round'%3E%3Cpath stroke-width='6' d='M0-70Q5-35 0 0'/%3E%3Cpath stroke-width='5' d='M0 0Q-20-30-15-65'/%3E%3Cpath stroke-width='5' d='M0 0Q20-30 15-65'/%3E%3Cpath stroke-width='4.5' d='M0 0Q-30-20-35-50'/%3E%3Cpath stroke-width='4.5' d='M0 0Q30-20 35-50'/%3E%3Cpath stroke-width='4' d='M0 5Q-35-5-48-25'/%3E%3Cpath stroke-width='4' d='M0 5Q35-5 48-25'/%3E%3Cpath stroke-width='3.5' d='M0 10Q-38 5-55-8'/%3E%3Cpath stroke-width='3.5' d='M0 10Q38 5 55-8'/%3E%3C/svg%3E");
 
