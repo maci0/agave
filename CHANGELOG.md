@@ -11,7 +11,74 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Breaking
+- A pre-routing 403 on an Anthropic-envelope route (`/v1/messages`) now returns
+  the Anthropic error body, not the OpenAI one. Before: a request rejected for a
+  non-loopback `Host` or a cross-origin `Origin` on an unauthenticated server
+  answered `{"error":{"message":...,"type":...,"code":"host_forbidden"}}` at
+  status 403. After: `{"type":"error","error":{"type":"invalid_request_error",
+  "message":...}}`. Status codes and the OpenAI routes are unchanged. The
+  Anthropic envelope carries no `code` field, so a client that keys off `code`
+  still finds it on the OpenAI routes; on `/v1/messages`, branch on the status.
+
+### Added
+- A man page, `man/agave.1`, generated from `agave --help` by
+  `scripts/gen-manpage.sh`. `zig build` installs it at
+  `zig-out/share/man/man1/agave.1` and the Docker image ships it at
+  `/usr/share/man/man1/agave.1` (for `docker cp` or a bind mount; the slim base
+  has no `man` binary). `zig build test` fails when the page drifts from the
+  flag list or from the product version, so regenerate it after a flag or
+  version change rather than editing it.
+- `zig build wasm` writes a self-contained `zig-out/web` holding `agave.wasm`
+  plus the `index.html`, `style.css`, `agave.js`, and `shell.js` the page
+  loads by relative URL. Serve that directory instead of the source `web/`.
+
 ### Fixed
+- A 304 for the chat UI document no longer claims `Content-Length: 0`, which
+  contradicted the length the matching 200 reported and could truncate a
+  revalidated document (RFC 9110 15.4.5). `ETag`, `Vary: Accept-Encoding`, and
+  `Cache-Control: private, no-cache` still ride on the 304, so a cache
+  revalidates under the same key. A client that read `Content-Length` off a 304
+  sees no header instead of a wrong one.
+- Spec-decode tokens the target model accepted are written into the target KV
+  cache. Before, the accepted draft prefix was not in that cache, so a
+  prefix-memoized follow-up request could re-attend over a KV that never held
+  the tokens it had just agreed to.
+- A request with an image part no longer publishes its prompt into the shared
+  KV prefix memo, so a later text request cannot match that prefix and read the
+  earlier request's image embeddings back out of the cache.
+- The server no longer holds the conversation mutex across the store's fsync.
+  A save used to block every other request for the length of the disk write.
+- Spec-decode buffers are freed on every server generate path, including the
+  error and abort returns, so a long-lived `--serve` no longer grows per
+  request.
+- Partial rotary dimensions are floored before the integer cast, so a
+  `head_dim * partial_rotary` product with a fractional part picks the smaller
+  even dimension instead of rounding up into the next one. A quantized weight
+  whose group count exceeds its reduction axis, or whose metadata reports
+  `group_size` 0, falls back to the default group size instead of handing a zero
+  divisor to the GEMV.
+- An expert profile recorded for a model with a different expert count is
+  ignored with a warning. Expert ids index the model's expert tensors
+  directly, so the mismatched profile used to prefault, mlock, and
+  DMA-register weight ranges past the end of the tensor.
+- LoRA adapters and DS4 MTP headers are checked against the extents the file
+  actually holds. `rank`, `k`, and `n` come from the adapter, so a crafted
+  product could wrap, allocate a short buffer, and dequant past its end; such a
+  tensor is now skipped with a warning. The peer transport also caps the shared
+  memory segment a peer may name.
+- The chat UI shows the server's error text instead of failing silently, and
+  the log link stays reachable while a response is streaming.
+- The conversation store numbers a second quarantine or overflow sidecar
+  (`{path}.corrupt.1`, `{path}.overflow.1`) instead of overwriting the first, and
+  the backup script copies every numbered slot. Losing either loses state the
+  live path no longer holds.
+- Temp paths for durable and pull reads are created through the sim clock, so a
+  run driven by `--sim-clock-ms` no longer fails on an unwarmed path.
+- `nanosleep` resumes the remainder after a signal. A profiler tick, a terminal
+  resize, or a Ctrl-C on a non-exiting thread used to cut a sleep short, which
+  collapsed the pull retry backoff to an immediate retry and made the server's
+  sleep-mode and drain polls spin instead of pace.
 - A debug env var set to something other than `1` or `0` (`AGAVE_DF2_DEBUG=true`)
   leaves the flag off and now warns at startup instead of looking ignored.
 - `--host`/`--port` and their `AGAVE_HOST`/`AGAVE_PORT` counterparts both set
@@ -22,6 +89,12 @@ must still appear under **Changed** or **Breaking** below. See
   against empty statistics, which was reported as "no .cal file found".
 
 ### Changed
+- A conversation store carrying the same conversation id twice keeps the first
+  record and drops the later one. The id is the store's primary key, so the
+  second record was unreachable behind the first and the next save would have
+  destroyed it with no trace. The drop is treated like a cap overflow: the
+  whole original file is written to `{path}.overflow` first, so a
+  hand-edited or merged store is recoverable from there.
 - The REPL `/clear` and `/reset` commands also drop the line history, so the
   prompts the conversation held cannot be recalled with the up arrow after a
   clear. Prompt and reply buffers are also zeroed before they are freed.
