@@ -64,6 +64,9 @@ pub const SpecState = struct {
     /// Allocate draft log-prob and sampling buffers for speculative decoding.
     /// `k`: maximum draft length. `vocab_size`: model vocabulary size.
     /// Caller owns the returned state and must call `deinit` with the same allocator.
+    /// A success is owned whatever `k` is: the buffers are allocated from
+    /// `vocab_size` alone, so `k == 0` still returns memory the caller must
+    /// release. Track success with a flag, not with `state.k > 0`.
     pub fn init(allocator: std.mem.Allocator, k: u32, vocab_size: u32) !SpecState {
         const n_log_probs = std.math.mul(usize, max_draft_tokens, vocab_size) catch return error.OutOfMemory;
         const draft_log_probs = try allocator.alloc(f32, n_log_probs);
@@ -972,6 +975,17 @@ test "SpecState init and stats" {
     s.total_rounds = 2;
     try std.testing.expectApproxEqAbs(@as(f32, 0.8), s.acceptanceRate(), 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 4.0), s.meanAccepted(), 0.01);
+}
+
+test "SpecState init owns its buffers even when k is zero" {
+    // The server frees a SpecState on the strength of init having succeeded,
+    // not on k > 0. std.testing.allocator reports a leak when the buffers
+    // below outlive the test, so a caller that skips deinit fails here.
+    var s = try SpecState.init(std.testing.allocator, 0, 100);
+    defer s.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, 0), s.k);
+    try std.testing.expectEqual(max_draft_tokens * 100, s.draft_log_probs.len);
+    try std.testing.expectEqual(@as(usize, 100), s.sampling_buf.len);
 }
 
 test "SpecState recordRound updates stats" {

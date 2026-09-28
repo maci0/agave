@@ -4595,8 +4595,12 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     var spec_state_storage: spec_decode.SpecState = undefined;
     var spec_state_valid = false;
     if (has_draft) {
-        spec_state_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
-        spec_state_valid = spec_state_storage.k > 0;
+        if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
+            spec_state_storage = ok;
+            spec_state_valid = true;
+        } else |_| {
+            spec_state_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        }
     }
     defer if (spec_state_valid) spec_state_storage.deinit(g_server.allocator);
 
@@ -5836,8 +5840,12 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
     var a_spec_storage: spec_decode.SpecState = undefined;
     var a_spec_valid = false;
     if (a_has_draft) {
-        a_spec_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
-        a_spec_valid = a_spec_storage.k > 0;
+        if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
+            a_spec_storage = ok;
+            a_spec_valid = true;
+        } else |_| {
+            a_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        }
     }
     defer if (a_spec_valid) a_spec_storage.deinit(g_server.allocator);
 
@@ -6329,8 +6337,12 @@ fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: us
     var r_spec_storage: spec_decode.SpecState = undefined;
     var r_spec_valid = false;
     if (r_has_draft) {
-        r_spec_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
-        r_spec_valid = r_spec_storage.k > 0;
+        if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
+            r_spec_storage = ok;
+            r_spec_valid = true;
+        } else |_| {
+            r_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        }
     }
     defer if (r_spec_valid) r_spec_storage.deinit(g_server.allocator);
 
@@ -7090,8 +7102,12 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
     var s_spec_storage: spec_decode.SpecState = undefined;
     var s_spec_valid = false;
     if (s_has_draft) {
-        s_spec_storage = spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize()) catch spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
-        s_spec_valid = s_spec_storage.k > 0;
+        if (spec_decode.SpecState.init(g_server.allocator, g_server.spec_tokens, model.vocabSize())) |ok| {
+            s_spec_storage = ok;
+            s_spec_valid = true;
+        } else |_| {
+            s_spec_storage = spec_decode.SpecState{ .k = 0, .vocab_size = 0 };
+        }
     }
     defer if (s_spec_valid) s_spec_storage.deinit(g_server.allocator);
 
