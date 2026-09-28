@@ -60,6 +60,8 @@ Leaving `runner` empty keeps the matrix on the GitHub-hosted labels, where the r
 
 `ci-pass` also requires the `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, `kernel-artifacts`, and `reproducible-build` jobs. `zig build ci` does not cover them. Fuzz smoke runs anywhere (`zig build test --fuzz=1000 --summary all`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
 
+Every shell step in `.github/workflows/ci.yml` is a script in `scripts/`, so `zig build lint-shell` analyses the shell CI depends on: `scripts/check-ci-pass.sh` (the `ci-pass` gate, `NEEDS_JSON=${{ toJSON(needs) }}`), `scripts/check-docker-image.sh` (the `docker-build` smoke test), `scripts/build-cross-target.sh` (the `cross-compile-check` matrix), and `scripts/build-wasm.sh` (the `wasm-build` output check). A new `run:` block with logic in it belongs in one of those, not in the YAML.
+
 `reproducible-build` runs `scripts/check-reproducible.sh` (`zig build check-reproducible` locally). It builds the same source twice, from two different directories, with different install prefixes, cache dirs, `SOURCE_DATE_EPOCH`, timezone and locale, and requires the two `agave` binaries to be byte-identical. A mismatch means the build root, the clock or the locale is leaking into a release artifact; the script names the differing SHA256 and, when `diffoscope` is installed, what changed. Run it after touching `build.zig`, the release module options, or anything that can put a path, timestamp or hostname into a binary.
 
 ## Where New Code Goes

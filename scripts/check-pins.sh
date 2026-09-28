@@ -165,17 +165,17 @@ df_uid="$(sed -n 's/^[[:space:]]*.*useradd -r -u \([0-9][0-9]*\).*/\1/p' Dockerf
 df_gid="$(sed -n 's/^[[:space:]]*.*groupadd -r -g \([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
 compose_user="$(sed -n 's/^[[:space:]]*user: "\([0-9][0-9]*\):\([0-9][0-9]*\)".*/\1:\2/p' docker-compose.yml | head -n1)"
 compose_tmpfs="$(sed -n 's/.*uid=\([0-9][0-9]*\),gid=\([0-9][0-9]*\).*/\1:\2/p' docker-compose.yml | head -n1)"
-ci_uid="$(sed -n 's/.*expected USER agave (uid \([0-9][0-9]*\)).*/\1/p' .github/workflows/ci.yml | head -n1)"
+ci_uid="$(sed -n 's/.*expected USER agave (uid \([0-9][0-9]*\)).*/\1/p' scripts/check-docker-image.sh | head -n1)"
 if [[ -z "$df_uid" || -z "$df_gid" || -z "$compose_user" || -z "$compose_tmpfs" || -z "$ci_uid" ]]; then
-    echo "check-pins: could not parse the runtime uid/gid from Dockerfile, docker-compose.yml or ci.yml" >&2
+    echo "check-pins: could not parse the runtime uid/gid from Dockerfile, docker-compose.yml or scripts/check-docker-image.sh" >&2
     exit 1
 fi
 if [[ "$compose_user" != "$df_uid:$df_gid" || "$compose_tmpfs" != "$df_uid:$df_gid" || "$ci_uid" != "$df_uid" ]]; then
-    echo "check-pins: runtime uid mismatch: Dockerfile useradd=$df_uid groupadd=$df_gid, compose user:=$compose_user, compose tmpfs uid/gid=$compose_tmpfs, ci.yml smoke test=$ci_uid" >&2
-    echo "check-pins: the Dockerfile owns the value; update docker-compose.yml (user:, tmpfs) and the ci.yml smoke test in the same change" >&2
+    echo "check-pins: runtime uid mismatch: Dockerfile useradd=$df_uid groupadd=$df_gid, compose user:=$compose_user, compose tmpfs uid/gid=$compose_tmpfs, check-docker-image.sh=$ci_uid" >&2
+    echo "check-pins: the Dockerfile owns the value; update docker-compose.yml (user:, tmpfs) and the smoke test in scripts/check-docker-image.sh in the same change" >&2
     exit 1
 fi
-echo "Runtime user OK: $df_uid:$df_gid (Dockerfile, compose user:, compose tmpfs, ci.yml smoke test)"
+echo "Runtime user OK: $df_uid:$df_gid (Dockerfile, compose user:, compose tmpfs, check-docker-image.sh)"
 
 # `zig fmt --check` and `zig build fmt-check` must cover the same files. A path
 # added to build.zig's fmt_paths but not to the ci.yml step is formatted locally

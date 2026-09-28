@@ -87,7 +87,7 @@ Non-negotiable. Every change must respect all of them.
 - No magic numbers. Thresholds are named module-level `const`s.
 
 ### Build
-- Build system is `build.zig` + `build.zig.zon` only. Do not add a Makefile or C/C++ inference libraries. `scripts/` holds the profiling, lint, pin, and web-bundle helpers; `build.zig` shells out to its lint, pin, docs, and artifact checks, but the build graph itself is Zig-only. `tools/` is offline model-prep utilities (`tools/README.md`), never linked into `agave`; anything the build or CI must run goes in `scripts/`.
+- Build system is `build.zig` + `build.zig.zon` only. Do not add a Makefile or C/C++ inference libraries. `scripts/` holds the profiling, lint, pin, web-bundle, and CI job helpers; `build.zig` shells out to its lint, pin, docs, and artifact checks, but the build graph itself is Zig-only. `tools/` is offline model-prep utilities (`tools/README.md`), never linked into `agave`; anything the build or CI must run goes in `scripts/`.
 - `build.zig.zon` has zero Zig package dependencies. Keep it that way. CLI is `src/cli.zig`. Terminal I/O is `src/term.zig` (posix + `std.unicode`, no libc, no `wcwidth`, no terminal frameworks).
 - Cross-compile must keep working, matching `.github/workflows/ci.yml`: `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` (Metal off), `x86_64-linux-musl`, `aarch64-linux-musl` (static, CPU-only), plus the separate `wasm32-freestanding` build.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast — that no-ops `std.debug.assert`.

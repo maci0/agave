@@ -164,55 +164,7 @@ jobs:
         run: docker compose config --quiet
 
       - name: Smoke test binary
-        run: |
-          set -euo pipefail
-          docker run --rm --entrypoint agave agave:ci --help
-          # Runtime image must not run as root (Dockerfile USER agave, uid 10001).
-          uid="$(docker run --rm --entrypoint id agave:ci -u)"
-          if [[ "$uid" != "10001" ]]; then
-            echo "::error::Container uid=$uid; expected USER agave (uid 10001)"
-            exit 1
-          fi
-          echo "Container uid=$uid (non-root ok)"
-          # HEALTHCHECK must probe /ready (not /health) so orchestrators do not
-          # route to degraded instances. One-shot CLI runs should pass --no-healthcheck.
-          hc="$(docker inspect --format='{{json .Config.Healthcheck.Test}}' agave:ci)"
-          if [[ "$hc" != *"/ready"* ]]; then
-            echo "::error::Image HEALTHCHECK missing /ready probe: $hc"
-            exit 1
-          fi
-          echo "HEALTHCHECK ok: $hc"
-          # GPL requires the license to accompany the binary.
-          if ! docker run --rm --entrypoint cat agave:ci /usr/share/doc/agave/copyright | grep -q "GNU GENERAL PUBLIC LICENSE"; then
-            echo "::error::Runtime image missing GPL license at /usr/share/doc/agave/copyright"
-            exit 1
-          fi
-          echo "LICENSE ok: /usr/share/doc/agave/copyright"
-          # HOME must be set in the image config (k8s/podman do not copy passwd HOME).
-          home="$(docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' agave:ci | sed -n 's/^HOME=//p')"
-          if [[ "$home" != "/home/agave" ]]; then
-            echo "::error::Image HOME='$home'; expected /home/agave"
-            exit 1
-          fi
-          echo "HOME ok: $home"
-          lic="$(docker inspect --format='{{index .Config.Labels "org.opencontainers.image.licenses"}}' agave:ci)"
-          if [[ "$lic" != "GPL-3.0-or-later" ]]; then
-            echo "::error::OCI licenses label is '$lic'; expected GPL-3.0-or-later"
-            exit 1
-          fi
-          echo "OCI licenses ok: $lic"
-          # All dlopen backends disabled above → Dockerfile must select musl static.
-          ldd_out="$(docker run --rm --entrypoint ldd agave:ci /usr/local/bin/agave 2>&1 || true)"
-          echo "$ldd_out"
-          if echo "$ldd_out" | grep -qiE '=>|libc\.so'; then
-            echo "::error::Expected static musl binary when CUDA/Vulkan/ROCm/WebGPU are disabled"
-            exit 1
-          fi
-          if ! echo "$ldd_out" | grep -qiE 'not a dynamic|statically linked'; then
-            echo "::error::Unexpected ldd output (expected static binary): $ldd_out"
-            exit 1
-          fi
-          echo "Static musl binary ok"
+        run: bash scripts/check-docker-image.sh agave:ci
 
   cross-compile-check:
     name: Cross-compilation matrix
@@ -247,21 +199,7 @@ jobs:
           restore-keys: zig-${{ steps.zig.outputs.version }}-cross-${{ matrix.target }}-
 
       - name: Build for target
-        env:
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          args=(-Dtarget="$TARGET")
-          # Metal is macOS-only and unavailable on Linux runners; disable for macOS cross-compile.
-          if [[ "$TARGET" == *"-macos" ]]; then
-            args+=(-Denable-metal=false)
-          fi
-          # Static musl builds are CPU-only: the dlopen backends load
-          # glibc-linked .so files (README "Static musl builds").
-          if [[ "$TARGET" == *"-musl" ]]; then
-            args+=(-Denable-metal=false -Denable-vulkan=false -Denable-cuda=false -Denable-rocm=false -Denable-webgpu=false)
-          fi
-          zig build "${args[@]}"
+        run: bash scripts/build-cross-target.sh "${{ matrix.target }}"
 
   # wasm32-freestanding is a separate build step, so the cross-compile matrix
   # (which only varies -Dtarget) never touches it. Untested it rots: the
@@ -290,16 +228,7 @@ jobs:
           restore-keys: zig-${{ steps.zig.outputs.version }}-wasm-
 
       - name: Build agave.wasm
-        run: |
-          set -euo pipefail
-          zig build wasm
-          # zig-out/web is the directory README tells a developer to serve, so
-          # it has to hold the page's relative-URL assets too, not just the
-          # module. A wasm step that emitted agave.wasm alone would 404 on
-          # shell.js and still pass `test -s`.
-          for f in agave.wasm index.html style.css agave.js shell.js; do
-            test -s "zig-out/web/$f" || { echo "missing zig-out/web/$f" >&2; exit 1; }
-          done
+        run: bash scripts/build-wasm.sh
 
   # Rebuild-and-compare check for committed kernel binaries (CUDA PTX).
   # These artifacts are @embedFile'd but NOT rebuilt by `zig build`, so a
@@ -474,8 +403,8 @@ jobs:
       - name: ruff
         run: bash scripts/lint-python.sh
 
-  # scripts/*.sh is 13 files of unanalysed shell: quoting bugs and unset-variable
-  # failures there break CI jobs and developer tooling the same way. Blocking.
+  # Every script CI runs lives in scripts/ and lands here, so the shell this
+  # workflow depends on is analysed by the gate that blocks it. Blocking.
   # scripts/lint-shell.sh is the single entry point, so the local `zig build
   # lint-shell` and this job run identical checks.
   lint-shell:
@@ -499,20 +428,8 @@ jobs:
     steps:
       - name: Verify all jobs passed
         # Env indirection, not ${{ }} interpolation: the job results must never
-        # be spliced into the shell body.
+        # be spliced into a shell body. The check itself lives in
+        # scripts/check-ci-pass.sh so the blocking lint-shell job analyses it.
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          # Require every job in `needs` == success (skipped/cancelled must not
-          # green the gate). Reading the needs payload keeps the required-job
-          # list in `needs:` above, so a new job cannot be added there and
-          # silently go unchecked here.
-          failed="$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)=\(.value.result)"' <<<"$NEEDS_JSON")"
-          if [[ -n "$failed" ]]; then
-            while read -r pair; do
-              echo "::error::Required CI job '${pair%%=*}' result was '${pair#*=}' (expected success)"
-            done <<<"$failed"
-            exit 1
-          fi
-          echo "All required CI jobs succeeded: $(jq -r 'keys | join(", ")' <<<"$NEEDS_JSON")"
+        run: bash scripts/check-ci-pass.sh
