@@ -67,7 +67,7 @@ pub fn freeKvCache(allocator: Allocator, cache: KvCache) void {
 // ── PagedAttention ────────────────────────────────────────────────
 //
 // Block-based KV cache management following the vLLM PagedAttention paper.
-// The cache is divided into fixed-size blocks (default 16 positions each).
+// The cache is divided into fixed-size blocks of `block_size` positions each.
 // Sequences reference blocks through a block table (indirection), allowing
 // fine-grained memory reclamation.
 
@@ -96,6 +96,9 @@ pub const PagedKvCache = struct {
     allocator: Allocator,
 
     /// Allocate a paged KV cache with `num_blocks` blocks of `block_size` positions each.
+    /// The layer-count parameter is ignored: `num_blocks` is one pool shared by all
+    /// layers, and each layer draws its own blocks through its block table
+    /// (see `BlockAllocator.appendBlock`).
     pub fn init(allocator: Allocator, _: usize, kv_dim: usize, num_blocks: usize, block_size: u16) !PagedKvCache {
         const blocks = try allocator.alloc(CacheBlock, num_blocks);
         errdefer allocator.free(blocks);

@@ -283,7 +283,9 @@ fn activationFn(activation: Activation) []const u8 {
 
 /// Compose a complete megakernel MSL source from a model descriptor.
 /// The generated kernel is a single entry point that processes all layers.
-/// Returns the generated MSL as a slice of the provided buffer.
+/// Returns the generated MSL as a slice of the provided buffer. The caller
+/// sizes the buffer; generation panics rather than truncating on overflow.
+/// `desc.n_layers` must be at most `max_layers`.
 pub fn composeMSL(buf: []u8, desc: ModelDesc) []const u8 {
     var pos: usize = 0;
 

@@ -1,8 +1,9 @@
-//! Minimal PNG image decoder and image utilities for multimodal inference.
+//! Image decoders and image utilities for multimodal inference.
 //!
 //! Supports PNG files with RGB (color_type 2) and RGBA (color_type 6) at
-//! 8-bit depth. Ancillary chunks are ignored. JPEG files are detected and
-//! rejected with a helpful error message.
+//! 8-bit depth. Ancillary chunks are ignored. Also parses uncompressed binary
+//! PPM (P6) via `decodePpm`. JPEG files are detected and rejected with a
+//! helpful error message.
 //!
 //! Decompression uses `std.compress.flate.Decompress` with the zlib container.
 //! Scanline filters (None, Sub, Up, Average, Paeth) are reconstructed in-place.

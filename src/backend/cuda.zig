@@ -194,14 +194,14 @@ pub const CudaBackend = struct {
     cuStreamCreate: FnStreamCreate = undefined,
     cuStreamSynchronize: FnStreamSync = undefined,
 
-    /// Dedicated compute stream. All kernel launches and copy-backs go here
-    /// (never the legacy null stream): blocking copies on the null stream
-    /// cost ~2ms per call on GB10, so the deferred-sync drains batch the
-    /// copy-backs asynchronously and sync once.
     /// Persistent host staging for the batched GEMV pointer table. A stack
     /// buffer is unsafe: GB10's blocking H2D can be deferred past the
     /// function return and the reused stack frame then feeds garbage.
     batched_host_tab: [4 * 16]u64 = undefined,
+    /// Dedicated compute stream. All kernel launches and copy-backs go here
+    /// (never the legacy null stream): blocking copies on the null stream
+    /// cost ~2ms per call on GB10, so the deferred-sync drains batch the
+    /// copy-backs asynchronously and sync once.
     stream: CUstream = null,
     cuMemHostRegister: ?FnMemHostRegister = null,
     cuMemHostGetDevicePointer: ?FnMemHostGetDevicePointer = null,

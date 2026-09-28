@@ -446,9 +446,10 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
     return limit;
 }
 
-/// Apply min_p filtering: zero out tokens with probability < min_p * max_probability.
-/// Must be called AFTER temperature scaling (logits are still pre-softmax).
-/// Converts to probabilities, finds max, masks below threshold, restores to logits.
+/// Apply min_p filtering: mask tokens with probability < min_p * max_probability
+/// by setting their logits to `-inf`. Must be called AFTER temperature scaling
+/// (logits are still pre-softmax). Works in log space: the threshold is
+/// `max_logit + log(min_p)`, so no probability round trip is needed.
 pub fn applyMinP(logits: []f32, min_p: f32) void {
     if (min_p <= 0 or min_p >= 1.0) return;
 
@@ -471,8 +472,10 @@ pub fn applyMinP(logits: []f32, min_p: f32) void {
     }
 }
 
-/// XTC sampling: with probability `xtc_probability`, exclude top tokens that
-/// exceed `xtc_threshold` probability. Increases diversity by preventing mode collapse.
+/// XTC sampling: with probability `xtc_probability`, mask every token whose
+/// probability exceeds `xtc_threshold`, except the last such token in vocabulary
+/// order (ties in probability broken by index, not by logit rank).
+/// Increases diversity by preventing mode collapse.
 /// Must be called AFTER temperature scaling. Operates on pre-softmax logits.
 pub fn applyXtc(logits: []f32, xtc_probability: f32, xtc_threshold: f32, rng: std.Random) void {
     if (xtc_probability <= 0 or xtc_threshold <= 0) return;

@@ -33,7 +33,7 @@ fn cpuSoftmax(data: [*]f32, n: usize) void {
 /// scaled dot-product attention: softmax(Q @ K^T / sqrt(hd)) @ V.
 ///
 /// Parameters:
-///   - q: Query buffer [nh * hd], pre-scaled if needed.
+///   - q: Query buffer [nh * hd], not pre-scaled (each dot product is scaled by `scale`).
 ///   - kv_keys: KV cache keys for this layer (byte slice, format determined by kv_type).
 ///   - kv_values: KV cache values for this layer (byte slice).
 ///   - k_buf: Current key vector [kvd] to append to cache.

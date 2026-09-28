@@ -35,11 +35,13 @@ reporting, no third-party script, and no analytics in the web UI: every
 
 ## Network exposure
 
-`--serve` binds `127.0.0.1` by default. Every endpoint except `/health` and
-`/ready` requires the API key set with `--api-key` or `AGAVE_API_KEY`, and an
-unauthenticated server additionally rejects non-loopback `Host` headers and
-cross-origin requests, so a page in a browser cannot drive inference or read
-conversation state (`src/server/server.zig:2296`).
+`--serve` binds `127.0.0.1` by default. Every endpoint except `/health`,
+`/ready`, and `/favicon.ico` requires the API key set with `--api-key` or
+`AGAVE_API_KEY` (`/health` and `/ready` trim their response for an
+unauthenticated caller, `/favicon.ico` is a static asset with no server state
+behind it). An unauthenticated server additionally rejects non-loopback `Host`
+headers and cross-origin requests, so a page in a browser cannot drive inference
+or read conversation state (`src/server/server.zig:2304`).
 
 `agave pull` is the only component that talks to a third party: it requests
 model metadata and weights from `huggingface.co`. It sends the repository id
@@ -51,12 +53,12 @@ Conversations are kept until they are deleted. There is no automatic expiry,
 so a store left in place keeps its messages until the user removes them. The
 store caps are 100 conversations and 1000 messages per conversation; anything
 past a cap is preserved in `<path>.overflow` rather than silently dropped
-(`src/server/conv_store.zig:31`).
+(`src/server/conv_store.zig:34`).
 
 ## Removing the data
 
-- Delete one conversation: the trash control in the web UI sidebar, or
-  `POST /v1/conversations` with `action=delete` and its `id`.
+- Delete one conversation: the delete control (an `X` beside the title) in the
+  web UI sidebar, or `POST /v1/conversations` with `action=delete` and its `id`.
 - Clear the active conversation: `/clear` in the REPL, or `/clear` as a chat
   message. In the REPL this also drops the line history that would otherwise
   recall the same prompts.

@@ -190,9 +190,11 @@ pub const TieredKvCache = struct {
     ///   - n_layers: Number of model layers.
     ///   - kv_dim: KV dimension per position.
     ///   - vram_blocks: Number of VRAM tier blocks (from existing PagedKvCache budget).
-    ///   - ram_blocks: Number of RAM tier blocks (auto-detect 50% of free system RAM, or user-specified).
+    ///   - ram_blocks: Number of RAM tier blocks. A block count, not a byte
+    ///     budget: the caller derives it (the CLI budgets 50% of free system RAM
+    ///     unless `--kv-ram-budget` overrides).
     ///   - ssd_blocks: Number of SSD tier blocks (virtual allocation, no RAM backing).
-    ///   - block_size: Tokens per block (default 16).
+    ///   - block_size: Tokens per block. Required, not defaulted.
     ///   - ssd_path: Optional path to SSD sparse file. If null, SSD tier disabled.
     ///
     /// Returns: TieredKvCache with initialized VRAM, RAM, and SSD tiers.

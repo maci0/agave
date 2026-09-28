@@ -6,7 +6,8 @@
 const std = @import("std");
 const math_ops = @import("math.zig");
 
-/// Maximum interceptors on one request (bias, repeat, dry, penalties, min_p, xtc).
+/// Maximum interceptors on one request. `Kind` has six built-in processors
+/// (bias, repeat, dry, penalties, min_p, xtc); the extra headroom is spare.
 pub const max_processors: usize = 8;
 
 /// Logit-mutating processor kind. Order on the stack is apply order.

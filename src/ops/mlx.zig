@@ -8,9 +8,9 @@ const quant = @import("quant.zig");
 /// Default MLX quantization parameters.
 /// 64 elements per quantization group.
 pub const mlx_group_size: usize = 64;
-/// MXFP4 group size: NVIDIA MXFP4 spec uses 16-element blocks (not 32).
-/// Each scale covers 16 weight elements. Group size 32 was wrong and caused
-/// row-stride corruption: every row after row 0 read the wrong scale bytes.
+/// MXFP4 group size: the NVIDIA MXFP4 spec uses 16-element blocks, so each
+/// scale covers 16 weight elements. Any other group size shifts the scale byte
+/// offset, so every row after row 0 reads the wrong scale bytes.
 pub const mxfp4_group_size: usize = 16;
 /// MLX community MoE experts pack MXFP4 with 32-element groups and E8M0 scales.
 pub const mxfp4_mlx_expert_group_size: usize = 32;

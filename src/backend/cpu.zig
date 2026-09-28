@@ -2207,7 +2207,8 @@ test "fuzz: all cpu functions" {
 
 test "softmax autotune, compare SIMD widths" {
     // Generates all 3 variants at comptime, benchmarks each at test time.
-    // Run with: zig build test --release=fast
+    // `zig build test` already builds at ReleaseSafe; --release=fast would
+    // no-op std.debug.assert and is not what this gate runs.
     const n = 1024;
     var data_orig: [n]f32 = undefined;
     for (0..n) |i| data_orig[i] = @as(f32, @floatFromInt(i % 37)) * 0.1 - 1.8;

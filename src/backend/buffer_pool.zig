@@ -83,9 +83,11 @@ pub fn BufferPool(comptime Handle: type) type {
             return null;
         }
 
-        /// Hand every pooled buffer back for release, emptying the pool. Used when
-        /// the budget shrinks, where holding unused device memory is the exact thing
-        /// the caller is trying to stop doing.
+        /// Hand pooled buffers back for release, into `out`, newest first.
+        ///
+        /// Drains at most `out.len` entries, so a short buffer leaves the rest of
+        /// the pool in place. Used when the budget shrinks, where holding unused
+        /// device memory is the exact thing the caller is trying to stop doing.
         pub fn drain(self: *Self, out: []Handle) []const Handle {
             const n = @min(self.len, out.len);
             for (0..n) |i| {

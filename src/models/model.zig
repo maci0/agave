@@ -549,8 +549,6 @@ pub const Model = struct {
         return self.vtable.get_kv_seq_len(self.ptr);
     }
 
-    /// Roll back KV cache position for speculative decoding rejection.
-    /// Safe because paged blocks stay allocated and are overwritten on next forward().
     /// Set expert budget for MoE-Spec verification mode (arXiv 2602.16052).
     /// budget > 0: fewer experts per token during forward (reduces SSD reads).
     /// budget = 0: normal mode (full n_expert_used).
@@ -563,6 +561,8 @@ pub const Model = struct {
         self.vtable.prefetch_all_layers(self.ptr);
     }
 
+    /// Roll back KV cache position for speculative decoding rejection.
+    /// Safe because paged blocks stay allocated and are overwritten on next forward().
     pub fn setKvSeqLen(self: Model, len: usize) void {
         self.vtable.set_kv_seq_len(self.ptr, len);
     }
