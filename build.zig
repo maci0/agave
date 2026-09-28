@@ -685,7 +685,7 @@ pub fn build(b: *std.Build) void {
         const reproducible_step = b.step("check-reproducible", "Build twice from different paths and byte-compare (CI reproducible-build job)");
         reproducible_step.dependOn(&reproducible_cmd.step);
 
-        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + unit tests");
+        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + unit tests + conversation store backup self-test (needs Python 3.11+)");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
         check_step.dependOn(check_pins_step);
@@ -696,7 +696,7 @@ pub fn build(b: *std.Build) void {
         // cross-compile, wasm, fuzz and PTX freshness stay in CI (or the
         // CONTRIBUTING table): they need Docker, cross toolchains, or a
         // long fuzz budget.
-        const ci_step = b.step("ci", "Full local CI gate: check + lint-web + lint-shell + lint-python (needs bun, shellcheck, ruff)");
+        const ci_step = b.step("ci", "Full local CI gate: check + lint-web + lint-shell + lint-python (needs Python 3.11+, bun + `bun install --frozen-lockfile`, shellcheck, ruff)");
         ci_step.dependOn(check_step);
         ci_step.dependOn(lint_web_step);
         ci_step.dependOn(lint_shell_step);

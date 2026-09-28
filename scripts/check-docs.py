@@ -18,8 +18,21 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, UTC
 from pathlib import Path
+
+# `zig build check` runs this file with a bare `python3`, so the
+# `requires-python` metadata above and ruff.toml's `target-version` are enforced
+# by nothing on that path. The 3.11-only `datetime.UTC` below reports as an
+# ImportError from the middle of the import block, naming neither this script
+# nor the version it needs, so the requirement is stated here instead. UP036
+# reads the guard as dead code under that target and is the point of it.
+if sys.version_info < (3, 11):  # noqa: UP036
+    sys.exit(
+        f"check-docs: needs Python 3.11+ (running {sys.version.split()[0]}). "
+        "Install a newer Python, then rerun `zig build check`."
+    )
+
+from datetime import UTC, datetime
 
 
 def find_root() -> Path:
