@@ -115,6 +115,9 @@ zig build
 # Generate TriAttention calibration data
 ./zig-out/bin/agave calibrate model.gguf
 
+# Update to latest GitHub release
+./zig-out/bin/agave update
+
 # Vision: describe an image (requires mmproj or built-in vision encoder)
 ./zig-out/bin/agave model.gguf --image photo.png "Describe this image"
 
@@ -230,6 +233,25 @@ Generate TriAttention calibration data for frequency-domain KV eviction:
 ```
 
 The calibration pass records per-head Q/K frequency statistics used by the `--kv-eviction tri` policy. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+
+## Updating
+
+Compare this build with the latest GitHub release and replace the running binary:
+
+```bash
+# Check if a newer version is available without downloading
+agave update --check
+
+# Replace the running binary with the latest release
+agave update
+
+# Check or update from a specific repository fork
+agave update --repo owner/agave
+```
+
+The update checks the GitHub Release API, downloads the matching architecture binary and its `.sha256` sidecar, verifies the checksum and host URL, and atomically replaces the running executable.
+
+Exit codes: `0` current or updated successfully, `2` bad invocation (unknown flag, invalid repository format), `1` network or verification failure.
 
 ## Browser WASM
 

@@ -744,6 +744,7 @@ const CliArgs = struct {
 const help_topics = [_]struct { name: []const u8, usage: *const fn () void }{
     .{ .name = "pull", .usage = pull.printUsage },
     .{ .name = "calibrate", .usage = @import("calibrate.zig").printUsage },
+    .{ .name = "update", .usage = @import("update.zig").printUsage },
 };
 
 /// Print the usage of the help topic named `sub`. Returns false when `sub` is
@@ -773,6 +774,12 @@ fn checkSubcommand(allocator: std.mem.Allocator) bool {
     if (std.mem.eql(u8, first, "calibrate")) {
         const calibrate = @import("calibrate.zig");
         const exit_code = calibrate.run(allocator, init_args, g_io);
+        if (exit_code != 0) std.process.exit(exit_code);
+        return true;
+    }
+    if (std.mem.eql(u8, first, "update")) {
+        const update = @import("update.zig");
+        const exit_code = update.run(allocator, init_args, g_io);
         if (exit_code != 0) std.process.exit(exit_code);
         return true;
     }
@@ -2324,7 +2331,8 @@ const usage_text =
     \\  agave pull <org/repo> --quant Q4_K_M     Download specific quantization
     \\  agave pull <org/repo> --list             List available model files
     \\  agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
-    \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
+    \\  agave update [--check]                   Replace this binary with the latest release
+    \\  agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate, update)
     \\
     \\SUPPORTED ARCHITECTURES:
     \\  
@@ -2436,7 +2444,7 @@ pub fn main(init: std.process.Init) !void {
                 if (std.mem.indexOfScalar(u8, cli.model_path, '/') == null and
                     std.mem.indexOfScalar(u8, cli.model_path, '.') == null)
                 {
-                    const subs = [_][]const u8{ "pull", "calibrate", "help" };
+                    const subs = [_][]const u8{ "pull", "calibrate", "update", "help" };
                     for (subs) |sub| {
                         if (std.mem.eql(u8, cli.model_path, sub) or closeMatch(cli.model_path, sub)) {
                             eprint("  Did you mean 'agave {s}'?\n", .{sub});
@@ -5626,6 +5634,7 @@ test {
     _ = @import("chat_template.zig");
     _ = @import("pull.zig");
     _ = @import("calibrate.zig");
+    _ = @import("update.zig");
     _ = @import("image.zig");
     _ = @import("image_tokens.zig");
     _ = @import("steering.zig");

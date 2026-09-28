@@ -10,6 +10,8 @@ agave \- Zig LLM inference engine
 [\fIOPTIONS\fR] \fBpull\fR \fIORG/REPO\fR
 .B agave
 [\fIOPTIONS\fR] \fBcalibrate\fR \fIMODEL\fR
+.B agave
+[\fIOPTIONS\fR] \fBupdate\fR [\fI--check\fR]
 .SH DESCRIPTION
 Loads a GGUF model or a SafeTensors directory and generates text, or serves an
 OpenAI- and Anthropic-compatible HTTP API. The options, environment, and
@@ -205,7 +207,8 @@ examples below are the output of `agave --help`.
    agave pull <org/repo> --quant Q4_K_M     Download specific quantization
    agave pull <org/repo> --list             List available model files
    agave calibrate <model.gguf|model-dir/>   Generate TriAttention calibration data
-   agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate)
+   agave update [--check]                   Replace this binary with the latest release
+   agave help <topic>                       Show help for a subcommand (e.g. pull, calibrate, update)
  
  SUPPORTED ARCHITECTURES:
    
