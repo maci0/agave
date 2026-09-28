@@ -1,5 +1,11 @@
 # Security
 
+Claims in this file are checked against source by the threat-model pass. If one
+disagrees with the code, the code wins; see the docs-vs-code check at the end of
+[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
+
+- **Last reviewed:** 2026-09-28
+
 ## Supported versions
 
 Until **1.0.0** there is no multi-version support matrix and no promised LTS.
@@ -43,7 +49,21 @@ the server accepts. On a single-key deployment, every holder is inside one
 trust domain. See T3, T8 in
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
 
-`docker-compose.yml` publishes 49453 on 127.0.0.1 only
-(`docker-compose.yml:35`) and requires `AGAVE_API_KEY` (`:39`). The
+`docker-compose.yml` publishes the API port on 127.0.0.1 only
+(`docker-compose.yml:36`) and requires `AGAVE_API_KEY` (`:40`). The
 distributed ports are not published by compose; a raw `docker run` of the
 image does not get that isolation.
+
+## Operator notes
+
+Two controls an operator is likely to assume are on are not:
+
+- **Rate limiting is off unless asked for.** `--rate-limit-rpm` and
+  `--rate-limit-tpm` both default to `0` (`src/main.zig:660,662`), which
+  substitutes the effectively unlimited values `src/server/server.zig:162-163`.
+  One global bucket, not per client (`src/server/rate_limiter.zig:58`). A
+  server bound to a non-loopback address with a key and no rate-limit flags has
+  no compute quota. See T4.
+- **Same-host multi-rank runs share fixed shm names.** `/agave_0to1` and
+  `/agave_1to0` (`src/parallel/transport.zig:321-322`) are mode 0600, so any
+  other process running as the same uid can read or inject tensors. See T5.
