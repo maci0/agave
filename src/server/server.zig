@@ -667,6 +667,21 @@ const Server = struct {
         return ids;
     }
 
+    /// Publish `token_ids` as the KV prefix memo for the next request. Single
+    /// entry point so the read guard in `prefixCacheApplies` and this write
+    /// cannot drift: a memo written by a vision request holds image placeholder
+    /// IDs, which every image shares, so a later text request would match the
+    /// prefix and read the earlier request's picture back out of the KV cache.
+    /// Caller must hold self.mutex.
+    fn publishCachedPromptIds(self: *Server, token_ids: []const u32, n_visual: u32) void {
+        self.clearCachedPromptIds();
+        if (!prefixCacheApplies(n_visual)) return;
+        self.cached_prompt_ids = self.allocator.dupe(u32, token_ids) catch blk: {
+            std.log.warn("req={d} prefix-cache OOM ({d} tokens); next request will re-prefill", .{ log_request_id, token_ids.len });
+            break :blk &.{};
+        };
+    }
+
     /// Drop cached prompt-prefix token IDs. Must be called whenever the KV
     /// cache is wiped (`resetCache`) so the next request does not treat empty
     /// slots as a prefix-cache hit. Caller must hold self.mutex when other
@@ -691,6 +706,7 @@ const Server = struct {
         self.active_id = id;
         self.kv_valid = false;
         self.clearCachedPromptIds();
+        if (ngram_mod.global_pool) |*pool| pool.clear();
         // Opaque title only, never store user message text (may contain PII).
         const conv = &self.conversations.items[self.conversations.items.len - 1];
         var title_buf: [24]u8 = undefined;
@@ -733,10 +749,15 @@ const Server = struct {
     }
 
     /// Select a conversation by ID. Caller must hold self.mutex.
+    /// Wipes the prefix memo and the shared n-gram pool alongside the KV flag:
+    /// both hold the previous conversation's tokens, and neither can be
+    /// trimmed to one conversation, so a switch carries state across.
     fn selectConv(self: *Server, id: u32) void {
         if (self.active_id != id) {
             self.active_id = id;
             self.kv_valid = false;
+            self.clearCachedPromptIds();
+            if (ngram_mod.global_pool) |*pool| pool.clear();
             self.persistConversationsLocked();
         }
     }
@@ -4094,13 +4115,7 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
     }
 
     // Cache the prompt token IDs for next request's prefix matching (zeros old IDs).
-    g_server.clearCachedPromptIds();
-    if (prefixCacheApplies(n_visual)) {
-        g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch blk: {
-            std.log.warn("req={d} prefix-cache OOM ({d} tokens); next request will re-prefill", .{ log_request_id, token_ids.len });
-            break :blk &.{};
-        };
-    }
+    g_server.publishCachedPromptIds(token_ids, n_visual);
     const prefill_ms: u64 = elapsedMs(prefill_start);
     const prefill_tps: f32 = tokensPerSec(prompt_token_count, prefill_ms);
     g_server.metrics.recordTTFT(prefill_ms, prompt_token_count);
@@ -7032,11 +7047,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
     } else if (stream_forward_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
 
     // Update prompt prefix cache for next request (zeros old IDs).
-    g_server.clearCachedPromptIds();
-    g_server.cached_prompt_ids = g_server.allocator.dupe(u32, token_ids) catch blk: {
-        std.log.warn("req={d} prefix-cache OOM ({d} tokens); next request will re-prefill", .{ log_request_id, token_ids.len });
-        break :blk &.{};
-    };
+    g_server.publishCachedPromptIds(token_ids, n_visual);
 }
 
 // JSON field extraction, encoding, and form-parsing utilities are in json.zig.
@@ -8158,6 +8169,36 @@ test "Conversation.setTitle keeps trailing multi-byte characters" {
     const t = conv2.titleSlice();
     try std.testing.expect(std.unicode.utf8ValidateSlice(t));
     try std.testing.expect(t.len < 47);
+}
+
+test "prefix memo: a vision request publishes nothing for the next text request" {
+    // The memo is keyed on token IDs alone and image placeholders are the same
+    // IDs for every image, so a published vision prompt would let the next text
+    // request match its prefix and read back the earlier request's picture.
+    var server = Server{
+        .model = undefined,
+        .tokenizer = undefined,
+        .chat_template = ChatTemplate.chatml,
+        .model_name = "test",
+        .backend_name = "cpu",
+        .allocator = std.testing.allocator,
+        .bos_token_id = 0,
+        .eog_ids = @splat(0),
+        .eog_len = 0,
+        .io = undefined,
+        .idem = Idempotency.Ledger.init(std.testing.allocator),
+    };
+    defer server.idem.deinit();
+    defer server.clearCachedPromptIds();
+
+    const prompt = [_]u32{ 1, 2, 3, 4 };
+    // A text request publishes, so the memo is live.
+    server.publishCachedPromptIds(&prompt, 0);
+    try std.testing.expectEqualSlices(u32, &prompt, server.cached_prompt_ids);
+
+    // A vision request must leave no memo behind, not the placeholder IDs.
+    server.publishCachedPromptIds(&prompt, 2);
+    try std.testing.expectEqual(@as(usize, 0), server.cached_prompt_ids.len);
 }
 
 test "fuzz: all server functions" {
