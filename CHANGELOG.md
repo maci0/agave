@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.7.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.8.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,15 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.8.0] - 2026-09-28
+
+### Added
+- `agave update` subcommand to check for and apply updates directly from GitHub releases.
+  - `--check` flag to query the latest release without downloading or replacing.
+  - `--repo OWNER/REPO` flag to specify an alternative GitHub repository.
+  - URL trust verification restricted to official GitHub domains, SHA-256 sidecar checksum verification, and atomic executable replacement preserving existing symlinks with permissions `0755`.
+- `scripts/release-checksum.sh` utility to generate and verify SHA-256 sidecars for release binaries across Linux (`sha256sum`) and macOS (`shasum`).
 
 ## [0.7.0] - 2026-09-28
 
@@ -1334,7 +1343,8 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.7.0...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/maci0/agave/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/maci0/agave/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/maci0/agave/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/maci0/agave/compare/v0.4.0...v0.5.0
