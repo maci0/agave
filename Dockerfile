@@ -225,6 +225,10 @@ COPY --link --from=build /agave-version /usr/share/agave/version
 # non-root runtime user (uid 10001), so `cat .../copyright` fails with EACCES.
 RUN mkdir -p -m 0755 /usr/share/doc/agave
 COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
+# Man page, generated from `agave --help` by scripts/gen-manpage.sh. The slim
+# base ships no man binary, so this is for `docker cp` or a bind mount, not for
+# `man` inside the container.
+COPY --link --chmod=0644 man/agave.1 /usr/share/man/man1/agave.1
 # Conversation-store backup/restore. Shipped so an operator can reach a store
 # that lives only in a volume, without a checkout on the host.
 # Run: docker run --rm --entrypoint conv-store-backup.sh \

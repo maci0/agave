@@ -288,6 +288,11 @@ pub fn build(b: *std.Build) void {
     linkPlatform(mod_rel, exe_rel, target, link_metal);
     b.installArtifact(exe_rel);
 
+    // A binary with no man page documents itself only through --help, which
+    // nothing finds on its own. The page is generated from usage_text
+    // (scripts/gen-manpage.sh), so it cannot contradict `agave --help`.
+    b.installFile("man/agave.1", "share/man/man1/agave.1");
+
     // ── Debug executable (also built by default) ─────────────────
     // ReleaseSafe keeps every safety check a Debug build has while linking
     // against modern system crt1.o (GCC 16 emits .sframe sections that
