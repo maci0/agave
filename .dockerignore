@@ -111,6 +111,14 @@ compose*.yml
 # and Hub blobs; gitignored, but the Docker build context is a separate
 # filter, so it would otherwise be sent and copied into the build stage.
 /.agave-cache/
+# Conversation-store backup tier. docs/DURABILITY.md binds it to
+# $PWD/backups, so it lands in the repo root of any host that ran the
+# documented recipe. Same plaintext prompts as the cache above, and
+# `COPY . .` would put them in a build-stage layer.
+backups/
+# Local worktree and agent state.
+.worktrees/
+.superpowers/
 
 # Stray files
 pelorus-*.yaml
