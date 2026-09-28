@@ -1,4 +1,3 @@
-import { Slot } from '@radix-ui/react-slot';
 import { cva, type VariantProps } from 'class-variance-authority';
 import type { ButtonHTMLAttributes } from 'react';
 import { cn } from './cn';
@@ -46,15 +45,13 @@ const buttonVariants = cva(
   },
 );
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> &
-  VariantProps<typeof buttonVariants> & {
-    /** Render the child element instead of a `<button>` (Radix `asChild`). */
-    asChild?: boolean;
-  };
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof buttonVariants>;
 
-export const Button = ({ className, variant, size, active, asChild = false, ...props }: ButtonProps) => {
-  const Comp = asChild ? Slot : 'button';
-  return <Comp className={cn(buttonVariants({ variant, size, active }), className)} {...props} />;
-};
+/** A `<button>`, always. shadcn's `asChild` escape hatch came with the Radix
+ *  Slot primitive; nothing in either surface rendered anything but a button, so
+ *  the primitive and the prop went with it. */
+export const Button = ({ className, variant, size, active, ...props }: ButtonProps) => (
+  <button className={cn(buttonVariants({ variant, size, active }), className)} {...props} />
+);
 
 export { buttonVariants };
