@@ -50,3 +50,26 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/backups/agave
+# The unit runs cp, awk, stat, and sync. It needs no devices beyond /dev/null
+# and /dev/urandom, no kernel or hostname surface, and no way to add itself to
+# a cgroup or load a module.
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+# Backups are chat history: keep the copy and the umask that made it
+# owner-only even if the operator's shell login sets a permissive umask.
+UMask=0077
+# No sockets: the script never talks to a network. AF_UNIX is left available
+# because bash and coreutils open a notify socket in some libc paths.
+RestrictAddressFamilies=AF_UNIX
+# The Bash syntax tree is not JIT-compiled, so W^X holds.
+MemoryDenyWriteExecute=true

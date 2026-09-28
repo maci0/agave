@@ -44,6 +44,13 @@ if ! docker run --rm --entrypoint cat "$image" "$copyright_path" | grep -q "GNU 
 fi
 echo "LICENSE ok: $copyright_path"
 
+# The man page ships with the binary and has to match `agave --help`.
+if ! docker run --rm --entrypoint cat "$image" /usr/share/man/man1/agave.1 | grep -q '^\.TH AGAVE 1'; then
+    echo "::error::Runtime image missing the man page at /usr/share/man/man1/agave.1"
+    exit 1
+fi
+echo "Man page ok: /usr/share/man/man1/agave.1"
+
 # HOME must be set in the image config (k8s/podman do not copy passwd HOME).
 home="$(docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' "$image" | sed -n 's/^HOME=//p')"
 if [[ "$home" != "/home/agave" ]]; then

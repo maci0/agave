@@ -5935,6 +5935,42 @@ test "usage_text lists qwen4-exp" {
     try std.testing.expectEqualStrings(supported_arch_help, "gemma3, gemma4, diffusion-gemma, qwen35, qwen4exp, qwen4-exp, gpt-oss, nemotron-h, nemotron-nano, glm4, deepseek4, llama4");
 }
 
+// man/agave.1 is generated from usage_text by scripts/gen-manpage.sh, so a
+// committed page that has fallen behind the flag list is a generator that was
+// not rerun. Reading the file here is what turns that into a failing test
+// rather than a man page that quietly documents last month's flags.
+// Upper bound on the man page the drift test reads. It is a guard against
+// reading an unrelated file, not a size the page is expected to reach.
+const man_page_max_bytes = 256 * 1024;
+
+test "man page documents every cli_spec" {
+    const io = std.testing.io;
+    const page = Io.Dir.cwd().readFileAlloc(io, "man/agave.1", std.testing.allocator, .limited(man_page_max_bytes)) catch |err| {
+        std.debug.print("cannot read man/agave.1: {t}\n", .{err});
+        return err;
+    };
+    defer std.testing.allocator.free(page);
+    for (cli_specs) |spec| {
+        var needle_buf: [80]u8 = undefined;
+        const needle = std.fmt.bufPrint(&needle_buf, "--{s}", .{spec.long}) catch unreachable;
+        std.testing.expect(std.mem.indexOf(u8, page, needle) != null) catch |err| {
+            std.debug.print("man/agave.1 does not document --{s}: run `bash scripts/gen-manpage.sh`\n", .{spec.long});
+            return err;
+        };
+        if (spec.short) |sh| {
+            var short_buf: [8]u8 = undefined;
+            const short = std.fmt.bufPrint(&short_buf, "-{c}", .{sh}) catch unreachable;
+            std.testing.expect(std.mem.indexOf(u8, page, short) != null) catch |err| {
+                std.debug.print("man/agave.1 does not document {s}: run `bash scripts/gen-manpage.sh`\n", .{short});
+                return err;
+            };
+        }
+    }
+    // The architecture list is the one part of usage_text the generator spells
+    // out instead of reading back, so it is pinned on both sides.
+    try std.testing.expect(std.mem.indexOf(u8, page, supported_arch_help) != null);
+}
+
 test "shouldNoteSeed always surfaces auto-derived seeds" {
     try std.testing.expect(shouldNoteSeed(false, false));
     try std.testing.expect(shouldNoteSeed(false, true));

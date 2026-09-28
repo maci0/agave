@@ -146,6 +146,16 @@ zig build
 ./zig-out/bin/agave model.gguf --megakernel "prompt"
 ```
 
+`zig build` installs the man page next to the binary:
+
+```bash
+man ./zig-out/share/man/man1/agave.1
+```
+
+The page is generated from `agave --help` by `scripts/gen-manpage.sh`, so
+regenerate it (`bash scripts/gen-manpage.sh`) rather than editing it after a
+flag change; `zig build test` fails when the two disagree.
+
 ## Distributed Inference
 
 Split models across multiple GPUs or machines via tensor parallelism (TP) and pipeline parallelism (PP).
