@@ -587,11 +587,12 @@ pub fn parseTools(body: []const u8) ToolParams {
     return result;
 }
 
-/// Parse tools from an Anthropic Messages API body into a ToolParams.
-/// Anthropic format is flat, `tools: [{"name", "description", "input_schema"}]`,
-/// without the OpenAI `"function"` wrapper, so this is a separate scanner.
-/// `tool_choice` accepts "auto"/"any"/"tool"/"none"; callers normalize "any"/"tool"
-/// to "required" semantics.
+/// Parse tools from a flat `tools` array into a ToolParams.
+/// Anthropic Messages format is `tools: [{"name", "description", "input_schema"}]`
+/// and the OpenAI Responses format spells the schema key "parameters"; neither
+/// uses the OpenAI Chat Completions `"function"` wrapper, so this is a separate
+/// scanner. `tool_choice` accepts "auto"/"any"/"tool"/"none"; callers normalize
+/// "any"/"tool" to "required" semantics.
 pub fn parseToolsAnthropic(body: []const u8) ToolParams {
     var result = ToolParams{};
 
@@ -606,7 +607,8 @@ pub fn parseToolsAnthropic(body: []const u8) ToolParams {
 
         const name = extractField(obj, "name") orelse continue;
         const desc = extractField(obj, "description") orelse "";
-        const params = extractObjectField(obj, "input_schema") orelse "{}";
+        const params = extractObjectField(obj, "input_schema") orelse
+            extractObjectField(obj, "parameters") orelse "{}";
 
         const idx = result.tool_count;
         result.tools[idx] = .{ .name = name, .description = desc, .parameters_json = params };
@@ -1853,6 +1855,17 @@ test "parseToolsAnthropic flat format" {
     try std.testing.expectEqualStrings("Get weather", tp.tools[0].?.description);
     try std.testing.expect(std.mem.indexOf(u8, tp.tools[0].?.parameters_json, "properties") != null);
     try std.testing.expectEqualStrings("search", tp.tools[1].?.name);
+}
+
+test "parseToolsAnthropic reads the Responses API parameters spelling" {
+    const body =
+        \\{"input":"hi","tools":[{"type":"function","name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}]}
+    ;
+    const tp = parseToolsAnthropic(body);
+    try std.testing.expectEqual(@as(u32, 1), tp.tool_count);
+    try std.testing.expectEqualStrings("get_weather", tp.tools[0].?.name);
+    try std.testing.expectEqualStrings("Get weather", tp.tools[0].?.description);
+    try std.testing.expect(std.mem.indexOf(u8, tp.tools[0].?.parameters_json, "properties") != null);
 }
 
 test "parseToolsAnthropic absent or malformed" {
