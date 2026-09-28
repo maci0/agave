@@ -204,16 +204,16 @@ inline fn quatRotateForward(buf: *[32]f32) void {
         const vz = buf[4 * i + 2];
         const vw_unused = buf[4 * i + 3];
 
-        // q * v * conj(q) for pure quaternion v = (vx, vy, vz)
-        // Fourth element treated as independent scalar (rotated separately)
-        const t0 = w * vx + qy * vz - qz * vy;
-        const t1 = w * vy + qz * vx - qx * vz;
-        const t2 = w * vz + qx * vy - qy * vx;
-        const t3 = -qx * vx - qy * vy - qz * vz;
+        // q * v * conj(q) in Rodrigues form: with u the vector part of q and
+        // v pure, v' = v + 2w(u x v) + 2 u x (u x v). Fourth element is an
+        // independent scalar, passed through.
+        const t0 = qy * vz - qz * vy;
+        const t1 = qz * vx - qx * vz;
+        const t2 = qx * vy - qy * vx;
 
-        buf[4 * i] = t0 * w + t3 * (-qx) + t1 * (-qz) - t2 * (-qy);
-        buf[4 * i + 1] = t1 * w + t3 * (-qy) + t2 * (-qx) - t0 * (-qz);
-        buf[4 * i + 2] = t2 * w + t3 * (-qz) + t0 * (-qy) - t1 * (-qx);
+        buf[4 * i] = vx + 2.0 * (w * t0 + qy * t2 - qz * t1);
+        buf[4 * i + 1] = vy + 2.0 * (w * t1 + qz * t0 - qx * t2);
+        buf[4 * i + 2] = vz + 2.0 * (w * t2 + qx * t1 - qy * t0);
         buf[4 * i + 3] = vw_unused; // pass through
     }
 }
@@ -230,14 +230,13 @@ inline fn quatRotateInverse(buf: *[32]f32) void {
         const vz = buf[4 * i + 2];
         const vw_unused = buf[4 * i + 3];
 
-        const t0 = w * vx + qy * vz - qz * vy;
-        const t1 = w * vy + qz * vx - qx * vz;
-        const t2 = w * vz + qx * vy - qy * vx;
-        const t3 = -qx * vx - qy * vy - qz * vz;
+        const t0 = qy * vz - qz * vy;
+        const t1 = qz * vx - qx * vz;
+        const t2 = qx * vy - qy * vx;
 
-        buf[4 * i] = t0 * w + t3 * (-qx) + t1 * (-qz) - t2 * (-qy);
-        buf[4 * i + 1] = t1 * w + t3 * (-qy) + t2 * (-qx) - t0 * (-qz);
-        buf[4 * i + 2] = t2 * w + t3 * (-qz) + t0 * (-qy) - t1 * (-qx);
+        buf[4 * i] = vx + 2.0 * (w * t0 + qy * t2 - qz * t1);
+        buf[4 * i + 1] = vy + 2.0 * (w * t1 + qz * t0 - qx * t2);
+        buf[4 * i + 2] = vz + 2.0 * (w * t2 + qx * t1 - qy * t0);
         buf[4 * i + 3] = vw_unused;
     }
 }
@@ -254,58 +253,41 @@ const rotor_angle_step: f32 = 0.314159;
 /// Per-group rotation angle offset to avoid zero-angle at group 0.
 const rotor_angle_offset: f32 = 0.5;
 
-/// Fixed Cl(3,0) rotors for each group. Format: [s, b12, b13, b23].
-/// Each rotor R = s + b12*e12 + b13*e13 + b23*e23, normalized RR̃ = 1.
-const rotor_params: [rotor_groups_per_block][4]f32 = blk: {
-    var r: [rotor_groups_per_block][4]f32 = undefined;
+/// Fixed e12-plane rotor for each group. Format: [s, b12].
+/// R = cos(θ/2) + sin(θ/2)·e12, so s² + b12² = 1.
+const rotor_params: [rotor_groups_per_block][2]f32 = blk: {
+    var r: [rotor_groups_per_block][2]f32 = undefined;
     for (0..rotor_groups_per_block) |i| {
         const angle: f32 = @as(f32, @floatFromInt(i)) * rotor_angle_step + rotor_angle_offset;
         const half = angle * 0.5;
-        const c = @cos(half);
-        const s = @sin(half);
-        // Rotor in the e12 plane: R = cos(θ/2) + sin(θ/2)*e12
-        r[i] = .{ c, s, 0, 0 };
+        r[i] = .{ @cos(half), @sin(half) };
     }
     break :blk r;
 };
 
-/// Apply forward Cl(3,0) rotor sandwich product: v' = RvR̃ for 3D groups.
-/// Exploits sparsity: rotor has 4 components but many are zero.
+/// Apply the forward rotor sandwich v' = RvR̃ to the first two components of
+/// each group. The third component of the group is the scalar pass-through.
 inline fn rotorForward(buf: *[32]f32) void {
     inline for (0..rotor_groups_per_block) |g| {
         const base = g * 3;
         if (base + 2 >= 32) break;
         const s = rotor_params[g][0];
         const b12 = rotor_params[g][1];
-        const b13 = rotor_params[g][2];
-        const b23 = rotor_params[g][3];
         const x = buf[base];
         const y = buf[base + 1];
-        const z = buf[base + 2];
 
-        // RvR̃ for grade-1 vector v = x*e1 + y*e2 + z*e3:
-        // v1' = (s²+b12²-b13²-b23²)*x + 2(b12*b13-s*b23)*z + 2(s*b13+b12*b23)*y ... simplified:
-        // For rotor in e12 plane only (b13=0, b23=0):
-        //   x' = (s²-b12²)*x + 2*s*b12*y
-        //   y' = -2*s*b12*x + (s²-b12²)*y
-        //   z' = z (unchanged, rotation is in xy plane)
-        const ss = s * s;
-        const bb12 = b12 * b12;
+        // Rotor sandwich RvR̃ in the e12 plane, R = s + b12·e12 with
+        // s² + b12² = 1. With the Cl(3,0) convention e12·e3 = e3, the full
+        // sandwich also multiplies the e3 component by s² - b12², which makes
+        // it singular (the store and the dot path could not undo it), so the
+        // e3 component of the group passes through and the group map is the
+        // e12 rotation by twice the rotor angle: diagonal s² - b12²,
+        // off-diagonal ∓2·s·b12.
+        const diag = s * s - b12 * b12;
         const sb2 = 2.0 * s * b12;
 
-        // General 3D rotor: RvR̃ rotation matrix diagonal elements differ per axis.
-        // R₁₁ = s² + b12² - b13² - b23²   (x-diagonal)
-        // R₂₂ = s² - b12² + b13² - b23²   (y-diagonal)
-        // R₃₃ = s² - b12² - b13² + b23²   (z-diagonal)
-        const bb13 = b13 * b13;
-        const bb23 = b23 * b23;
-        const diag_x = ss + bb12 - bb13 - bb23;
-        const diag_y = ss - bb12 + bb13 - bb23;
-        const diag_z = ss - bb12 - bb13 + bb23;
-
-        buf[base] = diag_x * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
-        buf[base + 1] = -sb2 * x + diag_y * y + 2.0 * (s * b13 + b12 * b23) * z;
-        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + diag_z * z;
+        buf[base] = diag * x + sb2 * y;
+        buf[base + 1] = -sb2 * x + diag * y;
     }
 }
 
@@ -314,27 +296,19 @@ inline fn rotorInverse(buf: *[32]f32) void {
     inline for (0..rotor_groups_per_block) |g| {
         const base = g * 3;
         if (base + 2 >= 32) break;
-        // Inverse = conjugate: negate bivector components
+        // Inverse = conjugate rotor: negate the bivector component, which
+        // transposes the e12 rotation block. The e3 component is untouched,
+        // as in the forward pass.
         const s = rotor_params[g][0];
         const b12 = -rotor_params[g][1];
-        const b13 = -rotor_params[g][2];
-        const b23 = -rotor_params[g][3];
         const x = buf[base];
         const y = buf[base + 1];
-        const z = buf[base + 2];
 
-        const ss = s * s;
-        const bb12 = b12 * b12;
+        const diag = s * s - b12 * b12;
         const sb2 = 2.0 * s * b12;
-        const bb13 = b13 * b13;
-        const bb23 = b23 * b23;
-        const diag_x = ss + bb12 - bb13 - bb23;
-        const diag_y = ss - bb12 + bb13 - bb23;
-        const diag_z = ss - bb12 - bb13 + bb23;
 
-        buf[base] = diag_x * x + sb2 * y + 2.0 * (b12 * b13 - s * b23) * z;
-        buf[base + 1] = -sb2 * x + diag_y * y + 2.0 * (s * b13 + b12 * b23) * z;
-        buf[base + 2] = 2.0 * (s * b23 - b12 * b13) * x + 2.0 * (-s * b13 - b12 * b23) * y + diag_z * z;
+        buf[base] = diag * x + sb2 * y;
+        buf[base + 1] = -sb2 * x + diag * y;
     }
 }
 
@@ -2109,6 +2083,40 @@ test "turbo kvSliceBytes" {
     // turbo4: 18 bytes per 32 elements
     try std.testing.expectEqual(@as(usize, 18), kvSliceBytes(.turbo4, 32));
     try std.testing.expectEqual(@as(usize, 36), kvSliceBytes(.turbo4, 64));
+}
+
+test "rotor and quaternion rotations round-trip" {
+    // Store rotates the block, the dot/mul-accum paths rotate back. A wrong
+    // sandwich (rotor diagonals) or a non-quaternion second product (iso)
+    // leaves the vector scaled or sheared, so forward∘inverse must be identity.
+    var buf: [32]f32 = undefined;
+    for (&buf, 0..) |*v, i| v.* = @as(f32, @floatFromInt(i)) * 0.37 - 3.1;
+    const original = buf;
+
+    buf = original;
+    rotorForward(&buf);
+    rotorInverse(&buf);
+    for (buf, original) |got, want| try std.testing.expectApproxEqAbs(want, got, 1e-5);
+
+    buf = original;
+    quatRotateForward(&buf);
+    quatRotateInverse(&buf);
+    for (buf, original) |got, want| try std.testing.expectApproxEqAbs(want, got, 1e-5);
+}
+
+test "rotor sandwich is isoclinic" {
+    // RvR̃ for a planar e12 rotor has one shared diagonal (s² - b12²) and
+    // off-diagonals ±2·s·b12. An axis that was scaled instead of rotated shows
+    // up as a different diagonal, which is what the store/dot pair relies on.
+    var buf: [32]f32 = [_]f32{0} ** 32;
+    buf[0] = 1;
+    rotorForward(&buf);
+    const g = rotor_params[0];
+    const diag = g[0] * g[0] - g[1] * g[1];
+    const off = 2.0 * g[0] * g[1];
+    try std.testing.expectApproxEqAbs(diag, buf[0], 1e-6);
+    try std.testing.expectApproxEqAbs(-off, buf[1], 1e-6);
+    try std.testing.expectApproxEqAbs(0.0, buf[2], 1e-6);
 }
 
 test "turbo fromString" {

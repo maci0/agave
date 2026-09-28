@@ -34,15 +34,17 @@ const latency_buckets = [_]HistBucket{
     .{ .bound = 30000, .le = "30" },
 };
 
-/// TPOT buckets (ms/token). Finer than latency; decode is typically 5-100ms/token.
+/// TPOT buckets (µs/token). Finer than latency; decode is typically 5-100ms/token.
+/// Bounds are microseconds so a decode faster than 1ms/token still lands in the
+/// smallest bucket instead of truncating to 0.
 const tpot_buckets = [_]HistBucket{
-    .{ .bound = 5, .le = "0.005" },
-    .{ .bound = 10, .le = "0.01" },
-    .{ .bound = 20, .le = "0.02" },
-    .{ .bound = 50, .le = "0.05" },
-    .{ .bound = 100, .le = "0.1" },
-    .{ .bound = 200, .le = "0.2" },
-    .{ .bound = 500, .le = "0.5" },
+    .{ .bound = 5 * us_per_ms, .le = "0.005" },
+    .{ .bound = 10 * us_per_ms, .le = "0.01" },
+    .{ .bound = 20 * us_per_ms, .le = "0.02" },
+    .{ .bound = 50 * us_per_ms, .le = "0.05" },
+    .{ .bound = 100 * us_per_ms, .le = "0.1" },
+    .{ .bound = 200 * us_per_ms, .le = "0.2" },
+    .{ .bound = 500 * us_per_ms, .le = "0.5" },
 };
 
 /// Prompt / generation token-count buckets (`le` is the count itself).
@@ -74,6 +76,10 @@ const cache_line: usize = 64;
 
 /// Milliseconds per second, used for ms→seconds conversion in Prometheus output.
 const ms_per_second: f64 = 1000.0;
+/// Microseconds per second, used for µs→seconds conversion in Prometheus output.
+const us_per_second: f64 = 1_000_000.0;
+/// Microseconds per millisecond, used to keep the TPOT histogram sub-millisecond exact.
+const us_per_ms: u64 = 1000;
 
 /// Prometheus metrics collector with atomic counters and gauges.
 ///
@@ -375,16 +381,16 @@ pub const Metrics = struct {
     }
 
     /// Render a histogram in Prometheus cumulative-bucket format using comptime field dispatch.
-    fn renderHistogram(self: *const Metrics, writer: anytype, name: []const u8, help: []const u8, comptime fields: anytype, comptime labels: anytype, comptime sum_field: []const u8, comptime sum_as_seconds: bool) !void {
+    fn renderHistogram(self: *const Metrics, writer: anytype, name: []const u8, help: []const u8, comptime fields: anytype, comptime labels: anytype, comptime sum_field: []const u8, comptime sum_divisor: f64) !void {
         try writer.print("# HELP {s} {s}\n# TYPE {s} histogram\n", .{ name, help, name });
         var cumulative: u64 = 0;
         inline for (fields, labels) |field, label| {
             cumulative += @field(self, field).load(.monotonic);
             try writer.print("{s}_bucket{{le=\"{s}\"}} {d}\n", .{ name, @as([]const u8, label), cumulative });
         }
-        if (sum_as_seconds) {
-            const sum_ms = @field(self, sum_field).load(.monotonic);
-            try writer.print("{s}_sum {d:.3}\n", .{ name, @as(f64, @floatFromInt(sum_ms)) / ms_per_second });
+        if (sum_divisor != 1.0) {
+            const raw_sum = @field(self, sum_field).load(.monotonic);
+            try writer.print("{s}_sum {d:.3}\n", .{ name, @as(f64, @floatFromInt(raw_sum)) / sum_divisor });
         } else {
             try writer.print("{s}_sum {d}\n", .{ name, @field(self, sum_field).load(.monotonic) });
         }
@@ -464,12 +470,14 @@ pub const Metrics = struct {
 
     /// Record time-per-output-token and update TPOT histogram.
     /// `tokens` is the number of decode tokens; `decode_ms` is the total decode time.
-    /// TPOT = decode_ms / tokens (milliseconds per token).
+    /// TPOT = decode_ms / tokens, accumulated in microseconds so a decode faster
+    /// than one millisecond per token keeps its fraction instead of truncating to 0.
     pub fn recordTPOT(self: *Metrics, tokens: u32, decode_ms: u64) void {
         if (tokens == 0) return;
-        const tpot_ms = decode_ms / @as(u64, tokens);
-        _ = self.tpot_sum.fetchAdd(tpot_ms, .monotonic);
-        self.recordToBuckets(tpot_ms, .{
+        const decode_us = std.math.mul(u64, decode_ms, us_per_ms) catch std.math.maxInt(u64);
+        const tpot_us = decode_us / @as(u64, tokens);
+        _ = self.tpot_sum.fetchAdd(tpot_us, .monotonic);
+        self.recordToBuckets(tpot_us, .{
             "tpot_5ms",   "tpot_10ms",  "tpot_20ms",  "tpot_50ms",
             "tpot_100ms", "tpot_200ms", "tpot_500ms",
         }, comptime histBounds(&tpot_buckets), "tpot_inf");
@@ -555,13 +563,13 @@ pub const Metrics = struct {
             "latency_10ms", "latency_50ms", "latency_100ms", "latency_500ms",
             "latency_1s",   "latency_5s",   "latency_10s",   "latency_30s",
             "latency_inf",
-        }, comptime histLes(&latency_buckets), "latency_sum", true);
+        }, comptime histLes(&latency_buckets), "latency_sum", ms_per_second);
 
         try self.renderHistogram(writer, "agave_ttft_seconds", "Time-to-first-token histogram", .{
             "ttft_10ms", "ttft_50ms", "ttft_100ms", "ttft_500ms",
             "ttft_1s",   "ttft_5s",   "ttft_10s",   "ttft_30s",
             "ttft_inf",
-        }, comptime histLes(&latency_buckets), "ttft_sum", true);
+        }, comptime histLes(&latency_buckets), "ttft_sum", ms_per_second);
 
         // Prefill tokens
         try writer.writeAll("# HELP agave_prefill_tokens_total Total prompt tokens processed during prefill\n");
@@ -684,25 +692,25 @@ pub const Metrics = struct {
         try self.renderHistogram(writer, "agave_time_per_output_token_seconds", "Time per output token histogram", .{
             "tpot_5ms",   "tpot_10ms",  "tpot_20ms",  "tpot_50ms",
             "tpot_100ms", "tpot_200ms", "tpot_500ms", "tpot_inf",
-        }, comptime histLes(&tpot_buckets), "tpot_sum", true);
+        }, comptime histLes(&tpot_buckets), "tpot_sum", us_per_second);
 
         try self.renderHistogram(writer, "agave_request_queue_time_seconds", "Request queue wait time histogram", .{
             "queue_time_10ms", "queue_time_50ms", "queue_time_100ms", "queue_time_500ms",
             "queue_time_1s",   "queue_time_5s",   "queue_time_10s",   "queue_time_30s",
             "queue_time_inf",
-        }, comptime histLes(&latency_buckets), "queue_time_sum", true);
+        }, comptime histLes(&latency_buckets), "queue_time_sum", ms_per_second);
 
         try self.renderHistogram(writer, "agave_request_prompt_tokens", "Prompt token count distribution", .{
             "prompt_tok_16",  "prompt_tok_64",   "prompt_tok_128",  "prompt_tok_256",
             "prompt_tok_512", "prompt_tok_1024", "prompt_tok_2048", "prompt_tok_4096",
             "prompt_tok_inf",
-        }, comptime histLes(&token_buckets), "prompt_tok_sum", false);
+        }, comptime histLes(&token_buckets), "prompt_tok_sum", 1.0);
 
         try self.renderHistogram(writer, "agave_request_generation_tokens", "Generation token count distribution", .{
             "gen_tok_16",  "gen_tok_64",   "gen_tok_128",  "gen_tok_256",
             "gen_tok_512", "gen_tok_1024", "gen_tok_2048", "gen_tok_4096",
             "gen_tok_inf",
-        }, comptime histLes(&token_buckets), "gen_tok_sum", false);
+        }, comptime histLes(&token_buckets), "gen_tok_sum", 1.0);
 
         // VRAM (GPU-resident) tier occupancy, the tier capacity alerts watch.
         const vram_used = self.vram_kv_blocks_used.load(.monotonic);
@@ -717,7 +725,7 @@ pub const Metrics = struct {
             "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
             "itl_inf",
-        }, comptime histLes(&itl_buckets), "itl_sum", true);
+        }, comptime histLes(&itl_buckets), "itl_sum", ms_per_second);
 
         // Per-tier KV occupancy. `state` has two values, `tier` three, so the
         // series count is fixed: cardinality does not grow with cache pressure.
@@ -1170,13 +1178,19 @@ test "Metrics: recordTPOT updates histogram" {
     // 10 tokens in 100ms → tpot = 10ms → tpot_10ms bucket
     metrics.recordTPOT(10, 100);
     try std.testing.expectEqual(@as(u64, 1), metrics.tpot_10ms.load(.monotonic));
-    try std.testing.expectEqual(@as(u64, 10), metrics.tpot_sum.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 10_000), metrics.tpot_sum.load(.monotonic));
     // 0 tokens → no-op
     metrics.recordTPOT(0, 100);
-    try std.testing.expectEqual(@as(u64, 10), metrics.tpot_sum.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 10_000), metrics.tpot_sum.load(.monotonic));
     // 1 token in 300ms → tpot = 300ms → tpot_500ms bucket
     metrics.recordTPOT(1, 300);
     try std.testing.expectEqual(@as(u64, 1), metrics.tpot_500ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 310_000), metrics.tpot_sum.load(.monotonic));
+    // 20 tokens in 9ms → 0.45ms/token. Integer ms math collapsed this to 0;
+    // microseconds keep the fraction and the sample still lands in tpot_5ms.
+    metrics.recordTPOT(20, 9);
+    try std.testing.expectEqual(@as(u64, 1), metrics.tpot_5ms.load(.monotonic));
+    try std.testing.expectEqual(@as(u64, 310_450), metrics.tpot_sum.load(.monotonic));
 }
 
 test "Metrics: recordQueueTime updates histogram" {

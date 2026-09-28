@@ -2028,7 +2028,10 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
     if (!cli.json) eprint("\nFrontier Benchmark ({d} frontiers, {d} probe tokens each):\n", .{ n_frontiers, probe_tokens });
     if (cli.json) _ = std.posix.system.write(stdout_file.handle, "[", 1);
 
-    for (frontiers_buf[0..n_frontiers], 0..) |ctx_len, fi| {
+    // Comma goes before each element and only when one was already written, so
+    // a skipped frontier (duplicate or zero context) cannot leave a trailing one.
+    var emitted: usize = 0;
+    for (frontiers_buf[0..n_frontiers]) |ctx_len| {
         // Prefill from cursor to ctx_len. `cursor` saturates at prompt.len, so
         // a frontier below it has nothing left to prefill.
         const end = @min(ctx_len, prompt.len);
@@ -2075,9 +2078,10 @@ fn runFrontierBench(model: *Model, tok_state: anytype, allocator: std.mem.Alloca
 
         var buf: [256]u8 = undefined;
         if (cli.json) {
-            const comma: []const u8 = if (fi + 1 < n_frontiers) "," else "";
-            const msg = std.fmt.bufPrint(&buf, "{{\"ctx\":{d},\"prefill_tokens\":{d},\"prefill_tps\":{d:.1},\"decode_tps\":{d:.1}}}{s}", .{ ctx_len, slice.len, pf_tps, dec_tps, comma }) catch continue;
+            const msg = std.fmt.bufPrint(&buf, "{{\"ctx\":{d},\"prefill_tokens\":{d},\"prefill_tps\":{d:.1},\"decode_tps\":{d:.1}}}", .{ ctx_len, slice.len, pf_tps, dec_tps }) catch continue;
+            if (emitted > 0) _ = std.posix.system.write(stdout_file.handle, ",", 1);
             _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
+            emitted += 1;
         } else {
             const msg = std.fmt.bufPrint(&buf, "  ctx={d:6}: prefill {d:.1} t/s  decode {d:.1} t/s  (prefill {d} tok)\n", .{ ctx_len, pf_tps, dec_tps, slice.len }) catch continue;
             _ = std.posix.system.write(stdout_file.handle, msg.ptr, msg.len);
