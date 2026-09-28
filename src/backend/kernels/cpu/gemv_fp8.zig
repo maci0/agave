@@ -314,7 +314,7 @@ pub fn gemvMXFP8(
 ) void {
     const group_size: usize = 128;
     const n_col_groups = (k + group_size - 1) / group_size;
-    _ = scale_cols; // Should equal n_col_groups
+    std.debug.assert(scale_cols == n_col_groups);
 
     for (0..n) |row| {
         var sum: f32 = 0.0;

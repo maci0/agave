@@ -870,6 +870,21 @@ fn markSamplingReady(req: *Request) void {
     req.sampling_ready.store(true, .release);
 }
 
+/// Request with default fields, taking the token list the caller reserved.
+fn testRequest(tokens: std.ArrayList(u32), allocator: Allocator) Request {
+    return .{
+        .id = 1,
+        .tokens = tokens,
+        .last_token_id = 0,
+        .is_finished = std.atomic.Value(bool).init(false),
+        .is_cancelled = std.atomic.Value(bool).init(false),
+        .visible_len = std.atomic.Value(u32).init(0),
+        .enqueued_at = 0,
+        .prompt_tokens = 0,
+        .allocator = allocator,
+    };
+}
+
 test "prefillTokensInFlight counts only unprefilled tokens of running requests" {
     const allocator = std.testing.allocator;
     var metrics = Metrics{};
@@ -1206,17 +1221,7 @@ test "appendToken marks finished on EOG" {
     var tokens: std.ArrayList(u32) = .empty;
     try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
     defer tokens.deinit(allocator);
-    var req = Request{
-        .id = 1,
-        .tokens = tokens,
-        .last_token_id = 0,
-        .is_finished = std.atomic.Value(bool).init(false),
-        .is_cancelled = std.atomic.Value(bool).init(false),
-        .visible_len = std.atomic.Value(u32).init(0),
-        .enqueued_at = 0,
-        .prompt_tokens = 0,
-        .allocator = allocator,
-    };
+    var req = testRequest(tokens, allocator);
 
     const eog_ids = [_]u32{ 2, 128001 };
     req.appendToken(42, &eog_ids);
@@ -1233,17 +1238,7 @@ test "appendToken updates visible_len and last_token_id" {
     var tokens: std.ArrayList(u32) = .empty;
     try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
     defer tokens.deinit(allocator);
-    var req = Request{
-        .id = 1,
-        .tokens = tokens,
-        .last_token_id = 0,
-        .is_finished = std.atomic.Value(bool).init(false),
-        .is_cancelled = std.atomic.Value(bool).init(false),
-        .visible_len = std.atomic.Value(u32).init(0),
-        .enqueued_at = 0,
-        .prompt_tokens = 0,
-        .allocator = allocator,
-    };
+    var req = testRequest(tokens, allocator);
 
     try std.testing.expectEqual(@as(u32, 0), req.visible_len.load(.acquire));
 
@@ -1384,17 +1379,7 @@ test "appendToken at capacity sets cancelled flag" {
     defer tokens.deinit(allocator);
     const actual_cap = tokens.capacity;
 
-    var req = Request{
-        .id = 1,
-        .tokens = tokens,
-        .last_token_id = 0,
-        .is_finished = std.atomic.Value(bool).init(false),
-        .is_cancelled = std.atomic.Value(bool).init(false),
-        .visible_len = std.atomic.Value(u32).init(0),
-        .enqueued_at = 0,
-        .prompt_tokens = 0,
-        .allocator = allocator,
-    };
+    var req = testRequest(tokens, allocator);
 
     var i: u32 = 0;
     while (i < actual_cap) : (i += 1) {
@@ -1492,17 +1477,7 @@ test "Request.deinit frees tokens" {
     const allocator = std.testing.allocator;
     var tokens: std.ArrayList(u32) = .empty;
     try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
-    var req = Request{
-        .id = 1,
-        .tokens = tokens,
-        .last_token_id = 0,
-        .is_finished = std.atomic.Value(bool).init(false),
-        .is_cancelled = std.atomic.Value(bool).init(false),
-        .visible_len = std.atomic.Value(u32).init(0),
-        .enqueued_at = 0,
-        .prompt_tokens = 0,
-        .allocator = allocator,
-    };
+    var req = testRequest(tokens, allocator);
     req.appendToken(42, &[_]u32{});
     req.appendToken(43, &[_]u32{});
     try std.testing.expectEqual(@as(usize, 2), req.tokens.items.len);
@@ -1543,19 +1518,9 @@ test "sampleNextToken applies logit bias at temperature 0" {
     try tokens.ensureTotalCapacity(allocator, 8);
     defer tokens.deinit(allocator);
 
-    var req = Request{
-        .id = 1,
-        .tokens = tokens,
-        .last_token_id = 0,
-        .is_finished = std.atomic.Value(bool).init(false),
-        .is_cancelled = std.atomic.Value(bool).init(false),
-        .visible_len = std.atomic.Value(u32).init(0),
-        .enqueued_at = 0,
-        .prompt_tokens = 0,
-        .allocator = allocator,
-        .temperature = 0,
-        .logit_bias_count = 1,
-    };
+    var req = testRequest(tokens, allocator);
+    req.temperature = 0;
+    req.logit_bias_count = 1;
     req.logit_bias_ids[0] = 0;
     req.logit_bias_vals[0] = 10.0; // boost token 0 above greedy argmax at index 1
     req.rebuildSampler();
@@ -1626,17 +1591,8 @@ test "fuzz: all scheduler functions" {
             // --- Request.appendToken + Request.deinit ---
             var tokens: std.ArrayList(u32) = .empty;
             try tokens.ensureTotalCapacity(allocator, initial_token_capacity);
-            var req = Request{
-                .id = smith.valueWithHash(u64, 3),
-                .tokens = tokens,
-                .last_token_id = 0,
-                .is_finished = std.atomic.Value(bool).init(false),
-                .is_cancelled = std.atomic.Value(bool).init(false),
-                .visible_len = std.atomic.Value(u32).init(0),
-                .enqueued_at = 0,
-                .prompt_tokens = 0,
-                .allocator = allocator,
-            };
+            var req = testRequest(tokens, allocator);
+            req.id = smith.valueWithHash(u64, 3);
             defer req.deinit(); // exercises Request.deinit
 
             const token = smith.valueWithHash(u32, 4);
