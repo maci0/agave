@@ -398,4 +398,11 @@
   .mark {
     background: CanvasText;
   }
+
+  /* The hover-revealed row actions (copy, regenerate, delete) start at opacity
+     0, which in forced-colors mode hides a real control from anyone reading
+     the page without a pointer. There is no hover to bring them back. */
+  .agave-reveal {
+    opacity: 1;
+  }
 }
