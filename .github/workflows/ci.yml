@@ -293,7 +293,13 @@ jobs:
         run: |
           set -euo pipefail
           zig build wasm
-          test -s zig-out/web/agave.wasm
+          # zig-out/web is the directory README tells a developer to serve, so
+          # it has to hold the page's relative-URL assets too, not just the
+          # module. A wasm step that emitted agave.wasm alone would 404 on
+          # shell.js and still pass `test -s`.
+          for f in agave.wasm index.html style.css agave.js shell.js; do
+            test -s "zig-out/web/$f" || { echo "missing zig-out/web/$f" >&2; exit 1; }
+          done
 
   # Rebuild-and-compare check for committed kernel binaries (CUDA PTX).
   # These artifacts are @embedFile'd but NOT rebuilt by `zig build`, so a
