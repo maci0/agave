@@ -290,7 +290,7 @@ text is zeroed in RAM on delete/clear.
 **Durability:** the web-UI conversation list is written to
 `$XDG_CACHE_HOME/agave/conversations.json` (fallback `~/.cache/agave/conversations.json`;
 override with `--conv-store PATH`, disable with `--no-conv-store`). Saves use a sibling
-`.tmp.<pid>` file, `fsync`, and rename, so
+`.tmp.<pid>` file (`.<counter>` under `--sim-clock-ms`), `fsync`, and rename, so
 a crash cannot truncate the live file and a second server on the same path
 cannot truncate this one's write. On startup the server loads that file;
 a corrupt file is renamed to `{path}.corrupt` and the server starts empty

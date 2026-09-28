@@ -1720,7 +1720,7 @@ fn sendJsonErrorEx(stream: http.TcpStream, status: []const u8, err_type: []const
 /// so the OpenAI body is an unparseable response there. `code` is the
 /// OpenAI-envelope machine-readable code; the Anthropic envelope has no code
 /// field, so only the message survives.
-fn sendPreflightErrorEx(stream: TcpStream, path: []const u8, status: []const u8, code: []const u8, message: []const u8) void {
+fn sendPreflightErrorEx(stream: http.TcpStream, path: []const u8, status: []const u8, code: []const u8, message: []const u8) void {
     if (isAnthropicPath(path)) {
         sendAnthropicError(stream, if (std.mem.eql(u8, status, "403 Forbidden")) "403" else status, "invalid_request_error", message);
         return;

@@ -4,6 +4,8 @@
 //! parent directory. A crash mid-write leaves the previous live file intact
 //! (or no file on first write). Used by calibration output, conversation
 //! store, Vulkan pipeline cache, expert profiles, and Hub download publish.
+//! Under a clock override the tmp suffix is a call counter rather than the
+//! pid, so a simulated crash leaves a leftover tmp a replay reproduces.
 //!
 //! Not a hot-path helper: callers are one-shot CLI/server I/O.
 //!
@@ -14,6 +16,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const sim_clock = @import("sim_clock.zig");
 
 /// fsync is a no-op on targets without a real POSIX file descriptor.
 const posix_sync = builtin.os.tag != .wasi and builtin.os.tag != .freestanding;
@@ -217,10 +220,25 @@ fn writeAll(fd: std.posix.fd_t, data: []const u8) !void {
 /// processes replacing the same file cannot truncate or rename each other's
 /// partial write. Callers in one process must still serialize writes to the
 /// same path (the server does so under its mutex).
+///
+/// Under a clock override the pid is replaced by a per-process call counter.
+/// The pid differs on every host and every run, so a simulated crash/restart
+/// would leave the leftover tmp under a name a replay cannot reproduce, and
+/// the leftover tmp is exactly the state a restart reads back. Simulation mode
+/// is one process driving one timeline, where the call counter is unique per
+/// write and identical across replays.
 fn tmpPath(buf: []u8, path: []const u8) ![]u8 {
     if (comptime !posix_sync) return std.fmt.bufPrint(buf, "{s}.tmp", .{path}) catch error.NameTooLong;
+    if (sim_clock.isOverridden()) {
+        const seq = tmp_seq.fetchAdd(1, .monotonic);
+        return std.fmt.bufPrint(buf, "{s}.tmp.{d}", .{ path, seq }) catch error.NameTooLong;
+    }
     return std.fmt.bufPrint(buf, "{s}.tmp.{d}", .{ path, std.c.getpid() }) catch error.NameTooLong;
 }
+
+/// Per-process tmp sequence used in place of the pid under a clock override.
+/// u32, so 32-bit atomics cover every target; only read under an override.
+var tmp_seq = std.atomic.Value(u32).init(0);
 
 fn closeFd(fd: std.posix.fd_t) void {
     if (comptime builtin.os.tag == .linux) {
@@ -371,6 +389,48 @@ test "replace overwrites previous contents atomically" {
     const got = try readPath(std.testing.allocator, path);
     defer std.testing.allocator.free(got);
     try std.testing.expectEqualStrings("v2-longer", got);
+}
+
+test "tmp path drops the pid under a clock override" {
+    if (comptime !posix_sync) return;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "tmp_name.bin");
+    const prefix = try std.fmt.allocPrint(std.testing.allocator, "{s}.tmp.", .{path});
+    defer std.testing.allocator.free(prefix);
+
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    const pid_suffix = try std.fmt.allocPrint(std.testing.allocator, ".tmp.{d}", .{std.c.getpid()});
+    defer std.testing.allocator.free(pid_suffix);
+    try std.testing.expect(std.mem.endsWith(u8, try tmpPath(&buf_a, path), pid_suffix));
+
+    sim_clock.setOverrideMs(1_700_000_000_000);
+    defer sim_clock.setOverrideMs(null);
+
+    var buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    var buf_c: [std.fs.max_path_bytes]u8 = undefined;
+    const b = try tmpPath(&buf_b, path);
+    const c = try tmpPath(&buf_c, path);
+    // Each write gets its own tmp, so a restart still finds the leftover.
+    try std.testing.expect(!std.mem.eql(u8, b, c));
+    // The suffix counts up, so a replay of the same call sequence rebuilds
+    // the same names whatever the host pid is.
+    const b_seq = try std.fmt.parseInt(u32, b[prefix.len..], 10);
+    const c_seq = try std.fmt.parseInt(u32, c[prefix.len..], 10);
+    try std.testing.expectEqual(b_seq + 1, c_seq);
+
+    // A simulated crash leaves the tmp behind under the name a replay
+    // rebuilds, so a restart can find and clean it. The successful replace
+    // above takes one number, the crashing one the next.
+    try replace(path, "old");
+    defer deletePath(path);
+    var leftover_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const leftover = try std.fmt.bufPrint(&leftover_buf, "{s}{d}", .{ prefix, c_seq + 2 });
+    defer deletePath(leftover);
+    armFault(.write, .crash);
+    defer clearFault();
+    try std.testing.expectError(error.InjectedCrash, replace(path, "new"));
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, leftover, .{}, 0);
+    closeFd(fd);
 }
 
 // ── Crash-consistency tests driven by the fault seam ─────────────────────

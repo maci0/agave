@@ -73,6 +73,27 @@ fn getenv(name: []const u8) ?[]const u8 {
 /// cannot be coerced into `model.ForwardError` at the model vtable.
 const PollError = error{ AcceptFailed, ConnectFailed };
 
+/// Owner and length of an open descriptor, read through whichever stat the
+/// target exposes: Linux reaches the metadata through statx and declares no
+/// `fstat`, so the two fields a peer check needs are pulled per target rather
+/// than through a filled-in `Stat`.
+const FdInfo = struct {
+    uid: u32,
+    size: u64,
+};
+
+fn fdInfo(fd: c_int) !FdInfo {
+    if (comptime builtin.os.tag == .linux) {
+        var sx: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(fd, @ptrCast(""), std.os.linux.AT.EMPTY_PATH, std.os.linux.STATX{ .UID = true, .SIZE = true }, &sx);
+        if (rc != 0) return error.StatFailed;
+        return .{ .uid = sx.uid, .size = @intCast(@max(sx.size, 0)) };
+    }
+    var st: posix.Stat = undefined;
+    if (c.fstat(fd, &st) != 0) return error.StatFailed;
+    return .{ .uid = st.uid, .size = @intCast(@max(st.size, 0)) };
+}
+
 /// Poll `fd` for `events` until ready or `budget_ms` elapse on the injectable
 /// clock. Returns the poll result (0 on timeout), or `poll_error` if poll(2)
 /// itself fails.
@@ -364,14 +385,13 @@ pub const Transport = struct {
         // The peer names a fixed region, so a same-user process can pre-create
         // it. Verify the segment is ours and long enough before mapping it: a
         // short segment would fault (SIGBUS) on the first write past its end.
-        var recv_st: posix.Stat = undefined;
-        if (std.c.fstat(self.shm_recv_fd, &recv_st) != 0) return error.ShmOpenFailed;
-        if (recv_st.uid != std.c.geteuid()) {
+        const info = fdInfo(self.shm_recv_fd) catch return error.ShmOpenFailed;
+        if (info.uid != std.c.geteuid()) {
             std.log.err("shm: {s} is not owned by this user, refusing to map it", .{recv_name});
             return error.ShmOpenFailed;
         }
-        if (@as(u64, @intCast(@max(recv_st.size, 0))) < shm_region_size) {
-            std.log.err("shm: {s} is {d} bytes, need {d}", .{ recv_name, recv_st.size, shm_region_size });
+        if (info.size < shm_region_size) {
+            std.log.err("shm: {s} is {d} bytes, need {d}", .{ recv_name, info.size, shm_region_size });
             return error.ShmOpenFailed;
         }
         const recv_ptr = posix.system.mmap(null, shm_region_size, @bitCast(shm_PROT_RW), @bitCast(shm_MAP_SHARED), self.shm_recv_fd, 0);

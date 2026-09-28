@@ -42,6 +42,27 @@ const stderr_file = Io.File.stderr();
 /// Module-level Io instance, set by run() from caller.
 var mod_io: Io = undefined;
 
+/// Counter behind `tempSuffix` under a clock override. u32 so 32-bit atomics
+/// cover every target.
+var temp_seq = std.atomic.Value(u32).init(0);
+
+/// Unique suffix for the temp path of an atomic symlink publish.
+///
+/// Production draws OS entropy: the suffix only has to keep two concurrent
+/// `pull` processes off each other's temp path, and unpredictability costs
+/// nothing there. Under a clock override the entropy is replaced by a call
+/// counter, because that temp path is printed in diagnostics and a replay
+/// must reproduce the same run byte-for-byte. Simulation mode drives one
+/// process, where the counter is unique per publish.
+fn tempSuffix() u64 {
+    if (!sim_clock.isOverridden()) {
+        var buf: [8]u8 = undefined;
+        mod_io.random(&buf);
+        return std.mem.readInt(u64, &buf, .little);
+    }
+    return temp_seq.fetchAdd(1, .monotonic);
+}
+
 /// Nanosecond timestamp via sim_clock's MONOTONIC timeline (progress-interval
 /// deltas). REALTIME can jump under NTP and make the progress bar stutter
 /// or stall. Under override, progress intervals follow virtual time so a
@@ -904,12 +925,10 @@ fn createAgaveSymlink(allocator: Allocator, repo: []const u8, snapshot_dir: []co
     };
     defer allocator.free(link_path);
 
-    // Atomic symlink replacement: create at temp path with random suffix to
+    // Atomic symlink replacement: create at temp path with a unique suffix to
     // prevent TOCTOU races (CWE-367), then rename over target.
-    var rand_buf: [8]u8 = undefined;
-    mod_io.random(&rand_buf);
     const tmp_path = std.fmt.allocPrint(allocator, "{s}.tmp.{x}", .{
-        link_path, std.mem.readInt(u64, &rand_buf, .little),
+        link_path, tempSuffix(),
     }) catch {
         eprint("Warning: OOM creating temp path for agave symlink {s}/{s}\n", .{ org, name });
         return;
@@ -1652,10 +1671,8 @@ fn pullSidecarFile(
 /// Errors are returned: a snapshot link that is not published makes the whole
 /// pull unusable, and the path is printed to stdout for scripting.
 fn atomicSymlink(pa: Allocator, target: []const u8, link_path: []const u8) !void {
-    var rand_buf: [8]u8 = undefined;
-    mod_io.random(&rand_buf);
     const tmp_link = try std.fmt.allocPrint(pa, "{s}.tmp.{x}", .{
-        link_path, std.mem.readInt(u64, &rand_buf, .little),
+        link_path, tempSuffix(),
     });
     defer pa.free(tmp_link);
     createSymlink(pa, target, tmp_link) catch |err| {
