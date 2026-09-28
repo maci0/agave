@@ -694,6 +694,7 @@ const Server = struct {
     }
 
     /// Create a new conversation. Caller must hold self.mutex.
+    /// The caller persists with `persistConversations` once the lock is free.
     fn createConv(self: *Server) ?*Conversation {
         if (self.conversations.items.len >= max_conversations) return null;
         const id = self.next_id;
@@ -712,7 +713,6 @@ const Server = struct {
         var title_buf: [24]u8 = undefined;
         const title = std.fmt.bufPrint(&title_buf, "Chat {d}", .{id}) catch "Chat";
         conv.setTitle(title);
-        self.persistConversationsLocked();
         return conv;
     }
 
@@ -721,6 +721,7 @@ const Server = struct {
     /// conversation, so one erasure cannot surgically remove its history.
     /// When the active conversation is deleted, also wipe KV / prefix cache
     /// so prompt-derived state does not survive (matches `/clear` / `/reset`).
+    /// The caller persists with `persistConversations` once the lock is free.
     fn deleteConv(self: *Server, id: u32) void {
         var removed = false;
         for (self.conversations.items, 0..) |*conv, i| {
@@ -745,21 +746,22 @@ const Server = struct {
             self.kv_valid = false;
             self.clearCachedPromptIds();
         }
-        self.persistConversationsLocked();
     }
 
     /// Select a conversation by ID. Caller must hold self.mutex.
     /// Wipes the prefix memo and the shared n-gram pool alongside the KV flag:
     /// both hold the previous conversation's tokens, and neither can be
     /// trimmed to one conversation, so a switch carries state across.
-    fn selectConv(self: *Server, id: u32) void {
+    /// Returns true when the selection changed, so the caller knows to persist.
+    fn selectConv(self: *Server, id: u32) bool {
         if (self.active_id != id) {
             self.active_id = id;
             self.kv_valid = false;
             self.clearCachedPromptIds();
             if (ngram_mod.global_pool) |*pool| pool.clear();
-            self.persistConversationsLocked();
+            return true;
         }
+        return false;
     }
 
     /// Claim the caller's `X-Request-Id` in the replay ledger. A request
@@ -848,6 +850,42 @@ const Server = struct {
             self.metrics.recordConvStoreSaveFailure();
             std.log.err("conversation store save failed ({s}): {}; conversation history is not persisted", .{ path, err });
         };
+    }
+
+    /// Write conversations to `conv_store_path` from a request path, taking
+    /// `mutex` only to snapshot the store. `conv_store.save` runs two fsyncs,
+    /// so the write itself runs unlocked; holding `mutex` across it stalls
+    /// every other request for the duration of the sync.
+    fn persistConversations(self: *Server) void {
+        if (self.conv_store_path == null) return;
+        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        var views_buf: [max_conversations]conv_store.ConvView = undefined;
+        var n: usize = 0;
+        var active_id: u32 = 0;
+        var next_id: u32 = 0;
+        {
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
+            n = @min(self.conversations.items.len, max_conversations);
+            for (self.conversations.items[0..n], 0..) |*conv, i| {
+                views_buf[i] = .{
+                    .id = conv.id,
+                    .title = arena.dupe(u8, conv.titleSlice()) catch {
+                        self.metrics.recordConvStoreSaveFailure();
+                        return;
+                    },
+                    .messages = arena.dupe(Message, conv.messages.items) catch {
+                        self.metrics.recordConvStoreSaveFailure();
+                        return;
+                    },
+                };
+            }
+            active_id = self.active_id;
+            next_id = self.next_id;
+        }
+        self.saveConversationSnapshot(self.conv_store_path.?, active_id, next_id, views_buf[0..n]);
     }
 
     /// Restore conversations from `conv_store_path`. Caller must hold self.mutex
@@ -3111,6 +3149,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 logRequestDone(method, path, 503, elapsedMs(request_start));
                 return;
             }
+            g_server.persistConversations();
             var nbuf: [clear_response_buf_size]u8 = undefined;
             const njson = std.fmt.bufPrint(&nbuf,
                 \\{{"ok":true,"id":{d}}}
@@ -3137,12 +3176,13 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             };
             var mbuf: [conv_msgs_buf_size]u8 = undefined;
             var mw: std.Io.Writer = .fixed(&mbuf);
+            var switched = false;
             const select_result: enum { not_found, format_ok, format_fail } = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
 
                 const conv = g_server.getConvById(id) orelse break :blk .not_found;
-                g_server.selectConv(id);
+                switched = g_server.selectConv(id);
                 mw.writeAll("{\"messages\":[") catch break :blk .format_fail;
                 for (conv.messages.items, 0..) |msg, mi| {
                     if (mi > 0) mw.writeByte(',') catch break :blk .format_fail;
@@ -3168,6 +3208,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                     return;
                 },
                 .format_ok => {
+                    if (switched) g_server.persistConversations();
                     sendJson(stream, mw.buffered());
                     g_server.metrics.recordCompletion();
                     logRequestDone(method, path, 200, elapsedMs(request_start));
@@ -3209,6 +3250,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 return;
             }
             const was_active = delete_result.?;
+            g_server.persistConversations();
             var dbuf: [clear_response_buf_size]u8 = undefined;
             const djson = std.fmt.bufPrint(&dbuf,
                 \\{{"ok":true,"cleared":{s}}}
@@ -3319,7 +3361,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 break :blk null;
             }
             if (removed_assistant) |m| Conversation.freeOwnedMessage(g_server.allocator, m);
-            g_server.persistConversationsLocked();
 
             break :blk RegenPrepResult{ .formatted = regen_formatted, .msg_count = regen_conv.messages.items.len, .prompt_ids = regen_ids_owned };
         };
@@ -3327,6 +3368,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             g_server.releaseIdempotencyKey();
             return;
         }
+        g_server.persistConversations();
         const regen_formatted = regen_prep.?.formatted;
         defer wipeFree(g_server.allocator, @constCast(regen_formatted));
         const regen_msg_count = regen_prep.?.msg_count;
@@ -3544,8 +3586,6 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 break :blk null;
             }
 
-            g_server.persistConversationsLocked();
-
             prompt_ids_owned_handed_off = true;
             break :blk ChatPrepResult{ .need_reset = need_reset, .formatted = formatted, .prompt_ids = prompt_ids_owned };
         };
@@ -3553,6 +3593,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             g_server.releaseIdempotencyKey();
             return;
         }
+        g_server.persistConversations();
         const need_reset = prep_result.?.need_reset;
         const formatted = prep_result.?.formatted;
         defer if (formatted.ptr != trimmed.ptr) wipeFree(g_server.allocator, @constCast(formatted));
@@ -3678,8 +3719,8 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             // onto empty slots and skip re-prefilling (garbled output).
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
-            g_server.persistConversationsLocked();
         }
+        g_server.persistConversations();
         if (ngram_mod.global_pool) |*pool| pool.clear();
         std.log.info("req={d} chat command /clear", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
@@ -3694,8 +3735,8 @@ fn handleChatCommand(cmd: []const u8) ?[]const u8 {
             g_server.kv_valid = false;
             g_server.clearCachedPromptIds();
             if (g_server.getActiveConv()) |conv| conv.clearMessages(g_server.allocator);
-            g_server.persistConversationsLocked();
         }
+        g_server.persistConversations();
         if (ngram_mod.global_pool) |*pool| pool.clear();
         std.log.info("req={d} chat command /reset", .{log_request_id});
         return "<div class=\"msg assistant\" data-tokens=\"0\" data-time=\"0\" data-tps=\"0\">Conversation cleared.</div>";
@@ -4471,21 +4512,33 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
             gen_tokens[token_count] = next;
             // Decode token text for grammar/JSON/stop checks
             const needs_text = use_grammar or sampling.json_mode or sampling.hasStop();
-            const tok_text_alloc: ?[]u8 = if (needs_text) blk: {
-                const tok_slice = [1]u32{next};
-                break :blk g_server.tokenizer.decode(@constCast(&tok_slice)) catch |err| blk2: {
-                    std.log.warn("req={d} token decode failed (id={d}): {}", .{ log_request_id, next, err });
-                    break :blk2 null;
-                };
-            } else null;
+            // Decode into a stack buffer; only a token whose text exceeds it
+            // falls back to the allocating path, so the common case costs no
+            // allocation per token.
+            var tok_text_buf: [stream_decode_buf_size]u8 = undefined;
+            var tok_text_alloc: ?[]u8 = null;
+            var tok_decode_ok = true;
+            var tok_text: []const u8 = "";
+            if (needs_text) {
+                if (g_server.tokenizer.decodeOne(next, &tok_text_buf)) |decoded| {
+                    tok_text = decoded;
+                } else {
+                    const tok_slice = [1]u32{next};
+                    tok_text_alloc = g_server.tokenizer.decode(@constCast(&tok_slice)) catch |err| blk2: {
+                        std.log.warn("req={d} token decode failed (id={d}): {}", .{ log_request_id, next, err });
+                        break :blk2 null;
+                    };
+                    tok_text = tok_text_alloc orelse "";
+                    tok_decode_ok = tok_text_alloc != null;
+                }
+            }
             defer if (tok_text_alloc) |t| g_server.allocator.free(t);
             // Fail closed: accepting "" on decode failure corrupts grammar state.
-            if (use_grammar and needs_text and tok_text_alloc == null) {
+            if (use_grammar and needs_text and !tok_decode_ok) {
                 std.log.warn("req={d} grammar token decode failed, aborting generation", .{log_request_id});
                 forward_failed = true;
                 break;
             }
-            const tok_text: []const u8 = tok_text_alloc orelse "";
             // Accept token in grammar state, use raw vocab text for consistent BPE handling.
             if (use_grammar and grammar_state_storage != null) {
                 const raw_tok = if (next < vocab_texts.len) vocab_texts[next] else "";
@@ -5718,12 +5771,23 @@ fn sendAnthropicFinalEvents(stream: http.TcpStream, stop_reason: []const u8, tok
 /// Empty text emits nothing. Returns false on client disconnect.
 fn emitAnthropicDeltaPiece(stream: http.TcpStream, text: []const u8) bool {
     if (text.len == 0) return true;
+    // Fast path: escape into the event buffer without allocating, as the chat
+    // stream path does. Falls back to the allocating escape only when the
+    // escaped form does not fit.
+    var buf: [sse_event_buf_size]u8 = undefined;
+    const prefix = "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"";
+    const suffix = "\"}}";
+    const budget = buf.len - prefix.len - suffix.len;
+    if (text.len <= budget) {
+        if (json.jsonEscapeInto(buf[prefix.len..][0..budget], text)) |escaped| {
+            @memcpy(buf[0..prefix.len], prefix);
+            @memcpy(buf[prefix.len + escaped.len ..][0..suffix.len], suffix);
+            return sseWriteEvent(stream, "content_block_delta", buf[0 .. prefix.len + escaped.len + suffix.len]);
+        }
+    }
     const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
     defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
-    var buf: [sse_event_buf_size]u8 = undefined;
-    const data = std.fmt.bufPrint(&buf,
-        \\{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{s}"}}}}
-    , .{escaped}) catch {
+    const data = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ prefix, escaped, suffix }) catch {
         std.log.warn("req={d} anthropic SSE delta exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
@@ -5781,12 +5845,23 @@ fn sendResponsesStartEvents(stream: http.TcpStream, req_id: u64, created: i64) v
 /// event. Empty text emits nothing. Returns false on client disconnect.
 fn emitResponsesDeltaPiece(stream: http.TcpStream, text: []const u8) bool {
     if (text.len == 0) return true;
+    // Fast path: escape into the event buffer without allocating, as the chat
+    // stream path does. Falls back to the allocating escape only when the
+    // escaped form does not fit.
+    var buf: [sse_event_buf_size]u8 = undefined;
+    const prefix = "{\"type\":\"response.output_text.delta\",\"item_id\":\"msg_0\",\"output_index\":0,\"content_index\":0,\"delta\":\"";
+    const suffix = "\"}";
+    const budget = buf.len - prefix.len - suffix.len;
+    if (text.len <= budget) {
+        if (json.jsonEscapeInto(buf[prefix.len..][0..budget], text)) |escaped| {
+            @memcpy(buf[0..prefix.len], prefix);
+            @memcpy(buf[prefix.len + escaped.len ..][0..suffix.len], suffix);
+            return sseWriteEvent(stream, "response.output_text.delta", buf[0 .. prefix.len + escaped.len + suffix.len]);
+        }
+    }
     const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
     defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
-    var buf: [sse_event_buf_size]u8 = undefined;
-    const data = std.fmt.bufPrint(&buf,
-        \\{{"type":"response.output_text.delta","item_id":"msg_0","output_index":0,"content_index":0,"delta":"{s}"}}
-    , .{escaped}) catch {
+    const data = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ prefix, escaped, suffix }) catch {
         std.log.warn("req={d} responses SSE delta exceeded buffer ({d} bytes escaped)", .{ log_request_id, escaped.len });
         return true;
     };
