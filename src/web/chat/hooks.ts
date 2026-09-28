@@ -2,7 +2,8 @@
  *
  *  Each hook owns one slice of the surface so the component that assembles them
  *  stays a layout rather than a store. The logic is the logic the pre-React
- *  `app.ts` held at module scope; nothing here changes what the UI does.
+ *  the pre-React `app.ts` held at module scope; nothing here changes what the
+ *  UI does.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';

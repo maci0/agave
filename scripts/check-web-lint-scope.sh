@@ -17,7 +17,7 @@ cd "$ROOT"
 
 # Every pattern oxlint is allowed to skip, with the reason it exists.
 #   tools/oxlint/anti-slop/**  the local rules plugin, linted by its own tests
-#   src/web/app.js, web/*.js  committed tsc output, compared by
+#   src/web/app.js, web/*.js  committed bun output, compared by
 #                             scripts/check-web-artifacts.sh
 # The dot directories and build output trees are tool and cache roots.
 # No .ts/.tsx source is skipped: every one of them is linted.
