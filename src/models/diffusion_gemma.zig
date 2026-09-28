@@ -146,8 +146,6 @@ pub const DiffusionGemmaModel = struct {
     router_logits: []f32 = &.{},
     /// Final logits: vocab_size elements.
     logits_buf: []f32 = &.{},
-    /// Canvas token IDs for diffusion (canvas_length elements).
-    canvas_tokens: []u32 = &.{},
 
     // ── Prefill batch buffers (canvas denoising) ──────────────────
     /// Batch hidden states: canvas_length * n_embd.
@@ -326,8 +324,6 @@ pub const DiffusionGemmaModel = struct {
         errdefer allocator.free(self.router_logits);
         self.logits_buf = try allocator.alloc(f32, self.vocab_size);
         errdefer allocator.free(self.logits_buf);
-        self.canvas_tokens = try allocator.alloc(u32, cl);
-        errdefer allocator.free(self.canvas_tokens);
         // Prefill batch buffers for canvas denoising.
         self.pf_hidden = try allocator.alloc(f32, cl * e);
         errdefer allocator.free(self.pf_hidden);
@@ -369,7 +365,6 @@ pub const DiffusionGemmaModel = struct {
         allocator.free(self.pf_scratch);
         allocator.free(self.canvas_k_buf);
         allocator.free(self.canvas_v_buf);
-        allocator.free(self.canvas_tokens);
         if (self.tiered_block_allocator) |*tba| {
             tba.freeSeqTable(&self.seq_table);
         } else {

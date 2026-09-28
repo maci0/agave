@@ -35,7 +35,7 @@ ROOT = find_root()
 
 def check_links() -> list[str]:
     errors: list[str] = []
-    md_files = [*list((ROOT / "docs").rglob("*.md")), ROOT / "README.md"]
+    md_files = [*(ROOT / "docs").rglob("*.md"), ROOT / "README.md"]
     link_re = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
     for f in md_files:
         text = f.read_text(encoding="utf-8", errors="replace")
@@ -406,40 +406,13 @@ def check_debian_snapshot_pin() -> list[str]:
 
 
 def check_docker_packaging() -> list[str]:
-    """Debian snapshot pin, OCI license, LICENSE shipment, and HOME in the image."""
+    """OCI license, LICENSE shipment, and HOME in the image.
+
+    The Debian snapshot pin is checked by check_debian_snapshot_pin().
+    """
     errors: list[str] = []
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8", errors="replace")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8", errors="replace")
-
-    from_days = re.findall(r"debian:bookworm-(\d{8})-slim", dockerfile)
-    snap_days = re.findall(r"DEBIAN_SNAPSHOT=(\d{8})T", dockerfile)
-    if not from_days:
-        errors.append("Dockerfile: missing debian:bookworm-YYYYMMDD-slim FROM tag")
-    if not snap_days:
-        errors.append("Dockerfile: missing DEBIAN_SNAPSHOT=YYYYMMDDT... pin")
-    if from_days and len(set(from_days)) != 1:
-        errors.append(f"Dockerfile: FROM tag days disagree: {from_days}")
-    if snap_days and len(set(snap_days)) != 1:
-        errors.append(f"Dockerfile: DEBIAN_SNAPSHOT days disagree: {snap_days}")
-    if from_days and snap_days and from_days[0] != snap_days[0]:
-        errors.append(
-            f"Dockerfile: debian FROM day {from_days[0]} != DEBIAN_SNAPSHOT day {snap_days[0]}"
-        )
-    elif from_days:
-        day = from_days[0]
-        expected_epoch = int(
-            datetime(
-                int(day[:4]), int(day[4:6]), int(day[6:8]), tzinfo=UTC
-            ).timestamp()
-        )
-        epoch_m = re.search(r"SOURCE_DATE_EPOCH=(\d+)", dockerfile)
-        if not epoch_m:
-            errors.append("Dockerfile: missing SOURCE_DATE_EPOCH")
-        elif int(epoch_m.group(1)) != expected_epoch:
-            errors.append(
-                f"Dockerfile: SOURCE_DATE_EPOCH={epoch_m.group(1)} != {expected_epoch} "
-                f"(00:00:00 UTC on FROM/snapshot day {day})"
-            )
 
     if 'org.opencontainers.image.licenses="GPL-3.0-or-later"' not in dockerfile:
         errors.append(

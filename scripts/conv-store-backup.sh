@@ -623,7 +623,6 @@ main() {
         --self-test) do_self_test ;;
         -h | --help | '') usage ;;
         *)
-            [[ -n "${1:-}" ]] || die "no command given (path, backup, verify, restore, check, --self-test)"
             die "unknown command '$1' (path, backup, verify, restore, check, --self-test)"
             ;;
     esac

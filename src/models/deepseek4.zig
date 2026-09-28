@@ -318,9 +318,6 @@ pub const Ds4Model = struct {
     expert_scratch: []f32 = &.{}, // [max_total_experts * n_embd] for batched down GEMVs
     ff_gate_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] gate outputs pre-siluMul
     ff_up_scratch: []f32 = &.{}, // [max_total_experts * ff_exp] up outputs pre-siluMul
-    /// Scratch buffer for dequantized expert weights (AMX acceleration path).
-    /// Sized for one expert weight matrix: ff_exp × n_embd elements.
-    amx_dequant_buf: []f32 = &.{},
     router_logits: []f32 = &.{}, // [n_experts]
     logits_buf: []f32 = &.{}, // [vocab_size]
     mtp_hidden_buf: []f32 = &.{}, // [n_embd], saved MTP hidden state between depths
@@ -558,10 +555,6 @@ pub const Ds4Model = struct {
         const ff_gate_elems = std.math.mul(usize, max_experts, ff) catch return error.OutOfMemory;
         self.ff_gate_scratch = try allocator.alloc(f32, ff_gate_elems);
         errdefer allocator.free(self.ff_gate_scratch);
-        // AMX dequant scratch: one expert weight matrix (ff × e for gate/up, e × ff for down)
-        const amx_elems = std.math.mul(usize, ff, e) catch return error.OutOfMemory;
-        self.amx_dequant_buf = try allocator.alloc(f32, amx_elems);
-        errdefer allocator.free(self.amx_dequant_buf);
 
         // Expert data pool: heap staging for GPU-safe expert weight access.
         // 21 slots (7 experts × 3 weights), each sized for max expert weight.

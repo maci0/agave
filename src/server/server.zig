@@ -1842,7 +1842,6 @@ fn buildToolSystemPrompt(allocator: Allocator, tmpl: ChatTemplate, tp: *const js
 }
 
 /// Parse tool calls from model output. Looks for <tool_call>...</tool_call> patterns.
-/// Returns true if tool calls found and writes response. Otherwise returns false.
 fn hasToolCalls(text: []const u8) bool {
     return std.mem.indexOf(u8, text, "<tool_call>") != null;
 }

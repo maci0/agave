@@ -2294,8 +2294,7 @@ pub const VulkanBackend = struct {
     }
 
     /// MLX affine quantized GEMV.
-    pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
-        _ = bits;
+    pub fn gemvMlxQ(self: *VulkanBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, _: u32, _: u32) void {
         const x_sz = std.math.mul(usize, k, @sizeOf(f32)) catch return;
         const gpr = (std.math.add(usize, k, 63) catch return) / 64;
         const wpr = std.math.mul(usize, gpr, 8) catch return;

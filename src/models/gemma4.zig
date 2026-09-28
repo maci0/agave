@@ -227,8 +227,6 @@ pub const Gemma4Model = struct {
     router_buf: []f32 = &.{},
     logits_buf: []f32 = &.{},
     scores: []f32 = &.{},
-    /// PLE per-layer input vector (sized to ple_dim, one layer's slice at a time).
-    ple_buf: []f32 = &.{},
     /// PLE gate projection output (sized to ple_dim).
     ple_gate_buf: []f32 = &.{},
     /// PLE combined per-layer embeddings: [n_layers * ple_dim].
@@ -862,15 +860,12 @@ pub const Gemma4Model = struct {
 
         // PLE buffers, only allocated when PLE is active
         if (ple_dim > 0) {
-            self.ple_buf = try allocator.alloc(f32, ple_dim);
-            errdefer allocator.free(self.ple_buf);
             self.ple_gate_buf = try allocator.alloc(f32, ple_dim);
             errdefer allocator.free(self.ple_gate_buf);
             self.ple_combined = try allocator.alloc(f32, nl * ple_dim);
             errdefer allocator.free(self.ple_combined);
         }
         errdefer if (self.ple_dim > 0) {
-            allocator.free(self.ple_buf);
             allocator.free(self.ple_gate_buf);
             allocator.free(self.ple_combined);
         };
@@ -926,7 +921,6 @@ pub const Gemma4Model = struct {
         // Free cached norm weight conversions
         for (self.norm_cache[0..self.norm_cache_len]) |entry| self.allocator.free(entry.data);
         // Free PLE buffers
-        if (self.ple_buf.len > 0) self.allocator.free(self.ple_buf);
         if (self.ple_gate_buf.len > 0) self.allocator.free(self.ple_gate_buf);
         if (self.ple_combined.len > 0) self.allocator.free(self.ple_combined);
         // Free image batch buffer

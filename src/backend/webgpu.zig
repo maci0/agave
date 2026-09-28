@@ -555,8 +555,7 @@ pub const WebGpuBackend = struct {
             }.cb,
             .userdata1 = @ptrCast(&ctx),
         };
-        const future = self.fn_instance_request_adapter(self.instance, &opts, cb_info);
-        _ = future;
+        _ = self.fn_instance_request_adapter(self.instance, &opts, cb_info);
         self.fn_instance_process_events(self.instance);
         if (!ctx.ready or ctx.adapter == null) return error.WebGpuNotAvailable;
         self.adapter = ctx.adapter;
@@ -584,8 +583,7 @@ pub const WebGpuBackend = struct {
             }.cb,
             .userdata1 = @ptrCast(&ctx),
         };
-        const future = self.fn_adapter_request_device(self.adapter, &desc, cb_info);
-        _ = future;
+        _ = self.fn_adapter_request_device(self.adapter, &desc, cb_info);
         self.fn_instance_process_events(self.instance);
         if (!ctx.ready or ctx.device == null) return error.WebGpuNotAvailable;
         self.device = ctx.device;
@@ -784,7 +782,6 @@ pub const WebGpuBackend = struct {
     fn downloadF32(self: *WebGpuBackend, src: WGPUBuffer, dst: [*]f32, count: usize) void {
         self.submitPending();
         const size = count * @sizeOf(f32);
-        // Ensure staging buffer is large enough
         if (self.staging_buf == null or self.staging_size < size) {
             if (self.staging_buf != null) self.fn_buffer_destroy(self.staging_buf);
             self.staging_buf = self.createBuffer(size, wgpu_buffer_usage_copy_dst | wgpu_buffer_usage_map_read);
@@ -1838,14 +1835,12 @@ pub const WebGpuBackend = struct {
     }
 
     pub fn gemvAwq(self: *WebGpuBackend, x: [*]const f32, qweight: [*]const u32, scales: [*]const u16, qzeros: [*]const u32, y: [*]f32, n: usize, k: usize, group_size: u32) void {
-        const words_per_col = k / 8;
         const n_groups = (k + group_size - 1) / group_size;
         const x_sz = k * @sizeOf(f32);
         const w_sz = k * (n / 8) * @sizeOf(u32);
         const s_sz = n_groups * n * @sizeOf(u16);
         const z_sz = n_groups * (n / 8) * @sizeOf(u32);
         const y_sz = n * @sizeOf(f32);
-        _ = words_per_col;
 
         const x_buf = self.getOrUpload(@ptrCast(x), x_sz);
         const w_buf = self.getOrUpload(@ptrCast(qweight), w_sz);

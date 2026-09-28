@@ -1016,8 +1016,7 @@ pub const RocmBackend = struct {
     }
 
     /// MLX affine quantized GEMV, uses existing ROCm MLX Q4 kernel.
-    pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, bits: u32, _: u32) void {
-        _ = bits;
+    pub fn gemvMlxQ(self: *RocmBackend, x: [*]const f32, w_packed: [*]const u8, w_scales: [*]const u8, w_biases: [*]const u8, y: [*]f32, n: usize, k: usize, _: u32, _: u32) void {
         const gpr = (k + 63) / 64;
         const wpr = gpr * 8;
         var d_x = self.getInputBuf(x, k * @sizeOf(f32));
