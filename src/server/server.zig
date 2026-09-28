@@ -122,7 +122,7 @@ fn estimateKvExportBytes(model: Model, n_tokens: usize) usize {
     const raw = std.math.mul(usize, n_tokens, per_token4) catch return kv_export_max_bytes;
     return @min(if (raw == 0) kv_export_max_bytes else raw, kv_export_max_bytes);
 }
-const conv_title_max_len: usize = 48;
+const conv_title_max_len = conv_store.max_title_len;
 const conv_list_buf_size: usize = 8192;
 const conv_msgs_buf_size: usize = 65536;
 const http_buf_size: usize = 1024 * 1024;
@@ -147,8 +147,10 @@ const max_request_body_size: usize = http_buf_size;
 const kv_export_max_bytes: usize = 64 * 1024 * 1024;
 /// Extra factor for per-layer KV dim variation (dual attention, MLA).
 const kv_export_dim_headroom: usize = 2;
-const max_conversations: usize = 100;
-const max_messages_per_conv: usize = 1000;
+/// In-memory admission caps, taken from the store that persists them: a
+/// conversation admitted here must survive the next `conv_store` save.
+const max_conversations = conv_store.max_conversations;
+const max_messages_per_conv = conv_store.max_messages_per_conv;
 const max_message_len: usize = 100_000;
 const max_concurrent_connections: u32 = 64;
 /// Retry-After seconds advertised on 503 when at connection capacity or spawn fails.

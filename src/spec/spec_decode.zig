@@ -576,17 +576,25 @@ pub fn verifySequential(
     if (state.n_draft == 0) return .{ .accepted = 0, .next_token = last_accepted_token };
     target_model.setKvSeqLen(pre_draft_pos);
     var accepted: u32 = 0;
+    // Prediction the target last made for the position after the committed
+    // prefix. On a forward failure that is the only token still consistent
+    // with the cache, so it becomes the round's next token.
+    var last_pred = last_accepted_token;
 
     for (0..state.n_draft) |i| {
         const input = if (i == 0) last_accepted_token else state.draft_tokens[i - 1];
         const target_next = target_model.forward(input) catch |err| {
             std.log.warn("spec verify: target forward failed at draft {d}/{d}: {s}", .{ i, state.n_draft, @errorName(err) });
-            break;
+            // The cache holds exactly `accepted` committed tokens here, so
+            // replaying the last draft token would put the cache and the
+            // emitted stream out of step. Emit the prediction that matches it.
+            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_pred);
         };
         const chosen = greedyWithPenalties(target_model, pen, target_next);
 
         if (chosen == state.draft_tokens[i]) {
             accepted += 1;
+            last_pred = chosen;
         } else {
             return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, chosen);
         }
@@ -617,12 +625,15 @@ pub fn verifySampling(
     target_model.setKvSeqLen(pre_draft_pos);
     const vs = state.vocab_size;
     var accepted: u32 = 0;
+    // See verifySequential: on a forward failure the cache holds exactly
+    // `accepted` tokens, so the round emits the token that matches them.
+    var last_pred = last_accepted_token;
 
     for (0..state.n_draft) |i| {
         const input = if (i == 0) last_accepted_token else state.draft_tokens[i - 1];
         _ = target_model.forward(input) catch |err| {
             std.log.warn("spec sampling: target forward failed at draft {d}/{d}: {s}", .{ i, state.n_draft, @errorName(err) });
-            break;
+            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, last_pred);
         };
 
         // p is the target distribution we sample from, so the masks belong on it.
@@ -639,6 +650,7 @@ pub fn verifySampling(
         // Accept with probability min(1, p/q)
         if (q_tok > 0 and rng.float(f32) < @min(1.0, p_tok / q_tok)) {
             accepted += 1;
+            last_pred = draft_tok;
         } else {
             const correction = sampleResidual(tp, draft_lp, vs, rng, state.sampling_buf);
             return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, correction);
@@ -722,32 +734,33 @@ pub fn verifyDDTree(
                     current_parent = @intCast(next_child);
                     cur_child = next_child;
                 } else {
+                    // The tree walk wrote nothing to the target's cache, so
+                    // replay the context `next` was drawn from: the root token
+                    // plus every accepted token, which is `accepted + 1`
+                    // forwards. Leaving them out makes the next round read a
+                    // context that predates the tokens this round emits.
+                    if (!commitTargetPrefix(state, target_model, last_accepted_token, pre_draft_pos, accepted + 1)) {
+                        return .{ .accepted = 0, .next_token = last_accepted_token };
+                    }
                     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, next);
                 }
             }
         } else {
-            // Commit root token to KV cache (forwardTree didn't modify cache)
-            target_model.setKvSeqLen(pre_draft_pos);
-            _ = target_model.forward(last_accepted_token) catch |err| {
-                std.log.warn("spec verify: target forward failed: {s}", .{@errorName(err)});
+            // Commit the root token: first_target was drawn from the logits of
+            // the root node, whose only input is the token itself.
+            if (!commitTargetPrefix(state, target_model, last_accepted_token, pre_draft_pos, 1)) {
                 return .{ .accepted = 0, .next_token = last_accepted_token };
-            };
+            }
             return finishRound(state, target_model, draft_model, 0, pre_draft_pos, first_target);
         }
 
         // Commit accepted tokens to KV cache (forwardTree didn't modify cache)
-        target_model.setKvSeqLen(pre_draft_pos);
-        var commit_tok = last_accepted_token;
-        for (0..accepted) |i| {
-            _ = target_model.forward(commit_tok) catch |err| {
-                std.log.warn("spec commit: target forward failed at token {d}/{d}: {s}", .{ i, accepted, @errorName(err) });
-                return .{ .accepted = @intCast(i), .next_token = commit_tok };
-            };
-            commit_tok = state.draft_tokens[i];
+        if (!commitTargetPrefix(state, target_model, last_accepted_token, pre_draft_pos, accepted)) {
+            return .{ .accepted = 0, .next_token = last_accepted_token };
         }
-        const bonus = target_model.forward(commit_tok) catch |err| {
+        const bonus = target_model.forward(state.draft_tokens[accepted - 1]) catch |err| {
             std.log.warn("spec commit: bonus forward failed: {s}", .{@errorName(err)});
-            return .{ .accepted = accepted, .next_token = commit_tok };
+            return .{ .accepted = accepted, .next_token = state.draft_tokens[accepted - 1] };
         };
         return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
     }
@@ -766,9 +779,18 @@ fn verifyDDTreeSequential(
     var accepted: u32 = 0;
     var current_parent: i32 = -1;
     var input_tok = last_accepted_token;
+    // The batch attempt may have left the cache wherever its failed
+    // forwardTree stopped; this path replays the prefix from scratch.
+    target_model.setKvSeqLen(pre_draft_pos);
 
     while (true) {
-        const target_next = target_model.forward(input_tok) catch break;
+        const target_next = target_model.forward(input_tok) catch |err| {
+            std.log.warn("spec ddtree: target forward failed after {d} accepted: {s}", .{ accepted, @errorName(err) });
+            // The cache holds exactly `accepted` tokens. Committing anything
+            // else would desync it from the tokens this round emits.
+            const emitted = if (accepted > 0) state.draft_tokens[accepted - 1] else last_accepted_token;
+            return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, emitted);
+        };
 
         if (tree.findChild(current_parent, target_next)) |child_idx| {
             state.draft_tokens[accepted] = target_next;
@@ -784,6 +806,36 @@ fn verifyDDTreeSequential(
 
     const bonus = target_model.forward(input_tok) catch input_tok;
     return finishRound(state, target_model, draft_model, accepted, pre_draft_pos, bonus);
+}
+
+/// Replay the context a tree verification predicted from into the target's KV.
+///
+/// `forwardTree` fills scratch attention buffers instead of the target's cache,
+/// so every branch that hands tokens back for emission has to replay them
+/// through plain forwards. `count` is the length of that context, counting
+/// `last_accepted_token` as its first token: the cache ends at
+/// `pre_draft_pos + count`, holding every emitted token except the round's
+/// `next_token`, which the next round feeds as its first input.
+///
+/// Returns false if a forward failed, leaving the cache at the last position
+/// that did commit; the caller must then not report a prefix it cannot back.
+fn commitTargetPrefix(
+    state: *SpecState,
+    target_model: *Model,
+    last_accepted_token: u32,
+    pre_draft_pos: usize,
+    count: u32,
+) bool {
+    target_model.setKvSeqLen(pre_draft_pos);
+    var commit_tok = last_accepted_token;
+    for (0..count) |i| {
+        _ = target_model.forward(commit_tok) catch |err| {
+            std.log.warn("spec commit: target forward failed at token {d}/{d}: {s}", .{ i, count, @errorName(err) });
+            return false;
+        };
+        commit_tok = state.draft_tokens[i];
+    }
+    return true;
 }
 
 /// Shared exit path: record stats, sync draft KV cache, return result.

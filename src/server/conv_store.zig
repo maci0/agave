@@ -28,9 +28,12 @@ const config = @import("../config.zig");
 pub const format_version: u32 = 1;
 /// Refuse to load a store larger than this (protects against a huge corrupt file).
 const max_store_bytes: usize = 64 * 1024 * 1024;
-const max_conversations: usize = 100;
-const max_messages_per_conv: usize = 1000;
-const max_title_len: usize = 48;
+/// Conversation-store limits. Owned here because persistence is what drops
+/// the overflow; `server.zig` enforces the same caps in memory so a request
+/// cannot admit more than the next save would keep.
+pub const max_conversations: usize = 100;
+pub const max_messages_per_conv: usize = 1000;
+pub const max_title_len: usize = 48;
 
 /// One conversation as loaded from disk. Contents are owned by `Snapshot`.
 pub const LoadedConv = struct {
