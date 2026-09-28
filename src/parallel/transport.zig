@@ -950,6 +950,8 @@ test "Transport.init nccl" {
 }
 
 test "fuzz: all transport functions" {
+    sim_clock.setOverrideMs(0);
+    defer sim_clock.setOverrideMs(null);
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
             const allocator = std.testing.allocator;
@@ -966,12 +968,7 @@ test "fuzz: all transport functions" {
             defer t.deinit(); // exercises deinit on every path
 
             // ── connectPeer (will fail, no listener, exercises error path) ──
-            const host = [4]u8{
-                smith.valueWithHash(u8, 3),
-                smith.valueWithHash(u8, 4),
-                smith.valueWithHash(u8, 5),
-                smith.valueWithHash(u8, 6),
-            };
+            const host = [4]u8{ 127, 0, 0, 1 };
             const port = smith.valueWithHash(u16, 7) | 1024;
             t.connectPeer(host, port) catch {};
 

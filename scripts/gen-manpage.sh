@@ -59,6 +59,8 @@ agave \\- Zig LLM inference engine
 [\\fIOPTIONS\\fR] \\fBpull\\fR \\fIORG/REPO\\fR
 .B agave
 [\\fIOPTIONS\\fR] \\fBcalibrate\\fR \\fIMODEL\\fR
+.B agave
+[\\fIOPTIONS\\fR] \\fBupdate\\fR [\\fI--check\\fR]
 .SH DESCRIPTION
 Loads a GGUF model or a SafeTensors directory and generates text, or serves an
 OpenAI- and Anthropic-compatible HTTP API. The options, environment, and
