@@ -5969,6 +5969,17 @@ test "man page documents every cli_spec" {
     // The architecture list is the one part of usage_text the generator spells
     // out instead of reading back, so it is pinned on both sides.
     try std.testing.expect(std.mem.indexOf(u8, page, supported_arch_help) != null);
+
+    // The `.TH` header carries the product SemVer, which the generator reads
+    // from build.zig.zon. A release commit that bumps the version without
+    // rerunning the generator otherwise ships a page stamped with the previous
+    // release, and `man agave` reports the wrong version to whoever reads it.
+    var header_buf: [64]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buf, ".TH AGAVE 1 \"\" \"agave {s}\"", .{version}) catch unreachable;
+    std.testing.expect(std.mem.indexOf(u8, page, header) != null) catch |err| {
+        std.debug.print("man/agave.1 does not carry the .TH header for {s}: run `bash scripts/gen-manpage.sh`\n", .{version});
+        return err;
+    };
 }
 
 test "shouldNoteSeed always surfaces auto-derived seeds" {

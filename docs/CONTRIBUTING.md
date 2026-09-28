@@ -642,12 +642,16 @@ maintainers (avoid commit hashes as the only description).
    `build.zig.zon` `.version` when cutting a release. Add the
    `[X.Y.Z]:` link definition for the new section and repoint `[unreleased]`
    at the new tag (`compare/vX.Y.Z...HEAD`).
-2. Confirm `CHANGELOG.md` and `build.zig.zon` `.version` agree (`agave --version`).
-3. Tag `vX.Y.Z` matching the product version (do not reuse or mutate tags).
-4. Smoke: `agave --version`, one short CPU inference, and `GET /health` if serving.
-5. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
+2. Rerun `bash scripts/gen-manpage.sh` and commit `man/agave.1`. Its `.TH`
+   header stamps the product SemVer, so a version bump without a regeneration
+   ships a page labeled with the previous release; the drift test in
+   `src/main.zig` fails on the header as well as on the flag list.
+3. Confirm `CHANGELOG.md` and `build.zig.zon` `.version` agree (`agave --version`).
+4. Tag `vX.Y.Z` matching the product version (do not reuse or mutate tags).
+5. Smoke: `agave --version`, one short CPU inference, and `GET /health` if serving.
+6. Note minimum Zig (`.zigversion`) in release notes when raised (breaking for
    builders).
-6. Run `python3 scripts/check-docs.py` (SemVer string must match across
+7. Run `python3 scripts/check-docs.py` (SemVer string must match across
    `build.zig.zon`, `CHANGELOG.md`, `docs/API.md`, `docs/CONTRIBUTING.md`,
    `README.md`, `SECURITY.md`, and `docs/DOCUMENTATION.md`;
    every released `[X.Y.Z]` section must have a link definition and
