@@ -149,6 +149,7 @@ pub const ExpertProfile = struct {
         };
         if (fsize == 0) return error.EmptyFile;
         const data = try allocator.alloc(u8, fsize);
+        defer allocator.free(data);
         var got: usize = 0;
         while (got < fsize) {
             const n = std.posix.read(fd, data[got..]) catch break;
@@ -156,7 +157,6 @@ pub const ExpertProfile = struct {
             got += n;
         }
         if (got < fsize) return error.ReadFailed;
-        defer allocator.free(data);
 
         // Parse n_layers and n_experts from the header lines.
         var n_layers: u32 = 0;

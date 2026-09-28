@@ -311,7 +311,8 @@ pub const iq4_nl_block_bytes: usize = quant_ops.iq4_nl_block_bytes;
 /// IQ4_XS: 136 bytes per 256-element super-block.
 /// Layout: f16 d (2) + u16 scales_h (2) + u8 scales_l[4] (4) + u8 qs[128] (128).
 pub const iq4_xs_block_bytes: usize = quant_ops.iq4_xs_block_bytes;
-/// MXFP4: 16B quants + 1B shared scale = 17 bytes per 16-element block.
+/// MXFP4: 16B quants (32 FP4 nibbles) + 1B shared E8M0 scale = 17 bytes per
+/// 32-element block.
 pub const mxfp4_block_bytes: usize = 17;
 /// NVFP4: 8B quants + 1B scale = 9 bytes per 16-element block.
 pub const nvfp4_block_bytes: usize = 9;

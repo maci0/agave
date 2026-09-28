@@ -4096,12 +4096,16 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
         };
 
         // Record TTFT from scheduler's per-request prefill timestamp
+        var sched_prefill_ms: u64 = 0;
         if (req.prefill_done_at > 0) {
-            const sched_ttft = elapsedBetween(req.enqueued_at, req.prefill_done_at);
-            g_server.metrics.recordTTFT(sched_ttft, prompt_token_count);
+            sched_prefill_ms = elapsedBetween(req.enqueued_at, req.prefill_done_at);
+            g_server.metrics.recordTTFT(sched_prefill_ms, prompt_token_count);
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
-        g_server.metrics.recordTPOT(token_count, time_ms);
+        // TPOT is decode-only. gen_start precedes the enqueue here, so time_ms
+        // carries queue wait and prefill; subtracting the prefill span keeps
+        // this series comparable with the direct path.
+        g_server.metrics.recordTPOT(token_count, time_ms -| sched_prefill_ms);
         g_server.metrics.recordPromptTokens(prompt_token_count);
         g_server.metrics.recordGenerationTokens(token_count);
 
@@ -4138,8 +4142,10 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
                 .prompt_tokens = prompt_token_count,
                 .time_ms = time_ms,
                 .tokens_per_sec = tokens_per_sec,
-                .prefill_ms = 0,
-                .prefill_tps = 0,
+                // Same span recordTTFT was fed, not zero: the caller renders
+                // this as the request's prefill time.
+                .prefill_ms = sched_prefill_ms,
+                .prefill_tps = tokensPerSec(prompt_token_count, sched_prefill_ms),
             },
         };
     }
@@ -4756,7 +4762,8 @@ fn chatStreamGeneratePre(stream: http.TcpStream, formatted: []const u8, reset: b
             g_server.metrics.recordTTFT(sched_prefill_ms, prompt_token_count);
         }
         g_server.metrics.recordThroughput(token_count, time_ms);
-        g_server.metrics.recordTPOT(token_count, time_ms);
+        // Decode-only span: see the non-streaming scheduler path above.
+        g_server.metrics.recordTPOT(token_count, time_ms -| sched_prefill_ms);
         g_server.metrics.recordPromptTokens(prompt_token_count);
         g_server.metrics.recordGenerationTokens(token_count);
         // Match other stream paths: max_tokens is successful completion, not failure.

@@ -1308,7 +1308,7 @@ fn downloadFileOnce(
     // between two reads: it never fires while bytes keep arriving, so a slow
     // mirror is unaffected, and a dead one fails into the normal retry path
     // that Range-resumes. Failure to set it is advisory, not fatal.
-    setSocketReadTimeout(req, download_stall_timeout_sec);
+    setSocketReadTimeout(&req, download_stall_timeout_sec);
     var read_buf: [download_buf_size]u8 = undefined;
     while (true) {
         const bytes_read = body_reader.readSliceShort(&read_buf) catch |err| {
