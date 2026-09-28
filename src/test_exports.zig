@@ -9,6 +9,8 @@ const backend = @import("backend/backend.zig");
 pub const Backend = backend.Backend;
 /// Re-exported CpuBackend for test access.
 pub const CpuBackend = backend.CpuBackend;
+/// Re-exported quantized-weight view struct for test access.
+pub const TensorData = backend.TensorData;
 /// Re-exported CudaBackend for test access.
 pub const CudaBackend = backend.CudaBackend;
 /// Re-exported MetalBackend for test access.
