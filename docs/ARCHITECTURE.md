@@ -203,6 +203,7 @@ Irreversible or high-cost choices. Rationale lives here so they are not re-litig
 | HTTP KV prefix blob | Unversioned f32 layout: `layer0_K\|layer0_V\|…` (not `checkpoint.KVC`) | Hot path for LMCache-style fleet transfer; uniform-dim checkpoint header cannot express dual-attn / MLA per-layer `kvd` | Wire format gains magic/version + token IDs for safe API prefix reuse |
 | KV export implementors | Soft vtable stubs; only Gemma4 implements today | Avoid forcing every arch to stub; 501 when unsupported | A second architecture needs fleet KV transfer |
 | KV import vs prefix cache | Import clears `cached_prompt_ids`, sets `kv_valid` | Blob carries no token IDs; keeping old IDs would lie to `/info` and prefix matching | Blob (or sidecar) includes prompt token IDs so API `reset=true` can skip re-prefill |
+| Vision vs KV prefix cache | `prefixCacheApplies` gates the read; `Server.publishCachedPromptIds` gates the write. A request with `n_visual > 0` neither reads nor publishes the memo | The memo is keyed on token IDs alone and image placeholders are the same IDs for every image, so a published vision prompt lets a later text request match the prefix and read the earlier request's picture back out of the KV cache. One entry point for the write keeps the two guards from drifting | Image embeddings become part of the memo key rather than excluded from it |
 
 ## The Inference Pipeline
 
