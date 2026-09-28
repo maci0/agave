@@ -397,7 +397,7 @@ pub fn resize(allocator: Allocator, src: []const u8, src_w: u32, src_h: u32, dst
                 const bot = bl * (1.0 - fx) + br * fx;
                 const val = top * (1.0 - fy) + bot * fy;
 
-                out[dst_idx + c] = @intFromFloat(std.math.clamp(val + 0.5, 0.0, 255.0));
+                out[dst_idx + c] = @intFromFloat(@floor(std.math.clamp(val + 0.5, 0.0, 255.0)));
             }
         }
     }

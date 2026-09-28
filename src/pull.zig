@@ -1277,7 +1277,7 @@ fn downloadFileOnce(
                 // Estimate time remaining.
                 const remaining_bytes = if (total_size > downloaded) total_size - downloaded else 0;
                 const eta_secs: u64 = if (speed_mbps > 0.0)
-                    @intFromFloat(@as(f64, @floatFromInt(remaining_bytes)) / (speed_mbps * bytes_per_mb))
+                    @intFromFloat(@floor(@as(f64, @floatFromInt(remaining_bytes)) / (speed_mbps * bytes_per_mb)))
                 else
                     0;
 

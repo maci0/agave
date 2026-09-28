@@ -2990,7 +2990,7 @@ fn parseVisionConfigObject(
     if (metaU32(meta, "clip.vision.image_size") == null) {
         if (metaU32(meta, "clip.vision.num_position_embeddings")) |n_pos| {
             if (metaU32(meta, "clip.vision.patch_size")) |ps| {
-                const side: u32 = @intFromFloat(@sqrt(@as(f64, @floatFromInt(n_pos))));
+                const side: u32 = @intFromFloat(@floor(@sqrt(@as(f64, @floatFromInt(n_pos)))));
                 if (side > 0 and side * side == n_pos) {
                     const owned_key = try dupeString(allocator, owned, "clip.vision.image_size");
                     try meta.put(owned_key, .{ .uint = @as(u64, side) * @as(u64, ps) });

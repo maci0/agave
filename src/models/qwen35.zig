@@ -308,7 +308,7 @@ pub const Qwen35Model = struct {
             // SafeTensors: compute from head_dim × partial_rotary_factor
             if (f.getArchF32(arch, "partial_rotary_factor")) |raw_prf| {
                 const prf = std.math.clamp(raw_prf, 0.0, 1.0);
-                break :blk @intFromFloat(@as(f32, @floatFromInt(self.head_dim)) * prf);
+                break :blk @intFromFloat(@floor(@as(f32, @floatFromInt(self.head_dim)) * prf));
             }
             break :blk self.head_dim;
         };
