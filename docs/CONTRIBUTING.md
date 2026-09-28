@@ -30,6 +30,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 | `build.zig` or anything that can put a path, timestamp or hostname in a binary | `zig build check-reproducible` (blocking CI job `reproducible-build`; builds twice from different paths and byte-compares) |
 | `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` (blocking CI job `lint-python`) |
+| `Dockerfile`, `docker-compose.yml` | `AGAVE_API_KEY=local docker compose config --quiet`, then build the image the way the `docker-build` job does (its `build-args` in `.github/workflows/ci.yml`, tagged `agave:ci`) and run `bash scripts/check-docker-image.sh agave:ci`. The job runs both; neither has a `zig build` step, so copy the build args rather than inventing a subset |
 
 Dependabot (`.github/dependabot.yml`) opens weekly bumps for the GitHub
 Actions, Docker, npm and Python ecosystems. Two of them cannot be merged on
@@ -402,7 +403,8 @@ Notes:
 # bun 1.4.0 with `bun install --frozen-lockfile`.
 zig build ci
 
-# Local CI gate (format + docs hygiene + unit tests). Zig-only scope; run this before pushing.
+# Local CI gate (format + docs hygiene + pin consistency + unit tests +
+# conversation store backup self-test). Needs Python 3.11+; run this before pushing.
 zig build check
 
 # Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
