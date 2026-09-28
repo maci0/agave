@@ -17,10 +17,9 @@ import { afterAll, expect, test } from 'bun:test';
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 
 import { renderMarkdown } from './chat/markdown';
+import type { Bubble } from './chat/types';
 
 GlobalRegistrator.register({ url: 'http://127.0.0.1:49453' });
-
-afterAll(function () { void GlobalRegistrator.unregister(); });
 
 /** A turn body carrying both an injected tag and a script-scheme link. */
 const UNSANITIZED_TEXT = '<img src=x onerror=alert(1)> and [a](javascript:alert(2))';
@@ -41,12 +40,37 @@ const clearCdn = (): void => {
 const markdownTarget = document.createElement('div');
 
 /** Let React flush its concurrent render and the stream throttle timer. */
-const wait = (ms: number): Promise<void> =>
+const settle = (ms = 1): Promise<void> =>
   // oxlint-disable-next-line promise/avoid-new -- a timer is the only clock the test needs
   new Promise(function (resolve) { setTimeout(resolve, ms); });
 
 const tick = async (times = 4): Promise<void> => {
-  for (let index = 0; index < times; index += 1) { await wait(5); }
+  for (let index = 0; index < times; index += 1) { await settle(5); }
+};
+
+/** Poll for a condition. React commits on its own scheduler, so a fixed
+ *  number of ticks is a guess the loaded machine can lose. */
+const waitFor = async (condition: () => boolean): Promise<boolean> => {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (condition()) { return true; }
+    await settle(10);
+  }
+  return condition();
+};
+
+afterAll(async function () {
+  // React's scheduler drains through `window`, so let the pending work from
+  // The mounted trees land before the registrator takes the DOM globals away.
+  for (let index = 0; index < 40; index += 1) { await settle(5); }
+  await GlobalRegistrator.unregister();
+});
+
+/** A host element for a tree the test drives by hand. */
+const mountHost = (): HTMLDivElement => {
+  document.body.append(document.createElement('div'));
+  const host = document.body.lastElementChild;
+  if (!(host instanceof HTMLDivElement)) { throw new Error('host element missing'); }
+  return host;
 };
 
 const sseResponse = (frames: Array<string>): Response => {
@@ -61,6 +85,10 @@ const sseResponse = (frames: Array<string>): Response => {
 };
 
 const MODEL = { data: [{ id: 'test-model', backend: 'cpu', ctx_size: 4096, kv_seq_len: 5, vision: false }] };
+
+/** Mounting the real tree and waiting out the stream throttle costs more than
+ *  the 5s default on a loaded machine; a timeout here is not a verdict. */
+const MOUNT_TIMEOUT_MS = 30_000;
 
 const stubServer = (): void => {
   // SAFETY: the stub answers only the three routes the UI calls on this path.
@@ -110,16 +138,40 @@ test('a prompt streams into the log and the model badge resolves', async functio
   form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 
   // The stream paints on a 60ms throttle, so poll rather than guess a delay.
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if (document.body.textContent.includes('is 4.')) { break; }
-    await wait(10);
-  }
+  expect(await waitFor(function () { return document.body.textContent.includes('is 4.'); })).toBe(true);
 
   const text = document.body.textContent;
   expect(text).toContain('What is 2+2?');
   expect(text).toContain('The answer ');
   expect(text).toContain('is 4.');
   expect(text).toContain('agave');
+
+  // The thinking placeholder is replaced by the stream, not prepended to it.
+  const bodies = [...document.querySelectorAll('.agave-prose')];
+  expect(bodies.at(-1)?.textContent).toBe('The answer is 4.');
+}, MOUNT_TIMEOUT_MS);
+
+test('a streaming turn replaces the thinking placeholder instead of extending it', async function () {
+  // Imported here, not at the top: react-dom reads the global document when
+  // It loads, so it has to load after the registrator.
+  const { createRoot } = await import('react-dom/client');
+  const { MessageBody } = await import('./chat/components/message');
+  const host = mountHost();
+  const root = createRoot(host);
+  const announced: Array<string> = [];
+  const paint = (text: string, phase: Bubble['phase']): void => {
+    root.render(<MessageBody text={text} phase={phase} onRendered={function (rendered) { announced.push(rendered); }} />);
+  };
+  paint('', 'thinking');
+  expect(await waitFor(function () { return host.textContent === '…'; })).toBe(true);
+  paint('The answer', 'streaming');
+  expect(await waitFor(function () { return host.textContent === 'The answer'; })).toBe(true);
+  paint('The answer is 4.', 'streaming');
+  expect(await waitFor(function () { return host.textContent === 'The answer is 4.'; })).toBe(true);
+  // A turn in flight is not a rendered turn, so it announces nothing.
+  expect(announced).toEqual([]);
+  root.unmount();
+  host.remove();
 });
 
 test('model text renders as text when the sanitizer has not loaded', function () {
