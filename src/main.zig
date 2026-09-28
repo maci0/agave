@@ -4430,7 +4430,13 @@ fn generateDiffusion(
         const output_canvas = canvas[0..eos_pos];
 
         // Output the (possibly truncated) canvas tokens.
-        const canvas_text = tok.decodeSpm(output_canvas) catch tok.decode(output_canvas) catch null;
+        const canvas_text = tok.decodeSpm(output_canvas) catch |spm_err| blk: {
+            eprint("Warning: decodeSpm failed ({}), falling back to decode\n", .{spm_err});
+            break :blk tok.decode(output_canvas) catch |err| {
+                eprint("Error: failed to decode the generated canvas: {}\n", .{err});
+                break :blk null;
+            };
+        };
         if (canvas_text) |text| {
             _ = std.posix.system.write(stdout_file.handle, text.ptr, text.len);
             allocator.free(text);
@@ -4441,7 +4447,10 @@ fn generateDiffusion(
         if (eos_pos < canvas_len) break;
 
         // Prefill the canvas into the KV cache for the next block.
-        _ = model.prefill(canvas) catch break;
+        _ = model.prefill(canvas) catch |err| {
+            eprint("Error: canvas prefill failed: {}\n", .{err});
+            break;
+        };
 
         // Stop if max_tokens reached.
         if (total_generated >= cli.max_tokens) break;

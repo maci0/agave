@@ -748,43 +748,54 @@ pub const Display = struct {
     // ── JSON Output ──────────────────────────────────────────
 
     /// Print full JSON output for a prompt response (model info + generated text + stats).
+    /// A response that does not fit the fixed buffer is reported on stderr
+    /// instead of leaving stdout empty, so a caller reading stdout sees a
+    /// failure rather than a blank document.
     pub fn printJsonPrompt(_: Display, info: ModelInfo, output_text: []const u8, stats: GenStats) void {
+        emitJsonPrompt(info, output_text, stats) catch |err| {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Error: --json output was not written ({s}); the response text and metadata exceed the {d} byte JSON buffer. Re-run with a smaller --max-tokens.\n", .{ @errorName(err), json_out_buf_size }) catch return;
+            writeStderr(msg);
+        };
+    }
+
+    fn emitJsonPrompt(info: ModelInfo, output_text: []const u8, stats: GenStats) !void {
         var buf: [json_out_buf_size]u8 = undefined;
         var writer = Io.Writer.fixed(&buf);
         var jw: std.json.Stringify = .{ .writer = &writer };
-        jw.beginObject() catch return;
+        try jw.beginObject();
 
         // Model info
-        jw.objectField("model") catch return;
-        jw.write(info.name) catch return;
-        jw.objectField("arch") catch return;
-        jw.write(info.arch_name) catch return;
-        jw.objectField("quant") catch return;
-        jw.write(info.quant) catch return;
-        jw.objectField("backend") catch return;
-        jw.write(info.be_name) catch return;
-        jw.objectField("version") catch return;
-        jw.write(version) catch return;
+        try jw.objectField("model");
+        try jw.write(info.name);
+        try jw.objectField("arch");
+        try jw.write(info.arch_name);
+        try jw.objectField("quant");
+        try jw.write(info.quant);
+        try jw.objectField("backend");
+        try jw.write(info.be_name);
+        try jw.objectField("version");
+        try jw.write(version);
 
         // Output
-        jw.objectField("output") catch return;
-        jw.write(output_text) catch return;
+        try jw.objectField("output");
+        try jw.write(output_text);
 
         // Stats
-        jw.objectField("tokens") catch return;
-        jw.write(stats.token_count) catch return;
-        jw.objectField("tok_per_sec") catch return;
-        jw.write(stats.tokPerSec()) catch return;
-        jw.objectField("prefill_tokens") catch return;
-        jw.write(stats.prefill_token_count) catch return;
-        jw.objectField("prefill_ms") catch return;
-        jw.write(stats.prefill_ms) catch return;
-        jw.objectField("prefill_tok_per_sec") catch return;
-        jw.write(stats.prefillTokPerSec()) catch return;
-        jw.objectField("gen_ms") catch return;
-        jw.write(stats.gen_ms) catch return;
+        try jw.objectField("tokens");
+        try jw.write(stats.token_count);
+        try jw.objectField("tok_per_sec");
+        try jw.write(stats.tokPerSec());
+        try jw.objectField("prefill_tokens");
+        try jw.write(stats.prefill_token_count);
+        try jw.objectField("prefill_ms");
+        try jw.write(stats.prefill_ms);
+        try jw.objectField("prefill_tok_per_sec");
+        try jw.write(stats.prefillTokPerSec());
+        try jw.objectField("gen_ms");
+        try jw.write(stats.gen_ms);
 
-        jw.endObject() catch return;
+        try jw.endObject();
 
         const written = writer.buffer[0..writer.end];
         writeStdout(written);
@@ -793,79 +804,87 @@ pub const Display = struct {
 
     /// Print JSON model info (for --model-info --json).
     pub fn printJsonModelInfo(_: Display, info: ModelInfo) void {
+        emitJsonModelInfo(info) catch |err| {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Error: --model-info --json was not written ({s}); the metadata exceeds the {d} byte JSON buffer.\n", .{ @errorName(err), out_buf_size }) catch return;
+            writeStderr(msg);
+        };
+    }
+
+    fn emitJsonModelInfo(info: ModelInfo) !void {
         const fsize = formatSize(info.file_size_bytes);
         var buf: [out_buf_size]u8 = undefined;
         var writer = Io.Writer.fixed(&buf);
         var jw: std.json.Stringify = .{ .writer = &writer };
-        jw.beginObject() catch return;
+        try jw.beginObject();
 
-        jw.objectField("version") catch return;
-        jw.write(version) catch return;
-        jw.objectField("name") catch return;
-        jw.write(info.name) catch return;
-        jw.objectField("arch") catch return;
-        jw.write(info.arch_name) catch return;
-        jw.objectField("quant") catch return;
-        jw.write(info.quant) catch return;
-        jw.objectField("backend") catch return;
-        jw.write(info.be_name) catch return;
+        try jw.objectField("version");
+        try jw.write(version);
+        try jw.objectField("name");
+        try jw.write(info.name);
+        try jw.objectField("arch");
+        try jw.write(info.arch_name);
+        try jw.objectField("quant");
+        try jw.write(info.quant);
+        try jw.objectField("backend");
+        try jw.write(info.be_name);
         if (info.format_name.len > 0) {
-            jw.objectField("format") catch return;
-            jw.write(info.format_name) catch return;
+            try jw.objectField("format");
+            try jw.write(info.format_name);
         }
-        jw.objectField("layers") catch return;
-        jw.write(info.n_layers) catch return;
-        jw.objectField("embed") catch return;
-        jw.write(info.n_embed) catch return;
-        jw.objectField("heads") catch return;
-        jw.write(info.n_heads) catch return;
-        jw.objectField("kv_heads") catch return;
-        jw.write(info.n_kv_heads) catch return;
-        jw.objectField("head_dim") catch return;
-        jw.write(info.head_dim) catch return;
-        jw.objectField("ff_dim") catch return;
-        jw.write(info.ff_dim) catch return;
-        jw.objectField("vocab_size") catch return;
-        jw.write(info.vocab_size) catch return;
-        jw.objectField("ctx_size") catch return;
-        jw.write(info.ctx_size) catch return;
-        jw.objectField("rope_theta") catch return;
-        if (std.math.isFinite(info.rope_theta)) jw.write(info.rope_theta) catch return else jw.write(null) catch return;
-        jw.objectField("n_params") catch return;
-        jw.write(info.n_params) catch return;
+        try jw.objectField("layers");
+        try jw.write(info.n_layers);
+        try jw.objectField("embed");
+        try jw.write(info.n_embed);
+        try jw.objectField("heads");
+        try jw.write(info.n_heads);
+        try jw.objectField("kv_heads");
+        try jw.write(info.n_kv_heads);
+        try jw.objectField("head_dim");
+        try jw.write(info.head_dim);
+        try jw.objectField("ff_dim");
+        try jw.write(info.ff_dim);
+        try jw.objectField("vocab_size");
+        try jw.write(info.vocab_size);
+        try jw.objectField("ctx_size");
+        try jw.write(info.ctx_size);
+        try jw.objectField("rope_theta");
+        if (std.math.isFinite(info.rope_theta)) try jw.write(info.rope_theta) else try jw.write(null);
+        try jw.objectField("n_params");
+        try jw.write(info.n_params);
         if (info.n_params > 0) {
-            jw.objectField("bpw") catch return;
-            jw.write(info.bitsPerWeight()) catch return;
+            try jw.objectField("bpw");
+            try jw.write(info.bitsPerWeight());
         }
         if (info.n_experts > 0) {
-            jw.objectField("n_experts") catch return;
-            jw.write(info.n_experts) catch return;
-            jw.objectField("n_experts_used") catch return;
-            jw.write(info.n_experts_used) catch return;
+            try jw.objectField("n_experts");
+            try jw.write(info.n_experts);
+            try jw.objectField("n_experts_used");
+            try jw.write(info.n_experts_used);
         }
-        jw.objectField("file_size") catch return;
-        jw.write(info.file_size_bytes) catch return;
-        jw.objectField("file_size_human") catch return;
+        try jw.objectField("file_size");
+        try jw.write(info.file_size_bytes);
+        try jw.objectField("file_size_human");
         // Format as "1.2GB"
         {
             var sbuf: [file_size_buf_size]u8 = undefined;
             const stxt = std.fmt.bufPrint(&sbuf, "{d:.1}{s}", .{ fsize.val, fsize.unit }) catch "?";
-            jw.write(stxt) catch return;
+            try jw.write(stxt);
         }
-        jw.objectField("load_ms") catch return;
-        jw.write(info.load_ms) catch return;
-        jw.objectField("warmup_ms") catch return;
-        jw.write(info.warmup_ms) catch return;
+        try jw.objectField("load_ms");
+        try jw.write(info.load_ms);
+        try jw.objectField("warmup_ms");
+        try jw.write(info.warmup_ms);
         if (info.system_mem > 0) {
-            jw.objectField("system_mem_bytes") catch return;
-            jw.write(info.system_mem) catch return;
+            try jw.objectField("system_mem_bytes");
+            try jw.write(info.system_mem);
         }
-        jw.objectField("mtp_depth") catch return;
-        jw.write(info.mtp_depth) catch return;
-        jw.objectField("vision") catch return;
-        jw.write(info.has_vision) catch return;
+        try jw.objectField("mtp_depth");
+        try jw.write(info.mtp_depth);
+        try jw.objectField("vision");
+        try jw.write(info.has_vision);
 
-        jw.endObject() catch return;
+        try jw.endObject();
 
         const written = writer.buffer[0..writer.end];
         writeStdout(written);
