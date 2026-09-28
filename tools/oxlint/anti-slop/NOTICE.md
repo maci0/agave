@@ -31,6 +31,6 @@ find . -name '*.ts' -type f | sed 's|^\./||' | LC_ALL=C sort | xargs sha256sum >
 ## Why vendored at all
 
 oxlint resolves JavaScript plugins from a path (`jsPlugins[].specifier` in
-`.oxlintrc.json`), and the repository keeps zero runtime dependencies outside
-`package.json` devDependencies. `index.ts` imports `@oxlint/plugins`, which is
+`.oxlintrc.json`), so the rules load from this directory and never enter the
+resolved dependency tree. `index.ts` imports `@oxlint/plugins`, which is
 already a devDependency; only the rule sources are vendored.
