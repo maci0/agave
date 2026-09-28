@@ -66,7 +66,8 @@ must still appear under **Changed** or **Breaking** below. See
   actually holds. `rank`, `k`, and `n` come from the adapter, so a crafted
   product could wrap, allocate a short buffer, and dequant past its end; such a
   tensor is now skipped with a warning. The peer transport also caps the shared
-  memory segment a peer may name.
+  memory segment a peer may name. Security fix: a malformed or hostile model
+  file, not a remote peer, is the input that reaches this path.
 - The chat UI shows the server's error text instead of failing silently, and
   the log link stays reachable while a response is streaming.
 - The conversation store numbers a second quarantine or overflow sidecar
@@ -87,6 +88,11 @@ must still appear under **Changed** or **Breaking** below. See
 - A `.cal` file that exists but cannot be parsed (bad magic, truncated, wrong
   version) stops `--kv-eviction tri` at startup instead of running TriAttention
   against empty statistics, which was reported as "no .cal file found".
+- The chat UI's per-row actions (copy, regenerate, delete) are always visible
+  in the Windows high-contrast (`forced-colors`) mode of both the `--serve` page
+  and the browser WASM shell. They start at `opacity: 0` and are revealed on
+  hover, so a reader in forced-colors mode with no pointer saw no way to copy or
+  delete a message at all.
 
 ### Changed
 - A conversation store carrying the same conversation id twice keeps the first
