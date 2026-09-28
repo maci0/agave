@@ -71,12 +71,16 @@ trap 'rm -rf "$SCRATCH"' EXIT
 # A copy at a different path is the only way the build root, and therefore
 # every relative path the compiler bakes in, can differ between the two runs.
 # .git, the caches and zig-out are build state, not source; node_modules is
-# TypeScript tooling that no Zig artifact reads.
+# TypeScript tooling that no Zig artifact reads. .agave-cache (the host-path
+# AGAVE_CACHE_DIR: Hub blobs and the conversation store) and .venv are
+# gitignored local state that no build reads: copying them would put the whole
+# download cache and the plaintext conversation history in a temp tree.
 SRC_B="$SCRATCH/src"
 mkdir -p "$SRC_B"
 tar -C "$ROOT" -cf - \
     --exclude=./.git --exclude=./.zig-cache --exclude=./zig-out \
     --exclude=./node_modules --exclude=./models \
+    --exclude=./.agave-cache --exclude=./.venv --exclude=./zig-out-linux \
     . | tar -C "$SRC_B" -xf -
 
 echo "== Build A: $ROOT"
@@ -98,8 +102,20 @@ for bin in "$A" "$B"; do
     fi
 done
 
-sha_a="$(sha256sum "$A" | cut -d' ' -f1)"
-sha_b="$(sha256sum "$B" | cut -d' ' -f1)"
+# macOS ships no coreutils sha256sum; shasum is the same tool by another name.
+# Without the fallback the gate died on the last line, after both builds, with
+# a bare "command not found" instead of a verdict.
+if command -v sha256sum >/dev/null 2>&1; then
+    sha_cmd=(sha256sum)
+elif command -v shasum >/dev/null 2>&1; then
+    sha_cmd=(shasum -a 256)
+else
+    echo "check-reproducible: no sha256sum or shasum on PATH" >&2
+    exit 1
+fi
+
+sha_a="$("${sha_cmd[@]}" "$A" | cut -d' ' -f1)"
+sha_b="$("${sha_cmd[@]}" "$B" | cut -d' ' -f1)"
 echo "A sha256 $sha_a"
 echo "B sha256 $sha_b"
 
