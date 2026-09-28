@@ -25,7 +25,7 @@ is either downloaded content or derived numbers with no free-text field.
 | Store sidecars | `<path>.corrupt` (a corrupt store moved aside), `<path>.overflow` (the part past the load caps) | same 0600 handling; a store an older build left world-readable is narrowed to 0600 on load (`src/server/conv_store.zig:205`) |
 | Browser UI state | `localStorage`: temperature, top_p, max_tokens, stats toggle. `sessionStorage`: the system prompt | origin-scoped by the browser, never sent anywhere. The system prompt was moved out of `localStorage` and the legacy key is deleted on first read (`src/web/chat/storage.ts:29`) |
 | REPL history | process memory only, up to 256 lines, wiped on free and on `/clear` (`src/readline.zig:56`) | never written to disk |
-| Request logs | stderr | method, sanitized path, request id, status, duration. No prompt, reply, header value, or key (`src/server/server.zig:1280`) |
+| Request logs | stderr | method, sanitized path, request id, status, duration. No prompt, reply, header value, or key (`src/server/server.zig:1158`) |
 | Prometheus metrics | `/metrics`, in memory | counters and histograms only, no free-text labels |
 
 Nothing is written outside these locations. There is no telemetry, no crash

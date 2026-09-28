@@ -143,8 +143,6 @@ Items 26, 27, 28, 29, 30 and 32 shipped and moved to Done above.
 
 ---
 
-## Design Notes
-
 ## Implemented Features
 
 | Feature | Status |
@@ -162,7 +160,7 @@ Items 26, 27, 28, 29, 30 and 32 shipped and moved to Done above.
 
 ## Model Abstraction (Deferred)
 
-All 11 chat architectures plus the DFlash2 drafter share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
+All 12 chat architectures plus the DFlash2 drafter share near-identical skeletons. A `ModelBuilder` could save ~600 lines but adds comptime complexity. Deferred because:
 1. Models rarely change once working
 2. Each has unique quirks (Gemma scaling, GPT-OSS sinks, Qwen DeltaNet, GLM4 MLA)
 3. Self-contained files are easier to debug

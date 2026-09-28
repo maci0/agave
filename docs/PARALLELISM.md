@@ -3,7 +3,7 @@
 **Status**: PP implemented; TP FFN/expert-parallel all-reduce implemented for 2-rank pairs (`--tp 2`, `--pp 2`). Hybrid TP+PP does not launch (TP transport is skipped when `--pp > 1`). RCCL is declared, not implemented.  
 **Last verified**: 2026-09-27 (transport kinds, CLI flags, shm names and sizes, sharding entry points, and the key-file table checked against source; the benchmark table is the run recorded on it).  
 **Scope**: Tensor Parallelism (TP), Pipeline Parallelism (PP), Hybrid TP+PP, Disaggregated Prefill/Decode  
-**Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not yet implemented)  
+**Transports**: TCP, POSIX Shared Memory, NCCL (RoCE RDMA), RCCL (declared, not implemented)  
 **Backends**: All GPU backends (Metal, CUDA, Vulkan, ROCm, WebGPU) + CPU
 
 **Tutorial:** [Distributed Inference](tutorial/22-distributed-inference.md)
@@ -58,9 +58,9 @@ All distributed communication goes through `src/parallel/transport.zig`. Four tr
 | **TCP** | BSD sockets, full send/recv loops | Cross-node, no RDMA | ~10 Gbps |
 | **POSIX shm** | `shm_open` + `mmap`, atomic spin-wait | Same-node, zero-copy | Memory bandwidth |
 | **NCCL** | `dlopen("libnccl.so.2")`, GPU-direct | CUDA multi-GPU, RoCE RDMA | Up to 400 Gbps |
-| **RCCL** | AMD's NCCL equivalent | ROCm multi-GPU | n/a |
+| **RCCL** (declared only) | AMD's NCCL equivalent | ROCm multi-GPU | n/a |
 
-RCCL (`rccl`) is declared in `TransportKind` but not yet fully implemented. It shares the same API as NCCL and will use `dlopen("librccl.so")` when available.
+RCCL (`rccl`) is declared in `TransportKind` and nothing else: `Transport.init` returns `error.NotImplemented` for it (`src/parallel/transport.zig:925`). The row above records the intended mechanism, not a shipped transport. An implementation would mirror NCCL's API and `dlopen("librccl.so")`.
 
 Auto-selection (`--transport auto`): same-node peers (`localhost`/`127.0.0.1`) → shm, otherwise → tcp.
 
