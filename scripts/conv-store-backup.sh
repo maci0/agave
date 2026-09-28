@@ -208,6 +208,21 @@ brace_balance() {
     ' "$1"
 }
 
+# The envelope version src/server/conv_store.zig writes. `verify_store` matches
+# STORE_FORMAT_VERSION, so a format bump that never reaches this script makes
+# every backup fail after it has already copied the store, and every restore
+# refuse a file the server writes daily. The check runs in the self-test rather
+# than at load time because the container image ships this script without the
+# source tree, and it fails loudly instead of inferring a version it cannot read.
+assert_format_version_agrees() {
+    local src="$REPO_ROOT/src/server/conv_store.zig" found
+    [[ -f "$src" ]] || return 0
+    found="$(grep -Eo 'pub const format_version: u32 = [0-9]+' "$src" | grep -Eo '[0-9]+$' | head -1)"
+    [[ -n "$found" ]] || die "could not read format_version from $src; keep this script's STORE_FORMAT_VERSION in step with it"
+    [[ "$found" == "$STORE_FORMAT_VERSION" ]] ||
+        die "STORE_FORMAT_VERSION=$STORE_FORMAT_VERSION but src/server/conv_store.zig writes envelope version $found: update this script, or backups and restores fail against every store the server writes"
+}
+
 verify_store() {
     local file="$1"
     [[ -f "$file" ]] || die "not a file: $file"
@@ -394,6 +409,20 @@ do_self_test() {
         status=1
     }
 
+    # A store this build does not read is not restorable into, whatever else is
+    # wrong with it, and the cases above only cover truncation. verify_store
+    # ends in `exit`, so the call is a subshell: a direct call would take the
+    # self-test down with it instead of recording the failure.
+    printf '%s' '{"version":99,"conversations":[]}' >"$tmp/future.json"
+    if (verify_store "$tmp/future.json") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a store in another envelope version was accepted" >&2
+        status=1
+    fi
+
+    # The version this script verifies has to be the version the server writes,
+    # or every backup of a good store dies at the verify step.
+    assert_format_version_agrees
+
     # Braces inside message content are text, not structure.
     printf '%s' '{"version":1,"active_id":2,"next_id":3,"conversations":[{"id":2,"title":"brace { title","messages":[{"role":"user","content":"see fn f() { } \"quoted\""}]}]}' >"$tmp/braces.json"
     if ! verify_store "$tmp/braces.json" >/dev/null 2>&1; then
@@ -549,7 +578,7 @@ do_self_test() {
     fi
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
+        note "self-test passed: backup, verify, reject-truncated, reject-other-version, format-version-agrees, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }

@@ -17,8 +17,10 @@ else `$HOME/.cache/agave/`. In the compose image that is
 | Quarantined store | `<cache>/agave/conversations.json.corrupt` | no | Only remaining copy of a store the server could not parse |
 | Overflow store | `<cache>/agave/conversations.json.overflow` | no | The part of a store past the load caps, which the next save overwrites |
 | Hub model blobs | `<cache>/huggingface/` | yes, `agave pull` re-downloads | Bandwidth and time only |
+| Hub model symlinks | `<cache>/agave/models/{org}/{repo}` | yes, `agave pull` recreates them | A convenience path, nothing else |
 | Vulkan pipeline cache | `<cache>/agave/vk_pipeline_cache.bin` | yes, rebuilt on first run | One slower startup |
 | Expert profile | caller-supplied path | yes | Profile re-recorded |
+| TriAttention calibration | `<model>.cal`, next to the model | yes, `agave calibrate <model.gguf>` | Re-measured at full cost, and it is not in the cache dir, so the backup tier never covered it |
 
 Only the first three cannot be rebuilt. Everything else is a cache with a
 rebuild path, so this document is about the conversation store.
@@ -193,6 +195,9 @@ docker run --rm --entrypoint conv-store-backup.sh \
   agave:local backup
 ```
 
+`backups/` at the repo root is gitignored: the tier is plaintext prompt
+history, and a `git add -A` must not reach it.
+
 Drop the `:ro` for a restore, which also needs to write the pre-restore
 snapshot and the live path. The image runs as uid 10001, so the host backup
 directory has to be writable by that uid.
@@ -231,7 +236,9 @@ whole path in CI and locally:
 
 ```bash
 zig build conv-store-backup-test     # backup, verify, reject-truncated,
-                                    # restore, pre-restore snapshot, retention,
+                                    # reject-other-envelope-version,
+                                    # format-version drift guard, restore,
+                                    # pre-restore snapshot, retention,
                                     # retention scope, same-filesystem refusal,
                                     # check fresh/missing/stale,
                                     # --store override, whole help text
@@ -239,6 +246,12 @@ scripts/conv-store-backup.sh --self-test   # same, standalone
 ```
 
 `zig build check` depends on it, so a broken backup or restore fails the gate.
+
+The self-test also compares the script's `STORE_FORMAT_VERSION` against
+`format_version` in `src/server/conv_store.zig`. A store format bump that never
+reaches the script would otherwise make every `backup` fail after it has
+already copied the store, and every `restore` refuse a file the server writes
+daily, with the first sign of it being a broken deployment.
 
 What the self-test does not cover: a restore into a store the current build
 rejects at load. The load paths above mean that copy stays at the live path
