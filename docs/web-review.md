@@ -58,4 +58,3 @@ If a section is correct, say nothing. Only report real issues.
 - Whether `AGENTS.md` accurately describes the tree belongs to `docs/agents-review.md`; Zig under `src/` belongs to `docs/src-standards-review.md`; prose in `docs/` and `README.md` belongs to `docs/DOCS_REVIEW_PROMPT.md`.
 - Do not redesign the UI, rename a CSS class, or restyle anything. This pass checks safety, freshness, and gate coverage, not looks.
 - Do not delete a test or a lint rule to make a finding disappear.
-- Do not install packages or tools. Use `rg` and `sg` if they are on PATH.
