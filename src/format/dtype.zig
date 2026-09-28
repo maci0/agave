@@ -48,6 +48,20 @@ pub const DType = enum {
 const std = @import("std");
 
 test "DType enum completeness" {
+    // The exact variant set, not just a count: a `>= 25` floor passes for any
+    // enum with enough padding variants and hides a dropped dtype, which the
+    // loaders map from GGUF/safetensors names by string.
+    const expected = [_][]const u8{
+        "f32",    "f16",     "bf16",    "q2_k",     "q3_k",     "q4_0",
+        "q4_1",   "q4_k",    "q5_0",    "q5_k",     "q6_k",     "q8_0",
+        "iq4_xs", "iq4_nl",  "iq3_xxs", "iq3_s",    "iq2_xxs",  "iq2_xs",
+        "iq2_s",  "iq1_s",   "iq1_m",   "fp8_e4m3", "fp8_e5m2", "nvfp4",
+        "mxfp4",  "tq1_0",   "tq2_0",   "mlx_q",    "gptq",     "awq",
+        "hqq",    "unknown",
+    };
     const dtype_fields = @typeInfo(DType).@"enum".fields;
-    try std.testing.expect(dtype_fields.len >= 25);
+    try std.testing.expectEqual(expected.len, dtype_fields.len);
+    inline for (expected, 0..) |name, i| {
+        try std.testing.expectEqualStrings(name, dtype_fields[i].name);
+    }
 }

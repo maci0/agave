@@ -700,11 +700,18 @@ test "tokenBucket distributes different IDs to different buckets" {
     try std.testing.expect(unique >= 200);
 }
 
-test "tokenBucket is deterministic" {
-    // Same input always produces same output
-    try std.testing.expectEqual(tokenBucket(42), tokenBucket(42));
-    try std.testing.expectEqual(tokenBucket(0), tokenBucket(0));
-    try std.testing.expectEqual(tokenBucket(0xFFFFFFFF), tokenBucket(0xFFFFFFFF));
+test "tokenBucket pins the multiplicative hash" {
+    // Exact values, so a changed multiplier or shift fails here instead of
+    // silently reshuffling every radix tree's fanout.
+    try std.testing.expectEqual(@as(u8, 0), tokenBucket(0));
+    try std.testing.expectEqual(@as(u8, 158), tokenBucket(1));
+    try std.testing.expectEqual(@as(u8, 245), tokenBucket(42));
+    try std.testing.expectEqual(@as(u8, 97), tokenBucket(0xFFFFFFFF));
+
+    // High-bit-only IDs still spread: a non-wrapping multiply would map them
+    // onto a narrow slice of the fanout.
+    try std.testing.expectEqual(@as(u8, 55), tokenBucket(256));
+    try std.testing.expectEqual(@as(u8, 128), tokenBucket(0x8000_0000));
 }
 
 test "PagedKvView initView and pointer access" {
