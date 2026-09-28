@@ -288,6 +288,12 @@ fn parse(allocator: Allocator, data: []const u8) !ParseResult {
 
     var convs: std.ArrayList(LoadedConv) = .empty;
     var truncated = false;
+    // `id` is the store's primary key: the server looks a conversation up by
+    // id, and a second record with the same id is unreachable behind the first
+    // (a delete or select would only ever hit the first). Bound by
+    // `max_conversations`, so a fixed table needs no allocation.
+    var seen_ids: [max_conversations]u32 = undefined;
+    var seen_len: usize = 0;
     errdefer {
         for (convs.items) |*conv| {
             allocator.free(conv.title);
@@ -301,7 +307,7 @@ fn parse(allocator: Allocator, data: []const u8) !ParseResult {
     }
 
     var i: usize = 1;
-    while (i < arr.len) {
+    convs_loop: while (i < arr.len) {
         // The next save writes back only what loaded here, so hitting the cap
         // deletes the overflow with no record. Name it instead of dropping it.
         if (convs.items.len == max_conversations) {
@@ -317,6 +323,17 @@ fn parse(allocator: Allocator, data: []const u8) !ParseResult {
 
         const id_raw = json.extractIntField(obj, "id") orelse return error.CorruptStore;
         const id: u32 = try castId(id_raw);
+        for (seen_ids[0..seen_len]) |seen| {
+            if (seen != id) continue;
+            // Same handling as a cap overflow: the record cannot be kept under
+            // a key the first one already owns, and dropping it silently would
+            // destroy it on the next save, so preserve the original bytes.
+            truncated = true;
+            std.log.warn("conversation store: conversation id {d} appears more than once; the later record is dropped on the next save", .{id});
+            continue :convs_loop;
+        }
+        seen_ids[seen_len] = id;
+        seen_len += 1;
         const title_raw = json.extractField(obj, "title") orelse "";
         const title_un = try json.jsonUnescapeOwned(allocator, title_raw);
         // The writer clips titles on a character boundary, but this file is
@@ -610,6 +627,37 @@ test "load caps conversations at the save cap instead of dropping silently" {
     const kept = try readFile(allocator, testPathSuffix(&suf_buf, path, ".overflow"));
     defer allocator.free(kept);
     try std.testing.expectEqualStrings(buf.items, kept);
+}
+
+test "load keeps conversation ids unique and preserves the dropped record" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "dupid.json");
+    var suf_buf: [std.fs.max_path_bytes]u8 = undefined;
+    defer deleteTestPath(path);
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".corrupt"));
+    defer deleteTestPath(testPathSuffix(&suf_buf, path, ".overflow"));
+
+    // A hand-edited store carrying the same id twice: the second record is
+    // unreachable behind the first, so it cannot be kept.
+    const raw =
+        \\{"version":1,"active_id":2,"next_id":3,"conversations":[
+        \\{"id":2,"title":"first","messages":[]},
+        \\{"id":2,"title":"second","messages":[]},
+        \\{"id":9,"title":"third","messages":[]}]}
+    ;
+    try durable.replacePrivate(path, raw);
+
+    var snap = try load(allocator, path);
+    defer snap.deinit();
+    try std.testing.expectEqual(@as(usize, 2), snap.conversations.len);
+    try std.testing.expectEqualStrings("first", snap.conversations[0].title);
+    try std.testing.expectEqualStrings("third", snap.conversations[1].title);
+
+    // The dropped record has to survive the next save somewhere.
+    const kept = try readFile(allocator, testPathSuffix(&suf_buf, path, ".overflow"));
+    defer allocator.free(kept);
+    try std.testing.expectEqualStrings(raw, kept);
 }
 
 test "load clips an over-long non-ASCII title on a character boundary" {

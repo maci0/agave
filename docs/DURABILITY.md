@@ -54,6 +54,10 @@ Other verified properties, so a future pass leaves them alone:
   load writes the whole original to `{path}.overflow` first: without it, the
   part past the caps is destroyed by the first save and the backup taken after
   that save never saw it (`src/server/conv_store.zig`, `preserveOverflow`).
+- A conversation id is the store's primary key, so a store carrying the same id
+  twice keeps the first record and drops the later one, which no lookup could
+  reach behind it. The drop is treated like a cap overflow: the whole original
+  goes to `{path}.overflow` before the next save overwrites the live path.
 - `--conv-store PATH` points the store anywhere; `--no-conv-store` keeps
   conversations in memory only. The backup script follows a relocated store
   with `--store PATH`.

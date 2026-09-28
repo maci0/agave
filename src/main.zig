@@ -3277,44 +3277,54 @@ fn initAndRun(
             };
             if (prof) |*p| {
                 defer p.deinit(allocator);
-                // Pre-pin top-8 experts per layer into the LRU cache.
-                var top_ids: [8]u32 = undefined;
-                for (0..@min(n_lay, p.n_layers)) |li| {
-                    const k = ec.admit_prepin(@intCast(li), &top_ids, p.topExperts(@intCast(li), 8, &top_ids));
-                    _ = k;
-                }
-                eprint("ssd-streaming: pre-pinned hot experts from '{s}'\n", .{prof_path});
-
-                // mlock the hot experts' weight ranges so the OS cannot evict them.
-                if (cli.ssd_streaming) {
-                    var pin_count: u32 = 0;
-                    var dma_count: u32 = 0;
-                    var pin_buf: [128]u8 = undefined;
+                // A profile's expert ids index the model's expert tensors
+                // directly (`t.data_ptr + eid * stride`), so a profile
+                // recorded for a model with a different expert count names
+                // ranges that do not exist: they get prefaulted, mlocked, and
+                // DMA-registered past the end of the weight. Layers may
+                // differ (the loops take the min); experts may not.
+                if (p.n_experts != n_exp) {
+                    eprint("Warning: expert profile '{s}' has {d} experts, model has {d}; ignored\n", .{ prof_path, p.n_experts, n_exp });
+                } else {
+                    // Pre-pin top-8 experts per layer into the LRU cache.
+                    var top_ids: [8]u32 = undefined;
                     for (0..@min(n_lay, p.n_layers)) |li| {
-                        const k_pinned = p.topExperts(@intCast(li), 6, &top_ids);
-                        for (0..k_pinned) |j| {
-                            const eid = top_ids[j];
-                            for ([_][]const u8{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" }) |suffix| {
-                                const name = std.fmt.bufPrint(&pin_buf, "blk.{d}.{s}", .{ li, suffix }) catch continue;
-                                if (fmt.getTensor(name)) |t| {
-                                    const stride = t.dataByteLen() / @as(usize, n_exp);
-                                    const range = t.data_ptr + eid * stride;
-                                    if (!ec.pinExpert(range, stride)) continue;
-                                    pin_count += 1;
-                                    // Only AFTER pinExpert has prefaulted and wired the
-                                    // range: registering a cold mapping makes the driver
-                                    // fault it in page-at-a-time (~19 MB/s measured).
-                                    if (be.hostRegister(range, stride)) dma_count += 1;
+                        const k = ec.admit_prepin(@intCast(li), &top_ids, p.topExperts(@intCast(li), 8, &top_ids));
+                        _ = k;
+                    }
+                    eprint("ssd-streaming: pre-pinned hot experts from '{s}'\n", .{prof_path});
+
+                    // mlock the hot experts' weight ranges so the OS cannot evict them.
+                    if (cli.ssd_streaming) {
+                        var pin_count: u32 = 0;
+                        var dma_count: u32 = 0;
+                        var pin_buf: [128]u8 = undefined;
+                        for (0..@min(n_lay, p.n_layers)) |li| {
+                            const k_pinned = p.topExperts(@intCast(li), 6, &top_ids);
+                            for (0..k_pinned) |j| {
+                                const eid = top_ids[j];
+                                for ([_][]const u8{ "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight" }) |suffix| {
+                                    const name = std.fmt.bufPrint(&pin_buf, "blk.{d}.{s}", .{ li, suffix }) catch continue;
+                                    if (fmt.getTensor(name)) |t| {
+                                        const stride = t.dataByteLen() / @as(usize, n_exp);
+                                        const range = t.data_ptr + eid * stride;
+                                        if (!ec.pinExpert(range, stride)) continue;
+                                        pin_count += 1;
+                                        // Only AFTER pinExpert has prefaulted and wired the
+                                        // range: registering a cold mapping makes the driver
+                                        // fault it in page-at-a-time (~19 MB/s measured).
+                                        if (be.hostRegister(range, stride)) dma_count += 1;
+                                    }
                                 }
                             }
                         }
-                    }
-                    if (pin_count > 0) {
-                        eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB){s}\n", .{
-                            pin_count,
-                            ec.total_pinned_bytes / (1024 * 1024),
-                            if (dma_count > 0) ", DMA-registered" else "",
-                        });
+                        if (pin_count > 0) {
+                            eprint("ssd-streaming: mlocked {d} expert weight ranges ({d} MB){s}\n", .{
+                                pin_count,
+                                ec.total_pinned_bytes / (1024 * 1024),
+                                if (dma_count > 0) ", DMA-registered" else "",
+                            });
+                        }
                     }
                 }
             }
