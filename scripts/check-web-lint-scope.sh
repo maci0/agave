@@ -42,8 +42,13 @@ if [[ ! -f .oxlintrc.json ]]; then
 fi
 
 # The array literal only, from the key to the line that closes it, so a
-# similarly named key elsewhere in the file cannot widen the read.
-mapfile -t ignored_patterns < <(
+# similarly named key elsewhere in the file cannot widen the read. A `while
+# read` loop, not mapfile: macOS still ships bash 3.2 and this runs on a
+# macOS workstation too.
+ignored_patterns=()
+while IFS= read -r line; do
+    ignored_patterns+=("$line")
+done < <(
     sed -n '/"ignorePatterns"/,/^[[:space:]]*]/p' .oxlintrc.json |
         grep -v '"ignorePatterns"' | grep -oE '"[^"]+"' | tr -d '"' | sort -u
 )

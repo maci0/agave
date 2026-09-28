@@ -23,7 +23,32 @@ shellcheck --version | sed -n '2p'
 # the checks, so a newer one is fine and a newer CI runner is not a surprise.
 readonly shellcheck_floor=0.9.0
 shellcheck_version="$(shellcheck --version | sed -n '2s/^version: //p')"
-if [[ "$(printf '%s\n%s\n' "$shellcheck_floor" "$shellcheck_version" | sort -V | head -n1)" != "$shellcheck_floor" ]]; then
+
+# True when $1 sorts before $2 as a dotted version. Field-wise, so 0.10.0 is
+# above 0.9.0 the way a version reads and not the way a string compares. Done
+# in bash rather than `sort -V`, which GNU coreutils has and BSD/macOS sort
+# does not, and a macOS workstation runs this script.
+version_lt() {
+    local -a lhs rhs
+    local i l r
+    IFS='.' read -r -a lhs <<<"$1"
+    IFS='.' read -r -a rhs <<<"$2"
+    for i in 0 1 2; do
+        # Trailing `-rc1` or `+dfsg` suffixes are cut; a field with no digits
+        # at all reads as 0.
+        l="${lhs[i]:-0}"
+        r="${rhs[i]:-0}"
+        l="${l%%[^0-9]*}"
+        r="${r%%[^0-9]*}"
+        l="${l:-0}"
+        r="${r:-0}"
+        ((10#$l > 10#$r)) && return 1
+        ((10#$l < 10#$r)) && return 0
+    done
+    return 1
+}
+
+if version_lt "$shellcheck_version" "$shellcheck_floor"; then
     echo "lint-shell: shellcheck $shellcheck_version is older than the $shellcheck_floor floor;" >&2
     echo "  it does not know check-set-e-suppressed and would report a false pass." >&2
     exit 1

@@ -350,8 +350,9 @@ done
 # fields (name, description, requires-python) cannot be mistaken for a pin.
 # shellcheck disable=SC2016  # awk's $0 and /"[^"]+"/ below are the awk language, not the shell
 check_exact_pins "pyproject dependencies" < <(
-    find tests research -name pyproject.toml -not -path '*/.venv/*' -print0 |
-        xargs -0 awk '
+    # -exec ... + rather than -print0 | xargs -0: `-0` is a GNU xargs option
+    # that BSD/macOS xargs rejects, and this runs on a macOS workstation too.
+    find tests research -name pyproject.toml -not -path '*/.venv/*' -exec awk '
             /^[[:space:]]*(dependencies|\[project\.optional-dependencies\])/ { in_deps = 1 }
             in_deps {
                 while (match($0, /"[^"]+"/)) {
@@ -360,7 +361,7 @@ check_exact_pins "pyproject dependencies" < <(
                 }
                 if ($0 ~ /\]/) { in_deps = 0 }
             }
-        '
+        ' {} +
 )
 
 if ((exact_pin_fail)); then
