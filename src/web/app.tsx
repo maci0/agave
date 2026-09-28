@@ -247,13 +247,14 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
 };
 
 /** The composer form, with the sampling and turn state folded in. */
-const Composer = ({ settings, turn, model, image, submit, focusToken }: {
+const Composer = ({ settings, turn, model, image, submit, focusToken, reject }: {
   settings: ReturnType<typeof useSettings>;
   turn: ReturnType<typeof useChatTurn>;
   model: ReturnType<typeof useModelInfo>;
   image: ReturnType<typeof useImageAttachment>;
   submit: (text: string, image: string | null) => void;
   focusToken: number;
+  reject: PushToast;
 }) => (
   <ComposerForm
     sampling={settings.sampling}
@@ -265,6 +266,7 @@ const Composer = ({ settings, turn, model, image, submit, focusToken }: {
     pendingImage={image.pending}
     onImageFile={image.attach}
     onRemoveImage={image.clear}
+    onDropRejected={reject}
     onClearSystem={settings.clearSystem}
     tps={turn.tps}
     settingsOpen={settings.open}
@@ -344,7 +346,7 @@ const ChatApp = () => {
       header={<ChatHeader model={model} convs={convs} turn={turn} chrome={chrome} focusComposer={focusComposer} exportConversation={commands.exportConversation} />}
       sidebar={<ConversationPanel isDrawer={chrome.isDrawer} drawerOpen={chrome.drawerOpen} onDrawerChange={chrome.setDrawerOpen} sidebarProps={sidebarProps} />}
       log={<ChatLogPanel log={log} toasts={toasts} settings={settings} model={model} turn={turn} convs={convs} commands={commands} dismissToast={dismissToast} />}
-      composer={<Composer settings={settings} turn={turn} model={model} image={image} submit={commands.submitMessage} focusToken={focusToken} />}
+      composer={<Composer settings={settings} turn={turn} model={model} image={image} submit={commands.submitMessage} focusToken={focusToken} reject={pushToast} />}
       announcement={announcement}
       about={<AboutDialog open={chrome.aboutOpen} onOpenChange={chrome.setAboutOpen} modelName={model.modelName} backendName={model.backendName} />}
     />
