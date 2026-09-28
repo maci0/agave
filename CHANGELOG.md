@@ -17,7 +17,7 @@ must still appear under **Changed** or **Breaking** below. See
   runtime underneath them is `preact/compat`. `vendor/react` and `vendor/react-dom`
   are `file:` dependencies that answer to those names, because the pinned bun
   cannot alias modules. The shipped bundles roughly halve: the serve page goes
-  from 116 KB to 50 KB gzipped, the browser shell from 84 KB to 25 KB. The
+  from 116 KB to 50 KB gzipped, the browser shell from 84 KB to 22 KB. The
   sampling sliders are native `<input type="range">` controls, because Radix's
   Slider positions its thumb from a Collection index that does not register
   through `preact/compat`; every other Radix primitive shadcn uses here (dialog,
