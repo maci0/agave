@@ -281,13 +281,18 @@ check_exact_pins() {
     done
 }
 
-# package.json devDependencies (npm/bun semver) and pyproject dependencies
-# (PEP 508) sit behind different syntaxes, so each is listed with its own
-# parser rather than a regex that would have to cover both.
-check_exact_pins "package.json devDependencies" < <(
-    sed -n '/"devDependencies"/,/^[[:space:]]*}/p' package.json |
-        sed -n 's/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
-)
+# package.json dependencies and devDependencies (npm/bun semver) and
+# pyproject dependencies (PEP 508) sit behind different syntaxes, so each is
+# listed with its own parser rather than a regex that would have to cover both.
+# Both package.json blocks are checked: a range in the production block reaches
+# the shipped bundle. The range end is a bare closing brace, which no entry line
+# ("name": "version") can contain.
+for block in dependencies devDependencies; do
+    check_exact_pins "package.json ${block}" < <(
+        sed -n "/\"${block}\"/,/^[[:space:]]*}/p" package.json |
+            sed -n 's/^[[:space:]]*"[^"]*"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+    )
+done
 
 # Every quoted requirement token inside a dependency array, optional extras
 # and markers included. Only the arrays are read, so the quoted values of other
@@ -311,4 +316,4 @@ if ((exact_pin_fail)); then
     echo "check-pins: every third-party requirement must pin one exact version" >&2
     exit 1
 fi
-echo "Dependency pins OK: package.json devDependencies and pyproject requirements are exact"
+echo "Dependency pins OK: package.json dependencies, devDependencies and pyproject requirements are exact"

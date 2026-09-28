@@ -4,8 +4,9 @@ Custom oxlint rules, loaded by `.oxlintrc.json` via
 `jsPlugins[].specifier: ./tools/oxlint/anti-slop/index.ts`.
 
 - Upstream: https://github.com/dmmulroy/anti-slop
-- Vendored because oxlint resolves JS plugins from a path, and the repo keeps
-  zero runtime dependencies outside `package.json` devDependencies.
+- Vendored because oxlint resolves JS plugins from a path: an npm dependency on
+  the upstream package would pull the rules in through `bun install` and let
+  them drift from the reviewed source. `VENDORED.sha256` pins them instead.
 
 ## Local patches
 
