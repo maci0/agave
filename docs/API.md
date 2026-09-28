@@ -130,6 +130,8 @@ curl http://localhost:49453/v1/completions -d '{
 
 Same sampling parameters as chat completions. Prompt is raw text (no chat template).
 `prompt` must be a string; an array or object returns `400` (`code: invalid_value`).
+`n` is accepted for compatibility; only `n=1` is supported, and `n > 1` returns
+`400` (`code: n_not_supported`).
 
 **Response:**
 ```json
@@ -158,6 +160,8 @@ curl http://localhost:49453/v1/responses -d '{
 Same sampling parameters as chat completions. Token limit accepts OpenAI
 `max_output_tokens`, then `max_tokens`, then `max_completion_tokens`. `input`
 must be a string; an array or object returns `400` (`code: invalid_value`).
+`n` is accepted for compatibility; only `n=1` is supported, and `n > 1` returns
+`400` (`code: n_not_supported`).
 
 **Response:**
 ```json
@@ -640,9 +644,10 @@ All endpoints return JSON error bodies on failure.
 `param` names the offending field or query key when known; otherwise `null`.
 `code` is a stable machine-readable string when known (for example `missing_required_parameter`, `n_not_supported`, `invalid_api_key`, `method_not_allowed`, `unknown_endpoint`, `conversation_not_found`, `request_too_large`, `malformed_request`, `invalid_value`, `rate_limit_exceeded`, `duplicate_request`, `not_implemented`, `cross_origin_forbidden`, `host_forbidden`, `message_too_long`, `image_decode_failed`, `vision_not_supported`, `kv_import_failed`, `unknown_conversation_action`, `no_active_conversation`, `no_user_message`, `conversation_limit_reached`, `conversation_message_limit`, `server_overloaded`); otherwise `null`.
 
-Failures raised before routing (malformed request, oversized body) use the envelope
-of the route the request addressed, so a `/v1/messages` client never receives an
-OpenAI-shaped error for a 400 or 413.
+Failures raised before routing (malformed request, oversized body, rejected
+Host, cross-origin request, failed auth) use the envelope of the route the
+request addressed, so a `/v1/messages` client never receives an OpenAI-shaped
+error for a 400, 401, 403, or 413.
 
 **Anthropic format** (`/v1/messages` only):
 ```json

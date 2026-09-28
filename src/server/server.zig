@@ -431,8 +431,9 @@ fn authPolicyFor(path: []const u8) AuthPolicy {
 }
 
 /// True when `path` addresses a route whose errors use the Anthropic envelope.
-/// Used for failures raised before routing (malformed request, oversized body)
-/// so a `/v1/messages` client never receives an OpenAI-shaped error.
+/// Used for failures raised before routing (malformed request, oversized body,
+/// rejected Host, cross-origin request, failed auth) so a `/v1/messages` client
+/// never receives an OpenAI-shaped error.
 fn isAnthropicPath(path: []const u8) bool {
     for (known_endpoints) |ep| {
         if (ep.is_anthropic) return std.mem.eql(u8, path, ep.path);
@@ -1693,6 +1694,19 @@ fn sendJsonErrorEx(stream: http.TcpStream, status: []const u8, err_type: []const
     sendResponse(stream, status, "application/json", json_body);
 }
 
+/// Send an error raised before routing, in the envelope of the route the
+/// request addressed. A `/v1/messages` client parses the Anthropic shape only,
+/// so the OpenAI body is an unparseable response there. `code` is the
+/// OpenAI-envelope machine-readable code; the Anthropic envelope has no code
+/// field, so only the message survives.
+fn sendPreflightErrorEx(stream: TcpStream, path: []const u8, status: []const u8, code: []const u8, message: []const u8) void {
+    if (isAnthropicPath(path)) {
+        sendAnthropicError(stream, if (std.mem.eql(u8, status, "403 Forbidden")) "403" else status, "invalid_request_error", message);
+        return;
+    }
+    sendJsonErrorEx(stream, status, "invalid_request_error", message, null, code);
+}
+
 /// Send 401 Unauthorized response for invalid API key.
 fn send401(stream: http.TcpStream) void {
     g_server.metrics.recordAuthFailure();
@@ -1938,10 +1952,12 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
     // Unauthenticated servers only accept loopback Host. A public name that
     // DNS-rebinds to 127.0.0.1 would pass Origin==Host and skip the CSRF check.
     if (isRebindHostUnauthenticated(req.headers)) {
+        logRequest(method, path);
         g_server.metrics.recordRequest();
         g_server.metrics.recordClientError();
         std.log.warn("req={d} non-loopback Host rejected (no API key)", .{log_request_id});
-        sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Host not allowed", null, "host_forbidden");
+        sendPreflightErrorEx(stream, path, "403 Forbidden", "host_forbidden", "Host not allowed");
+        logRequestDone(method, path, 403, elapsedMs(request_start));
         return;
     }
 
@@ -1953,7 +1969,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         g_server.metrics.recordRequest();
         g_server.metrics.recordClientError();
         std.log.warn("req={d} cross-origin request rejected (no API key)", .{log_request_id});
-        sendJsonErrorEx(stream, "403 Forbidden", "invalid_request_error", "Cross-origin request rejected", null, "cross_origin_forbidden");
+        sendPreflightErrorEx(stream, path, "403 Forbidden", "cross_origin_forbidden", "Cross-origin request rejected");
         logRequestDone(method, path, 403, elapsedMs(request_start));
         return;
     }
@@ -5005,7 +5021,9 @@ const anthropic_error_fallback = "{\"type\":\"error\",\"error\":{\"type\":\"api_
 fn anthropicStatusLine(status_code: []const u8) []const u8 {
     if (std.mem.eql(u8, status_code, "400")) return "400 Bad Request";
     if (std.mem.eql(u8, status_code, "401")) return "401 Unauthorized";
+    if (std.mem.eql(u8, status_code, "403")) return "403 Forbidden";
     if (std.mem.eql(u8, status_code, "404")) return "404 Not Found";
+    if (std.mem.eql(u8, status_code, "405")) return "405 Method Not Allowed";
     if (std.mem.eql(u8, status_code, "413")) return "413 Payload Too Large";
     if (std.mem.eql(u8, status_code, "429")) return "429 Too Many Requests";
     if (std.mem.eql(u8, status_code, "503")) return "503 Service Unavailable";
@@ -7864,7 +7882,9 @@ test "resolveAnthropicToolInput keeps a complete object and drops a truncated on
 test "anthropicStatusLine maps known codes" {
     try std.testing.expectEqualStrings("400 Bad Request", anthropicStatusLine("400"));
     try std.testing.expectEqualStrings("401 Unauthorized", anthropicStatusLine("401"));
+    try std.testing.expectEqualStrings("403 Forbidden", anthropicStatusLine("403"));
     try std.testing.expectEqualStrings("404 Not Found", anthropicStatusLine("404"));
+    try std.testing.expectEqualStrings("405 Method Not Allowed", anthropicStatusLine("405"));
     try std.testing.expectEqualStrings("429 Too Many Requests", anthropicStatusLine("429"));
     try std.testing.expectEqualStrings("503 Service Unavailable", anthropicStatusLine("503"));
     try std.testing.expectEqualStrings("500 Internal Server Error", anthropicStatusLine("500"));
