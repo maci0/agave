@@ -307,6 +307,8 @@ User CLI flags always override recipe defaults.
 
 HTTP server activated via `--serve` (default port 49453, override with `--port`). Provides a full OpenAI-compatible API plus health and metrics endpoints.
 
+`server.zig` owns the routes, auth policy, and the response bodies. `http.zig` owns the HTTP/1.1 wire format (socket, request parsing, header lookup, Host/Origin checks, response header constants) and holds no server state.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/chat/completions` | POST | Chat completions (streaming SSE or batch) |
