@@ -156,8 +156,10 @@ is idempotent and safe to run while the server is serving.
 hourly run that also runs `check` and retries a failed run, with
 `Persistent=true` so a host that was off at :17 backs up at the next boot
 instead of waiting for the next hour. Edit `User=` and `AGAVE_BACKUP_DIR` in
-the service before enabling it. Nothing in this repository installs or starts
-them.
+the service before enabling it, and create the account and the directory it
+names (`useradd --system` for the user, `install -d -o <user> -g <user> -m 0700`
+for the destination). A missing one fails the unit at start, not at the first
+backup. Nothing in this repository installs or starts them.
 
 ## Know whether the backup ran
 
