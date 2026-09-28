@@ -52,7 +52,9 @@ export const MessageBody = memo(function MessageBody({ text, phase, onRendered }
     }
     if (phase === 'thinking') {
       element.textContent = THINKING_GLYPH;
-      painted.current = '';
+      // The glyph is what the node holds, so the next stream paint does not
+      // Extend it. `painted` tracks the text on screen, not the response.
+      painted.current = THINKING_GLYPH;
       return;
     }
     if (phase === 'error') {
