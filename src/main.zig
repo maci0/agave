@@ -1113,6 +1113,18 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
         break :blk p;
     };
 
+    // Debug env flags enable on exactly `1`; `0` is a deliberate off. Any other
+    // value (`true`, `yes`, an env-file typo) leaves the switch off, so name it
+    // here instead of letting the flag look ignored.
+    for ([_]struct { name: []const u8, value: ?[]const u8 }{
+        .{ .name = "AGAVE_DF2_DEBUG", .value = g_environ.get("AGAVE_DF2_DEBUG") },
+        .{ .name = "AGAVE_VISION_DEBUG", .value = g_environ.get("AGAVE_VISION_DEBUG") },
+    }) |flag| {
+        if (config.unsupportedEnvFlagValue(flag.value)) |bad| {
+            eprint("Warning: {s}='{s}' is not 1 or 0; the flag stays off\n", .{ flag.name, bad });
+        }
+    }
+
     // Validate max-batch-size (0 would silently fall back inside the server)
     if (parseU32(res.option("max-batch-size"), "max-batch-size")) |mbs| {
         if (mbs == 0) {
@@ -1184,6 +1196,14 @@ fn parseCli(allocator: std.mem.Allocator) ?CliArgs {
             eprint("Warning: both --api-key and AGAVE_API_KEY set; using AGAVE_API_KEY (CLI value ignored)\n", .{});
         } else if (res.option("api-key") != null) {
             eprint("Warning: --api-key is visible in process listings; prefer AGAVE_API_KEY\n", .{});
+        }
+        // The image ENTRYPOINT is `agave --host 0.0.0.0`, so AGAVE_HOST set
+        // alongside it loses silently. Name the winner for --host and --port.
+        if (res.option("host") != null and config.nonemptyEnv(g_environ.get("AGAVE_HOST")) != null) {
+            eprint("Warning: both --host and AGAVE_HOST set; using --host (AGAVE_HOST ignored)\n", .{});
+        }
+        if (port_cli != null and port_env != null) {
+            eprint("Warning: both --port and AGAVE_PORT set; using --port {d} (AGAVE_PORT ignored)\n", .{parsed_port});
         }
     }
 
@@ -2224,12 +2244,13 @@ const usage_text =
     \\  TERM                 Set to dumb to disable color and TTY decorations
     \\  AGAVE_API_KEY        API key for server auth (preferred over --api-key; wins if both set)
     \\                         Empty/whitespace is unset (does not override --api-key)
-    \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
-    \\                         Empty/whitespace is unset
     \\  AGAVE_PORT           Server port when --port is omitted [default: 49453]
-    \\                         Empty/whitespace is unset
+    \\                         Empty/whitespace is unset; --port wins if both set
+    \\  AGAVE_HOST           Server bind address when --host is omitted [default: 127.0.0.1]
+    \\                         Empty/whitespace is unset; --host wins if both set
     \\  AGAVE_VISION_DEBUG   Dump vision encoder intermediate buffers when set to 1
     \\  AGAVE_DF2_DEBUG      Dump DFlash2 speculation-round traces when set to 1
+    \\                       (1 enables, 0 disables; any other value warns and stays off)
     \\  TMPDIR               Base directory for extracted video frames (fallback: XDG_CACHE_HOME, ~/.cache)
     \\  HF_TOKEN             HuggingFace API token for private repos (used by pull)
     \\  HF_HOME              Custom HuggingFace cache directory (used by pull)
@@ -3151,9 +3172,19 @@ fn initAndRun(
             if (calibrate.readCalFile(allocator, g_io, cp)) |cals| {
                 mdl.setTriCalibration(cals);
                 if (!g_quiet) eprint("tri-attention: loaded {d} calibrations from {s}\n", .{ cals.len, cp });
-            } else |_| {
-                eprint("Warning: --kv-eviction tri but no .cal file found ({s})\n", .{cp});
-                eprint("  Generate with: agave calibrate {s}\n", .{cli.model_path});
+            } else |err| switch (err) {
+                // Missing is recoverable (the file is optional), but a file that
+                // exists and cannot be read is a misconfiguration: continuing
+                // would score eviction against empty statistics.
+                error.FileNotFound => {
+                    eprint("Warning: --kv-eviction tri but no .cal file found ({s})\n", .{cp});
+                    eprint("  Generate with: agave calibrate {s}\n", .{cli.model_path});
+                },
+                else => {
+                    eprint("Error: cannot read {s}: {s}\n", .{ cp, @errorName(err) });
+                    eprint("  Regenerate it with: agave calibrate {s}\n", .{cli.model_path});
+                    std.process.exit(2);
+                },
             }
         }
     }

@@ -29,13 +29,13 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 | Variable | Description |
 |----------|-------------|
 | `AGAVE_API_KEY` | API key for authentication (preferred over `--api-key` to avoid process-list exposure). Empty/whitespace is unset and does not override `--api-key`. |
-| `AGAVE_HOST` | Bind address (default: `127.0.0.1`). Empty/whitespace is unset. |
-| `AGAVE_PORT` | Listen port (default: `49453`). Empty/whitespace is unset. |
+| `AGAVE_HOST` | Bind address (default: `127.0.0.1`). Empty/whitespace is unset. `--host` wins when both are set. |
+| `AGAVE_PORT` | Listen port (default: `49453`). Empty/whitespace is unset. `--port` wins when both are set. |
 | `HF_TOKEN` | Hugging Face token for private model downloads (`agave pull`). Empty/whitespace is unset. |
 | `HF_HOME` | Hugging Face cache directory (default: `~/.cache/huggingface`) |
 | `XDG_CACHE_HOME` | Base cache directory when `HF_HOME` is not set |
-| `AGAVE_VISION_DEBUG` | Dump vision encoder intermediate buffers when set to `1` |
-| `AGAVE_DF2_DEBUG` | Dump DFlash2 speculation-round traces when set to `1` |
+| `AGAVE_VISION_DEBUG` | Dump vision encoder intermediate buffers when set to `1` (`0` disables, any other value warns and stays off) |
+| `AGAVE_DF2_DEBUG` | Dump DFlash2 speculation-round traces when set to `1` (`0` disables, any other value warns and stays off) |
 | `NO_COLOR` | Disable colored terminal output (respects [no-color.org](https://no-color.org) convention) |
 
 ---

@@ -38,8 +38,11 @@ services:
     environment:
       AGAVE_PORT: ${AGAVE_PORT:-49453}
       AGAVE_API_KEY: ${AGAVE_API_KEY:?Set AGAVE_API_KEY in .env (see .env.example)}
-      # Optional; empty is treated as unset (HF_TOKEN, NO_COLOR, AGAVE_VISION_DEBUG,
-      # AGAVE_DF2_DEBUG). Every var documented in .env.example is forwarded here.
+      # Optional; empty is treated as unset (HF_TOKEN, NO_COLOR,
+      # AGAVE_VISION_DEBUG, AGAVE_DF2_DEBUG). Compose-only vars
+      # (AGAVE_HOST_BIND, AGAVE_MODELS_DIR, AGAVE_CACHE_DIR, AGAVE_MODEL)
+      # are consumed here, not forwarded. HF_HOME and XDG_CACHE_HOME stay
+      # out: the named volume replaces ~/.cache, and image HOME is set below.
       HF_TOKEN: ${HF_TOKEN:-}
       NO_COLOR: ${NO_COLOR:-}
       AGAVE_VISION_DEBUG: ${AGAVE_VISION_DEBUG:-}
