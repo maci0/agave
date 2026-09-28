@@ -65,22 +65,24 @@ mkdir -p "$STAGE/server" "$STAGE/wasm"
 # result a classic script, which is what the server inlines into <script> and
 # what the shell loads with `defer`.
 #
-# The bundles are whitespace- and syntax-minified but NOT identifier-mangled.
-# `scripts/check-web-artifacts.sh` byte-compares the committed output against a
-# fresh build, and bun 1.4.2's identifier mangler is not reproducible across
-# sessions: two builds of identical sources can assign the same short names to
-# different bindings, which made the gate report STALE for an artifact that was
-# byte-for-byte the same program. Dropping identifier mangling costs about 36 KB
-# gzipped on the serve page (116 KB to 152 KB) and buys a gate that only fires on
-# real drift. Do not re-add `--minify` without re-measuring that.
+# The bundles are fully minified, identifiers included. app.js is inlined into
+# the one HTML document server.zig serves, so every cold visit downloads the
+# whole bundle: mangling takes that document from 152 KB to 116 KB gzipped
+# (701 KB to 368 KB raw), a quarter off the only response on the first-paint
+# path. The earlier reason for dropping it does not reproduce: three mangled
+# builds of the same sources came out byte-identical, and the mangled and
+# unmangled bundles agree byte-for-byte between bun 1.4.0 and 1.4.2, so
+# `scripts/check-web-artifacts.sh` byte-compares a deterministic artifact. If a
+# bun release ever makes the mangler unstable again, that gate is what catches
+# it, and the artifact goes back to `--minify-whitespace --minify-syntax`.
 #
 # NODE_ENV=production selects React's production build; without it the bundle
 # carries the development build and its warnings.
 export NODE_ENV=production
 bun build src/web/app.tsx --outfile "$STAGE/server/app.js" \
-    --format=iife --minify-whitespace --minify-syntax --target browser
+    --format=iife --minify --target browser
 bun build web/shell.tsx --outfile "$STAGE/wasm/shell.js" \
-    --format=iife --minify-whitespace --minify-syntax --target browser
+    --format=iife --minify --target browser
 # The SDK stays unminified and framework-free: it is a documented module for
 # embedders that load agave.js next to their own page, so it has to stay
 # readable, and nothing about the React UI changes its contract.

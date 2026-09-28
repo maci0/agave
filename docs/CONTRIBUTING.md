@@ -30,6 +30,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | Built-in chat UI and browser shell (React + Tailwind 4) | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
 | A JavaScript dependency in `dependencies` (ships inside the web bundles) | `zig build check-third-party`: every bundled package needs a `name@version` entry in `THIRD_PARTY_NOTICES.md`, with its upstream license and URL |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
+| Weight of the committed web bundles | `scripts/check-web-artifacts.sh` also fails when one grows past its `gzip -9` ceiling, so bundle weight cannot accrete unnoticed. `src/web/app.js` is inlined into the one HTML document the server sends, so its whole compressed size sits on the first-paint path |
 | `.oxlintrc.json` | `bash scripts/check-web-lint-scope.sh` (an `ignorePatterns` entry that is not known debt fails; entries may leave the list, never join it) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 | `build.zig` or anything that can put a path, timestamp or hostname in a binary | `zig build check-reproducible` (blocking CI job `reproducible-build`; builds twice from different paths and byte-compares) |
