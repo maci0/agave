@@ -540,7 +540,7 @@ Transports are selected via `--transport auto|tcp|shm|nccl`:
 
 `TransportKind.rccl` (AMD's NCCL equivalent) is declared in `src/parallel/transport.zig` but has no CLI choice or implementation yet.
 
-UDP peer discovery (`src/parallel/peer_discovery.zig`) is a separate mechanism: rank 0 broadcasts a beacon on port 49460, other ranks discover it automatically on the same subnet.
+UDP peer discovery (`src/parallel/peer_discovery.zig`) is a separate mechanism: rank 0 broadcasts a beacon and other ranks discover it automatically on the same subnet. It has no port of its own and reuses the parallel group's TCP data-port base (UDP 49454/49455 for tensor parallelism, 49455/49456 for pipeline parallelism).
 
 ### NCCL Architecture
 

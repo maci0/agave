@@ -181,7 +181,7 @@ PP=2 with NCCL RoCE RDMA achieves superlinear throughput on the 0.8B model (40.2
 
 ## UDP Peer Discovery
 
-Automatic peer discovery via UDP broadcast on LAN. Rank 0 broadcasts a beacon on port 49460; other ranks respond with join messages. Eliminates manual `--peers` configuration for same-subnet deployments.
+Automatic peer discovery via UDP broadcast on LAN. Rank 0 broadcasts a beacon and other ranks respond with join messages. Discovery reuses the parallel group's TCP data-port base: rank 0 binds UDP `port` and broadcasts to UDP `port + 1`, where the workers bind, so tensor parallelism uses UDP 49454/49455 and pipeline parallelism UDP 49455/49456. Eliminates manual `--peers` configuration for same-subnet deployments.
 
 ```bash
 # Rank 0 broadcasts, rank 1 auto-discovers

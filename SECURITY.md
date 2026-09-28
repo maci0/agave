@@ -36,11 +36,20 @@ is specified in [docs/API.md](docs/API.md) and implemented in
 
 The API key covers the HTTP listener only (default TCP 49453). The
 tensor-parallel, pipeline-parallel, and disaggregated data ports (TCP
-49454/49455/49456, `src/main.zig:146,148,150`) and UDP peer discovery
-(49460/49461, `src/parallel/peer_discovery.zig:21`) are separate
-listeners with no authentication, so a deployment that exposes them must
-rely on network-level isolation. See T1 in
+49454/49455/49456, `src/main.zig:146,148,150`) and UDP peer discovery are
+separate listeners with no authentication, so a deployment that exposes
+them must rely on network-level isolation. See T1 in
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#risk-ranked-summary).
+
+Peer discovery has **no port of its own**: it reuses the parallel group's
+TCP data-port base. `discoverPeer` takes that same base from
+`src/main.zig` (`src/parallel/peer_discovery.zig:62`), and rank 0 binds
+UDP `port` while broadcasting the beacon to UDP `port + 1`, where workers
+bind (`src/parallel/peer_discovery.zig:99,111`). For tensor parallelism
+that is UDP 49454/49455; for pipeline parallelism, UDP 49455/49456. A
+firewall rule that allows 49454-49456 for TCP but denies UDP leaves
+discovery closed; a rule written against any other port number, including
+one quoted in older revisions of this file, does not.
 
 The key authenticates on 49453 but does not partition: it identifies no
 principal, so the KV cache, the prompt-prefix cache, the conversation
