@@ -12,6 +12,8 @@ Every accepted connection gets `req=<n>`, a monotonic server-assigned ID, before
 any log line for that connection is written. The same ID appears in:
 
 - the access log (`[HH:MM:SS] req=<n> POST /v1/chat/completions -> 200 (1234ms)`),
+  where a stream that failed or was cut short logs `500`, `504`, or `499`
+  instead of the `200` its headers already sent,
 - every `std.log` line from that handler thread,
 - the `X-Request-Id` response header, so a client report carries the ID,
 - scheduler logs, which use the HTTP ID passed to `RequestManager.enqueue`.
@@ -39,7 +41,7 @@ Rate and error signals (PromQL uses `rate()` or `increase()` over these):
 
 | Metric | Meaning |
 |---|---|
-| `agave_requests_total` | Requests accepted, including rejected and probe traffic. |
+| `agave_requests_total` | Requests accepted, including rejected ones. Excludes `/health`, `/ready`, `/metrics`, `/favicon.ico`, and CORS preflights, so a Prometheus scrape does not sit in the request rate. |
 | `agave_requests_completed_total` | Finished generation. |
 | `agave_requests_cancelled_total` | Client disconnect or server timeout mid-generation. |
 | `agave_requests_failed_total` | Server faults (5xx, inference failures). This is the numerator `/ready` uses. |
@@ -86,10 +88,18 @@ regardless of client mix.
 2. `agave_requests_failed_total` counts server faults only; compare with
    `agave_requests_client_error_total` to see whether the traffic is at fault.
 3. Grep the access log for `-> 5` to get the request IDs and their durations.
+   Streaming requests that ended badly show `-> 499` (client disconnected) or
+   `-> 504` (server-side deadline) rather than `-> 200`, because the SSE headers
+   were already sent when the body failed.
 4. Grep those IDs for the `std.log` line naming the failed dependency (tokenizer,
    prefill forward, scheduler enqueue, grammar setup).
 5. `agave_scheduler_errors_total` and `agave_kv_cache_demotions_*_total` separate
    inference faults from cache pressure.
+
+A panic aborts the process and prints `agave: panic req=<n>: <message>` before
+the stack trace, so the crash names the request that was in flight. `req=0`
+means the fault hit a thread with no request: startup, shutdown, or a background
+worker.
 
 Every path that increments `agave_requests_cancelled_total` emits a
 `client disconnected during streaming` or `prefill cancelled` line with the same

@@ -53,6 +53,27 @@ const stdout_file = Io.File.stdout();
 const stderr_file = Io.File.stderr();
 const stdin_file = Io.File.stdin();
 
+/// Longest panic line composed before the process dies.
+const panic_log_buf_size = 512;
+
+/// Buffer for the panic line when the formatted message does not fit; the
+/// request ID alone still names the request that took the process down.
+const panic_log_fallback = "agave: panic\n";
+
+/// Panic handler: name the request that was in flight on this thread, then hand
+/// off to the default handler for the message and stack trace. A panic aborts
+/// the process, so without the ID the access log holds a `req=<n>` line with no
+/// `-> ...` completion line and nothing ties the crash to a request. The ID is
+/// 0 outside a request (startup, shutdown, background workers).
+fn logRequestPanic(msg: []const u8, ra: ?usize) noreturn {
+    var buf: [panic_log_buf_size]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "agave: panic req={d}: {s}\n", .{ server.currentRequestId(), msg }) catch panic_log_fallback;
+    _ = std.posix.system.write(stderr_file.handle, line.ptr, line.len);
+    std.debug.defaultPanic(msg, ra);
+}
+
+pub const panic = std.debug.FullPanic(logRequestPanic);
+
 /// Last-resort base for extracted video frames when no env var resolves one.
 const default_tmp_base = "/tmp";
 /// Fixed-name fallback when the unique frame path does not fit its buffer.
