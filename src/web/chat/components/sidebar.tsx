@@ -7,6 +7,8 @@ import type { ConvRecord } from '../types';
 export type SidebarProps = {
   conversations: Array<ConvRecord> | null;
   loadError: string | null;
+  /** A turn is in flight: the mutating actions wait for it. */
+  streaming: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onNew: () => void;
@@ -33,8 +35,9 @@ const RetryState = ({ message, onRetry }: { message: string; onRetry: () => void
 );
 
 /** One row: the title button and the delete control beside it. */
-const ConversationRow = ({ conversation, onSelect, onDelete }: {
+const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
   conversation: ConvRecord;
+  streaming: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
 }) => {
@@ -52,6 +55,7 @@ const ConversationRow = ({ conversation, onSelect, onDelete }: {
         onClick={function () { onSelect(conversation.id); }}
         aria-label={label}
         aria-current={conversation.active === true ? 'true' : undefined}
+        disabled={streaming}
         className="flex min-w-0 flex-1 items-center rounded-sm text-start"
       >
         <span
@@ -64,6 +68,7 @@ const ConversationRow = ({ conversation, onSelect, onDelete }: {
       <button
         type="button"
         onClick={function () { onDelete(conversation.id); }}
+        disabled={streaming}
         aria-label={`Delete conversation: ${label}`}
         className="agave-reveal inline-flex size-11 shrink-0 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
       >
@@ -73,7 +78,7 @@ const ConversationRow = ({ conversation, onSelect, onDelete }: {
   );
 };
 
-const ConversationList = ({ conversations, loadError, onSelect, onDelete, onRetryLoad }: SidebarProps) => {
+const ConversationList = ({ conversations, loadError, streaming, onSelect, onDelete, onRetryLoad }: SidebarProps) => {
   if (loadError !== null) { return <RetryState message={loadError} onRetry={onRetryLoad} />; }
   if (conversations === null) { return <ListState>Loading conversations…</ListState>; }
   if (conversations.length === 0) {
@@ -92,6 +97,7 @@ const ConversationList = ({ conversations, loadError, onSelect, onDelete, onRetr
           <ConversationRow
             key={conversation.id}
             conversation={conversation}
+            streaming={streaming}
             onSelect={onSelect}
             onDelete={onDelete}
           />
@@ -113,7 +119,7 @@ export const Sidebar = (props: SidebarProps) => (
             <X className="size-5" aria-hidden="true" />
           </Button>
         ) : null}
-        <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} aria-label="New conversation">
+        <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
           + New
         </Button>
       </div>
