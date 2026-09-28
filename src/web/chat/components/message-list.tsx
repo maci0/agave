@@ -30,7 +30,7 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       onFocus={function () { setPaused(true); }}
       onBlur={function () { setPaused(false); }}
       className={cn(
-        'mx-auto my-2 flex w-full agave-measure items-center gap-2 rounded-lg border px-[18px] py-3 text-sm',
+        'mx-auto flex w-full agave-measure items-center gap-2 rounded-lg border px-[18px] py-3 text-sm shadow-lg',
         toast.level === 'error'
           ? 'border-destructive bg-destructive/10 text-destructive-foreground'
           : 'border-border-strong bg-primary/10 text-muted-foreground',
@@ -99,17 +99,33 @@ const ToastList = ({ toasts, onDismiss }: { toasts: Array<Toast>; onDismiss: (id
 
 /** Shown only while the reader is scrolled away from the newest turn. */
 const JumpToLatest = ({ onClick }: { onClick: () => void }) => (
-  <Button
-    type="button"
-    variant="solid"
-    size="sm"
-    onClick={onClick}
-    className="absolute bottom-4 start-1/2 -translate-x-1/2 shadow-lg"
-  >
+  <Button type="button" variant="solid" size="sm" onClick={onClick} className="shadow-lg">
     <ArrowDown className="size-4" aria-hidden="true" />
     Jump to latest
   </Button>
 );
+
+/** Toasts and the jump key ride above the transcript instead of inside it: a
+ *  reader who has scrolled up would otherwise never see a failure, and the log
+ *  used to yank them back to the bottom to make one visible. */
+const LogOverlay = ({ toasts, showJump, onJump, onDismiss }: {
+  toasts: Array<Toast>;
+  showJump: boolean;
+  onJump: () => void;
+  onDismiss: (id: number) => void;
+}) => {
+  if (toasts.length === 0 && !showJump) { return null; }
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 p-4">
+      {showJump ? <div className="pointer-events-auto"><JumpToLatest onClick={onJump} /></div> : null}
+      {toasts.length === 0 ? null : (
+        <div className="pointer-events-auto flex w-full flex-col">
+          <ToastList toasts={toasts} onDismiss={onDismiss} />
+        </div>
+      )}
+    </div>
+  );
+};
 
 /** Pixels from the bottom that still count as "following the stream". */
 const STICK_SLACK_PX = 80;
@@ -122,7 +138,7 @@ const [showJump, setShowJump] = useState(false);
 useEffect(function () {
   const log = ref.current;
   if (log && nearBottom.current) { log.scrollTop = log.scrollHeight; }
-}, [props.bubbles, props.toasts]);
+}, [props.bubbles]);
 const jumpToLatest = useCallback(function () {
   const log = ref.current;
   if (!log) { return; }
@@ -148,9 +164,13 @@ return (
       setShowJump(!nearBottom.current);
       props.onScroll?.(nearBottom.current);
     }}
-    className="agave-scroll flex flex-1 flex-col gap-6 overflow-y-auto px-6 pt-6 pb-2 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary max-drawer:px-4 max-drawer:pt-4"
+    className={cn(
+      'agave-scroll flex flex-1 flex-col gap-6 overflow-y-auto px-6 pt-6 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary max-drawer:px-4 max-drawer:pt-4',
+      // Room for the toast overlay, so it never covers the newest turn.
+      props.toasts.length > 0 ? 'pb-28' : 'pb-2',
+    )}
   >
-    {props.bubbles.length === 0 && props.toasts.length === 0 && !props.loading ? (
+    {props.bubbles.length === 0 && !props.loading ? (
       <TranscriptEmptyState vision={props.vision} onRunCommand={props.onRunCommand} />
     ) : null}
     {props.loading ? <div role="status" className="m-auto font-mono text-xs text-faint">Loading conversation…</div> : null}
@@ -166,9 +186,8 @@ return (
         />
       );
     })}
-    {props.toasts.length === 0 ? null : <ToastList toasts={props.toasts} onDismiss={props.onDismissToast} />}
   </div>
-  {showJump ? <JumpToLatest onClick={jumpToLatest} /> : null}
+  <LogOverlay toasts={props.toasts} showJump={showJump} onJump={jumpToLatest} onDismiss={props.onDismissToast} />
   </div>
 );
 });

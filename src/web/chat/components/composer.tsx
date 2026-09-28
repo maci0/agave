@@ -18,6 +18,9 @@ type ComposerProps = {
   pendingImage: string | null;
   onImageFile: (file: File, label: string) => void;
   onRemoveImage: () => void;
+  /** Reports a drop the composer cannot act on, so a file the reader let go of
+   *  comes back with a reason instead of vanishing. */
+  onDropRejected: (message: string) => void;
   onClearSystem: () => void;
   /** Tokens per second, or null when idle. */
   tps: number | null;
@@ -232,10 +235,22 @@ export const Composer = (props: ComposerProps) => {
         form.setDragOver(false);
       }}
       onDrop={function (event) {
+        // Every drop is swallowed here, usable or not: the browser's default
+        // Would navigate the tab away from the conversation.
         event.preventDefault();
         form.setDragOver(false);
-        const [dropped] = event.dataTransfer.files;
-        if (dropped.type.startsWith('image/')) { props.onImageFile(dropped, 'Image dropped'); }
+        const { files } = event.dataTransfer;
+        if (files.length === 0) { return; }
+        const [dropped] = files;
+        if (!props.vision) {
+          props.onDropRejected('This model cannot view images. Send the file as text instead.');
+          return;
+        }
+        if (!dropped.type.startsWith('image/')) {
+          props.onDropRejected('Only images can be attached here. JPEG, PNG, GIF, or WebP.');
+          return;
+        }
+        props.onImageFile(dropped, 'Image dropped');
       }}
       className={cn(
         'relative z-10 border-t border-border bg-card px-6 pt-4 pb-5 transition-colors max-drawer:p-4',

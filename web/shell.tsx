@@ -101,7 +101,25 @@ const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
   </>
 );
 
-const ModelBar = ({ loader }: { loader: ModelLoader }) => (
+/** The model bar. A loaded model needs only its name here: the URL field, the
+ *  load button and the drop zone stay three rows tall on a phone, so they fold
+ *  away behind "Change model" once there is a model to prompt. */
+const ModelBar = ({ loader }: { loader: ModelLoader }) => {
+  const [editing, setEditing] = useState(false);
+  const name = loader.modelName ?? 'Model loaded';
+  if (loader.ready && !editing) {
+    return (
+      <div
+        role="region"
+        aria-label="Loaded model"
+        className="flex items-center gap-2 bg-card px-8 py-2 max-drawer:px-4"
+      >
+        <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint" title={name}>{name}</span>
+        <Button type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
+      </div>
+    );
+  }
+  return (
   <div
     role="region"
     aria-label="Model loading"
@@ -135,11 +153,15 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => (
       {loader.loading ? 'Loading…' : 'Load model'}
     </Button>
     <ModelDropZone loader={loader} />
+    {loader.ready ? (
+      <Button type="button" size="lg" onClick={function () { setEditing(false); }}>Done</Button>
+    ) : null}
     {loader.urlError === null ? null : (
       <div id="url-error" role="alert" className="w-full text-sm text-destructive-foreground">{loader.urlError}</div>
     )}
   </div>
-);
+  );
+};
 
 /** Before the first prompt. Same anchor as the serve UI's empty state, drawn by
  *  the same component, so the two surfaces read as one product rather than a

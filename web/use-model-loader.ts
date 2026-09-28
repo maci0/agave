@@ -22,6 +22,8 @@ export type ModelLoader = {
   loading: boolean;
   url: string;
   urlError: string | null;
+  /** File name of the model that loaded, or null before the first one does. */
+  modelName: string | null;
   busy: boolean;
   /** True while a file hovers the drop zone, for its highlighted state. */
   dragOver: boolean;
@@ -53,6 +55,13 @@ const isHttpUrl = (candidate: string): boolean => {
   } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- an unparseable URL is the error path, reported by the caller
     return false;
   }
+};
+
+/** The file name at the end of a model URL, so a download and a dropped file
+ *  read the same in the bar that names the loaded model. */
+const nameFromUrl = (candidate: string): string => {
+  const tail = new URL(candidate).pathname.split('/').pop() ?? '';
+  return tail === '' ? candidate : tail;
 };
 
 type LoadState = {
@@ -99,6 +108,9 @@ const useModelSources = (
 ) => {
   const initAndLoad = useEngineInit(engine, state, onReport, focusPrompt);
   const [url, setUrl] = useState('');
+  // Set only after the engine accepts the bytes, so the bar never names a model
+  // That failed to load: a stale name would read as a working model.
+  const [modelName, setModelName] = useState<string | null>(null);
 
   const loadFromUrl = useCallback(function () {
     const target = url.trim();
@@ -119,6 +131,7 @@ const useModelSources = (
       });
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
       await engine.loadModel(modelBytes);
+      setModelName(nameFromUrl(target));
     }, true);
   }, [engine, failUrl, initAndLoad, state, url]);
 
@@ -132,10 +145,11 @@ const useModelSources = (
       const modelBytes = await file.arrayBuffer();
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
       await engine.loadModel(modelBytes);
+      setModelName(file.name);
     }, false);
   }, [engine, initAndLoad, onReport, state]);
 
-  return { url, setUrl, loadFromUrl, loadFromBuffer };
+  return { url, setUrl, modelName, loadFromUrl, loadFromBuffer };
 };
 
 export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoader => {
@@ -177,6 +191,7 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
     loading,
     url: sources.url,
     urlError,
+    modelName: sources.modelName,
     busy: loading,
     dragOver,
     onDragOver,
