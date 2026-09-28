@@ -45,9 +45,7 @@ def rope(
     q_out = q.clone()
     k_out = k.clone()
 
-    freqs = torch.exp(
-        -math.log(theta) * torch.arange(0, rope_dim, 2, dtype=torch.float32) / rope_dim
-    )
+    freqs = torch.exp(-math.log(theta) * torch.arange(0, rope_dim, 2, dtype=torch.float32) / rope_dim)
     angles = pos * freqs  # [half]
 
     cos_vals = torch.cos(angles)
@@ -168,9 +166,7 @@ def gemv_f32(x: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     return w @ x
 
 
-def swiglu_fused(
-    x: torch.Tensor, w_gate: torch.Tensor, w_up: torch.Tensor
-) -> torch.Tensor:
+def swiglu_fused(x: torch.Tensor, w_gate: torch.Tensor, w_up: torch.Tensor) -> torch.Tensor:
     """Fused SwiGLU: silu(W_gate @ x) * (W_up @ x)"""
     gate = silu(w_gate @ x)
     up = w_up @ x
@@ -262,8 +258,11 @@ def conv1d_causal(x: torch.Tensor, weight: torch.Tensor, state: torch.Tensor) ->
 
 
 def deltanet_recurrence(
-    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-    beta: torch.Tensor, state: torch.Tensor,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    beta: torch.Tensor,
+    state: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     DeltaNet linear attention recurrence (single step).
@@ -335,10 +334,10 @@ def fp8_e4m3_dequant(data: torch.Tensor) -> torch.Tensor:
         mantissa = bits & 0x7
         if exp == 0:
             # Subnormal
-            result[i] = sign * (mantissa / 8.0) * (2.0 ** -6)
+            result[i] = sign * (mantissa / 8.0) * (2.0**-6)
         elif exp == 15:
             # NaN (E4M3 has no inf)
-            result[i] = float('nan') if mantissa != 0 else sign * 448.0
+            result[i] = float("nan") if mantissa != 0 else sign * 448.0
         else:
             result[i] = sign * (1.0 + mantissa / 8.0) * (2.0 ** (exp - 7))
     return result
@@ -360,9 +359,9 @@ def fp8_e5m2_dequant(data: torch.Tensor) -> torch.Tensor:
         mantissa = bits & 0x3
         if exp == 0:
             # Subnormal
-            result[i] = sign * (mantissa / 4.0) * (2.0 ** -14)
+            result[i] = sign * (mantissa / 4.0) * (2.0**-14)
         elif exp == 31:
-            result[i] = float('inf') * sign if mantissa == 0 else float('nan')
+            result[i] = float("inf") * sign if mantissa == 0 else float("nan")
         else:
             result[i] = sign * (1.0 + mantissa / 4.0) * (2.0 ** (exp - 15))
     return result
@@ -379,8 +378,7 @@ def nvfp4_dequant(data: torch.Tensor, scales: torch.Tensor, tensor_scale: float 
     E2M1 nibble format: 1 sign, 2 exponent, 1 mantissa.
     """
     # E2M1 lookup table (4 bits → f32)
-    e2m1_table = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-                  0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
+    e2m1_table = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
 
     n_bytes = data.shape[0]
     result = torch.zeros(n_bytes * 2)
@@ -392,8 +390,8 @@ def nvfp4_dequant(data: torch.Tensor, scales: torch.Tensor, tensor_scale: float 
         hi = (byte_val >> 4) & 0xF
         block_idx = i // 8  # 16 elements = 8 bytes per block
         block_scale = fp8_scales[block_idx].item() if block_idx < len(fp8_scales) else 1.0
-        result[2*i] = e2m1_table[lo] * block_scale * tensor_scale
-        result[2*i+1] = e2m1_table[hi] * block_scale * tensor_scale
+        result[2 * i] = e2m1_table[lo] * block_scale * tensor_scale
+        result[2 * i + 1] = e2m1_table[hi] * block_scale * tensor_scale
 
     return result
 

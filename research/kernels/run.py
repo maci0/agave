@@ -100,8 +100,7 @@ def cmd_coverage(args: list[str]):
     ref_path = Path(__file__).parent / "reference.py"
     ref_source = ref_path.read_text()
     ref_tree = ast.parse(ref_source)
-    ref_fns = {node.name for node in ast.walk(ref_tree)
-               if isinstance(node, ast.FunctionDef)}
+    ref_fns = {node.name for node in ast.walk(ref_tree) if isinstance(node, ast.FunctionDef)}
 
     # Scan Zig files for @embedFile containing golden/
     zig_golden_kernels: set[str] = set()
@@ -110,7 +109,7 @@ def cmd_coverage(args: list[str]):
         for zig_file in src_dir.rglob("*.zig"):
             content = zig_file.read_text()
             for kernel in KERNELS.values():
-                if f'golden/{kernel.golden_prefix}_' in content:
+                if f"golden/{kernel.golden_prefix}_" in content:
                     zig_golden_kernels.add(kernel.name)
 
     # Report
@@ -129,11 +128,12 @@ def cmd_coverage(args: list[str]):
         golden_count += has_golden
         zig_count += has_zig
 
-        print(f"  {name:<22} {'yes' if has_ref else 'no':<12} "
-              f"{'yes' if has_golden else 'no':<10} {'yes' if has_zig else 'no':<10}")
+        print(
+            f"  {name:<22} {'yes' if has_ref else 'no':<12} "
+            f"{'yes' if has_golden else 'no':<10} {'yes' if has_zig else 'no':<10}"
+        )
 
-    print(f"\n  Coverage: {ref_count}/{total} reference, "
-          f"{golden_count}/{total} golden, {zig_count}/{total} zig tests")
+    print(f"\n  Coverage: {ref_count}/{total} reference, {golden_count}/{total} golden, {zig_count}/{total} zig tests")
 
 
 def delegate(script: str, args: list[str]):
@@ -143,17 +143,17 @@ def delegate(script: str, args: list[str]):
 
 
 COMMANDS = {
-    "info":     "Show kernel details",
-    "list":     "List all kernels",
-    "diff":     "Show changed kernels",
-    "golden":   "Generate golden test data",
-    "bench":    "Run benchmarks (micro by default, --e2e for end-to-end)",
-    "tune":     "Single optimization cycle (build + benchmark + log)",
-    "grid":     "Grid search over a parameter",
-    "auto":     "Autonomous optimization loop (hill-climb or bayesian)",
-    "staged":   "Manage staged kernel improvements",
+    "info": "Show kernel details",
+    "list": "List all kernels",
+    "diff": "Show changed kernels",
+    "golden": "Generate golden test data",
+    "bench": "Run benchmarks (micro by default, --e2e for end-to-end)",
+    "tune": "Single optimization cycle (build + benchmark + log)",
+    "grid": "Grid search over a parameter",
+    "auto": "Autonomous optimization loop (hill-climb or bayesian)",
+    "staged": "Manage staged kernel improvements",
     "coverage": "Report reference/golden/Zig test coverage",
-    "status":   "Show optimization history",
+    "status": "Show optimization history",
 }
 
 
@@ -178,6 +178,7 @@ def main():
         delegate("generate_golden.py", rest)
     elif cmd in ("bench", "tune", "grid", "auto", "staged", "status"):
         from autotune import main as autotune_main
+
         autotune_main(cmd, rest)
     elif cmd == "coverage":
         cmd_coverage(rest)
@@ -190,6 +191,7 @@ def main():
     else:
         # Maybe it's a kernel name, show info
         from registry import find_kernels
+
         if find_kernels(cmd):
             cmd_info([cmd, *rest])
         else:

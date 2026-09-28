@@ -35,8 +35,7 @@ from gguf_io import Gguf, load, type_name, write_gguf
 # `blk.N.ffn_gate_exps.weight` and the `model.layers.N.mlp.experts.*` spelling
 # both name routed experts. Anything mentioning a shared expert is excluded:
 # shared experts see every token, so upgrading them costs size everywhere.
-EXPERT_PATTERNS = ("ffn_gate_exp", "ffn_up_exp", "ffn_down_exp", ".experts.",
-                   "gate_proj", "up_proj", "down_proj")
+EXPERT_PATTERNS = ("ffn_gate_exp", "ffn_up_exp", "ffn_down_exp", ".experts.", "gate_proj", "up_proj", "down_proj")
 LAYER_RE = re.compile(r"(?:blk\.|layers\.)(\d+)")
 
 
@@ -76,21 +75,19 @@ def splice(base: Gguf, donor: Gguf, layers: set[int]):
             if dt is None:
                 continue  # not an expert tensor in the donor: keep the base bytes
             if dt["dims"] != t["dims"]:
-                raise ValueError(
-                    f"{name}: donor dims {dt['dims']} differ from base {t['dims']}")
+                raise ValueError(f"{name}: donor dims {dt['dims']} differ from base {t['dims']}")
             source = donor
-        tensors.append({"name": t["name"], "dims": dt["dims"] if dt else t["dims"],
-                        "type": dt["type"] if dt else t["type"]})
+        tensors.append(
+            {"name": t["name"], "dims": dt["dims"] if dt else t["dims"], "type": dt["type"] if dt else t["type"]}
+        )
         payloads.append(source.blob(dt or t))
         if dt is not None:
-            spliced.append((name, type_name(t["type"]), type_name(dt["type"]),
-                            len(payloads[-1])))
+            spliced.append((name, type_name(t["type"]), type_name(dt["type"]), len(payloads[-1])))
     return tensors, payloads, spliced
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", required=True, type=Path, help="Base GGUF (lower quant, kept for most tensors)")
     parser.add_argument("--donor", required=True, type=Path, help="Donor GGUF (higher quant, experts copied from here)")
     parser.add_argument("--layers", required=True, help="Layer range(s) to splice, e.g. '37-42' or '0-2,40-42'")
@@ -131,8 +128,7 @@ def main() -> int:
     tmp = args.out.with_name(args.out.name + ".tmp")
     tmp.write_bytes(out)
     os.replace(tmp, args.out)
-    print(f"\nwrote {args.out} ({len(out) / 2**30:.2f} GiB): "
-          f"{len(spliced)} of {len(tensors)} tensors spliced")
+    print(f"\nwrote {args.out} ({len(out) / 2**30:.2f} GiB): {len(spliced)} of {len(tensors)} tensors spliced")
     return 0
 
 

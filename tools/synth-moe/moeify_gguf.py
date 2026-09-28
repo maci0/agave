@@ -37,8 +37,7 @@ from gguf_io import T_U32, load, write_gguf
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--in", dest="src", required=True, type=Path)
     ap.add_argument("--out", dest="dst", required=True, type=Path)
     ap.add_argument("--experts", type=int, default=4)
@@ -83,9 +82,12 @@ def main() -> int:
     for t in tensors:
         name = t["name"].decode()
         parts = name.split(".")
-        is_ffn = (len(parts) == 4 and parts[0] == "blk"
-                  and parts[2] in ("ffn_gate", "ffn_up", "ffn_down")
-                  and parts[3] == "weight")
+        is_ffn = (
+            len(parts) == 4
+            and parts[0] == "blk"
+            and parts[2] in ("ffn_gate", "ffn_up", "ffn_down")
+            and parts[3] == "weight"
+        )
         if not is_ffn:
             out_tensors.append(dict(t))
             payloads.append(blob(t))
@@ -93,16 +95,22 @@ def main() -> int:
 
         layer = int(parts[1])
         layers_seen.add(layer)
-        out_tensors.append({"name": f"blk.{layer}.{parts[2]}_exps.weight".encode(),
-                            "dims": t["dims"] + [args.experts], "type": t["type"]})
+        out_tensors.append(
+            {
+                "name": f"blk.{layer}.{parts[2]}_exps.weight".encode(),
+                "dims": t["dims"] + [args.experts],
+                "type": t["type"],
+            }
+        )
         payloads.append(blob(t) * args.experts)
 
     # One router per layer that had an FFN. Uniform weights: with identical
     # experts the routing cannot change the result, which is the point.
     for layer in sorted(layers_seen):
         router = struct.pack("<f", 0.0) * (n_embd * args.experts)
-        out_tensors.append({"name": f"blk.{layer}.ffn_gate_inp.weight".encode(),
-                            "dims": [n_embd, args.experts], "type": 0})
+        out_tensors.append(
+            {"name": f"blk.{layer}.ffn_gate_inp.weight".encode(), "dims": [n_embd, args.experts], "type": 0}
+        )
         payloads.append(router)
 
     # expert_feed_forward_length is not optional in practice: without it the
@@ -110,12 +118,14 @@ def main() -> int:
     # wrong width.
     ff_dim = next((v for key, t, v in kv if key == f"{arch}.feed_forward_length".encode()), None)
     if ff_dim is None:
-        print("error: no feed_forward_length to derive expert_feed_forward_length from",
-              file=sys.stderr)
+        print("error: no feed_forward_length to derive expert_feed_forward_length from", file=sys.stderr)
         return 2
 
-    drop = {f"{arch}.expert_count".encode(), f"{arch}.expert_used_count".encode(),
-            f"{arch}.expert_feed_forward_length".encode()}
+    drop = {
+        f"{arch}.expert_count".encode(),
+        f"{arch}.expert_used_count".encode(),
+        f"{arch}.expert_feed_forward_length".encode(),
+    }
     kv = [(k, t, v) for (k, t, v) in kv if k not in drop]
     kv.append((f"{arch}.expert_count".encode(), T_U32, args.experts))
     kv.append((f"{arch}.expert_used_count".encode(), T_U32, args.experts_used))
@@ -127,9 +137,11 @@ def main() -> int:
     tmp = args.dst.with_name(args.dst.name + ".tmp")
     tmp.write_bytes(body)
     os.replace(tmp, args.dst)
-    print(f"wrote {args.dst} ({len(body) / 2**20:.1f} MB): "
-          f"{len(out_tensors)} tensors, {args.experts} experts "
-          f"({args.experts_used} used), {len(layers_seen)} MoE layers")
+    print(
+        f"wrote {args.dst} ({len(body) / 2**20:.1f} MB): "
+        f"{len(out_tensors)} tensors, {args.experts} experts "
+        f"({args.experts_used} used), {len(layers_seen)} MoE layers"
+    )
     return 0
 
 

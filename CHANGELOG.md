@@ -95,6 +95,18 @@ must still appear under **Changed** or **Breaking** below. See
   delete a message at all.
 
 ### Changed
+- The Python gate runs `ruff format --check` alongside `ruff check`, and the
+  tree is formatted to match, so formatting drift fails `zig build ci` instead
+  of accumulating. Run `ruff format` on a file you touch. `ruff.toml` also
+  enables the tidy-imports, type-checking-import, debugger-call, pygrep-hook
+  and naive-datetime groups, all of which the tree already passed.
+- The stdlib unittest suites under `scripts/` and `tools/` run in CI, through
+  the new blocking `python-tests` job and `zig build test-python`
+  (`scripts/test-python.sh`). Nothing ran them before, so the
+  `collect_continuations` suite had drifted against the https-only endpoint
+  check and failed on two of its four cases; those cases now use an https
+  endpoint, a new one covers the scheme rejection, and an HTTP error body is
+  closed instead of left to the garbage collector.
 - A conversation store carrying the same conversation id twice keeps the first
   record and drops the later one. The id is the store's primary key, so the
   second record was unreachable behind the first and the next save would have

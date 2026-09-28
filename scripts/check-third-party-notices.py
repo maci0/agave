@@ -59,8 +59,9 @@ def read_lock(root: Path) -> dict[str, dict[str, dict[str, str]]]:
                 # A bun alias entry (["alias@npm:name@version", ...]) resolves
                 # to a package the notices file would have to name differently.
                 # The tree has none today, so fail rather than skip one.
-                sys.exit(f"check-third-party-notices: bun.lock entry {key} is an alias, "
-                         "which this script does not resolve")
+                sys.exit(
+                    f"check-third-party-notices: bun.lock entry {key} is an alias, which this script does not resolve"
+                )
             # "<parent>/<name>" with "bundled": true is a dependency npm ships
             # inside the parent tarball. The same name@version has its own
             # top-level entry, so walking the top-level map already covers it.
@@ -109,8 +110,10 @@ def main() -> int:
     root = find_root()
     notices = root / "THIRD_PARTY_NOTICES.md"
     if not notices.is_file():
-        sys.exit("check-third-party-notices: THIRD_PARTY_NOTICES.md is missing; the committed "
-                 "web bundles carry no license headers of their own")
+        sys.exit(
+            "check-third-party-notices: THIRD_PARTY_NOTICES.md is missing; the committed "
+            "web bundles carry no license headers of their own"
+        )
 
     closure = production_closure(root)
     listed = listed_entries(notices)

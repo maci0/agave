@@ -11,27 +11,58 @@ from pathlib import Path
 GGUF_MAGIC = b"GGUF"
 
 # GGUF metadata value type tags.
-(T_U8, T_I8, T_U16, T_I16, T_U32, T_I32, T_F32, T_BOOL, T_STR, T_ARR, T_U64,
- T_I64, T_F64) = range(13)
+(T_U8, T_I8, T_U16, T_I16, T_U32, T_I32, T_F32, T_BOOL, T_STR, T_ARR, T_U64, T_I64, T_F64) = range(13)
 
-_FIXED = {T_U8: "<B", T_I8: "<b", T_U16: "<H", T_I16: "<h", T_U32: "<I",
-          T_I32: "<i", T_F32: "<f", T_BOOL: "<?", T_U64: "<Q", T_I64: "<q",
-          T_F64: "<d"}
+_FIXED = {
+    T_U8: "<B",
+    T_I8: "<b",
+    T_U16: "<H",
+    T_I16: "<h",
+    T_U32: "<I",
+    T_I32: "<i",
+    T_F32: "<f",
+    T_BOOL: "<?",
+    T_U64: "<Q",
+    T_I64: "<q",
+    T_F64: "<d",
+}
 
 # ggml type -> (block size in elements, bytes per block). Quant types whose
 # block size this table gets wrong would silently mis-size every copy, so an
 # unknown type raises rather than being guessed at.
 GGML_TYPES = {
-    0: ("F32", 1, 4), 1: ("F16", 1, 2), 2: ("Q4_0", 32, 18), 3: ("Q4_1", 32, 20),
-    6: ("Q5_0", 32, 22), 7: ("Q5_1", 32, 24), 8: ("Q8_0", 32, 34),
-    9: ("Q8_1", 32, 36), 10: ("Q2_K", 256, 84), 11: ("Q3_K", 256, 110),
-    12: ("Q4_K", 256, 144), 13: ("Q5_K", 256, 176), 14: ("Q6_K", 256, 210),
-    15: ("Q8_K", 256, 292), 16: ("IQ2_XXS", 256, 66), 17: ("IQ2_XS", 256, 74),
-    18: ("IQ3_XXS", 256, 98), 19: ("IQ1_S", 256, 50), 20: ("IQ4_NL", 32, 18),
-    21: ("IQ3_S", 256, 110), 22: ("IQ2_S", 256, 82), 23: ("IQ4_XS", 256, 136),
-    24: ("I8", 1, 1), 25: ("I16", 1, 2), 26: ("I32", 1, 4), 27: ("I64", 1, 8),
-    28: ("F64", 1, 8), 29: ("IQ1_M", 256, 56), 30: ("BF16", 1, 2),
-    31: ("TQ1_0", 256, 54), 32: ("TQ2_0", 256, 66), 33: ("MXFP4", 32, 17),
+    0: ("F32", 1, 4),
+    1: ("F16", 1, 2),
+    2: ("Q4_0", 32, 18),
+    3: ("Q4_1", 32, 20),
+    6: ("Q5_0", 32, 22),
+    7: ("Q5_1", 32, 24),
+    8: ("Q8_0", 32, 34),
+    9: ("Q8_1", 32, 36),
+    10: ("Q2_K", 256, 84),
+    11: ("Q3_K", 256, 110),
+    12: ("Q4_K", 256, 144),
+    13: ("Q5_K", 256, 176),
+    14: ("Q6_K", 256, 210),
+    15: ("Q8_K", 256, 292),
+    16: ("IQ2_XXS", 256, 66),
+    17: ("IQ2_XS", 256, 74),
+    18: ("IQ3_XXS", 256, 98),
+    19: ("IQ1_S", 256, 50),
+    20: ("IQ4_NL", 32, 18),
+    21: ("IQ3_S", 256, 110),
+    22: ("IQ2_S", 256, 82),
+    23: ("IQ4_XS", 256, 136),
+    24: ("I8", 1, 1),
+    25: ("I16", 1, 2),
+    26: ("I32", 1, 4),
+    27: ("I64", 1, 8),
+    28: ("F64", 1, 8),
+    29: ("IQ1_M", 256, 56),
+    30: ("BF16", 1, 2),
+    31: ("TQ1_0", 256, 54),
+    32: ("TQ2_0", 256, 66),
+    33: ("MXFP4", 32, 17),
 }
 
 DEFAULT_ALIGNMENT = 32
@@ -42,7 +73,7 @@ class Reader:
         self.b, self.i = buf, 0
 
     def take(self, n: int) -> bytes:
-        out = self.b[self.i:self.i + n]
+        out = self.b[self.i : self.i + n]
         if len(out) != n:
             raise ValueError("truncated GGUF")
         self.i += n
@@ -130,11 +161,9 @@ class Gguf:
             nd = r.u32()
             dims = [r.u64() for _ in range(nd)]
             ttype = r.u32()
-            self.tensors.append({"name": name, "dims": dims, "type": ttype,
-                                 "offset": r.u64()})
+            self.tensors.append({"name": name, "dims": dims, "type": ttype, "offset": r.u64()})
             if ttype not in GGML_TYPES:
-                raise ValueError(
-                    f"{path}: tensor {name.decode()} has unsupported ggml type {ttype}")
+                raise ValueError(f"{path}: tensor {name.decode()} has unsupported ggml type {ttype}")
 
         self.alignment = DEFAULT_ALIGNMENT
         for key, _t, v in self.kv:
@@ -150,7 +179,7 @@ class Gguf:
 
     def blob(self, t) -> bytes:
         start = self.data_start + t["offset"]
-        return self.raw[start:start + tensor_bytes(t["dims"], t["type"])]
+        return self.raw[start : start + tensor_bytes(t["dims"], t["type"])]
 
 
 def load(path: Path) -> Gguf:

@@ -138,17 +138,36 @@ ARCH_PATTERNS: dict[str, list[str]] = {
 # Quant detection from filename (order matters - check longer patterns first)
 QUANT_PATTERNS = [
     # MLX/QAT SafeTensors formats
-    "qat-4bit", "qat-6bit",
-    "MLX-4bit", "MLX-5bit", "MLX-6bit",
+    "qat-4bit",
+    "qat-6bit",
+    "MLX-4bit",
+    "MLX-5bit",
+    "MLX-6bit",
     # NVFP4/MXFP4
-    "NVFP4", "MXFP4",
+    "NVFP4",
+    "MXFP4",
     # Standard float
-    "BF16", "F16", "F32",
+    "BF16",
+    "F16",
+    "F32",
     # GGUF integer quants (longer patterns first)
-    "IQ4_XS", "IQ4_NL",
-    "Q8_0", "Q6_K", "Q5_K_M", "Q5_K", "Q4_K_M", "Q4_K_L", "Q4_K",
-    "Q4_0", "Q4_1", "Q3_K_L", "Q3_K_M", "Q3_K_S", "Q3_K",
-    "Q2_K", "Q5_0",
+    "IQ4_XS",
+    "IQ4_NL",
+    "Q8_0",
+    "Q6_K",
+    "Q5_K_M",
+    "Q5_K",
+    "Q4_K_M",
+    "Q4_K_L",
+    "Q4_K",
+    "Q4_0",
+    "Q4_1",
+    "Q3_K_L",
+    "Q3_K_M",
+    "Q3_K_S",
+    "Q3_K",
+    "Q2_K",
+    "Q5_0",
     # FP8
     "FP8",
 ]
@@ -171,6 +190,7 @@ console = Console()
 @dataclass
 class KvConfig:
     """KV cache quantization configuration for a test run."""
+
     type_k: str  # Key cache type (e.g., "turbo4", "q8_0", "f16")
     type_v: str  # Value cache type
 
@@ -209,6 +229,7 @@ class KvConfig:
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ModelInfo:
     path: Path
@@ -236,6 +257,7 @@ class ModelInfo:
 @dataclass
 class ModelInfoResult:
     """Result from --model-info --json validation."""
+
     model: str
     arch: str
     quant: str
@@ -270,6 +292,7 @@ class RunResult:
 @dataclass
 class RepeatStats:
     """Aggregate stats from multiple runs."""
+
     runs: list[RunResult] = field(default_factory=list)
 
     @property
@@ -328,6 +351,7 @@ class BenchResult:
 # ---------------------------------------------------------------------------
 # Model discovery
 # ---------------------------------------------------------------------------
+
 
 def detect_arch(name: str) -> str | None:
     """Detect model architecture from file/directory name."""
@@ -425,6 +449,7 @@ def discover_models(search_dirs: list[Path]) -> list[ModelInfo]:
 # Backend detection
 # ---------------------------------------------------------------------------
 
+
 def detect_available_backends() -> list[str]:
     system = platform.system()
     candidates = PLATFORM_BACKENDS.get(system, ["cpu"])
@@ -485,8 +510,10 @@ def check_coherence(text: str) -> str:
         most_common_word, most_common_wcount = word_counts.most_common(1)[0]
         # Exclude common English words from this check
         common_words = {"the", "a", "an", "is", "of", "to", "and", "in", "for", "it", "i"}
-        if (most_common_word.lower() not in common_words
-                and most_common_wcount / len(words) > COHERENCE_MAX_WORD_REPEAT_RATIO):
+        if (
+            most_common_word.lower() not in common_words
+            and most_common_wcount / len(words) > COHERENCE_MAX_WORD_REPEAT_RATIO
+        ):
             return f"word '{most_common_word}' repeated ({most_common_wcount}/{len(words)} words)"
 
         # Check unique word ratio (pathological loops have very low uniqueness)
@@ -514,6 +541,7 @@ def check_coherence(text: str) -> str:
 # Running agave
 # ---------------------------------------------------------------------------
 
+
 def run_model_info(
     model: ModelInfo,
     backend: str,
@@ -523,13 +551,17 @@ def run_model_info(
     cmd = [
         str(AGAVE_BIN),
         str(model.path),
-        "--backend", backend,
+        "--backend",
+        backend,
         "--json",
         "--model-info",
     ]
 
     result = ModelInfoResult(
-        model=model.name, arch=model.arch, quant=model.quant, status="error",
+        model=model.name,
+        arch=model.arch,
+        quant=model.quant,
+        status="error",
     )
 
     try:
@@ -587,8 +619,10 @@ def run_inference(
     cmd = [
         str(AGAVE_BIN),
         str(model.path),
-        "--backend", backend,
-        "--max-tokens", str(max_tokens),
+        "--backend",
+        backend,
+        "--max-tokens",
+        str(max_tokens),
         "--json",
     ]
     if kv_config and not kv_config.is_default:
@@ -753,6 +787,7 @@ def _parse_bench_output(output: str) -> dict:
 @dataclass
 class SmokeResult:
     """Result from a quick 1-token smoke test."""
+
     model: str
     arch: str
     quant: str
@@ -784,8 +819,10 @@ def run_smoke(
     cmd = [
         str(AGAVE_BIN),
         str(model.path),
-        "--backend", backend,
-        "--max-tokens", "4",
+        "--backend",
+        backend,
+        "--max-tokens",
+        "4",
         "--json",
         "-q",
     ]
@@ -796,8 +833,13 @@ def run_smoke(
     cmd.append("Hello")
 
     result = SmokeResult(
-        model=model.name, arch=model.arch, quant=model.quant, backend=backend,
-        status="error", kv_type_k=kv_type_k, kv_type_v=kv_type_v,
+        model=model.name,
+        arch=model.arch,
+        quant=model.quant,
+        backend=backend,
+        status="error",
+        kv_type_k=kv_type_k,
+        kv_type_v=kv_type_v,
     )
 
     try:
@@ -872,6 +914,7 @@ def run_zig_tests(timeout: int) -> tuple[str, int]:
 # Golden reference system
 # ---------------------------------------------------------------------------
 
+
 def golden_path(model: ModelInfo, backend: str) -> Path:
     """Path for a golden reference file."""
     return GOLDEN_DIR / f"{model.golden_key}_{backend}.json"
@@ -928,9 +971,13 @@ def check_golden(result: RunResult, model: ModelInfo) -> str:
 # Profiling
 # ---------------------------------------------------------------------------
 
+
 def profile_with_instruments(
-    model: ModelInfo, backend: str, prompt: str,
-    max_tokens: int, timeout: int,
+    model: ModelInfo,
+    backend: str,
+    prompt: str,
+    max_tokens: int,
+    timeout: int,
 ) -> Path | None:
     if platform.system() != "Darwin" or not shutil.which("xctrace"):
         console.print("  [yellow]Instruments profiling only available on macOS with Xcode[/]")
@@ -944,14 +991,22 @@ def profile_with_instruments(
     trace_path = trace_dir / f"{model.arch}_{model.quant}_{backend}_{time.time_ns()}.trace"
 
     cmd = [
-        "xctrace", "record",
-        "--template", "Time Profiler",
-        "--output", str(trace_path),
-        "--launch", "--",
-        str(AGAVE_BIN), str(model.path),
-        "--backend", backend,
-        "--max-tokens", str(max_tokens),
-        "-q", prompt,
+        "xctrace",
+        "record",
+        "--template",
+        "Time Profiler",
+        "--output",
+        str(trace_path),
+        "--launch",
+        "--",
+        str(AGAVE_BIN),
+        str(model.path),
+        "--backend",
+        backend,
+        "--max-tokens",
+        str(max_tokens),
+        "-q",
+        prompt,
     ]
 
     try:
@@ -969,8 +1024,10 @@ def profile_with_instruments(
 # Regression comparison
 # ---------------------------------------------------------------------------
 
+
 def compare_to_baseline(
-    results: list[RunResult], baseline_path: Path,
+    results: list[RunResult],
+    baseline_path: Path,
     regression_threshold: float = 0.05,
 ) -> list[dict]:
     if not baseline_path.exists():
@@ -997,11 +1054,16 @@ def compare_to_baseline(
         delta = (r.tokens_per_sec - base_tps) / base_tps
 
         if delta < -regression_threshold:
-            regressions.append({
-                "arch": r.arch, "quant": r.quant, "backend": r.backend,
-                "baseline_tps": base_tps, "current_tps": r.tokens_per_sec,
-                "delta_pct": delta * 100,
-            })
+            regressions.append(
+                {
+                    "arch": r.arch,
+                    "quant": r.quant,
+                    "backend": r.backend,
+                    "baseline_tps": base_tps,
+                    "current_tps": r.tokens_per_sec,
+                    "delta_pct": delta * 100,
+                }
+            )
 
     return regressions
 
@@ -1009,6 +1071,7 @@ def compare_to_baseline(
 # ---------------------------------------------------------------------------
 # Rich output
 # ---------------------------------------------------------------------------
+
 
 def _truncate(s: str, max_len: int) -> str:
     return s[:max_len] + "..." if len(s) > max_len else s
@@ -1080,7 +1143,8 @@ def print_model_info_table(results: list[ModelInfoResult]) -> None:
             params_str = _format_params(n_params) if n_params else "[dim]-[/]"
             table.add_row(
                 status_markup(r.status),
-                md.get("arch", r.arch), r.quant,
+                md.get("arch", r.arch),
+                r.quant,
                 fmt_ms(r.load_ms),
                 str(md.get("layers", "")),
                 str(md.get("embed", "")),
@@ -1092,8 +1156,12 @@ def print_model_info_table(results: list[ModelInfoResult]) -> None:
             err = _truncate(r.error_message, 40) if r.error_message else ""
             table.add_row(
                 status_markup(r.status),
-                r.arch, r.quant,
-                "[dim]-[/]", "[dim]-[/]", "[dim]-[/]", "[dim]-[/]",
+                r.arch,
+                r.quant,
+                "[dim]-[/]",
+                "[dim]-[/]",
+                "[dim]-[/]",
+                "[dim]-[/]",
                 "[dim]-[/]",
                 f"[dim]{err}[/]" if err else "[dim]-[/]",
             )
@@ -1147,31 +1215,42 @@ def print_inference_table(results: list[RunResult], show_golden: bool = False) -
         if r.status == "pass":
             row = [
                 status_markup(r.status),
-                r.arch, r.quant, r.backend,
+                r.arch,
+                r.quant,
+                r.backend,
             ]
             if has_kv:
                 row.append(kv_label or "[dim]f16[/]")
-            row.extend([
-                f"{r.model_size_mb:.0f} MB",
-                fmt_ms(r.load_time_ms),
-                fmt_ms(r.time_to_first_token_ms),
-                fmt_tps(r.tokens_per_sec),
-                str(r.tokens_generated),
-                fmt_ms(r.total_time_ms),
-            ])
+            row.extend(
+                [
+                    f"{r.model_size_mb:.0f} MB",
+                    fmt_ms(r.load_time_ms),
+                    fmt_ms(r.time_to_first_token_ms),
+                    fmt_tps(r.tokens_per_sec),
+                    str(r.tokens_generated),
+                    fmt_ms(r.total_time_ms),
+                ]
+            )
         else:
             err = _truncate(r.error_message, 40) if r.error_message else ""
             row = [
                 status_markup(r.status),
-                r.arch, r.quant, r.backend,
+                r.arch,
+                r.quant,
+                r.backend,
             ]
             if has_kv:
                 row.append(kv_label or "[dim]f16[/]")
-            row.extend([
-                f"{r.model_size_mb:.0f} MB",
-                "[dim]-[/]", "[dim]-[/]", "[dim]-[/]", "[dim]-[/]",
-                f"[dim]{err}[/]" if err else "[dim]-[/]",
-            ])
+            row.extend(
+                [
+                    f"{r.model_size_mb:.0f} MB",
+                    "[dim]-[/]",
+                    "[dim]-[/]",
+                    "[dim]-[/]",
+                    "[dim]-[/]",
+                    f"[dim]{err}[/]" if err else "[dim]-[/]",
+                ]
+            )
         if show_golden:
             row.append(correctness_markup(r.correctness))
         table.add_row(*row)
@@ -1208,8 +1287,12 @@ def print_repeat_table(repeat_results: dict[tuple, RepeatStats]) -> None:
         avg = stats.tps_avg
         cv = (stats.tps_stddev / avg * 100) if avg > 0 else 0
         table.add_row(
-            arch, quant, backend, kv_label,
-            str(stats.n), str(n_pass),
+            arch,
+            quant,
+            backend,
+            kv_label,
+            str(stats.n),
+            str(n_pass),
             fmt_tps(avg),
             fmt_tps(stats.tps_min),
             fmt_tps(stats.tps_max),
@@ -1334,12 +1417,14 @@ def print_summary(
             )
 
     console.print()
-    console.print(Panel(
-        "\n".join(summary_lines),
-        title="Summary",
-        border_style="bold",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            "\n".join(summary_lines),
+            title="Summary",
+            border_style="bold",
+            padding=(0, 2),
+        )
+    )
 
     if regressions:
         reg_lines = []
@@ -1349,17 +1434,20 @@ def print_summary(
                 f"{reg['baseline_tps']:.1f} -> {reg['current_tps']:.1f} tok/s "
                 f"([bold red]{reg['delta_pct']:+.1f}%[/])"
             )
-        console.print(Panel(
-            "\n".join(reg_lines),
-            title=f"Regressions Detected ({len(regressions)})",
-            border_style="bold red",
-            padding=(0, 2),
-        ))
+        console.print(
+            Panel(
+                "\n".join(reg_lines),
+                title=f"Regressions Detected ({len(regressions)})",
+                border_style="bold red",
+                padding=(0, 2),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
+
 
 def results_to_json(
     results: list[RunResult],
@@ -1378,17 +1466,26 @@ def results_to_json(
     }
     if model_info_results:
         data["model_info_results"] = [
-            {"model": r.model, "arch": r.arch, "quant": r.quant,
-             "status": r.status, "load_ms": r.load_ms,
-             "error_message": r.error_message, "metadata": r.metadata}
+            {
+                "model": r.model,
+                "arch": r.arch,
+                "quant": r.quant,
+                "status": r.status,
+                "load_ms": r.load_ms,
+                "error_message": r.error_message,
+                "metadata": r.metadata,
+            }
             for r in model_info_results
         ]
     if repeat_results:
         data["repeat_stats"] = {
             f"{k[0]}_{k[1]}_{k[2]}_{k[3]}": {
-                "n": v.n, "pass": len(v.passing),
-                "tps_avg": v.tps_avg, "tps_min": v.tps_min,
-                "tps_max": v.tps_max, "tps_stddev": v.tps_stddev,
+                "n": v.n,
+                "pass": len(v.passing),
+                "tps_avg": v.tps_avg,
+                "tps_min": v.tps_min,
+                "tps_max": v.tps_max,
+                "tps_stddev": v.tps_stddev,
             }
             for k, v in repeat_results.items()
         }
@@ -1398,19 +1495,41 @@ def results_to_json(
 def results_to_csv(results: list[RunResult]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        "model", "arch", "quant", "backend", "status",
-        "load_ms", "ttft_ms", "tok_per_s", "tokens", "total_ms",
-        "size_mb", "correctness", "error",
-    ])
+    writer.writerow(
+        [
+            "model",
+            "arch",
+            "quant",
+            "backend",
+            "status",
+            "load_ms",
+            "ttft_ms",
+            "tok_per_s",
+            "tokens",
+            "total_ms",
+            "size_mb",
+            "correctness",
+            "error",
+        ]
+    )
     for r in results:
-        writer.writerow([
-            r.model, r.arch, r.quant, r.backend, r.status,
-            f"{r.load_time_ms:.1f}", f"{r.time_to_first_token_ms:.1f}",
-            f"{r.tokens_per_sec:.1f}", r.tokens_generated,
-            f"{r.total_time_ms:.1f}", f"{r.model_size_mb:.1f}",
-            r.correctness, r.error_message,
-        ])
+        writer.writerow(
+            [
+                r.model,
+                r.arch,
+                r.quant,
+                r.backend,
+                r.status,
+                f"{r.load_time_ms:.1f}",
+                f"{r.time_to_first_token_ms:.1f}",
+                f"{r.tokens_per_sec:.1f}",
+                r.tokens_generated,
+                f"{r.total_time_ms:.1f}",
+                f"{r.model_size_mb:.1f}",
+                r.correctness,
+                r.error_message,
+            ]
+        )
     return buf.getvalue()
 
 
@@ -1440,6 +1559,7 @@ def results_to_markdown(results: list[RunResult]) -> str:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Agave Inference Engine - Test Harness",
@@ -1447,75 +1567,73 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     filt = p.add_argument_group("Filtering")
-    filt.add_argument("--backend", nargs="+", metavar="BE",
-                      help="Backends to test (e.g., metal cpu vulkan cuda)")
-    filt.add_argument("--arch", nargs="+", metavar="ARCH",
-                      help="Model architectures (e.g., gemma3 qwen35)")
-    filt.add_argument("--quant", nargs="+", metavar="Q",
-                      help="Quantization formats (e.g., Q4_0 Q8_0 BF16)")
-    filt.add_argument("--model", nargs="+", metavar="PATH",
-                      help="Specific model files/dirs (overrides discovery)")
+    filt.add_argument("--backend", nargs="+", metavar="BE", help="Backends to test (e.g., metal cpu vulkan cuda)")
+    filt.add_argument("--arch", nargs="+", metavar="ARCH", help="Model architectures (e.g., gemma3 qwen35)")
+    filt.add_argument("--quant", nargs="+", metavar="Q", help="Quantization formats (e.g., Q4_0 Q8_0 BF16)")
+    filt.add_argument("--model", nargs="+", metavar="PATH", help="Specific model files/dirs (overrides discovery)")
 
     sel = p.add_argument_group("Test selection")
-    sel.add_argument("--bench-only", action="store_true",
-                     help="Only synthetic benchmarks, skip inference")
-    sel.add_argument("--correctness-only", action="store_true",
-                     help="Only inference, skip benchmarks")
-    sel.add_argument("--model-info-only", action="store_true",
-                     help="Only validate model metadata (fast, no inference)")
-    sel.add_argument("--no-smoke", action="store_true",
-                     help="Skip smoke tests")
-    sel.add_argument("--zig-test", action="store_true",
-                     help="Also run zig build test (unit tests)")
-    sel.add_argument("--no-bench", action="store_true",
-                     help="Skip synthetic benchmarks")
-    sel.add_argument("--kv-type", nargs="+", metavar="TYPE",
-                     help=f"KV cache types to test (e.g., turbo4 q8_0). Available: {', '.join(KV_TYPES)}")
-    sel.add_argument("--kv-asym", nargs="+", metavar="K:V",
-                     help="Asymmetric K/V type combos (e.g., q8_0:turbo4 f16:turbo3)")
+    sel.add_argument("--bench-only", action="store_true", help="Only synthetic benchmarks, skip inference")
+    sel.add_argument("--correctness-only", action="store_true", help="Only inference, skip benchmarks")
+    sel.add_argument("--model-info-only", action="store_true", help="Only validate model metadata (fast, no inference)")
+    sel.add_argument("--no-smoke", action="store_true", help="Skip smoke tests")
+    sel.add_argument("--zig-test", action="store_true", help="Also run zig build test (unit tests)")
+    sel.add_argument("--no-bench", action="store_true", help="Skip synthetic benchmarks")
+    sel.add_argument(
+        "--kv-type",
+        nargs="+",
+        metavar="TYPE",
+        help=f"KV cache types to test (e.g., turbo4 q8_0). Available: {', '.join(KV_TYPES)}",
+    )
+    sel.add_argument(
+        "--kv-asym", nargs="+", metavar="K:V", help="Asymmetric K/V type combos (e.g., q8_0:turbo4 f16:turbo3)"
+    )
 
     cfg = p.add_argument_group("Configuration")
-    cfg.add_argument("--model-dir", "--models-dir", type=Path, default=DEFAULT_WEIGHTS_DIR,
-                     dest="model_dir",
-                     help=f"Model search directory (default: {DEFAULT_WEIGHTS_DIR})")
-    cfg.add_argument("--prompt", default=DEFAULT_PROMPT,
-                     help="Prompt text for inference tests")
-    cfg.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
-                     help=f"Max tokens to generate (default: {DEFAULT_MAX_TOKENS})")
-    cfg.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
-                     help=f"Timeout per run in seconds (default: {DEFAULT_TIMEOUT})")
-    cfg.add_argument("--binary", type=Path, default=AGAVE_BIN,
-                     help=f"Path to agave binary (default: {AGAVE_BIN})")
-    cfg.add_argument("--repeat", type=int, default=1, metavar="N",
-                     help="Number of repeat runs per model/backend (default: 1)")
+    cfg.add_argument(
+        "--model-dir",
+        "--models-dir",
+        type=Path,
+        default=DEFAULT_WEIGHTS_DIR,
+        dest="model_dir",
+        help=f"Model search directory (default: {DEFAULT_WEIGHTS_DIR})",
+    )
+    cfg.add_argument("--prompt", default=DEFAULT_PROMPT, help="Prompt text for inference tests")
+    cfg.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"Max tokens to generate (default: {DEFAULT_MAX_TOKENS})",
+    )
+    cfg.add_argument(
+        "--timeout", type=int, default=DEFAULT_TIMEOUT, help=f"Timeout per run in seconds (default: {DEFAULT_TIMEOUT})"
+    )
+    cfg.add_argument("--binary", type=Path, default=AGAVE_BIN, help=f"Path to agave binary (default: {AGAVE_BIN})")
+    cfg.add_argument(
+        "--repeat", type=int, default=1, metavar="N", help="Number of repeat runs per model/backend (default: 1)"
+    )
 
     gold = p.add_argument_group("Golden references")
-    gold.add_argument("--generate-golden", action="store_true",
-                      help="Save passing outputs as golden references")
-    gold.add_argument("--check-golden", action="store_true",
-                      help="Validate outputs against golden references")
+    gold.add_argument("--generate-golden", action="store_true", help="Save passing outputs as golden references")
+    gold.add_argument("--check-golden", action="store_true", help="Validate outputs against golden references")
 
     out = p.add_argument_group("Output")
-    out.add_argument("--output", choices=["table", "json", "csv", "markdown"],
-                     default="table", help="Output format (default: table)")
-    out.add_argument("--save", type=Path, metavar="PATH",
-                     help="Save results to JSON file")
-    out.add_argument("--baseline", type=Path, metavar="PATH",
-                     help="Compare against baseline JSON for regressions")
-    out.add_argument("--regression-threshold", type=float, default=0.05,
-                     help="Regression threshold fraction (default: 0.05 = 5%%)")
+    out.add_argument(
+        "--output", choices=["table", "json", "csv", "markdown"], default="table", help="Output format (default: table)"
+    )
+    out.add_argument("--save", type=Path, metavar="PATH", help="Save results to JSON file")
+    out.add_argument("--baseline", type=Path, metavar="PATH", help="Compare against baseline JSON for regressions")
+    out.add_argument(
+        "--regression-threshold", type=float, default=0.05, help="Regression threshold fraction (default: 0.05 = 5%%)"
+    )
 
     prof = p.add_argument_group("Profiling")
-    prof.add_argument("--profile", choices=["instruments"],
-                      help="Enable profiling (instruments = macOS Time Profiler)")
+    prof.add_argument("--profile", choices=["instruments"], help="Enable profiling (instruments = macOS Time Profiler)")
 
     misc = p.add_argument_group("Misc")
-    misc.add_argument("--dry-run", action="store_true",
-                      help="Show what would run without running it")
-    misc.add_argument("--verbose", action="store_true",
-                      help="Show generated text from each run")
-    misc.add_argument("--fail-fast", action="store_true",
-                      help="Stop on first failure")
+    misc.add_argument("--dry-run", action="store_true", help="Show what would run without running it")
+    misc.add_argument("--verbose", action="store_true", help="Show generated text from each run")
+    misc.add_argument("--fail-fast", action="store_true", help="Stop on first failure")
 
     return p
 
@@ -1534,12 +1652,13 @@ def main() -> int:
 
     # Header
     console.print()
-    console.print(Panel.fit(
-        f"[bold]Platform:[/] {platform.system()} {platform.machine()}\n"
-        f"[bold]Binary:[/]   {AGAVE_BIN}",
-        title="[bold cyan]Agave Test Harness[/]",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Platform:[/] {platform.system()} {platform.machine()}\n[bold]Binary:[/]   {AGAVE_BIN}",
+            title="[bold cyan]Agave Test Harness[/]",
+            border_style="cyan",
+        )
+    )
 
     if not AGAVE_BIN.exists():
         console.print(f"\n[bold red]Binary not found:[/] {AGAVE_BIN}")
@@ -1632,13 +1751,17 @@ def main() -> int:
     if do_model_info:
         console.print(f"Model info:      [bold]{len(models)}[/] models (metadata validation)")
     if do_smoke:
-        console.print(f"Smoke tests:     [bold]{len(test_matrix)}[/] ({len(models)} models x {len(backends)} backends" +
-                      (f" x {len(kv_configs)} KV configs)" if len(kv_configs) > 1 else ")"))
+        console.print(
+            f"Smoke tests:     [bold]{len(test_matrix)}[/] ({len(models)} models x {len(backends)} backends"
+            + (f" x {len(kv_configs)} KV configs)" if len(kv_configs) > 1 else ")")
+        )
     if do_inference:
         run_label = f"{total_runs}" if args.repeat > 1 else f"{len(test_matrix)}"
-        console.print(f"Inference tests: [bold]{run_label}[/] ({len(models)} models x {len(backends)} backends" +
-                      (f" x {len(kv_configs)} KV configs" if len(kv_configs) > 1 else "") +
-                      (f" x {args.repeat} repeats)" if args.repeat > 1 else ")"))
+        console.print(
+            f"Inference tests: [bold]{run_label}[/] ({len(models)} models x {len(backends)} backends"
+            + (f" x {len(kv_configs)} KV configs" if len(kv_configs) > 1 else "")
+            + (f" x {args.repeat} repeats)" if args.repeat > 1 else ")")
+        )
     if do_bench:
         console.print(f"Synthetic benchmarks: [bold]{len(backends)}[/] backends")
     if len(kv_configs) > 1:
@@ -1724,11 +1847,18 @@ def main() -> int:
                 print_model_info_table(model_info_results)
                 print_summary([], [], model_info_results, [], golden_stats, elapsed)
             elif args.output == "json":
-                data = results_to_json([], [], model_info_results, {}, {
-                    "timestamp": utc_timestamp(),
-                    "platform": platform.system(), "machine": platform.machine(),
-                    "elapsed_s": round(elapsed, 1),
-                })
+                data = results_to_json(
+                    [],
+                    [],
+                    model_info_results,
+                    {},
+                    {
+                        "timestamp": utc_timestamp(),
+                        "platform": platform.system(),
+                        "machine": platform.machine(),
+                        "elapsed_s": round(elapsed, 1),
+                    },
+                )
                 console.print_json(json.dumps(data, indent=2))
             any_fail = any(r.status in ("fail", "error") for r in model_info_results)
             return 1 if any_fail else 0
@@ -1743,8 +1873,7 @@ def main() -> int:
             kv_label = f" [{kv.label}]" if not kv.is_default else ""
             label = f"{model.short_name} on {backend}{kv_label}"
             with console.status(f"  [bold]{label}...[/]"):
-                sr = run_smoke(model, backend, smoke_timeout,
-                               kv_type_k=kv.type_k, kv_type_v=kv.type_v)
+                sr = run_smoke(model, backend, smoke_timeout, kv_type_k=kv.type_k, kv_type_v=kv.type_v)
             smoke_results.append(sr)
 
             if sr.status == "pass":
@@ -1771,8 +1900,10 @@ def main() -> int:
         if smoke_crash > 0 or smoke_fail > 0:
             console.print()
             parts = [f"[bold]Smoke: {smoke_pass}/{len(smoke_results)} pass[/bold]"]
-            if smoke_crash: parts.append(f"[bold red]{smoke_crash} CRASH[/]")
-            if smoke_fail: parts.append(f"[bold red]{smoke_fail} FAIL[/]")
+            if smoke_crash:
+                parts.append(f"[bold red]{smoke_crash} CRASH[/]")
+            if smoke_fail:
+                parts.append(f"[bold red]{smoke_fail} FAIL[/]")
             console.print("  " + ", ".join(parts))
 
     # --- Synthetic benchmarks ---
@@ -1815,7 +1946,11 @@ def main() -> int:
                     progress.update(task, description=f"[bold]{label}[/]")
 
                     result = run_inference(
-                        model, backend, args.prompt, args.max_tokens, args.timeout,
+                        model,
+                        backend,
+                        args.prompt,
+                        args.max_tokens,
+                        args.timeout,
                         kv_config=kv,
                     )
 
@@ -1856,7 +1991,11 @@ def main() -> int:
                     if args.profile == "instruments" and result.status == "pass" and run_idx == 0:
                         with console.status("  Profiling with Instruments..."):
                             trace = profile_with_instruments(
-                                model, backend, args.prompt, args.max_tokens, args.timeout,
+                                model,
+                                backend,
+                                args.prompt,
+                                args.max_tokens,
+                                args.timeout,
                             )
                         if trace:
                             console.print(f"    [dim]Trace: {trace}[/]")
@@ -1882,7 +2021,8 @@ def main() -> int:
                 best_results.append(best)
         regressions = compare_to_baseline(
             best_results if best_results else inference_results,
-            args.baseline, args.regression_threshold,
+            args.baseline,
+            args.regression_threshold,
         )
 
     # --- Output ---

@@ -73,9 +73,7 @@ def shorten(symbol: str) -> str:
 
 def accumulate_time_profile(data: str, keep: str) -> tuple[dict[str, int], dict[str, int]]:
     """Sum self and total nanoseconds per symbol, keeping only stacks matching `keep`."""
-    weight_vals: dict[str, int] = {
-        m.group(1): int(m.group(2)) for m in WEIGHT_DEF_RE.finditer(data)
-    }
+    weight_vals: dict[str, int] = {m.group(1): int(m.group(2)) for m in WEIGHT_DEF_RE.finditer(data)}
 
     frame_names: dict[str, str] = {}
     for match in FRAME_TAG_RE.finditer(data):
@@ -136,19 +134,13 @@ def report_hot(args: argparse.Namespace) -> int:
     grand = sum(self_ns.values())
     ranked = sorted(self_ns.items(), key=lambda item: -item[1])[: args.top]
 
-    print(
-        f"\nTop {len(ranked)} symbols  "
-        f"({grand / 1e9:.2f}s sampled, {len(self_ns)} leaf symbols):"
-    )
+    print(f"\nTop {len(ranked)} symbols  ({grand / 1e9:.2f}s sampled, {len(self_ns)} leaf symbols):")
     print(f"  {'Rank':>4}  {'Self%':>6}  {'Self ms':>8}  {'Tot%':>5}  Symbol")
     print(f"  {'-' * 4}  {'-' * 6}  {'-' * 8}  {'-' * 5}  {'-' * MAX_SYMBOL_WIDTH}")
     for rank, (symbol, nanos) in enumerate(ranked, 1):
         self_pct = 100 * nanos / grand if grand else 0
         total_pct = 100 * total_ns.get(symbol, nanos) / grand if grand else 0
-        print(
-            f"  {rank:>4}  {self_pct:>6.2f}%  {nanos / 1e6:>8.1f}  "
-            f"{total_pct:>5.1f}%  {shorten(symbol)}"
-        )
+        print(f"  {rank:>4}  {self_pct:>6.2f}%  {nanos / 1e6:>8.1f}  {total_pct:>5.1f}%  {shorten(symbol)}")
     if args.filter:
         print(f"\n  (filtered: '{args.filter}')")
     return 0
@@ -160,12 +152,8 @@ def report_gpu(args: argparse.Namespace) -> int:
         return 1
     data = data.replace("&amp;", "&")
 
-    duration_vals: dict[str, int] = {
-        m.group(1): int(m.group(2)) for m in DURATION_DEF_RE.finditer(data)
-    }
-    label_vals: dict[str, str] = {
-        m.group(1): m.group(2) for m in LABEL_DEF_RE.finditer(data)
-    }
+    duration_vals: dict[str, int] = {m.group(1): int(m.group(2)) for m in DURATION_DEF_RE.finditer(data)}
+    label_vals: dict[str, str] = {m.group(1): m.group(2) for m in LABEL_DEF_RE.finditer(data)}
 
     kernel_ns: dict[str, int] = collections.defaultdict(int)
     kernel_count: collections.Counter[str] = collections.Counter()

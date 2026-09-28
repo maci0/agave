@@ -78,13 +78,13 @@ def main():
     # Collect activations
     good_acts = []
     for i, prompt in enumerate(good_prompts):
-        print(f"  good [{i+1}/{len(good_prompts)}]: {prompt[:60]}...")
+        print(f"  good [{i + 1}/{len(good_prompts)}]: {prompt[:60]}...")
         acts = get_activations(args.agave, args.model, prompt, args.n_layers, args.n_embd)
         good_acts.append(acts)
 
     bad_acts = []
     for i, prompt in enumerate(bad_prompts):
-        print(f"  bad [{i+1}/{len(bad_prompts)}]: {prompt[:60]}...")
+        print(f"  bad [{i + 1}/{len(bad_prompts)}]: {prompt[:60]}...")
         acts = get_activations(args.agave, args.model, prompt, args.n_layers, args.n_embd)
         bad_acts.append(acts)
 
@@ -93,8 +93,10 @@ def main():
 
     direction = build_direction(good_arr, bad_arr)  # [n_layers, n_embd]
     print(f"Direction shape: {direction.shape}")
-    print(f"Per-layer norms: min={np.linalg.norm(direction, axis=1).min():.4f}, "
-          f"max={np.linalg.norm(direction, axis=1).max():.4f}")
+    print(
+        f"Per-layer norms: min={np.linalg.norm(direction, axis=1).min():.4f}, "
+        f"max={np.linalg.norm(direction, axis=1).max():.4f}"
+    )
 
     # Write flat f32 file
     out_path = Path(args.out)

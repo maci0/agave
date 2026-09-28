@@ -69,7 +69,8 @@ def collect_one(endpoint, model, prompt, api_key, max_tokens):
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:  # noqa: S310 - checked above
             data = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="replace")
+        with e:
+            detail = e.read().decode(errors="replace")
         raise RuntimeError(f"HTTP {e.code}: {detail}") from e
 
     choice = data["choices"][0]
@@ -159,11 +160,12 @@ def main() -> int:
             order.append(prompt)
     results = load_results(out_path)
     todo = [p for p in order if not is_done(results, p, args.model)]
-    print(f"Collecting {len(todo)} continuations from {args.model} "
-          f"({len(order) - len(todo)} already collected, skipped)")
+    print(
+        f"Collecting {len(todo)} continuations from {args.model} ({len(order) - len(todo)} already collected, skipped)"
+    )
 
     for i, prompt in enumerate(todo):
-        print(f"  [{i+1}/{len(todo)}] {prompt[:60]}...")
+        print(f"  [{i + 1}/{len(todo)}] {prompt[:60]}...")
         try:
             results[prompt] = collect_one(args.endpoint, args.model, prompt, api_key, args.max_tokens)
         except Exception as e:

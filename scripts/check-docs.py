@@ -96,9 +96,7 @@ def check_doc_line_refs() -> list[str]:
             count = target.read_text(encoding="utf-8", errors="replace").count("\n") + 1
             for num in filter(None, (m.group(2), m.group(3))):
                 if int(num) > count:
-                    errors.append(
-                        f"{rel}:{line}: line ref past EOF -> {ref}:{num} (file has {count} lines)"
-                    )
+                    errors.append(f"{rel}:{line}: line ref past EOF -> {ref}:{num} (file has {count} lines)")
     return errors
 
 
@@ -145,9 +143,7 @@ def check_kernel_constants() -> list[str]:
             errors.append(f"docs/KERNELS.md: missing documented {name} count (code has {code_n})")
             continue
         if dm.group(1) != code_n:
-            errors.append(
-                f"docs/KERNELS.md: {name} count {dm.group(1)} != code {code_n} in {fname}"
-            )
+            errors.append(f"docs/KERNELS.md: {name} count {dm.group(1)} != code {code_n} in {fname}")
     return errors
 
 
@@ -168,38 +164,25 @@ def check_version_consistency() -> list[str]:
     if zigversion_path.exists():
         file_zig = zigversion_path.read_text(encoding="utf-8", errors="replace").strip()
         if file_zig != min_zig:
-            errors.append(
-                f".zigversion: {file_zig!r} != build.zig.zon minimum_zig_version {min_zig!r}"
-            )
+            errors.append(f".zigversion: {file_zig!r} != build.zig.zon minimum_zig_version {min_zig!r}")
     else:
         errors.append(".zigversion: missing (must match build.zig.zon .minimum_zig_version)")
 
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8", errors="replace")
     if f"Product version is **{product}**" not in changelog:
-        errors.append(
-            f"CHANGELOG.md: must state Product version is **{product}** "
-            "(match build.zig.zon .version)"
-        )
+        errors.append(f"CHANGELOG.md: must state Product version is **{product}** (match build.zig.zon .version)")
     if "## [Unreleased]" not in changelog:
         errors.append("CHANGELOG.md: missing ## [Unreleased] section")
 
     api = (ROOT / "docs" / "API.md").read_text(encoding="utf-8", errors="replace")
     if f"Product version **{product}**" not in api:
-        errors.append(
-            f"docs/API.md: must state Product version **{product}** "
-            "(match build.zig.zon .version)"
-        )
+        errors.append(f"docs/API.md: must state Product version **{product}** (match build.zig.zon .version)")
     if f'"agave-v{product}"' not in api and f"agave-v{product}" not in api:
-        errors.append(
-            f"docs/API.md: system_fingerprint examples should use agave-v{product}"
-        )
+        errors.append(f"docs/API.md: system_fingerprint examples should use agave-v{product}")
 
     contrib = (ROOT / "docs" / "CONTRIBUTING.md").read_text(encoding="utf-8", errors="replace")
     if f"Product version: **{product}**" not in contrib:
-        errors.append(
-            f"docs/CONTRIBUTING.md: must state Product version: **{product}** "
-            "(match build.zig.zon .version)"
-        )
+        errors.append(f"docs/CONTRIBUTING.md: must state Product version: **{product}** (match build.zig.zon .version)")
 
     # Reader-facing pages that restate the product version. Nothing in the build
     # or the binary reads them, so they drift silently at the next release bump.
@@ -218,9 +201,7 @@ def check_version_consistency() -> list[str]:
     # Leftover "until the next tagged product release bumps `0.1.0`" after a 0.2.0 cut.
     for bump in re.findall(r"bumps `([0-9]+\.[0-9]+\.[0-9]+)`", changelog):
         if bump != product:
-            errors.append(
-                f"CHANGELOG.md: 'bumps `{bump}`' is stale (product version is {product})"
-            )
+            errors.append(f"CHANGELOG.md: 'bumps `{bump}`' is stale (product version is {product})")
 
     errors.extend(_check_release_tags(changelog, product))
     return errors
@@ -255,9 +236,7 @@ def _check_release_tags(changelog: str, product: str) -> list[str]:
 
     for version in re.findall(r"^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - \d{4}-\d{2}-\d{2}$", changelog, re.M):
         if f"\n[{version}]:" not in changelog:
-            errors.append(
-                f"CHANGELOG.md: released section [{version}] has no [{version}]: link definition"
-            )
+            errors.append(f"CHANGELOG.md: released section [{version}] has no [{version}]: link definition")
 
     # The Unreleased section diffs against the last cut, so its base tag has to
     # be the current product version.
@@ -276,8 +255,7 @@ def _check_release_tags(changelog: str, product: str) -> list[str]:
         for tag in tags:
             if tag != expected and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+.*", tag):
                 errors.append(
-                    f"HEAD is tagged {tag} but build.zig.zon .version is {product} "
-                    f"(a release tag must be v{expected})"
+                    f"HEAD is tagged {tag} but build.zig.zon .version is {product} (a release tag must be v{expected})"
                 )
 
     return errors
@@ -319,9 +297,7 @@ def check_cli_flags_in_readme() -> list[str]:
     errors: list[str] = []
     for flag in flags:
         if f"--{flag}" not in block:
-            errors.append(
-                f"README.md CLI Options: missing --{flag} (declared in src/main.zig cli_specs)"
-            )
+            errors.append(f"README.md CLI Options: missing --{flag} (declared in src/main.zig cli_specs)")
     return errors
 
 
@@ -341,13 +317,9 @@ def check_model_enable_flags() -> list[str]:
             errors.append(f"README.md: missing build option `{name}`")
         zig_flag = f"-D{name}="
         if zig_flag not in dockerfile:
-            errors.append(
-                f"Dockerfile: missing {zig_flag} (model defaults on; image/compose cannot disable it)"
-            )
+            errors.append(f"Dockerfile: missing {zig_flag} (model defaults on; image/compose cannot disable it)")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8", errors="replace")
-    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8", errors="replace"
-    )
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8", errors="replace")
     # Local Compose / CI docker-build / README "minimal" claim "CPU + Gemma3
     # only"; any new model ENABLE_* must be turned off there or the image
     # silently compiles it in (Dockerfile ARG defaults are true).
@@ -376,10 +348,7 @@ def check_model_enable_flags() -> list[str]:
                 "(docker-build is 'single model'; Dockerfile ARG defaults on)"
             )
         if f"{arg}=false" not in readme:
-            errors.append(
-                f"README.md: missing --build-arg {arg}=false "
-                "(Minimal build: single model + CPU only)"
-            )
+            errors.append(f"README.md: missing --build-arg {arg}=false (Minimal build: single model + CPU only)")
     return errors
 
 
@@ -398,23 +367,14 @@ def check_debian_snapshot_pin() -> list[str]:
     from_day = days[0]
     errors: list[str] = []
     if any(d != from_day for d in days) or any(s != from_day for s in snaps):
-        errors.append(
-            f"Dockerfile: debian FROM days {days} and DEBIAN_SNAPSHOT days {snaps} "
-            f"must all equal {from_day}"
-        )
-    expected = int(
-        datetime.strptime(from_day, "%Y%m%d").replace(tzinfo=UTC).timestamp()
-    )
+        errors.append(f"Dockerfile: debian FROM days {days} and DEBIAN_SNAPSHOT days {snaps} must all equal {from_day}")
+    expected = int(datetime.strptime(from_day, "%Y%m%d").replace(tzinfo=UTC).timestamp())
     got = int(epoch_m.group(1))
     if got != expected:
-        errors.append(
-            f"Dockerfile: SOURCE_DATE_EPOCH {got} != midnight UTC of {from_day} ({expected})"
-        )
+        errors.append(f"Dockerfile: SOURCE_DATE_EPOCH {got} != midnight UTC of {from_day} ({expected})")
     epochs = re.findall(r"SOURCE_DATE_EPOCH=(\d+)", text)
     if epochs and any(e != str(got) for e in epochs):
-        errors.append(
-            f"Dockerfile: SOURCE_DATE_EPOCH values disagree: {epochs} (expected {got})"
-        )
+        errors.append(f"Dockerfile: SOURCE_DATE_EPOCH values disagree: {epochs} (expected {got})")
     return errors
 
 
@@ -428,38 +388,23 @@ def check_docker_packaging() -> list[str]:
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8", errors="replace")
 
     if 'org.opencontainers.image.licenses="GPL-3.0-or-later"' not in dockerfile:
-        errors.append(
-            'Dockerfile: OCI licenses label must be "GPL-3.0-or-later" '
-            "(LICENSE is GPLv3 or later)"
-        )
+        errors.append('Dockerfile: OCI licenses label must be "GPL-3.0-or-later" (LICENSE is GPLv3 or later)')
     if "LICENSE /usr/share/doc/agave/copyright" not in dockerfile:
-        errors.append(
-            "Dockerfile: must COPY LICENSE to /usr/share/doc/agave/copyright"
-        )
+        errors.append("Dockerfile: must COPY LICENSE to /usr/share/doc/agave/copyright")
     if "HOME=/home/agave" not in dockerfile:
-        errors.append(
-            "Dockerfile: must set ENV HOME=/home/agave for non-Docker OCI runtimes"
-        )
+        errors.append("Dockerfile: must set ENV HOME=/home/agave for non-Docker OCI runtimes")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8", errors="replace")
     if "HOME: /home/agave" not in compose:
-        errors.append(
-            "docker-compose.yml: must set HOME: /home/agave (same as the image ENV)"
-        )
+        errors.append("docker-compose.yml: must set HOME: /home/agave (same as the image ENV)")
 
     for i, raw in enumerate(dockerignore.splitlines(), 1):
         line = raw.split("#", 1)[0].strip()
         if line in {"LICENSE", "/LICENSE", "**/LICENSE"}:
-            errors.append(
-                f".dockerignore:{i}: excludes LICENSE "
-                "(runtime image must ship the GPL notice)"
-            )
+            errors.append(f".dockerignore:{i}: excludes LICENSE (runtime image must ship the GPL notice)")
 
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8", errors="replace")
     if "(at your option) any later version" not in license_text:
-        errors.append(
-            "LICENSE: expected GPL-3.0-or-later wording "
-            "('(at your option) any later version')"
-        )
+        errors.append("LICENSE: expected GPL-3.0-or-later wording ('(at your option) any later version')")
 
     return errors
 
@@ -471,21 +416,14 @@ def check_bun_pin() -> list[str]:
     pm = pkg.get("packageManager", "")
     m = re.fullmatch(r"bun@([0-9]+\.[0-9]+\.[0-9]+)", str(pm))
     if not m:
-        return ['package.json: packageManager must be bun@X.Y.Z']
+        return ["package.json: packageManager must be bun@X.Y.Z"]
     ver = m.group(1)
     engines = (pkg.get("engines") or {}).get("bun")
     if engines != ver:
-        errors.append(
-            f"package.json: engines.bun ({engines!r}) must equal packageManager bun@{ver}"
-        )
-    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8", errors="replace"
-    )
+        errors.append(f"package.json: engines.bun ({engines!r}) must equal packageManager bun@{ver}")
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8", errors="replace")
     if f'bun-version: "{ver}"' not in ci:
-        errors.append(
-            f'.github/workflows/ci.yml: bun-version must be "{ver}" '
-            "(package.json packageManager)"
-        )
+        errors.append(f'.github/workflows/ci.yml: bun-version must be "{ver}" (package.json packageManager)')
     return errors
 
 
@@ -497,16 +435,12 @@ def check_cuda_sm_default() -> list[str]:
         build,
     )
     if not m:
-        return ['build.zig: could not parse cuda-sm default']
+        return ["build.zig: could not parse cuda-sm default"]
     if m.group(1) != m.group(2):
-        return [
-            f"build.zig: cuda-sm option text default {m.group(1)} != orelse .{m.group(2)}"
-        ]
+        return [f"build.zig: cuda-sm option text default {m.group(1)} != orelse .{m.group(2)}"]
     default = m.group(1)
     errors: list[str] = []
-    script = (ROOT / "scripts" / "check-shader-artifacts.sh").read_text(
-        encoding="utf-8", errors="replace"
-    )
+    script = (ROOT / "scripts" / "check-shader-artifacts.sh").read_text(encoding="utf-8", errors="replace")
     if f"zig build ptx -Dcuda-sm={default}" not in script:
         errors.append(
             f"scripts/check-shader-artifacts.sh: PTX rebuild must use -Dcuda-sm={default} "
@@ -519,9 +453,7 @@ def check_cuda_sm_default() -> list[str]:
     ):
         errors.append(f"README.md: cuda-sm default column must be {default}")
     if '@embedFile(".zigversion")' not in build:
-        errors.append(
-            "build.zig: must embed .zigversion and refuse a mismatched compiler"
-        )
+        errors.append("build.zig: must embed .zigversion and refuse a mismatched compiler")
     return errors
 
 
@@ -598,9 +530,10 @@ def check_docs_workflow_paths() -> list[str]:
                 dir_pattern = pat[:-2]
                 dir_actual, _, name = rel.rpartition("/")
                 if (
-                    dir_pattern == dir_actual
-                    or fnmatch.fnmatch(dir_actual, dir_pattern)
-                ) and name and fnmatch.fnmatch(name, "*"):
+                    (dir_pattern == dir_actual or fnmatch.fnmatch(dir_actual, dir_pattern))
+                    and name
+                    and fnmatch.fnmatch(name, "*")
+                ):
                     return True
             elif pat == rel:
                 return True
