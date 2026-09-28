@@ -27,6 +27,7 @@ const RateLimiter = @import("rate_limiter.zig").RateLimiter;
 const metrics_mod = @import("metrics.zig");
 const Metrics = metrics_mod.Metrics;
 const json = @import("json.zig");
+const http = @import("http.zig");
 const conv_store = @import("conv_store.zig");
 const Idempotency = @import("idempotency.zig");
 const tools_mod = @import("tools.zig");
@@ -38,42 +39,6 @@ const engine_version = @import("build_options").version;
 const grammar_mod = @import("../grammar.zig");
 
 const Mutex = Io.Mutex;
-
-/// Lightweight wrapper providing writeAll/read/close over a raw socket fd.
-const TcpStream = struct {
-    handle: std.posix.fd_t,
-
-    /// Writes the entire contents of `data` to the socket, retrying on EINTR.
-    pub fn writeAll(self: TcpStream, data: []const u8) !void {
-        var written: usize = 0;
-        while (written < data.len) {
-            const n = std.posix.system.write(self.handle, data[written..].ptr, data[written..].len);
-            if (n < 0) {
-                if (std.c.errno(n) == .INTR) continue;
-                return error.BrokenPipe;
-            }
-            written += @intCast(n);
-        }
-    }
-
-    /// Reads up to `buf.len` bytes from the socket, retrying on EINTR.
-    /// Returns the number of bytes read (0 signals EOF).
-    pub fn read(self: TcpStream, buf: []u8) !usize {
-        while (true) {
-            const n = std.c.read(self.handle, buf.ptr, buf.len);
-            if (n < 0) {
-                if (std.c.errno(n) == .INTR) continue;
-                return error.ConnectionResetByPeer;
-            }
-            return @intCast(n);
-        }
-    }
-
-    /// Closes the underlying socket file descriptor.
-    pub fn close(self: TcpStream) void {
-        _ = std.c.close(self.handle);
-    }
-};
 
 // ── Server constants ────────────────────────────────────────────
 const slog_buf_size: usize = 4096;
@@ -501,9 +466,6 @@ const seconds_per_minute: u64 = 60;
 const seconds_per_hour: u64 = 3600;
 /// Hours per day, used for UTC time decomposition in request logs.
 const hours_per_day: u64 = 24;
-/// CORS preflight cache duration in seconds (24 hours).
-const cors_max_age_seconds = "86400";
-/// FNV-1a 64-bit offset basis (prefix hash in `/v1/kv_cache/info`).
 const fnv1a_offset_basis: u64 = 14695981039346656037;
 /// FNV-1a 64-bit prime.
 const fnv1a_prime: u64 = 1099511628211;
@@ -1023,163 +985,20 @@ fn estimatePromptTokens(token_count: usize, text_len: usize) u32 {
     return std.math.cast(u32, n) orelse std.math.maxInt(u32);
 }
 
-/// Characters unsafe for direct embedding in JSON string values or HTML contexts.
-fn isUnsafeJsonChar(c: u8) bool {
-    return c == '"' or c == '\\' or c < 0x20 or c == '<' or c == '>' or c == '&';
-}
-
-/// CORS allow-origin headers. Always empty: the embedded UI is same-origin
-/// (no CORS needed). Wildcard ACAO with no API key enabled cross-site
-/// read/CSRF against local servers (CWE-942); authenticated mode already
-/// omitted CORS. Cross-origin browser clients should use a reverse proxy.
-fn corsHeaders() []const u8 {
-    return "";
-}
-
-/// Return the first header value for `name` (case-insensitive), trimmed.
-/// Returns null when missing or when the header appears more than once.
-fn getHeaderValue(headers: []const u8, name: []const u8) ?[]const u8 {
-    var iter = std.mem.splitSequence(u8, headers, "\r\n");
-    var found: ?[]const u8 = null;
-    while (iter.next()) |line| {
-        const colon = std.mem.indexOf(u8, line, ":") orelse continue;
-        if (colon == name.len and std.ascii.eqlIgnoreCase(line[0..name.len], name)) {
-            if (found != null) return null;
-            found = std.mem.trim(u8, line[colon + 1 ..], " \t");
-        }
-    }
-    return found;
-}
-
-/// True when `Accept-Encoding` lists `name` with q > 0.
-fn acceptsEncoding(headers: []const u8, name: []const u8) bool {
-    const ae = getHeaderValue(headers, "accept-encoding") orelse return false;
-    var tokens = std.mem.splitScalar(u8, ae, ',');
-    while (tokens.next()) |raw| {
-        const item = std.mem.trim(u8, raw, " \t");
-        if (item.len == 0) continue;
-        var parts = std.mem.splitScalar(u8, item, ';');
-        const coding = std.mem.trim(u8, parts.next() orelse continue, " \t");
-        var q: f32 = 1.0;
-        while (parts.next()) |param| {
-            const p = std.mem.trim(u8, param, " \t");
-            if (p.len >= 2 and std.ascii.eqlIgnoreCase(p[0..2], "q=")) {
-                q = std.fmt.parseFloat(f32, std.mem.trim(u8, p[2..], " \t")) catch 0;
-            }
-        }
-        if (std.ascii.eqlIgnoreCase(coding, name) and q > 0) return true;
-    }
-    return false;
-}
-
-/// True when `If-None-Match` is `*` or lists `etag` (strong or weak).
-fn ifNoneMatch(headers: []const u8, etag: []const u8) bool {
-    const inm = getHeaderValue(headers, "if-none-match") orelse return false;
-    const trimmed = std.mem.trim(u8, inm, " \t");
-    if (std.mem.eql(u8, trimmed, "*")) return true;
-    var iter = std.mem.splitScalar(u8, trimmed, ',');
-    while (iter.next()) |part| {
-        var tag = std.mem.trim(u8, part, " \t");
-        if (std.mem.startsWith(u8, tag, "W/")) {
-            tag = std.mem.trim(u8, tag[2..], " \t");
-        }
-        if (std.mem.eql(u8, tag, etag)) return true;
-    }
-    return false;
-}
-
-/// Copy `raw` into `buf` when it is a safe correlation token (alnum, `-`, `_`, `.`).
-/// Returns 0 (ignore) on empty, oversized, or illegal characters (CWE-117).
-fn sanitizeClientRequestId(raw: []const u8, buf: []u8) usize {
-    if (raw.len == 0 or raw.len > buf.len) return 0;
-    for (raw, 0..) |c, i| {
-        const ok = std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.';
-        if (!ok) return 0;
-        buf[i] = c;
-    }
-    return raw.len;
-}
-
 /// Capture inbound `X-Request-Id` for access-log correlation (`xid=`).
 fn captureClientRequestId(headers: []const u8) void {
     log_client_rid_len = 0;
     log_idem_token = 0;
-    const raw = getHeaderValue(headers, "x-request-id") orelse return;
-    log_client_rid_len = sanitizeClientRequestId(raw, &log_client_rid);
-}
-
-/// True when `Origin` is `http(s)://` + Host (no path/userinfo). CWE-346.
-fn originMatchesHost(origin: []const u8, host: []const u8) bool {
-    const rest = if (std.mem.startsWith(u8, origin, "https://"))
-        origin["https://".len..]
-    else if (std.mem.startsWith(u8, origin, "http://"))
-        origin["http://".len..]
-    else
-        return false;
-    if (rest.len == 0) return false;
-    if (std.mem.indexOfAny(u8, rest, "/@?#")) |_| return false;
-    return std.ascii.eqlIgnoreCase(rest, host);
-}
-
-/// Hostname from a Host header: strip `:port` or `[ipv6]:port`.
-fn hostnameFromHost(host: []const u8) []const u8 {
-    if (host.len == 0) return host;
-    if (host[0] == '[') {
-        if (std.mem.indexOfScalar(u8, host, ']')) |end| {
-            if (end > 1) return host[1..end];
-        }
-        return host;
-    }
-    if (std.mem.lastIndexOfScalar(u8, host, ':')) |colon| {
-        const port = host[colon + 1 ..];
-        if (port.len > 0) {
-            for (port) |c| {
-                if (c < '0' or c > '9') return host;
-            }
-            return host[0..colon];
-        }
-    }
-    return host;
-}
-
-/// True when Host is loopback (`localhost`, `::1`, `127.0.0.0/8`).
-/// DNS rebinding points a public name at 127.0.0.1 so Origin equals Host and
-/// the same-origin check would allow the request (CWE-350).
-fn isLoopbackHttpHost(host: []const u8) bool {
-    var name = hostnameFromHost(host);
-    if (name.len > 0 and name[name.len - 1] == '.') name = name[0 .. name.len - 1];
-    if (name.len == 0) return false;
-    if (std.ascii.eqlIgnoreCase(name, "localhost")) return true;
-    if (std.mem.eql(u8, name, "::1")) return true;
-    if (name.len < 5 or !std.mem.startsWith(u8, name, "127.")) return false;
-    // Remaining three octets of 127.0.0.0/8.
-    var octets: u32 = 1;
-    var acc: u32 = 0;
-    var saw_digit = false;
-    for (name["127.".len..]) |c| {
-        if (c == '.') {
-            if (!saw_digit or acc > 255 or octets >= 4) return false;
-            octets += 1;
-            acc = 0;
-            saw_digit = false;
-        } else if (c >= '0' and c <= '9') {
-            acc = std.math.mul(u32, acc, 10) catch return false;
-            acc = std.math.add(u32, acc, c - '0') catch return false;
-            if (acc > 255) return false;
-            saw_digit = true;
-        } else {
-            return false;
-        }
-    }
-    return saw_digit and octets == 3 and acc <= 255;
+    const raw = http.getHeaderValue(headers, "x-request-id") orelse return;
+    log_client_rid_len = http.sanitizeClientRequestId(raw, &log_client_rid);
 }
 
 /// Unauthenticated `--serve`: reject missing or non-loopback Host so a
 /// DNS-rebound public hostname cannot drive the API (CWE-350).
 fn isRebindHostUnauthenticated(headers: []const u8) bool {
     if (g_server.api_key != null) return false;
-    const host = getHeaderValue(headers, "host") orelse return true;
-    return !isLoopbackHttpHost(host);
+    const host = http.getHeaderValue(headers, "host") orelse return true;
+    return !http.isLoopbackHttpHost(host);
 }
 
 /// Browser cross-origin call with no API key (CSRF / data theft via localhost).
@@ -1187,9 +1006,9 @@ fn isRebindHostUnauthenticated(headers: []const u8) bool {
 /// check (clients already present a secret).
 fn isCrossOriginUnauthenticated(headers: []const u8) bool {
     if (g_server.api_key != null) return false;
-    const origin = getHeaderValue(headers, "origin") orelse return false;
-    const host = getHeaderValue(headers, "host") orelse return true;
-    return !originMatchesHost(origin, host);
+    const origin = http.getHeaderValue(headers, "origin") orelse return false;
+    const host = http.getHeaderValue(headers, "host") orelse return true;
+    return !http.originMatchesHost(origin, host);
 }
 
 /// Broken-down UTC time for request log timestamps.
@@ -1336,26 +1155,6 @@ const html_page_hash = blk: {
 };
 const html_etag = std.fmt.comptimePrint("\"{x}\"", .{html_page_hash});
 const html_etag_gzip = std.fmt.comptimePrint("\"{x}-gzip\"", .{html_page_hash});
-const gzip_id1: u8 = 0x1f;
-const gzip_id2: u8 = 0x8b;
-
-/// gzip `src` at best effort. Caller owns the slice.
-/// Returns `error.NoCompressionGain` when the result is not smaller than `src`.
-fn gzipAlloc(allocator: Allocator, src: []const u8) ![]u8 {
-    var aw = try std.Io.Writer.Allocating.initCapacity(allocator, @max(src.len / 2, 16));
-    errdefer aw.deinit();
-    var window: [std.compress.flate.max_window_len]u8 = undefined;
-    var compressor = try std.compress.flate.Compress.init(&aw.writer, &window, .gzip, .best);
-    try compressor.writer.writeAll(src);
-    try compressor.finish();
-    const out = try aw.toOwnedSlice();
-    if (out.len >= src.len) {
-        allocator.free(out);
-        return error.NoCompressionGain;
-    }
-    return out;
-}
-
 /// Return the current thread's request ID (set at start of handleRequest).
 /// Used for API response IDs so they match log correlation IDs.
 fn currentRequestId() u64 {
@@ -1363,36 +1162,6 @@ fn currentRequestId() u64 {
 }
 
 // ── HTTP helpers ────────────────────────────────────────────────
-
-/// Parsed HTTP request. Slices point into the read buffer.
-const HttpRequest = struct {
-    method: []const u8,
-    path: []const u8,
-    /// Query string without leading `?` (empty when absent).
-    query: []const u8,
-    headers: []const u8,
-    body: []const u8,
-};
-
-/// Split a raw request-target into path and query (without leading `?`).
-fn splitPathQuery(raw_path: []const u8) struct { path: []const u8, query: []const u8 } {
-    if (std.mem.indexOf(u8, raw_path, "?")) |q| {
-        return .{ .path = raw_path[0..q], .query = raw_path[q + 1 ..] };
-    }
-    return .{ .path = raw_path, .query = "" };
-}
-
-/// Parse an HTTP/1.1 request-line body (`METHOD SP request-target SP HTTP-version`).
-/// Returns null if the line lacks two spaces (malformed).
-fn parseRequestLine(req_line: []const u8) ?struct { method: []const u8, path: []const u8, query: []const u8 } {
-    const sp1 = std.mem.indexOf(u8, req_line, " ") orelse return null;
-    const method = req_line[0..sp1];
-    const rest = req_line[sp1 + 1 ..];
-    const sp2 = std.mem.indexOf(u8, rest, " ") orelse return null;
-    const raw_path = rest[0..sp2];
-    const pq = splitPathQuery(raw_path);
-    return .{ .method = method, .path = pq.path, .query = pq.query };
-}
 
 /// Parse `{"tokens":[1,2,3]}`-style body into `out`.
 /// Outcome of parsing the `tokens` array of a `/v1/detokenize` body.
@@ -1429,20 +1198,6 @@ fn parseDetokenizeTokens(body: []const u8, out: []u32) DetokenizeTokens {
     return if (n_toks == 0) .empty else .{ .count = n_toks };
 }
 
-/// Extract a single query parameter value (`key=value`). Returns null if absent.
-fn extractQueryParam(query: []const u8, key: []const u8) ?[]const u8 {
-    var iter = std.mem.splitScalar(u8, query, '&');
-    while (iter.next()) |pair| {
-        if (pair.len == 0) continue;
-        if (std.mem.indexOf(u8, pair, "=")) |eq| {
-            if (std.mem.eql(u8, pair[0..eq], key)) return pair[eq + 1 ..];
-        } else if (std.mem.eql(u8, pair, key)) {
-            return "";
-        }
-    }
-    return null;
-}
-
 /// Result of parsing a required positive integer query parameter.
 const PositiveQueryParam = union(enum) {
     missing,
@@ -1453,7 +1208,7 @@ const PositiveQueryParam = union(enum) {
 /// Parse `key` from a query string as a required positive integer.
 /// Empty, zero, and non-numeric values are `.invalid` (not `.missing`).
 fn parsePositiveQueryParam(query: []const u8, key: []const u8) PositiveQueryParam {
-    const raw = extractQueryParam(query, key) orelse return .missing;
+    const raw = http.extractQueryParam(query, key) orelse return .missing;
     const n = std.fmt.parseInt(usize, raw, 10) catch return .invalid;
     if (n == 0) return .invalid;
     return .{ .value = n };
@@ -1476,136 +1231,11 @@ fn parseFormConversationId(body: []const u8) FormConversationId {
     return .{ .value = id };
 }
 
-/// Result of reading an HTTP request, distinguishes malformed requests from
-/// oversized bodies so the caller can return the correct status code.
-/// Connection failures (`connection_closed`, `read_error`) are kept separate
-/// from `malformed` so logs and client-error metrics do not blame the request
-/// content when the peer vanished before sending a complete request.
-const HttpReadResult = union(enum) {
-    ok: HttpRequest,
-    /// Request line or headers were unreadable. Payload is the request path
-    /// when the request line parsed, "" otherwise, so the caller can pick the
-    /// error envelope of the route the client addressed.
-    malformed: []const u8,
-    /// Payload is the request path, so an oversized body to `/v1/messages`
-    /// still gets the Anthropic error shape.
-    body_too_large: []const u8,
-    /// Peer closed the connection before a complete request arrived
-    /// (probes, port scans, health checks dialing the raw port).
-    connection_closed,
-    /// Socket read failed (timeout or reset) before a complete request arrived.
-    read_error,
-};
-
-/// Check whether a given header name is present in raw HTTP headers.
-fn hasHeader(headers: []const u8, name: []const u8) bool {
-    var iter = std.mem.splitSequence(u8, headers, "\r\n");
-    while (iter.next()) |line| {
-        const colon = std.mem.indexOf(u8, line, ":") orelse continue;
-        if (colon == name.len and std.ascii.eqlIgnoreCase(line[0..name.len], name)) return true;
-    }
-    return false;
-}
-
-/// Parse Content-Length from raw HTTP headers.
-/// Returns null on parse errors or duplicate headers (RFC 7230 §3.3.3),
-/// 0 when no Content-Length header is present.
-fn parseContentLength(headers: []const u8) ?usize {
-    const header_name = "content-length";
-    var iter = std.mem.splitSequence(u8, headers, "\r\n");
-    var found: ?usize = null;
-    while (iter.next()) |line| {
-        const colon = std.mem.indexOf(u8, line, ":") orelse continue;
-        if (colon == header_name.len and std.ascii.eqlIgnoreCase(line[0..header_name.len], header_name)) {
-            const val = std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch return null;
-            if (found != null) return null; // Duplicate Content-Length, reject
-            found = val;
-        }
-    }
-    return found orelse 0;
-}
-
-/// Read a complete HTTP/1.1 request from a TCP stream. Returns `.malformed`
-/// on parse errors, `.connection_closed`/`.read_error` when the peer vanished
-/// or the socket failed before a complete request arrived, `.body_too_large`
-/// when Content-Length exceeds max_request_body_size (RFC 7231 §6.5.11).
-/// Both failure variants carry the request path (empty when the request line
-/// did not parse) so the caller can answer in the addressed route's envelope.
-fn readHttpRequest(stream: TcpStream, buf: []u8) HttpReadResult {
-    var total: usize = 0;
-    var hdr_end: usize = undefined;
-
-    // Read until we have complete headers (\r\n\r\n).
-    // Scan only the newly-received region (plus 3-byte overlap for split boundary).
-    while (total < buf.len) {
-        const n = stream.read(buf[total..]) catch return .read_error;
-        if (n == 0) return .connection_closed;
-        const scan_start = if (total >= 3) total - 3 else 0;
-        total += n;
-        if (std.mem.indexOf(u8, buf[scan_start..total], "\r\n\r\n")) |pos| {
-            hdr_end = scan_start + pos;
-            break;
-        }
-    } else return .{ .malformed = "" };
-
-    // Parse request line: "GET /path HTTP/1.1"
-    const req_line_end = std.mem.indexOf(u8, buf[0..hdr_end], "\r\n") orelse return .{ .malformed = "" };
-    const req_line = buf[0..req_line_end];
-    const parsed_line = parseRequestLine(req_line) orelse return .{ .malformed = "" };
-    const method = parsed_line.method;
-    const path = parsed_line.path;
-    const query = parsed_line.query;
-
-    // Parse Content-Length (null = duplicate headers, reject per RFC 7230)
-    const headers = buf[req_line_end + 2 .. hdr_end];
-
-    // Reject Transfer-Encoding, this server only supports identity encoding.
-    // Accepting chunked requests without parsing them enables HTTP request
-    // smuggling (CWE-444) when behind a reverse proxy.
-    if (hasHeader(headers, "transfer-encoding")) return .{ .malformed = path };
-
-    const content_length = parseContentLength(headers) orelse return .{ .malformed = path };
-    const body_start = hdr_end + 4;
-
-    // Read remaining body bytes if needed
-    if (content_length > 0) {
-        if (content_length > max_request_body_size) return .{ .body_too_large = path };
-        const body_end = std.math.add(usize, body_start, content_length) catch return .{ .body_too_large = path };
-        if (body_end > buf.len) return .{ .body_too_large = path };
-        while (total < body_end) {
-            const n = stream.read(buf[total..body_end]) catch return .read_error;
-            if (n == 0) return .connection_closed;
-            total += n;
-        }
-        return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = buf[body_start..body_end] } };
-    }
-
-    return .{ .ok = .{ .method = method, .path = path, .query = query, .headers = headers, .body = "" } };
-}
-
-/// Security headers without Cache-Control. API/SSE/error responses append
-/// `Cache-Control: no-store` via `security_headers`. The chat UI document
-/// uses `private, no-cache` plus ETag instead (see `sendHtmlPage`).
-const security_headers_base =
-    "X-Content-Type-Options: nosniff\r\n" ++
-    "X-Frame-Options: DENY\r\n" ++
-    "Referrer-Policy: no-referrer\r\n" ++
-    "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" ++
-    "Permissions-Policy: geolocation=(), microphone=(), camera=(), accelerometer=(), gyroscope=()\r\n" ++
-    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
-
-/// Common security headers appended to every API/SSE/error response.
-const security_headers = security_headers_base ++ "Cache-Control: no-store\r\n";
-
-const document_cache_headers =
-    "Cache-Control: private, no-cache\r\n" ++
-    "Vary: Accept-Encoding\r\n";
-
 /// 304 for the chat UI document. No `Content-Length`: RFC 9110 15.4.5 lets a 304
 /// carry one only when it equals the length the matching 200 would have sent,
 /// and this response has no body to measure. `Vary` and `Cache-Control` repeat
 /// so a cache that stored the 200 revalidates it under the same key.
-const not_modified_headers = security_headers_base ++ document_cache_headers;
+const not_modified_headers = http.security_headers_base ++ http.document_cache_headers;
 
 /// Validate Authorization header against configured API key.
 /// Supports both OpenAI-style `Authorization: Bearer <key>` and
@@ -1672,9 +1302,9 @@ fn checkRateLimit(server: *Server, prompt_tokens: u32) ?u32 {
 }
 
 /// Write a complete HTTP response (status line + headers + body).
-fn sendResponse(stream: TcpStream, status: []const u8, content_type: []const u8, body: []const u8) void {
+fn sendResponse(stream: http.TcpStream, status: []const u8, content_type: []const u8, body: []const u8) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ status, content_type, body.len, log_request_id, corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ status, content_type, body.len, log_request_id, http.corsHeaders() }) catch {
         std.log.warn("req={d} response header overflow (body={d})", .{ log_request_id, body.len });
         return;
     };
@@ -1689,19 +1319,19 @@ fn sendResponse(stream: TcpStream, status: []const u8, content_type: []const u8,
 }
 
 /// Send a 200 OK HTTP response with `application/json` content type.
-fn sendJson(stream: TcpStream, body: []const u8) void {
+fn sendJson(stream: http.TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "application/json", body);
 }
 
 /// Send a 200 OK HTTP response with `text/html; charset=utf-8` content type.
-fn sendHtml(stream: TcpStream, body: []const u8) void {
+fn sendHtml(stream: http.TcpStream, body: []const u8) void {
     sendResponse(stream, "200 OK", "text/html; charset=utf-8", body);
 }
 
 /// Resolve a repeated mutating request against the replay ledger.
 /// Returns true when the response was sent and the caller must not run the
 /// operation again; false when this request owns the key and should proceed.
-fn resolveIdempotency(stream: TcpStream, method: []const u8, path: []const u8, request_start: i64) bool {
+fn resolveIdempotency(stream: http.TcpStream, method: []const u8, path: []const u8, request_start: i64) bool {
     switch (g_server.claimIdempotencyKey()) {
         .fresh => return false,
         .duplicate => {
@@ -1732,9 +1362,9 @@ fn resolveIdempotency(stream: TcpStream, method: []const u8, path: []const u8, r
 /// Re-send the response recorded for a repeated `X-Request-Id`. The ledger
 /// has already refused to run the operation a second time, so this is the
 /// answer the first execution produced.
-fn sendIdempotentReplay(stream: TcpStream, replay: Idempotency.Replay) void {
+fn sendIdempotentReplay(stream: http.TcpStream, replay: Idempotency.Replay) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nIdempotent-Replay: true\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ replay.status_line, replay.content_type, replay.body.len, log_request_id, corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 {s}\r\nContent-Type: {s}\r\nContent-Length: {d}\r\nIdempotent-Replay: true\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ replay.status_line, replay.content_type, replay.body.len, log_request_id, http.corsHeaders() }) catch {
         std.log.warn("req={d} replay header overflow (body={d})", .{ log_request_id, replay.body.len });
         return;
     };
@@ -1747,11 +1377,11 @@ fn sendIdempotentReplay(stream: TcpStream, replay: Idempotency.Replay) void {
     };
 }
 
-fn sendDocumentNotModified(stream: TcpStream, etag: []const u8) void {
+fn sendDocumentNotModified(stream: http.TcpStream, etag: []const u8) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
         not_modified_headers ++
-        "Connection: close\r\n\r\n", .{ etag, log_request_id, corsHeaders() }) catch {
+        "Connection: close\r\n\r\n", .{ etag, log_request_id, http.corsHeaders() }) catch {
         std.log.warn("req={d} 304 header overflow", .{log_request_id});
         return;
     };
@@ -1762,11 +1392,11 @@ fn sendDocumentNotModified(stream: TcpStream, etag: []const u8) void {
 
 /// Serve the embedded chat UI. gzip when the client accepts it; 304 when ETag matches.
 /// API JSON still uses `security_headers` (`Cache-Control: no-store`).
-fn sendHtmlPage(stream: TcpStream, req_headers: []const u8) u16 {
+fn sendHtmlPage(stream: http.TcpStream, req_headers: []const u8) u16 {
     const gzip_body = g_server.html_gzip;
-    const use_gzip = gzip_body.len > 0 and acceptsEncoding(req_headers, "gzip");
+    const use_gzip = gzip_body.len > 0 and http.acceptsEncoding(req_headers, "gzip");
     const etag: []const u8 = if (use_gzip) html_etag_gzip else html_etag;
-    if (ifNoneMatch(req_headers, etag)) {
+    if (http.ifNoneMatch(req_headers, etag)) {
         sendDocumentNotModified(stream, etag);
         return 304;
     }
@@ -1774,8 +1404,8 @@ fn sendHtmlPage(stream: TcpStream, req_headers: []const u8) u16 {
     const encoding_hdr: []const u8 = if (use_gzip) "Content-Encoding: gzip\r\n" else "";
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {d}\r\n{s}ETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
-        security_headers_base ++ document_cache_headers ++
-        "Connection: close\r\n\r\n", .{ body.len, encoding_hdr, etag, log_request_id, corsHeaders() }) catch {
+        http.security_headers_base ++ http.document_cache_headers ++
+        "Connection: close\r\n\r\n", .{ body.len, encoding_hdr, etag, log_request_id, http.corsHeaders() }) catch {
         sendHtml(stream, html_page);
         return 200;
     };
@@ -2014,7 +1644,7 @@ fn buildToolCallResponse(buf: []u8, raw_text: []const u8, req_id: u64, created: 
 const openai_error_fallback = "{\"error\":{\"message\":\"Internal error\",\"type\":\"server_error\",\"param\":null,\"code\":null}}";
 
 /// Send a JSON error response in OpenAI format. Escapes message and type to prevent injection (CWE-116).
-fn sendJsonError(stream: TcpStream, status: []const u8, err_type: []const u8, message: []const u8) void {
+fn sendJsonError(stream: http.TcpStream, status: []const u8, err_type: []const u8, message: []const u8) void {
     sendJsonErrorEx(stream, status, err_type, message, null, null);
 }
 
@@ -2029,7 +1659,7 @@ fn isSafeErrorToken(s: []const u8) bool {
 
 /// Like `sendJsonError`, with optional `param` (field/query name) and `code` (machine-readable).
 /// `param` and `code` must be static ASCII identifiers (not client-controlled).
-fn sendJsonErrorEx(stream: TcpStream, status: []const u8, err_type: []const u8, message: []const u8, param: ?[]const u8, code: ?[]const u8) void {
+fn sendJsonErrorEx(stream: http.TcpStream, status: []const u8, err_type: []const u8, message: []const u8, param: ?[]const u8, code: ?[]const u8) void {
     // Never fall back to unescaped input on OOM, that reintroduces injection.
     const escaped_msg = json.jsonEscape(g_server.allocator, message) catch {
         sendResponse(stream, status, "application/json", openai_error_fallback);
@@ -2064,7 +1694,7 @@ fn sendJsonErrorEx(stream: TcpStream, status: []const u8, err_type: []const u8, 
 }
 
 /// Send 401 Unauthorized response for invalid API key.
-fn send401(stream: TcpStream) void {
+fn send401(stream: http.TcpStream) void {
     g_server.metrics.recordAuthFailure();
     std.log.warn("req={d} authentication failed", .{log_request_id});
     const body = "{\"error\":{\"message\":\"Invalid API key\",\"type\":\"authentication_error\",\"param\":null,\"code\":\"invalid_api_key\"}}";
@@ -2073,11 +1703,11 @@ fn send401(stream: TcpStream) void {
 
 /// Write SSE response headers including X-Request-Id for log correlation.
 /// Returns false if the write failed (client disconnected).
-fn sendSseHeaders(stream: TcpStream) bool {
+fn sendSseHeaders(stream: http.TcpStream) bool {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     // Cache-Control comes only from security_headers (no-store). Emitting a second
     // Cache-Control: no-cache here produced duplicate headers and ambiguous caching.
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nX-Accel-Buffering: no\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: keep-alive\r\n\r\n", .{ log_request_id, http.corsHeaders() }) catch {
         std.log.warn("req={d} SSE header overflow ({d} bytes available)", .{ log_request_id, hdr_buf_size });
         return false;
     };
@@ -2091,13 +1721,13 @@ fn sendSseHeaders(stream: TcpStream) bool {
 const rate_limit_fallback = "{\"error\":{\"message\":\"Rate limit exceeded\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}";
 
 /// Send 429 Too Many Requests with Retry-After header.
-fn send429(stream: TcpStream, retry_after: u32) void {
+fn send429(stream: http.TcpStream, retry_after: u32) void {
     g_server.metrics.recordRateLimit();
     std.log.warn("req={d} rate limited (retry_after={d}s)", .{ log_request_id, retry_after });
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"error\":{{\"message\":\"Rate limit exceeded. Retry after {d} seconds.\",\"type\":\"rate_limit_exceeded\",\"param\":null,\"code\":\"rate_limit_exceeded\"}}}}", .{retry_after}) catch rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders() }) catch {
         // Always respond, a hung client is worse than a response without Retry-After.
         std.log.warn("req={d} 429 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "429 Too Many Requests", "application/json", body);
@@ -2114,9 +1744,9 @@ fn send429(stream: TcpStream, retry_after: u32) void {
 }
 
 /// Send 503 with Retry-After (connection capacity / spawn failure).
-fn send503Retry(stream: TcpStream, body: []const u8, retry_after: u32) void {
+fn send503Retry(stream: http.TcpStream, body: []const u8, retry_after: u32) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders() }) catch {
         std.log.warn("req={d} 503 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "503 Service Unavailable", "application/json", body);
         return;
@@ -2248,7 +1878,7 @@ fn classifyRequestImage(body: []const u8, form: bool) ImageReject {
 /// Send 400 for an unusable image attachment. Returns true when the caller
 /// should return (response already written).
 fn rejectBadImage(
-    stream: TcpStream,
+    stream: http.TcpStream,
     body: []const u8,
     form: bool,
     anthropic: bool,
@@ -2282,7 +1912,7 @@ fn rejectBadImage(
 /// enforces CORS policy and authentication, then routes the request by method
 /// and path to the appropriate endpoint handler (health, chat completions,
 /// models, metrics, etc.).
-fn handleRequest(stream: TcpStream, req: HttpRequest) void {
+fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
     const request_start = milliTimestamp();
     captureClientRequestId(req.headers);
     // Wake from sleep mode on any incoming request. Mutex serializes with
@@ -2342,11 +1972,11 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
             "{s}" ++
             "Access-Control-Allow-Methods: {s}\r\n" ++
             "Access-Control-Allow-Headers: Content-Type, Authorization, x-api-key, anthropic-version\r\n" ++
-            "Access-Control-Max-Age: " ++ cors_max_age_seconds ++ "\r\n" ++
+            "Access-Control-Max-Age: " ++ http.cors_max_age_seconds ++ "\r\n" ++
             "X-Request-Id: {d}\r\n" ++
-            security_headers ++
+            http.security_headers ++
             "Content-Length: 0\r\n" ++
-            "Connection: close\r\n\r\n", .{ corsHeaders(), allow_methods, log_request_id }) catch return;
+            "Connection: close\r\n\r\n", .{ http.corsHeaders(), allow_methods, log_request_id }) catch return;
         stream.writeAll(opts_hdr) catch return;
         return;
     }
@@ -2471,7 +2101,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
 
     if (is_get and std.mem.eql(u8, path, "/favicon.ico")) {
         var fav_buf: [short_hdr_buf_size]u8 = undefined;
-        const fav_hdr = std.fmt.bufPrint(&fav_buf, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ log_request_id, corsHeaders() }) catch return;
+        const fav_hdr = std.fmt.bufPrint(&fav_buf, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ log_request_id, http.corsHeaders() }) catch return;
         stream.writeAll(fav_hdr) catch return;
         return;
     }
@@ -3932,7 +3562,7 @@ fn handleRequest(stream: TcpStream, req: HttpRequest) void {
                 std.fmt.bufPrint(&body_buf,
                     \\{{"error":{{"message":"Method not allowed. {s}","type":"invalid_request_error","param":null,"code":"method_not_allowed"}}}}
                 , .{ep.msg}) catch method_not_allowed_openai;
-            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, corsHeaders() }) catch {
+            const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nAllow: {s}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, ep.allow, log_request_id, http.corsHeaders() }) catch {
                 // Prefer a body without Allow over a silent drop (hung client).
                 sendResponse(stream, "405 Method Not Allowed", "application/json", body);
                 g_server.metrics.recordClientError();
@@ -4859,12 +4489,12 @@ fn generateNPre(formatted: []const u8, reset: bool, max_tokens: usize, sampling:
 /// Sends final stats as `data: {"done":true,...}` followed by `data: [DONE]`.
 /// Returns GenResult with accumulated decoded text for conversation storage.
 /// When the scheduler is active, routes through RequestManager.enqueue().
-fn chatStreamGenerate(stream: TcpStream, formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GenResult {
+fn chatStreamGenerate(stream: http.TcpStream, formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GenResult {
     return chatStreamGeneratePre(stream, formatted, reset, max_tokens, sampling, null);
 }
 
 /// Like chatStreamGenerate, but reuses caller-owned `pre_ids` when non-null.
-fn chatStreamGeneratePre(stream: TcpStream, formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams, pre_ids: ?[]const u32) GenResult {
+fn chatStreamGeneratePre(stream: http.TcpStream, formatted: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams, pre_ids: ?[]const u32) GenResult {
     const tok = g_server.tokenizer;
     const zero_stats = Stats.zero;
     var owned_ids_cs: ?[]u32 = null;
@@ -5311,7 +4941,7 @@ fn decodeTokenText(tok: *Tokenizer, token_id: u32) ?[]u8 {
 /// JSON-escape `text` and write it as one chat-stream token event
 /// (`data: {"t":"..."}`). Empty text emits nothing.
 /// Returns false if the write failed (client disconnected).
-fn emitChatStreamEvent(stream: TcpStream, text: []const u8) bool {
+fn emitChatStreamEvent(stream: http.TcpStream, text: []const u8) bool {
     if (text.len == 0) return true;
     // Fast path: escape into the event buffer without allocating. Falls back
     // to the allocating escape only when the escaped form does not fit.
@@ -5340,7 +4970,7 @@ fn emitChatStreamEvent(stream: TcpStream, text: []const u8) bool {
 
 /// Release any bytes still held by `hb` as a final event at end of generation
 /// so streamed output matches the batch-decoded text byte for byte.
-fn flushStreamHoldback(stream: TcpStream, hb: *Utf8Holdback, comptime emitFn: fn (TcpStream, []const u8) bool) bool {
+fn flushStreamHoldback(stream: http.TcpStream, hb: *Utf8Holdback, comptime emitFn: fn (http.TcpStream, []const u8) bool) bool {
     const held = hb.flush();
     if (held.len == 0) return true;
     return emitFn(stream, held);
@@ -5351,7 +4981,7 @@ fn flushStreamHoldback(stream: TcpStream, hb: *Utf8Holdback, comptime emitFn: fn
 /// tokenizers can split one character across several tokens). Callers must
 /// call flushStreamHoldback before the final [DONE].
 /// Returns false if the write failed (client disconnected).
-fn streamToken(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+fn streamToken(stream: http.TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
     // Fast path: allocation-free single-token decode into a stack buffer.
     var buf: [stream_decode_buf_size]u8 = undefined;
     if (tok.decodeOne(token_id, &buf)) |decoded| {
@@ -5384,7 +5014,7 @@ fn anthropicStatusLine(status_code: []const u8) []const u8 {
 
 /// Send a JSON error response in Anthropic error format.
 /// Message and type are JSON-escaped to prevent injection (CWE-116).
-fn sendAnthropicError(stream: TcpStream, status_code: []const u8, err_type: []const u8, message: []const u8) void {
+fn sendAnthropicError(stream: http.TcpStream, status_code: []const u8, err_type: []const u8, message: []const u8) void {
     const status = anthropicStatusLine(status_code);
     // Never fall back to unescaped input on OOM, that reintroduces injection.
     const escaped_msg = json.jsonEscape(g_server.allocator, message) catch {
@@ -5411,13 +5041,13 @@ fn sendAnthropicError(stream: TcpStream, status_code: []const u8, err_type: []co
 const anthropic_rate_limit_fallback = "{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded\"}}";
 
 /// Send a 429 Too Many Requests response in Anthropic error format with Retry-After header.
-fn sendAnthropic429(stream: TcpStream, retry_after: u32) void {
+fn sendAnthropic429(stream: http.TcpStream, retry_after: u32) void {
     g_server.metrics.recordRateLimit();
     std.log.warn("req={d} anthropic rate limited (retry_after={d}s)", .{ log_request_id, retry_after });
     var buf: [error_body_buf_size]u8 = undefined;
     const body = std.fmt.bufPrint(&buf, "{{\"type\":\"error\",\"error\":{{\"type\":\"rate_limit_error\",\"message\":\"Rate limit exceeded. Retry after {d} seconds.\"}}}}", .{retry_after}) catch anthropic_rate_limit_fallback;
     var hdr_buf: [hdr_buf_size]u8 = undefined;
-    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, corsHeaders() }) catch {
+    const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {d}\r\nRetry-After: {d}\r\nX-Request-Id: {d}\r\n{s}" ++ http.security_headers ++ "Connection: close\r\n\r\n", .{ body.len, retry_after, log_request_id, http.corsHeaders() }) catch {
         // Always respond, a hung client is worse than a response without Retry-After.
         std.log.warn("req={d} anthropic 429 header format failed, using fallback", .{log_request_id});
         sendResponse(stream, "429 Too Many Requests", "application/json", body);
@@ -5434,7 +5064,7 @@ fn sendAnthropic429(stream: TcpStream, retry_after: u32) void {
 }
 
 /// Send an SSE event with both event type and data (Anthropic streaming format).
-fn sseWriteEvent(stream: TcpStream, event_type: []const u8, data: []const u8) bool {
+fn sseWriteEvent(stream: http.TcpStream, event_type: []const u8, data: []const u8) bool {
     var event_buf: [response_buf_size + 64]u8 = undefined;
     const event = std.fmt.bufPrint(&event_buf, "event: {s}\ndata: {s}\n\n", .{ event_type, data }) catch return false;
     stream.writeAll(event) catch return false;
@@ -5442,7 +5072,7 @@ fn sseWriteEvent(stream: TcpStream, event_type: []const u8, data: []const u8) bo
 }
 
 /// Start an Anthropic-format SSE streaming response for /v1/messages.
-fn startAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
+fn startAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -5459,7 +5089,7 @@ const anthropic_delta_piece_len: usize = 256;
 /// generation runs to completion first and the parsed result is emitted as
 /// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
 /// the raw text as a `text` block when nothing parses (small-model fallback).
-fn startAnthropicStreamWithTools(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, tp: *const json.ToolParams) void {
+fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, tp: *const json.ToolParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -5635,7 +5265,7 @@ fn resolveAnthropicToolInput(allocator: Allocator, tc_json: []const u8, call_idx
 }
 
 /// Emit message_delta + message_stop for an already-closed content block set.
-fn sendAnthropicMessageEnd(stream: TcpStream, stop_reason: []const u8, token_count: u32) void {
+fn sendAnthropicMessageEnd(stream: http.TcpStream, stop_reason: []const u8, token_count: u32) void {
     var delta_buf: [response_buf_size]u8 = undefined;
     const delta = std.fmt.bufPrint(&delta_buf,
         \\{{"type":"message_delta","delta":{{"stop_reason":"{s}","stop_sequence":null}},"usage":{{"output_tokens":{d}}}}}
@@ -5655,7 +5285,7 @@ fn sendAnthropicMessageEnd(stream: TcpStream, stop_reason: []const u8, token_cou
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling_a: SamplingParams) void {
+fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling_a: SamplingParams) void {
     const tok = g_server.tokenizer;
     const req_id = currentRequestId();
 
@@ -5978,7 +5608,7 @@ fn generateAnthropicStream(stream: TcpStream, formatted: []const u8, max_tokens:
 }
 
 /// Send the Anthropic SSE final events: content_block_stop, message_delta, message_stop.
-fn sendAnthropicFinalEvents(stream: TcpStream, stop_reason: []const u8, token_count: u32) void {
+fn sendAnthropicFinalEvents(stream: http.TcpStream, stop_reason: []const u8, token_count: u32) void {
     _ = sseWriteEvent(stream, "content_block_stop",
         \\{"type":"content_block_stop","index":0}
     );
@@ -5997,7 +5627,7 @@ fn sendAnthropicFinalEvents(stream: TcpStream, stop_reason: []const u8, token_co
 
 /// JSON-escape `text` and write it as one Anthropic content_block_delta event.
 /// Empty text emits nothing. Returns false on client disconnect.
-fn emitAnthropicDeltaPiece(stream: TcpStream, text: []const u8) bool {
+fn emitAnthropicDeltaPiece(stream: http.TcpStream, text: []const u8) bool {
     if (text.len == 0) return true;
     const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
     defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
@@ -6015,7 +5645,7 @@ fn emitAnthropicDeltaPiece(stream: TcpStream, text: []const u8) bool {
 /// event, holding back trailing partial UTF-8 sequences across tokens.
 /// Callers must flushStreamHoldback before the final events.
 /// Returns false if the write failed (client disconnected).
-fn streamAnthropicDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+fn streamAnthropicDelta(stream: http.TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
     var buf: [stream_decode_buf_size]u8 = undefined;
     if (tok.decodeOne(token_id, &buf)) |decoded| {
         const pieces = hb.feed(decoded);
@@ -6032,7 +5662,7 @@ fn streamAnthropicDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *
 // ── Responses API Streaming ─────────────────────────────────────
 
 /// Start a Responses API SSE streaming response for /v1/responses.
-fn startResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
+fn startResponsesStream(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -6042,7 +5672,7 @@ fn startResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: usize
 
 /// Send the Responses API setup events: response.created, response.output_item.added,
 /// response.content_part.added.
-fn sendResponsesStartEvents(stream: TcpStream, req_id: u64, created: i64) void {
+fn sendResponsesStartEvents(stream: http.TcpStream, req_id: u64, created: i64) void {
     var buf: [response_buf_size]u8 = undefined;
     const created_evt = std.fmt.bufPrint(&buf,
         \\{{"type":"response.created","response":{{"id":"resp-{d}","object":"response","created_at":{d},"status":"in_progress","model":"{s}","output":[],"usage":null}}}}
@@ -6060,7 +5690,7 @@ fn sendResponsesStartEvents(stream: TcpStream, req_id: u64, created: i64) void {
 
 /// JSON-escape `text` and write it as one Responses API output_text.delta
 /// event. Empty text emits nothing. Returns false on client disconnect.
-fn emitResponsesDeltaPiece(stream: TcpStream, text: []const u8) bool {
+fn emitResponsesDeltaPiece(stream: http.TcpStream, text: []const u8) bool {
     if (text.len == 0) return true;
     const escaped = json.jsonEscape(g_server.allocator, text) catch return true;
     defer if (escaped.ptr != text.ptr) g_server.allocator.free(escaped);
@@ -6078,7 +5708,7 @@ fn emitResponsesDeltaPiece(stream: TcpStream, text: []const u8) bool {
 /// holding back trailing partial UTF-8 sequences across tokens.
 /// Callers must flushStreamHoldback before the final events.
 /// Returns false if the write failed (client disconnected).
-fn streamResponsesDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
+fn streamResponsesDelta(stream: http.TcpStream, tok: *Tokenizer, token_id: u32, hb: *Utf8Holdback) bool {
     var buf: [stream_decode_buf_size]u8 = undefined;
     if (tok.decodeOne(token_id, &buf)) |decoded| {
         const pieces = hb.feed(decoded);
@@ -6094,7 +5724,7 @@ fn streamResponsesDelta(stream: TcpStream, tok: *Tokenizer, token_id: u32, hb: *
 
 /// Send the Responses API final events: output_text.done, content_part.done,
 /// output_item.done, response.completed.
-fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_reason: []const u8, escaped_text: []const u8, input_tokens: u32, output_tokens: u32) void {
+fn sendResponsesFinalEvents(stream: http.TcpStream, req_id: u64, created: i64, stop_reason: []const u8, escaped_text: []const u8, input_tokens: u32, output_tokens: u32) void {
     var buf: [response_buf_size]u8 = undefined;
     const total = input_tokens + output_tokens;
 
@@ -6139,7 +5769,7 @@ fn sendResponsesFinalEvents(stream: TcpStream, req_id: u64, created: i64, stop_r
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateResponsesStream(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling_r: SamplingParams) void {
+fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling_r: SamplingParams) void {
     const tok = g_server.tokenizer;
     const req_id = currentRequestId();
     const created = timestamp();
@@ -6487,7 +6117,7 @@ fn sseWriteData(stream: anytype, data: []const u8) bool {
 
 /// Start an SSE streaming response. Writes headers, generates tokens inline,
 /// and writes each as an SSE frame. Runs synchronously on the handler thread.
-fn startStream(stream: TcpStream, prompt: []const u8, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
+fn startStream(stream: http.TcpStream, prompt: []const u8, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -6536,7 +6166,7 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
 
 /// Streaming with tool call support. Generates full output first, then emits
 /// tool_calls delta chunks if tool calls detected, otherwise streams content.
-fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, tp: *const json.ToolParams) void {
+fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, tp: *const json.ToolParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -6630,7 +6260,7 @@ fn startStreamWithTools(stream: TcpStream, prompt: []const u8, max_tokens: usize
 }
 
 /// Start an SSE streaming response without chat template wrapping (for /v1/completions).
-fn startStreamRaw(stream: TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
+fn startStreamRaw(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
         return;
@@ -6685,14 +6315,14 @@ fn formatLogprobs(buf: []u8, tok: *Tokenizer, token_text: []const u8, info: Logp
 
 /// Stream a single token as an SSE chunk in OpenAI format.
 /// Returns false if the write failed (client disconnected).
-fn streamChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, hb: *Utf8Holdback) bool {
+fn streamChunk(stream: http.TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, hb: *Utf8Holdback) bool {
     return streamChunkLogprobs(stream, chunk_buf, tok, token_id, req_id, created, is_chat, null, hb);
 }
 
 /// Format one text piece as an OpenAI SSE chunk and write it.
 /// Returns false if the write failed (client disconnected).
 fn writeOpenAiChunk(
-    stream: TcpStream,
+    stream: http.TcpStream,
     chunk_buf: *[response_buf_size]u8,
     tok: *Tokenizer,
     text: []const u8,
@@ -6740,7 +6370,7 @@ fn writeOpenAiChunk(
     }
 }
 
-fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, lp_info: ?LogprobInfo, hb: *Utf8Holdback) bool {
+fn streamChunkLogprobs(stream: http.TcpStream, chunk_buf: *[response_buf_size]u8, tok: *Tokenizer, token_id: u32, req_id: u64, created: i64, is_chat: bool, lp_info: ?LogprobInfo, hb: *Utf8Holdback) bool {
     // Fast path: allocation-free single-token decode into a stack buffer.
     var dec_buf: [stream_decode_buf_size]u8 = undefined;
     var decoded: []const u8 = undefined;
@@ -6775,7 +6405,7 @@ fn streamChunkLogprobs(stream: TcpStream, chunk_buf: *[response_buf_size]u8, tok
 
 /// Send a usage-only SSE chunk (OpenAI streaming format).
 /// Emitted after the final chunk and before [DONE] so clients can track token usage.
-fn sendUsageChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool, prompt_tokens: u32, completion_tokens: u32) void {
+fn sendUsageChunk(stream: http.TcpStream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool, prompt_tokens: u32, completion_tokens: u32) void {
     const total = prompt_tokens + completion_tokens;
     const id_prefix: []const u8 = if (is_chat) "chatcmpl" else "cmpl";
     const obj_type: []const u8 = if (is_chat) "chat.completion.chunk" else "text_completion";
@@ -6789,7 +6419,7 @@ fn sendUsageChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: 
 }
 
 /// Send the final SSE chunk with the given finish_reason ("stop" or "length").
-fn sendFinalChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool, finish_reason: []const u8) void {
+fn sendFinalChunk(stream: http.TcpStream, chunk_buf: *[response_buf_size]u8, req_id: u64, created: i64, is_chat: bool, finish_reason: []const u8) void {
     const id_prefix: []const u8 = if (is_chat) "chatcmpl" else "cmpl";
     const obj_type: []const u8 = if (is_chat) "chat.completion.chunk" else "text_completion";
     const delta_or_text: []const u8 = if (is_chat)
@@ -6811,7 +6441,7 @@ fn sendFinalChunk(stream: TcpStream, chunk_buf: *[response_buf_size]u8, req_id: 
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running (CLI mode).
-fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
+fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
     const tok = g_server.tokenizer;
 
     const formatted = if (format_prompt)
@@ -7395,7 +7025,7 @@ fn generateStream(stream: TcpStream, prompt: []const u8, req_id: u64, created: i
 
 // ── Connection handler & server entry point ─────────────────────
 
-fn handleConnection(stream: TcpStream) void {
+fn handleConnection(stream: http.TcpStream) void {
     // Assign the correlation ID before any log so socket-option failures
     // can be grepped with the same req=N as the rest of the request.
     log_request_id = g_server.request_counter.fetchAdd(1, .monotonic);
@@ -7437,7 +7067,7 @@ fn handleConnection(stream: TcpStream) void {
         @memset(buf, 0);
         g_server.allocator.free(buf);
     }
-    switch (readHttpRequest(stream, buf)) {
+    switch (http.readHttpRequest(stream, buf, max_request_body_size)) {
         .ok => |req| handleRequest(stream, req),
         .body_too_large => |ep_path| {
             g_server.metrics.recordRequest();
@@ -7548,10 +7178,10 @@ pub fn run(config: ServerConfig) !void {
     defer if (model_name_buf) |b| allocator.free(b);
     const safe_model_name: []const u8 = blk: {
         for (model_name) |c| {
-            if (isUnsafeJsonChar(c)) {
+            if (http.isUnsafeJsonChar(c)) {
                 const buf = allocator.alloc(u8, model_name.len) catch break :blk model_name;
                 for (buf, model_name) |*d, sc| {
-                    d.* = if (isUnsafeJsonChar(sc)) '_' else sc;
+                    d.* = if (http.isUnsafeJsonChar(sc)) '_' else sc;
                 }
                 model_name_buf = buf;
                 break :blk buf;
@@ -7614,7 +7244,7 @@ pub fn run(config: ServerConfig) !void {
 
     g_server = &server;
 
-    server.html_gzip = gzipAlloc(allocator, html_page) catch |err| blk: {
+    server.html_gzip = http.gzipAlloc(allocator, html_page) catch |err| blk: {
         std.log.warn("server: gzip of chat UI failed ({s}), serving uncompressed", .{@errorName(err)});
         break :blk &.{};
     };
@@ -7729,7 +7359,7 @@ pub fn run(config: ServerConfig) !void {
             std.log.err("Accept failed: {}", .{err});
             continue;
         };
-        const stream = TcpStream{ .handle = net_stream.socket.handle };
+        const stream = http.TcpStream{ .handle = net_stream.socket.handle };
         // Atomically increment before capacity check to prevent TOCTOU race
         // where multiple accept() calls pass the check before any thread increments.
         const prev = g_server.metrics.active_connections.fetchAdd(1, .acquire);
@@ -7827,7 +7457,7 @@ test "uptimeSeconds is monotonic elapsed and never negative" {
 }
 
 test "parseContentLength normal" {
-    try std.testing.expectEqual(@as(?usize, 42), parseContentLength("Content-Length: 42\r\nHost: localhost"));
+    try std.testing.expectEqual(@as(?usize, 42), http.parseContentLength("Content-Length: 42\r\nHost: localhost"));
 }
 
 /// Test double satisfying the `writeAll` surface `sseWriteData` needs.
@@ -7987,62 +7617,62 @@ test "shouldNoteAutoSeed only when sampling and seed omitted" {
 }
 
 test "originMatchesHost accepts same-origin http" {
-    try std.testing.expect(originMatchesHost("http://127.0.0.1:49453", "127.0.0.1:49453"));
-    try std.testing.expect(originMatchesHost("https://Example.COM", "example.com"));
+    try std.testing.expect(http.originMatchesHost("http://127.0.0.1:49453", "127.0.0.1:49453"));
+    try std.testing.expect(http.originMatchesHost("https://Example.COM", "example.com"));
 }
 
 test "originMatchesHost rejects path userinfo and cross-origin" {
-    try std.testing.expect(!originMatchesHost("http://127.0.0.1:49453/", "127.0.0.1:49453"));
-    try std.testing.expect(!originMatchesHost("http://evil.com", "127.0.0.1:49453"));
-    try std.testing.expect(!originMatchesHost("null", "127.0.0.1:49453"));
-    try std.testing.expect(!originMatchesHost("http://user@127.0.0.1:49453", "127.0.0.1:49453"));
+    try std.testing.expect(!http.originMatchesHost("http://127.0.0.1:49453/", "127.0.0.1:49453"));
+    try std.testing.expect(!http.originMatchesHost("http://evil.com", "127.0.0.1:49453"));
+    try std.testing.expect(!http.originMatchesHost("null", "127.0.0.1:49453"));
+    try std.testing.expect(!http.originMatchesHost("http://user@127.0.0.1:49453", "127.0.0.1:49453"));
 }
 
 test "isLoopbackHttpHost accepts loopback Host values" {
-    try std.testing.expect(isLoopbackHttpHost("127.0.0.1"));
-    try std.testing.expect(isLoopbackHttpHost("127.0.0.1:49453"));
-    try std.testing.expect(isLoopbackHttpHost("127.1.2.3:80"));
-    try std.testing.expect(isLoopbackHttpHost("localhost"));
-    try std.testing.expect(isLoopbackHttpHost("LocalHost:49453"));
-    try std.testing.expect(isLoopbackHttpHost("localhost."));
-    try std.testing.expect(isLoopbackHttpHost("[::1]"));
-    try std.testing.expect(isLoopbackHttpHost("[::1]:49453"));
+    try std.testing.expect(http.isLoopbackHttpHost("127.0.0.1"));
+    try std.testing.expect(http.isLoopbackHttpHost("127.0.0.1:49453"));
+    try std.testing.expect(http.isLoopbackHttpHost("127.1.2.3:80"));
+    try std.testing.expect(http.isLoopbackHttpHost("localhost"));
+    try std.testing.expect(http.isLoopbackHttpHost("LocalHost:49453"));
+    try std.testing.expect(http.isLoopbackHttpHost("localhost."));
+    try std.testing.expect(http.isLoopbackHttpHost("[::1]"));
+    try std.testing.expect(http.isLoopbackHttpHost("[::1]:49453"));
 }
 
 test "isLoopbackHttpHost rejects DNS-rebind and LAN Host values" {
-    try std.testing.expect(!isLoopbackHttpHost("evil.com"));
-    try std.testing.expect(!isLoopbackHttpHost("evil.com:49453"));
-    try std.testing.expect(!isLoopbackHttpHost("127.0.0.1.nip.io"));
-    try std.testing.expect(!isLoopbackHttpHost("localhost.evil.com"));
-    try std.testing.expect(!isLoopbackHttpHost("0.0.0.0"));
-    try std.testing.expect(!isLoopbackHttpHost("192.168.1.1:49453"));
-    try std.testing.expect(!isLoopbackHttpHost(""));
-    try std.testing.expect(!isLoopbackHttpHost("127.1"));
-    try std.testing.expect(!isLoopbackHttpHost("127.0.0.1.2"));
+    try std.testing.expect(!http.isLoopbackHttpHost("evil.com"));
+    try std.testing.expect(!http.isLoopbackHttpHost("evil.com:49453"));
+    try std.testing.expect(!http.isLoopbackHttpHost("127.0.0.1.nip.io"));
+    try std.testing.expect(!http.isLoopbackHttpHost("localhost.evil.com"));
+    try std.testing.expect(!http.isLoopbackHttpHost("0.0.0.0"));
+    try std.testing.expect(!http.isLoopbackHttpHost("192.168.1.1:49453"));
+    try std.testing.expect(!http.isLoopbackHttpHost(""));
+    try std.testing.expect(!http.isLoopbackHttpHost("127.1"));
+    try std.testing.expect(!http.isLoopbackHttpHost("127.0.0.1.2"));
 }
 
 test "getHeaderValue trims and rejects duplicates" {
-    try std.testing.expectEqualStrings("127.0.0.1:49453", getHeaderValue("Host: 127.0.0.1:49453\r\n", "host").?);
-    try std.testing.expect(getHeaderValue("Host: a\r\nHost: b\r\n", "host") == null);
-    try std.testing.expect(getHeaderValue("Accept: */*\r\n", "origin") == null);
+    try std.testing.expectEqualStrings("127.0.0.1:49453", http.getHeaderValue("Host: 127.0.0.1:49453\r\n", "host").?);
+    try std.testing.expect(http.getHeaderValue("Host: a\r\nHost: b\r\n", "host") == null);
+    try std.testing.expect(http.getHeaderValue("Accept: */*\r\n", "origin") == null);
 }
 
 test "acceptsEncoding honors gzip q-values" {
-    try std.testing.expect(acceptsEncoding("Accept-Encoding: gzip, deflate, br\r\n", "gzip"));
-    try std.testing.expect(acceptsEncoding("accept-encoding: GZIP\r\n", "gzip"));
-    try std.testing.expect(!acceptsEncoding("Accept-Encoding: gzip;q=0\r\n", "gzip"));
-    try std.testing.expect(!acceptsEncoding("Accept-Encoding: deflate, br\r\n", "gzip"));
-    try std.testing.expect(!acceptsEncoding("Host: localhost\r\n", "gzip"));
-    try std.testing.expect(acceptsEncoding("Accept-Encoding: gzip;q=1.0, identity;q=0.5\r\n", "gzip"));
+    try std.testing.expect(http.acceptsEncoding("Accept-Encoding: gzip, deflate, br\r\n", "gzip"));
+    try std.testing.expect(http.acceptsEncoding("accept-encoding: GZIP\r\n", "gzip"));
+    try std.testing.expect(!http.acceptsEncoding("Accept-Encoding: gzip;q=0\r\n", "gzip"));
+    try std.testing.expect(!http.acceptsEncoding("Accept-Encoding: deflate, br\r\n", "gzip"));
+    try std.testing.expect(!http.acceptsEncoding("Host: localhost\r\n", "gzip"));
+    try std.testing.expect(http.acceptsEncoding("Accept-Encoding: gzip;q=1.0, identity;q=0.5\r\n", "gzip"));
 }
 
 test "ifNoneMatch matches listed ETags" {
-    try std.testing.expect(ifNoneMatch("If-None-Match: \"abc\"\r\n", "\"abc\""));
-    try std.testing.expect(ifNoneMatch("If-None-Match: W/\"abc\"\r\n", "\"abc\""));
-    try std.testing.expect(ifNoneMatch("If-None-Match: \"x\", \"abc\"\r\n", "\"abc\""));
-    try std.testing.expect(ifNoneMatch("If-None-Match: *\r\n", "\"abc\""));
-    try std.testing.expect(!ifNoneMatch("If-None-Match: \"xyz\"\r\n", "\"abc\""));
-    try std.testing.expect(!ifNoneMatch("Host: localhost\r\n", "\"abc\""));
+    try std.testing.expect(http.ifNoneMatch("If-None-Match: \"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(http.ifNoneMatch("If-None-Match: W/\"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(http.ifNoneMatch("If-None-Match: \"x\", \"abc\"\r\n", "\"abc\""));
+    try std.testing.expect(http.ifNoneMatch("If-None-Match: *\r\n", "\"abc\""));
+    try std.testing.expect(!http.ifNoneMatch("If-None-Match: \"xyz\"\r\n", "\"abc\""));
+    try std.testing.expect(!http.ifNoneMatch("Host: localhost\r\n", "\"abc\""));
 }
 
 test "304 revalidates under the same cache key and claims no body" {
@@ -8059,11 +7689,11 @@ test "304 revalidates under the same cache key and claims no body" {
 }
 
 test "gzipAlloc shrinks the chat UI and round-trips" {
-    const gz = try gzipAlloc(std.testing.allocator, html_page);
+    const gz = try http.gzipAlloc(std.testing.allocator, html_page);
     defer std.testing.allocator.free(gz);
     try std.testing.expect(gz.len < html_page.len);
-    try std.testing.expectEqual(gzip_id1, gz[0]);
-    try std.testing.expectEqual(gzip_id2, gz[1]);
+    try std.testing.expectEqual(http.gzip_id1, gz[0]);
+    try std.testing.expectEqual(http.gzip_id2, gz[1]);
 
     var reader: std.Io.Reader = .fixed(gz);
     var window_buf: [std.compress.flate.max_window_len]u8 = undefined;
@@ -8108,13 +7738,13 @@ test "chat UI streams by appending and times out a stalled CDN script" {
 
 test "sanitizeClientRequestId accepts correlation tokens" {
     var buf: [max_client_request_id_len]u8 = undefined;
-    try std.testing.expectEqual(@as(usize, 3), sanitizeClientRequestId("abc", &buf));
+    try std.testing.expectEqual(@as(usize, 3), http.sanitizeClientRequestId("abc", &buf));
     try std.testing.expectEqualStrings("abc", buf[0..3]);
-    try std.testing.expectEqual(@as(usize, 36), sanitizeClientRequestId("550e8400-e29b-41d4-a716-446655440000", &buf));
-    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("", &buf));
-    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("has space", &buf));
-    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("bad\nid", &buf));
-    try std.testing.expectEqual(@as(usize, 0), sanitizeClientRequestId("a" ** 65, &buf));
+    try std.testing.expectEqual(@as(usize, 36), http.sanitizeClientRequestId("550e8400-e29b-41d4-a716-446655440000", &buf));
+    try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("", &buf));
+    try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("has space", &buf));
+    try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("bad\nid", &buf));
+    try std.testing.expectEqual(@as(usize, 0), http.sanitizeClientRequestId("a" ** 65, &buf));
 }
 
 test "HealthView maps degradation reasons" {
@@ -8242,62 +7872,62 @@ test "anthropicStatusLine maps known codes" {
 }
 
 test "parseContentLength duplicate rejects" {
-    try std.testing.expectEqual(@as(?usize, null), parseContentLength("Content-Length: 42\r\nContent-Length: 42"));
+    try std.testing.expectEqual(@as(?usize, null), http.parseContentLength("Content-Length: 42\r\nContent-Length: 42"));
 }
 
 test "parseContentLength missing header returns zero" {
-    try std.testing.expectEqual(@as(?usize, 0), parseContentLength("Host: localhost\r\nAccept: */*"));
+    try std.testing.expectEqual(@as(?usize, 0), http.parseContentLength("Host: localhost\r\nAccept: */*"));
 }
 
 test "parseContentLength non-numeric rejects" {
-    try std.testing.expectEqual(@as(?usize, null), parseContentLength("Content-Length: abc\r\nHost: localhost"));
+    try std.testing.expectEqual(@as(?usize, null), http.parseContentLength("Content-Length: abc\r\nHost: localhost"));
 }
 
 test "parseContentLength empty headers returns zero" {
-    try std.testing.expectEqual(@as(?usize, 0), parseContentLength(""));
+    try std.testing.expectEqual(@as(?usize, 0), http.parseContentLength(""));
 }
 
 test "parseContentLength case insensitive" {
-    try std.testing.expectEqual(@as(?usize, 99), parseContentLength("content-length: 99\r\nHost: x"));
-    try std.testing.expectEqual(@as(?usize, 7), parseContentLength("CONTENT-LENGTH: 7\r\nHost: x"));
+    try std.testing.expectEqual(@as(?usize, 99), http.parseContentLength("content-length: 99\r\nHost: x"));
+    try std.testing.expectEqual(@as(?usize, 7), http.parseContentLength("CONTENT-LENGTH: 7\r\nHost: x"));
 }
 
 test "splitPathQuery strips query from path" {
-    const no_q = splitPathQuery("/v1/kv_cache");
+    const no_q = http.splitPathQuery("/v1/kv_cache");
     try std.testing.expectEqualStrings("/v1/kv_cache", no_q.path);
     try std.testing.expectEqualStrings("", no_q.query);
 
-    const with_q = splitPathQuery("/v1/kv_cache?n_tokens=512&foo=1");
+    const with_q = http.splitPathQuery("/v1/kv_cache?n_tokens=512&foo=1");
     try std.testing.expectEqualStrings("/v1/kv_cache", with_q.path);
     try std.testing.expectEqualStrings("n_tokens=512&foo=1", with_q.query);
 
-    const empty_q = splitPathQuery("/v1/models?");
+    const empty_q = http.splitPathQuery("/v1/models?");
     try std.testing.expectEqualStrings("/v1/models", empty_q.path);
     try std.testing.expectEqualStrings("", empty_q.query);
 }
 
 test "extractQueryParam reads values" {
-    try std.testing.expectEqualStrings("512", extractQueryParam("n_tokens=512", "n_tokens").?);
-    try std.testing.expectEqualStrings("512", extractQueryParam("foo=1&n_tokens=512&bar=2", "n_tokens").?);
-    try std.testing.expect(extractQueryParam("foo=1&bar=2", "n_tokens") == null);
-    try std.testing.expectEqualStrings("", extractQueryParam("n_tokens=&x=1", "n_tokens").?);
-    try std.testing.expectEqualStrings("", extractQueryParam("n_tokens", "n_tokens").?);
-    try std.testing.expect(extractQueryParam("n_tokens_extra=9", "n_tokens") == null);
+    try std.testing.expectEqualStrings("512", http.extractQueryParam("n_tokens=512", "n_tokens").?);
+    try std.testing.expectEqualStrings("512", http.extractQueryParam("foo=1&n_tokens=512&bar=2", "n_tokens").?);
+    try std.testing.expect(http.extractQueryParam("foo=1&bar=2", "n_tokens") == null);
+    try std.testing.expectEqualStrings("", http.extractQueryParam("n_tokens=&x=1", "n_tokens").?);
+    try std.testing.expectEqualStrings("", http.extractQueryParam("n_tokens", "n_tokens").?);
+    try std.testing.expect(http.extractQueryParam("n_tokens_extra=9", "n_tokens") == null);
 }
 
 test "parseRequestLine extracts method path query" {
-    const a = parseRequestLine("GET /health HTTP/1.1").?;
+    const a = http.parseRequestLine("GET /health HTTP/1.1").?;
     try std.testing.expectEqualStrings("GET", a.method);
     try std.testing.expectEqualStrings("/health", a.path);
     try std.testing.expectEqualStrings("", a.query);
 
-    const b = parseRequestLine("POST /v1/kv_cache?n_tokens=64 HTTP/1.1").?;
+    const b = http.parseRequestLine("POST /v1/kv_cache?n_tokens=64 HTTP/1.1").?;
     try std.testing.expectEqualStrings("POST", b.method);
     try std.testing.expectEqualStrings("/v1/kv_cache", b.path);
     try std.testing.expectEqualStrings("n_tokens=64", b.query);
 
-    try std.testing.expect(parseRequestLine("GET /health") == null);
-    try std.testing.expect(parseRequestLine("") == null);
+    try std.testing.expect(http.parseRequestLine("GET /health") == null);
+    try std.testing.expect(http.parseRequestLine("") == null);
 }
 
 test "parseDetokenizeTokens reads token id array" {
@@ -8542,9 +8172,9 @@ test "fuzz: all server functions" {
 
             // ── pub TcpStream methods: comptime verify (need real socket FDs) ──
             comptime {
-                _ = &TcpStream.writeAll;
-                _ = &TcpStream.read;
-                _ = &TcpStream.close;
+                _ = &http.TcpStream.writeAll;
+                _ = &http.TcpStream.read;
+                _ = &http.TcpStream.close;
             }
 
             // ── pub GeneratedEscaped.deinit: comptime verify (needs g_server) ──
@@ -8599,7 +8229,7 @@ test "fuzz: all server functions" {
             // isUnsafeJsonChar
             {
                 const c = smith.valueWithHash(u8, 0x06);
-                const is_unsafe = isUnsafeJsonChar(c);
+                const is_unsafe = http.isUnsafeJsonChar(c);
                 // Control chars < 0x20 must be unsafe
                 if (c < 0x20) std.debug.assert(is_unsafe);
                 // Normal alphanum must be safe
@@ -8627,20 +8257,20 @@ test "fuzz: all server functions" {
 
             // hasHeader, fixed well-formed cases plus random header blobs
             {
-                const has_ct = hasHeader("Content-Type: text/html\r\nHost: x", "Content-Type");
+                const has_ct = http.hasHeader("Content-Type: text/html\r\nHost: x", "Content-Type");
                 std.debug.assert(has_ct);
-                const has_missing = hasHeader("Content-Type: text/html\r\nHost: x", "Authorization");
+                const has_missing = http.hasHeader("Content-Type: text/html\r\nHost: x", "Authorization");
                 std.debug.assert(!has_missing);
                 // Case-insensitive
-                const has_ci = hasHeader("content-type: text/html\r\nHost: x", "Content-Type");
+                const has_ci = http.hasHeader("content-type: text/html\r\nHost: x", "Content-Type");
                 std.debug.assert(has_ci);
                 // Malformed / truncated / binary header lines must not crash
                 var hdr_fuzz: [256]u8 = undefined;
                 smith.bytesWithHash(&hdr_fuzz, 0x11);
                 const hdr_len = smith.indexWithHash(hdr_fuzz.len + 1, 0x12);
-                _ = hasHeader(hdr_fuzz[0..hdr_len], "Content-Type");
-                _ = hasHeader(hdr_fuzz[0..hdr_len], "Authorization");
-                _ = hasHeader(hdr_fuzz[0..hdr_len], "x-api-key");
+                _ = http.hasHeader(hdr_fuzz[0..hdr_len], "Content-Type");
+                _ = http.hasHeader(hdr_fuzz[0..hdr_len], "Authorization");
+                _ = http.hasHeader(hdr_fuzz[0..hdr_len], "x-api-key");
             }
 
             // parseContentLength, well-formed + adversarial header blobs
@@ -8648,18 +8278,18 @@ test "fuzz: all server functions" {
                 const val = smith.valueWithHash(u16, 0x10);
                 var hdr_buf: [64]u8 = undefined;
                 const hdr = std.fmt.bufPrint(&hdr_buf, "Content-Length: {d}\r\nHost: x", .{val}) catch unreachable;
-                const parsed = parseContentLength(hdr);
+                const parsed = http.parseContentLength(hdr);
                 std.debug.assert(parsed != null);
                 std.debug.assert(parsed.? == @as(usize, val));
                 // Duplicate / junk Content-Length must return null or a finite usize
                 var cl_fuzz: [256]u8 = undefined;
                 smith.bytesWithHash(&cl_fuzz, 0x13);
                 const cl_len = smith.indexWithHash(cl_fuzz.len + 1, 0x14);
-                _ = parseContentLength(cl_fuzz[0..cl_len]);
+                _ = http.parseContentLength(cl_fuzz[0..cl_len]);
                 // Explicit duplicate rejection path
-                _ = parseContentLength("Content-Length: 10\r\nContent-Length: 20\r\n");
-                _ = parseContentLength("Content-Length: not-a-number\r\n");
-                _ = parseContentLength("Content-Length: \r\n");
+                _ = http.parseContentLength("Content-Length: 10\r\nContent-Length: 20\r\n");
+                _ = http.parseContentLength("Content-Length: not-a-number\r\n");
+                _ = http.parseContentLength("Content-Length: \r\n");
             }
 
             // validateAuth, random Authorization / x-api-key header lines
@@ -8724,11 +8354,11 @@ test "fuzz: all server functions" {
                 }
             }
 
-            // HttpReadResult union: verify layout at comptime
+            // http.HttpReadResult union: verify layout at comptime
             comptime {
-                _ = @as(?HttpReadResult, null);
-                _ = HttpReadResult{ .malformed = "" };
-                _ = HttpReadResult{ .body_too_large = "" };
+                _ = @as(?http.HttpReadResult, null);
+                _ = http.HttpReadResult{ .malformed = "" };
+                _ = http.HttpReadResult{ .body_too_large = "" };
             }
 
             // splitPathQuery + extractQueryParam, untrusted request-target / query string
@@ -8736,7 +8366,7 @@ test "fuzz: all server functions" {
                 var path_buf: [256]u8 = undefined;
                 smith.bytesWithHash(&path_buf, 0x50);
                 const path_len = smith.indexWithHash(path_buf.len + 1, 0x51);
-                const pq = splitPathQuery(path_buf[0..path_len]);
+                const pq = http.splitPathQuery(path_buf[0..path_len]);
                 // Invariant: path + optional '?' + query reconstructs the input
                 if (pq.query.len == 0 and path_len > 0 and path_buf[path_len - 1] != '?') {
                     std.debug.assert(std.mem.eql(u8, pq.path, path_buf[0..path_len]));
@@ -8748,8 +8378,8 @@ test "fuzz: all server functions" {
                 var key_buf: [16]u8 = undefined;
                 smith.bytesWithHash(&key_buf, 0x52);
                 const key_len = smith.indexWithHash(key_buf.len + 1, 0x53);
-                _ = extractQueryParam(pq.query, key_buf[0..key_len]);
-                _ = extractQueryParam(path_buf[0..path_len], "n_tokens");
+                _ = http.extractQueryParam(pq.query, key_buf[0..key_len]);
+                _ = http.extractQueryParam(path_buf[0..path_len], "n_tokens");
 
                 var q_struct: [128]u8 = undefined;
                 const qn = std.fmt.bufPrint(&q_struct, "n_tokens={d}&foo={s}&n_tokens={d}", .{
@@ -8758,7 +8388,7 @@ test "fuzz: all server functions" {
                     smith.valueWithHash(u16, 0x55),
                 }) catch unreachable;
                 // First match wins, must not crash on duplicate keys
-                const ntok = extractQueryParam(qn, "n_tokens");
+                const ntok = http.extractQueryParam(qn, "n_tokens");
                 std.debug.assert(ntok != null);
                 _ = parsePositiveQueryParam(qn, "n_tokens");
                 _ = parsePositiveQueryParam(path_buf[0..path_len], "n_tokens");
@@ -8772,21 +8402,21 @@ test "fuzz: all server functions" {
                 var line_buf: [256]u8 = undefined;
                 smith.bytesWithHash(&line_buf, 0x60);
                 const line_len = smith.indexWithHash(line_buf.len + 1, 0x61);
-                _ = parseRequestLine(line_buf[0..line_len]);
+                _ = http.parseRequestLine(line_buf[0..line_len]);
 
                 // Structure-aware well-formed request lines
                 var good: [160]u8 = undefined;
                 const gn = std.fmt.bufPrint(&good, "POST /v1/chat/completions?n_tokens={d} HTTP/1.1", .{
                     smith.valueWithHash(u16, 0x62),
                 }) catch unreachable;
-                const parsed = parseRequestLine(gn).?;
+                const parsed = http.parseRequestLine(gn).?;
                 std.debug.assert(std.mem.eql(u8, parsed.method, "POST"));
                 std.debug.assert(std.mem.eql(u8, parsed.path, "/v1/chat/completions"));
                 std.debug.assert(parsed.query.len > 0);
 
-                std.debug.assert(parseRequestLine("GET /health") == null); // missing version SP
-                std.debug.assert(parseRequestLine("") == null);
-                std.debug.assert(parseRequestLine("NOSPACES") == null);
+                std.debug.assert(http.parseRequestLine("GET /health") == null); // missing version SP
+                std.debug.assert(http.parseRequestLine("") == null);
+                std.debug.assert(http.parseRequestLine("NOSPACES") == null);
             }
 
             // parseDetokenizeTokens, untrusted /v1/detokenize JSON bodies
@@ -8831,7 +8461,7 @@ test "fuzz: all server functions" {
     }.f, .{});
 }
 
-test "fuzz: readHttpRequest over socket" {
+test "fuzz: http.readHttpRequest over socket" {
     try std.testing.fuzz({}, struct {
         fn f(_: void, smith: *std.testing.Smith) !void {
             // Build the raw request bytes sent by the "client".
@@ -8862,8 +8492,8 @@ test "fuzz: readHttpRequest over socket" {
             // reads return 0 instead of blocking, so no iteration can hang.
             var fds: [2]std.posix.fd_t = undefined;
             if (std.c.socketpair(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0, &fds) != 0) return;
-            var client = TcpStream{ .handle = fds[0] };
-            var conn = TcpStream{ .handle = fds[1] };
+            var client = http.TcpStream{ .handle = fds[0] };
+            var conn = http.TcpStream{ .handle = fds[1] };
             defer client.close();
             defer conn.close();
 
@@ -8873,11 +8503,11 @@ test "fuzz: readHttpRequest over socket" {
             // Deliberately small buffer: oversized Content-Length must land in
             // `.body_too_large`, exercising that branch without a 1 MB array.
             var read_buf: [256]u8 = undefined;
-            switch (readHttpRequest(conn, &read_buf)) {
+            switch (http.readHttpRequest(conn, &read_buf, max_request_body_size)) {
                 .ok => |req| {
                     // Pair assertion across the trust boundary: the declared
                     // Content-Length must equal the delivered body byte count.
-                    try std.testing.expectEqual(parseContentLength(req.headers).?, req.body.len);
+                    try std.testing.expectEqual(http.parseContentLength(req.headers).?, req.body.len);
                     // Every parsed slice must live inside the read buffer.
                     // Empty slices may be static literals, only check real ones.
                     const slices = [_][]const u8{ req.method, req.path, req.query, req.headers, req.body };
@@ -8911,9 +8541,9 @@ test "fuzz: HTTP header and request-line helpers" {
 
             // getHeaderValue: any returned value must be a subslice of the
             // input, and must not contain the line separator.
-            _ = acceptsEncoding(headers, "gzip");
-            _ = ifNoneMatch(headers, "\"abc\"");
-            if (getHeaderValue(headers, "host")) |val| {
+            _ = http.acceptsEncoding(headers, "gzip");
+            _ = http.ifNoneMatch(headers, "\"abc\"");
+            if (http.getHeaderValue(headers, "host")) |val| {
                 const v0 = @intFromPtr(val.ptr);
                 const v1 = v0 + val.len;
                 const h0 = @intFromPtr(headers.ptr);
@@ -8924,7 +8554,7 @@ test "fuzz: HTTP header and request-line helpers" {
 
             // parseRequestLine + splitPathQuery: parsed slices stay inside the
             // line; path/query cannot contain spaces (split happens first).
-            if (parseRequestLine(headers)) |line| {
+            if (http.parseRequestLine(headers)) |line| {
                 const h0 = @intFromPtr(headers.ptr);
                 const h1 = h0 + headers.len;
                 for ([_][]const u8{ line.method, line.path, line.query }) |s| {
@@ -8935,7 +8565,7 @@ test "fuzz: HTTP header and request-line helpers" {
             }
 
             // extractQueryParam: returned value is a query subslice.
-            if (extractQueryParam(headers, "prompt")) |val| {
+            if (http.extractQueryParam(headers, "prompt")) |val| {
                 const v0 = @intFromPtr(val.ptr);
                 const h0 = @intFromPtr(headers.ptr);
                 try std.testing.expect(v0 >= h0 and v0 + val.len <= h0 + headers.len);
@@ -8943,17 +8573,17 @@ test "fuzz: HTTP header and request-line helpers" {
 
             // parseContentLength: duplicate Content-Length must be rejected
             // regardless of surrounding junk (RFC 7230 §3.3.3 smuggling guard).
-            _ = parseContentLength(headers);
+            _ = http.parseContentLength(headers);
             var dup_buf: [128]u8 = undefined;
             const dup = std.fmt.bufPrint(&dup_buf, "Content-Length: 5\r\n{s}\r\ncontent-length: 7", .{headers[0..@min(headers.len, 64)]}) catch return;
-            try std.testing.expect(parseContentLength(dup) == null);
+            try std.testing.expect(http.parseContentLength(dup) == null);
 
             // originMatchesHost: a positive verdict implies scheme-stripped
             // case-insensitive equality with no delimiter characters.
             const sep = smith.indexWithHash(len + 1, 2);
             const origin = headers[0..sep];
             const host = headers[@min(sep, len)..];
-            if (originMatchesHost(origin, host)) {
+            if (http.originMatchesHost(origin, host)) {
                 const rest = if (std.mem.startsWith(u8, origin, "https://"))
                     origin["https://".len..]
                 else
@@ -8965,15 +8595,15 @@ test "fuzz: HTTP header and request-line helpers" {
             // sanitizeClientRequestId: either rejects (0) or copies the whole
             // input; never panics or returns a length that would overrun `out`.
             var out: [max_client_request_id_len]u8 = undefined;
-            const n = sanitizeClientRequestId(headers, &out);
+            const n = http.sanitizeClientRequestId(headers, &out);
             try std.testing.expect(n == 0 or n == headers.len);
             if (n > 0) try std.testing.expectEqualStrings(headers, out[0..n]);
 
             // isLoopbackHttpHost: a positive verdict is localhost, ::1, or 127/8.
-            _ = isLoopbackHttpHost(host);
-            _ = isLoopbackHttpHost(origin);
-            if (isLoopbackHttpHost(host)) {
-                const hn = hostnameFromHost(host);
+            _ = http.isLoopbackHttpHost(host);
+            _ = http.isLoopbackHttpHost(origin);
+            if (http.isLoopbackHttpHost(host)) {
+                const hn = http.hostnameFromHost(host);
                 const name = if (hn.len > 0 and hn[hn.len - 1] == '.') hn[0 .. hn.len - 1] else hn;
                 const loop = std.ascii.eqlIgnoreCase(name, "localhost") or
                     std.mem.eql(u8, name, "::1") or
