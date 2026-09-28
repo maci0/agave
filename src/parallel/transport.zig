@@ -361,6 +361,19 @@ pub const Transport = struct {
             _ = std.c.close(self.shm_recv_fd);
             self.shm_recv_fd = -1;
         }
+        // The peer names a fixed region, so a same-user process can pre-create
+        // it. Verify the segment is ours and long enough before mapping it: a
+        // short segment would fault (SIGBUS) on the first write past its end.
+        var recv_st: posix.Stat = undefined;
+        if (std.c.fstat(self.shm_recv_fd, &recv_st) != 0) return error.ShmOpenFailed;
+        if (recv_st.uid != std.c.geteuid()) {
+            std.log.err("shm: {s} is not owned by this user, refusing to map it", .{recv_name});
+            return error.ShmOpenFailed;
+        }
+        if (@as(u64, @intCast(@max(recv_st.size, 0))) < shm_region_size) {
+            std.log.err("shm: {s} is {d} bytes, need {d}", .{ recv_name, recv_st.size, shm_region_size });
+            return error.ShmOpenFailed;
+        }
         const recv_ptr = posix.system.mmap(null, shm_region_size, @bitCast(shm_PROT_RW), @bitCast(shm_MAP_SHARED), self.shm_recv_fd, 0);
         if (recv_ptr == posix.system.MAP_FAILED) return error.ShmMmapFailed;
         self.shm_recv = @ptrCast(@alignCast(recv_ptr));

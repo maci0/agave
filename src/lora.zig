@@ -147,23 +147,44 @@ fn applyLoraGgufFile(
             continue;
         }
 
-        // Dequant lora_a [rank × k] and lora_b [n × rank] to F32
-        const la = try allocator.alloc(f32, rank * k);
-        defer allocator.free(la);
-        quant.dequantToF32(la, lora_file.tensorData(&lora_a_info), gguf.GGUFFile.ggmlToDType(lora_a_info.ggml_type), rank * k);
+        // rank comes from the adapter file, so rank * k can overflow: a
+        // wrapped product would allocate a short buffer and dequant past its
+        // end. Check the products and require the file to actually hold the
+        // elements each dequant reads.
+        const la_len = std.math.mul(usize, rank, k) catch {
+            std.log.warn("LoRA: skipping '{s}', rank * k overflows ({d} * {d})", .{ base_suffix, rank, k });
+            continue;
+        };
+        const lb_len = std.math.mul(usize, n, rank) catch {
+            std.log.warn("LoRA: skipping '{s}', n * rank overflows ({d} * {d})", .{ base_suffix, n, rank });
+            continue;
+        };
+        const merged_len = std.math.mul(usize, n, k) catch {
+            std.log.warn("LoRA: skipping '{s}', n * k overflows ({d} * {d})", .{ base_suffix, n, k });
+            continue;
+        };
+        if (lora_a_info.numElements() < la_len or lora_b_info.numElements() < lb_len or base_ti.numElements() < merged_len) {
+            std.log.warn("LoRA: skipping '{s}', adapter tensor is smaller than its declared shape", .{base_suffix});
+            continue;
+        }
 
-        const lb = try allocator.alloc(f32, n * rank);
+        // Dequant lora_a [rank × k] and lora_b [n × rank] to F32
+        const la = try allocator.alloc(f32, la_len);
+        defer allocator.free(la);
+        quant.dequantToF32(la, lora_file.tensorData(&lora_a_info), gguf.GGUFFile.ggmlToDType(lora_a_info.ggml_type), la_len);
+
+        const lb = try allocator.alloc(f32, lb_len);
         defer allocator.free(lb);
-        quant.dequantToF32(lb, lora_file.tensorData(&lora_b_info), gguf.GGUFFile.ggmlToDType(lora_b_info.ggml_type), n * rank);
+        quant.dequantToF32(lb, lora_file.tensorData(&lora_b_info), gguf.GGUFFile.ggmlToDType(lora_b_info.ggml_type), lb_len);
 
         // Allocate merged buffer [n × k]. Start from a previous adapter if present
         // so stacked applies compose; otherwise dequant the mmap base.
-        const merged = try allocator.alloc(f32, n * k);
+        const merged = try allocator.alloc(f32, merged_len);
         errdefer allocator.free(merged);
         if (base_gguf.lora_overrides.get(base_ti.name)) |ov| {
             @memcpy(merged, ov.data);
         } else {
-            quant.dequantToF32(merged, base_gguf.tensorData(base_ti), gguf.GGUFFile.ggmlToDType(base_ti.ggml_type), n * k);
+            quant.dequantToF32(merged, base_gguf.tensorData(base_ti), gguf.GGUFFile.ggmlToDType(base_ti.ggml_type), merged_len);
         }
 
         // Add LoRA delta: merged += scale * (lb[n,rank] @ la[rank,k])
