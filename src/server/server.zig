@@ -764,15 +764,22 @@ const Server = struct {
         return false;
     }
 
-    /// Claim the caller's `X-Request-Id` in the replay ledger. A request
-    /// without a client id has nothing to deduplicate on and always runs.
-    /// A fresh claim's token is stashed in `log_idem_token` for this thread.
-    fn claimIdempotencyKey(self: *Server) Idempotency.Claim {
+    /// Claim the caller's `X-Request-Id` in the replay ledger, scoped to
+    /// `route`: the id alone is client-chosen and would replay across
+    /// operations. A request without a client id has nothing to deduplicate on
+    /// and always runs. A fresh claim's token and route are stashed in
+    /// `log_idem_token` / `log_idem_route` for this thread.
+    fn claimIdempotencyKey(self: *Server, route: []const u8) Idempotency.Claim {
         const key = log_client_rid[0..log_client_rid_len];
         if (key.len == 0) return .{ .fresh = 0 };
+        log_idem_route_len = 0;
+        if (route.len <= Idempotency.max_route_len) {
+            @memcpy(log_idem_route[0..route.len], route);
+            log_idem_route_len = route.len;
+        }
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        const claim = self.idem.claim(key, milliTimestamp());
+        const claim = self.idem.claim(key, log_idem_route[0..log_idem_route_len], milliTimestamp());
         log_idem_token = if (claim == .fresh) claim.fresh else 0;
         return claim;
     }
@@ -785,7 +792,7 @@ const Server = struct {
         if (key.len == 0 or log_idem_token == 0) return;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.idem.complete(key, log_idem_token, milliTimestamp(), status_line, content_type, body);
+        self.idem.complete(key, log_idem_route[0..log_idem_route_len], log_idem_token, milliTimestamp(), status_line, content_type, body);
     }
 
     /// Drop an unfinished claim so a failed request does not block its retries.
@@ -794,7 +801,7 @@ const Server = struct {
         if (key.len == 0 or log_idem_token == 0) return;
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.idem.release(key, log_idem_token);
+        self.idem.release(key, log_idem_route[0..log_idem_route_len], log_idem_token);
     }
 
     /// Deep-copy the conversation views into `arena` so they stay valid after
@@ -1020,6 +1027,11 @@ threadlocal var log_client_rid_len: usize = 0;
 /// to the claim this request actually took, so a request that outlives the
 /// in-flight TTL cannot complete or release the retry that replaced it.
 threadlocal var log_idem_token: u64 = 0;
+/// Route this handler thread claimed its replay key on. Set by
+/// `claimIdempotencyKey` and read by the complete/release helpers, which have
+/// no other handle on which route the token belongs to.
+threadlocal var log_idem_route: [Idempotency.max_route_len]u8 = undefined;
+threadlocal var log_idem_route_len: usize = 0;
 /// Visual token count from processVisionImage for the current handler thread only.
 /// Must not live on Server: concurrent text requests would observe another
 /// connection's count and inject bogus image pad tokens into the prompt.
@@ -1427,7 +1439,7 @@ fn sendHtml(stream: http.TcpStream, body: []const u8) void {
 /// Returns true when the response was sent and the caller must not run the
 /// operation again; false when this request owns the key and should proceed.
 fn resolveIdempotency(stream: http.TcpStream, method: []const u8, path: []const u8, request_start: i64) bool {
-    switch (g_server.claimIdempotencyKey()) {
+    switch (g_server.claimIdempotencyKey(path)) {
         .fresh => return false,
         .duplicate => {
             sendJsonErrorEx(stream, "409 Conflict", "invalid_request_error", "A request with this X-Request-Id is still in flight", null, "duplicate_request");
