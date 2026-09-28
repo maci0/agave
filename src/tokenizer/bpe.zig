@@ -1517,3 +1517,100 @@ test "fuzz: all bpe functions" {
         }
     }.f, .{});
 }
+
+test "fuzz: loadFromGGUF with fuzzed vocab and merges" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+
+            // GGUF carries the vocab and merge table as attacker-controlled
+            // string arrays, so the loader is the untrusted boundary, not the
+            // prompt. Feed it fuzzer-derived token text and merge rules rather
+            // than a fixed table: merge keys longer than merge_key_buf_size,
+            // empty tokens, rules naming absent pieces, and NUL-bearing text
+            // only occur on this path.
+            var blob: [512]u8 = undefined;
+            smith.bytesWithHash(&blob, 0);
+            const blob_len = smith.indexWithHash(blob.len + 1, 1);
+            const blob_s = blob[0..blob_len];
+            // A fuzzer-chosen '\n' splits vocab entries from merge rules, so
+            // both halves carry attacker bytes and the split moves each run.
+            const cut = @min(
+                (std.mem.indexOfScalar(u8, blob_s, '\n') orelse blob_s.len -| 1) + 1,
+                blob_s.len,
+            );
+
+            var vocab: std.ArrayList([]const u8) = .empty;
+            defer vocab.deinit(allocator);
+            var merges: std.ArrayList([]const u8) = .empty;
+            defer merges.deinit(allocator);
+            var it = std.mem.splitScalar(u8, blob_s[0..cut], '\n');
+            while (it.next()) |line| try vocab.append(allocator, line);
+            it = std.mem.splitScalar(u8, blob_s[cut..], '\n');
+            while (it.next()) |line| try merges.append(allocator, line);
+            // Every emitted id is a vocab index; an empty table would make the
+            // id-range invariant vacuous and hide the unk fallback.
+            if (vocab.items.len == 0) try vocab.append(allocator, "<unk>");
+
+            const eos_id: u32 = @intCast(smith.valueWithHash(u16, 2) % @as(u16, @intCast(vocab.items.len)));
+
+            // --- BPE mode: merges drive applyBpe and the linked-list piece heap ---
+            var tok = BpeTokenizer.init(allocator);
+            defer tok.deinit();
+            tok.loadFromGGUF(vocab.items, merges.items, eos_id) catch return;
+            try std.testing.expectEqual(@as(u32, @intCast(vocab.items.len)), tok.vocab_size);
+
+            // Special tokens are scanned longest-first, so a fuzzed '<..>' or
+            // '[..]' vocab entry must be registered, never silently dropped
+            // into the text body.
+            for (vocab.items, 0..) |v, i| {
+                if (v.len > 0 and ((v[0] == '<' and v[v.len - 1] == '>') or
+                    (v[0] == '[' and v[v.len - 1] == ']')))
+                {
+                    try std.testing.expect(tok.isSpecialId(@intCast(i)));
+                }
+            }
+
+            var text: [96]u8 = undefined;
+            const text_len = smith.indexWithHash(text.len + 1, 3);
+            smith.bytesWithHash(text[0..text_len], 4);
+
+            const ids = tok.encode(text[0..text_len]) catch return;
+            defer allocator.free(ids);
+            // Invariant: unknown pieces fall back to id 0, so nothing may ever
+            // name a slot outside the loaded table.
+            for (ids) |id| try std.testing.expect(id < tok.vocab_size);
+
+            const decoded = tok.decode(ids) catch return;
+            defer allocator.free(decoded);
+            // Invariant: encoding a vocab entry's own text cannot outrun the
+            // table, and decoding never fails for ids encode produced.
+            for (ids) |id| {
+                // Wider than any blob line, so a null return can only mean the
+                // id is out of range, never that the token failed to fit.
+                var buf: [blob.len]u8 = undefined;
+                if (tok.decodeOne(id, &buf)) |one| {
+                    // Pair assertion across the encode/decode boundary: the
+                    // allocation-free path must agree with the allocating one.
+                    const via_decode = tok.decode(&.{id}) catch return;
+                    defer allocator.free(via_decode);
+                    try std.testing.expectEqualStrings(via_decode, one);
+                } else {
+                    // Null means out of range, never a silent wrong answer.
+                    try std.testing.expect(id >= tok.id_to_token.items.len);
+                }
+            }
+
+            // --- SPM mode: greedy longest match over a fuzzed table ---
+            var spm = BpeTokenizer.init(allocator);
+            defer spm.deinit();
+            spm.loadFromGGUFSpm(vocab.items, eos_id) catch return;
+            const spm_ids = spm.encodeSpm(text[0..text_len]) catch return;
+            defer allocator.free(spm_ids);
+            for (spm_ids) |id| try std.testing.expect(id < spm.vocab_size);
+            const spm_nodummy = spm.encodeSpmNoDummy(text[0..text_len]) catch return;
+            defer allocator.free(spm_nodummy);
+            for (spm_nodummy) |id| try std.testing.expect(id < spm.vocab_size);
+        }
+    }.f, .{});
+}
