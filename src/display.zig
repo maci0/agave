@@ -6,6 +6,7 @@ const std = @import("std");
 const Io = std.Io;
 const posix = std.posix;
 const term = @import("term.zig");
+const config = @import("config.zig");
 
 /// ANSI escape: erase from cursor to end of line (EL0).
 const erase_line = "\x1b[K";
@@ -44,7 +45,8 @@ pub fn termIsDumbValue(val: ?[]const u8) bool {
 }
 
 /// True when NO_COLOR is present and non-empty (https://no-color.org).
-/// `NO_COLOR=` (empty) keeps auto behavior.
+/// `NO_COLOR=` (empty) keeps auto behavior. `getenvNoColor` reads through
+/// `config.getenv`, so a whitespace-only value is unset here too.
 pub fn noColorValue(val: ?[]const u8) bool {
     const v = val orelse return false;
     return v.len > 0;
@@ -57,13 +59,11 @@ pub fn versionDecorate(tty: bool, term_val: ?[]const u8, no_color: ?[]const u8) 
 }
 
 fn getenvTerm() ?[]const u8 {
-    const result = std.c.getenv("TERM") orelse return null;
-    return std.mem.span(result);
+    return config.getenv("TERM");
 }
 
 fn getenvNoColor() ?[]const u8 {
-    const result = std.c.getenv("NO_COLOR") orelse return null;
-    return std.mem.span(result);
+    return config.getenv("NO_COLOR");
 }
 
 /// Print version to stdout. Cactus emoji only when `decorate` is true.

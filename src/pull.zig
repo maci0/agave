@@ -29,7 +29,8 @@ const progress_interval_ns: u64 = 500 * std.time.ns_per_ms;
 const max_retries: u32 = 3;
 /// Doubles per attempt: 1s, 2s, 4s.
 const retry_base_delay_ns: u64 = 1 * std.time.ns_per_s;
-const hf_api_base = "https://huggingface.co";
+/// Public Hugging Face API base, used when `HF_ENDPOINT` is unset.
+const hf_api_base_default = "https://huggingface.co";
 /// Prevents OOM from malicious server.
 const max_api_response_size: usize = 10 * 1024 * 1024;
 const progress_bar_width: usize = 30;
@@ -332,6 +333,10 @@ pub fn parseArgs(args_iter: *std.process.Args.Iterator) PullError!?PullArgs {
     // auth with a confusing 401; getenv treats those as unset.
     result.token = config.getenv("HF_TOKEN");
 
+    // Reject a malformed HF_ENDPOINT before any request, not on the first
+    // network call, so a mirror typo names itself in the error.
+    _ = hfApiBase() catch |err| return err;
+
     var past_options = false;
 
     while (args_iter.next()) |arg| {
@@ -434,6 +439,26 @@ fn siblingSize(sibling: std.json.Value) u64 {
     };
 }
 
+/// Resolve the Hugging Face API base URL: `HF_ENDPOINT` when set, otherwise
+/// the public endpoint. A trailing `/` is trimmed so callers appending
+/// `/api/...` cannot build a double slash. A value that is not an http(s) URL
+/// is rejected here, at startup, instead of producing an unparseable URL at
+/// the first request. `HF_ENDPOINT` is the name the `huggingface_hub` tooling
+/// uses, so a mirror already configured for it works unchanged.
+pub fn hfApiBase() PullError![]const u8 {
+    return resolveHfApiBase(config.getenv("HF_ENDPOINT"));
+}
+
+fn resolveHfApiBase(val: ?[]const u8) PullError![]const u8 {
+    const v = val orelse return hf_api_base_default;
+    const trimmed = std.mem.trimEnd(u8, v, "/");
+    if (!std.mem.startsWith(u8, trimmed, "https://") and !std.mem.startsWith(u8, trimmed, "http://")) {
+        eprint("Error: HF_ENDPOINT must be an http(s) URL, got '{s}'\n", .{v});
+        return PullError.InvalidArgument;
+    }
+    return trimmed;
+}
+
 /// Fetch the list of model files available in a HuggingFace repository.
 ///
 /// Makes a GET request to the HuggingFace API and parses the JSON response
@@ -445,8 +470,8 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
     errdefer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    // Build API URL: https://huggingface.co/api/models/{repo}
-    const url = std.fmt.allocPrint(arena_alloc, "{s}/api/models/{s}", .{ hf_api_base, repo }) catch |e| switch (e) {
+    // Build API URL: {endpoint}/api/models/{repo}
+    const url = std.fmt.allocPrint(arena_alloc, "{s}/api/models/{s}", .{ try hfApiBase(), repo }) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
     };
 
@@ -1044,7 +1069,7 @@ fn downloadFile(
     expected_size: u64,
 ) PullError!void {
     // Build download URL.
-    const url = std.fmt.allocPrint(allocator, "{s}/{s}/resolve/main/{s}", .{ hf_api_base, repo, filename }) catch
+    const url = std.fmt.allocPrint(allocator, "{s}/{s}/resolve/main/{s}", .{ try hfApiBase(), repo, filename }) catch
         return PullError.DownloadFailed;
     defer allocator.free(url);
 
@@ -2330,4 +2355,14 @@ test "fuzz: pull helper functions" {
             try std.testing.expect(bar.len > 0);
         }
     }.f, .{});
+}
+
+test "HF_ENDPOINT overrides the API base and rejects a non-URL" {
+    try std.testing.expectEqualStrings(hf_api_base_default, try resolveHfApiBase(null));
+    try std.testing.expectEqualStrings("https://hf-mirror.internal", try resolveHfApiBase("https://hf-mirror.internal"));
+    try std.testing.expectEqualStrings("https://hf-mirror.internal", try resolveHfApiBase("https://hf-mirror.internal/"));
+    try std.testing.expectEqualStrings("http://localhost:8080", try resolveHfApiBase("http://localhost:8080/"));
+    try std.testing.expectError(PullError.InvalidArgument, resolveHfApiBase("hf-mirror.internal"));
+    try std.testing.expectError(PullError.InvalidArgument, resolveHfApiBase("ftp://huggingface.co"));
+    try std.testing.expectError(PullError.InvalidArgument, resolveHfApiBase("/"));
 }

@@ -32,11 +32,32 @@ See [Versioning & Releases](CONTRIBUTING.md#versioning--releases).
 | `AGAVE_HOST` | Bind address (default: `127.0.0.1`). Empty/whitespace is unset. `--host` wins when both are set. |
 | `AGAVE_PORT` | Listen port (default: `49453`). Empty/whitespace is unset. `--port` wins when both are set. |
 | `HF_TOKEN` | Hugging Face token for private model downloads (`agave pull`). Empty/whitespace is unset. |
+| `HF_ENDPOINT` | Hugging Face API base URL for `agave pull` (default `https://huggingface.co`). Must start with `http://` or `https://`; a trailing `/` is trimmed. Use it for a mirror or an air-gapped gateway. Empty/whitespace is unset. |
 | `HF_HOME` | Hugging Face cache directory (default: `~/.cache/huggingface`) |
-| `XDG_CACHE_HOME` | Base cache directory when `HF_HOME` is not set |
+| `XDG_CACHE_HOME` | Base cache directory when `HF_HOME` is not set. Also the conversation store location (`$XDG_CACHE_HOME/agave/conversations.json`) and the base for extracted video frames. |
+| `HOME` | Fallback base directory when `XDG_CACHE_HOME` is unset (`$HOME/.cache`) |
+| `TMPDIR` | Base directory for extracted video frames, taking precedence over `XDG_CACHE_HOME` and `HOME` |
 | `AGAVE_VISION_DEBUG` | Dump vision encoder intermediate buffers when set to `1` (`0` disables, any other value warns and stays off) |
 | `AGAVE_DF2_DEBUG` | Dump DFlash2 speculation-round traces when set to `1` (`0` disables, any other value warns and stays off) |
-| `NO_COLOR` | Disable colored terminal output (respects [no-color.org](https://no-color.org) convention) |
+| `TERM` | Terminal type. `dumb` disables color and decorations; every other value is auto (color on a TTY). |
+| `NO_COLOR` | Disable colored terminal output (respects [no-color.org](https://no-color.org) convention). Empty/whitespace is unset, so `NO_COLOR=` keeps auto behavior. |
+
+Every variable above is read through `src/config.zig`, which treats missing,
+empty, and whitespace-only values as unset, so a sourced `.env.example` (which
+leaves values blank) behaves exactly like an unset variable.
+
+### Docker Compose variables
+
+`docker-compose.yml` substitutes these itself. Except `AGAVE_PORT` (forwarded
+to the process as well), they are not read by the `agave` process and are never
+forwarded into the container.
+
+| Variable | Description |
+|----------|-------------|
+| `AGAVE_HOST_BIND` | Host address published to the container port (default `127.0.0.1`, loopback only) |
+| `AGAVE_MODEL` | Model path inside the container (default `/models/model.gguf`) |
+| `AGAVE_MODELS_DIR` | Host directory mounted read-only at `/models` (default `./models`) |
+| `AGAVE_CACHE_DIR` | Host path or named volume backing `/home/agave/.cache` (default volume `agave-cache`) |
 
 ---
 

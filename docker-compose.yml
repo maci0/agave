@@ -38,12 +38,14 @@ services:
     environment:
       AGAVE_PORT: ${AGAVE_PORT:-49453}
       AGAVE_API_KEY: ${AGAVE_API_KEY:?Set AGAVE_API_KEY in .env (see .env.example)}
-      # Optional; empty is treated as unset (HF_TOKEN, NO_COLOR,
+      # Optional; empty is treated as unset (HF_TOKEN, HF_ENDPOINT, NO_COLOR,
       # AGAVE_VISION_DEBUG, AGAVE_DF2_DEBUG). Compose-only vars
       # (AGAVE_HOST_BIND, AGAVE_MODELS_DIR, AGAVE_CACHE_DIR, AGAVE_MODEL)
       # are consumed here, not forwarded. HF_HOME and XDG_CACHE_HOME stay
       # out: the named volume replaces ~/.cache, and image HOME is set below.
       HF_TOKEN: ${HF_TOKEN:-}
+      # Mirror or air-gapped Hub gateway; empty keeps huggingface.co.
+      HF_ENDPOINT: ${HF_ENDPOINT:-}
       NO_COLOR: ${NO_COLOR:-}
       AGAVE_VISION_DEBUG: ${AGAVE_VISION_DEBUG:-}
       AGAVE_DF2_DEBUG: ${AGAVE_DF2_DEBUG:-}
@@ -64,8 +66,10 @@ services:
     # ENTRYPOINT is already: agave --host 0.0.0.0
     command: ["${AGAVE_MODEL:-/models/model.gguf}", "--serve"]
     restart: unless-stopped
-    # Must exceed the server's 30s connection-drain timeout (server.zig) plus
-    # scheduler join/cleanup; equal budgets get SIGKILLed mid-cleanup.
+    # SIGTERM starts a graceful drain (server.zig): the server logs a warning
+    # once in-flight connections have held it for 30s but keeps waiting for
+    # them, so it only exits when they finish. This budget must cover the
+    # longest in-flight request; past it compose SIGKILLs mid-stream.
     stop_grace_period: 40s
     security_opt:
       - no-new-privileges:true
