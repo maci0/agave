@@ -8,6 +8,7 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 
 ```bash
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe) + agave-bench
+zig build doctor                   # report whether this machine can run `zig build ci`, and name what is missing
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
 zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python
 zig build check                    # fmt-check + docs hygiene + pin consistency + third-party notices + unit tests + Python unit tests + conv-store backup self-test (local CI gate)

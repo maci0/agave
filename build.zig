@@ -659,6 +659,14 @@ pub fn build(b: *std.Build) void {
         const lint_shell_step = b.step("lint-shell", "shellcheck (CI lint-shell job)");
         lint_shell_step.dependOn(&lint_shell_cmd.step);
 
+        // The toolchains `ci` needs are each enforced by the half that uses
+        // them, so a missing one surfaces as a failure partway through a long
+        // gate. This reports the whole list in one short run first.
+        const doctor_cmd = b.addSystemCommand(&.{ "bash", "scripts/doctor.sh" });
+        doctor_cmd.setCwd(repo_cwd);
+        doctor_cmd.has_side_effects = true;
+        b.step("doctor", "Report whether this machine can run `zig build ci`, and what is missing").dependOn(&doctor_cmd.step);
+
         const lint_python_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-python.sh" });
         lint_python_cmd.setCwd(repo_cwd);
         lint_python_cmd.has_side_effects = true;
