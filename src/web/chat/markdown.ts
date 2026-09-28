@@ -25,6 +25,9 @@ const HLJS_STYLE_INTEGRITY = 'sha384-o5F1vUaMNOmou1sQrsWiFo4/QUGSV0svqNZW+EesmKx
  *  never ran. */
 const CDN_SCRIPT_TIMEOUT_MS = 10_000;
 
+/** How long a copy key keeps its "Copied" state before it returns to "Copy". */
+const COPY_REVERT_MS = 2000;
+
 /**
  * The deferred CDN libraries, read off `globalThis` rather than as bare
  * identifiers. A free `marked` reference throws a ReferenceError until the
@@ -222,11 +225,22 @@ const decorateCodeBlock = (block: Element): void => {
   copy.type = 'button';
   copy.className = 'copy-btn';
   copy.textContent = 'Copy';
-  copy.setAttribute('aria-label', lang ? `Copy ${lang} code` : 'Copy code');
+  // The key reports its result by swapping its text, so it is a live region:
+  // A screen reader that is not reading the page still has to hear that the
+  // Clipboard write landed (SC 4.1.3), and the name has to stop saying
+  // "Copy" once it did.
+  copy.setAttribute('aria-live', 'polite');
+  const what = lang === '' ? 'code' : `${lang} code`;
+  copy.setAttribute('aria-label', `Copy ${what}`);
   copy.addEventListener('click', function () {
     void copyText(block.textContent).then(function (result) {
+      const state = result === 'copied' ? 'copied' : 'failed';
       copy.textContent = result === 'copied' ? 'Copied' : 'Failed';
-      setTimeout(function () { copy.textContent = 'Copy'; }, 2000);
+      copy.setAttribute('aria-label', `Copy ${what}, ${state}`);
+      setTimeout(function () {
+        copy.textContent = 'Copy';
+        copy.setAttribute('aria-label', `Copy ${what}`);
+      }, COPY_REVERT_MS);
     });
   });
   pre.append(copy);
