@@ -11,6 +11,16 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Fixed
+- A debug env var set to something other than `1` or `0` (`AGAVE_DF2_DEBUG=true`)
+  leaves the flag off and now warns at startup instead of looking ignored.
+- `--host`/`--port` and their `AGAVE_HOST`/`AGAVE_PORT` counterparts both set
+  prints which one won. The Docker image ENTRYPOINT passes `--host 0.0.0.0`, so
+  `AGAVE_HOST` used to lose silently.
+- A `.cal` file that exists but cannot be parsed (bad magic, truncated, wrong
+  version) stops `--kv-eviction tri` at startup instead of running TriAttention
+  against empty statistics, which was reported as "no .cal file found".
+
 ### Changed
 - The REPL `/clear` and `/reset` commands also drop the line history, so the
   prompts the conversation held cannot be recalled with the up arrow after a

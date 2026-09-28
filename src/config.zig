@@ -28,6 +28,18 @@ pub fn envFlagIsOne(val: ?[]const u8) bool {
     return std.mem.eql(u8, v, "1");
 }
 
+/// The value of a debug/feature env var that `envFlagIsOne` will not accept, or
+/// null when the var is unset or already `1`.
+///
+/// `0` is accepted as a deliberate "off". Anything else (`true`, `yes`, `on`)
+/// leaves the flag off by design, so callers pass the result to a warning to
+/// keep a `.env` typo from silently disabling a debug switch.
+pub fn unsupportedEnvFlagValue(val: ?[]const u8) ?[]const u8 {
+    const v = nonemptyEnv(val) orelse return null;
+    if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "0")) return null;
+    return v;
+}
+
 /// Get an environment variable (Zig 0.16 idiom via C getenv).
 /// Empty and whitespace-only values are unset (see `nonemptyEnv`).
 pub fn getenv(name: []const u8) ?[]const u8 {
@@ -60,4 +72,20 @@ test "envFlagIsOne requires trimmed 1" {
 
 test "getenv returns null for a variable that is not set" {
     try std.testing.expect(getenv("AGAVE_TEST_UNSET_ENV_VAR_12345") == null);
+}
+
+test "unsupportedEnvFlagValue reports only values that leave the flag off" {
+    try std.testing.expect(unsupportedEnvFlagValue(null) == null);
+    try std.testing.expect(unsupportedEnvFlagValue("") == null);
+    try std.testing.expect(unsupportedEnvFlagValue("  ") == null);
+    try std.testing.expect(unsupportedEnvFlagValue("1") == null);
+    try std.testing.expect(unsupportedEnvFlagValue(" 1 ") == null);
+    try std.testing.expect(unsupportedEnvFlagValue("0") == null);
+    try std.testing.expectEqualStrings("true", unsupportedEnvFlagValue("true").?);
+    try std.testing.expectEqualStrings("yes", unsupportedEnvFlagValue(" yes ").?);
+    try std.testing.expectEqualStrings("on", unsupportedEnvFlagValue("on").?);
+    // Every value it reports is one envFlagIsOne rejects.
+    for ([_][]const u8{ "true", "yes", "on", "2", "01", "TRUE" }) |bad| {
+        try std.testing.expect(!envFlagIsOne(bad));
+    }
 }

@@ -563,7 +563,7 @@ pub fn readCalFile(allocator: Allocator, io: Io, path: []const u8) ![]kv_evict.T
 
     // Read data arrays (header is 28 bytes: magic(4) + version(4) + fields(20))
     const data_offset: u64 = 28;
-    const array_bytes = band_count * @sizeOf(f32);
+    const array_bytes = std.math.mul(usize, band_count, @sizeOf(f32)) catch return error.InvalidFormat;
 
     var q_center_norm = try allocator.alloc(f32, band_count);
     errdefer allocator.free(q_center_norm);
