@@ -116,11 +116,17 @@ must still appear under **Changed** or **Breaking** below. See
 - The REPL `/clear` and `/reset` commands also drop the line history, so the
   prompts the conversation held cannot be recalled with the up arrow after a
   clear. Prompt and reply buffers are also zeroed before they are freed.
-- The committed web bundles are whitespace- and syntax-minified but no longer
-  identifier-mangled. `scripts/check-web-artifacts.sh` byte-compares them, and
-  bun's identifier mangler is not reproducible across sessions, so the gate could
-  report a stale artifact for a byte-identical program. The serve page grows
-  from 122 KB to about 158 KB gzipped.
+- The committed web bundles are fully minified again, identifiers included.
+  `src/web/app.js` is inlined into the single HTML document the server sends,
+  so its whole compressed size sits on the first-paint path: the serve page
+  drops from 152 KB to 116 KB gzipped and `web/shell.js` from 114 KB to 84 KB.
+  The mangled and unmangled bundles agree byte-for-byte between bun 1.4.0 and
+  1.4.2, and repeated builds of the same sources are byte-identical, so the
+  artifact-freshness gate still byte-compares a deterministic output.
+- `scripts/check-web-artifacts.sh` holds each committed web artifact to a
+  compressed-size ceiling (`gzip -9`, the encoding the server sends) and fails
+  when one grows past it, so bundle weight cannot accrete unnoticed between
+  two diffs that look like a routine dependency bump.
 
 ## [0.6.0] - 2026-09-28
 
