@@ -76,6 +76,9 @@ Thumbs.db
 # copies it to /usr/share/doc/agave/copyright (GPL-3.0-or-later).
 docs/
 *.md
+# ...except the notices for the third-party code in the embedded web bundle,
+# which the runtime stage copies to /usr/share/doc/agave as well.
+!THIRD_PARTY_NOTICES.md
 
 # Log files
 *.log

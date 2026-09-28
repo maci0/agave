@@ -47,6 +47,13 @@ jobs:
       - name: Check Zig and Docker reproducibility pins agree
         run: scripts/check-pins.sh
 
+      # src/web/app.js and web/shell.js are minified bundles of React, Radix
+      # and friends. The bundler strips their license headers, so this file is
+      # the only record that travels with them; a dependency bump that is not
+      # listed there ships third-party code with no traceable grant.
+      - name: Third-party notices cover the shipped bundles
+        run: python3 scripts/check-third-party-notices.py
+
       - name: Check formatting
         run: zig fmt --check src/ tests/ build.zig build.zig.zon
 

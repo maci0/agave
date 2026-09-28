@@ -225,6 +225,9 @@ COPY --link --from=build /agave-version /usr/share/agave/version
 # non-root runtime user (uid 10001), so `cat .../copyright` fails with EACCES.
 RUN mkdir -p -m 0755 /usr/share/doc/agave
 COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
+# Notices for the third-party code bundled into the embedded web UI, which the
+# minifier leaves headerless. Travels with the binary for the same reason.
+COPY --link --chmod=0644 THIRD_PARTY_NOTICES.md /usr/share/doc/agave/third-party-notices.md
 # Man page, generated from `agave --help` by scripts/gen-manpage.sh. The slim
 # base ships no man binary, so this is for `docker cp` or a bind mount, not for
 # `man` inside the container.
