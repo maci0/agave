@@ -1263,8 +1263,10 @@ const html_page_hash = blk: {
 const html_etag = std.fmt.comptimePrint("\"{x}\"", .{html_page_hash});
 const html_etag_gzip = std.fmt.comptimePrint("\"{x}-gzip\"", .{html_page_hash});
 /// Return the current thread's request ID (set at start of handleRequest).
-/// Used for API response IDs so they match log correlation IDs.
-fn currentRequestId() u64 {
+/// Used for API response IDs so they match log correlation IDs, and by the root
+/// panic handler so a crash names the request that was in flight. 0 means no
+/// request owns this thread (startup, shutdown, or a background worker).
+pub fn currentRequestId() u64 {
     return log_request_id;
 }
 
@@ -2493,12 +2495,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         };
 
         if (json.extractBoolField(body, "stream")) {
-            if (toolsWanted(&tool_params)) {
-                startStreamWithTools(stream, formatted, max_tokens, sampling, serverToolCallCtx(&tool_params));
-            } else {
+            const stream_status = if (toolsWanted(&tool_params))
+                startStreamWithTools(stream, formatted, max_tokens, sampling, serverToolCallCtx(&tool_params))
+            else
                 startStream(stream, formatted, true, false, max_tokens, sampling);
-            }
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
 
@@ -2633,8 +2634,8 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         }
 
         if (json.extractBoolField(body, "stream")) {
-            startStreamRaw(stream, prompt, max_tokens, sampling_c);
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            const stream_status = startStreamRaw(stream, prompt, max_tokens, sampling_c);
+            logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
 
@@ -3044,8 +3045,8 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         }
 
         if (json.extractBoolField(body, "stream")) {
-            startResponsesStream(stream, input, max_tokens, sampling_r);
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            const stream_status = startResponsesStream(stream, input, max_tokens, sampling_r);
+            logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
 
@@ -3205,12 +3206,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         };
 
         if (json.extractBoolField(body, "stream")) {
-            if (want_tools_m) {
-                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, serverToolCallCtx(&tool_params_m));
-            } else {
+            const stream_status = if (want_tools_m)
+                startAnthropicStreamWithTools(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m, serverToolCallCtx(&tool_params_m))
+            else
                 startAnthropicStream(stream, formatted_m, max_tokens_m, prompt_tokens_m, sampling_m);
-            }
-            logRequestDone(method, path, 200, elapsedMs(request_start));
+            logRequestDone(method, path, stream_status, elapsedMs(request_start));
             return;
         }
 
@@ -5402,12 +5402,12 @@ fn sseWriteEvent(stream: http.TcpStream, event_type: []const u8, data: []const u
 }
 
 /// Start an Anthropic-format SSE streaming response for /v1/messages.
-fn startAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) void {
+fn startAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams) u16 {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
-        return;
+        return stream_status_client_gone;
     }
-    generateAnthropicStream(stream, formatted, max_tokens, input_tokens, sampling);
+    return generateAnthropicStream(stream, formatted, max_tokens, input_tokens, sampling);
 }
 
 /// Longest raw text piece handed to emitAnthropicDeltaPiece; its escaped form
@@ -5419,10 +5419,10 @@ const anthropic_delta_piece_len: usize = 256;
 /// generation runs to completion first and the parsed result is emitted as
 /// content blocks: one `tool_use` block per call (stop_reason "tool_use"), or
 /// the raw text as a `text` block when nothing parses (small-model fallback).
-fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, ctx: ToolCallCtx) void {
+fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling: SamplingParams, ctx: ToolCallCtx) u16 {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
-        return;
+        return stream_status_client_gone;
     }
 
     const req_id = currentRequestId();
@@ -5434,13 +5434,13 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
     var msg_buf: [response_buf_size]u8 = undefined;
     const msg_start = std.fmt.bufPrint(&msg_buf,
         \\{{"type":"message_start","message":{{"id":"msg_{d}","type":"message","role":"assistant","content":[],"model":"{s}","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":0}}}}}}
-    , .{ req_id, g_server.model_name, input_tokens }) catch return;
-    if (!sseWriteEvent(stream, "message_start", msg_start)) return;
+    , .{ req_id, g_server.model_name, input_tokens }) catch return stream_status_client_gone;
+    if (!sseWriteEvent(stream, "message_start", msg_start)) return stream_status_client_gone;
 
     if (std.mem.eql(u8, gen.finish_reason, "error")) {
         g_server.metrics.recordFailure();
         sendAnthropicFinalEvents(stream, "end_turn", 0);
-        return;
+        return 500;
     }
 
     var call_idx: usize = 0;
@@ -5465,7 +5465,7 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
                 std.log.warn("req={d} stream anthropic tool call chunk overflow: skipping call {d}", .{ log_request_id, call_idx });
                 continue;
             };
-            if (!sseWriteEvent(stream, "content_block_start", block_start)) return;
+            if (!sseWriteEvent(stream, "content_block_start", block_start)) return stream_status_client_gone;
 
             // input_json_delta carries the arguments as an escaped JSON string
             // per the Anthropic streaming spec.
@@ -5479,14 +5479,14 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
                     std.log.warn("req={d} anthropic tool input_json_delta exceeded buffer ({d} bytes), truncating call {d}", .{ log_request_id, escaped_args.len, call_idx });
                     continue;
                 };
-                if (!sseWriteEvent(stream, "content_block_delta", delta)) return;
+                if (!sseWriteEvent(stream, "content_block_delta", delta)) return stream_status_client_gone;
             }
 
             var stop_buf: [64]u8 = undefined;
             const block_stop = std.fmt.bufPrint(&stop_buf,
                 \\{{"type":"content_block_stop","index":{d}}}
             , .{call_idx}) catch continue;
-            if (!sseWriteEvent(stream, "content_block_stop", block_stop)) return;
+            if (!sseWriteEvent(stream, "content_block_stop", block_stop)) return stream_status_client_gone;
             call_idx += 1;
         }
     }
@@ -5502,7 +5502,7 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
         stop_reason = if (std.mem.eql(u8, gen.finish_reason, "length")) "max_tokens" else "end_turn";
         if (!sseWriteEvent(stream, "content_block_start",
             \\{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
-        )) return;
+        )) return stream_status_client_gone;
         var piece_start: usize = 0;
         while (piece_start < gen.raw.len) {
             var piece_end = @min(piece_start + anthropic_delta_piece_len, gen.raw.len);
@@ -5513,7 +5513,7 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
                 // byte in range. Step forward so the walk always progresses.
                 if (piece_end == piece_start) piece_end = piece_start + 1;
             }
-            if (!emitAnthropicDeltaPiece(stream, gen.raw[piece_start..piece_end])) return;
+            if (!emitAnthropicDeltaPiece(stream, gen.raw[piece_start..piece_end])) return stream_status_client_gone;
             piece_start = piece_end;
         }
         sendAnthropicFinalEvents(stream, stop_reason, gen.stats.tokens_generated);
@@ -5527,6 +5527,7 @@ fn startAnthropicStreamWithTools(stream: http.TcpStream, formatted: []const u8, 
     g_server.metrics.recordPromptTokens(input_tokens);
     g_server.metrics.recordGenerationTokens(gen.stats.tokens_generated);
     g_server.metrics.recordCompletion();
+    return 200;
 }
 
 /// Result of resolving a <tool_call> payload's `arguments` into JSON object text.
@@ -5615,7 +5616,7 @@ fn sendAnthropicMessageEnd(stream: http.TcpStream, stop_reason: []const u8, toke
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling_a: SamplingParams) void {
+fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_tokens: usize, input_tokens: u32, sampling_a: SamplingParams) u16 {
     const tok = g_server.tokenizer;
     const req_id = currentRequestId();
 
@@ -5623,7 +5624,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
         std.log.err("req={d} anthropic streaming tokenizer encode failed ({d} bytes input): {}", .{ log_request_id, formatted.len, err });
         g_server.metrics.recordFailure();
         sendAnthropicFinalEvents(stream, "end_turn", 0);
-        return;
+        return 500;
     };
     defer g_server.allocator.free(token_ids);
 
@@ -5631,13 +5632,13 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
     var msg_buf: [response_buf_size]u8 = undefined;
     const msg_start = std.fmt.bufPrint(&msg_buf,
         \\{{"type":"message_start","message":{{"id":"msg_{d}","type":"message","role":"assistant","content":[],"model":"{s}","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":{d},"output_tokens":0}}}}}}
-    , .{ req_id, g_server.model_name, input_tokens }) catch return;
-    if (!sseWriteEvent(stream, "message_start", msg_start)) return;
+    , .{ req_id, g_server.model_name, input_tokens }) catch return stream_status_client_gone;
+    if (!sseWriteEvent(stream, "message_start", msg_start)) return stream_status_client_gone;
 
     // content_block_start
     if (!sseWriteEvent(stream, "content_block_start",
         \\{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
-    )) return;
+    )) return stream_status_client_gone;
 
     // Scheduler path: grammar/json_mode requests bypass (no grammar/JSON support in scheduler).
     const use_grammar_anth = (sampling_a.grammar_string != null or sampling_a.json_schema != null) and !sampling_a.json_mode;
@@ -5647,7 +5648,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             sendAnthropicFinalEvents(stream, "end_turn", 0);
-            return;
+            return 500;
         };
         configureSchedulerSampling(req, sampling_a);
         defer {
@@ -5736,7 +5737,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
             });
             g_server.metrics.recordFailure();
         }
-        return;
+        return streamFinishStatus(!anth_client_connected, !(req.is_finished.load(.acquire) or token_count >= max_tokens), req.is_timed_out.load(.acquire));
     }
 
     // Direct forward path (fallback when scheduler is not active)
@@ -5754,7 +5755,7 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
             g_server.metrics.recordFailure();
             sendAnthropicFinalEvents(stream, "end_turn", 0);
-            return;
+            return 500;
         };
     }
 
@@ -5771,12 +5772,12 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
                 std.log.info("req={d} anthropic stream prefill cancelled", .{log_request_id});
                 g_server.metrics.recordCancellation();
                 sendAnthropicFinalEvents(stream, "end_turn", 0);
-                return;
+                return stream_status_client_gone;
             }
             std.log.warn("req={d} prefill forward failed: {}", .{ log_request_id, err });
             g_server.metrics.recordFailure();
             sendAnthropicFinalEvents(stream, "end_turn", 0);
-            return;
+            return 500;
         };
     }
     const anth_prefill_ms: u64 = @intCast(@max(milliTimestamp() - anth_prefill_start, 0));
@@ -5935,6 +5936,8 @@ fn generateAnthropicStream(stream: http.TcpStream, formatted: []const u8, max_to
         std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
         g_server.metrics.recordCancellation();
     } else if (anth_forward_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+
+    return streamFinishStatus(!anth_disconnected, anth_forward_failed, false);
 }
 
 /// Send the Anthropic SSE final events: content_block_stop, message_delta, message_stop.
@@ -6003,12 +6006,12 @@ fn streamAnthropicDelta(stream: http.TcpStream, tok: *Tokenizer, token_id: u32, 
 // ── Responses API Streaming ─────────────────────────────────────
 
 /// Start a Responses API SSE streaming response for /v1/responses.
-fn startResponsesStream(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
+fn startResponsesStream(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) u16 {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
-        return;
+        return stream_status_client_gone;
     }
-    generateResponsesStream(stream, prompt, max_tokens, sampling);
+    return generateResponsesStream(stream, prompt, max_tokens, sampling);
 }
 
 /// Send the Responses API setup events: response.created, response.output_item.added,
@@ -6121,7 +6124,7 @@ fn sendResponsesFinalEvents(stream: http.TcpStream, req_id: u64, created: i64, s
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running.
-fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling_r: SamplingParams) void {
+fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling_r: SamplingParams) u16 {
     const tok = g_server.tokenizer;
     const req_id = currentRequestId();
     const created = timestamp();
@@ -6133,7 +6136,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
         g_server.metrics.recordFailure();
         sendResponsesStartEvents(stream, req_id, created);
         sendResponsesFinalEvents(stream, req_id, created, "stop", "", 0, 0);
-        return;
+        return 500;
     };
     defer wipeFreeTokens(g_server.allocator, token_ids);
     const input_tokens: u32 = @intCast(token_ids.len);
@@ -6149,7 +6152,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
-            return;
+            return 500;
         };
         configureSchedulerSampling(req, sampling_r);
         defer {
@@ -6253,7 +6256,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
             });
             g_server.metrics.recordFailure();
         }
-        return;
+        return streamFinishStatus(!resp_client_connected, !(req.is_finished.load(.acquire) or token_count >= max_tokens), req.is_timed_out.load(.acquire));
     }
 
     // Direct forward path (fallback when scheduler is not active)
@@ -6271,7 +6274,7 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
             std.log.warn("req={d} BOS forward failed: {}", .{ log_request_id, err });
             g_server.metrics.recordFailure();
             sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
-            return;
+            return 500;
         };
     }
 
@@ -6288,12 +6291,12 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
                 std.log.info("req={d} responses stream prefill cancelled", .{log_request_id});
                 g_server.metrics.recordCancellation();
                 sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
-                return;
+                return stream_status_client_gone;
             }
             std.log.warn("req={d} prefill forward failed: {}", .{ log_request_id, err });
             g_server.metrics.recordFailure();
             sendResponsesFinalEvents(stream, req_id, created, "stop", "", input_tokens, 0);
-            return;
+            return 500;
         };
     }
     const resp_prefill_ms: u64 = @intCast(@max(milliTimestamp() - resp_prefill_start, 0));
@@ -6453,6 +6456,8 @@ fn generateResponsesStream(stream: http.TcpStream, prompt: []const u8, max_token
         std.log.warn("req={d} client disconnected during streaming ({d} tokens sent)", .{ log_request_id, token_count });
         g_server.metrics.recordCancellation();
     } else if (resp_forward_failed) g_server.metrics.recordFailure() else g_server.metrics.recordCompletion();
+
+    return streamFinishStatus(!resp_disconnected, resp_forward_failed, false);
 }
 
 // ── SSE Streaming ──────────────────────────────────────────────
@@ -6467,14 +6472,30 @@ fn sseWriteData(stream: anytype, data: []const u8) bool {
     return true;
 }
 
+/// Access-log status for a stream that ended with its body unfinished. SSE
+/// headers already answered 200, so a failure, a deadline, or a client that
+/// walked away mid-body is only visible in the per-request `std.log` line; the
+/// access log is where an operator counts them. 499 and 504 are the nginx
+/// conventions for a closed request and a timed-out upstream.
+const stream_status_client_gone: u16 = 499;
+const stream_status_timeout: u16 = 504;
+
+/// Map the terminal condition of a stream to the status the access log prints.
+fn streamFinishStatus(client_connected: bool, failed: bool, timed_out: bool) u16 {
+    if (!client_connected) return stream_status_client_gone;
+    if (!failed) return 200;
+    return if (timed_out) stream_status_timeout else 500;
+}
+
 /// Start an SSE streaming response. Writes headers, generates tokens inline,
 /// and writes each as an SSE frame. Runs synchronously on the handler thread.
-fn startStream(stream: http.TcpStream, prompt: []const u8, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
+/// Returns the status the access log records for the request.
+fn startStream(stream: http.TcpStream, prompt: []const u8, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) u16 {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
-        return;
+        return stream_status_client_gone;
     }
-    generateStream(stream, prompt, currentRequestId(), timestamp(), is_chat, format_prompt, max_tokens, sampling);
+    return generateStream(stream, prompt, currentRequestId(), timestamp(), is_chat, format_prompt, max_tokens, sampling);
 }
 
 /// Maximum escaped-content bytes per streamed content delta. Longer outputs are
@@ -6518,10 +6539,10 @@ fn writeStreamedContent(stream: anytype, chunk_buf: []u8, model_name: []const u8
 
 /// Streaming with tool call support. Generates full output first, then emits
 /// tool_calls delta chunks if tool calls detected, otherwise streams content.
-fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, ctx: ToolCallCtx) void {
+fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams, ctx: ToolCallCtx) u16 {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
-        return;
+        return stream_status_client_gone;
     }
 
     const req_id = currentRequestId();
@@ -6535,7 +6556,7 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
         _ = sseWriteData(stream, "[DONE]");
         g_server.metrics.recordLatency(elapsedMs(tool_stream_start));
         g_server.metrics.recordFailure();
-        return;
+        return 500;
     }
 
     var chunk_buf: [response_buf_size]u8 = undefined;
@@ -6601,15 +6622,16 @@ fn startStreamWithTools(stream: http.TcpStream, prompt: []const u8, max_tokens: 
     g_server.metrics.recordPromptTokens(gen.stats.prompt_tokens);
     g_server.metrics.recordGenerationTokens(gen.stats.tokens_generated);
     g_server.metrics.recordCompletion();
+    return 200;
 }
 
 /// Start an SSE streaming response without chat template wrapping (for /v1/completions).
-fn startStreamRaw(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) void {
+fn startStreamRaw(stream: http.TcpStream, prompt: []const u8, max_tokens: usize, sampling: SamplingParams) u16 {
     if (!sendSseHeaders(stream)) {
         g_server.metrics.recordCancellation();
-        return;
+        return stream_status_client_gone;
     }
-    generateStream(stream, prompt, currentRequestId(), timestamp(), false, false, max_tokens, sampling);
+    return generateStream(stream, prompt, currentRequestId(), timestamp(), false, false, max_tokens, sampling);
 }
 
 const max_top_logprobs = math_ops.max_top_logprobs;
@@ -6785,7 +6807,7 @@ fn sendFinalChunk(stream: http.TcpStream, chunk_buf: *[response_buf_size]u8, req
 /// When the scheduler is active, routes through RequestManager.enqueue()
 /// and polls for generated tokens. Falls back to direct model.forward()
 /// when no scheduler is running (CLI mode).
-fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) void {
+fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, created: i64, is_chat: bool, format_prompt: bool, max_tokens: usize, sampling: SamplingParams) u16 {
     const tok = g_server.tokenizer;
 
     const formatted = if (format_prompt)
@@ -6797,7 +6819,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         std.log.err("req={d} streaming tokenizer encode failed ({d} bytes input): {}", .{ log_request_id, formatted.len, err });
         g_server.metrics.recordFailure();
         _ = sseWriteData(stream, "[DONE]");
-        return;
+        return 500;
     };
     defer wipeFreeTokens(g_server.allocator, token_ids);
 
@@ -6822,7 +6844,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
             std.log.warn("req={d} scheduler enqueue failed ({d} tokens): {}", .{ log_request_id, token_ids.len, err });
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
-            return;
+            return 500;
         };
         configureSchedulerSampling(req, sampling);
         defer {
@@ -6919,7 +6941,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
             });
             g_server.metrics.recordFailure();
         }
-        return;
+        return streamFinishStatus(!chunk_client_connected, !(req.is_finished.load(.acquire) or token_count >= max_tokens), req.is_timed_out.load(.acquire));
     }
 
     // Direct forward path (fallback when scheduler is not active)
@@ -6957,7 +6979,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
             invalidateKvBookkeeping();
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
-            return;
+            return 500;
         };
     }
 
@@ -6998,7 +7020,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
         g_server.metrics.recordFailure();
         _ = sseWriteData(stream, "{\"error\":\"grammar setup failed\"}");
         _ = sseWriteData(stream, "[DONE]");
-        return;
+        return 500;
     }
 
     // Prefill, capture the last forward's return value (first generated token)
@@ -7016,13 +7038,13 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
                 invalidateKvBookkeeping();
                 g_server.metrics.recordCancellation();
                 _ = sseWriteData(stream, "[DONE]");
-                return;
+                return stream_status_client_gone;
             }
             std.log.warn("req={d} prefill forward failed: {}", .{ log_request_id, err });
             invalidateKvBookkeeping();
             g_server.metrics.recordFailure();
             _ = sseWriteData(stream, "[DONE]");
-            return;
+            return 500;
         };
     }
     const stream_prefill_ms: u64 = elapsedMs(prefill_start);
@@ -7038,7 +7060,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
                     g_server.metrics.recordFailure();
                     _ = sseWriteData(stream, "{\"error\":\"grammar OOM\"}");
                     _ = sseWriteData(stream, "[DONE]");
-                    return;
+                    return 500;
                 };
                 first_gen_token = math_ops.argmax(s_first_logits);
             }
@@ -7070,7 +7092,7 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
             logGeneration(0, 0, 0);
             std.log.warn("req={d} client disconnected before first stream chunk", .{log_request_id});
             g_server.metrics.recordCancellation();
-            return;
+            return stream_status_client_gone;
         }
         last = first_gen_token;
         token_count = 1;
@@ -7359,6 +7381,8 @@ fn generateStream(stream: http.TcpStream, prompt: []const u8, req_id: u64, creat
 
     // Update prompt prefix cache for next request (zeros old IDs).
     g_server.publishCachedPromptIds(token_ids, n_visual);
+
+    return streamFinishStatus(!stream_disconnected, stream_forward_failed, false);
 }
 
 // JSON field extraction, encoding, and form-parsing utilities are in json.zig.
@@ -7926,6 +7950,17 @@ test "log timestamps render with an explicit UTC marker" {
     try std.testing.expectEqualStrings("[01:01:01Z] req=7\n", line);
 }
 
+test "streamFinishStatus names a stream outcome in the access log" {
+    // SSE headers are already 200 by the time the body ends, so these are the
+    // only record of a failure, a deadline, or a client that walked away.
+    try std.testing.expectEqual(@as(u16, 200), streamFinishStatus(true, false, false));
+    try std.testing.expectEqual(@as(u16, 500), streamFinishStatus(true, true, false));
+    try std.testing.expectEqual(@as(u16, 504), streamFinishStatus(true, true, true));
+    // A disconnect outranks the fault flags: the client is gone either way.
+    try std.testing.expectEqual(@as(u16, 499), streamFinishStatus(false, false, false));
+    try std.testing.expectEqual(@as(u16, 499), streamFinishStatus(false, true, true));
+}
+
 test "prngSeedFromSampling uses sim_clock when seed omitted" {
     defer sim_clock.setOverrideMs(null);
     sim_clock.setOverrideMs(1_700_000_000_000);
@@ -8193,6 +8228,15 @@ test "plainContent drops tags, escapes, and falls back to the pre-escaped text" 
 }
 
 test "buildResponsesToolCallResponse emits function_call items for declared tools" {
+    // buildResponsesToolCallResponse reads the process server for the tool
+    // registry, allocator, and model name; g_server is otherwise undefined.
+    var srv: Server = undefined;
+    srv.tool_registry = .{};
+    srv.allocator = std.testing.allocator;
+    srv.model_name = "test-model";
+    g_server = &srv;
+    defer g_server = undefined;
+
     var tp = json.ToolParams{};
     tp.tools[0] = .{ .name = "get_weather", .description = "", .parameters_json = "{}" };
     tp.tool_count = 1;
@@ -8213,6 +8257,13 @@ test "buildResponsesToolCallResponse emits function_call items for declared tool
 }
 
 test "buildResponsesToolCallResponse returns empty when no declared tool is called" {
+    var srv: Server = undefined;
+    srv.tool_registry = .{};
+    srv.allocator = std.testing.allocator;
+    srv.model_name = "test-model";
+    g_server = &srv;
+    defer g_server = undefined;
+
     var tp = json.ToolParams{};
     const text = "<tool_call>{\"name\": \"rm\", \"arguments\": {}}</tool_call>";
     var reg = tools_mod.Registry{};
