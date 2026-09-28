@@ -2,9 +2,14 @@
 
 **Status**: implemented (shared-expert FFN only). Weights load from a caller-supplied safetensors file via `--mtp-model`; they are not bundled in GGUF. Canonical CLI: `src/main.zig` (`--mtp-model`), loader: `src/models/ds4_mtp.zig`, forward: `Ds4Model.mtpForward` (`src/models/deepseek4.zig`).
 
-**Last updated**: 2026-09-27 (status and performance note checked against `mtpForward`).
+**Last updated**: 2026-09-28 (per-call cost, depth-count behavior, and the memory layout checked against `mtpForward`, `MtpWeights.load`, and `spec_decode.draftMtp`).
 
 **Implementation note:** `mtpForward` currently runs MTP layers 0–2 on every call and does not use `depth` to select a single layer. It also runs `main_proj` and `main_norm` once, ahead of the layer loop, and always fills the middle 4096-wide slot of the input from `mtp_hidden_buf` rather than zeros at depth 0. The per-depth sketch below is the intended v1 shape; do not treat the loop-all-layers path as a superseding decision.
+
+Two consequences of that loop, both provable in the code:
+
+- Cost is per call, not per drafted token. `draftMtp` (`src/spec/spec_decode.zig`) calls `mtpForward` once per draft token, chaining each draft on the previous one, and each call runs all three layers. A one-draft round therefore costs the same three layers as a three-draft round.
+- A checkpoint with fewer than three depths is not rejected. `getMtpDepth` returns `n_mtp_layers`, which `Model.setMtpWeights` takes from the loader's `n_depths` (one past the highest `mtp.N` prefix in the file). The per-layer helpers return silently when their tensors are absent (`mtp.get(...) orelse return`), so a file carrying only `mtp.0.*` runs layers 1 and 2 as no-ops and still produces a draft token.
 
 ## Architecture
 
@@ -73,9 +78,11 @@ reads them; the output head uses `mtp.2.norm.weight` followed by the main model'
 
 ### Memory Layout
 
-MTP tensors are mmap'd from the safetensors file (595MB).
-On 48GB system: 595MB fits easily alongside the 155GB main model page cache.
-No SSD streaming needed for MTP non-expert weights.
+`MtpWeights.load` maps the whole safetensors file read-only and shared
+(`posix.mmap`, `src/models/ds4_mtp.zig`); tensor pointers are offsets into that mapping and
+nothing is copied or read eagerly. The mapping is demand-paged, so resident memory is the pages
+`mtpForward` actually touches, not the 595MB file size, and the markov/confidence/`hc_head`
+tensors stay on disk. There is no streaming path and no separate MTP weight budget to reserve.
 
 ### Performance Estimate (unmeasured projection)
 
@@ -91,8 +98,13 @@ Each MTP forward:
 - Total: ~180M FLOPs per MTP depth
 - At 10 GFLOPS (CPU with 14 threads): ~18ms per MTP depth
 
-3 MTP depths: ~54ms per target token
+3 MTP depths: ~54ms per draft call, and `draftMtp` makes one call per draft token
 Target token: ~770ms
-MTP overhead: 54/770 = 7%
+MTP overhead: 54/770 = 7% for one draft, ~21% for three
 Assumed draft acceptance: ~60% (3 drafts → ~1.8 accepted)
 Projected throughput: 2.8 tokens per 824ms = 3.4 tok/s
+
+As written, each draft call runs all three layers, so a three-draft round costs
+3 × 54ms and the overhead above is ~21%, not 7%. The 54ms-per-token figure holds
+only once the depth loop runs one layer per call. Both numbers are still
+unmeasured.

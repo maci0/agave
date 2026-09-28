@@ -49,7 +49,7 @@ Start here: **[Chapter 0: Getting Started](tutorial/00-getting-started.md)** (or
 - **[Observability](OBSERVABILITY.md)**: `--serve` metrics, health endpoints, log correlation IDs, debugging path
 - **[Security](../SECURITY.md)**: supported versions and vulnerability reporting
 - **[Architecture](ARCHITECTURE.md)**: project structure, Design Decisions table, module reference, inference pipeline
-- **[Models](MODELS.md)**: 11 supported architectures (incl. Qwen4-Exp, DeepSeek V4, DiffusionGemma), parameters, per-model details, benchmarks
+- **[Models](MODELS.md)**: 12 supported architectures (incl. Qwen4-Exp, DeepSeek V4, DiffusionGemma), parameters, per-model details, benchmarks
 - **[Kernel Status](KERNELS.md)**: per-backend kernel implementation status
 - **[Megakernel System](MEGAKERNEL.md)**: three-tier megakernel architecture (fused FFN, true megakernels, composed megakernels)
 - **[Benchmarks](BENCHMARKS.md)**: performance data across models, backends, and quantization types
