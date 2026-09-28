@@ -2874,7 +2874,7 @@ const weight_fraction_of_file: f64 = 0.90;
 fn warnIfBudgetForcesEviction(be: Backend, budget_bytes: usize, file_bytes: usize) void {
     if (budget_bytes == 0 or file_bytes == 0) return;
     if (!be.hasWeightBudget()) return;
-    const need: usize = @intFromFloat(@as(f64, @floatFromInt(file_bytes)) * weight_fraction_of_file);
+    const need: usize = @intFromFloat(@floor(@as(f64, @floatFromInt(file_bytes)) * weight_fraction_of_file));
     if (need <= budget_bytes) return;
     eprint(
         "Warning: --vram-budget {d} MB is below this model's ~{d} MB of weights, so decode " ++
@@ -2940,7 +2940,7 @@ fn resolveVramBudget(cli: *const CliArgs, be: Backend) usize {
     if (!g_quiet and info.avail_mem == 0) {
         eprint("vram-budget auto: backend reports no free-memory figure, sizing from {d} MB total\n", .{pool / (1024 * 1024)});
     }
-    return @intFromFloat(@as(f64, @floatFromInt(pool)) * vram_budget_auto_fraction);
+    return @intFromFloat(@floor(@as(f64, @floatFromInt(pool)) * vram_budget_auto_fraction));
 }
 
 fn initAndRun(

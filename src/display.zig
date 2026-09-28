@@ -462,7 +462,7 @@ pub const Display = struct {
                 // scaling is a second multiply that mulAll cannot bound.
                 const kv_bytes: u64 = if (kv_elems) |e| blk: {
                     const scaled = @as(f64, @floatFromInt(e)) * @as(f64, info.kv_bpe) / bits_per_byte_f64;
-                    break :blk if (scaled >= @as(f64, @floatFromInt(std.math.maxInt(u64)))) 0 else @intFromFloat(scaled);
+                    break :blk if (scaled >= @as(f64, @floatFromInt(std.math.maxInt(u64)))) 0 else @intFromFloat(@floor(scaled));
                 } else 0;
                 if (kv_elems != null and kv_bytes > 0) {
                     const kvs = formatSize(kv_bytes);

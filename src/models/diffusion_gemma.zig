@@ -231,7 +231,7 @@ pub const DiffusionGemmaModel = struct {
             0.0,
             1.0,
         );
-        self.gl_rope_dim = @as(u32, @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
+        self.gl_rope_dim = @as(u32, @intFromFloat(@floor(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary)));
 
         // MoE.
         self.n_experts = f.getMetaU32("text_config.num_local_experts") orelse

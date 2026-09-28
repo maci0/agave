@@ -98,7 +98,9 @@ pub fn selectBlocks(state: *PFlashState) void {
     }
 
     // Enforce max_kept_ratio cap (strict floor: 25% of 16 = 4, not 5).
-    const max_blocks = @max(1, @as(usize, @intFromFloat(@as(f32, @floatFromInt(n_blocks)) * cfg.max_kept_ratio)));
+    // @floor makes the truncation explicit: @intFromFloat on a non-integer
+    // operand is a safety panic in ReleaseSafe and UB in ReleaseFast.
+    const max_blocks = @max(1, @as(usize, @intFromFloat(@floor(@as(f32, @floatFromInt(n_blocks)) * cfg.max_kept_ratio))));
     if (n_selected > max_blocks) {
         // Trim lowest-scoring selected blocks until within cap
         // Find threshold score for top max_blocks

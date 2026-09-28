@@ -666,7 +666,8 @@ pub const MlxCompanion = struct { scales: [*]const u8, biases: [*]const u8, bits
 pub fn inferMlxGroupSize(st: format_mod.TensorInfo, k: usize) u32 {
     if (st.n_dims >= 2 and k > 0) {
         const n_groups: usize = @intCast(st.dims[st.n_dims - 1]);
-        if (n_groups > 0) return @intCast(k / n_groups);
+        // n_groups > k yields 0, and every MLX GEMV divides by the result.
+        if (n_groups > 0 and n_groups <= k) return @intCast(k / n_groups);
     }
     return @intCast(mlx_ops.mlx_group_size);
 }
@@ -678,7 +679,8 @@ pub fn inferMxfp4GroupSize(st: format_mod.TensorInfo, k: usize) usize {
     // For 3D expert tensors [n_experts, rows, groups_per_row], use the last dim
     const dim_idx: usize = if (st.n_dims >= 3) 2 else if (st.n_dims >= 2) @as(usize, @intCast(st.n_dims - 1)) else return mlx_ops.mxfp4_group_size;
     const n_groups: usize = @intCast(st.dims[dim_idx]);
-    if (n_groups > 0 and k > 0) return k / n_groups;
+    // n_groups > k yields 0, and the MXFP4 GEMV divides by the result.
+    if (n_groups > 0 and k > 0 and n_groups <= k) return k / n_groups;
     return mlx_ops.mxfp4_group_size;
 }
 
@@ -756,7 +758,12 @@ pub fn dispatchGemv(be: backend_mod.Backend, fmt: format_mod.Format, x: [*]const
         const scales_t = if (s_name.len > 0) fmt.getTensor(s_name) else null;
         const zeros_t = if (z_name.len > 0) fmt.getTensor(z_name) else null;
         if (scales_t) |st| {
-            const group_size = fmt.getMetaU32("group_size") orelse 128;
+            // A present-but-zero group_size reaches the GEMV's integer division
+            // as a divisor; fall back to the default instead of trapping.
+            const group_size = blk: {
+                const g = fmt.getMetaU32("group_size") orelse break :blk 128;
+                break :blk if (g > 0) g else 128;
+            };
             const zeros_ptr: [*]const u32 = if (zeros_t) |zt|
                 @ptrCast(@alignCast(zt.data_ptr))
             else

@@ -1275,7 +1275,7 @@ pub const Gemma4Model = struct {
 
             // Batched RoPE for Q and K
             if (is_global) {
-                const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
+                const rd: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
                     self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, rd_even, self.gl_rope_theta);
@@ -1303,7 +1303,7 @@ pub const Gemma4Model = struct {
                 self.be.rmsNormMulti(self.pf_q.ptr, self.normAsF32(qn, hd), n_tok * nh, hd, self.rms_eps);
             }
             if (is_global) {
-                const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
+                const rd: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
                     self.be.ropeBatched(self.pf_q.ptr, self.pf_positions.ptr, n_tok, nh, hd, rd_even, self.gl_rope_theta);
@@ -1570,7 +1570,7 @@ pub const Gemma4Model = struct {
                     // RoPE for K
                     const pos = image_start + ti;
                     if (is_global) {
-                        const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
+                        const rd: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
                         const rd_even = rd & ~@as(usize, 1);
                         if (rd_even > 0) self.be.rope(self.k_buf.ptr, pos, nkv, hd, rd_even, self.gl_rope_theta);
                     } else {
@@ -1866,7 +1866,7 @@ pub const Gemma4Model = struct {
 
             t = self.perf.start();
             if (is_global) {
-                const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
+                const rd: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
                     self.be.beginBatch();
@@ -1892,7 +1892,7 @@ pub const Gemma4Model = struct {
 
             t = self.perf.start();
             if (is_global) {
-                const rd: usize = @intFromFloat(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary);
+                const rd: usize = @intFromFloat(@floor(@as(f32, @floatFromInt(self.gl_head_dim)) * self.gl_partial_rotary));
                 const rd_even = rd & ~@as(usize, 1);
                 if (rd_even > 0) {
                     self.be.rope(self.q_buf.ptr, self.kv_seq_len, nh, hd, rd_even, self.gl_rope_theta);
