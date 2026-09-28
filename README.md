@@ -675,3 +675,9 @@ zig build -Dtarget=aarch64-linux-musl \
 ## License
 
 GNU General Public License v3.0 or later
+
+The chat UI ships as a minified bundle, so the license headers of the
+third-party code inside it exist nowhere in the release. What travels instead
+is [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which names every bundled
+package with its version, license and upstream, and is re-checked against
+`package.json` and `bun.lock` by `zig build check-third-party`.

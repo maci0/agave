@@ -630,6 +630,23 @@ pub fn build(b: *std.Build) void {
             ).step);
         }
 
+        // The committed web bundles are minified, so the notices of the React
+        // and Radix code inside them exist nowhere in the release. The
+        // GPL-3.0-or-later grant requires them to travel with it, and a notices
+        // file nobody re-checks goes stale on the first dependency bump.
+        const third_party_step = b.step("check-third-party", "THIRD_PARTY_NOTICES.md covers every package bundled into the committed web artifacts (CI fmt-check job)");
+        if (python3) |py| {
+            const third_party_cmd = b.addSystemCommand(&.{ py, "scripts/check-third-party-notices.py" });
+            third_party_cmd.setCwd(repo_cwd);
+            pin_spawned_python(third_party_cmd);
+            third_party_cmd.has_side_effects = true;
+            third_party_step.dependOn(&third_party_cmd.step);
+        } else {
+            third_party_step.dependOn(&b.addFail(
+                "python3 not found; zig build check-third-party needs Python 3.11+ for scripts/check-third-party-notices.py",
+            ).step);
+        }
+
         const lint_web_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-web.sh" });
         lint_web_cmd.setCwd(repo_cwd);
         lint_web_cmd.has_side_effects = true;
@@ -685,10 +702,11 @@ pub fn build(b: *std.Build) void {
         const reproducible_step = b.step("check-reproducible", "Build twice from different paths and byte-compare (CI reproducible-build job)");
         reproducible_step.dependOn(&reproducible_cmd.step);
 
-        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + unit tests + conversation store backup self-test (needs Python 3.11+)");
+        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + third-party notices + unit tests + conversation store backup self-test (needs Python 3.11+)");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
         check_step.dependOn(check_pins_step);
+        check_step.dependOn(third_party_step);
         check_step.dependOn(test_step);
         check_step.dependOn(conv_backup_step);
 

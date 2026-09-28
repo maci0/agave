@@ -25,6 +25,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, the ruff and bun versions, the committed `uv.lock` files, the vendored anti-slop source against `tools/oxlint/anti-slop/VENDORED.sha256`, and every exact third-party version in `package.json` and the `pyproject.toml` files must agree) |
 | `tools/oxlint/anti-slop/**` (re-vendoring) | `zig build check-pins` after regenerating `tools/oxlint/anti-slop/VENDORED.sha256`; record the upstream commit in that directory's `README.md` and copy upstream's LICENSE file there |
 | Built-in chat UI and browser shell (React + Tailwind 4) | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
+| A JavaScript dependency in `dependencies` (ships inside the web bundles) | `zig build check-third-party`: every bundled package needs a `name@version` entry in `THIRD_PARTY_NOTICES.md`, with its upstream license and URL |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | `.oxlintrc.json` | `bash scripts/check-web-lint-scope.sh` (an `ignorePatterns` entry that is not known debt fails; entries may leave the list, never join it) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
@@ -403,8 +404,9 @@ Notes:
 # bun 1.4.0 with `bun install --frozen-lockfile`.
 zig build ci
 
-# Local CI gate (format + docs hygiene + pin consistency + unit tests +
-# conversation store backup self-test). Needs Python 3.11+; run this before pushing.
+# Local CI gate (format + docs hygiene + pin consistency + third-party notices +
+# unit tests + conversation store backup self-test). Needs Python 3.11+; run this
+# before pushing.
 zig build check
 
 # Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
