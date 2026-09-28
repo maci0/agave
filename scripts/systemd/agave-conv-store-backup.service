@@ -7,6 +7,19 @@
 #
 # Edit the two settings marked below before enabling. Runbook:
 # docs/DURABILITY.md.
+#
+# User= and ReadWritePaths= name an account and a directory the host does not
+# have until they are created, and a missing one fails the unit at start rather
+# than at backup time: User=agave gives 217/USER, and a missing
+# /var/backups/agave gives 200/CHDIR from ReadWritePaths. On a host that does not
+# already run the server under a dedicated account:
+#
+#   useradd --system --home-dir /var/lib/agave --shell /usr/sbin/nologin agave
+#   install -d -o agave -g agave -m 0700 /var/backups/agave
+#
+# ProtectHome=read-only leaves the store under that account's home readable,
+# which is all `backup` needs. Put /var/backups/agave on a different filesystem
+# from the store's directory; the script refuses to run otherwise (see below).
 [Unit]
 Description=Back up the Agave conversation store
 After=local-fs.target

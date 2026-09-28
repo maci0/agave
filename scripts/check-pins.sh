@@ -152,6 +152,57 @@ if [[ "$env_port$expose_port$probe_port$compose_probe_port" != "$env_port$env_po
 fi
 echo "Listen port OK: $env_port (ENV, EXPOSE, both healthchecks)"
 
+# The runtime user is spelled out in four places: the Dockerfile creates it,
+# docker-compose.yml runs as it and mounts the tmpfs it owns, and the CI smoke
+# test asserts it. They agree today because someone edited all four. Change the
+# UID in the Dockerfile alone and CI still goes green (the smoke test reads the
+# id out of the image, which is now the new one, against its own literal, which
+# fails loudly there) while compose keeps running the server as an account the
+# image does not have and its tmpfs mounts land root-owned. That surfaces as an
+# EACCES inside a running container, hours later, not as a red check. All four
+# must carry the Dockerfile's numbers.
+df_uid="$(sed -n 's/^[[:space:]]*.*useradd -r -u \([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
+df_gid="$(sed -n 's/^[[:space:]]*.*groupadd -r -g \([0-9][0-9]*\).*/\1/p' Dockerfile | head -n1)"
+compose_user="$(sed -n 's/^[[:space:]]*user: "\([0-9][0-9]*\):\([0-9][0-9]*\)".*/\1:\2/p' docker-compose.yml | head -n1)"
+compose_tmpfs="$(sed -n 's/.*uid=\([0-9][0-9]*\),gid=\([0-9][0-9]*\).*/\1:\2/p' docker-compose.yml | head -n1)"
+ci_uid="$(sed -n 's/.*expected USER agave (uid \([0-9][0-9]*\)).*/\1/p' .github/workflows/ci.yml | head -n1)"
+if [[ -z "$df_uid" || -z "$df_gid" || -z "$compose_user" || -z "$compose_tmpfs" || -z "$ci_uid" ]]; then
+    echo "check-pins: could not parse the runtime uid/gid from Dockerfile, docker-compose.yml or ci.yml" >&2
+    exit 1
+fi
+if [[ "$compose_user" != "$df_uid:$df_gid" || "$compose_tmpfs" != "$df_uid:$df_gid" || "$ci_uid" != "$df_uid" ]]; then
+    echo "check-pins: runtime uid mismatch: Dockerfile useradd=$df_uid groupadd=$df_gid, compose user:=$compose_user, compose tmpfs uid/gid=$compose_tmpfs, ci.yml smoke test=$ci_uid" >&2
+    echo "check-pins: the Dockerfile owns the value; update docker-compose.yml (user:, tmpfs) and the ci.yml smoke test in the same change" >&2
+    exit 1
+fi
+echo "Runtime user OK: $df_uid:$df_gid (Dockerfile, compose user:, compose tmpfs, ci.yml smoke test)"
+
+# `zig fmt --check` and `zig build fmt-check` must cover the same files. A path
+# added to build.zig's fmt_paths but not to the ci.yml step is formatted locally
+# and shipped unformatted; the reverse is a file CI rejects that no local gate
+# can reproduce. Neither side can see the other, so compare the two lists here.
+# A ci.yml step that stops spelling the command out fails this check rather than
+# quietly dropping the comparison.
+ci_fmt="$(sed -n 's/^[[:space:]]*run: zig fmt --check \(.*\)$/\1/p' .github/workflows/ci.yml | head -n1)"
+build_fmt_paths="$(sed -n 's/^.*const fmt_paths = \[_\]\[\]const u8{ \(.*\) };.*/\1/p' build.zig | head -n1)"
+# Directories are spelled with a trailing slash on both sides ("src/" here,
+# "src/" on the command line); bare file names must not gain one.
+build_fmt="$(printf '%s\n' "$build_fmt_paths" |
+    grep -oE '"[^"]+"' | tr -d '"' |
+    awk '{ if ($0 ~ /\/$/) print; else print $0 }' |
+    tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^ *//;s/ *$//')"
+ci_fmt_norm="$(printf '%s\n' "$ci_fmt" | tr -s '[:space:]' ' ' | sed 's/^ *//;s/ *$//')"
+if [[ -z "$ci_fmt_norm" || -z "$build_fmt" ]]; then
+    echo "check-pins: could not parse the zig fmt path list from ci.yml fmt-check or build.zig fmt_paths" >&2
+    echo "check-pins: ci_fmt='$ci_fmt_norm' build_fmt='$build_fmt'" >&2
+    exit 1
+fi
+if [[ "$ci_fmt_norm" != "$build_fmt" ]]; then
+    echo "check-pins: zig fmt path mismatch: ci.yml fmt-check checks '$ci_fmt_norm', build.zig fmt_paths checks '$build_fmt'" >&2
+    exit 1
+fi
+echo "Zig fmt paths OK: $ci_fmt_norm (ci.yml fmt-check, build.zig fmt_paths)"
+
 # ruff.toml owns the ruff version: required-version gates every run, and
 # scripts/lint-python.sh resolves its uvx fetch from the same file. The CI job
 # must call that script rather than spelling out its own invocation, otherwise a
