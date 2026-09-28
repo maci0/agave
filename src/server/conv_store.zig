@@ -13,7 +13,9 @@
 //! quarantined to `{path}.corrupt` so the next save cannot overwrite the
 //! only remaining copy. A store larger than the load caps keeps its full
 //! bytes at `{path}.overflow`, because the next save writes back only what
-//! loaded.
+//! loaded. Both sidecars are the only copy of state the server does not hold,
+//! so a second quarantine or overflow takes the next free `.corrupt.N` /
+//! `.overflow.N` name instead of overwriting the first.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -218,8 +220,8 @@ fn restrictToOwner(path: []const u8) void {
 /// at this point, so a failure here costs the sidecar, not the store.
 fn preserveOverflow(path: []const u8, data: []const u8) void {
     var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dest = std.fmt.bufPrint(&dest_buf, "{s}.overflow", .{path}) catch {
-        std.log.err("conversation store: store at {s} exceeds the load caps and its name does not fit {d} bytes; the part past the caps is lost on the next save", .{ path, std.fs.max_path_bytes });
+    const dest = freeSidecarPath(&dest_buf, path, ".overflow") orelse {
+        std.log.err("conversation store: store at {s} exceeds the load caps and no free {s}.overflow[.n] name is left ({d} kept); the part past the caps is lost on the next save", .{ path, path, max_sidecar_copies });
         return;
     };
     durable.replacePrivate(dest, data) catch |err| {
@@ -474,9 +476,43 @@ fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
     return buf;
 }
 
+/// Distinct sidecar copies kept beside the live store. A quarantine or an
+/// overflow preserves state the server does not hold, so a second event writes
+/// a different file: a fixed name drops the first copy, which is the only copy
+/// of that state. Bounded, and a full set is reported rather than overwritten.
+const max_sidecar_copies: usize = 8;
+
+fn sidecarExists(path: []const u8) bool {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (path.len >= buf.len) return false;
+    @memcpy(buf[0..path.len], path);
+    buf[path.len] = 0;
+    return std.c.access(@ptrCast(buf[0..path.len :0]), 0) == 0;
+}
+
+/// First free `{path}{suffix}`, then the first free `{path}{suffix}.{n}` up to
+/// `max_sidecar_copies`. Null when the name does not fit or every slot is taken.
+fn freeSidecarPath(buf: []u8, path: []const u8, suffix: []const u8) ?[]u8 {
+    const first = std.fmt.bufPrint(buf, "{s}{s}", .{ path, suffix }) catch return null;
+    if (!sidecarExists(first)) return first;
+    var numbered: [std.fs.max_path_bytes]u8 = undefined;
+    for (1..max_sidecar_copies) |n| {
+        const candidate = std.fmt.bufPrint(&numbered, "{s}{s}.{d}", .{ path, suffix, n }) catch return null;
+        if (sidecarExists(candidate)) continue;
+        return std.fmt.bufPrint(buf, "{s}", .{candidate}) catch null;
+    }
+    return null;
+}
+
+/// Name of sidecar slot `n`: the bare suffix for the first, `.N` after it.
+fn sidecarIndexSuffix(n: usize, buf: []u8) ![]const u8 {
+    if (n == 0) return buf[0..0];
+    return std.fmt.bufPrint(buf, ".{d}", .{n});
+}
+
 fn quarantine(path: []const u8, data: []const u8) !void {
     var dest_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dest = std.fmt.bufPrint(&dest_buf, "{s}.corrupt", .{path}) catch return error.NameTooLong;
+    const dest = freeSidecarPath(&dest_buf, path, ".corrupt") orelse return error.TooManyQuarantines;
     durable.renameOver(path, dest) catch |err| {
         // Rename is preferred so the live path is vacated. If it fails, copy
         // the already-read bytes so the next save cannot destroy the only copy.
@@ -730,6 +766,60 @@ test "load quarantines corrupt store" {
         return;
     };
     return error.CorruptNotQuarantined;
+}
+
+test "a second corrupt store does not overwrite the first quarantine" {
+    const allocator = std.testing.allocator;
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "recorrupt.json");
+    var first_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var second_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const first_copy = std.fmt.bufPrint(&first_buf, "{s}.corrupt", .{path}) catch unreachable;
+    const second_copy = std.fmt.bufPrint(&second_buf, "{s}.corrupt.1", .{path}) catch unreachable;
+    defer deleteTestPath(path);
+    defer deleteTestPath(first_copy);
+    defer deleteTestPath(second_copy);
+
+    const first_raw = "{\"first\": 1}";
+    try durable.replacePrivate(path, first_raw);
+    try std.testing.expectError(error.CorruptStore, load(allocator, path));
+    const first_kept = try readFile(allocator, first_copy);
+    defer allocator.free(first_kept);
+    try std.testing.expectEqualStrings(first_raw, first_kept);
+
+    // A later corruption is a different file holding different history, so it
+    // takes the next name rather than replacing the only copy of the first.
+    const second_raw = "{\"second\": 2}";
+    try durable.replacePrivate(path, second_raw);
+    try std.testing.expectError(error.CorruptStore, load(allocator, path));
+    const second_kept = try readFile(allocator, second_copy);
+    defer allocator.free(second_kept);
+    try std.testing.expectEqualStrings(second_raw, second_kept);
+    const first_again = try readFile(allocator, first_copy);
+    defer allocator.free(first_again);
+    try std.testing.expectEqualStrings(first_raw, first_again);
+}
+
+test "sidecar slots are bounded and never overwritten" {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = testPath(&path_buf, "slots");
+    var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var index_buf: [16]u8 = undefined;
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    // Fill every slot: `.corrupt` plus `.corrupt.1` through `.corrupt.7`.
+    for (0..max_sidecar_copies) |n| {
+        const index = try sidecarIndexSuffix(n, &index_buf);
+        const name = std.fmt.bufPrint(&name_buf, "{s}.corrupt{s}", .{ path, index }) catch unreachable;
+        try durable.replacePrivate(name, "x");
+    }
+    // Every slot holds a distinct copy, so the next event has nowhere to put
+    // its own and is reported instead of dropping one of them.
+    try std.testing.expect(freeSidecarPath(&buf, path, ".corrupt") == null);
+    for (0..max_sidecar_copies) |n| {
+        const index = try sidecarIndexSuffix(n, &index_buf);
+        const name = std.fmt.bufPrint(&name_buf, "{s}.corrupt{s}", .{ path, index }) catch unreachable;
+        deleteTestPath(name);
+    }
 }
 
 test "load quarantines a store whose ids overflow u32" {
