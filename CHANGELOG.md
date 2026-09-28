@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.5.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.6.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,14 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.6.0] - 2026-09-28
+
+### Fixed
+- macOS builds compile again. Durable-file permission modes use the platform `mode_t` (`u16` on macOS). `zig build` stopped on aarch64-macos with `expected type 'u16', found 'u32'`.
+- The wasm32 build compiles again. KV demotion counters are `usize`, because wasm32-freestanding has no 64-bit atomics. Metrics still report the counts as `u64`.
+- The Docker image's `/usr/share/doc/agave` directory is mode `0755`, so the non-root runtime user can read the GPL notice. `COPY --chmod=0644` had left the directory non-traversable.
+- Committed CUDA PTX matches the kernel-alias fixup. Body-less `.func` forward declarations are no longer promoted to `.entry`, which shadowed the real kernel. All 62 artifacts were regenerated.
 
 ## [0.5.0] - 2026-09-27
 
@@ -1206,7 +1214,8 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.5.0...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/maci0/agave/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/maci0/agave/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/maci0/agave/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/maci0/agave/compare/v0.2.0...v0.3.0
