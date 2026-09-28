@@ -33,7 +33,7 @@ zig build -Denable-<backend>=false # cpu cuda metal rocm vulkan webgpu
 zig build -Denable-debug=false     # skip agave-debug
 zig build -Denable-bench=false     # skip installing agave-bench
 zig build test -Dtest-filter=<str> # only tests whose name contains <str>. Repeat to AND filters. A filter matching no `test "..."` name aborts the build (an empty match would otherwise exit 0).
-zig build wasm                     # browser WASM module (web/), not src/web/. Compile only, see Gotchas.
+zig build wasm                     # browser WASM module into zig-out/web/ (agave.wasm + the index.html, style.css, agave.js, shell.js the page loads), not src/web/. Compile only, see Gotchas.
 zig build validate                 # every GPU kernel against the CPU backend. Needs the GPU; -Dvalidate-backend= picks it (default rocm).
 zig build ptx                      # CUDA kernels to zig-out/ptx/*.ptx (see Build: commit them)
 zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.hsaco (see Build)

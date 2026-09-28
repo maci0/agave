@@ -250,8 +250,10 @@ agave.destroy();
 `AbortSignal`. Engine state is read, never written: `agave.ready`,
 `agave.hasModel`, and `agave.initMessage`. For a multi-hundred-MB model, fetch it
 yourself with `agave.fetchModel(url, { onProgress })` and hand the buffer to
-`loadModel(buffer)`; a bare `loadModel(url)` gives no progress. Serve `web/` as
-a static directory after `zig build wasm`.
+`loadModel(buffer)`; a bare `loadModel(url)` gives no progress. Serve
+`zig-out/web` as a static directory after `zig build wasm`: it holds
+`agave.wasm` plus the `index.html`, `style.css`, `agave.js` and `shell.js` the
+page loads by relative URL.
 Forward-pass generation in WASM is still blocked by a Zig wasm32 codegen bug;
 load and tokenize work.
 

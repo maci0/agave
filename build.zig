@@ -67,6 +67,14 @@ pub fn build(b: *std.Build) void {
     // itself and the step that wanted it.
     const python3 = b.findProgram(&.{"python3"}, &.{}) catch null;
 
+    // A Run step inherits the process working directory unless told otherwise,
+    // so `zig build --build-file <path>/build.zig` from anywhere else ran
+    // `bash scripts/lint-shell.sh` out of the caller's cwd and failed on a
+    // file that is right there in the build root. The script argument is
+    // cwd-relative; pin the child's cwd to the build root so every entry point
+    // finds the tree it was configured from.
+    const repo_cwd: std.Build.LazyPath = b.path(".");
+
     // ── CUDA PTX kernels (cross-compiled via nvptx64-cuda) ─────────
     // Compiles Zig CUDA kernels to PTX assembly. The resulting .s file
     // is placed in zig-out/ and can be embedded into cuda.zig via @embedFile.
@@ -571,16 +579,27 @@ pub fn build(b: *std.Build) void {
     });
     wasm_step.dependOn(&install_wasm.step);
 
+    // index.html loads style.css, agave.js and shell.js by relative URL, so
+    // agave.wasm alone is not a servable directory. Ship the committed shell
+    // next to it: zig-out/web is what README tells a developer to serve.
+    for ([_][]const u8{ "index.html", "style.css", "agave.js", "shell.js" }) |shell_file| {
+        const path = b.fmt("web/{s}", .{shell_file});
+        const install_shell = b.addInstallFile(b.path(path), path);
+        wasm_step.dependOn(&install_shell.step);
+    }
+
     // Contributor gates. Paths must stay in lockstep with
     // `.github/workflows/ci.yml` fmt-check (`zig fmt --check src/ tests/ build.zig build.zig.zon`).
     const fmt_paths = [_][]const u8{ "src/", "tests/", "build.zig", "build.zig.zon" };
     {
         const fmt_apply = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt" });
+        fmt_apply.setCwd(repo_cwd);
         fmt_apply.addArgs(&fmt_paths);
         fmt_apply.has_side_effects = true;
         b.step("fmt", "Apply zig fmt to the paths CI checks").dependOn(&fmt_apply.step);
 
         const fmt_check_cmd = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", "--check" });
+        fmt_check_cmd.setCwd(repo_cwd);
         fmt_check_cmd.addArgs(&fmt_paths);
         fmt_check_cmd.has_side_effects = true;
         const fmt_check_step = b.step("fmt-check", "Check formatting (same paths as CI)");
@@ -589,12 +608,14 @@ pub fn build(b: *std.Build) void {
         const docs_check_step = b.step("docs-check", "Docs hygiene (scripts/check-docs.py + its SemVer guard tests)");
         if (python3) |py| {
             const docs_check_cmd = b.addSystemCommand(&.{ py, "scripts/check-docs.py" });
+            docs_check_cmd.setCwd(repo_cwd);
             pin_spawned_python(docs_check_cmd);
             docs_check_cmd.has_side_effects = true;
             docs_check_step.dependOn(&docs_check_cmd.step);
             // CI's docs-check job runs the guard's own tests; keeping them in
             // `check` means a broken guard fails locally, not after a push.
             const docs_check_test_cmd = b.addSystemCommand(&.{ py, "scripts/test_check_docs.py" });
+            docs_check_test_cmd.setCwd(repo_cwd);
             pin_spawned_python(docs_check_test_cmd);
             docs_check_test_cmd.has_side_effects = true;
             docs_check_step.dependOn(&docs_check_test_cmd.step);
@@ -605,16 +626,19 @@ pub fn build(b: *std.Build) void {
         }
 
         const lint_web_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-web.sh" });
+        lint_web_cmd.setCwd(repo_cwd);
         lint_web_cmd.has_side_effects = true;
         const lint_web_step = b.step("lint-web", "oxlint + tsc (CI lint-web job)");
         lint_web_step.dependOn(&lint_web_cmd.step);
 
         const lint_shell_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-shell.sh" });
+        lint_shell_cmd.setCwd(repo_cwd);
         lint_shell_cmd.has_side_effects = true;
         const lint_shell_step = b.step("lint-shell", "shellcheck (CI lint-shell job)");
         lint_shell_step.dependOn(&lint_shell_cmd.step);
 
         const lint_python_cmd = b.addSystemCommand(&.{ "bash", "scripts/lint-python.sh" });
+        lint_python_cmd.setCwd(repo_cwd);
         lint_python_cmd.has_side_effects = true;
         const lint_python_step = b.step("lint-python", "ruff (CI lint-python job)");
         lint_python_step.dependOn(&lint_python_cmd.step);
@@ -624,6 +648,7 @@ pub fn build(b: *std.Build) void {
         // against a scratch store, so the runbook in docs/DURABILITY.md is
         // exercised rather than described.
         const conv_backup_cmd = b.addSystemCommand(&.{ "bash", "scripts/conv-store-backup.sh", "--self-test" });
+        conv_backup_cmd.setCwd(repo_cwd);
         conv_backup_cmd.has_side_effects = true;
         const conv_backup_step = b.step("conv-store-backup-test", "Conversation store backup + restore self-test (docs/DURABILITY.md)");
         conv_backup_step.dependOn(&conv_backup_cmd.step);
@@ -632,6 +657,7 @@ pub fn build(b: *std.Build) void {
         // bun + Tailwind outputs, @embedFile'd or shipped as-is. CI's lint-web
         // job regenerates and byte-compares them.
         const web_artifacts_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-web-artifacts.sh" });
+        web_artifacts_cmd.setCwd(repo_cwd);
         web_artifacts_cmd.has_side_effects = true;
         const web_artifacts_step = b.step("check-web", "Committed browser bundles and stylesheets match a fresh build (CI lint-web job)");
         web_artifacts_step.dependOn(&web_artifacts_cmd.step);
@@ -640,6 +666,7 @@ pub fn build(b: *std.Build) void {
         // CI's fmt-check job runs the same script, so the pins that make a
         // Docker build reproducible fail locally too, not only after a push.
         const check_pins_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-pins.sh" });
+        check_pins_cmd.setCwd(repo_cwd);
         check_pins_cmd.has_side_effects = true;
         const check_pins_step = b.step("check-pins", "Zig / Debian / SOURCE_DATE_EPOCH pins agree (CI fmt-check job)");
         check_pins_step.dependOn(&check_pins_cmd.step);
@@ -648,6 +675,7 @@ pub fn build(b: *std.Build) void {
         // compiles the engine twice and needs its own CI job, not every
         // contributor's gate.
         const reproducible_cmd = b.addSystemCommand(&.{ "bash", "scripts/check-reproducible.sh" });
+        reproducible_cmd.setCwd(repo_cwd);
         reproducible_cmd.has_side_effects = true;
         const reproducible_step = b.step("check-reproducible", "Build twice from different paths and byte-compare (CI reproducible-build job)");
         reproducible_step.dependOn(&reproducible_cmd.step);
@@ -709,9 +737,9 @@ const BackendTest = struct {
 };
 
 /// Applies the platform link settings every artifact in this build shares: libc
-/// linkage, PIE on the ELF/Mach-O targets, and, when `link_metal` is set, the
-/// three macOS frameworks the Metal backend calls into. Vulkan
-/// (libvulkan.so / libvulkan.1.dylib via the KosmicKrisp ICD) is loaded at
+/// linkage, PIE and stack-protector-canary on the ELF/Mach-O targets, and, when
+/// `link_metal` is set, the three macOS frameworks the Metal backend calls into.
+/// Vulkan (libvulkan.so / libvulkan.1.dylib via the KosmicKrisp ICD) is loaded at
 /// runtime through std.DynLib and needs no link-time dependency.
 fn linkPlatform(
     mod: *std.Build.Module,
@@ -720,6 +748,10 @@ fn linkPlatform(
     link_metal: bool,
 ) void {
     mod.link_libc = true;
+    // Canaries on every function with a local array. Off by default, and the
+    // engine parses attacker-controlled GGUF headers and weights, so the one
+    // overflow worth guarding is the one in a decode loop.
+    mod.stack_protector = true;
     // zig 0.16 ReleaseFast defaults to a non-PIE ET_EXEC on Linux.
     switch (resolved.result.os.tag) {
         .linux, .macos => compile.pie = true,

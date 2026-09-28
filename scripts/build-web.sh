@@ -77,11 +77,10 @@ bun build web/agave.ts --outfile "$STAGE/wasm/agave.js" \
 # stays byte-identical outside that one escape. Only the inlined bundle needs
 # it; the shell is loaded from a file.
 if grep -q '</script' "$STAGE/server/app.js"; then
-    python3 - "$STAGE/server/app.js" <<'PY'
-import pathlib, sys
-path = pathlib.Path(sys.argv[1])
-path.write_text(path.read_text().replace('</script', '<\\/script'))
-PY
+    # Write-then-rename rather than `sed -i`: GNU and BSD sed disagree on
+    # whether -i takes a suffix argument.
+    sed 's|</script|<\\/script|g' "$STAGE/server/app.js" > "$STAGE/server/app.js.tmp"
+    mv "$STAGE/server/app.js.tmp" "$STAGE/server/app.js"
 fi
 
 "$TAILWIND" -i src/web/app.css -o "$STAGE/server/style.css" --minify
