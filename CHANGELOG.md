@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.6.0** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.7.0** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,8 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-09-28
 
 ### Breaking
 - A pre-routing 403 on an Anthropic-envelope route (`/v1/messages`) now returns
@@ -22,6 +24,7 @@ must still appear under **Changed** or **Breaking** below. See
   still finds it on the OpenAI routes; on `/v1/messages`, branch on the status.
 
 ### Added
+- `HF_ENDPOINT` environment variable support to override the Hugging Face Hub API base URL for custom endpoints and internal mirrors.
 - A man page, `man/agave.1`, generated from `agave --help` by
   `scripts/gen-manpage.sh`. `zig build` installs it at
   `zig-out/share/man/man1/agave.1` and the Docker image ships it at
@@ -1331,7 +1334,8 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/maci0/agave/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/maci0/agave/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/maci0/agave/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/maci0/agave/compare/v0.3.0...v0.4.0
