@@ -41,12 +41,11 @@ inline fn simdMaxF32(buf: []const f32) f32 {
     return m;
 }
 
-/// Return index of maximum element (first occurrence on ties).
-/// Single pass over `buf` (SIMD chunks + scalar tail), avoids the prior
-/// max-then-rescan pattern that touched every logit twice on greedy decode.
-/// Returns 0 for empty input.
-pub fn argmax(buf: []const f32) u32 {
-    if (buf.len == 0) return 0;
+/// Maximum of `buf` and the index of its first occurrence, in one pass.
+/// Callers that need both take this instead of a separate `argmax`, so a
+/// vocabulary-sized sweep is not paid twice. An all-NaN buffer reports index 0.
+inline fn maxWithIndex(buf: []const f32) struct { val: f32, idx: u32 } {
+    if (buf.len == 0) return .{ .val = -std.math.inf(f32), .idx = 0 };
     var best_idx: u32 = 0;
     var best_val: f32 = buf[0];
     var found_finite = !std.math.isNan(best_val);
@@ -92,9 +91,17 @@ pub fn argmax(buf: []const f32) u32 {
     }
     if (!found_finite) {
         std.log.warn("argmax: NaN detected in logits", .{});
-        return 0;
+        return .{ .val = -std.math.inf(f32), .idx = 0 };
     }
-    return best_idx;
+    return .{ .val = best_val, .idx = best_idx };
+}
+
+/// Return index of maximum element (first occurrence on ties).
+/// Single pass over `buf` (SIMD chunks + scalar tail), avoids the prior
+/// max-then-rescan pattern that touched every logit twice on greedy decode.
+/// Returns 0 for empty input.
+pub fn argmax(buf: []const f32) u32 {
+    return maxWithIndex(buf).idx;
 }
 
 /// Select the top-k elements from `scores` by value.
@@ -599,8 +606,14 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
     if (temperature == 0) return argmax(logits);
 
     const n = logits.len;
-    const fallback: u32 = argmax(logits);
     const neg_inf = -std.math.inf(f32);
+    // Index of the largest logit, needed only if filtering leaves nothing to
+    // sample. Captured in the sweeps that already run over the vocabulary
+    // rather than by a separate argmax pass: `logits` is overwritten with
+    // exponentials below, so the value has to come from before that. Scaling
+    // by a positive temperature preserves the ordering, so reading it after
+    // the scale step picks the same token.
+    var fallback: u32 = 0;
 
     // 1. Temperature scaling (SIMD), skip identity scaling
     if (temperature != 1.0 and temperature > 0) {
@@ -623,8 +636,13 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
         const buf_k = @min(k, max_top_k);
         for (0..buf_k) |i| top_buf[i] = neg_inf;
         var mi: usize = 0;
+        var fallback_logit: f32 = neg_inf;
 
-        for (logits) |v| {
+        for (logits, 0..) |v, i| {
+            if (v > fallback_logit) {
+                fallback_logit = v;
+                fallback = @intCast(i);
+            }
             if (v > top_buf[mi]) {
                 top_buf[mi] = v;
                 mi = 0;
@@ -656,7 +674,9 @@ pub fn sampleToken(logits: []f32, temperature: f32, top_k: u32, top_p: f32, rng:
             sum += logits[si];
         }
     } else {
-        const max_val = simdMaxF32(logits);
+        const mx = maxWithIndex(logits);
+        const max_val = mx.val;
+        fallback = mx.idx;
         const max_v: V8 = @splat(max_val);
         var sum_v: V8 = @splat(@as(f32, 0.0));
         var si: usize = 0;
@@ -939,6 +959,34 @@ test "sampleToken top_p allows multiple tokens" {
         count += 1;
     };
     try std.testing.expect(count >= 3);
+}
+
+test "sampleToken falls back to argmax when the distribution collapses" {
+    // NaN logits make the softmax sum non-finite, so sampleToken returns the
+    // argmax it captured on the way through. The peak is not index 0, so a
+    // fallback that lost the index would be visible here.
+    var l = [_]f32{ std.math.nan(f32), 5.0, std.math.nan(f32) };
+    var prng = std.Random.DefaultPrng.init(7);
+    try std.testing.expectEqual(@as(u32, 1), sampleToken(&l, 1.0, 0, 1.0, prng.random()));
+
+    // Same through the top-k sweep, which captures the index in its own scan.
+    var l2 = [_]f32{ std.math.nan(f32), 5.0, std.math.nan(f32), 1.0 };
+    var prng2 = std.Random.DefaultPrng.init(7);
+    try std.testing.expectEqual(@as(u32, 1), sampleToken(&l2, 0.7, 2, 1.0, prng2.random()));
+}
+
+test "argmax matches maxWithIndex on ties and NaN" {
+    try std.testing.expectEqual(@as(u32, 0), argmax(&[_]f32{}));
+    const tied = [_]f32{ 2.0, 2.0, 1.0, 2.0 };
+    const mx = maxWithIndex(&tied);
+    try std.testing.expectEqual(@as(f32, 2.0), mx.val);
+    try std.testing.expectEqual(@as(u32, 0), mx.idx);
+    const with_nan = [_]f32{ std.math.nan(f32), 3.0, std.math.nan(f32) };
+    const mx2 = maxWithIndex(&with_nan);
+    try std.testing.expectEqual(@as(f32, 3.0), mx2.val);
+    try std.testing.expectEqual(@as(u32, 1), mx2.idx);
+    const all_nan = [_]f32{ std.math.nan(f32), std.math.nan(f32) };
+    try std.testing.expectEqual(@as(u32, 0), maxWithIndex(&all_nan).idx);
 }
 
 test "applyRepeatPenalty positive logits divided" {
