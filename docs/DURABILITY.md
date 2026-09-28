@@ -91,7 +91,7 @@ Message content is user data, so every copy of the store is owner-only:
 | Disaster | RPO | RTO | Notes |
 |---|---|---|---|
 | Host or instance loss, no backup | the whole store | n/a | Total loss of conversations |
-| Host or instance loss, backups current | last server save | seconds to restore a small file | Store is capped at 64 MiB on load |
+| Host or instance loss, backups current | last server save | seconds to restore a small file | The server refuses to load a store over 64 MiB, so `verify` and `restore` reject one before it reaches the live path |
 | `docker compose down -v` | the whole store | n/a | Deletes the volume |
 | Malicious or accidental deletion | last backup taken | same | Only if backups were taken |
 | Logical corruption (a bad build writing a wrong but well-formed store) | the interval between backups | seconds to restore | `verify` checks structure, not meaning; see below |
@@ -154,10 +154,11 @@ Destination is `AGAVE_BACKUP_DIR`, default `$HOME/.agave-backups`. **Set it to
 a different filesystem than the cache directory.** A backup on the same disk
 protects against a bad save, not against losing the disk, which is the case
 that matters, so `backup` refuses to run when both resolve to the same
-filesystem (`df -P` device) and names the device. `AGAVE_ALLOW_SAME_FS=1`
-overrides the refusal when that tradeoff is deliberate, for instance while
-testing. The check is filesystem-level, not disk-level: two directories on
-different partitions of one disk pass it and do not survive losing the disk.
+filesystem (`df -P` device) and names the device, and `check` reaches the same
+conclusion from the same test. `AGAVE_ALLOW_SAME_FS=1` overrides both
+refusals when that tradeoff is deliberate, for instance while testing. The
+check is filesystem-level, not disk-level: two directories on different
+partitions of one disk pass it and do not survive losing the disk.
 
 Put it on a schedule (cron, systemd timer, whatever the host runs). The script
 is idempotent and safe to run while the server is serving.
@@ -199,10 +200,19 @@ scripts/conv-store-backup.sh check      # exit 0 = the tier is a recovery path
 ```
 
 It fails when the backup directory does not exist, holds no dated backup, holds
-a newest backup older than `AGAVE_MAX_AGE_HOURS` (default 26), or when the
-newest backup no longer verifies. Schedule it next to the backup and alert on a
-nonzero exit; a monthly `check` against a daily backup is the minimum, since
-`AGAVE_MAX_AGE_HOURS` has to exceed the real backup interval to be meaningful.
+a newest backup older than `AGAVE_MAX_AGE_HOURS` (default 26), when the newest
+backup no longer verifies, or when the tier sits on the same filesystem as the
+store. That last one is the case monitoring exists for: a tier moved onto the
+cache volume stops every `backup` run at once, and the old copies stay fresh
+for a retention window afterwards, so without the check `check` reports a
+healthy recovery path for exactly the deployment whose backups stopped being
+taken. A store path that cannot be resolved, or whose directory is absent
+because the tier is being checked on a recovery host, has no filesystem to
+compare against and is not a failure.
+
+Schedule it next to the backup and alert on a nonzero exit; a monthly `check`
+against a daily backup is the minimum, since `AGAVE_MAX_AGE_HOURS` has to
+exceed the real backup interval to be meaningful.
 
 ```cron
 # Hourly backup, freshness checked every run: a nonzero exit is the alert.
@@ -267,10 +277,14 @@ whole path in CI and locally:
 ```bash
 zig build conv-store-backup-test     # backup, verify, reject-truncated,
                                     # reject-other-envelope-version,
-                                    # format-version drift guard, restore,
-                                    # pre-restore snapshot, retention,
-                                    # retention scope, same-filesystem refusal,
+                                    # format-version drift guard,
+                                    # load-cap drift guard, reject-oversize,
+                                    # restore, pre-restore snapshot,
+                                    # retention, retention scope,
+                                    # same-filesystem refusal,
                                     # check fresh/missing/stale,
+                                    # check rejects a shared filesystem,
+                                    # check without a store,
                                     # --store override, whole help text
 scripts/conv-store-backup.sh --self-test   # same, standalone
 ```
@@ -283,9 +297,21 @@ reaches the script would otherwise make every `backup` fail after it has
 already copied the store, and every `restore` refuse a file the server writes
 daily, with the first sign of it being a broken deployment.
 
+It compares `MAX_STORE_BYTES` against `max_store_bytes` the same way. A store
+past that cap is well-formed, so it passed `verify` until both grew this check:
+`backup` kept copying it, `restore` kept installing it, and the server, which
+refuses to load it and disables persistence instead, reported neither. Now
+`verify` rejects it on size, before the brace scan that walks a file a
+character at a time, and `restore` refuses before it snapshots a good live
+store and overwrites it with a copy the server will not read. Reaching this
+limit needs roughly 64 MiB of conversation text, so it is a fault and not a
+routine path, which is exactly why it needed a check rather than an
+assumption.
+
 What the self-test does not cover: a restore into a store the current build
-rejects at load. The load paths above mean that copy stays at the live path
-rather than being dropped, but proving it needs a running server.
+rejects at load for a reason neither check can see. The load paths above mean
+that copy stays at the live path rather than being dropped, but proving it
+needs a running server.
 
 ## Configuration and secrets
 

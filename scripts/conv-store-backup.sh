@@ -25,7 +25,8 @@
 #   scripts/conv-store-backup.sh backup               # copy + verify, prune old
 #   scripts/conv-store-backup.sh verify FILE          # check a backup is loadable
 #   scripts/conv-store-backup.sh restore FILE         # verify, snapshot, install
-#   scripts/conv-store-backup.sh check                # backup tier is fresh and loadable
+#   scripts/conv-store-backup.sh check                # tier is fresh, loadable,
+#                                                    # and on its own filesystem
 #   scripts/conv-store-backup.sh --store PATH backup  # store is not at the default path
 #   scripts/conv-store-backup.sh --self-test          # exercise all of the above
 #
@@ -55,6 +56,13 @@ cd "$REPO_ROOT"
 # format_version must stay in step; verify fails loudly on anything else
 # rather than installing a file the current build cannot load.
 STORE_FORMAT_VERSION=1
+# Load cap the server refuses to read past, mirroring max_store_bytes in
+# src/server/conv_store.zig. A store over it is left at the live path with
+# persistence disabled, so `backup` would keep copying it and `restore` would
+# keep installing it, and both report success: the operator walks away from a
+# restore the server never loaded. assert_max_store_bytes_agrees keeps this in
+# step with the server the way STORE_FORMAT_VERSION does.
+MAX_STORE_BYTES=67108864
 KEEP="${AGAVE_KEEP:-14}"
 KEEP_SNAPSHOT="${AGAVE_KEEP_SNAPSHOT:-5}"
 MAX_AGE_HOURS="${AGAVE_MAX_AGE_HOURS:-26}"
@@ -154,6 +162,16 @@ else
     backdated_stamp() { date -u -v-"${1}"H +%Y%m%d%H%M; }
 fi
 
+# Size in bytes. The same platform probe as mtime_of, for the same reason: GNU
+# and BSD stat share no flag for it.
+file_size() {
+    if stat -c %Y . >/dev/null 2>&1; then
+        stat -c %s -- "$1"
+    else
+        stat -f %z -- "$1"
+    fi
+}
+
 # Newest first, one path per line. $1 is the directory, $2 a basename ERE.
 list_backups() {
     local dir="$1" re="$2" f
@@ -230,10 +248,44 @@ assert_format_version_agrees() {
         die "STORE_FORMAT_VERSION=$STORE_FORMAT_VERSION but src/server/conv_store.zig writes envelope version $found: update this script, or backups and restores fail against every store the server writes"
 }
 
+# The load cap, the same drift guard for max_store_bytes. The Zig side is
+# spelled as an expression rather than a decimal, so it is evaluated instead of
+# text-matched: a cap that moves to 128 MiB has to be visible here, and one this
+# cannot read is a failure, not a reason to guess the old number.
+assert_max_store_bytes_agrees() {
+    local src="$REPO_ROOT/src/server/conv_store.zig" expr found
+    [[ -f "$src" ]] || return 0
+    expr="$(grep -Eo 'const max_store_bytes: usize = [^;]+;' "$src" | head -1 | sed -e 's/^const max_store_bytes: usize = //' -e 's/;$//')"
+    [[ -n "$expr" ]] || die "could not read max_store_bytes from $src; keep this script's MAX_STORE_BYTES in step with it"
+    # bash arithmetic, not awk's: eval() is a gawk extension and this script
+    # runs on macOS and busybox hosts too. A cap spelled with anything but
+    # digits and arithmetic operators is refused rather than guessed at, so a
+    # cap that stops being a literal fails the self-test instead of leaving
+    # MAX_STORE_BYTES stale.
+    [[ "$expr" =~ ^[0-9]+([[:space:]]*[*+][[:space:]]*[0-9]+)*$ ]] ||
+        die "max_store_bytes in $src is '$expr', not a literal byte count this script can read; keep this script's MAX_STORE_BYTES in step with it"
+    found=$((expr))
+    [[ "$found" == "$MAX_STORE_BYTES" ]] ||
+        die "MAX_STORE_BYTES=$MAX_STORE_BYTES but src/server/conv_store.zig refuses to load a store over $found bytes: update this script, or verify accepts stores the server cannot load"
+}
+
 verify_store() {
     local file="$1"
     [[ -f "$file" ]] || die "not a file: $file"
     [[ -s "$file" ]] || die "empty file: $file"
+    # Loadable is checked before structure, and off the file's size rather
+    # than off a scan of it. The server refuses to read a store past
+    # max_store_bytes and leaves it at the live path with persistence
+    # disabled, so a file that passes every structural check below can still
+    # be one the server never loads. Catching it here means `backup` says so at
+    # the copy rather than reporting success, and `restore` refuses it before
+    # it snapshots and overwrites a good live store to install a dead one.
+    # brace_balance walks the file a character at a time, so an oversize file
+    # has to be rejected before that, not after it.
+    local size
+    size="$(file_size "$file")"
+    (( size <= MAX_STORE_BYTES )) ||
+        die "$file is $size bytes, over the $MAX_STORE_BYTES-byte limit the server loads within: the server would not read it back. Nothing has been changed."
     [[ "$(head -c 1 "$file")" == "{" ]] || die "not a JSON object: $file"
     grep -Eq '"version":[[:space:]]*'"$STORE_FORMAT_VERSION"'([[:space:]]*[,}])' "$file" ||
         die "no \"version\":$STORE_FORMAT_VERSION envelope in $file (written by a different format version; inspect before restoring)"
@@ -375,6 +427,22 @@ do_check() {
     local dir
     dir="$(backup_dir)"
     [[ -d "$dir" ]] || die "no backup dir at $dir (the backup job has never run, or AGAVE_BACKUP_DIR moved)"
+    # The same refusal `backup` makes, and for the same reason. A tier moved
+    # onto the cache volume (the container's default $HOME/.agave-backups is a
+    # 64 MiB tmpfs, so the fix an operator reaches for first is to point
+    # AGAVE_BACKUP_DIR at a mount) stops every backup run at once, and the old
+    # copies stay fresh for a retention window after that. Without this,
+    # `check` reports a healthy recovery path for exactly the deployment whose
+    # backups are not being taken, which is the one case the check exists for.
+    # A store path that cannot be resolved, or whose directory does not exist
+    # (the tier is being checked on a recovery host before the store is back),
+    # has no filesystem to compare against, so freshness and loadability are
+    # the whole answer there.
+    local live_dir
+    if live_dir="$(live_store_path 2>/dev/null)"; then
+        live_dir="$(dirname -- "$live_dir")"
+        [[ -d "$live_dir" ]] && assert_separate_fs "$live_dir" "$dir"
+    fi
     local newest
     newest="$(list_backups "$dir" "$DATED_RE" | head -1)"
     [[ -n "$newest" ]] || die "no dated backup in $dir (the backup job has never produced one)"
@@ -456,6 +524,27 @@ do_self_test() {
     # The version this script verifies has to be the version the server writes,
     # or every backup of a good store dies at the verify step.
     assert_format_version_agrees
+    assert_max_store_bytes_agrees
+
+    # A store the server refuses to load is not a restore candidate, however
+    # well-formed it is, so verify has to reject it and restore has to leave
+    # the live store alone when it does.
+    local oversize="$tmp/oversize.json"
+    printf '{"version":1,"conversations":[]}' >"$oversize"
+    truncate -s "$((MAX_STORE_BYTES + 1))" "$oversize" 2>/dev/null ||
+        dd if=/dev/zero bs=1 count=0 seek="$((MAX_STORE_BYTES + 1))" of="$oversize" 2>/dev/null
+    if (verify_store "$oversize") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a store over the server's load cap was accepted" >&2
+        status=1
+    fi
+    if (AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_restore "$oversize") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a store over the server's load cap was restored" >&2
+        status=1
+    fi
+    cmp -s "$store" "$backup" || {
+        echo "conv-store-backup: self-test FAILED: the rejected oversize restore changed the live store" >&2
+        status=1
+    }
 
     # Braces inside message content are text, not structure.
     printf '%s' '{"version":1,"active_id":2,"next_id":3,"conversations":[{"id":2,"title":"brace { title","messages":[{"role":"user","content":"see fn f() { } \"quoted\""}]}]}' >"$tmp/braces.json"
@@ -578,6 +667,22 @@ do_self_test() {
         status=1
     fi
 
+    # `check` has to reach the same conclusion `backup` does about a tier on
+    # the store's own filesystem. The temp dir is one filesystem, so a tier
+    # under the store's directory is that case: the copies are fresh and
+    # loadable, and reporting a recovery path here hides a backup job that
+    # cannot run at all.
+    if (AGAVE_ALLOW_SAME_FS=0 AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check) >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: check passed with the tier on the store's filesystem" >&2
+        status=1
+    fi
+    # The recovery host has the tier and not the store, so there is no
+    # filesystem to compare and a fresh loadable copy is the whole answer.
+    if ! (AGAVE_ALLOW_SAME_FS=0 AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/empty-cache" do_check) >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: check failed with no store present to compare against" >&2
+        status=1
+    fi
+
     # A retention value of 0 or below prunes the whole tier, so the guard
     # rejects it before do_backup can run. It lives at load time, so exercise
     # it by re-entering the script rather than calling do_backup here.
@@ -612,7 +717,7 @@ do_self_test() {
     fi
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, reject-other-version, format-version-agrees, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, reject-bad-retention, store-override, whole-help"
+        note "self-test passed: backup, verify, reject-truncated, reject-other-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }
