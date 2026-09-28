@@ -1,0 +1,22 @@
+{
+  "name": "react",
+  "version": "19.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Preact shim: agave's UI runs on Preact, and the copied shadcn/ui components plus the Radix primitives import `react`. Re-exports preact/compat under that name.",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./jsx-runtime.d.ts",
+      "default": "./jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./jsx-dev-runtime.d.ts",
+      "default": "./jsx-dev-runtime.js"
+    },
+    "./package.json": "./package.json"
+  }
+}

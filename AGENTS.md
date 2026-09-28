@@ -48,7 +48,7 @@ After backend or model interface changes run `zig build`, not only `zig build te
 
 `zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
-Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (React in `app.tsx`, Tailwind 4 in `app.css`, shadcn primitives in `ui/`; `scripts/build-web.sh` bundles them into the committed `src/web/app.js` and `src/web/style.css`). Browser WASM shell is `web/` (React in `shell.tsx`, `shell.css`), not `src/web/`.
+Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (Preact in `app.tsx`, Tailwind 4 in `app.css`, shadcn primitives in `ui/`; `scripts/build-web.sh` bundles them into the committed `src/web/app.js` and `src/web/style.css`). Browser WASM shell is `web/` (Preact in `shell.tsx`, `shell.css`), not `src/web/`. Both surfaces reach Preact through the `vendor/react` shims, not through React.
 
 ## Invariants
 

@@ -45,12 +45,14 @@ const SettingSlider = ({
         <span className="font-mono text-xs text-primary">{shown}</span>
       </div>
       <Slider
+        id={id}
         min={min}
         max={max}
         step={step}
-        value={[value]}
-        onValueChange={function (next) { onChange(next[0] ?? value); }}
-        thumbProps={{ id, 'aria-label': label, 'aria-valuetext': shown }}
+        value={value}
+        onValueChange={onChange}
+        aria-label={label}
+        aria-valuetext={shown}
       />
       <span className="mt-0.5 block font-mono text-2xs text-faint">{hint}</span>
     </div>

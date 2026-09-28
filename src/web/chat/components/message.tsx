@@ -33,7 +33,7 @@ type MessageBodyProps = {
 /**
  * The body of an assistant turn.
  *
- * React owns the element, not its children: the streaming path appends text
+ * Preact owns the element, not its children: the streaming path appends text
  * nodes and the final path fills the same node from sanitized markdown, so a
  * turn that goes from hundreds of partial tokens to a full markdown render
  * costs one reconcile rather than a re-render per token.

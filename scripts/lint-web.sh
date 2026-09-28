@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CI lint-web job: oxlint + tsc for src/web and web, plus the chat UI smoke
-# test. The UI is a React tree that only exists once mounted, so a broken
+# test. The UI is a Preact tree that only exists once mounted, so a broken
 # import or a dead render passes every static check; `bun test src/web` mounts
 # it against a stubbed server and fails if a turn does not land in the log.
 # Canonical: zig build lint-web  (or this script from the repo root).

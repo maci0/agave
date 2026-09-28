@@ -16,6 +16,12 @@ recomputed from those two files by `scripts/check-third-party-notices.py`
 (`zig build check-third-party`), which fails when a package ships without an
 entry here or an entry names a package that no longer ships.
 
+`react` and `react-dom` are not listed: they are repo-local shims
+(`vendor/react`, `vendor/react-dom`) that re-export `preact/compat` under the
+names the shadcn/ui components and Radix primitives import. See
+[vendor/README.md](vendor/README.md). The `preact` entry below is what those
+shims ship.
+
 Each package is listed with its SPDX license identifier and upstream URL. The
 full license text is not inlined here: it ships inside the package itself
 under `node_modules/<name>/LICENSE`, and upstream publishes it at the tagged
@@ -23,13 +29,10 @@ revision linked in the table.
 
 | Package (name@version) | License | Upstream |
 | --- | --- | --- |
-| `@radix-ui/number@1.1.3` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/primitive@1.1.7` | MIT | <https://github.com/radix-ui/primitives> |
-| `@radix-ui/react-collection@1.1.15` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-compose-refs@1.1.5` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-context@1.2.2` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-dialog@1.1.23` | MIT | <https://github.com/radix-ui/primitives> |
-| `@radix-ui/react-direction@1.1.4` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-dismissable-layer@1.1.19` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-focus-guards@1.1.6` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-focus-scope@1.1.16` | MIT | <https://github.com/radix-ui/primitives> |
@@ -38,26 +41,21 @@ revision linked in the table.
 | `@radix-ui/react-portal@1.1.17` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-presence@1.1.10` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-primitive@2.1.10` | MIT | <https://github.com/radix-ui/primitives> |
-| `@radix-ui/react-slider@1.4.7` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-slot@1.3.3` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-use-callback-ref@1.1.4` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-use-controllable-state@1.2.6` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-use-effect-event@0.0.5` | MIT | <https://github.com/radix-ui/primitives> |
 | `@radix-ui/react-use-layout-effect@1.1.4` | MIT | <https://github.com/radix-ui/primitives> |
-| `@radix-ui/react-use-previous@1.1.4` | MIT | <https://github.com/radix-ui/primitives> |
-| `@radix-ui/react-use-size@1.1.4` | MIT | <https://github.com/radix-ui/primitives> |
 | `aria-hidden@1.2.6` | MIT | <https://github.com/theKashey/aria-hidden> |
 | `class-variance-authority@0.7.1` | Apache-2.0 | <https://github.com/joe-bell/cva> |
 | `clsx@2.1.1` | MIT | <https://github.com/lukeed/clsx> |
 | `detect-node-es@1.1.0` | MIT | <https://github.com/thekashey/detect-node> |
 | `get-nonce@1.0.1` | MIT | <ssh://git@github.com/theKashey/get-nonce> |
 | `lucide-react@1.48.0` | ISC | <https://github.com/lucide-icons/lucide> |
-| `react@19.3.0` | MIT | <https://github.com/react/react> |
-| `react-dom@19.3.0` | MIT | <https://github.com/react/react> |
+| `preact@10.29.8` | MIT | <https://github.com/preactjs/preact> |
 | `react-remove-scroll@2.7.2` | MIT | <https://github.com/theKashey/react-remove-scroll> |
 | `react-remove-scroll-bar@2.3.8` | MIT | <https://github.com/theKashey/react-remove-scroll-bar> |
 | `react-style-singleton@2.2.3` | MIT | <https://github.com/theKashey/react-style-singleton> |
-| `scheduler@0.28.0` | MIT | <https://github.com/react/react> |
 | `tailwind-merge@3.7.0` | MIT | <https://github.com/dcastil/tailwind-merge> |
 | `tslib@2.8.1` | 0BSD | <https://github.com/Microsoft/tslib> |
 | `use-callback-ref@1.3.3` | MIT | <https://github.com/theKashey/use-callback-ref> |

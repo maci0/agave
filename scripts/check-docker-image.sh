@@ -46,7 +46,7 @@ echo "LICENSE ok: $copyright_path"
 
 # The embedded web UI is a minified bundle, so its upstream license headers
 # exist nowhere in the image. The notices file is the only record of the grant
-# for the React and Radix code inside it.
+# for the Preact and Radix code inside it.
 notices_path="/usr/share/doc/agave/third-party-notices.md"
 if ! docker run --rm --entrypoint cat "$image" "$notices_path" | grep -q 'lucide-react@'; then
     echo "::error::Runtime image missing third-party notices at $notices_path"

@@ -149,7 +149,7 @@ agave/
 │   │   ├── tiered.zig     # Tiered KV cache (VRAM + RAM + SSD)
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
 │   ├── web/
-│   │   ├── app.tsx        # Chat UI entry (React; SSE streaming, conversation management)
+│   │   ├── app.tsx        # Chat UI entry (Preact; SSE streaming, conversation management)
 │   │   ├── app.test.tsx   # Chat UI tests (bun test)
 │   │   ├── chat/          # Chat UI state (hooks) and components
 │   │   ├── ui/            # shadcn primitives, the shared Tailwind 4 theme, and the motifs both chat surfaces draw (empty state, hint chips)
@@ -166,7 +166,7 @@ agave/
 │   ├── index.html         # Standalone WASM demo page
 │   ├── agave.ts           # Typed glue for agave.wasm (AgaveEngine)
 │   ├── agave.js           # Generated classic script
-│   ├── shell.tsx          # Demo page (React)
+│   ├── shell.tsx          # Demo page (Preact)
 │   ├── use-model-loader.ts # Model fetch + parse lifecycle hook for the demo page
 │   ├── load-errors.ts     # WASM error -> user-facing message mapping, shared by loader and generator
 │   ├── shell.css          # Tailwind 4 entry for this surface

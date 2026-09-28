@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "module": "preserve",
     "moduleDetection": "legacy",
     "jsx": "react-jsx",
@@ -21,7 +24,36 @@
     "skipLibCheck": true,
     "noEmit": true,
     "removeComments": false,
-    "types": ["bun"]
+    "types": [
+      "bun"
+    ],
+    "paths": {
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "react/jsx-runtime": [
+        "./node_modules/@types/react/jsx-runtime"
+      ],
+      "react/jsx-dev-runtime": [
+        "./node_modules/@types/react/jsx-dev-runtime"
+      ],
+      "react-dom": [
+        "./node_modules/@types/react-dom"
+      ],
+      "react-dom/client": [
+        "./node_modules/@types/react-dom/client"
+      ]
+    }
   },
-  "include": ["src/web/app.tsx", "src/web/app.test.tsx", "src/web/globals.d.ts", "src/web/chat/**/*", "src/web/ui/**/*", "web/agave.ts", "web/shell.tsx", "web/load-errors.ts", "web/use-model-loader.ts"]
+  "include": [
+    "src/web/app.tsx",
+    "src/web/app.test.tsx",
+    "src/web/globals.d.ts",
+    "src/web/chat/**/*",
+    "src/web/ui/**/*",
+    "web/agave.ts",
+    "web/shell.tsx",
+    "web/load-errors.ts",
+    "web/use-model-loader.ts"
+  ]
 }

@@ -1,7 +1,7 @@
 /* global AgaveEngine */
 
 /**
- * Standalone WASM chat shell. React tree mounted by `web/index.html` after
+ * Standalone WASM chat shell. Preact tree mounted by `web/index.html` after
  * `agave.js` has put `AgaveEngine` on `globalThis`.
  * Distinct from `src/web/` (HTTP --serve chat UI).
  *
