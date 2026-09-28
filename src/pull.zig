@@ -503,10 +503,32 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
 
     // Parse JSON response. Do not echo the body: Hub model-card JSON includes
     // publisher identity fields (author/username) and may include account data.
-    const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, body, .{}) catch {
-        eprint("Error: failed to parse API response ({d} bytes)\n", .{body.len});
-        return PullError.ApiResponseInvalid;
+    return parseModelListing(allocator, body) catch |err| switch (err) {
+        error.ApiResponseInvalid => {
+            eprint("Error: failed to parse API response ({d} bytes)\n", .{body.len});
+            return PullError.ApiResponseInvalid;
+        },
+        error.NoGgufFiles => {
+            eprint("Error: no model files (GGUF or SafeTensors) found in '{s}'\n", .{repo});
+            return PullError.NoGgufFiles;
+        },
+        else => |e| return e,
     };
+}
+
+/// Parse a HuggingFace `api/models/{repo}` response body into a `ListResult`.
+///
+/// Split out of `listModelFiles` so the network and the parser can be tested
+/// apart: this is the only consumer of remote-controlled bytes, and it is what
+/// the fuzz target drives. Silent by contract; diagnostics belong to the
+/// caller, which knows the repository name and the body size.
+fn parseModelListing(allocator: Allocator, body: []const u8) (PullError || Allocator.Error)!ListResult {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, body, .{}) catch
+        return PullError.ApiResponseInvalid;
     const root = parsed.value;
 
     // Extract commit SHA from "sha" field.
@@ -558,10 +580,7 @@ pub fn listModelFiles(allocator: Allocator, repo: []const u8, token: ?[]const u8
         }
     }
 
-    if (gguf_count == 0 and st_count == 0) {
-        eprint("Error: no model files (GGUF or SafeTensors) found in '{s}'\n", .{repo});
-        return PullError.NoGgufFiles;
-    }
+    if (gguf_count == 0 and st_count == 0) return PullError.NoGgufFiles;
 
     // Second pass: collect GGUF file info.
     var gguf_files: []GgufFile = &.{};
@@ -1458,6 +1477,9 @@ fn detectGgufShardCount(filename: []const u8) u32 {
 /// Preserves zero-padding width of the original filename.
 fn buildShardFilename(allocator: Allocator, shard1: []const u8, idx: u32, total: u32) ![]u8 {
     const gguf_sfx = ".gguf";
+    // A remote filename shorter than the suffix underflows the stem slice, so
+    // check the suffix rather than trusting the caller's shard count.
+    if (!std.mem.endsWith(u8, shard1, gguf_sfx)) return error.InvalidShardName;
     const stem = shard1[0 .. shard1.len - gguf_sfx.len];
     const of_pos = std.mem.lastIndexOf(u8, stem, "-of-") orelse return error.InvalidShardName;
     const pre_dash = std.mem.lastIndexOfScalar(u8, stem[0..of_pos], '-') orelse return error.InvalidShardName;
@@ -2365,4 +2387,134 @@ test "HF_ENDPOINT overrides the API base and rejects a non-URL" {
     try std.testing.expectError(PullError.InvalidArgument, resolveHfApiBase("hf-mirror.internal"));
     try std.testing.expectError(PullError.InvalidArgument, resolveHfApiBase("ftp://huggingface.co"));
     try std.testing.expectError(PullError.InvalidArgument, resolveHfApiBase("/"));
+}
+
+test "fuzz: HuggingFace API listing parser" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            var buf: [512]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = smith.indexWithHash(buf.len + 1, 1);
+            var body = buf[0..len];
+            // Owned only when the seeded listing below replaces `body`; freed
+            // after the parse so the slices never outlive their storage.
+            var body_owned: ?[]u8 = null;
+            defer if (body_owned) |owned| allocator.free(owned);
+
+            // Half the time, plant a well-formed listing so the parser is
+            // driven past the JSON check into the siblings walk, the shard
+            // collection, and the saturating size sum.
+            if (smith.valueWithHash(u8, 2) & 1 == 0) {
+                const n_gguf: usize = smith.indexWithHash(3, 3);
+                const n_st: usize = smith.indexWithHash(3, 4);
+                const bogus_size = smith.valueWithHash(u64, 5);
+                var w = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
+                defer w.deinit();
+                w.writer.print("{{\"id\":\"o/r\",\"sha\":\"{s}\",\"siblings\":[{{\"rfilename\":\"config.json\",\"size\":{d}}},{{\"rfilename\":\"tokenizer.json\",\"size\":-5}},{{\"rfilename\":\"../escape.gguf\",\"size\":1}}", .{
+                    if (smith.valueWithHash(u8, 6) & 1 == 0) "0123456789abcdef" else "NOTHEX",
+                    bogus_size,
+                }) catch return;
+                for (0..n_gguf) |i| {
+                    w.writer.print(
+                        "{{\"rfilename\":\"model-Q4_K_M-{d}.gguf\",\"size\":{d}}}",
+                        .{ i, @as(u64, 1) << @intCast(smith.valueWithHash(u8, 7) % 64) },
+                    ) catch return;
+                }
+                for (0..n_st) |i| {
+                    w.writer.print(
+                        "{{\"rfilename\":\"model-{d}.safetensors\",\"size\":{d}}}",
+                        .{ i, bogus_size },
+                    ) catch return;
+                }
+                w.writer.writeAll("]}") catch return;
+                body_owned = try w.toOwnedSlice();
+                body = body_owned.?;
+            }
+
+            var result = parseModelListing(allocator, body) catch |err| switch (err) {
+                // A body that is not JSON, or a listing with no model files,
+                // is the only rejected shape.
+                error.ApiResponseInvalid, error.NoGgufFiles => return,
+                else => |e| return e,
+            };
+            defer result.deinit();
+
+            // A successful parse always reports at least one downloadable file.
+            try std.testing.expect(result.hasAnyFiles());
+
+            // Every filename handed to the download path is a safe basename
+            // with the extension it was selected for, and every size slice is
+            // parallel to its filename slice.
+            for (result.files) |gf| {
+                try std.testing.expect(isSafeFilename(gf.filename));
+                try std.testing.expect(std.mem.endsWith(u8, gf.filename, ".gguf"));
+            }
+            if (result.safetensors) |st| {
+                try std.testing.expectEqual(st.shards.len, st.shard_sizes.len);
+                for (st.shards, st.shard_sizes) |name, size| {
+                    try std.testing.expect(isSafeFilename(name));
+                    try std.testing.expect(std.mem.endsWith(u8, name, ".safetensors"));
+                    _ = size;
+                }
+                // The advertised total never under-reports the sum of its own
+                // shards: a sum that overflowed u64 saturates at maxInt.
+                var sum: u64 = 0;
+                for (st.shard_sizes) |size| {
+                    sum = std.math.add(u64, sum, size) catch std.math.maxInt(u64);
+                }
+                try std.testing.expect(st.total_size >= @min(sum, std.math.maxInt(u64)));
+                if (sum == std.math.maxInt(u64)) {
+                    try std.testing.expectEqual(std.math.maxInt(u64), st.total_size);
+                }
+            }
+
+            // The commit SHA is either the literal fallback or a hex string.
+            if (!std.mem.eql(u8, result.commit_sha, "unknown")) {
+                try std.testing.expect(isValidHexSha(result.commit_sha));
+            }
+        }
+    }.f, .{});
+}
+
+test "fuzz: GGUF shard filename parse and rebuild" {
+    try std.testing.fuzz({}, struct {
+        fn f(_: void, smith: *std.testing.Smith) !void {
+            const allocator = std.testing.allocator;
+            var buf: [64]u8 = undefined;
+            smith.bytesWithHash(&buf, 0);
+            const len = smith.indexWithHash(buf.len + 1, 1);
+            const name = buf[0..len];
+
+            const total = detectGgufShardCount(name);
+            // A non-zero count means the name matched `-NNNNN-of-MMMMM.gguf`
+            // with a total of at least 2, and the count is recoverable.
+            if (total != 0) {
+                try std.testing.expect(total >= 2);
+                const rebuilt1 = try buildShardFilename(allocator, name, 1, total);
+                defer allocator.free(rebuilt1);
+                // Rebuilding index 1 of N must round-trip to the same shard
+                // count, which is what the download loop trusts.
+                try std.testing.expectEqual(total, detectGgufShardCount(rebuilt1));
+
+                // Every shard in 1..=total parses back to the same count and
+                // ends at the same digit width, so no shard is skipped.
+                for (2..total + 1) |idx| {
+                    const rebuilt = buildShardFilename(allocator, name, @intCast(idx), total) catch continue;
+                    defer allocator.free(rebuilt);
+                    try std.testing.expectEqual(total, detectGgufShardCount(rebuilt));
+                    try std.testing.expect(std.mem.endsWith(u8, rebuilt, ".gguf"));
+                    try std.testing.expectEqual(rebuilt.len, rebuilt1.len);
+                }
+            }
+
+            // buildShardFilename is only ever called with a name that already
+            // parsed; anything else must be refused rather than truncated.
+            if (!std.mem.endsWith(u8, name, ".gguf") or
+                std.mem.indexOf(u8, name, "-of-") == null)
+            {
+                try std.testing.expectError(error.InvalidShardName, buildShardFilename(allocator, name, 1, 2));
+            }
+        }
+    }.f, .{});
 }

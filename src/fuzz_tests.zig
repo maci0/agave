@@ -345,6 +345,14 @@ test "fuzz: findImageInsertPos" {
 
 // ── CLI Parser Fuzzing ─────────────────────────────────────────
 
+/// True when `needle` is byte-identical to one of the passed arguments.
+fn containsArg(argv: []const [*:0]const u8, needle: []const u8) bool {
+    for (argv) |arg| {
+        if (std.mem.eql(u8, std.mem.span(arg), needle)) return true;
+    }
+    return false;
+}
+
 test "fuzz: CLI arg parser" {
     const cli = @import("cli.zig");
     try std.testing.fuzz({}, struct {
@@ -384,6 +392,28 @@ test "fuzz: CLI arg parser" {
             _ = result.optionU32("max-tokens");
             _ = result.optionF32("temperature");
             _ = result.positional(0);
+
+            // Invariant: the parser can only surface strings that came off
+            // argv. An option or positional the fuzzer never passed is a
+            // parser bug, and a value that escaped its argument buffer is a
+            // buffer bug.
+            for (result.positionals.items) |positional| {
+                try std.testing.expect(containsArg(argv[0..n_args], positional));
+            }
+            var opt_it = result.options.iterator();
+            while (opt_it.next()) |entry| {
+                try std.testing.expect(containsArg(argv[0..n_args], entry.value_ptr.*));
+            }
+
+            // Invariant: an integer option round-trips to the same digits the
+            // value parses to, so a truncated or reinterpreted value is caught.
+            if (result.option("max-tokens")) |raw| {
+                if (result.optionU32("max-tokens")) |n| {
+                    var buf: [16]u8 = undefined;
+                    const printed = try std.fmt.bufPrint(&buf, "{d}", .{n});
+                    try std.testing.expect(std.mem.endsWith(u8, raw, printed));
+                }
+            }
         }
     }.f, .{});
 }
