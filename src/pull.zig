@@ -920,6 +920,26 @@ fn ensureDir(path: []const u8) PullError!void {
     };
 }
 
+/// Hugging Face cache layout for a repo/commit, with all three directories created.
+const CachePaths = struct {
+    blobs: []const u8,
+    snapshots: []const u8,
+    refs: []const u8,
+};
+
+fn cachePaths(pa: Allocator, repo: []const u8, commit_sha: []const u8) (PullError || Allocator.Error)!CachePaths {
+    const cache_dir = try hfCacheDir(pa, repo);
+    const paths = CachePaths{
+        .blobs = try std.fmt.allocPrint(pa, "{s}/blobs", .{cache_dir}),
+        .snapshots = try std.fmt.allocPrint(pa, "{s}/snapshots/{s}", .{ cache_dir, commit_sha }),
+        .refs = try std.fmt.allocPrint(pa, "{s}/refs", .{cache_dir}),
+    };
+    try ensureDir(paths.blobs);
+    try ensureDir(paths.snapshots);
+    try ensureDir(paths.refs);
+    return paths;
+}
+
 /// Create a symbolic link using the C library (std.posix.symlink removed in Zig 0.16).
 fn createSymlink(allocator: Allocator, target: []const u8, link_path: []const u8) !void {
     const target_z = try allocator.dupeZ(u8, target);
@@ -1550,14 +1570,10 @@ fn pullGgufModel(
     defer path_arena.deinit();
     const pa = path_arena.allocator();
 
-    const cache_dir = try hfCacheDir(pa, args.repo);
-    const blobs_dir = std.fmt.allocPrint(pa, "{s}/blobs", .{cache_dir}) catch return error.OutOfMemory;
-    const snapshots_dir = std.fmt.allocPrint(pa, "{s}/snapshots/{s}", .{ cache_dir, list_result.commit_sha }) catch return error.OutOfMemory;
-    const refs_dir = std.fmt.allocPrint(pa, "{s}/refs", .{cache_dir}) catch return error.OutOfMemory;
-
-    try ensureDir(blobs_dir);
-    try ensureDir(snapshots_dir);
-    try ensureDir(refs_dir);
+    const cache = try cachePaths(pa, args.repo, list_result.commit_sha);
+    const blobs_dir = cache.blobs;
+    const snapshots_dir = cache.snapshots;
+    const refs_dir = cache.refs;
 
     // Check if already downloaded.
     const blob_path = std.fmt.allocPrint(pa, "{s}/{s}", .{ blobs_dir, selected.filename }) catch return error.OutOfMemory;
@@ -1652,14 +1668,10 @@ fn pullSafeTensorsModel(
     defer path_arena.deinit();
     const pa = path_arena.allocator();
 
-    const cache_dir = try hfCacheDir(pa, args.repo);
-    const blobs_dir = std.fmt.allocPrint(pa, "{s}/blobs", .{cache_dir}) catch return error.OutOfMemory;
-    const snapshots_dir = std.fmt.allocPrint(pa, "{s}/snapshots/{s}", .{ cache_dir, list_result.commit_sha }) catch return error.OutOfMemory;
-    const refs_dir = std.fmt.allocPrint(pa, "{s}/refs", .{cache_dir}) catch return error.OutOfMemory;
-
-    try ensureDir(blobs_dir);
-    try ensureDir(snapshots_dir);
-    try ensureDir(refs_dir);
+    const cache = try cachePaths(pa, args.repo, list_result.commit_sha);
+    const blobs_dir = cache.blobs;
+    const snapshots_dir = cache.snapshots;
+    const refs_dir = cache.refs;
 
     // Download each shard.
     for (st.shards, st.shard_sizes, 0..) |shard, expected_size, i| {

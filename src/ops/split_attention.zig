@@ -227,48 +227,20 @@ pub fn splitAttention(
         return;
     }
 
-    // Fast path: all CPU, sync pending GPU ops, run CPU SDPA (parallel if pool available)
-    if (partition.gpu_count == 0) {
-        be.sync();
-        const kvd = nkv * hd;
-        const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
-        const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
-        kv_quant.kvStore(kv_keys.ptr + k_off, k_new, kvd, kv_type_k);
-        kv_quant.kvStore(kv_values.ptr + v_off, v_new, kvd, kv_type_v);
-        if (pool) |p| {
-            var ctx = CpuSdpaNoStatsJob{
-                .q = q,
-                .keys = kv_keys.ptr,
-                .values = kv_values.ptr,
-                .output = output,
-                .nh = nh,
-                .nkv = nkv,
-                .hd = hd,
-                .sl = seq_len + 1,
-                .scale = scale,
-                .kv_type_k = kv_type_k,
-                .kv_type_v = kv_type_v,
-            };
-            p.parallelFor(nh, 1, @ptrCast(&ctx), CpuSdpaNoStatsJob.work);
-        } else {
-            sdpa_cpu.sdpaQuantHeads(q, kv_keys.ptr, kv_values.ptr, output, nh, nkv, hd, seq_len + 1, scale, kv_type_k, kv_type_v);
-        }
-        return;
-    }
-
-    // ── Split path: mixed VRAM + RAM/SSD ──────────────────────────
+    // CPU path, used by both the all-CPU fast path and the mixed split path.
     //
-    // GPU backends currently fill identity softmax stats (max=0, sum=1) after a
-    // normal SDPA. Online merge requires real per-head max/sum from each split;
-    // identity stats silently corrupt the result. Until backends emit real stats,
-    // run full-sequence CPU SDPA (exact, no merge) after syncing GPU work.
+    // Split path: mixed VRAM + RAM/SSD. GPU backends currently fill identity
+    // softmax stats (max=0, sum=1) after a normal SDPA. Online merge requires
+    // real per-head max/sum from each split; identity stats silently corrupt the
+    // result. Until backends emit real stats, run full-sequence CPU SDPA (exact,
+    // no merge) after syncing GPU work.
 
     be.sync();
-    const kvd_mixed = nkv * hd;
-    const k_off_m = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd_mixed);
-    const v_off_m = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd_mixed);
-    kv_quant.kvStore(kv_keys.ptr + k_off_m, k_new, kvd_mixed, kv_type_k);
-    kv_quant.kvStore(kv_values.ptr + v_off_m, v_new, kvd_mixed, kv_type_v);
+    const kvd = nkv * hd;
+    const k_off = kv_quant.kvByteOffset(kv_type_k, seq_len * kvd);
+    const v_off = kv_quant.kvByteOffset(kv_type_v, seq_len * kvd);
+    kv_quant.kvStore(kv_keys.ptr + k_off, k_new, kvd, kv_type_k);
+    kv_quant.kvStore(kv_values.ptr + v_off, v_new, kvd, kv_type_v);
     if (pool) |p| {
         var ctx = CpuSdpaNoStatsJob{
             .q = q,
