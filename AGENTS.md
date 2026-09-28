@@ -39,7 +39,7 @@ zig build ptx                      # CUDA kernels to zig-out/ptx/*.ptx (see Buil
 zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.hsaco (see Build)
 ```
 
-`--spec-mode`: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp (alias medusa), eagle, eagle3, mlp, pflash, dspark, dflash2 (alias dflash). Flag list: `src/main.zig` `cli_specs`, or `agave --help`.
+Every flag, including `--spec-mode`: `agave --help`, or the `cli_specs` table in `src/main.zig`.
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 
@@ -91,8 +91,7 @@ Non-negotiable. Every change must respect all of them.
 - `build.zig.zon` has zero Zig package dependencies. Keep it that way. CLI is `src/cli.zig`. Terminal I/O is `src/term.zig` (posix + `std.unicode`, no libc, no `wcwidth`, no terminal frameworks).
 - Cross-compile must keep working, matching `.github/workflows/ci.yml`: `x86_64-linux-gnu`, `aarch64-linux-gnu`, `aarch64-macos` (Metal off), `x86_64-linux-musl`, `aarch64-linux-musl` (static, CPU-only), plus the separate `wasm32-freestanding` build.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast — that no-ops `std.debug.assert`.
-- 12 model architectures: Gemma3, Gemma4, DiffusionGemma, Qwen3.5, Qwen 3.8 Flash-Next GGUF (`qwen4exp`), Qwen4-Exp SafeTensors (`qwen4_exp`), GPT-OSS, Nemotron-H, Nemotron-Nano, GLM-4, DeepSeek V4, Llama 4. DFlash2 is a block-diffusion drafter (`-Denable-dflash2`).
-- The model build flags are slugs, not the display names: `gemma3`, `gemma4`, `diffusion-gemma`, `qwen35`, `qwen4exp`, `qwen4-exp`, `gpt-oss`, `nemotron-h`, `nemotron-nano`, `glm4`, `deepseek4`, `llama4`, `dflash2`.
+- One `-Denable-*` model flag per architecture: 12 architectures, plus the DFlash2 block-diffusion drafter. The slug is not the display name: `gemma3` (Gemma3), `gemma4` (Gemma4), `diffusion-gemma` (DiffusionGemma), `qwen35` (Qwen3.5), `qwen4exp` (Qwen 3.8 Flash-Next GGUF), `qwen4-exp` (Qwen4-Exp SafeTensors), `gpt-oss` (GPT-OSS), `nemotron-h` (Nemotron-H), `nemotron-nano` (Nemotron-Nano), `glm4` (GLM-4), `deepseek4` (DeepSeek V4), `llama4` (Llama 4), `dflash2` (DFlash2 drafter).
 - Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate and commit:
   - PTX: `zig build ptx`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`.
   - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
