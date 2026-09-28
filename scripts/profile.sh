@@ -24,6 +24,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$ROOT/.scratch"
 
+usage() {
+    sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed -e '$d' -e 's/^# \{0,1\}//'
+}
+
+die() {
+    echo "profile: $*" >&2
+    exit 2
+}
+
+# A value-taking option at the end of argv would otherwise abort with a bare
+# bash "unbound variable", which names neither the option nor the fix.
+
 TEMPLATE="Time Profiler"
 DURATION=30
 OUTPUT=""
@@ -32,19 +44,26 @@ METAL=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -t) TEMPLATE="$2"; shift 2 ;;
-        -d) DURATION="$2"; shift 2 ;;
-        -o) OUTPUT="$2"; shift 2 ;;
-        --hot) HOT_N="$2"; shift 2 ;;
+        -t | -d | -o | --hot)
+            [[ $# -ge 2 ]] || die "$1 requires a value"
+            case "$1" in
+                -t) TEMPLATE="$2" ;;
+                -d) DURATION="$2" ;;
+                -o) OUTPUT="$2" ;;
+                --hot) HOT_N="$2" ;;
+            esac
+            shift 2
+            ;;
         --metal) METAL=true; shift ;;
         --) shift; break ;;
-        *) echo "Unknown option: $1" >&2; exit 1 ;;
+        -h | --help) usage; exit 0 ;;
+        *) die "unknown option '$1' (see --help)" ;;
     esac
 done
 
 if [[ $# -eq 0 ]]; then
-    echo "Usage: $0 [options] -- ./zig-out/bin/agave <model> [args...]" >&2
-    exit 1
+    usage >&2
+    exit 2
 fi
 
 # Prefer agave-debug for DWARF symbols (ReleaseFast loses most names)

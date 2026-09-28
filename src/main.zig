@@ -1834,10 +1834,29 @@ fn rejectUnknownShortPositionals(res: *const cli_mod.ParseResult) void {
     for (res.positionals.items) |pos| {
         if (looksLikeUnknownShortOpt(pos)) {
             eprint("Error: unknown option '{s}'\n", .{pos});
+            var buf: [short_list_buf_size]u8 = undefined;
+            eprint("  Valid short options: {s}\n", .{shortOptionList(&buf)});
             eprint("Run 'agave --help' for more information.\n", .{});
             std.process.exit(2);
         }
     }
+}
+
+/// Buffer for the rendered `-x --long` short-option list.
+const short_list_buf_size: usize = 512;
+
+/// Render every `-x` alias with its long name, so an unknown short reports the
+/// same way a rejected `--flag=value` does: with the accepted values. Two short
+/// letters are always one substitution apart, so there is no meaningful
+/// "did you mean" for a single character.
+fn shortOptionList(buf: []u8) []const u8 {
+    var pos: usize = 0;
+    for (cli_specs) |spec| {
+        const s = spec.short orelse continue;
+        const text = std.fmt.bufPrint(buf[pos..], "-{c} (--{s}) ", .{ s, spec.long }) catch break;
+        pos += text.len;
+    }
+    return std.mem.trimEnd(u8, buf[0..pos], " ");
 }
 
 /// Check if a short character matches any known CLI spec.
@@ -2259,7 +2278,7 @@ const usage_text =
     \\EXAMPLES:
     \\  agave model.gguf                          Interactive REPL
     \\  agave model.gguf "What is 2+2?"           Single prompt
-    \\  agave model.gguf -q "Hello" > out.txt     Pipe output (no banner)
+    \\  agave model.gguf --quiet "Hello" > out.txt     Pipe output (no banner)
     \\  agave model.gguf --serve --port 3000      HTTP server on port 3000
     \\  agave model.gguf --serve --host 0          HTTP server on all interfaces
     \\  agave model.gguf -t 0.7 --top-p 0.9 "Tell me a joke"
@@ -5782,6 +5801,18 @@ test "looksLikeUnknownShortOpt detects short typos" {
     try std.testing.expect(!looksLikeUnknownShortOpt("--quiet"));
     try std.testing.expect(!looksLikeUnknownShortOpt("model.gguf"));
     try std.testing.expect(!looksLikeUnknownShortOpt("-"));
+}
+
+test "shortOptionList names every alias with its long form" {
+    var buf: [short_list_buf_size]u8 = undefined;
+    var want_buf: [64]u8 = undefined;
+    const list = shortOptionList(&buf);
+    for (cli_specs) |spec| {
+        const s = spec.short orelse continue;
+        const want = try std.fmt.bufPrint(&want_buf, "-{c} (--{s})", .{ s, spec.long });
+        try std.testing.expect(std.mem.indexOf(u8, list, want) != null);
+    }
+    try std.testing.expect(std.mem.endsWith(u8, list, ")"));
 }
 
 // Force test discovery for modules only imported at runtime (inside function bodies).
