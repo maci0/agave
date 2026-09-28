@@ -46,7 +46,20 @@ pub const LineEditor = struct {
 
     /// Free all owned history entries.
     pub fn deinit(self: *LineEditor) void {
-        for (self.history[0..self.hist_len]) |h| self.allocator.free(h);
+        self.clearHistory();
+    }
+
+    /// Drop every history entry. Lines are whatever the user typed, so they
+    /// are user content: wipe each one before the free rather than leaving the
+    /// text in the allocator freelist. `/clear` calls this so erasing the
+    /// conversation also erases the prompts that recalled it.
+    pub fn clearHistory(self: *LineEditor) void {
+        for (self.history[0..self.hist_len]) |h| {
+            const owned = @constCast(h);
+            @memset(owned, 0);
+            self.allocator.free(owned);
+        }
+        self.hist_len = 0;
     }
 
     /// Append a line to history (deduplicates consecutive entries).
@@ -59,7 +72,9 @@ pub const LineEditor = struct {
             self.history[self.hist_len] = dupe;
             self.hist_len += 1;
         } else {
-            self.allocator.free(self.history[0]);
+            const evicted = @constCast(self.history[0]);
+            @memset(evicted, 0);
+            self.allocator.free(evicted);
             std.mem.copyForwards([]const u8, self.history[0 .. max_history - 1], self.history[1..max_history]);
             self.history[max_history - 1] = dupe;
         }
@@ -511,6 +526,26 @@ test "searchBack no match" {
     editor.addHistory("hello");
     const result = editor.searchBack("xyz", null);
     try std.testing.expect(result == null);
+}
+
+test "clearHistory drops the prompts a /clear is meant to erase" {
+    var editor = LineEditor.init(std.testing.allocator);
+    defer editor.deinit();
+
+    editor.addHistory("my address is 1 Main St");
+    editor.addHistory("and my phone is 555-0100");
+    try std.testing.expectEqual(@as(usize, 2), editor.hist_len);
+
+    editor.clearHistory();
+    try std.testing.expectEqual(@as(usize, 0), editor.hist_len);
+    // Nothing left to recall, and deinit above stays leak-free.
+    try std.testing.expect(editor.searchBack("Main St", null) == null);
+    try std.testing.expect(editor.searchBack("555-0100", null) == null);
+
+    // Usable again after a clear.
+    editor.addHistory("next");
+    try std.testing.expectEqual(@as(usize, 1), editor.hist_len);
+    try std.testing.expectEqualStrings("next", editor.history[0]);
 }
 
 test "searchBack empty query" {

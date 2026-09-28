@@ -421,7 +421,7 @@ fn preloadRegionProgress(data: []align(std.heap.page_size_min) const u8, loaded:
 // ── REPL help (shared between --help and /help) ─────────────────
 
 const repl_help =
-    \\  /clear, /reset      Clear conversation and KV cache (stay in chat)
+    \\  /clear, /reset      Clear conversation, line history, and KV cache (stay in chat)
     \\  /context, /ctx      Show context window usage (tokens used / max)
     \\  /system <text>      Set system prompt (clears conversation)
     \\  /system             Show current system prompt
@@ -4036,6 +4036,17 @@ fn initAndRun(
 
 // ── Interactive REPL ─────────────────────────────────────────────
 
+/// Free every message in a REPL history, wiping each one first. Message
+/// content is the user's prompt and the model's reply, so it must not survive
+/// in the allocator freelist. Mirrors `server.Conversation.freeOwnedMessage`.
+fn freeReplHistory(allocator: std.mem.Allocator, history: *std.ArrayList(Message)) void {
+    for (history.items) |msg| {
+        const content = @constCast(msg.content);
+        @memset(content, 0);
+        allocator.free(content);
+    }
+}
+
 /// Runs the interactive read-eval-print loop, reading user prompts from the terminal and generating responses.
 fn runRepl(
     allocator: std.mem.Allocator,
@@ -4062,14 +4073,18 @@ fn runRepl(
 
     // Track REPL-owned system prompt (from /system command)
     var system_prompt_owned: ?[]const u8 = null;
-    defer if (system_prompt_owned) |sp| allocator.free(sp);
+    defer if (system_prompt_owned) |sp| {
+        const owned = @constCast(sp);
+        @memset(owned, 0);
+        allocator.free(owned);
+    };
 
     // Conversation history for multi-turn support. Cap so a long REPL session
     // cannot grow without bound; drop the oldest message when full.
     const max_repl_history_messages: usize = 100;
     var history: std.ArrayList(Message) = .empty;
     defer {
-        for (history.items) |msg| allocator.free(@constCast(msg.content));
+        freeReplHistory(allocator, &history);
         history.deinit(allocator);
     }
 
@@ -4081,7 +4096,13 @@ fn runRepl(
             print("\n", .{});
             return;
         };
-        defer allocator.free(line_owned);
+        // The line the user typed is the prompt itself, so wipe it on free
+        // rather than leaving it in the allocator freelist.
+        defer {
+            const line_buf = @constCast(line_owned);
+            @memset(line_buf, 0);
+            allocator.free(line_buf);
+        }
 
         const trimmed = std.mem.trim(u8, line_owned, " \t\r\n");
         if (trimmed.len == 0) continue;
@@ -4094,8 +4115,11 @@ fn runRepl(
                 return;
             } else if (std.mem.eql(u8, trimmed, "/clear") or std.mem.eql(u8, trimmed, "/reset")) {
                 mdl.resetCache();
-                for (history.items) |msg| allocator.free(@constCast(msg.content));
+                freeReplHistory(allocator, &history);
                 history.clearRetainingCapacity();
+                // The recall buffer holds the same prompts, so a clear that
+                // left them behind would not have erased anything.
+                editor.clearHistory();
                 print("Conversation and KV cache cleared.\n", .{});
                 continue;
             } else if (std.mem.eql(u8, trimmed, "/context") or std.mem.eql(u8, trimmed, "/ctx")) {
@@ -4111,7 +4135,11 @@ fn runRepl(
                     continue;
                 }
                 // Free old system prompt if we own it
-                if (system_prompt_owned) |old| allocator.free(old);
+                if (system_prompt_owned) |old| {
+                    const owned = @constCast(old);
+                    @memset(owned, 0);
+                    allocator.free(owned);
+                }
                 const duped = allocator.dupe(u8, new_system) catch {
                     eprint("Error: out of memory\n", .{});
                     continue;
@@ -4120,7 +4148,7 @@ fn runRepl(
                 cli.system_prompt = duped;
                 // Clear conversation since system prompt is baked into first turn
                 mdl.resetCache();
-                for (history.items) |msg| allocator.free(@constCast(msg.content));
+                freeReplHistory(allocator, &history);
                 history.clearRetainingCapacity();
                 print("System prompt set. Conversation cleared.\n", .{});
                 continue;
@@ -4174,7 +4202,9 @@ fn runRepl(
         };
         if (history.items.len >= max_repl_history_messages) {
             const old = history.orderedRemove(0);
-            allocator.free(@constCast(old.content));
+            const old_content = @constCast(old.content);
+            @memset(old_content, 0);
+            allocator.free(old_content);
         }
         history.append(allocator, .{ .role = .user, .content = user_content }) catch {
             allocator.free(user_content);
@@ -4216,7 +4246,9 @@ fn runRepl(
                 };
                 if (history.items.len >= max_repl_history_messages) {
                     const old = history.orderedRemove(0);
-                    allocator.free(@constCast(old.content));
+                    const old_content = @constCast(old.content);
+                    @memset(old_content, 0);
+                    allocator.free(old_content);
                 }
                 history.append(allocator, .{ .role = .assistant, .content = resp_content }) catch {
                     allocator.free(resp_content);
