@@ -8,17 +8,21 @@
 //! and waits for rank 1+ to respond. Peers respond with their IP address.
 //! Eliminates manual --peers configuration for same-network setups.
 //!
-//! Protocol:
+//! Protocol (all sockets on the caller's `port` base: rank 0 owns `port`,
+//! workers own `port + 1`):
 //!   Rank 0: broadcast "AGAVE-DISCOVER:<port>:<world_size>" every 500ms
 //!   Rank 1+: listen for beacon, respond with "AGAVE-JOIN:<rank>" via unicast
 //!   Rank 0: collect responses until world_size peers joined
+//!
+//! A worker only answers a beacon whose port base and world size match its
+//! own, so concurrent groups on one host (TP and PP, or two TP runs) neither
+//! share a socket nor adopt each other's ranks.
 
 const std = @import("std");
 const c = std.c;
 const posix = std.posix;
 const sim_clock = @import("../sim_clock.zig");
 
-const discovery_port: u16 = 49460;
 const beacon_interval_ms: u32 = 500;
 const discovery_timeout_ms: u32 = 30000;
 const beacon_prefix = "AGAVE-DISCOVER:";
@@ -51,8 +55,14 @@ pub const DiscoveredPeer = struct {
 /// Discover peers via UDP broadcast. Returns the peer's IP address.
 /// Rank 0 broadcasts; rank 1+ listens and responds.
 /// Returns null on timeout or failure.
+///
+/// `port` is the base for the two discovery sockets: rank 0 binds `port` and
+/// workers bind `port + 1`. It is the same base `main.zig` gives the peer
+/// transport, so each parallel group gets its own pair of sockets.
 pub fn discoverPeer(rank: u32, world_size: u32, port: u16) ?[4]u8 {
     if (world_size < 2) return null;
+    // The worker socket is `port + 1`; a base of 65535 has no successor port.
+    if (port == std.math.maxInt(u16)) return null;
     // Under a clock override there is no network model: expire the deadline
     // in virtual time and return immediately so SO_RCVTIMEO cannot block a
     // simulated run for 30s of wall-clock time.
@@ -73,14 +83,14 @@ pub fn discoverPeer(rank: u32, world_size: u32, port: u16) ?[4]u8 {
     if (rank == 0) {
         return discoverAsRank0(sock, world_size, port);
     } else {
-        return discoverAsWorker(sock, rank, port);
+        return discoverAsWorker(sock, rank, world_size, port);
     }
 }
 
 fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
-    // Bind to discovery port to receive responses
+    // Bind to the rank-0 discovery port to receive responses
     var bind_addr: posix.sockaddr.in = .{
-        .port = std.mem.nativeToBig(u16, discovery_port),
+        .port = std.mem.nativeToBig(u16, port),
         .addr = 0,
     };
     if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
@@ -92,7 +102,7 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
 
     // Broadcast address
     var bcast_addr: posix.sockaddr.in = .{
-        .port = std.mem.nativeToBig(u16, discovery_port + 1),
+        .port = std.mem.nativeToBig(u16, port + 1),
         .addr = 0xFFFFFFFF,
     };
 
@@ -100,7 +110,7 @@ fn discoverAsRank0(sock: c_int, world_size: u32, port: u16) ?[4]u8 {
     var beacon: [max_msg_len]u8 = undefined;
     const beacon_msg = std.fmt.bufPrint(&beacon, "{s}{d}:{d}", .{ beacon_prefix, port, world_size }) catch return null;
 
-    std.log.info("discovery: broadcasting on UDP port {d}...", .{discovery_port});
+    std.log.info("discovery: broadcasting on UDP port {d}...", .{port});
 
     const start_ms = monoMilli();
     while (monoMilli() - start_ms < discovery_timeout_ms) {
@@ -138,12 +148,27 @@ test "DiscoveredPeer, struct layout" {
 }
 
 test "discovery, protocol constants" {
-    try @import("std").testing.expectEqual(@as(u16, 49460), discovery_port);
     try @import("std").testing.expectEqual(@as(u32, 500), beacon_interval_ms);
     try @import("std").testing.expectEqual(@as(u32, 30000), discovery_timeout_ms);
     try @import("std").testing.expectEqualStrings("AGAVE-DISCOVER:", beacon_prefix);
     try @import("std").testing.expectEqualStrings("AGAVE-JOIN:", join_prefix);
     try @import("std").testing.expectEqual(@as(usize, 64), max_msg_len);
+}
+
+test "discovery, port base of 65535 has no worker socket" {
+    try @import("std").testing.expectEqual(@as(?[4]u8, null), discoverPeer(0, 2, std.math.maxInt(u16)));
+    try @import("std").testing.expectEqual(@as(?[4]u8, null), discoverPeer(1, 2, std.math.maxInt(u16)));
+}
+
+test "discovery, worker only answers a beacon for its own group" {
+    // A TP group and a PP group on one host must not adopt each other's ranks.
+    try std.testing.expect(beaconMatchesThisGroup("49454:2", 49454, 2));
+    try std.testing.expect(!beaconMatchesThisGroup("49455:2", 49454, 2));
+    try std.testing.expect(!beaconMatchesThisGroup("49454:4", 49454, 2));
+    try std.testing.expect(!beaconMatchesThisGroup("49454", 49454, 2));
+    try std.testing.expect(!beaconMatchesThisGroup("49454:2:extra", 49454, 2));
+    try std.testing.expect(!beaconMatchesThisGroup("not-a-port:2", 49454, 2));
+    try std.testing.expect(!beaconMatchesThisGroup("", 49454, 2));
 }
 
 test "msToTimeval splits seconds and microseconds" {
@@ -287,11 +312,22 @@ test "fuzz: all discovery functions" {
     }.f, .{});
 }
 
-fn discoverAsWorker(sock: c_int, rank: u32, port: u16) ?[4]u8 {
-    _ = port;
-    // Bind to beacon listen port
+/// Parse a beacon payload ("<port>:<world_size>") and report whether it
+/// targets this worker's own discovery group.
+fn beaconMatchesThisGroup(payload: []const u8, port: u16, world_size: u32) bool {
+    var it = std.mem.splitScalar(u8, payload, ':');
+    const port_str = it.first();
+    const ws_str = it.next() orelse return false;
+    if (it.next() != null) return false;
+    const port_val = std.fmt.parseInt(u16, port_str, 10) catch return false;
+    const ws_val = std.fmt.parseInt(u32, ws_str, 10) catch return false;
+    return port_val == port and ws_val == world_size;
+}
+
+fn discoverAsWorker(sock: c_int, rank: u32, world_size: u32, port: u16) ?[4]u8 {
+    // Bind to the beacon listen port (rank 0's base + 1)
     var bind_addr: posix.sockaddr.in = .{
-        .port = std.mem.nativeToBig(u16, discovery_port + 1),
+        .port = std.mem.nativeToBig(u16, port + 1),
         .addr = 0,
     };
     if (c.bind(sock, @ptrCast(&bind_addr), @sizeOf(@TypeOf(bind_addr))) != 0) return null;
@@ -299,31 +335,36 @@ fn discoverAsWorker(sock: c_int, rank: u32, port: u16) ?[4]u8 {
     const tv = msToTimeval(discovery_timeout_ms);
     _ = c.setsockopt(sock, posix.SOL.SOCKET, posix.SO.RCVTIMEO, @ptrCast(&tv), @sizeOf(@TypeOf(tv)));
 
-    std.log.info("discovery: listening for rank 0 beacon on UDP port {d}...", .{discovery_port + 1});
+    std.log.info("discovery: listening for rank 0 beacon on UDP port {d}...", .{port + 1});
 
-    var beacon: [max_msg_len]u8 = undefined;
-    var from_addr: posix.sockaddr.in = undefined;
-    var from_len: c.socklen_t = @sizeOf(@TypeOf(from_addr));
-    const n = c.recvfrom(sock, &beacon, max_msg_len, 0, @ptrCast(&from_addr), &from_len);
-    if (n <= 0) {
-        std.log.warn("discovery: no beacon received", .{});
-        return null;
+    // Keep listening past mismatched beacons: another group on the same
+    // segment may broadcast on its own port, and that is not our rank 0.
+    const start_ms = monoMilli();
+    while (monoMilli() - start_ms < discovery_timeout_ms) {
+        var beacon: [max_msg_len]u8 = undefined;
+        var from_addr: posix.sockaddr.in = undefined;
+        var from_len: c.socklen_t = @sizeOf(@TypeOf(from_addr));
+        const n = c.recvfrom(sock, &beacon, max_msg_len, 0, @ptrCast(&from_addr), &from_len);
+        if (n <= 0) continue;
+        const msg = beacon[0..@intCast(n)];
+        if (!std.mem.startsWith(u8, msg, beacon_prefix)) continue;
+        if (!beaconMatchesThisGroup(msg[beacon_prefix.len..], port, world_size)) continue;
+
+        const peer_ip = @as([4]u8, @bitCast(from_addr.addr));
+        std.log.info("discovery: found rank 0 at {d}.{d}.{d}.{d}", .{ peer_ip[0], peer_ip[1], peer_ip[2], peer_ip[3] });
+
+        // Send join response back to rank 0
+        var join_msg: [max_msg_len]u8 = undefined;
+        const join = std.fmt.bufPrint(&join_msg, "{s}{d}", .{ join_prefix, rank }) catch return null;
+        var reply_addr: posix.sockaddr.in = .{
+            .port = std.mem.nativeToBig(u16, port),
+            .addr = from_addr.addr,
+        };
+        _ = c.sendto(sock, join.ptr, join.len, 0, @ptrCast(&reply_addr), @sizeOf(@TypeOf(reply_addr)));
+
+        return peer_ip;
     }
 
-    const msg = beacon[0..@intCast(n)];
-    if (!std.mem.startsWith(u8, msg, beacon_prefix)) return null;
-
-    const peer_ip = @as([4]u8, @bitCast(from_addr.addr));
-    std.log.info("discovery: found rank 0 at {d}.{d}.{d}.{d}", .{ peer_ip[0], peer_ip[1], peer_ip[2], peer_ip[3] });
-
-    // Send join response back to rank 0
-    var join_msg: [max_msg_len]u8 = undefined;
-    const join = std.fmt.bufPrint(&join_msg, "{s}{d}", .{ join_prefix, rank }) catch return null;
-    var reply_addr: posix.sockaddr.in = .{
-        .port = std.mem.nativeToBig(u16, discovery_port),
-        .addr = from_addr.addr,
-    };
-    _ = c.sendto(sock, join.ptr, join.len, 0, @ptrCast(&reply_addr), @sizeOf(@TypeOf(reply_addr)));
-
-    return peer_ip;
+    std.log.warn("discovery: no matching beacon for port {d} world_size {d}", .{ port, world_size });
+    return null;
 }
