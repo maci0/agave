@@ -795,6 +795,41 @@ const Server = struct {
         self.idem.release(key, log_idem_token);
     }
 
+    /// Deep-copy the conversation views into `arena` so they stay valid after
+    /// `mutex` is released. Caller must hold self.mutex.
+    fn snapshotConversationsLocked(self: *Server, arena: std.mem.Allocator) ![]conv_store.ConvView {
+        const n = @min(self.conversations.items.len, max_conversations);
+        const views = try arena.alloc(conv_store.ConvView, n);
+        for (self.conversations.items[0..n], 0..) |*conv, i| {
+            const msgs = try arena.alloc(Message, conv.messages.items.len);
+            for (conv.messages.items, 0..) |m, j| {
+                msgs[j] = .{ .role = m.role, .content = try arena.dupe(u8, m.content) };
+            }
+            views[i] = .{
+                .id = conv.id,
+                .title = try arena.dupe(u8, conv.titleSlice()),
+                .messages = msgs,
+            };
+        }
+        return views;
+    }
+
+    /// Encode `views` and write them to `path`, replacing the file
+    /// durably. Takes no lock: `conv_store.save` runs two fsyncs, so it must
+    /// not run while `mutex` is held, or every other request stalls on it.
+    fn saveConversationSnapshot(
+        self: *Server,
+        path: []const u8,
+        active_id: u32,
+        next_id: u32,
+        views: []const conv_store.ConvView,
+    ) void {
+        conv_store.save(self.allocator, path, active_id, next_id, views) catch |err| {
+            self.metrics.recordConvStoreSaveFailure();
+            std.log.err("conversation store save failed ({s}): {}; conversation history is not persisted", .{ path, err });
+        };
+    }
+
     /// Write conversations to `conv_store_path`. Caller must hold self.mutex.
     fn persistConversationsLocked(self: *Server) void {
         const path = self.conv_store_path orelse return;
@@ -3818,28 +3853,49 @@ const GeneratedEscaped = struct {
 /// Sets kv_valid, logs generation stats, and appends the trimmed response
 /// as an assistant message. Used by both streaming and non-streaming chat/regen paths.
 fn storeConversationResponse(result_data: []const u8, stats: Stats) void {
-    g_server.mutex.lockUncancelable(g_server.io);
-    defer g_server.mutex.unlock(g_server.io);
-    g_server.kv_valid = true;
-    logGeneration(stats.tokens_generated, stats.time_ms, stats.tokens_per_sec);
-    const trimmed = std.mem.trimEnd(u8, result_data, " \t\r\n");
-    if (trimmed.len == 0) return;
-    const duped = g_server.allocator.dupe(u8, trimmed) catch {
-        std.log.warn("req={d} OOM storing response ({d} bytes)", .{ log_request_id, trimmed.len });
-        return;
-    };
-    const conv = g_server.getActiveConv() orelse {
-        @memset(duped, 0);
-        g_server.allocator.free(duped);
-        return;
-    };
-    conv.messages.append(g_server.allocator, .{ .role = .assistant, .content = duped }) catch {
-        std.log.warn("req={d} OOM appending response to conversation", .{log_request_id});
-        @memset(duped, 0);
-        g_server.allocator.free(duped);
-        return;
-    };
-    g_server.persistConversationsLocked();
+    var arena_state = std.heap.ArenaAllocator.init(g_server.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var views: []conv_store.ConvView = &.{};
+    var active_id: u32 = 0;
+    var next_id: u32 = 0;
+
+    {
+        g_server.mutex.lockUncancelable(g_server.io);
+        defer g_server.mutex.unlock(g_server.io);
+        g_server.kv_valid = true;
+        logGeneration(stats.tokens_generated, stats.time_ms, stats.tokens_per_sec);
+        const trimmed = std.mem.trimEnd(u8, result_data, " \t\r\n");
+        if (trimmed.len == 0) return;
+        const duped = g_server.allocator.dupe(u8, trimmed) catch {
+            std.log.warn("req={d} OOM storing response ({d} bytes)", .{ log_request_id, trimmed.len });
+            return;
+        };
+        const conv = g_server.getActiveConv() orelse {
+            @memset(duped, 0);
+            g_server.allocator.free(duped);
+            return;
+        };
+        conv.messages.append(g_server.allocator, .{ .role = .assistant, .content = duped }) catch {
+            std.log.warn("req={d} OOM appending response to conversation", .{log_request_id});
+            @memset(duped, 0);
+            g_server.allocator.free(duped);
+            return;
+        };
+        if (g_server.conv_store_path) |_| {
+            views = g_server.snapshotConversationsLocked(arena) catch |err| {
+                std.log.err("req={d} conversation snapshot failed: {}; history is not persisted", .{ log_request_id, err });
+                return;
+            };
+            active_id = g_server.active_id;
+            next_id = g_server.next_id;
+        }
+    }
+
+    if (g_server.conv_store_path) |path| {
+        g_server.saveConversationSnapshot(path, active_id, next_id, views);
+    }
 }
 
 fn generateEscapedN(prompt: []const u8, reset: bool, max_tokens: usize, sampling: SamplingParams) GeneratedEscaped {
