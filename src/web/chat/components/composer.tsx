@@ -29,7 +29,7 @@ type ComposerProps = {
 
 /** The attached image, with the control that removes it. */
 const ImagePreview = ({ src, onRemove }: { src: string; onRemove: () => void }) => (
-  <div className="mx-auto block w-full max-w-prose p-2 max-drawer:px-0">
+  <div className="mx-auto block w-full agave-measure p-2 max-drawer:px-0">
     <div className="relative inline-block max-w-full">
       <img
         className="block max-w-[200px] rounded-lg border border-border"
@@ -134,7 +134,7 @@ const InputRow = (props: ComposerProps & {
   area: RefObject<HTMLTextAreaElement | null>;
   fileInput: RefObject<HTMLInputElement | null>;
 }) => (
-  <div className="mx-auto flex w-full max-w-prose items-end gap-2.5">
+  <div className="mx-auto flex w-full agave-measure items-end gap-2.5">
     <input
       ref={props.fileInput}
       type="file"
@@ -258,7 +258,7 @@ export const Composer = (props: ComposerProps) => {
         area={form.area}
         fileInput={form.fileInput}
       />
-      <p id="input-hint" className="mx-auto mt-2 w-full max-w-prose text-center font-mono text-2xs text-faint max-drawer:sr-only">
+      <p id="input-hint" className="mx-auto mt-2 w-full agave-measure text-center font-mono text-2xs text-faint max-drawer:sr-only">
         Enter to send &middot; Shift+Enter for new line &middot; Escape to stop &middot; /help for commands
       </p>
     </form>

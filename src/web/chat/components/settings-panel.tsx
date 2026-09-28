@@ -140,7 +140,7 @@ export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPan
     id="settings-panel"
     role="region"
     aria-label="Sampling settings"
-    className="mx-auto mb-3 max-w-prose rounded-lg border border-border bg-popover p-4"
+    className="mx-auto mb-3 agave-measure rounded-lg border border-border bg-popover p-4"
   >
     <div className="mb-3 grid grid-cols-3 gap-4 max-drawer:grid-cols-1">
       <SettingSlider

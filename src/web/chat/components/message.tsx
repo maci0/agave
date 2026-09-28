@@ -166,7 +166,7 @@ const Message = memo(function Message({ bubble, showStats, canRegenerate, onRege
       role="group"
       aria-labelledby={roleId}
       className={cn(
-        'mx-auto flex w-full max-w-prose flex-col gap-1',
+        'mx-auto flex w-full agave-measure flex-col gap-1',
         isUser ? 'items-end' : 'items-start',
       )}
     >
