@@ -1,12 +1,10 @@
 import {
   Close,
   Content,
-  Description,
   Overlay,
   Portal,
   Root,
   Title,
-  Trigger,
 } from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import type { ComponentProps } from 'react';
@@ -21,10 +19,6 @@ import { cn } from './cn';
  * one place this surface uses a sheet instead of a centered card.
  */
 export const Dialog = (props: ComponentProps<typeof Root>) => <Root data-slot="dialog" {...props} />;
-
-export const DialogTrigger = (props: ComponentProps<typeof Trigger>) => <Trigger data-slot="dialog-trigger" {...props} />;
-
-export const DialogClose = (props: ComponentProps<typeof Close>) => <Close data-slot="dialog-close" {...props} />;
 
 type DialogContentProps = ComponentProps<typeof Content> & {
   /** `left` renders a drawer pinned to the inline start edge. */
@@ -67,8 +61,4 @@ export const DialogContent = ({ className, children, side = 'center', hideClose,
 
 export const DialogTitle = ({ className, ...props }: ComponentProps<typeof Title>) => (
   <Title className={cn('font-mono text-lg font-semibold text-primary', className)} {...props} />
-);
-
-export const DialogDescription = ({ className, ...props }: ComponentProps<typeof Description>) => (
-  <Description className={cn('text-sm text-muted-foreground', className)} {...props} />
 );

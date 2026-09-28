@@ -13,11 +13,5 @@ pub const CpuBackend = backend.CpuBackend;
 pub const CudaBackend = backend.CudaBackend;
 /// Re-exported MetalBackend for test access.
 pub const MetalBackend = backend.MetalBackend;
-/// Re-exported VulkanBackend for test access.
-pub const VulkanBackend = backend.VulkanBackend;
-/// Re-exported RocmBackend for test access.
-pub const RocmBackend = backend.RocmBackend;
 /// Re-exported WebGpuBackend for test access.
 pub const WebGpuBackend = backend.WebGpuBackend;
-/// Re-exported TensorData so parity tests can build quantized GEMV inputs.
-pub const TensorData = backend.TensorData;

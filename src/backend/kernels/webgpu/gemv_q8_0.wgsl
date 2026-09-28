@@ -35,11 +35,6 @@ fn sign_extend_i8(val: u32) -> i32 {
     return signed;
 }
 
-// Unpack f16 from two bytes stored in the low 16 bits of a u32
-fn unpack_f16_scale(bits: u32) -> f32 {
-    return unpack2x16float(bits & 0xFFFFu).x;
-}
-
 @compute @workgroup_size(256)
 fn main(
     @builtin(workgroup_id) wg_id: vec3<u32>,
