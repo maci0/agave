@@ -29,6 +29,7 @@ zig build                                          # Build (ReleaseFast + Debug)
 agave/
 ├── build.zig              # Build config (ReleaseFast default + Debug)
 ├── build.zig.zon          # Package metadata (zero external dependencies)
+├── tsconfig.json          # Single TS program covering both web surfaces (src/web chat UI, web/ WASM shell)
 ├── src/
 │   ├── main.zig           # CLI: arg parsing, format detection, model init, REPL, recipe application
 │   ├── cli.zig            # Self-contained CLI argument parser (zero deps)
@@ -149,8 +150,10 @@ agave/
 │   │   ├── prefetch.zig   # Async block prefetching for tiered cache
 │   ├── web/
 │   │   ├── app.tsx        # Chat UI entry (React; SSE streaming, conversation management)
+│   │   ├── app.test.tsx   # Chat UI tests (bun test)
 │   │   ├── chat/          # Chat UI state (hooks) and components
 │   │   ├── ui/            # shadcn primitives, the shared Tailwind 4 theme, and the motifs both chat surfaces draw (empty state, hint chips)
+│   │   ├── globals.d.ts   # Ambient declarations for the embedded script/style assets
 │   │   ├── app.css        # Tailwind 4 entry for this surface
 │   │   ├── app.js         # Generated classic script; embedded by server.zig
 │   │   ├── style.css      # Generated stylesheet; embedded by server.zig
@@ -164,6 +167,8 @@ agave/
 │   ├── agave.ts           # Typed glue for agave.wasm (AgaveEngine)
 │   ├── agave.js           # Generated classic script
 │   ├── shell.tsx          # Demo page (React)
+│   ├── use-model-loader.ts # Model fetch + parse lifecycle hook for the demo page
+│   ├── load-errors.ts     # WASM error -> user-facing message mapping, shared by loader and generator
 │   ├── shell.css          # Tailwind 4 entry for this surface
 │   ├── shell.js           # Generated classic script
 │   └── style.css          # Generated stylesheet

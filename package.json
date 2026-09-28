@@ -8,7 +8,7 @@
   },
   "scripts": {
     "lint": "oxlint --disable-nested-config --type-aware --deny-warnings",
-    "typecheck": "tsc --noEmit -p src/web/tsconfig.json",
+    "typecheck": "tsc --noEmit",
     "test:web": "bun test src/web",
     "build:web": "bash scripts/build-web.sh"
   },
