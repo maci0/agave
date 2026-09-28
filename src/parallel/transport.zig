@@ -40,6 +40,7 @@ const tcp_accept_timeout_ms: i32 = 300_000;
 
 const builtin = @import("builtin");
 const sim_clock = @import("../sim_clock.zig");
+const config = @import("../config.zig");
 const shm_O_CREAT: c_int = if (builtin.os.tag == .macos) 0x200 else 0o100;
 const shm_O_EXCL: c_int = if (builtin.os.tag == .macos) 0x800 else 0o200;
 const shm_O_RDWR: c_int = 0o2;
@@ -56,16 +57,6 @@ fn simdAddF32(dst: [*]f32, src: [*]const f32, n: usize) void {
         dst[i..][0..8].* = @as(V8, dst[i..][0..8].*) + @as(V8, src[i..][0..8].*);
     }
     while (i < n) : (i += 1) dst[i] += src[i];
-}
-
-fn getenv(name: []const u8) ?[]const u8 {
-    var buf: [128:0]u8 = undefined;
-    @memcpy(buf[0..name.len], name);
-    buf[name.len] = 0;
-    const val = c.getenv(&buf);
-    if (val == null) return null;
-    const ptr: [*:0]const u8 = @ptrCast(val.?);
-    return std.mem.sliceTo(ptr, 0);
 }
 
 /// Errors a poll(2) wait can surface. Named rather than `anyerror`: an inferred
@@ -489,7 +480,7 @@ pub const Transport = struct {
             "NCCL_BUFFSIZE",      "NCCL_NTHREADS",
         };
         for (nccl_env_vars) |name| {
-            if (getenv(name)) |val| {
+            if (config.getenv(name)) |val| {
                 std.log.info("NCCL env: {s}={s}", .{ name, val });
             }
         }
@@ -825,9 +816,8 @@ test "simdAddF32 partial SIMD width" {
     }
 }
 
-test "getenv returns null for nonexistent var" {
-    const result = getenv("AGAVE_TEST_NONEXISTENT_ENV_VAR_12345");
-    try std.testing.expectEqual(@as(?[]const u8, null), result);
+test "NCCL env names are read through the shared config accessor" {
+    try std.testing.expectEqual(@as(?[]const u8, null), config.getenv("AGAVE_TEST_NONEXISTENT_ENV_VAR_12345"));
 }
 
 test "shm wait times out on virtual time, not host speed" {

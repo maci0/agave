@@ -3,10 +3,11 @@
 //! One place decides what an unset variable means, so a debug flag, a secret,
 //! and a cache path cannot disagree about the same string. Readers go through
 //! here: `src/pull.zig` (HF_TOKEN, HF_HOME, cache roots), `src/main.zig`
-//! (AGAVE_* server settings), `src/models/vision.zig` (AGAVE_VISION_DEBUG), and
-//! the Vulkan / conversation-store cache paths. Two modules read the
-//! environment directly and are the exceptions: `src/display.zig` (TERM,
-//! NO_COLOR) and `src/parallel/transport.zig` (per-process IPC discovery).
+//! (AGAVE_* server settings, video frame temp root), `src/display.zig` (TERM,
+//! NO_COLOR), `src/server/conv_store.zig` (store path), and
+//! `src/parallel/transport.zig` (NCCL transport debug logging). Modules that
+//! receive the parsed environment map from `main` (`g_environ`) read it there
+//! instead of calling `getenv`, so both paths share `nonemptyEnv`.
 
 const std = @import("std");
 
