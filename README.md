@@ -299,7 +299,7 @@ Launch without a prompt argument for multi-turn chat:
 
 | Command | Description |
 |---------|-------------|
-| `/clear`, `/reset` | Clear conversation history and KV cache |
+| `/clear`, `/reset` | Clear conversation history, line history, and KV cache |
 | `/context`, `/ctx` | Show context window usage (tokens used / max) |
 | `/system <text>` | Set system prompt (clears conversation) |
 | `/system` | Show current system prompt |
@@ -657,6 +657,7 @@ zig build -Dtarget=aarch64-linux-musl \
 - **[API Reference](docs/API.md)**: HTTP API endpoints, request/response formats
 - **[Observability](docs/OBSERVABILITY.md)**: `--serve` Prometheus metrics, health endpoints, request log correlation
 - **[Durability and recovery](docs/DURABILITY.md)**: On-disk state, RPO/RTO, conversation-store backup and restore
+- **[Privacy and data handling](docs/PRIVACY.md)**: What personal data exists, where it is stored, and how to delete it
 - **[Megakernel System](docs/MEGAKERNEL.md)**: Composable fused GPU dispatch
 - **[CLAUDE.md](CLAUDE.md)**: Engineering standards for contributors
 - **[research/kernels/](research/kernels/)**: Kernel research tools (benchmarks, golden tests)

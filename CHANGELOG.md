@@ -12,6 +12,9 @@ must still appear under **Changed** or **Breaking** below. See
 ## [Unreleased]
 
 ### Changed
+- The REPL `/clear` and `/reset` commands also drop the line history, so the
+  prompts the conversation held cannot be recalled with the up arrow after a
+  clear. Prompt and reply buffers are also zeroed before they are freed.
 - The committed web bundles are whitespace- and syntax-minified but no longer
   identifier-mangled. `scripts/check-web-artifacts.sh` byte-compares them, and
   bun's identifier mangler is not reproducible across sessions, so the gate could
