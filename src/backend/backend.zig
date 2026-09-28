@@ -2473,8 +2473,12 @@ test "Backend.gemvMulti via CPU dispatch, empty ops" {
     var cpu = CpuBackend{};
     const be = Backend{ .cpu = &cpu };
     var x = [_]f32{1.0};
+    var y = [_]f32{42.0};
+    y[0] = 42.0; // `y` is the slice ops write through; the empty list must not.
     const ops = [_]GemvOp{};
-    be.gemvMulti(&x, &ops, 1); // Must not panic
+    be.gemvMulti(&x, &ops, 1);
+    // Zero ops must leave the output buffer untouched, not zeroed or scaled.
+    try std.testing.expectEqual(@as(f32, 42.0), y[0]);
 }
 
 test "Backend.gemvT via CPU dispatch" {

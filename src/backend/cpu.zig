@@ -1919,8 +1919,12 @@ test "CpuBackend, gemvMulti single op" {
 test "CpuBackend, gemvMulti empty ops" {
     var be = CpuBackend{};
     var x = [_]f32{1.0};
+    var y = [_]f32{42.0};
+    y[0] = 42.0; // `y` is the slice ops write through; the empty list must not.
     const ops = [_]backend_mod.GemvOp{};
-    be.gemvMulti(&x, &ops, 1); // Must not panic
+    be.gemvMulti(&x, &ops, 1);
+    // Zero ops must leave the output buffer untouched, not zeroed or scaled.
+    try std.testing.expectEqual(@as(f32, 42.0), y[0]);
 }
 
 test "CpuBackend, sdpa f32 single token" {
