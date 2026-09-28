@@ -165,7 +165,27 @@ pub fn sleepNs(ns: u64) void {
         .sec = @intCast(ns / std.time.ns_per_s),
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
-    _ = std.posix.system.nanosleep(&ts, null);
+    nanosleepFull(ts);
+}
+
+/// Sleep for `req`, resuming the remainder when a signal interrupts the call.
+///
+/// `nanosleep` returns early with EINTR and writes the unslept remainder to
+/// `rem`, so a one-shot call can come back after ~0 ns. That truncation turns
+/// every signal that lands during a sleep (a profiler tick, a terminal window
+/// change, Ctrl-C on a non-exiting thread) into a skipped interval: the pull
+/// retry backoff collapses to an immediate retry and the server's sleep-mode
+/// and drain polls spin instead of pacing.
+fn nanosleepFull(req: std.posix.timespec) void {
+    var remaining = req;
+    while (true) {
+        var rem: std.posix.timespec = undefined;
+        const rc = std.posix.system.nanosleep(&remaining, &rem);
+        if (comptime @TypeOf(rc) == void) return;
+        if (std.posix.errno(rc) != .INTR) return;
+        if (rem.sec <= 0 and rem.nsec <= 0) return;
+        remaining = rem;
+    }
 }
 
 test "override freezes milliNow" {
@@ -195,6 +215,17 @@ test "sleepNs advances virtual clock when overridden" {
     sleepNs(500_000);
     try std.testing.expectEqual(@as(i64, 1_000_005), milliNow());
     try std.testing.expect(isOverridden());
+}
+
+test "sleepNs actually waits its interval on the real clock" {
+    if (is_freestanding) return error.SkipZigTest;
+    defer setOverrideMs(null);
+    const sleep_ms: i64 = 20;
+    const start = monoMilli();
+    sleepNs(@intCast(sleep_ms * std.time.ns_per_ms));
+    // A no-op or an early return from an interrupted nanosleep lands here
+    // short; the floor leaves room for millisecond timer granularity.
+    try std.testing.expect(monoMilli() - start >= sleep_ms);
 }
 
 test "monoMilli follows override and monotonic clock" {

@@ -50,7 +50,8 @@ fn nanoTimestamp() i128 {
     return sim_clock.monoNano();
 }
 
-/// Backoff before download retry `attempt` (1-based in the retry loop).
+/// Backoff before download retry `attempt`, 0-based: the first retry (attempt
+/// 0) waits `retry_base_delay_ns`, then it doubles per attempt.
 /// Routes through sim_clock so a clock override advances virtual time
 /// instead of blocking wall-clock time between attempts.
 fn sleepRetry(attempt: u32) void {
