@@ -26,6 +26,12 @@ OUT_ROOT="${1:-$ROOT}"
 
 TSC="$ROOT/node_modules/.bin/tsc"
 TAILWIND="$ROOT/node_modules/.bin/tailwindcss"
+
+BUN_PIN="$(sed -n 's/.*"packageManager": "bun@\([^"]*\)".*/\1/p' "$ROOT/package.json" | head -n1)"
+if [[ -z "$BUN_PIN" ]]; then
+    echo "build-web: could not parse packageManager bun@X.Y.Z from package.json" >&2
+    exit 1
+fi
 for tool in "$TSC" "$TAILWIND"; do
     if [[ ! -x "$tool" ]]; then
         echo "need bun install --frozen-lockfile ($tool missing from node_modules)" >&2
@@ -33,7 +39,19 @@ for tool in "$TSC" "$TAILWIND"; do
     fi
 done
 if ! command -v bun >/dev/null 2>&1; then
-    echo "need bun on PATH (package.json packageManager) to bundle the UI" >&2
+    echo "need bun ${BUN_PIN} on PATH (package.json packageManager) to bundle the UI" >&2
+    exit 1
+fi
+# The committed bundles are `bun build` output, and
+# scripts/check-web-artifacts.sh decides staleness by byte-comparing against
+# them. A different bun release can emit different bytes for the same source,
+# so regenerating with an unpinned bun commits bundles the pinned bun cannot
+# reproduce, and every other checkout then reports STALE. scripts/lint-web.sh
+# gates its own run the same way; this is the regeneration path, so it needs
+# the same check.
+if [[ "$(bun --version)" != "$BUN_PIN" ]]; then
+    echo "build-web: bun $(bun --version) != package.json packageManager bun@${BUN_PIN}" >&2
+    echo "  install bun ${BUN_PIN}, then rerun (scripts/lint-web.sh enforces the same pin)" >&2
     exit 1
 fi
 
