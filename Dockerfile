@@ -220,10 +220,12 @@ COPY --link --from=build /out/bin/agave /usr/local/bin/agave
 # Authoritative product version parsed from build.zig.zon (see build-stage check).
 COPY --link --from=build /agave-version /usr/share/agave/version
 # GPL-3.0-or-later: the notice must accompany the binary (keep LICENSE in context).
-# The directory is created first: COPY --chmod stamps the parents it creates with
+# The directories are created first: COPY --chmod stamps the parents it creates with
 # the same mode, and a 0644 /usr/share/doc/agave is not traversable by the
 # non-root runtime user (uid 10001), so `cat .../copyright` fails with EACCES.
-RUN mkdir -p -m 0755 /usr/share/doc/agave
+# /usr/share/man/man1 gets the same guard: whether the slim base ships it is a
+# property of the pinned tag, not of this file.
+RUN mkdir -p -m 0755 /usr/share/doc/agave /usr/share/man/man1
 COPY --link --chmod=0644 LICENSE /usr/share/doc/agave/copyright
 # Notices for the third-party code bundled into the embedded web UI, which the
 # minifier leaves headerless. Travels with the binary for the same reason.
