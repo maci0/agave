@@ -143,8 +143,15 @@ readonly SNAPSHOT_RE='^conversations-(corrupt|overflow|prerestore)-[0-9]{8}T[0-9
 # width on each platform, so `sort -r` below orders by mtime.
 if stat -c %Y . >/dev/null 2>&1; then
     mtime_of() { stat -c %.9Y "$1"; }
+    mode_of() { stat -c %a "$1"; }
+    # Caller passes a whole number of hours; only the spelling differs.
+    backdated_stamp() { date -u -d "$1 hours ago" +%Y%m%d%H%M; }
 else
     mtime_of() { stat -f %Fm "$1"; }
+    mode_of() { stat -f %Lp "$1"; }
+    # BSD date takes a relative shift as -v-2H and has no -d at all, so the
+    # same hours argument drives both.
+    backdated_stamp() { date -u -v-"${1}"H +%Y%m%d%H%M; }
 fi
 
 # Newest first, one path per line. $1 is the directory, $2 a basename ERE.
@@ -318,8 +325,15 @@ prune() {
 
 prune_tier() {
     local dir="$1" re="$2" keep="$3"
-    local -a files
-    mapfile -t files < <(list_backups "$dir" "$re")
+    # `=()` not just `-a`: under `set -u` an array that was declared but never
+    # assigned reads as unbound when the tier is empty.
+    local -a files=()
+    local line
+    # A `while read` loop, not mapfile: macOS still ships bash 3.2, and the
+    # runbook schedules this script with cron on any host, macOS included.
+    while IFS= read -r line; do
+        files+=("$line")
+    done < <(list_backups "$dir" "$re")
     (( ${#files[@]} <= keep )) && return 0
     local i
     for ((i = keep; i < ${#files[@]}; i++)); do
@@ -400,8 +414,8 @@ do_self_test() {
     [[ -f "$backup" ]] || die "self-test: backup produced no file"
     # A backup is the whole chat history, so it must not be readable by any
     # other user of the host whatever umask the operator runs with.
-    if [[ "$(stat -c '%a' -- "$backup")" != "600" ]]; then
-        echo "conv-store-backup: self-test FAILED: backup mode is $(stat -c '%a' -- "$backup"), expected 600" >&2
+    if [[ "$(mode_of "$backup")" != "600" ]]; then
+        echo "conv-store-backup: self-test FAILED: backup mode is $(mode_of "$backup"), expected 600" >&2
         status=1
     fi
 
@@ -558,7 +572,7 @@ do_self_test() {
         echo "conv-store-backup: self-test FAILED: check passed with no backup dir" >&2
         status=1
     fi
-    touch -d '2 hours ago' -- "$tmp/backups"/conversations-2*.json
+    touch -t "$(backdated_stamp 2)" -- "$tmp/backups"/conversations-2*.json
     if (MAX_AGE_HOURS=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check) >/dev/null 2>&1; then
         echo "conv-store-backup: self-test FAILED: check passed on a 2h-old backup with AGAVE_MAX_AGE_HOURS=1" >&2
         status=1
