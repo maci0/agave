@@ -43,22 +43,28 @@ class CollectOneTests(unittest.TestCase):
         }
         fake = _FakeResponse(json.dumps(payload).encode())
         with patch("urllib.request.urlopen", return_value=fake):
-            result = collect_one("http://example.test/v1", "m", "What is 2+2?", "k", 8)
+            result = collect_one("https://example.test/v1", "m", "What is 2+2?", "k", 8)
         self.assertEqual(result["continuation"], "4")
         self.assertEqual(result["tokens_text"], ["4"])
         self.assertEqual(result["model"], "m")
 
     def test_http_error_becomes_runtime_error(self) -> None:
         err = urllib.error.HTTPError(
-            url="http://example.test/v1",
+            url="https://example.test/v1",
             code=401,
             msg="Unauthorized",
             hdrs={},
             fp=BytesIO(b'{"error":"bad key"}'),
         )
         with patch("urllib.request.urlopen", side_effect=err), self.assertRaises(RuntimeError) as ctx:
-            collect_one("http://example.test/v1", "m", "hi", "k", 8)
+            collect_one("https://example.test/v1", "m", "hi", "k", 8)
         self.assertIn("401", str(ctx.exception))
+
+    def test_rejects_a_non_https_endpoint(self) -> None:
+        with patch("urllib.request.urlopen") as urlopen, self.assertRaises(ValueError) as ctx:
+            collect_one("http://example.test/v1", "m", "hi", "k", 8)
+        urlopen.assert_not_called()
+        self.assertIn("https", str(ctx.exception))
 
 
 class ResumeTests(unittest.TestCase):
@@ -75,9 +81,21 @@ class ResumeTests(unittest.TestCase):
                 calls.append(prompt)
                 return {"prompt": prompt, "continuation": "x", "tokens_text": [], "model": model}
 
-            argv = ["collect_continuations.py", "--endpoint", "http://example.test/v1",
-                    "--model", "m", "--prompts", str(prompts), "--out", str(out),
-                    "--api-key", "k", "--delay", "0"]
+            argv = [
+                "collect_continuations.py",
+                "--endpoint",
+                "http://example.test/v1",
+                "--model",
+                "m",
+                "--prompts",
+                str(prompts),
+                "--out",
+                str(out),
+                "--api-key",
+                "k",
+                "--delay",
+                "0",
+            ]
             with patch.object(sys, "argv", argv), patch.object(cc, "collect_one", fake):
                 cc.main()
             self.assertEqual(calls, ["2+2?", "capital of France?"])
@@ -105,9 +123,21 @@ class ResumeTests(unittest.TestCase):
 
             prompts = root / "prompts.txt"
             prompts.write_text("q\n")
-            argv = ["collect_continuations.py", "--endpoint", "http://example.test/v1",
-                    "--model", "m", "--prompts", str(prompts), "--out", str(out),
-                    "--api-key", "k", "--delay", "0"]
+            argv = [
+                "collect_continuations.py",
+                "--endpoint",
+                "http://example.test/v1",
+                "--model",
+                "m",
+                "--prompts",
+                str(prompts),
+                "--out",
+                str(out),
+                "--api-key",
+                "k",
+                "--delay",
+                "0",
+            ]
             with patch.object(sys, "argv", argv), patch.object(cc, "collect_one", fake):
                 cc.main()
             self.assertEqual(calls, ["q"])

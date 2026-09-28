@@ -15,7 +15,7 @@ zig build test       # unit tests
 zig build --help     # all steps
 ```
 
-Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness + the oxlint `ignorePatterns` ratchet), `lint-shell` (shellcheck) and `lint-python` (ruff). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness + the oxlint `ignorePatterns` ratchet), `lint-shell` (shellcheck) and `lint-python` (ruff check and ruff format --check). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check) plus the Python unit tests (`zig build test-python`), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -30,7 +30,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `.oxlintrc.json` | `bash scripts/check-web-lint-scope.sh` (an `ignorePatterns` entry that is not known debt fails; entries may leave the list, never join it) |
 | `scripts/*.sh` | `zig build lint-shell` (blocking CI job `lint-shell`) |
 | `build.zig` or anything that can put a path, timestamp or hostname in a binary | `zig build check-reproducible` (blocking CI job `reproducible-build`; builds twice from different paths and byte-compares) |
-| `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` (blocking CI job `lint-python`) |
+| `scripts/`, `tests/`, `tools/`, `research/` Python | `zig build lint-python` and `zig build test-python` (blocking CI jobs `lint-python` and `python-tests`; `ruff check` plus `ruff format --check`, so format the file you touch) |
 | `Dockerfile`, `docker-compose.yml` | `AGAVE_API_KEY=local docker compose config --quiet`, then build the image the way the `docker-build` job does (its `build-args` in `.github/workflows/ci.yml`, tagged `agave:ci`) and run `bash scripts/check-docker-image.sh agave:ci`. The job runs both; neither has a `zig build` step, so copy the build args rather than inventing a subset |
 
 Dependabot (`.github/dependabot.yml`) opens weekly bumps for the GitHub
@@ -405,8 +405,8 @@ Notes:
 zig build ci
 
 # Local CI gate (format + docs hygiene + pin consistency + third-party notices +
-# unit tests + conversation store backup self-test). Needs Python 3.11+; run this
-# before pushing.
+# unit tests + Python unit tests + conversation store backup self-test). Needs
+# Python 3.11+; run this before pushing.
 zig build check
 
 # Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
@@ -416,6 +416,11 @@ zig build lint-web
 # Shell scripts (blocking CI job lint-shell). Needs shellcheck.
 zig build lint-shell
 # equivalent: bash scripts/lint-shell.sh
+
+# Python unit tests (blocking CI job python-tests). Needs Python 3.11+; stdlib
+# only, no network and no model weights.
+zig build test-python
+# equivalent: bash scripts/test-python.sh
 
 # Format check only (same paths as .github/workflows/ci.yml fmt-check)
 zig build fmt-check

@@ -70,23 +70,23 @@ def compare_outputs(agave_output: str, reference_output: str) -> bool:
         matches = sum(1 for a, r in zip(agave_prefix.lower(), ref_prefix.lower(), strict=False) if a == r)
         match_ratio = matches / prefix_len if prefix_len > 0 else 0.0
         if match_ratio < 0.95:
-            print(f"FAIL: Prefix mismatch (match ratio: {match_ratio*100:.1f}%)", file=sys.stderr)
+            print(f"FAIL: Prefix mismatch (match ratio: {match_ratio * 100:.1f}%)", file=sys.stderr)
             print(f"  Agave:     {agave_prefix}", file=sys.stderr)
             print(f"  Reference: {ref_prefix}", file=sys.stderr)
             return False
-        print(f"PASS: Prefix {match_ratio*100:.1f}% match (case-normalized)")
+        print(f"PASS: Prefix {match_ratio * 100:.1f}% match (case-normalized)")
 
     # Mid-point check: sample from the middle of the output to catch
     # "good prefix + garbage tail" failures.
     if len(agave_output) > 80 and len(reference_output) > 80:
         mid = min(len(agave_output), len(reference_output)) // 2
         window = min(40, mid)
-        agave_mid = agave_output[mid - window:mid].lower()
-        ref_mid = reference_output[mid - window:mid].lower()
+        agave_mid = agave_output[mid - window : mid].lower()
+        ref_mid = reference_output[mid - window : mid].lower()
         mid_matches = sum(1 for a, r in zip(agave_mid, ref_mid, strict=False) if a == r)
         mid_ratio = mid_matches / len(agave_mid) if len(agave_mid) > 0 else 0.0
         if mid_ratio < 0.85:
-            print(f"FAIL: Mid-point mismatch (match ratio: {mid_ratio*100:.1f}%)", file=sys.stderr)
+            print(f"FAIL: Mid-point mismatch (match ratio: {mid_ratio * 100:.1f}%)", file=sys.stderr)
             print(f"  Agave mid:     {agave_mid}", file=sys.stderr)
             print(f"  Reference mid: {ref_mid}", file=sys.stderr)
             return False
@@ -100,7 +100,7 @@ def compare_outputs(agave_output: str, reference_output: str) -> bool:
         suffix_matches = sum(1 for a, r in zip(agave_suffix, ref_suffix, strict=False) if a == r)
         suffix_ratio = suffix_matches / suffix_len
         if suffix_ratio < 0.75:
-            print(f"FAIL: Suffix mismatch (match ratio: {suffix_ratio*100:.1f}%)", file=sys.stderr)
+            print(f"FAIL: Suffix mismatch (match ratio: {suffix_ratio * 100:.1f}%)", file=sys.stderr)
             print(f"  Agave suffix:     {agave_suffix}", file=sys.stderr)
             print(f"  Reference suffix: {ref_suffix}", file=sys.stderr)
             return False

@@ -18,8 +18,7 @@ BLOCKS = 256
 FFN = [BLOCKS, 8]
 
 
-def make_gguf(path: Path, expert_type: int, expert_byte: int,
-              ffn_dims: list[int] | None = None) -> None:
+def make_gguf(path: Path, expert_type: int, expert_byte: int, ffn_dims: list[int] | None = None) -> None:
     """A two-layer model: F32 everywhere except the expert tensors."""
     ffn_dims = ffn_dims or FFN
     kv = [(b"general.architecture", 8, b"qwen35"), (b"qwen35.block_count", T_U32, 2)]
@@ -32,8 +31,11 @@ def make_gguf(path: Path, expert_type: int, expert_byte: int,
     ]
     n = ffn_dims[0] * ffn_dims[1] // BLOCKS * 72
     payloads = [
-        bytes([expert_byte]) * n, b"\x01" * 256, b"\x07" * 256,
-        bytes([expert_byte]) * n, b"\x02" * 256,
+        bytes([expert_byte]) * n,
+        b"\x01" * 256,
+        b"\x07" * 256,
+        bytes([expert_byte]) * n,
+        b"\x02" * 256,
     ]
     path.write_bytes(write_gguf(3, kv, tensors, payloads, 32))
 
@@ -64,10 +66,8 @@ class SpliceTest(unittest.TestCase):
         self.assertEqual(by_name["blk.0.ffn_gate_exps.weight"]["type"], 0)
         self.assertEqual(result.blob(by_name["blk.0.ffn_gate_exps.weight"])[0], 0xAA)
         # Non-expert tensors keep the base bytes even in a spliced layer.
-        self.assertEqual(result.blob(by_name["blk.1.attn_q.weight"]),
-                         b"\x02" * 256)
-        self.assertEqual(result.blob(by_name["blk.0.shared_expert.weight"]),
-                         b"\x07" * 256)
+        self.assertEqual(result.blob(by_name["blk.1.attn_q.weight"]), b"\x02" * 256)
+        self.assertEqual(result.blob(by_name["blk.0.shared_expert.weight"]), b"\x07" * 256)
 
     def test_dim_mismatch_is_refused(self) -> None:
         make_gguf(self.donor, 10, 0x55, ffn_dims=[BLOCKS, 4])

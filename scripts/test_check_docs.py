@@ -27,8 +27,7 @@ PRODUCT = "9.9.9"
 FILES: dict[str, str] = {
     ".zigversion": "0.16.0\n",
     "build.zig.zon": (
-        '.{\n    .name = .agave,\n    .version = "' + PRODUCT + '",\n'
-        '    .minimum_zig_version = "0.16.0",\n}\n'
+        '.{\n    .name = .agave,\n    .version = "' + PRODUCT + '",\n    .minimum_zig_version = "0.16.0",\n}\n'
     ),
     "CHANGELOG.md": (
         f"Product version is **{PRODUCT}**\n\n## [Unreleased]\n\n"
@@ -123,9 +122,7 @@ class DocsWorkflowPathsTest(unittest.TestCase):
     """The docs-check path filter must cover every file check-docs.py reads."""
 
     def _workflow(self, patterns: list[str]) -> str:
-        return "on:\n  push:\n    paths:\n" + "".join(
-            f"      - '{p}'\n" for p in patterns
-        )
+        return "on:\n  push:\n    paths:\n" + "".join(f"      - '{p}'\n" for p in patterns)
 
     def _errors(self, patterns: list[str]) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,8 +144,7 @@ class DocsWorkflowPathsTest(unittest.TestCase):
 
     def test_single_star_covers_a_direct_child(self) -> None:
         patterns = [
-            ".github/workflows/*" if p == ".github/workflows/ci.yml" else p
-            for p in check_docs.DOCS_CHECK_PATH_INPUTS
+            ".github/workflows/*" if p == ".github/workflows/ci.yml" else p for p in check_docs.DOCS_CHECK_PATH_INPUTS
         ]
         self.assertEqual(self._errors(patterns), [])
 

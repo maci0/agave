@@ -17,11 +17,28 @@ import sys
 import torch
 
 from reference import (
-    rms_norm, silu, gelu, rope, sdpa, sdpa_online, gemv_f32, swiglu_fused,
-    add, mul, sigmoid, softplus, softmax, l2_norm,
-    embedding_lookup, conv1d_causal, deltanet_recurrence,
-    moe_routing_topk, moe_routing_sigmoid,
-    fp8_e4m3_dequant, fp8_e5m2_dequant, nvfp4_dequant,
+    rms_norm,
+    silu,
+    gelu,
+    rope,
+    sdpa,
+    sdpa_online,
+    gemv_f32,
+    swiglu_fused,
+    add,
+    mul,
+    sigmoid,
+    softplus,
+    softmax,
+    l2_norm,
+    embedding_lookup,
+    conv1d_causal,
+    deltanet_recurrence,
+    moe_routing_topk,
+    moe_routing_sigmoid,
+    fp8_e4m3_dequant,
+    fp8_e5m2_dequant,
+    nvfp4_dequant,
     paged_sdpa,
 )
 
@@ -44,9 +61,11 @@ GENERATORS: dict[str, callable] = {}
 
 def generator(name: str):
     """Decorator to register a golden data generator."""
+
     def wrap(fn):
         GENERATORS[name] = fn
         return fn
+
     return wrap
 
 
@@ -74,9 +93,7 @@ def generate_sdpa():
         save(f"{tag}_out_online", out_online)
 
         diff = (out_naive - out_online).abs().max().item()
-        print(
-            f"  naive vs online max diff: {diff:.2e} {'OK' if diff < 1e-5 else 'MISMATCH!'}"
-        )
+        print(f"  naive vs online max diff: {diff:.2e} {'OK' if diff < 1e-5 else 'MISMATCH!'}")
 
     # GQA variant: n_heads=20, n_kv_heads=5, head_dim=128
     nh, nkv, hd = 20, 5, 128
@@ -386,7 +403,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Generate golden test data")
     parser.add_argument(
-        "kernels", nargs="*",
+        "kernels",
+        nargs="*",
         help=f"Kernels to generate (default: all). Available: {', '.join(sorted(GENERATORS))}",
     )
     parser.add_argument("--list", action="store_true", help="List available generators")

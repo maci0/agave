@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Static analysis for the auxiliary Python (scripts/, tests/, tools/, research/).
-# Canonical: zig build lint-python  (or this script from the repo root).
-# Rules live in ruff.toml at the repo root.
+# Static analysis for the auxiliary Python (scripts/, tests/, tools/, research/):
+# ruff check plus ruff format --check, so a formatting drift fails CI instead of
+# accumulating. Canonical: zig build lint-python  (or this script from the repo
+# root). Rules live in ruff.toml at the repo root.
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
@@ -37,4 +38,5 @@ fi
 # CI runs `uvx ruff@<pin>` with the same config; both read ruff.toml, so the
 # two invocations see the same rule set and the same tool version.
 "${RUFF[@]}" check --config ruff.toml .
+"${RUFF[@]}" format --check --config ruff.toml .
 echo "lint-python: ruff clean"

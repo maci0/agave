@@ -40,6 +40,7 @@ BENCH_MODELS = {
 
 # ── Helpers ───────────────────────────────────────────────────────
 
+
 def utc_stamp(fmt: str) -> str:
     """Format the current UTC instant for logs, TSV rows, and staging paths.
 
@@ -84,8 +85,7 @@ def confirm_modify(file_path: str, kernel_name: str) -> bool:
     return answer in ("y", "yes")
 
 
-def stage_improvement(kernel_name: str, file_path: str, patched_content: str,
-                      result_info: dict) -> Path:
+def stage_improvement(kernel_name: str, file_path: str, patched_content: str, result_info: dict) -> Path:
     """Save an improved source file to the staging area for later review."""
     ts = utc_stamp("%Y%m%d_%H%M%S")
     desc = result_info.get("description", "improvement")
@@ -122,6 +122,7 @@ def find_bench_quant(kernel: Kernel) -> str | None:
 
 # ── Build / run helpers ───────────────────────────────────────────
 
+
 def load_search_spaces() -> dict:
     """Load search space definitions from TOML."""
     if not SEARCH_SPACES_FILE.exists():
@@ -143,9 +144,7 @@ def ensure_built(e2e: bool = False):
 def _run_json_cmd(cmd: list[str]) -> dict:
     """Run a command that outputs JSON, returning parsed dict or error status."""
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300, cwd=str(AGAVE_ROOT), check=False
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(AGAVE_ROOT), check=False)
     except subprocess.TimeoutExpired:
         return {"status": "TIMEOUT"}
     if result.returncode != 0:
@@ -156,23 +155,31 @@ def _run_json_cmd(cmd: list[str]) -> dict:
         return {"status": "FAIL", "error": f"Bad JSON: {result.stdout[:100]}"}
 
 
-def run_micro_bench(kernel: str, backend: str = "cpu",
-                    n: int = 4096, k: int = 4096, iters: int = 100) -> dict:
+def run_micro_bench(kernel: str, backend: str = "cpu", n: int = 4096, k: int = 4096, iters: int = 100) -> dict:
     """Run micro-benchmark for a single kernel."""
-    return _run_json_cmd([
-        str(BENCH_BINARY), kernel,
-        f"--n={n}", f"--k={k}", f"--iters={iters}",
-        f"--backend={backend}",
-    ])
+    return _run_json_cmd(
+        [
+            str(BENCH_BINARY),
+            kernel,
+            f"--n={n}",
+            f"--k={k}",
+            f"--iters={iters}",
+            f"--backend={backend}",
+        ]
+    )
 
 
 def run_e2e(model_path: str, backend: str = "cpu", n_tokens: int = 10) -> dict:
     """Run end-to-end inference benchmark."""
-    return _run_json_cmd([
-        str(BENCH_BINARY), "e2e",
-        f"--model={AGAVE_ROOT / model_path}",
-        f"--backend={backend}", f"--n={n_tokens}",
-    ])
+    return _run_json_cmd(
+        [
+            str(BENCH_BINARY),
+            "e2e",
+            f"--model={AGAVE_ROOT / model_path}",
+            f"--backend={backend}",
+            f"--n={n_tokens}",
+        ]
+    )
 
 
 def resolve_quants(kernels: list[Kernel] | None) -> set[str]:
@@ -187,9 +194,7 @@ def resolve_quants(kernels: list[Kernel] | None) -> set[str]:
 
 def rebuild() -> bool:
     """Unconditionally rebuild Agave. Returns False on failure."""
-    result = subprocess.run(
-        ["zig", "build"], cwd=AGAVE_ROOT, capture_output=True, text=True, timeout=120, check=False
-    )
+    result = subprocess.run(["zig", "build"], cwd=AGAVE_ROOT, capture_output=True, text=True, timeout=120, check=False)
     if result.returncode != 0:
         print(f"BUILD FAILED:\n{result.stderr[:500]}", file=sys.stderr)
         return False
@@ -208,8 +213,7 @@ def revert_sources(kernel: Kernel):
         subprocess.run(["git", "checkout", "--", *paths], cwd=AGAVE_ROOT, check=False)
 
 
-def log_result(kernel_name: str, backend: str, metric_value: float,
-               metric_name: str, status: str, description: str):
+def log_result(kernel_name: str, backend: str, metric_value: float, metric_name: str, status: str, description: str):
     """Append to optimization log."""
     header = "timestamp\tkernel\tbackend\tmetric\tvalue\tstatus\tdescription\n"
     if not LOG_FILE.exists():
@@ -217,8 +221,7 @@ def log_result(kernel_name: str, backend: str, metric_value: float,
             f.write(header)
     ts = utc_stamp("%Y-%m-%dT%H:%M:%SZ")
     with open(LOG_FILE, "a") as f:
-        f.write(f"{ts}\t{kernel_name}\t{backend}\t{metric_name}\t"
-                f"{metric_value:.2f}\t{status}\t{description}\n")
+        f.write(f"{ts}\t{kernel_name}\t{backend}\t{metric_name}\t{metric_value:.2f}\t{status}\t{description}\n")
 
 
 def measure(kernel: Kernel, backend: str, e2e: bool, metric: str) -> float | None:
@@ -239,22 +242,23 @@ def measure(kernel: Kernel, backend: str, e2e: bool, metric: str) -> float | Non
 
 # ── Commands ──────────────────────────────────────────────────────
 
+
 def cmd_bench(args):
     """Run benchmarks (micro by default)."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="run.py bench")
     parser.add_argument("kernel", nargs="?", default=None)
     parser.add_argument("--backend", "-b", nargs="+", default=["cpu"])
-    parser.add_argument("--dim", type=int, default=4096,
-                        help="Output dimension / vector length for micro mode (default: 4096)")
-    parser.add_argument("--k", type=int, default=4096,
-                        help="Input dimension for GEMV micro mode (default: 4096)")
-    parser.add_argument("--iters", type=int, default=100,
-                        help="Number of timed iterations for micro mode (default: 100)")
-    parser.add_argument("-n", "--n-tokens", type=int, default=10,
-                        help="Tokens to generate in e2e mode (default: 10)")
-    parser.add_argument("--e2e", action="store_true",
-                        help="Use end-to-end mode instead of micro-benchmark")
+    parser.add_argument(
+        "--dim", type=int, default=4096, help="Output dimension / vector length for micro mode (default: 4096)"
+    )
+    parser.add_argument("--k", type=int, default=4096, help="Input dimension for GEMV micro mode (default: 4096)")
+    parser.add_argument(
+        "--iters", type=int, default=100, help="Number of timed iterations for micro mode (default: 100)"
+    )
+    parser.add_argument("-n", "--n-tokens", type=int, default=10, help="Tokens to generate in e2e mode (default: 10)")
+    parser.add_argument("--e2e", action="store_true", help="Use end-to-end mode instead of micro-benchmark")
     parser.add_argument("--save-baseline", action="store_true")
     parser.add_argument("--compare", action="store_true")
     parser.add_argument("--tag", default="")
@@ -283,8 +287,7 @@ def cmd_bench(args):
             for backend in parsed.backend:
                 label = f"{kernel.name}/{backend}"
                 print(f"  {label:<22}", end="", flush=True)
-                r = run_micro_bench(kernel.name, backend=backend,
-                                    n=parsed.dim, k=parsed.k, iters=parsed.iters)
+                r = run_micro_bench(kernel.name, backend=backend, n=parsed.dim, k=parsed.k, iters=parsed.iters)
                 r["backend"] = backend
                 r["kernels"] = [kernel.name]
                 results.append(r)
@@ -320,9 +323,7 @@ def cmd_bench(args):
     if parsed.compare:
         compare_with_baseline(results)
 
-    tag = parsed.tag or (
-        ",".join(k.name for k in selected) if selected else ""
-    )
+    tag = parsed.tag or (",".join(k.name for k in selected) if selected else "")
     append_tsv(results, tag=tag)
 
 
@@ -383,12 +384,13 @@ def compare_with_baseline(results):
                 change = (curr_tps - base_tps) / base_tps * 100
                 marker = "+" if change > 0 else ""
                 flag = " <-- REGRESSION" if change < -5 else ""
-                print(f"  {r.get('quant','')}/{r.get('backend',''):<10} "
-                      f"{base_tps:>9.1f} {curr_tps:>9.1f} {marker}{change:>8.1f}%{flag}")
+                print(
+                    f"  {r.get('quant', '')}/{r.get('backend', ''):<10} "
+                    f"{base_tps:>9.1f} {curr_tps:>9.1f} {marker}{change:>8.1f}%{flag}"
+                )
 
     if not matched:
-        print("  (no matching baseline entries, was baseline saved in the same mode?)",
-              file=sys.stderr)
+        print("  (no matching baseline entries, was baseline saved in the same mode?)", file=sys.stderr)
 
 
 def append_tsv(results, tag=""):
@@ -400,24 +402,25 @@ def append_tsv(results, tag=""):
     with open(RESULTS_FILE, "a") as f:
         for r in results:
             knames = ",".join(r.get("kernels", ["all"]))
-            f.write(f"{ts}\t{tag}\t{knames}\t{r.get('quant', '')}\t{r.get('backend', '')}\t"
-                    f"{r.get('tok_per_sec', 0):.1f}\t{r.get('prefill_ms', 0):.0f}\t"
-                    f"{r.get('gen_ms', 0):.0f}\t{r.get('ns_median', 0)}\t"
-                    f"{r.get('gb_s', 0):.1f}\t{r.get('status', '')}\n")
+            f.write(
+                f"{ts}\t{tag}\t{knames}\t{r.get('quant', '')}\t{r.get('backend', '')}\t"
+                f"{r.get('tok_per_sec', 0):.1f}\t{r.get('prefill_ms', 0):.0f}\t"
+                f"{r.get('gen_ms', 0):.0f}\t{r.get('ns_median', 0)}\t"
+                f"{r.get('gb_s', 0):.1f}\t{r.get('status', '')}\n"
+            )
 
 
 def cmd_tune(args):
     """Single optimization cycle: build -> benchmark -> log."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="run.py tune")
     parser.add_argument("kernel", nargs="?")
     parser.add_argument("--backend", "-b", nargs="+", default=["cpu"])
     parser.add_argument("--description", "-d", default="manual optimization")
-    parser.add_argument("--auto-revert", action="store_true",
-                        help="Revert source files on build failure")
+    parser.add_argument("--auto-revert", action="store_true", help="Revert source files on build failure")
     parser.add_argument("--changed", action="store_true")
-    parser.add_argument("--e2e", action="store_true",
-                        help="Use end-to-end mode instead of micro-benchmark")
+    parser.add_argument("--e2e", action="store_true", help="Use end-to-end mode instead of micro-benchmark")
     parsed = parser.parse_args(args)
 
     kernels = resolve_kernel_args(parsed)
@@ -455,28 +458,27 @@ def cmd_tune(args):
                 metric_val = stats.get("ns_median", 0)
                 print(f"{metric_val} ns ({stats.get('gb_s', 0):.1f} GB/s)")
 
-            log_result(kernel.name, backend, metric_val,
-                       metric_name, stats.get("status", "PASS"), parsed.description)
+            log_result(kernel.name, backend, metric_val, metric_name, stats.get("status", "PASS"), parsed.description)
             print(f"Logged to {LOG_FILE}")
 
 
 def cmd_grid(args):
     """Exhaustive grid search over a parameter."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="run.py grid")
     parser.add_argument("kernel", nargs="?")
-    parser.add_argument("--backend", "-b", default="cpu",
-                        help="Single backend, grid modifies source files (default: cpu)")
+    parser.add_argument(
+        "--backend", "-b", default="cpu", help="Single backend, grid modifies source files (default: cpu)"
+    )
     parser.add_argument("--param", required=True)
     parser.add_argument("--values", required=True, help="Comma-separated values")
     parser.add_argument("--pattern", required=True)
     parser.add_argument("--template", required=True)
     parser.add_argument("--file", default=None)
-    parser.add_argument("--e2e", action="store_true",
-                        help="Use end-to-end mode instead of micro-benchmark")
+    parser.add_argument("--e2e", action="store_true", help="Use end-to-end mode instead of micro-benchmark")
     parser.add_argument("--changed", action="store_true")
-    parser.add_argument("--yes", "-y", action="store_true",
-                        help="Skip confirmation prompt")
+    parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     parsed = parser.parse_args(args)
 
     kernels = resolve_kernel_args(parsed)
@@ -528,8 +530,7 @@ def cmd_grid(args):
 
             if not rebuild():
                 print("BUILD FAILED")
-                log_result(kernel.name, parsed.backend, 0, parsed.param,
-                           "FAIL", f"grid:{parsed.param}={v}")
+                log_result(kernel.name, parsed.backend, 0, parsed.param, "FAIL", f"grid:{parsed.param}={v}")
                 results.append((v, 0, "FAIL", None))
                 continue
 
@@ -546,8 +547,7 @@ def cmd_grid(args):
             status = stats.get("status", "PASS")
             print(f"{metric:.1f} {unit}" if status == "PASS" else status)
             results.append((v, metric, status, patched))
-            log_result(kernel.name, parsed.backend, metric, parsed.param,
-                       status, f"grid:{parsed.param}={v}")
+            log_result(kernel.name, parsed.backend, metric, parsed.param, status, f"grid:{parsed.param}={v}")
     finally:
         # Always restore original source
         full_path.write_text(original)
@@ -564,14 +564,19 @@ def cmd_grid(args):
 
     if best_v is not None and best_patched is not None:
         print(f"\n  Best: {parsed.param}={best_v} -> {best_metric:.1f} {unit}")
-        entry_dir = stage_improvement(kernel.name, file_path, best_patched, {
-            "description": f"grid:{parsed.param}={best_v}",
-            "param": parsed.param,
-            "value": best_v,
-            "metric_name": "tok_per_sec" if unit == "tok/s" else "ns_median",
-            "metric_value": best_metric,
-            "backend": parsed.backend,
-        })
+        entry_dir = stage_improvement(
+            kernel.name,
+            file_path,
+            best_patched,
+            {
+                "description": f"grid:{parsed.param}={best_v}",
+                "param": parsed.param,
+                "value": best_v,
+                "metric_name": "tok_per_sec" if unit == "tok/s" else "ns_median",
+                "metric_value": best_metric,
+                "backend": parsed.backend,
+            },
+        )
         print(f"  Staged to {entry_dir.relative_to(DATA_DIR)}/")
         print(f"  Apply with: run.py staged apply {entry_dir.name}")
 
@@ -579,22 +584,25 @@ def cmd_grid(args):
 def cmd_auto(args):
     """Autonomous optimization loop."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="run.py auto")
     parser.add_argument("kernel", nargs="?")
-    parser.add_argument("--backend", "-b", default="cpu",
-                        help="Single backend, auto modifies source files (default: cpu)")
-    parser.add_argument("--metric", default="ns_median",
-                        help="Metric to optimize: ns_median (lower=better) or tok_per_sec (higher=better)")
+    parser.add_argument(
+        "--backend", "-b", default="cpu", help="Single backend, auto modifies source files (default: cpu)"
+    )
+    parser.add_argument(
+        "--metric",
+        default="ns_median",
+        help="Metric to optimize: ns_median (lower=better) or tok_per_sec (higher=better)",
+    )
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--max-iters", type=int, default=30)
     parser.add_argument("--target-ns", type=int, default=None)
     parser.add_argument("--target-tps", type=float, default=None)
     parser.add_argument("--strategy", choices=["hill-climb", "bayesian"], default="hill-climb")
-    parser.add_argument("--e2e", action="store_true",
-                        help="Use end-to-end mode instead of micro-benchmark")
+    parser.add_argument("--e2e", action="store_true", help="Use end-to-end mode instead of micro-benchmark")
     parser.add_argument("--changed", action="store_true")
-    parser.add_argument("--yes", "-y", action="store_true",
-                        help="Skip confirmation prompt")
+    parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     parsed = parser.parse_args(args)
 
     kernels = resolve_kernel_args(parsed)
@@ -643,17 +651,23 @@ def cmd_auto(args):
     original_source = full_path.read_text()
 
     if parsed.strategy == "bayesian":
-        best_patched = run_bayesian(kernel, parsed, params, dimensions, full_path,
-                                    original_source, baseline, lower_is_better)
+        best_patched = run_bayesian(
+            kernel, parsed, params, dimensions, full_path, original_source, baseline, lower_is_better
+        )
         if best_patched:
-            entry_dir = stage_improvement(kernel.name, file_path, best_patched["source"], {
-                "description": "bayesian:best",
-                "metric_name": parsed.metric,
-                "metric_value": best_patched["value"],
-                "params": best_patched.get("params", {}),
-                "baseline": baseline,
-                "backend": parsed.backend,
-            })
+            entry_dir = stage_improvement(
+                kernel.name,
+                file_path,
+                best_patched["source"],
+                {
+                    "description": "bayesian:best",
+                    "metric_name": parsed.metric,
+                    "metric_value": best_patched["value"],
+                    "params": best_patched.get("params", {}),
+                    "baseline": baseline,
+                    "backend": parsed.backend,
+                },
+            )
             print(f"\n  Staged to {entry_dir.relative_to(DATA_DIR)}/")
             print(f"  Apply with: run.py staged apply {entry_dir.name}")
         return
@@ -724,8 +738,7 @@ def cmd_auto(args):
                 if consecutive_build_failures >= 3:
                     print("  ABORT: 3 consecutive build failures.", file=sys.stderr)
                     break
-                log_result(kernel.name, parsed.backend, 0, parsed.metric,
-                           "FAIL", f"auto:{dim_name}={value}")
+                log_result(kernel.name, parsed.backend, 0, parsed.metric, "FAIL", f"auto:{dim_name}={value}")
                 continue
 
             consecutive_build_failures = 0
@@ -734,8 +747,7 @@ def cmd_auto(args):
             if result is None:
                 print("CRASH/TIMEOUT")
                 full_path.write_text(current_source)
-                log_result(kernel.name, parsed.backend, 0, parsed.metric,
-                           "CRASH", f"auto:{dim_name}={value}")
+                log_result(kernel.name, parsed.backend, 0, parsed.metric, "CRASH", f"auto:{dim_name}={value}")
                 continue
 
             improved = (result < best) if lower_is_better else (result > best)
@@ -747,14 +759,12 @@ def cmd_auto(args):
                 patience_remaining = parsed.patience
                 # Update pattern for next iteration
                 param["pattern"] = replacement
-                log_result(kernel.name, parsed.backend, result, parsed.metric,
-                           "KEEP", f"auto:{dim_name}={value}")
+                log_result(kernel.name, parsed.backend, result, parsed.metric, "KEEP", f"auto:{dim_name}={value}")
             else:
                 print(f"-> {result:.2f} (REVERT, best={best:.2f})")
                 full_path.write_text(current_source)
                 patience_remaining -= 1
-                log_result(kernel.name, parsed.backend, result, parsed.metric,
-                           "REVERT", f"auto:{dim_name}={value}")
+                log_result(kernel.name, parsed.backend, result, parsed.metric, "REVERT", f"auto:{dim_name}={value}")
     finally:
         # Always restore original source
         full_path.write_text(original_source)
@@ -762,26 +772,35 @@ def cmd_auto(args):
     # Final report
     print(f"\n{'=' * 60}")
     print(f"Result: {baseline:.2f} -> {best:.2f} {parsed.metric}")
-    improvement = ((baseline - best) / baseline * 100) if lower_is_better else (
-        (best - baseline) / baseline * 100) if baseline > 0 else 0
+    improvement = (
+        ((baseline - best) / baseline * 100)
+        if lower_is_better
+        else ((best - baseline) / baseline * 100)
+        if baseline > 0
+        else 0
+    )
     print(f"Improvement: {improvement:+.1f}%")
     print(f"{'=' * 60}")
 
     if best_patched_source is not None and best != baseline:
-        entry_dir = stage_improvement(kernel.name, file_path, best_patched_source, {
-            "description": "auto:hill-climb",
-            "metric_name": parsed.metric,
-            "metric_value": best,
-            "baseline": baseline,
-            "improvement_pct": round(improvement, 1),
-            "backend": parsed.backend,
-        })
+        entry_dir = stage_improvement(
+            kernel.name,
+            file_path,
+            best_patched_source,
+            {
+                "description": "auto:hill-climb",
+                "metric_name": parsed.metric,
+                "metric_value": best,
+                "baseline": baseline,
+                "improvement_pct": round(improvement, 1),
+                "backend": parsed.backend,
+            },
+        )
         print(f"\nBest result staged to {entry_dir.relative_to(DATA_DIR)}/")
         print(f"Apply with: run.py staged apply {entry_dir.name}")
 
 
-def run_bayesian(kernel, parsed, params, dimensions, full_path,
-                 original_source, baseline, lower_is_better):
+def run_bayesian(kernel, parsed, params, dimensions, full_path, original_source, baseline, lower_is_better):
     """Bayesian optimization using Optuna. Returns best patched source dict or None."""
     try:
         import optuna
@@ -807,11 +826,9 @@ def run_bayesian(kernel, parsed, params, dimensions, full_path,
             if ptype == "categorical":
                 value = trial.suggest_categorical(dim_name, param.get("values", []))
             elif ptype == "int_range":
-                value = trial.suggest_int(dim_name, param["low"], param["high"],
-                                          step=param.get("step", 1))
+                value = trial.suggest_int(dim_name, param["low"], param["high"], step=param.get("step", 1))
             elif ptype == "float_range":
-                value = trial.suggest_float(dim_name, param["low"], param["high"],
-                                            step=param.get("step"))
+                value = trial.suggest_float(dim_name, param["low"], param["high"], step=param.get("step"))
             elif ptype == "boolean":
                 value = trial.suggest_categorical(dim_name, [True, False])
                 template = param.get("template_true", template) if value else param.get("template_false", pattern)
@@ -838,14 +855,11 @@ def run_bayesian(kernel, parsed, params, dimensions, full_path,
         if best_source[0] is None:
             best_source[0] = {"source": current_source, "value": result}
         else:
-            is_better = (result < best_source[0]["value"]) if lower_is_better else (
-                result > best_source[0]["value"])
+            is_better = (result < best_source[0]["value"]) if lower_is_better else (result > best_source[0]["value"])
             if is_better:
-                best_source[0] = {"source": current_source, "value": result,
-                                  "params": trial.params}
+                best_source[0] = {"source": current_source, "value": result, "params": trial.params}
 
-        log_result(kernel.name, parsed.backend, result, parsed.metric,
-                   "TRIAL", f"bayesian:trial-{trial.number}")
+        log_result(kernel.name, parsed.backend, result, parsed.metric, "TRIAL", f"bayesian:trial-{trial.number}")
         return result
 
     try:
@@ -866,6 +880,7 @@ def run_bayesian(kernel, parsed, params, dimensions, full_path,
 def cmd_status(args):
     """Show optimization history."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="run.py status")
     parser.add_argument("kernel", nargs="?", help="Filter by kernel name")
     parsed = parser.parse_args(args)
@@ -909,21 +924,24 @@ def _load_staged_entry(action: str, name: str | None) -> tuple[Path, dict, list[
 def cmd_staged(args):
     """Manage staged improvements."""
     import argparse
+
     parser = argparse.ArgumentParser(prog="run.py staged")
-    parser.add_argument("action", nargs="?", default="list",
-                        choices=["list", "apply", "diff", "drop", "clean"],
-                        help="Action: list (default), apply, diff, drop, clean")
+    parser.add_argument(
+        "action",
+        nargs="?",
+        default="list",
+        choices=["list", "apply", "diff", "drop", "clean"],
+        help="Action: list (default), apply, diff, drop, clean",
+    )
     parser.add_argument("name", nargs="?", help="Staged entry name (for apply/diff/drop)")
-    parser.add_argument("--yes", "-y", action="store_true",
-                        help="Skip confirmation prompt")
+    parser.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
     parsed = parser.parse_args(args)
 
     if parsed.action == "list":
         if not STAGING_DIR.exists():
             print("No staged improvements.")
             return
-        entries = sorted(e for e in STAGING_DIR.iterdir()
-                         if e.is_dir() and (e / "meta.json").exists())
+        entries = sorted(e for e in STAGING_DIR.iterdir() if e.is_dir() and (e / "meta.json").exists())
         if not entries:
             print("No staged improvements.")
             return
@@ -936,8 +954,7 @@ def cmd_staged(args):
             if isinstance(meta.get("metric_value"), (int, float)):
                 mname = meta.get("metric_name", "")
                 metric_str = f"{meta['metric_value']:.1f} {mname}"
-            print(f"  {entry.name:<50} {metric_str:>14} "
-                  f"{meta.get('backend', '?'):<8} {meta.get('timestamp', '?')}")
+            print(f"  {entry.name:<50} {metric_str:>14} {meta.get('backend', '?'):<8} {meta.get('timestamp', '?')}")
         print("\nApply with: run.py staged apply <name>")
         print("Diff with:  run.py staged diff <name>")
 
@@ -957,6 +974,7 @@ def cmd_staged(args):
             return
         if answer in ("y", "yes"):
             import shutil
+
             for entry in entries:
                 shutil.rmtree(entry)
             print(f"Removed {count} staged entries.")
@@ -985,8 +1003,7 @@ def cmd_staged(args):
             source_file = meta["source_file"]
             current = AGAVE_ROOT / source_file
             result = subprocess.run(
-                ["diff", "-u", str(current), str(staged_files[0])],
-                capture_output=True, text=True, check=False
+                ["diff", "-u", str(current), str(staged_files[0])], capture_output=True, text=True, check=False
             )
             if result.stdout:
                 print(result.stdout)
@@ -995,6 +1012,7 @@ def cmd_staged(args):
 
         elif parsed.action == "drop":
             import shutil
+
             shutil.rmtree(entry)
             print(f"Removed {parsed.name}")
 

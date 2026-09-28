@@ -665,6 +665,14 @@ pub fn build(b: *std.Build) void {
         const lint_python_step = b.step("lint-python", "ruff (CI lint-python job)");
         lint_python_step.dependOn(&lint_python_cmd.step);
 
+        // The Python suites under scripts/ and tools/ are stdlib-only and
+        // network-free, and a suite nothing runs cannot catch a regression.
+        const test_python_cmd = b.addSystemCommand(&.{ "bash", "scripts/test-python.sh" });
+        test_python_cmd.setCwd(repo_cwd);
+        test_python_cmd.has_side_effects = true;
+        const test_python_step = b.step("test-python", "Python unit tests under scripts/ and tools/ (CI python-tests job)");
+        test_python_step.dependOn(&test_python_cmd.step);
+
         // A backup nobody has restored is a hypothesis. This runs the
         // conversation-store backup, verify, and restore path end to end
         // against a scratch store, so the runbook in docs/DURABILITY.md is
@@ -702,12 +710,13 @@ pub fn build(b: *std.Build) void {
         const reproducible_step = b.step("check-reproducible", "Build twice from different paths and byte-compare (CI reproducible-build job)");
         reproducible_step.dependOn(&reproducible_cmd.step);
 
-        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + third-party notices + unit tests + conversation store backup self-test (needs Python 3.11+)");
+        const check_step = b.step("check", "Local CI gate: format check + docs hygiene + pin consistency + third-party notices + unit tests + Python unit tests + conversation store backup self-test (needs Python 3.11+)");
         check_step.dependOn(fmt_check_step);
         check_step.dependOn(docs_check_step);
         check_step.dependOn(check_pins_step);
         check_step.dependOn(third_party_step);
         check_step.dependOn(test_step);
+        check_step.dependOn(test_python_step);
         check_step.dependOn(conv_backup_step);
 
         // The blocking ci-pass jobs a workstation can reproduce. Docker,

@@ -389,9 +389,10 @@ jobs:
 
   # The auxiliary Python (scripts/check-docs.py runs in docs-check, plus the
   # golden harness and tools/) had no analyzer: an undefined name or a leaked
-  # file handle merged unseen. Blocking. scripts/lint-python.sh is the single
-  # entry point, so the local `zig build lint-python` and this job agree; both
-  # read the ruff.toml rule set.
+  # file handle merged unseen, and unformatted code accumulated. Blocking.
+  # scripts/lint-python.sh is the single entry point, so the local `zig build
+  # lint-python` and this job agree; both read the ruff.toml rule set and run
+  # the same format check.
   lint-python:
     name: Lint Python
     runs-on: ubuntu-24.04
@@ -433,10 +434,29 @@ jobs:
       - name: shellcheck
         run: bash scripts/lint-shell.sh
 
+  # The stdlib unittest suites under scripts/ and tools/. They need no model
+  # weights, no API key and no network, and until this job existed nothing
+  # ran them, so a stale expectation sat unnoticed behind a green ci-pass.
+  # scripts/test-python.sh is the single entry point, so `zig build
+  # test-python` and this job run the same suites.
+  python-tests:
+    name: Python unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The runner's system python3 is 3.12, above the 3.11 floor the suites
+      # are written for, so no setup-python step (and no unpinned action) here.
+      - name: unittest
+        run: bash scripts/test-python.sh
+
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, reproducible-build, lint-web, lint-shell, lint-python]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, reproducible-build, lint-web, lint-shell, lint-python, python-tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:

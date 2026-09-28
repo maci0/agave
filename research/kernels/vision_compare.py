@@ -43,7 +43,7 @@ def correlation(a: np.ndarray, b: np.ndarray) -> float:
     a_centered = a - a.mean()
     b_centered = b - b.mean()
     num = np.sum(a_centered * b_centered)
-    denom = np.sqrt(np.sum(a_centered ** 2) * np.sum(b_centered ** 2))
+    denom = np.sqrt(np.sum(a_centered**2) * np.sum(b_centered**2))
     if denom < 1e-30:
         return 0.0
     return float(num / denom)

@@ -3,8 +3,9 @@
 # had no analyzer at all before.
 #
 # Entry point: zig build lint-python  (scripts/lint-python.sh), same checks as
-# the CI lint-python job. Run `ruff format` only on files you already touch;
-# the tree is not wholesale reformatted.
+# the CI lint-python job: `ruff check` and `ruff format --check`, both at the
+# pinned version. The tree is formatted, so the format check is a gate and not
+# a suggestion; `ruff format` is the fixer for it.
 
 # Ruff version gate. Both CI and scripts/lint-python.sh run the pinned ruff
 # through uvx, except when a `ruff` on PATH already reports this version, so
@@ -38,6 +39,11 @@ select = [
     "PT",   # flake8-pytest-style
     "ISC",  # implicit string concat
     "ICN",  # import conventions
+    "TID",  # tidy-imports: no parent-relative imports that break as modules move
+    "TCH",  # type-only imports belong under TYPE_CHECKING
+    "T10",  # no leftover debugger calls (breakpoint, pdb, django shell)
+    "PGH",  # pygrep-hooks: eval/exec and, in PGH004, bare `# noqa` with no rule
+    "DTZ",  # datetime without an explicit tz is a wrong answer waiting to happen
     "LOG",  # flake8-logging
     "G",    # flake8-logging-format
     "PLE",  # pylint errors

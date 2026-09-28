@@ -10,7 +10,7 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe) + agave-bench
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
 zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python
-zig build check                    # fmt-check + docs hygiene + pin consistency + third-party notices + unit tests + conv-store backup self-test (local CI gate)
+zig build check                    # fmt-check + docs hygiene + pin consistency + third-party notices + unit tests + Python unit tests + conv-store backup self-test (local CI gate)
 zig build check-pins               # Zig/Docker reproducibility pins, uv.lock freshness, and exact third-party version pins agree (CI fmt-check job)
 zig build check-reproducible       # build twice from different paths and byte-compare the binaries (CI reproducible-build job; compiles the engine twice)
 zig build docs-check               # docs link and count hygiene (scripts/check-docs.py)
@@ -18,8 +18,9 @@ zig build check-third-party        # THIRD_PARTY_NOTICES.md covers every package
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
 zig build lint-web                 # oxlint + tsc + ignorePatterns ratchet (CI lint-web; needs bun 1.4.0)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
-zig build lint-python              # ruff on scripts/, tests/, tools/, research/ Python (CI lint-python)
+zig build lint-python              # ruff check + ruff format --check on scripts/, tests/, tools/, research/ Python (CI lint-python)
 zig build check-web                # committed bundles and stylesheets match a fresh bun + Tailwind build (CI lint-web)
+zig build test-python              # Python unit tests under scripts/ and tools/ (CI python-tests; stdlib only, no network)
 zig build fmt                      # apply zig fmt to the paths CI checks
 zig build fmt-check                # check formatting without writing
 bun run lint                       # oxlint (web TypeScript; blocking in CI)

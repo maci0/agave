@@ -52,11 +52,16 @@ def generate_llamacpp_reference(model_name: str, model_path: str, prompt: str) -
 
     cmd = [
         str(llamacpp_bin),
-        "-m", model_path,
-        "-p", prompt,
-        "-n", "32",  # Generate 32 tokens
-        "-s", "42",  # Deterministic seed
-        "--temp", "0.0",  # Greedy sampling
+        "-m",
+        model_path,
+        "-p",
+        prompt,
+        "-n",
+        "32",  # Generate 32 tokens
+        "-s",
+        "42",  # Deterministic seed
+        "--temp",
+        "0.0",  # Greedy sampling
         "--no-display-prompt",
     ]
 

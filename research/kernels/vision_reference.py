@@ -95,8 +95,10 @@ def save_f32(path: str, arr: np.ndarray):
     """Save array as raw f32 little-endian binary."""
     arr = arr.astype(np.float32)
     arr.tofile(path)
-    print(f"  Saved {path}: shape={arr.shape}, {arr.nbytes} bytes, "
-          f"min={arr.min():.6f}, max={arr.max():.6f}, mean={arr.mean():.6f}")
+    print(
+        f"  Saved {path}: shape={arr.shape}, {arr.nbytes} bytes, "
+        f"min={arr.min():.6f}, max={arr.max():.6f}, mean={arr.mean():.6f}"
+    )
 
 
 def rms_norm(x: np.ndarray, weight: np.ndarray, eps: float = NORM_EPS) -> np.ndarray:
@@ -104,7 +106,7 @@ def rms_norm(x: np.ndarray, weight: np.ndarray, eps: float = NORM_EPS) -> np.nda
 
     x: (..., dim), weight: (dim,)
     """
-    rms = np.sqrt(np.mean(x ** 2, axis=-1, keepdims=True) + eps)
+    rms = np.sqrt(np.mean(x**2, axis=-1, keepdims=True) + eps)
     return x / rms * weight
 
 
@@ -149,7 +151,7 @@ def main():
         for px in range(N_PATCHES_SIDE):
             patch_idx = py * N_PATCHES_SIDE + px
             y0, x0 = py * PATCH_SIZE, px * PATCH_SIZE
-            patches[patch_idx] = image[:, y0:y0+PATCH_SIZE, x0:x0+PATCH_SIZE]
+            patches[patch_idx] = image[:, y0 : y0 + PATCH_SIZE, x0 : x0 + PATCH_SIZE]
 
     # Flatten patches: (n_patches, 3*16*16) = (196, 768)
     patches_flat = patches.reshape(N_PATCHES, -1)  # (196, 768)
@@ -167,7 +169,7 @@ def main():
     # ── 3. Input standardization ──────────────────────────────────
     # x = scale * x + bias
     std_scale = W.get("v.std_scale")  # (1152,)
-    std_bias = W.get("v.std_bias")    # (1152,)
+    std_bias = W.get("v.std_bias")  # (1152,)
     x = std_scale * x + std_bias
 
     # ── 4. 2D Position embedding ──────────────────────────────────
@@ -254,12 +256,12 @@ def main():
         # ── 5i. SwiGLU FFN ─────────────────────────────────────
         # gate, up: (1152 -> 4304), down: (4304 -> 1152)
         gate_w = W.get(f"v.blk.{bi}.ffn_gate.weight")  # (4304, 1152)
-        up_w = W.get(f"v.blk.{bi}.ffn_up.weight")      # (4304, 1152)
+        up_w = W.get(f"v.blk.{bi}.ffn_up.weight")  # (4304, 1152)
         down_w = W.get(f"v.blk.{bi}.ffn_down.weight")  # (1152, 4304)
 
         gate = ffn_input @ gate_w.T  # (196, 4304)
-        up = ffn_input @ up_w.T      # (196, 4304)
-        ffn_out = silu(gate) * up     # SwiGLU
+        up = ffn_input @ up_w.T  # (196, 4304)
+        ffn_out = silu(gate) * up  # SwiGLU
         ffn_out = ffn_out @ down_w.T  # (196, 1152)
 
         # ── 5j. Post-FFN RMSNorm ──────────────────────────────
@@ -284,7 +286,7 @@ def main():
     # The VisionPooler's sqrt(hidden_size) scaling gets absorbed by the RMSNorm,
     # so we only need the unweighted RMSNorm here.
     def rms_norm_no_weight(x, eps=NORM_EPS):
-        rms = np.sqrt(np.mean(x ** 2, axis=-1, keepdims=True) + eps)
+        rms = np.sqrt(np.mean(x**2, axis=-1, keepdims=True) + eps)
         return x / rms
 
     hidden = rms_norm_no_weight(hidden)
@@ -302,9 +304,13 @@ def main():
 
     # Also save first 10 values of each stage for quick inspection
     print("\n=== Quick reference values (first 10 per stage) ===")
-    for fname in ["01_after_patch_embed.bin", "02_after_std_pos.bin",
-                   "03_after_block_00.bin", "04_after_block_26.bin",
-                   "05_after_projection.bin"]:
+    for fname in [
+        "01_after_patch_embed.bin",
+        "02_after_std_pos.bin",
+        "03_after_block_00.bin",
+        "04_after_block_26.bin",
+        "05_after_projection.bin",
+    ]:
         path = os.path.join(OUT_DIR, fname)
         data = np.fromfile(path, dtype=np.float32)
         print(f"{fname}: {data[:10]}")
