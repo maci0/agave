@@ -176,8 +176,9 @@ pub fn build(b: *std.Build) void {
     // ── ROCm AMDGCN kernels (cross-compiled via amdgcn-amdhsa) ───────
     // Compiles Zig ROCm kernels to AMDGCN ISA, producing an ELF object.
     // Build with: zig build amdgcn [-Drocm-arch=gfx1100]
-    // After building, copy zig-out/rocm/kernels.o to
-    // src/backend/kernels/rocm/kernels.hsaco and commit.
+    // After building, copy zig-out/rocm/kernels.hsaco to
+    // src/backend/kernels/rocm/kernels.hsaco and commit. The step also installs
+    // zig-out/rocm/kernels.o, a relocatable ELF for manual linking, not the HSACO.
     const amdgcn_step = b.step("amdgcn", "Compile ROCm kernels to AMDGCN ISA");
     // The HSACO link needs lld (ROCm ships it at /opt/rocm/lib/llvm/bin/ld.lld).
     const ld_lld = b.findProgram(&.{"ld.lld"}, &.{}) catch null;

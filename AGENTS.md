@@ -36,10 +36,10 @@ zig build test -Dtest-filter=<str> # only tests whose name contains <str>. Repea
 zig build wasm                     # browser WASM module (web/), not src/web/. Compile only, see Gotchas.
 zig build validate                 # every GPU kernel against the CPU backend. Needs the GPU; -Dvalidate-backend= picks it (default rocm).
 zig build ptx                      # CUDA kernels to zig-out/ptx/*.ptx (see Build: commit them)
-zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.o (see Build)
+zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.hsaco (see Build)
 ```
 
-`--spec-mode`: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp (alias medusa), eagle, eagle3, mlp, pflash, dspark, dflash2. Flag list: `src/main.zig` `cli_specs`, or `agave --help`.
+`--spec-mode`: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp (alias medusa), eagle, eagle3, mlp, pflash, dspark, dflash2 (alias dflash). Flag list: `src/main.zig` `cli_specs`, or `agave --help`.
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 
@@ -96,7 +96,7 @@ Non-negotiable. Every change must respect all of them.
 - Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate and commit:
   - PTX: `zig build ptx`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`.
   - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
-  - ROCm: `zig build amdgcn`, copy `zig-out/rocm/kernels.o` to `src/backend/kernels/rocm/kernels.hsaco`.
+  - ROCm: `zig build amdgcn`, copy `zig-out/rocm/kernels.hsaco` to `src/backend/kernels/rocm/kernels.hsaco`. The step also installs `zig-out/rocm/kernels.o` (relocatable ELF, for manual linking only); it is not the HSACO.
   - Metal and WGSL are hand-written; no compile step.
 
 ### Errors, docs, tests

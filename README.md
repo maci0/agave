@@ -432,7 +432,7 @@ agave [OPTIONS] <model> [prompt]
       --draft-model <PATH> Draft model GGUF for speculative decoding
       --mtp-model <PATH>   MTP weight file (safetensors) for multi-token prediction
       --spec-mode <MODE>   Speculative mode: auto, standard, ddtree, self, ngram, suffix,
-                           lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2
+                           lookahead, mtp, medusa, eagle, eagle3, mlp, pflash, dspark, dflash2, dflash
   -K, --spec-tokens <N>    Draft tokens per speculation round [default: 5]
       --tree-budget <N>    DDTree node budget [default: 64]
       --draft-layers <N>   Layers for self-speculative draft [default: auto]
