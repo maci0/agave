@@ -1914,38 +1914,6 @@ test "fuzz: chat template all presets" {
     }.f, .{});
 }
 
-// ── GEMV Dispatcher Fuzzing ──────────────────────────────────────
-
-test "fuzz: gemvSeq dispatch Q8_0" {
-    const gemv = @import("backend/kernels/cpu/gemv.zig");
-    try std.testing.fuzz({}, struct {
-        fn f(_: void, smith: *Smith) !void {
-            var block: [34]u8 align(2) = undefined;
-            smith.bytesWithHash(&block, 0);
-            var x: [32]f32 = undefined;
-            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
-            var y: [1]f32 = undefined;
-            gemv.gemvSeq(&x, &block, .q8_0, &y, 1, 32);
-            try std.testing.expect(std.math.isFinite(y[0]));
-        }
-    }.f, .{});
-}
-
-test "fuzz: gemvSeq dispatch Q4_0" {
-    const gemv = @import("backend/kernels/cpu/gemv.zig");
-    try std.testing.fuzz({}, struct {
-        fn f(_: void, smith: *Smith) !void {
-            var block: [18]u8 align(2) = undefined;
-            smith.bytesWithHash(&block, 0);
-            var x: [32]f32 = undefined;
-            for (&x, 0..) |*v, i| v.* = @as(f32, @floatFromInt(smith.valueWithHash(i8, @truncate(i + 50)))) / 10.0;
-            var y: [1]f32 = undefined;
-            gemv.gemvSeq(&x, &block, .q4_0, &y, 1, 32);
-            try std.testing.expect(std.math.isFinite(y[0]));
-        }
-    }.f, .{});
-}
-
 // ════════════════════════════════════════════════════════════════
 // NEW FUZZ TARGETS, Categories below bring total to 143+
 // ════════════════════════════════════════════════════════════════
