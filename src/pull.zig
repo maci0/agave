@@ -1083,6 +1083,32 @@ fn downloadFile(
 
 /// Single download attempt (used by `downloadFile` retry loop).
 ///
+/// Bound on the gap between two reads of a download body, in seconds. A
+/// stalled connection then fails into the normal retry path instead of hanging
+/// with a partial blob on disk. Generous enough that a slow mirror that keeps
+/// sending bytes never trips it.
+const download_stall_timeout_sec: i64 = 60;
+
+/// Set SO_RCVTIMEO on the socket backing `req`, so the body read loop cannot
+/// block forever on a connection that stopped delivering. Advisory: a socket
+/// that cannot take the option (an already-released connection) warns and
+/// leaves the read untimed rather than failing the download.
+fn setSocketReadTimeout(req: *std.http.Client.Request, seconds: i64) void {
+    const conn = req.connection orelse {
+        eprint("Warning: download connection already released, no read timeout set\n", .{});
+        return;
+    };
+    const timeout = std.posix.timeval{ .sec = seconds, .usec = 0 };
+    std.posix.setsockopt(
+        conn.stream_reader.stream.socket.handle,
+        std.posix.SOL.SOCKET,
+        std.posix.SO.RCVTIMEO,
+        std.mem.asBytes(&timeout),
+    ) catch |err| {
+        eprint("Warning: could not set the {d}s download read timeout ({}); a stalled connection must be interrupted with Ctrl+C\n", .{ seconds, err });
+    };
+}
+
 /// `expected_size` is the repository's current file size per the API listing
 /// (0 = unknown); see `downloadFile`.
 fn downloadFileOnce(
@@ -1252,14 +1278,17 @@ fn downloadFileOnce(
         eprint("Resuming download from {d:.1} MB\n", .{@as(f64, @floatFromInt(start_offset)) / bytes_per_mb});
     }
 
-    // Note: std.http.Client does not support read timeouts. A stalled TCP
-    // connection will block readSliceShort indefinitely. Users can Ctrl+C
-    // and re-run to resume. A proper fix would require async I/O or a
-    // separate watchdog thread, which is not worth the complexity here.
+    // A stalled TCP connection would otherwise block readSliceShort forever,
+    // with the partial blob on disk and no message. SO_RCVTIMEO bounds the gap
+    // between two reads: it never fires while bytes keep arriving, so a slow
+    // mirror is unaffected, and a dead one fails into the normal retry path
+    // that Range-resumes. Failure to set it is advisory, not fatal.
+    setSocketReadTimeout(req, download_stall_timeout_sec);
     var read_buf: [download_buf_size]u8 = undefined;
     while (true) {
-        const bytes_read = body_reader.readSliceShort(&read_buf) catch {
-            eprint("\nError: network read failed during download\n", .{});
+        const bytes_read = body_reader.readSliceShort(&read_buf) catch |err| {
+            eprint("\nError: network read failed during download: {}\n", .{err});
+            eprint("  The connection stalled for over {d}s, or the network dropped. Re-run to resume from {d:.1} MB.\n", .{ download_stall_timeout_sec, @as(f64, @floatFromInt(downloaded)) / bytes_per_mb });
             return PullError.DownloadFailed;
         };
         if (bytes_read == 0) break;
