@@ -199,8 +199,6 @@ const hardenLinks = (root: HTMLElement): void => {
 
 /** Copy to the clipboard. The caller owns the label and its revert timer, so
  *  this only reports whether the write landed. */
-/** Copy to the clipboard. The caller owns the label and its revert timer, so
- *  this only reports whether the write landed. */
 export const copyText = async (text: string): Promise<'copied' | 'failed'> => {
   try {
     await navigator.clipboard.writeText(text);
