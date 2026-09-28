@@ -1601,6 +1601,12 @@ const document_cache_headers =
     "Cache-Control: private, no-cache\r\n" ++
     "Vary: Accept-Encoding\r\n";
 
+/// 304 for the chat UI document. No `Content-Length`: RFC 9110 15.4.5 lets a 304
+/// carry one only when it equals the length the matching 200 would have sent,
+/// and this response has no body to measure. `Vary` and `Cache-Control` repeat
+/// so a cache that stored the 200 revalidates it under the same key.
+const not_modified_headers = security_headers_base ++ document_cache_headers;
+
 /// Validate Authorization header against configured API key.
 /// Supports both OpenAI-style `Authorization: Bearer <key>` and
 /// Anthropic-style `x-api-key: <key>` headers.
@@ -1744,8 +1750,8 @@ fn sendIdempotentReplay(stream: TcpStream, replay: Idempotency.Replay) void {
 fn sendDocumentNotModified(stream: TcpStream, etag: []const u8) void {
     var hdr_buf: [hdr_buf_size]u8 = undefined;
     const hdr = std.fmt.bufPrint(&hdr_buf, "HTTP/1.1 304 Not Modified\r\nETag: {s}\r\nX-Request-Id: {d}\r\n{s}" ++
-        security_headers_base ++ document_cache_headers ++
-        "Content-Length: 0\r\nConnection: close\r\n\r\n", .{ etag, log_request_id, corsHeaders() }) catch {
+        not_modified_headers ++
+        "Connection: close\r\n\r\n", .{ etag, log_request_id, corsHeaders() }) catch {
         std.log.warn("req={d} 304 header overflow", .{log_request_id});
         return;
     };
@@ -8037,6 +8043,19 @@ test "ifNoneMatch matches listed ETags" {
     try std.testing.expect(ifNoneMatch("If-None-Match: *\r\n", "\"abc\""));
     try std.testing.expect(!ifNoneMatch("If-None-Match: \"xyz\"\r\n", "\"abc\""));
     try std.testing.expect(!ifNoneMatch("Host: localhost\r\n", "\"abc\""));
+}
+
+test "304 revalidates under the same cache key and claims no body" {
+    // A 304 that drops Vary lets a shared cache answer a client that never
+    // accepted gzip with the gzip entry, and one that carries
+    // `Content-Length: 0` contradicts the length the 200 reported (RFC 9110
+    // 15.4.5), which is how a revalidation turns into a truncated document.
+    try std.testing.expect(std.mem.indexOf(u8, not_modified_headers, "Vary: Accept-Encoding\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, not_modified_headers, "Cache-Control: private, no-cache\r\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, not_modified_headers, "Content-Length") == null);
+    // The same ETag names both the 200 and its 304, so a cache that stored
+    // either one revalidates against the other.
+    try std.testing.expect(std.mem.indexOf(u8, not_modified_headers, "ETag") == null);
 }
 
 test "gzipAlloc shrinks the chat UI and round-trips" {
