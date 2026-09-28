@@ -8052,9 +8052,11 @@ test "chat UI head pulls no third-party asset" {
 }
 
 test "chat UI streams by appending and times out a stalled CDN script" {
-    // The committed src/web/app.js is a minified bundle, so the identifiers
-    // below no longer survive into html_page; assert on the sources it is built
-    // from, which is where these two mechanisms live.
+    // The committed src/web/app.js is a minified bundle (whitespace and syntax;
+    // identifiers are kept so the artifact stays byte-reproducible for
+    // scripts/check-web-artifacts.sh, but they are mangled past recognition).
+    // Assert on the sources it is built from, which is where these two
+    // mechanisms live.
     const message_source = @embedFile("../web/chat/components/message.tsx");
     const markdown_source = @embedFile("../web/chat/markdown.ts");
     // Each stream flush used to reset textContent, rewriting the whole message

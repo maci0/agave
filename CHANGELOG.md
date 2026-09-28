@@ -11,6 +11,13 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Changed
+- The committed web bundles are whitespace- and syntax-minified but no longer
+  identifier-mangled. `scripts/check-web-artifacts.sh` byte-compares them, and
+  bun's identifier mangler is not reproducible across sessions, so the gate could
+  report a stale artifact for a byte-identical program. The serve page grows
+  from 122 KB to about 158 KB gzipped.
+
 ## [0.6.0] - 2026-09-28
 
 ### Fixed

@@ -3,7 +3,7 @@
 #
 #   src/web/app.js  src/web/style.css   server chat UI, @embedFile'd by server.zig
 #   web/shell.js    web/style.css       browser WASM shell, shipped as-is
-#   web/agave.js                       browser inference SDK, still a tsc output
+#   web/agave.js                       browser inference SDK, unminified for embedders
 #
 # Source of truth is the .tsx/.ts sources plus the Tailwind 4 entry stylesheets.
 # The bundles and stylesheets are committed so `zig build` needs no JavaScript
@@ -47,13 +47,22 @@ mkdir -p "$STAGE/server" "$STAGE/wasm"
 # result a classic script, which is what the server inlines into <script> and
 # what the shell loads with `defer`.
 #
+# The bundles are whitespace- and syntax-minified but NOT identifier-mangled.
+# `scripts/check-web-artifacts.sh` byte-compares the committed output against a
+# fresh build, and bun 1.4.2's identifier mangler is not reproducible across
+# sessions: two builds of identical sources can assign the same short names to
+# different bindings, which made the gate report STALE for an artifact that was
+# byte-for-byte the same program. Dropping identifier mangling costs about 36 KB
+# gzipped on the serve page (116 KB to 152 KB) and buys a gate that only fires on
+# real drift. Do not re-add `--minify` without re-measuring that.
+#
 # NODE_ENV=production selects React's production build; without it the bundle
 # carries the development build and its warnings.
 export NODE_ENV=production
 bun build src/web/app.tsx --outfile "$STAGE/server/app.js" \
-    --format=iife --minify --target browser
+    --format=iife --minify-whitespace --minify-syntax --target browser
 bun build web/shell.tsx --outfile "$STAGE/wasm/shell.js" \
-    --format=iife --minify --target browser
+    --format=iife --minify-whitespace --minify-syntax --target browser
 # The SDK stays unminified and framework-free: it is a documented module for
 # embedders that load agave.js next to their own page, so it has to stay
 # readable, and nothing about the React UI changes its contract.
