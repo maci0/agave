@@ -104,6 +104,28 @@ const PromptField = (props: PromptFieldProps) => (
   />
 );
 
+/** The send key, which becomes the stop key while a turn is running. */
+const SendControl = ({ streaming, canSend, onStop }: { streaming: boolean; canSend: boolean; onStop: () => void }) => (
+  streaming ? (
+    <Button type="button" variant="destructive" size="lg" onClick={onStop} title="Stop generation" aria-label="Stop generation">
+      Stop
+    </Button>
+  ) : (
+    <Button type="submit" variant="primaryOutline" size="lg" disabled={!canSend} title="Send message (Enter)" aria-label="Send message">
+      Send
+    </Button>
+  )
+);
+
+/** The generation-speed readout, empty until a turn reports one. */
+const SpeedReadout = ({ tps }: { tps: number | null }) => (
+  tps === null ? null : (
+    <span role="status" aria-label="Generation speed" className="flex items-center px-1 font-mono text-xs whitespace-nowrap text-primary">
+      {`${tps.toFixed(1)} tok/s`}
+    </span>
+  )
+);
+
 /** The attach key, the settings key, and the send or stop control. */
 const InputRow = (props: ComposerProps & {
   text: string;
@@ -121,6 +143,9 @@ const InputRow = (props: ComposerProps & {
       aria-label="Attach image"
       onChange={function (event) {
         const file = event.target.files?.[0];
+        // Clear the field so picking the same image again is still a change
+        // Event: an unsupported or oversized file is often re-picked smaller.
+        event.target.value = '';
         if (file !== undefined) { props.onImageFile(file, 'Image attached'); }
       }}
     />
@@ -149,20 +174,8 @@ const InputRow = (props: ComposerProps & {
     >
       <SlidersHorizontal className="size-5" aria-hidden="true" />
     </Button>
-    {props.streaming ? (
-      <Button type="button" variant="destructive" size="lg" onClick={props.onStop} title="Stop generation" aria-label="Stop generation">
-        Stop
-      </Button>
-    ) : (
-      <Button type="submit" variant="primaryOutline" size="lg" disabled={!props.canSend} title="Send message (Enter)" aria-label="Send message">
-        Send
-      </Button>
-    )}
-    {props.tps === null ? null : (
-      <span role="status" aria-label="Generation speed" className="flex items-center px-1 font-mono text-xs whitespace-nowrap text-primary">
-        {`${props.tps.toFixed(1)} tok/s`}
-      </span>
-    )}
+    <SendControl streaming={props.streaming} canSend={props.canSend} onStop={props.onStop} />
+    <SpeedReadout tps={props.tps} />
   </div>
 );
 

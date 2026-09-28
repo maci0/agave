@@ -1,6 +1,7 @@
-import { X } from 'lucide-react';
-import { memo, useEffect, useRef, useState } from 'react';
+import { ArrowDown, X } from 'lucide-react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Message } from './message';
+import { Button } from '../../ui/button';
 import type { Bubble, Toast } from '../types';
 import { cn } from '../../ui/cn';
 
@@ -96,6 +97,29 @@ onDismissToast: (id: number) => void;
 /** Reports whether the log is still within a thumb of the newest content. */
 onScroll?: (nearBottom: boolean) => void;
 };
+/** The toasts, oldest last, in the same column as the transcript. */
+const ToastList = ({ toasts, onDismiss }: { toasts: Array<Toast>; onDismiss: (id: number) => void }) => (
+  <>
+    {toasts.map(function (toast) {
+      return <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />;
+    })}
+  </>
+);
+
+/** Shown only while the reader is scrolled away from the newest turn. */
+const JumpToLatest = ({ onClick }: { onClick: () => void }) => (
+  <Button
+    type="button"
+    variant="solid"
+    size="sm"
+    onClick={onClick}
+    className="absolute bottom-4 start-1/2 -translate-x-1/2 shadow-lg"
+  >
+    <ArrowDown className="size-4" aria-hidden="true" />
+    Jump to latest
+  </Button>
+);
+
 /** Pixels from the bottom that still count as "following the stream". */
 const STICK_SLACK_PX = 80;
 /** The chat log. It owns its scroll position: a reader who scrolls up is left
@@ -103,11 +127,20 @@ const STICK_SLACK_PX = 80;
 export const MessageList = memo(function MessageList(props: MessageListProps) {
 const ref = useRef<HTMLDivElement>(null);
 const nearBottom = useRef(true);
+const [showJump, setShowJump] = useState(false);
 useEffect(function () {
   const log = ref.current;
   if (log && nearBottom.current) { log.scrollTop = log.scrollHeight; }
 }, [props.bubbles, props.toasts]);
+const jumpToLatest = useCallback(function () {
+  const log = ref.current;
+  if (!log) { return; }
+  log.scrollTop = log.scrollHeight;
+  nearBottom.current = true;
+  setShowJump(false);
+}, []);
 return (
+  <div className="relative flex min-h-0 flex-1 flex-col">
   <div
     id="chat"
     ref={ref}
@@ -119,6 +152,9 @@ return (
     onScroll={function (event) {
       const log = event.currentTarget;
       nearBottom.current = log.scrollHeight - log.scrollTop - log.clientHeight < STICK_SLACK_PX;
+      // A reader who scrolls up during a stream otherwise gets no sign that
+      // The turn kept growing below the fold, and no way back to it.
+      setShowJump(!nearBottom.current);
       props.onScroll?.(nearBottom.current);
     }}
     className="agave-scroll flex flex-1 flex-col gap-6 overflow-y-auto px-6 pt-6 pb-2 focus-visible:-outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary max-drawer:px-4 max-drawer:pt-4"
@@ -139,9 +175,9 @@ return (
         />
       );
     })}
-    {props.toasts.map(function (toast) {
-      return <ToastItem key={toast.id} toast={toast} onDismiss={props.onDismissToast} />;
-    })}
+    {props.toasts.length === 0 ? null : <ToastList toasts={props.toasts} onDismiss={props.onDismissToast} />}
+  </div>
+  {showJump ? <JumpToLatest onClick={jumpToLatest} /> : null}
   </div>
 );
 });

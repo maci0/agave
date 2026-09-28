@@ -147,11 +147,13 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
   const prompt = useRef<HTMLInputElement>(null);
 
   const focusPrompt = useCallback(function () { prompt.current?.focus(); }, []);
+  // The reader is looking at the URL field, and the error renders beside it,
+  // So focus stays where it is: the prompt is disabled until a model loads,
+  // And moving focus there drops it on the body instead.
   const failUrl = useCallback(function (message: string) {
     setStatus(message);
     setUrlError(message);
-    focusPrompt();
-  }, [focusPrompt]);
+  }, []);
 
   const state: LoadState = { setStatus, setReady, setLoading, setUrlError };
   const sources = useModelSources(engine, state, onReport, failUrl, focusPrompt);

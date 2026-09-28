@@ -44,6 +44,10 @@ export const userFacingError = (cause: unknown): string => {
 
 const getJson = async <T>(url: string): Promise<T> => {
   const response = await fetch(url);
+  // An error status carries an error object where the caller expects a list or
+  // A record, so it has to reject here: the caller's failure path is what
+  // Tells the reader, and what it guards is a shape the error body is not.
+  if (!response.ok) {throw new Error(httpErrorMessage(response.status));}
   // SAFETY: every route answers with the shape the caller names, and
   // The server serving this page is that same binary.
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the contract above
@@ -56,6 +60,9 @@ const postConversation = async (action: string, id?: string, requestId?: string)
   const target = id === undefined ? `action=${action}` : `action=${action}&id=${encodeURIComponent(id)}`;
   const headers = requestId === undefined ? FORM_HEADERS : { ...FORM_HEADERS, 'X-Request-Id': requestId };
   const response = await fetch('/v1/conversations', { method: 'POST', headers, body: target });
+  // Select, delete and new all answer 4xx or 5xx with an error object, which
+  // The ConvMessages callers would otherwise read as an empty result.
+  if (!response.ok) {throw new Error(httpErrorMessage(response.status));}
   // SAFETY: the POST answers with the ConvMessages shape; a non-JSON
   // Body surfaces as a parse error the caller toasts.
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the contract above
@@ -80,7 +87,9 @@ export const deleteConversation = (id: string): Promise<ConvMessages> => postCon
 
 /** Clear the server-side conversation and KV cache. */
 export const clearServerConversation = async (): Promise<void> => {
-  await fetch('/v1/chat', { method: 'POST', headers: FORM_HEADERS, body: 'message=%2Fclear' });
+  const response = await fetch('/v1/chat', { method: 'POST', headers: FORM_HEADERS, body: 'message=%2Fclear' });
+  // A rejected clear is what the caller reports, so the status has to reach it.
+  if (!response.ok) {throw new Error(httpErrorMessage(response.status));}
 };
 
 /** Query string for the sampling settings and the system prompt. */

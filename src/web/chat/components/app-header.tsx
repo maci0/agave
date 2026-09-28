@@ -17,6 +17,8 @@ type AppHeaderProps = {
   modelResolved: boolean;
   ctx: Context | null;
   sidebarOpen: boolean;
+  /** A turn is in flight: the conversation actions wait for it, as /clear does. */
+  streaming: boolean;
   onOpenSidebar: () => void;
   onRetryModel: () => void;
   onNew: () => void;
@@ -78,14 +80,14 @@ export const AppHeader = (props: AppHeaderProps) => {
         <ContextBadge ctx={props.ctx} />
       </div>
       <div className="flex flex-wrap justify-end gap-1.5 ms-auto">
-        <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} aria-label="New conversation">
+        <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
           + New
         </Button>
-        <Button type="button" size="sm" onClick={props.onExport} title="Export conversation" aria-label="Export conversation">
+        <Button type="button" size="sm" onClick={props.onExport} disabled={props.streaming} title="Export conversation" aria-label="Export conversation">
           <span className="max-drawer:hidden">Export </span>
           <Download className="hidden size-4 max-drawer:inline-flex" aria-hidden="true" />
         </Button>
-        <Button type="button" size="sm" onClick={props.onClear} title="Clear conversation" aria-label="Clear conversation">
+        <Button type="button" size="sm" onClick={props.onClear} disabled={props.streaming} title="Clear conversation" aria-label="Clear conversation">
           <span className="max-drawer:hidden">Clear </span>
           <X className="hidden size-4 max-drawer:inline-flex" aria-hidden="true" />
         </Button>
