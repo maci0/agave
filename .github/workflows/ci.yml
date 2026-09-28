@@ -5,6 +5,12 @@ on:
     branches: [ main, develop ]
     paths-ignore:
       - '**/*.md'
+      # ...except the notices for the shipped web bundle. They are markdown,
+      # but fmt-check gates them (check-third-party-notices.py), they are
+      # copied into the runtime image, and dropping an entry for a package
+      # still in package.json must be red. The negation is re-inclusion by
+      # path-filter order, so it has to stay after the '**/*.md' it overrides.
+      - '!THIRD_PARTY_NOTICES.md'
       - 'docs/**'
       - 'LICENSE'
       - '.planning/**'
@@ -12,6 +18,7 @@ on:
     branches: [ main ]
     paths-ignore:
       - '**/*.md'
+      - '!THIRD_PARTY_NOTICES.md'
       - 'docs/**'
       - 'LICENSE'
       - '.planning/**'

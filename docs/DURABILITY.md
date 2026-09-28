@@ -172,6 +172,23 @@ names (`useradd --system` for the user, `install -d -o <user> -g <user> -m 0700`
 for the destination). A missing one fails the unit at start, not at the first
 backup. Nothing in this repository installs or starts them.
 
+The unit runs `/usr/local/bin/conv-store-backup.sh`, which only the container
+image puts there, so a host install has to place the script as well as the two
+unit files:
+
+```bash
+install -Dm0755 scripts/conv-store-backup.sh /usr/local/bin/conv-store-backup.sh
+install -Dm0644 scripts/systemd/agave-conv-store-backup.service \
+  /etc/systemd/system/agave-conv-store-backup.service
+install -Dm0644 scripts/systemd/agave-conv-store-backup.timer \
+  /etc/systemd/system/agave-conv-store-backup.timer
+systemctl daemon-reload
+systemctl enable --now agave-conv-store-backup.timer
+```
+
+Without the first line every run fails 203/EXEC, which reads like a stopped
+backup job rather than a missing install.
+
 ## Know whether the backup ran
 
 A backup job that stopped running, or that cannot write its destination, is

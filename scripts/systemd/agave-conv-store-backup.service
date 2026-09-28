@@ -1,9 +1,20 @@
 # Scheduled backup of the web-UI conversation store, the only state Agave
-# owns that cannot be regenerated. Install both this file and
-# agave-conv-store-backup.timer under /etc/systemd/system/, then:
+# owns that cannot be regenerated. From the repository root, install the
+# script and both unit files, then:
 #
+#   install -Dm0755 scripts/conv-store-backup.sh \
+#     /usr/local/bin/conv-store-backup.sh
+#   install -Dm0644 scripts/systemd/agave-conv-store-backup.service \
+#     /etc/systemd/system/agave-conv-store-backup.service
+#   install -Dm0644 scripts/systemd/agave-conv-store-backup.timer \
+#     /etc/systemd/system/agave-conv-store-backup.timer
 #   systemctl daemon-reload
 #   systemctl enable --now agave-conv-store-backup.timer
+#
+# ExecStart below names /usr/local/bin/conv-store-backup.sh, and only the
+# container image puts the script there. Copying the two unit files without
+# it gives every run 203/EXEC, which reads as a stopped backup rather than a
+# missing install.
 #
 # Edit the two settings marked below before enabling. Runbook:
 # docs/DURABILITY.md.
