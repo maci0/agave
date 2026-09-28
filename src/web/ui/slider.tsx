@@ -23,7 +23,7 @@ export const Slider = ({ className, thumbProps, ...props }: SliderProps) => (
       <Range className="absolute h-full bg-primary" />
     </Track>
     <Thumb
-      className="block size-5 rounded-full border-2 border-primary bg-background transition-[box-shadow] hover:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-primary)_15%,transparent)] focus-visible:shadow-[0_0_0_4px_color-mix(in_oklab,var(--color-primary)_25%,transparent)]"
+      className="block size-5 rounded-full border-2 border-primary bg-background transition-[box-shadow] hover:shadow-halo focus-visible:shadow-halo-focus"
       {...thumbProps}
     />
   </Root>

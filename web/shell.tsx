@@ -12,6 +12,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button } from '../src/web/ui/button';
+import { EmptyState } from '../src/web/ui/empty-state';
+import { HintChip } from '../src/web/ui/hint-chip';
 import { Input } from '../src/web/ui/input';
 import { cn } from '../src/web/ui/cn';
 import { friendlyGenerateError } from './load-errors';
@@ -139,32 +141,23 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => (
   </div>
 );
 
-/** Before the first prompt. Same anchor as the serve UI's empty state
- *  (rosette, mono title, one line, mono hint chips) so the two surfaces read as
- *  one product rather than a chat page and a demo page. */
+/** Before the first prompt. Same anchor as the serve UI's empty state, drawn by
+ *  the same component, so the two surfaces read as one product rather than a
+ *  chat page and a demo page. */
 const ShellEmptyState = ({ ready }: { ready: boolean }) => (
-  <div className="m-auto px-5 py-10 text-center">
-    <span className="mark mark-lg" aria-hidden="true" />
-    <h2 className="mb-2 font-mono text-lg font-semibold text-foreground">
-      {ready ? 'Prompt the model' : 'Load a model to start'}
-    </h2>
-    <p className="mb-6 text-base text-muted-foreground">
-      {ready
-        ? 'Inference runs in this tab. Nothing leaves the browser.'
-        : 'Drop a GGUF file or paste a model URL above, then prompt it.'}
-    </p>
-    <div className="flex flex-wrap justify-center gap-2">
-      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
-        GGUF only
-      </span>
-      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
-        Enter to send
-      </span>
-      <span className="inline-flex min-h-11 items-center rounded-lg border border-border bg-card px-2.5 py-1 font-mono text-2xs text-faint">
-        {`Replies capped at ${String(MAX_TOKENS)} tokens`}
-      </span>
-    </div>
-  </div>
+  <EmptyState
+    title={ready ? 'Prompt the model' : 'Load a model to start'}
+    line={ready
+      ? 'Inference runs in this tab. Nothing leaves the browser.'
+      : 'Drop a GGUF file or paste a model URL above, then prompt it.'}
+    hints={
+      <>
+        <HintChip>GGUF only</HintChip>
+        <HintChip>Enter to send</HintChip>
+        <HintChip>{`Replies capped at ${String(MAX_TOKENS)} tokens`}</HintChip>
+      </>
+    }
+  />
 );
 
 /** The log: the transcript, the empty hint, and the pending bubble. */
@@ -341,7 +334,7 @@ const Shell = () => {
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       <a
         href="#prompt"
-        className="skip-link absolute start-4 top-[-100%] z-50 rounded-lg bg-primary px-4 py-2 font-mono text-sm font-medium text-primary-foreground no-underline transition-[top] duration-200 focus:top-2"
+        className="absolute start-4 top-[-100%] z-50 rounded-lg bg-primary px-4 py-2 font-mono text-sm font-medium text-primary-foreground no-underline transition-[top] duration-200 focus:top-2"
       >
         Skip to message input
       </a>

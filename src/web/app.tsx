@@ -59,7 +59,7 @@ const ChatShell = ({ header, sidebar, log, composer, announcement, about }: Chat
   <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
     <a
       href="#msg"
-      className="skip-link absolute start-4 top-[-100%] z-50 rounded-lg bg-primary px-4 py-2 font-mono text-sm font-medium text-primary-foreground no-underline transition-[top] duration-200 focus:top-2"
+      className="absolute start-4 top-[-100%] z-50 rounded-lg bg-primary px-4 py-2 font-mono text-sm font-medium text-primary-foreground no-underline transition-[top] duration-200 focus:top-2"
     >
       Skip to message input
     </a>

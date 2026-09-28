@@ -150,7 +150,7 @@ agave/
 │   ├── web/
 │   │   ├── app.tsx        # Chat UI entry (React; SSE streaming, conversation management)
 │   │   ├── chat/          # Chat UI state (hooks) and components
-│   │   ├── ui/            # shadcn primitives + the shared Tailwind 4 theme
+│   │   ├── ui/            # shadcn primitives, the shared Tailwind 4 theme, and the motifs both chat surfaces draw (empty state, hint chips)
 │   │   ├── app.css        # Tailwind 4 entry for this surface
 │   │   ├── app.js         # Generated classic script; embedded by server.zig
 │   │   ├── style.css      # Generated stylesheet; embedded by server.zig
