@@ -106,11 +106,13 @@ pub const NgramState = struct {
 /// Inspired by llama.cpp ngram-mod (PR #19164): a shared pool means concurrent
 /// requests on similar content benefit from each other's history for free.
 ///
-/// Thread-safety: guarded by a plain Mutex; critical sections are short
-/// (ring-buffer push or linear scan), so contention is negligible.
+/// Thread-safety: guarded by a `std.atomic.Mutex` spinlock; critical sections are
+/// short (ring-buffer push or a linear scan of the history), so contention is
+/// negligible.
 pub const SharedNgramPool = struct {
     /// Maximum number of tokens in the shared pool ring buffer (~32 KB).
-    /// Larger than the per-request history (2 KB) so cross-request matches span more context.
+    /// Larger than the per-request history (2048 tokens, ~8 KB) so cross-request
+    /// matches span more context.
     const pool_capacity: usize = 8192;
 
     history: [pool_capacity]u32 = undefined,
@@ -183,12 +185,13 @@ pub var global_pool: ?SharedNgramPool = null;
 /// Suffix Decoding: exact suffix matching with dynamic speculation depth.
 ///
 /// vLLM-style suffix decoding (https://docs.vllm.ai/en/latest/features/speculative_decoding/suffix/):
-/// - Maintains a large cross-request token cache (default: 10k tokens)
-/// - Finds the LONGEST suffix of the current context that exists earlier in the cache
-/// - Longer matches → deeper speculation (up to max_tree_depth)
+/// - Maintains a per-request token history (10k tokens)
+/// - Finds the LONGEST suffix of the current context that exists earlier in the history
+/// - Longer matches → deeper speculation (up to `max_k`)
 /// - No draft model required; zero overhead beyond cache lookups
 ///
-/// Dynamic depth: match_len == min_suffix → k=1; match_len >= max_suffix → k=max_k.
+/// Dynamic depth: k = `max_k` * min(1, quality + 0.2) where quality ramps 0 at
+/// `min_suffix` to 1 at `max_suffix`, floored at 1 token.
 pub const SuffixState = struct {
     const cache_capacity: usize = 10_000;
     const min_suffix: usize = 2; // minimum suffix length to attempt
@@ -245,7 +248,8 @@ pub const SuffixState = struct {
     }
 
     /// Propose tokens and compute dynamic speculation depth.
-    /// Depth scales with match quality: 1 token for minimum match, max_k for maximum.
+    /// Depth scales with match quality: `max_k` * min(1, quality + 0.2) where
+    /// quality is 0 at `min_suffix` and 1 at `max_suffix`, floored at 1 token.
     pub fn propose(self: *const SuffixState, out: []u32) usize {
         const result = self.proposeWithDepth(self.max_k, out);
         if (result.n == 0) return 0;
@@ -452,7 +456,7 @@ test "fuzz: all ngram functions" {
 /// via parallel sampling rather than replaying history.
 ///
 /// Algorithm (simplified):
-///   Window W = 5 branches of N = 7 tokens each (W×N = 35 candidates)
+///   Window W = 5 branches (`n_branches`), each holding up to N = 16 tokens (`max_window`)
 ///   1. Each branch advances: branch[i] = sample(target(branch[i][-1])) × N times
 ///   2. Check if any n-gram in the window matches the current context suffix
 ///   3. If match: propose that branch as draft tokens (up to N tokens)
@@ -471,7 +475,8 @@ pub const LookaheadState = struct {
     n_branches: usize = 5,
 
     /// Seed branches with continuations from an initial token set.
-    /// Called after prefill; branches start from the last `n_branches` distinct tokens.
+    /// Called after prefill; branch i starts from `history[history.len - n + i]`,
+    /// where n = min(n_branches, history.len).
     pub fn seed(self: *LookaheadState, history: []const u32) void {
         std.debug.assert(self.n_branches <= max_branches);
         const n = @min(self.n_branches, history.len);

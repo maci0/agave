@@ -1,8 +1,10 @@
 //! PFlash: Speculative prefill with block-sparse importance scoring.
 //!
 //! Algorithm (from Luce-Org/lucebox-hub):
-//!   1. Score, lightweight draft model runs forward pass; attention weights reveal
-//!              which KV blocks are important for the final tail positions.
+//!   1. Score, lightweight draft model runs forward pass. The reference scores
+//!              blocks from attention weights over the final tail positions; this
+//!              implementation scores them by recency (later block, higher score)
+//!              because attention-weight extraction is not integrated yet.
 //!   2. Select, keep blocks above alpha × mean_score (adaptive threshold).
 //!   3. Compress, build a reduced token list from selected block spans.
 //!   4. Prefill, target model prefills only the compressed prompt.
@@ -164,8 +166,9 @@ pub fn compressionRatio(state: *const PFlashState) f32 {
 }
 
 /// Full PFlash prefill pipeline:
-///   1. Draft model prefills the full prompt (builds KV cache for scoring).
-///   2. Score blocks from the draft's KV cache + final Q vector.
+///   1. Draft model prefills the full prompt.
+///   2. Score each block. The scores come from a recency heuristic, not from the
+///      draft's attention weights; see the file header.
 ///   3. Select blocks above alpha × mean threshold.
 ///   4. Build compressed token list.
 ///   5. Target model prefills only the compressed prompt.

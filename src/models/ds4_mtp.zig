@@ -131,6 +131,9 @@ pub const MtpWeights = struct {
         return self.tensors.get(name);
     }
 
+    /// Free the dupe'd tensor names and unmap the safetensors file. `allocator`
+    /// must be the one passed to `init` and `load`; tensor data pointers from
+    /// `get` dangle afterwards.
     pub fn deinit(self: *MtpWeights, allocator: Allocator) void {
         var kit = self.tensors.keyIterator();
         while (kit.next()) |k| allocator.free(k.*);

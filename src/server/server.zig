@@ -4,7 +4,7 @@
 //! /v1/chat (built-in web UI), /v1/chat/regenerate, /v1/tokenize, /v1/detokenize,
 //! /health, /ready, and /metrics.
 //! Supports both synchronous JSON responses and SSE streaming.
-//! Uses std.net with per-connection threads; inference is mutex-serialized.
+//! Uses `Io.net` with per-connection threads; inference is mutex-serialized.
 
 const std = @import("std");
 const Io = std.Io;

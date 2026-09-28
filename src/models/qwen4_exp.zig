@@ -8,7 +8,7 @@
 //!
 //! Forked from qwen35.zig — keep in sync for shared DeltaNet/MoE paths.
 //!
-//! PLE ngram embedding (20M vocab, 128 shards, 51B, FP8 E4M3) at layer 1 is
+//! PLE ngram embedding (20M vocab, 128 shards, 51B, FP8 E4M3) at layer 2 is
 //! mmap'd but NOT yet read by the forward pass, and NgramCache
 //! (src/ngram_cache.zig) is not wired to --ssd-streaming yet.
 //!

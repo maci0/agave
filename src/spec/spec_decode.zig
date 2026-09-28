@@ -191,8 +191,9 @@ pub const SpecResult = struct {
 /// and trims the drafted block to the longest prefix with positive expected return
 /// under the single-request degenerate case of Algorithm 1 (flat SPS(B) assumption).
 ///
-/// In the multi-request server path the full hardware-aware scheduler in dspark.zig
-/// should be called directly with the actual SPS profile and per-request blocks.
+/// Only the single-request path in `src/main.zig` runs DSpark; the server
+/// scheduler does not call into dspark.zig, so the hardware-aware scheduler there
+/// has no caller.
 pub fn dsparkTrimDraft(state: *SpecState) void {
     const n = state.n_draft;
     if (n <= 1) return;

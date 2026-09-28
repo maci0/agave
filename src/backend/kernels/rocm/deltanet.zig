@@ -1,6 +1,7 @@
-//! DeltaNet SSM kernels for ROCm.
-//! Gate/beta and conv1d kernels are loaded by rocm.zig, but the top-level
-//! deltaNet dispatch still @panics, full recurrence kernel not yet ported.
+//! DeltaNet SSM gate/beta and causal conv1d kernels for ROCm.
+//! RocmBackend.deltaNet computes both stages on the CPU and launches only
+//! deltanet_recurrence_kernel; the two kernels here are compiled into the
+//! HSACO and loaded by name, but no dispatch path launches them.
 
 const cu = @import("common.zig");
 

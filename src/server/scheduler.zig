@@ -11,7 +11,7 @@ const sim_clock = @import("../sim_clock.zig");
 
 /// Monotonic millisecond clock (injectable via sim_clock for deterministic
 /// tests). All scheduler interval math, request timeouts, priority aging,
-/// TTFT stamps, uses this so NTP steps cannot spuriously time out running
+/// and TTFT stamps use this, so NTP steps cannot spuriously time out running
 /// requests or invert queue priority.
 fn milliTimestamp() i64 {
     return sim_clock.monoMilli();

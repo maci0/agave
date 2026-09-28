@@ -3,7 +3,7 @@
 //! Implements BigBird-style block sparsity:
 //!   - Global blocks: first N blocks attend/are-attended-by all positions
 //!   - Sliding window: each query block attends ±window blocks
-//!   - (Random blocks are omitted initially, global+sliding covers most long-context cases)
+//!   - (BigBird's random block pattern is not implemented; buildMask covers global+sliding only)
 //!
 //! Used by PFlash for efficient drafter scoring and as a standalone SDPA variant
 //! for long-context models where dense O(n²) attention is prohibitive.

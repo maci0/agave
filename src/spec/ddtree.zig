@@ -31,7 +31,6 @@ pub const TreeNode = struct {
     cum_log_prob: f32,
 };
 
-/// Compiled tree ready for verification.
 /// Maximum children per node (for child index).
 const max_children_per_node: usize = 32;
 

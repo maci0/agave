@@ -456,7 +456,7 @@ pub const DiffusionGemmaModel = struct {
         }
     }
 
-    /// Reset KV cache and SSM state for a new conversation.
+    /// Reset the KV cache position for a new conversation.
     pub fn resetCache(self: *DiffusionGemmaModel) void {
         model_mod.resetKvCache(self);
     }
