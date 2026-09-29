@@ -84,7 +84,7 @@ const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
         loader.dragOver ? 'border-primary text-primary' : 'border-border text-faint',
       )}
     >
-      Drop GGUF file or click
+      Choose or drop a GGUF file
     </label>
     <input
       id="file-input"

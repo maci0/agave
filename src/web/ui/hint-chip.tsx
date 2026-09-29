@@ -9,7 +9,7 @@ import type { ReactNode } from 'react';
  * a control; only `HintAction` wears a frame, because only it can be pressed.
  */
 export const HintChip = ({ children }: { children: ReactNode }) => (
-  <span className="inline-flex min-h-11 items-center gap-2 px-2 font-mono text-2xs text-faint before:size-1 before:rounded-pill before:bg-success before:content-['']">
+  <span className="inline-flex min-h-6 items-center gap-2 px-2 font-mono text-2xs text-faint before:size-1 before:rounded-pill before:bg-success before:content-['']">
     {children}
   </span>
 );
