@@ -301,6 +301,16 @@ Start with `--serve`. Supports both synchronous JSON and SSE streaming.
 AGAVE_API_KEY=sk-mykey ./zig-out/bin/agave model.gguf --serve
 ```
 
+Open `http://localhost:49453/` for the built-in chat UI. It follows the system
+light or dark setting.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/serve-ui-dark.webp">
+  <img src="docs/images/serve-ui-light.webp" alt="The agave chat UI: conversation list on the left, a question and a formatted reply with a highlighted code block, and the prompt field at the bottom" width="800">
+</picture>
+
+<sub>The reply in this screenshot is sample text, not model output.</sub>
+
 **API Endpoints:**
 
 | Endpoint | Method | Description |

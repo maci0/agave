@@ -11,6 +11,11 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Changed
+- Code blocks and wide tables in responses use the same thin scrollbar as
+  the transcript instead of the browser default.
+- The README shows the chat UI in both color schemes.
+
 ## [0.10.0] - 2026-09-29
 
 ### Added

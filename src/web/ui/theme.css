@@ -298,6 +298,10 @@
     padding: 14px;
     padding-top: 40px;
     overflow-x: auto;
+    /* Same thin scrollbar as the transcript (.agave-scroll): the default bar is
+       wider than the text it scrolls. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
     margin: 12px 0;
     position: relative;
   }
@@ -414,6 +418,8 @@
 
   .agave-prose .table-wrap {
     overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
     margin: 12px 0;
   }
 
