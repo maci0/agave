@@ -1,4 +1,4 @@
-import { X } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { Button } from '../../ui/button';
 import { cn } from '../../ui/cn';
 import type { ReactNode } from 'react';
@@ -46,7 +46,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
     <div
       role="listitem"
       className={cn(
-        'mb-0.5 flex items-center gap-2 rounded-md border border-transparent px-3 py-2.5 transition-colors hover:bg-muted',
+        'mb-0.5 flex items-center gap-1 rounded-md border border-transparent ps-3 pe-0.5 transition-colors hover:bg-muted',
         conversation.active === true && 'border-primary/25 bg-primary/10',
       )}
     >
@@ -56,7 +56,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
         aria-label={label}
         aria-current={conversation.active === true ? 'true' : undefined}
         disabled={streaming}
-        className="flex min-w-0 flex-1 items-center rounded-sm text-start"
+        className="flex min-h-10 min-w-0 flex-1 items-center rounded-sm text-start"
       >
         <span
           className={cn('flex-1 truncate text-sm', conversation.active === true ? 'text-foreground' : 'text-muted-foreground')}
@@ -70,7 +70,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
         onClick={function () { onDelete(conversation.id); }}
         disabled={streaming}
         aria-label={`Delete conversation: ${label}`}
-        className="agave-reveal inline-flex size-11 shrink-0 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        className="agave-reveal inline-flex size-9 shrink-0 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
       >
         <X className="size-4" aria-hidden="true" />
       </button>
@@ -86,14 +86,14 @@ const ConversationList = ({ conversations, loadError, streaming, onSelect, onDel
       <ListState>
         No conversations yet.
         <br />
-        Use <strong className="font-medium text-muted-foreground">+ New</strong> to start.
+        Use <strong className="font-medium text-muted-foreground">New</strong> to start.
       </ListState>
     );
   }
   return (
     <div role="list" aria-label="Conversations">
-      {conversations.map(function (conversation) {
-        return (
+      {conversations.map((conversation) =>
+        (
           <ConversationRow
             key={conversation.id}
             conversation={conversation}
@@ -101,8 +101,8 @@ const ConversationList = ({ conversations, loadError, streaming, onSelect, onDel
             onSelect={onSelect}
             onDelete={onDelete}
           />
-        );
-      })}
+        )
+      )}
     </div>
   );
 };
@@ -111,7 +111,7 @@ const ConversationList = ({ conversations, loadError, streaming, onSelect, onDel
  *  sheet so both surfaces stay identical. */
 export const Sidebar = (props: SidebarProps) => (
   <div className="flex h-full w-full flex-col bg-card">
-    <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-3">
+    <div className="flex shrink-0 items-center justify-between gap-2 border-b border-divider px-3 py-3">
       <h2 className="font-mono text-xs font-medium text-faint">Chats</h2>
       <div className="flex shrink-0 items-center gap-1.5">
         {props.onClose ? (
@@ -120,7 +120,8 @@ export const Sidebar = (props: SidebarProps) => (
           </Button>
         ) : null}
         <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
-          + New
+          <Plus className="size-4" aria-hidden="true" />
+          New
         </Button>
       </div>
     </div>

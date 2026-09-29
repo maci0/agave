@@ -76,7 +76,7 @@ const MaxTokensField = ({ sampling, onChange }: { sampling: Sampling; onChange: 
       min={MAX_TOKENS_MIN}
       max={MAX_TOKENS_MAX}
       value={sampling.maxTokens}
-      className="font-mono"
+      font="mono"
       aria-invalid={!valid}
       aria-describedby={`${fieldId}-range${valid ? '' : ` ${fieldId}-error`}`}
       onChange={function (event) { onChange({ ...sampling, maxTokens: event.target.value }); }}
@@ -113,9 +113,8 @@ const SystemPromptField = ({ sampling, onChange, onClear }: {
         <Label htmlFor={fieldId}>System Prompt</Label>
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="min-h-11 px-2 text-2xs hover:text-destructive-foreground"
+          variant="plainDestructive"
+          size="xs"
           onClick={onClear}
           aria-label="Clear system prompt"
         >
@@ -142,7 +141,7 @@ export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPan
     id="settings-panel"
     role="region"
     aria-label="Sampling settings"
-    className="mx-auto mb-3 agave-measure rounded-lg border border-border bg-popover p-4"
+    className="mx-auto mb-3 agave-measure rounded-lg border border-divider bg-popover p-4"
   >
     <div className="mb-3 grid grid-cols-3 gap-4 max-drawer:grid-cols-1">
       <SettingSlider

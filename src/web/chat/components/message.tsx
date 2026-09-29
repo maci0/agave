@@ -38,12 +38,12 @@ type MessageBodyProps = {
  * turn that goes from hundreds of partial tokens to a full markdown render
  * costs one reconcile rather than a re-render per token.
  */
-export const MessageBody = memo(function MessageBody({ text, phase, onRendered }: MessageBodyProps) {
+export const MessageBody = memo(({ text, phase, onRendered }: MessageBodyProps) => {
   const ref = useRef<HTMLDivElement>(null);
   const painted = useRef('');
   const announced = useRef<string | null>(null);
 
-  useEffect(function () {
+  useEffect(() => {
     const element = ref.current;
     if (!element) {return;}
     if (phase === 'streaming') {
@@ -72,7 +72,7 @@ export const MessageBody = memo(function MessageBody({ text, phase, onRendered }
     if (!markdownReady()) {
       // The libraries were still in flight, so rebuild once they land,
       // One message per idle slot, never a whole history in one task.
-      onIdle(function () {
+      onIdle(() => {
         if (element.isConnected) { renderMarkdown(element, text); }
       });
     }
@@ -87,11 +87,11 @@ export const MessageBody = memo(function MessageBody({ text, phase, onRendered }
 });
 
 const StatsLine = ({ stats }: { stats: StreamStats }) => {
-  const total = Number.parseInt(stats.time, 10) + (Number.parseInt(stats.pfMs, 10) || 0);
-  const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(Number.parseFloat(stats.tps), 2)}`;
-  const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(Number.parseFloat(stats.pfTps), 1)}`;
+  const total = Math.trunc(Number(stats.time)) + (Math.trunc(Number(stats.pfMs)) || 0);
+  const decode = `${fmtInt(stats.tokens)} tok @ ${fmtNum(Number(stats.tps), 2)}`;
+  const prefill = `${fmtInt(stats.pfTok)} tok @ ${fmtNum(Number(stats.pfTps), 1)}`;
   return (
-    <div className="mt-2.5 flex flex-wrap gap-x-4 border-t border-border pt-2.5 font-mono text-2xs text-faint">
+    <div className="mt-2.5 flex flex-wrap gap-x-4 border-t border-divider pt-2.5 font-mono text-2xs text-faint">
       <span>
         decode <span className="font-medium text-primary">{decode}</span> tok/s
       </span>
@@ -123,24 +123,25 @@ type MessageProps = {
 
 const COPY_REVERT_MS = 2000;
 
-/** Copy a finished response. Hidden until the bubble is hovered or focused, and
- *  pinned above the text on touch, where there is no hover. */
+/** The row under a response: copy and regenerate. Revealed with the message on
+ *  hover or focus, always shown on touch (see .agave-reveal). */
+const ACTION =
+  'agave-reveal inline-flex min-h-11 items-center gap-1.5 rounded-md px-2.5 py-1 font-mono text-2xs text-faint ' +
+  'transition-colors hover:bg-muted hover:text-primary';
+
+/** Copy a finished response. */
 const CopyResponse = ({ text }: { text: string }) => {
   const [label, setLabel] = useState('Copy');
-  const copy = useCallback(function () {
-    void copyText(text).then(function (result) {
+  const copy = useCallback(() => {
+    void copyText(text).then((result) => {
       setLabel(result === 'copied' ? 'Copied' : 'Failed');
-      setTimeout(function () { setLabel('Copy'); }, COPY_REVERT_MS);
+      setTimeout(() => { setLabel('Copy'); }, COPY_REVERT_MS);
     });
   }, [text]);
   return (
-    <button
-      type="button"
-      onClick={copy}
-      aria-label="Copy response"
-      className="agave-reveal absolute end-2 top-2 inline-flex min-h-11 min-w-11 items-center justify-center rounded-md p-1 font-mono text-2xs text-faint transition-colors hover:text-primary max-drawer:static max-drawer:mt-2 max-drawer:px-3"
-    >
-      {label === 'Copy' ? <Copy className="size-3.5" aria-hidden="true" /> : label}
+    <button type="button" onClick={copy} aria-label="Copy response" className={ACTION}>
+      <Copy className="size-3.5" aria-hidden="true" />
+      {label}
     </button>
   );
 };
@@ -151,48 +152,57 @@ const RegenerateButton = ({ retry, onRegenerate }: { retry: boolean; onRegenerat
     type="button"
     onClick={onRegenerate}
     aria-label={retry ? 'Retry generating response' : 'Regenerate response'}
-    className="agave-reveal inline-flex min-h-11 items-center gap-1.5 rounded-md border border-border px-2.5 py-1 font-mono text-2xs text-faint transition-colors hover:border-primary hover:bg-primary/10 hover:text-primary"
+    className={ACTION}
   >
     <RefreshCw className="size-3.5" aria-hidden="true" />
     {retry ? 'Retry' : 'Regenerate'}
   </button>
 );
 
-const Message = memo(function Message({ bubble, showStats, canRegenerate, onRegenerate, onRendered }: MessageProps) {
+const Message = memo(({ bubble, showStats, canRegenerate, onRegenerate, onRendered }: MessageProps) => {
   const isUser = bubble.role === 'user';
   const roleId = `msg-role-${bubble.id}`;
   const failed = bubble.phase === 'error';
+  const canCopy = !isUser && !failed && bubble.phase === 'done';
   const handleRendered = useCallback((rendered: string) => { onRendered(bubble.id, rendered); }, [bubble.id, onRendered]);
   return (
     <div
       role="group"
       aria-labelledby={roleId}
       className={cn(
-        'mx-auto flex w-full agave-measure flex-col gap-1',
+        'group mx-auto flex w-full agave-measure flex-col gap-1',
         isUser ? 'items-end' : 'items-start',
       )}
     >
-      <span id={roleId} className={cn('px-1 font-mono text-xs font-medium', isUser ? 'text-faint' : 'text-primary')}>
+      <span
+        id={roleId}
+        className={cn('inline-flex items-center gap-1.5 px-1 font-mono text-xs font-medium', isUser ? 'text-faint' : 'text-primary')}
+      >
+        {isUser ? null : <span className="mark mark-sm" aria-hidden="true" />}
         {isUser ? 'You' : 'agave'}
       </span>
       <div
         dir="auto"
         role={failed ? 'alert' : undefined}
         className={cn(
-          'relative w-full min-w-0 max-w-full rounded-lg border px-[18px] py-3.5 text-base',
-          failed ? 'border-destructive bg-destructive/10 text-sm text-destructive-foreground' : '',
-          !isUser && !failed ? 'rounded-es-[2px] border-border bg-popover' : '',
-          isUser ? 'rounded-ee-[2px] border-border bg-card' : '',
+          'relative min-w-0 max-w-full rounded-lg text-base',
+          failed && 'w-full border border-destructive bg-destructive/10 px-4.5 py-3.5 text-sm text-destructive-foreground',
+          !isUser && !failed && 'w-full px-1 py-1',
+          isUser && 'max-w-4/5 rounded-ee-xs bg-primary/10 px-4.5 py-3',
         )}
       >
-        {bubble.image !== undefined ? (
-          <img className="mb-2 block max-w-[200px] rounded-lg border border-border" src={bubble.image} alt="Attached image" />
-        ) : null}
+        {bubble.image === undefined ? null : (
+          <img className="mb-2 block max-w-50 rounded-md border border-divider" src={bubble.image} alt="Attached image" />
+        )}
         {isUser ? <div className="agave-prose min-w-0">{bubble.text}</div> : <MessageBody text={bubble.text} phase={bubble.phase} onRendered={handleRendered} />}
-        {!isUser && !failed && bubble.phase === 'done' ? <CopyResponse text={bubble.text} /> : null}
       </div>
       {bubble.stats && showStats ? <StatsLine stats={bubble.stats} /> : null}
-      {canRegenerate ? <RegenerateButton retry={failed} onRegenerate={onRegenerate} /> : null}
+      {canCopy || canRegenerate ? (
+        <div className="flex gap-1">
+          {canCopy ? <CopyResponse text={bubble.text} /> : null}
+          {canRegenerate ? <RegenerateButton retry={failed} onRegenerate={onRegenerate} /> : null}
+        </div>
+      ) : null}
     </div>
   );
 });

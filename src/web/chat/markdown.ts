@@ -60,19 +60,18 @@ const loadCdnScript = async (url: string, integrity: string): Promise<boolean> =
   script.crossOrigin = 'anonymous';
   script.referrerPolicy = 'no-referrer';
   // oxlint-disable-next-line promise/avoid-new -- a script load is an event, so it needs a promise to await
-  const result = await new Promise<'load' | 'error' | 'timeout'>(function (resolve) {
+  const result = await new Promise<'load' | 'error' | 'timeout'>((resolve) => {
     let settled = false;
     const handles: Array<Timer> = [];
     const settle = function (outcome: 'load' | 'error' | 'timeout') {
       if (settled) { return; }
       settled = true;
       for (const handle of handles) { clearTimeout(handle); }
-      // oxlint-disable-next-line promise/no-multiple-resolved -- the guard above resolves exactly once
       resolve(outcome);
     };
-    handles.push(setTimeout(function () { settle('timeout'); }, CDN_SCRIPT_TIMEOUT_MS));
-    script.addEventListener('load', function () { settle('load'); }, { once: true });
-    script.addEventListener('error', function () { settle('error'); }, { once: true });
+    handles.push(setTimeout(() => { settle('timeout'); }, CDN_SCRIPT_TIMEOUT_MS));
+    script.addEventListener('load', () => { settle('load'); }, { once: true });
+    script.addEventListener('error', () => { settle('error'); }, { once: true });
     document.head.append(script);
   });
   return result === 'load';
@@ -84,7 +83,7 @@ export const loadMarkdown = (): Promise<boolean> => {
   if (markdownLoad) {return markdownLoad;}
   if (cdn.marked && cdn.DOMPurify) {return Promise.resolve(true);}
   markdownLoad = Promise.all([loadCdnScript(MARKED_URL, MARKED_INTEGRITY), loadCdnScript(PURIFY_URL, PURIFY_INTEGRITY)]).then(
-    function () {return Boolean(cdn.marked && cdn.DOMPurify);},
+    () => Boolean(cdn.marked && cdn.DOMPurify),
   );
   return markdownLoad;
 };
@@ -107,7 +106,7 @@ export const loadHighlightJs = (): Promise<boolean> => {
   if (highlightLoad) {return highlightLoad;}
   if (cdn.hljs) {return Promise.resolve(true);}
   appendHighlightTheme();
-  highlightLoad = loadCdnScript(HLJS_URL, HLJS_INTEGRITY).then(function (ok) { return ok && Boolean(cdn.hljs); });
+  highlightLoad = loadCdnScript(HLJS_URL, HLJS_INTEGRITY).then((ok) => ok && Boolean(cdn.hljs));
   return highlightLoad;
 };
 
@@ -136,7 +135,7 @@ const markdownToHtml = (source: string): string => {
 const expandThinkBlocks = (content: string): string => {
   if (!content.includes('<think>')) {return content;}
   let thinkIndex = 0;
-  const expanded = content.replaceAll(/<think>([\s\S]*?)<\/think>\s*/g, function (_match, part: string) {
+  const expanded = content.replaceAll(/<think>(?<thought>[\s\S]*?)<\/think>\s*/gu, (_match, part: string) => {
     const thought = part.trim();
     if (!thought) {return '';}
     thinkIndex += 1;
@@ -151,7 +150,7 @@ const expandThinkBlocks = (content: string): string => {
  *  could reintroduce handlers if a sanitizer gap exists. */
 const demoteHeadings = (root: HTMLElement): void => {
   for (const heading of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
-    const level = Number.parseInt(heading.tagName.charAt(1), 10);
+    const level = Number(heading.tagName.charAt(1));
     const next = Math.min(level + 2, 6);
     if (next === level) {continue;}
     const replacement = document.createElement(`h${next}`);
@@ -214,7 +213,7 @@ export const copyText = async (text: string): Promise<'copied' | 'failed'> => {
 const decorateCodeBlock = (block: Element): void => {
   const pre = block.parentElement;
   if (!pre || pre.querySelector('.copy-btn')) {return;}
-  const lang = /language-(\w+)/.exec(block.className)?.[1] ?? '';
+  const lang = /language-(?<lang>\w+)/u.exec(block.className)?.groups?.lang ?? '';
   if (lang) {
     const label = document.createElement('span');
     label.className = 'code-lang';
@@ -232,12 +231,12 @@ const decorateCodeBlock = (block: Element): void => {
   copy.setAttribute('aria-live', 'polite');
   const what = lang === '' ? 'code' : `${lang} code`;
   copy.setAttribute('aria-label', `Copy ${what}`);
-  copy.addEventListener('click', function () {
-    void copyText(block.textContent).then(function (result) {
+  copy.addEventListener('click', () => {
+    void copyText(block.textContent).then((result) => {
       const state = result === 'copied' ? 'copied' : 'failed';
       copy.textContent = result === 'copied' ? 'Copied' : 'Failed';
       copy.setAttribute('aria-label', `Copy ${what}, ${state}`);
-      setTimeout(function () {
+      setTimeout(() => {
         copy.textContent = 'Copy';
         copy.setAttribute('aria-label', `Copy ${what}`);
       }, COPY_REVERT_MS);
@@ -261,7 +260,7 @@ const highlightCodeBlocks = (root: HTMLElement): void => {
     }
   };
   if (cdn.hljs) {apply(); return;}
-  void loadHighlightJs().then(function (ok) { if (ok) {apply();} });
+  void loadHighlightJs().then((ok) => { if (ok) {apply();} });
 };
 
 /**
@@ -299,9 +298,9 @@ const scheduleIdle = (fn: () => void): void => {
 };
 
 const drainIdle = (): void => {
-  const next = idleQueue.shift();
-  if (!next) { idleDraining = false; return; }
-  next();
+  const task = idleQueue.shift();
+  if (!task) { idleDraining = false; return; }
+  task();
   if (idleQueue.length > 0) { scheduleIdle(drainIdle); } else { idleDraining = false; }
 };
 

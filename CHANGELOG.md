@@ -22,6 +22,30 @@ must still appear under **Changed** or **Breaking** below. See
   Slider positions its thumb from a Collection index that does not register
   through `preact/compat`; every other Radix primitive shadcn uses here (dialog,
   label, slot) works unchanged.
+- **Calmer chat surfaces.** Layout separators (header rule, sidebar edge,
+  composer top, table and code frames) use a decorative divider tone; the 3:1
+  border stays on controls only. User turns are an amber-washed bubble,
+  assistant turns open text under a small rosette label, with Copy and
+  Regenerate in one row under the response. The header drops its duplicate
+  New key on wide layouts, its toolbar keys go borderless with icons, and on
+  a phone the model and context badges take their own row. Empty-state hints
+  that cannot be pressed no longer look like buttons.
+
+### Fixed
+- The serve composer showed a scrollbar on its first line (autosize ignored
+  the border), and stayed three lines tall after a turn on a phone (the tok/s
+  readout narrowed it mid-stream and nothing re-measured).
+- `cn()` did not know the theme's custom steps (`text-2xs`, `rounded-pill`,
+  the `shadow-*` tokens), so tailwind-merge could keep both of two conflicting
+  classes.
+
+### Tooling
+- oxlint 1.86 with `@shadcn/lint` at error on every rule (`no-restyle`,
+  `no-raw-colors`, `no-arbitrary-values`, `no-inline-styles`,
+  `no-unknown-classes`, `require-static-classes`), beside anti-slop and
+  `@rikalabs/oxlint-standards` strict. Components restyle through variants
+  (`Button` `plain`, `plainDestructive`, `destructiveSolid`, `floating`, `xs`,
+  `iconRound`; `Input` `font`/`size`), never through ad-hoc classes.
 
 ## [0.8.0] - 2026-09-28
 

@@ -73,7 +73,8 @@ file and the packages themselves provide.
 
 Development and build tooling is installed on a contributor's machine and
 never reaches a release artifact: `oxlint`, `oxlint-tsgolint`, `@oxlint/plugins`,
-`@rikalabs/oxlint-standards`, `typescript`, `tailwindcss`, `@tailwindcss/cli`,
+`@rikalabs/oxlint-standards`, `@shadcn/lint` (and its `cn` and
+`@eslint/core` dependencies), `typescript`, `tailwindcss`, `@tailwindcss/cli`,
 `happy-dom` (via `@happy-dom/global-registrator`), `@types/*`, and
 `@parcel/watcher` (pulled in by the Tailwind CLI). Their licenses are MIT or
 Apache-2.0 and are recorded in their own packages.

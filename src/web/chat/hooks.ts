@@ -47,7 +47,7 @@ export const useAnnouncer = (): Announcer => {
   const announce = useCallback((text: string) => {
     if (timer.current !== null) { clearTimeout(timer.current); }
     setAnnouncement('');
-    timer.current = setTimeout(function () { setAnnouncement(text); }, ANNOUNCE_DELAY_MS);
+    timer.current = setTimeout(() => { setAnnouncement(text); }, ANNOUNCE_DELAY_MS);
   }, []);
   return { announcement, announce };
 };
@@ -61,14 +61,14 @@ type Toaster = {
 export const useToasts = (): Toaster => {
   const [toasts, setToasts] = useState<Array<Toast>>([]);
   const nextId = useRef(1);
-  const pushToast = useCallback(function (text: string, level: Toast['level'] = 'error', retry?: () => void) {
+  const pushToast = useCallback((text: string, level: Toast['level'] = 'error', retry?: () => void) => {
     const id = nextId.current;
     nextId.current += 1;
     const toast: Toast = retry === undefined ? { id, text, level } : { id, text, level, action: 'Retry', onAction: retry };
-    setToasts(function (previous) { return [...previous, toast]; });
+    setToasts((previous) => [...previous, toast]);
   }, []);
-  const dismissToast = useCallback(function (id: number) {
-    setToasts(function (previous) { return previous.filter(function (toast) { return toast.id !== id; }); });
+  const dismissToast = useCallback((id: number) => {
+    setToasts((previous) => previous.filter((toast) => toast.id !== id) );
   }, []);
   return { toasts, pushToast, dismissToast };
 };
@@ -82,7 +82,7 @@ export const useModelInfo = () => {
   const [visionKnown, setVisionKnown] = useState(false);
   const resolved = useRef(false);
 
-  const refresh = useCallback(async function (): Promise<ModelRecord | null> {
+  const refresh = useCallback(async (): Promise<ModelRecord | null> => {
     try {
       const record = await loadModels();
       if (record === null) { return null; }
@@ -98,20 +98,20 @@ export const useModelInfo = () => {
     }
   }, []);
 
-  const markOffline = useCallback(function () {
+  const markOffline = useCallback(() => {
     // A failed refresh after a name is known only means the numbers
     // Are stale, so a live model never becomes an offline badge.
     if (resolved.current) { return; }
     setModelResolved(false);
   }, []);
 
-  useEffect(function () {
-    void refresh().then(function (record) { if (record === null) { markOffline(); } });
+  useEffect(() => {
+    void refresh().then((record) => { if (record === null) { markOffline(); } });
   }, [refresh, markOffline]);
 
-  const retry = useCallback(function () {
+  const retry = useCallback(() => {
     setModelResolved(false);
-    void refresh().then(function (record) { if (record === null) { markOffline(); } });
+    void refresh().then((record) => { if (record === null) { markOffline(); } });
   }, [markOffline, refresh]);
 
   return {
@@ -152,50 +152,50 @@ export const useBubbleLog = (): LogApi => {
   const flushTimer = useRef<Timer | null>(null);
   const pendingText = useRef('');
 
-  const allocate = useCallback(function (bubble: Omit<Bubble, 'id'>): Bubble {
+  const allocate = useCallback((bubble: Omit<Bubble, 'id'>): Bubble => {
     const id = nextId.current;
     nextId.current += 1;
     return { ...bubble, id };
   }, []);
 
-  const append = useCallback(function (bubble: Bubble) {
-    setBubbles(function (previous) { return [...previous, bubble]; });
+  const append = useCallback((bubble: Bubble) => {
+    setBubbles((previous) => [...previous, bubble]);
   }, []);
 
-  const addTurn = useCallback(function (bubble: Omit<Bubble, 'id'>): number {
+  const addTurn = useCallback((bubble: Omit<Bubble, 'id'>): number => {
     const id = nextId.current;
     nextId.current += 1;
-    setBubbles(function (previous) { return [...previous, { ...bubble, id }]; });
+    setBubbles((previous) => [...previous, { ...bubble, id }]);
     return id;
   }, []);
 
-  const replaceAll = useCallback(function (next: ReadonlyArray<Omit<Bubble, 'id'>>) {
+  const replaceAll = useCallback((next: ReadonlyArray<Omit<Bubble, 'id'>>) => {
     nextId.current = 1;
-    setBubbles(next.map(function (bubble) { return allocate(bubble); }));
+    setBubbles(next.map((bubble) => allocate(bubble)));
   }, [allocate]);
 
-  const patch = useCallback(function (id: number, change: Partial<Bubble>) {
-    setBubbles(function (previous) {
-      return previous.map(function (bubble) { return bubble.id === id ? { ...bubble, ...change } : bubble; });
-    });
+  const patch = useCallback((id: number, change: Partial<Bubble>) => {
+    setBubbles((previous) =>
+      previous.map((bubble) => bubble.id === id ? { ...bubble, ...change } : bubble)
+    );
   }, []);
 
-  const clear = useCallback(function () { setBubbles([]); }, []);
+  const clear = useCallback(() => { setBubbles([]); }, []);
 
-  const dropLastAssistant = useCallback(function () {
-    setBubbles(function (previous) {
-      const index = previous.map(function (bubble) { return bubble.role === 'assistant'; }).lastIndexOf(true);
-      return index === -1 ? previous : previous.filter(function (_bubble, at) { return at !== index; });
+  const dropLastAssistant = useCallback(() => {
+    setBubbles((previous) => {
+      const index = previous.map((bubble) => bubble.role === 'assistant').lastIndexOf(true);
+      return index === -1 ? previous : previous.filter((_bubble, at) => at !== index);
     });
   }, []);
 
   /** Queue a streaming paint. The timer arms once and then repaints at a fixed
    *  cadence with whatever text has arrived, so a burst of tokens costs one
    *  render per window rather than one per token. */
-  const schedulePaint = useCallback(function (id: number, content: string) {
+  const schedulePaint = useCallback((id: number, content: string) => {
     pendingText.current = content;
     if (flushTimer.current !== null) {return;}
-    flushTimer.current = setTimeout(function () {
+    flushTimer.current = setTimeout(() => {
       flushTimer.current = null;
       const next = pendingText.current;
       pendingText.current = '';
@@ -203,13 +203,13 @@ export const useBubbleLog = (): LogApi => {
     }, STREAM_FLUSH_MS);
   }, [patch]);
 
-  const flushNow = useCallback(function (id: number, content: string, change: Partial<Bubble>) {
+  const flushNow = useCallback((id: number, content: string, change: Partial<Bubble>) => {
     if (flushTimer.current !== null) { clearTimeout(flushTimer.current); flushTimer.current = null; }
     pendingText.current = '';
     patch(id, { text: content, ...change });
   }, [patch]);
 
-  const lastAssistantId = useMemo(function () {
+  const lastAssistantId = useMemo(() => {
     for (let index = bubbles.length - 1; index >= 0; index -= 1) {
       if (bubbles[index]?.role === 'assistant') { return bubbles[index]?.id ?? null; }
     }
@@ -236,7 +236,7 @@ const runStream = async (
   if (request.url !== undefined) { target.url = request.url; }
   try {
     await streamChat(target, {
-      onText: function (next) {
+      onText (next) {
         content = next;
         tokenCount.value += 1;
         const now = performance.now();
@@ -246,7 +246,7 @@ const runStream = async (
         }
         log.schedulePaint(id, next);
       },
-      onStats: function (stats: StreamStats) { log.patch(id, { stats }); },
+      onStats (stats: StreamStats) { log.patch(id, { stats }); },
     });
     log.flushNow(id, content || 'No response.', { phase: 'done' });
     onFinish(false);
@@ -274,9 +274,9 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
   const abortRef = useRef<AbortController | null>(null);
   const stopped = useRef(false);
 
-  const stop = useCallback(function () { abortRef.current?.abort(); }, []);
+  const stop = useCallback(() => { abortRef.current?.abort(); }, []);
 
-  const send = useCallback(function (body: string, errorLabel: string, url?: string) {
+  const send = useCallback((body: string, errorLabel: string, url?: string) => {
     const turnId = log.addTurn({ role: 'assistant', text: '', phase: 'thinking' });
     // Start the markdown fetch alongside the request: by the last
     // Chunk, marked and DOMPurify are normally already in place.
@@ -288,7 +288,7 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
     setTps(0);
     announce('Generating response…');
     void runStream(log, turnId, { body, url, signal: controller.signal, errorLabel },
-      function (wasStopped) {
+      (wasStopped) => {
         stopped.current = wasStopped;
         abortRef.current = null;
         setStreaming(false);
@@ -313,40 +313,40 @@ type ConversationsInput = {
 /** Selecting, creating, clearing and deleting a conversation. */
 const useConversationActions = ({ log, announce, pushToast, load, setLoading }: ConversationsInput) => {
   const seq = useRef(0);
-  const open = useCallback(function (id: string) {
+  const open = useCallback((id: string) => {
     seq.current += 1;
     const mine = seq.current;
     setLoading(true);
     announce('Loading conversation…');
     void selectConversation(id).then(
-      function (data) {
+      (data) => {
         if (mine !== seq.current) {return;}
         setLoading(false);
-        log.replaceAll((data.messages ?? []).map(function (message) {
-          return { role: message.role === 'user' ? 'user' : 'assistant', text: message.content, phase: 'done' };
-        }));
+        log.replaceAll((data.messages ?? []).map((message) => (
+          { role: message.role === 'user' ? 'user' : 'assistant', text: message.content, phase: 'done' }
+        )));
         void load();
       },
-      function () {
+      () => {
         if (mine !== seq.current) {return;}
         setLoading(false);
-        pushToast('Failed to load conversation. Check that the server is running.', 'error', function () { open(id); });
+        pushToast('Failed to load conversation. Check that the server is running.', 'error', () => { open(id); });
       },
     );
   }, [announce, load, log, pushToast, setLoading]);
 
-  const startNew = useCallback(function () {
+  const startNew = useCallback(() => {
     void createConversation().then(
-      function () { log.clear(); void load(); announce('New conversation started'); },
-      function () { pushToast('Could not create a new conversation. Check that the server is running.'); },
+      () => { log.clear(); void load(); announce('New conversation started'); },
+      () => { pushToast('Could not create a new conversation. Check that the server is running.'); },
     );
   }, [announce, load, log, pushToast]);
 
-  const clearAll = useCallback(function () {
+  const clearAll = useCallback(() => {
     if (log.bubbles.length > 0 && globalThis.confirm('Clear this conversation?') === false) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
     void clearServerConversation().then(
-      function () { log.clear(); void load(); announce('Conversation cleared'); },
-      function () {
+      () => { log.clear(); void load(); announce('Conversation cleared'); },
+      () => {
         log.clear();
         // Failure styling: every other failed action in the UI toasts in red.
         pushToast('Could not clear on the server. The view was reset locally, but the conversation is still stored.');
@@ -354,11 +354,11 @@ const useConversationActions = ({ log, announce, pushToast, load, setLoading }: 
     );
   }, [announce, load, log, pushToast]);
 
-  const remove = useCallback(function (id: string) {
+  const remove = useCallback((id: string) => {
     if (!globalThis.confirm('Delete this conversation?')) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
     void deleteConversation(id).then(
-      function (data) { void load(); if (data.cleared === true) { log.clear(); } },
-      function () { pushToast('Could not delete that conversation. Check that the server is running.'); },
+      (data) => { void load(); if (data.cleared === true) { log.clear(); } },
+      () => { pushToast('Could not delete that conversation. Check that the server is running.'); },
     );
   }, [load, log, pushToast]);
 
@@ -375,7 +375,7 @@ export const useConversations = ({ log, announce, pushToast }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async function () {
+  const load = useCallback(async () => {
     try {
       setConversations(await loadConversations());
       setLoadError(null);
@@ -384,7 +384,7 @@ export const useConversations = ({ log, announce, pushToast }: {
     }
   }, []);
 
-  useEffect(function () { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const actions = useConversationActions({ log, announce, pushToast, load, setLoading });
 
@@ -396,26 +396,26 @@ export const useSettings = (announce: Announce) => {
   const [showStats, setShowStats] = useState(readShowStats);
   const [open, setOpen] = useState(false);
 
-  const change = useCallback(function (next: Sampling) {
+  const change = useCallback((next: Sampling) => {
     setSampling(next);
     writeSampling(next);
   }, []);
 
-  const clearSystem = useCallback(function () {
-    setSampling(function (previous) { return { ...previous, system: '' }; });
+  const clearSystem = useCallback(() => {
+    setSampling((previous) => ( { ...previous, system: '' } ));
     clearStoredSystemPrompt();
     announce('System prompt cleared');
   }, [announce]);
 
-  const toggleStats = useCallback(function () {
-    setShowStats(function (previous) {
+  const toggleStats = useCallback(() => {
+    setShowStats((previous) => {
       writeShowStats(!previous);
       return !previous;
     });
   }, []);
 
-  const togglePanel = useCallback(function () {
-    setOpen(function (wasOpen) {
+  const togglePanel = useCallback(() => {
+    setOpen((wasOpen) => {
       announce(`Settings panel ${wasOpen ? 'closed' : 'opened'}`);
       return !wasOpen;
     });
@@ -432,29 +432,29 @@ export const useImageAttachment = ({ vision, visionKnown, announce, pushToast }:
 }) => {
   const [pending, setPending] = useState<string | null>(null);
 
-  useEffect(function () {
+  useEffect(() => {
     if (visionKnown && !vision && pending !== null) {
       setPending(null);
       pushToast('This model cannot view images.');
     }
   }, [pending, pushToast, vision, visionKnown]);
 
-  const attach = useCallback(function (file: File, label: string) {
+  const attach = useCallback((file: File, label: string) => {
     if (visionKnown && !vision) { pushToast('This model cannot view images.'); return; }
     if (!ALLOWED_IMAGE_TYPES.has(file.type)) { pushToast('Unsupported image format. Use JPEG, PNG, GIF, or WebP.'); return; }
     if (file.size > MAX_IMAGE_BYTES) { pushToast('Image too large (max 10 MB).'); return; }
     const reader = new FileReader();
-    reader.addEventListener('load', function (event) {
+    reader.addEventListener('load', (event) => {
       const encoded = event.target?.result;
       if (encoded === null || encoded === undefined || encoded instanceof ArrayBuffer) {return;}
       setPending(encoded);
       announce(label);
     });
-    reader.addEventListener('error', function () { pushToast('Could not read that image. Try another file.'); });
+    reader.addEventListener('error', () => { pushToast('Could not read that image. Try another file.'); });
     reader.readAsDataURL(file);
   }, [announce, pushToast, vision, visionKnown]);
 
-  const clear = useCallback(function () {
+  const clear = useCallback(() => {
     setPending(null);
     announce('Image removed');
   }, [announce]);

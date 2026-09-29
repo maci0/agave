@@ -16,9 +16,37 @@
 		{
 			"name": "anti-slop",
 			"specifier": "./tools/oxlint/anti-slop/index.ts"
-		}
+		},
+		"@shadcn/lint"
 	],
+	// @shadcn/lint reads the Tailwind theme from src/web/ui/theme.css (the one
+	// stylesheet that imports tailwindcss) and treats every import from a
+	// `ui/` directory as a design-system component. docs/brand/README.md is the
+	// design system these rules enforce.
+	"settings": {
+		"shadcn": {
+			"componentImports": ["(^|/)ui/"],
+			"ignoreImports": ["(^|/)ui/cn$"],
+			"note": "Design tokens and component rules: docs/brand/README.md and src/web/ui/theme.css."
+		}
+	},
 	"rules": {
+		"shadcn/no-restyle": ["error", { "allow": ["layout"] }],
+		"shadcn/no-raw-colors": "error",
+		"shadcn/no-arbitrary-values": "error",
+		"shadcn/no-inline-styles": "error",
+		"shadcn/no-unknown-classes": "error",
+		"shadcn/require-static-classes": "error",
+		// The strict preset enables the whole style category, whose one-var
+		// default merges declarations into `let a, b;`. One binding per
+		// statement keeps diffs and blame to one line per name.
+		"one-var": ["error", "never"],
+		// Same reason as jest/require-hook: the smoke test registers happy-dom
+		// at module scope, before the modules under test import the DOM.
+		"vitest/require-hook": "off",
+		// The vitest plugin reads bun:test imports as globals; the tests import
+		// test, expect and afterAll from bun:test, which is their runner.
+		"vitest/prefer-importing-vitest-globals": "off",
 		"anti-slop/no-chained-type-assertions": "error",
 		"anti-slop/no-conditional-empty-object-spread": "error",
 		"anti-slop/no-known-value-widening": "error",
@@ -46,6 +74,18 @@
 	},
 	"overrides": [
 		{
+			// The design-system components own their classes; the restyle and
+			// arbitrary-value policies apply to the code that uses them.
+			"files": [
+				"src/web/ui/**"
+			],
+			"rules": {
+				"shadcn/no-restyle": "off",
+				"shadcn/no-arbitrary-values": "off",
+				"shadcn/require-static-classes": "off"
+			}
+		},
+		{
 			"files": [
 				"**/*.d.ts",
 				"web/agave.ts"
@@ -68,12 +108,18 @@
 			"files": [
 				"docs/**/*.mjs"
 			],
+			// A bun CLI script: Bun is its runtime, and top-level await is how a
+			// bun entry point waits; nothing require()s it.
+			"globals": {
+				"Bun": "readonly"
+			},
 			"env": {
 				"node": true
 			},
 			"rules": {
 				"import/no-nodejs-modules": "off",
 				"no-console": "off",
+				"node/no-top-level-await": "off",
 				"@rikalabs/no-unlisted-external-imports": "off",
 				"typescript/no-unsafe-call": "off",
 				"typescript/no-unsafe-member-access": "off",

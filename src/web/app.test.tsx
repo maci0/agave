@@ -39,10 +39,17 @@ const clearCdn = (): void => {
  *  whatever was in it, so one node serves both. */
 const markdownTarget = document.createElement('div');
 
+/** The value, or a thrown error naming what was missing, so a test body reads
+ *  as straight-line assertions. */
+const present = <T,>(value: T | null | undefined, what: string): T => {
+  if (value === null || value === undefined) { throw new Error(`${what} missing`); }
+  return value;
+};
+
 /** Let Preact flush its render and the stream throttle timer. */
 const settle = (ms = 1): Promise<void> =>
   // oxlint-disable-next-line promise/avoid-new -- a timer is the only clock the test needs
-  new Promise(function (resolve) { setTimeout(resolve, ms); });
+  new Promise((resolve) => { setTimeout(resolve, ms); });
 
 const tick = async (times = 4): Promise<void> => {
   for (let index = 0; index < times; index += 1) { await settle(5); }
@@ -58,7 +65,7 @@ const waitFor = async (condition: () => boolean): Promise<boolean> => {
   return condition();
 };
 
-afterAll(async function () {
+afterAll(async () => {
   // Preact's scheduler drains through `window`, so let the pending work from
   // The mounted trees land before the registrator takes the DOM globals away.
   for (let index = 0; index < 40; index += 1) { await settle(5); }
@@ -108,7 +115,7 @@ const stubServer = (): void => {
   } as typeof fetch;
 };
 
-test('a prompt streams into the log and the model badge resolves', async function () {
+test('a prompt streams into the log and the model badge resolves', async () => {
   document.body.innerHTML = '<div id="root"></div>';
   stubServer();
   await import('./app');
@@ -119,15 +126,12 @@ test('a prompt streams into the log and the model badge resolves', async functio
   expect(document.querySelector('a[href="#msg"]')).not.toBeNull();
   expect(document.body.textContent).toContain('test-model');
 
-  const input = document.querySelector<HTMLTextAreaElement>('#msg');
-  expect(input).not.toBeNull();
-  if (!input) { throw new Error('composer input missing'); }
+  const input = present(document.querySelector<HTMLTextAreaElement>('#msg'), 'composer input');
 
   // The framework installs its own value setter on the node, so the native descriptor
   // Is the only way to write a value the controlled input will observe.
   // oxlint-disable-next-line typescript-eslint/unbound-method -- `.call` below binds the node, which is the point
-  const { set: nativeSetter } = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value') ?? {};
-  if (nativeSetter === undefined) { throw new Error('no value setter'); }
+  const nativeSetter = present(Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set, 'textarea value setter');
   // SAFETY: the descriptor is the DOM value setter of a textarea.
   nativeSetter.call(input, 'What is 2+2?');
   input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -138,7 +142,7 @@ test('a prompt streams into the log and the model badge resolves', async functio
   form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 
   // The stream paints on a 60ms throttle, so poll rather than guess a delay.
-  expect(await waitFor(function () { return document.body.textContent.includes('is 4.'); })).toBe(true);
+  expect(await waitFor(() => document.body.textContent.includes('is 4.'))).toBe(true);
 
   const text = document.body.textContent;
   expect(text).toContain('What is 2+2?');
@@ -151,7 +155,7 @@ test('a prompt streams into the log and the model badge resolves', async functio
   expect(bodies.at(-1)?.textContent).toBe('The answer is 4.');
 }, MOUNT_TIMEOUT_MS);
 
-test('a streaming turn replaces the thinking placeholder instead of extending it', async function () {
+test('a streaming turn replaces the thinking placeholder instead of extending it', async () => {
   // Imported here, not at the top: react-dom reads the global document when
   // It loads, so it has to load after the registrator.
   const { createRoot } = await import('react-dom/client');
@@ -163,28 +167,28 @@ test('a streaming turn replaces the thinking placeholder instead of extending it
     root.render(<MessageBody text={text} phase={phase} onRendered={function (rendered) { announced.push(rendered); }} />);
   };
   paint('', 'thinking');
-  expect(await waitFor(function () { return host.textContent === '…'; })).toBe(true);
+  expect(await waitFor(() => host.textContent === '…')).toBe(true);
   paint('The answer', 'streaming');
-  expect(await waitFor(function () { return host.textContent === 'The answer'; })).toBe(true);
+  expect(await waitFor(() => host.textContent === 'The answer')).toBe(true);
   paint('The answer is 4.', 'streaming');
-  expect(await waitFor(function () { return host.textContent === 'The answer is 4.'; })).toBe(true);
+  expect(await waitFor(() => host.textContent === 'The answer is 4.')).toBe(true);
   // A turn in flight is not a rendered turn, so it announces nothing.
   expect(announced).toEqual([]);
   root.unmount();
   host.remove();
 });
 
-test('model text renders as text when the sanitizer has not loaded', function () {
+test('model text renders as text when the sanitizer has not loaded', () => {
   clearCdn();
   renderMarkdown(markdownTarget, UNSANITIZED_TEXT);
   expect(markdownTarget.querySelector('img')).toBeNull();
   expect(markdownTarget.textContent).toBe(UNSANITIZED_TEXT);
 });
 
-test('a link that survives the sanitizer loses its script scheme', function () {
+test('a link that survives the sanitizer loses its script scheme', () => {
   Object.assign(globalThis, {
-    marked: { setOptions: function () { return undefined; }, parse: function () { return LINK_PAYLOAD; } },
-    DOMPurify: { sanitize: function (dirty: string) { return dirty; } },
+    marked: { setOptions () { return undefined; }, parse () { return LINK_PAYLOAD; } },
+    DOMPurify: { sanitize (dirty: string) { return dirty; } },
   });
   try {
     renderMarkdown(markdownTarget, LINK_PAYLOAD);

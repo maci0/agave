@@ -15,6 +15,7 @@ import { Button } from '../src/web/ui/button';
 import { EmptyState } from '../src/web/ui/empty-state';
 import { HintChip } from '../src/web/ui/hint-chip';
 import { Input } from '../src/web/ui/input';
+import { SkipLink } from '../src/web/ui/skip-link';
 import { cn } from '../src/web/ui/cn';
 import { friendlyGenerateError } from './load-errors';
 import { useModelLoader, type ModelLoader } from './use-model-loader';
@@ -33,8 +34,8 @@ type Message = {
 const ROLE_LABELS = { user: 'You', assistant: 'Agave', system: 'System', error: 'Error' } as const;
 
 const BUBBLE = {
-  user: 'rounded-ee-[2px] border-border bg-card',
-  assistant: 'rounded-es-[2px] border-border bg-popover',
+  user: 'w-auto max-w-4/5 rounded-ee-xs border-transparent bg-primary/10',
+  assistant: 'border-transparent px-1',
   system: 'border-border-strong bg-primary/10 text-sm text-muted-foreground',
   error: 'border-destructive bg-destructive/10 text-sm text-destructive-foreground',
 } as const;
@@ -43,7 +44,7 @@ const BUBBLE = {
  *  announces twice. Returns the cancel handle for the pending timer. */
 const announceLater = (setter: (text: string) => void, text: string): void => {
   setter('');
-  setTimeout(function () { setter(text); }, ANNOUNCE_DELAY_MS);
+  setTimeout(() => { setter(text); }, ANNOUNCE_DELAY_MS);
 };
 
 const ShellMessage = ({ message }: { message: Message }) => (
@@ -59,7 +60,7 @@ const ShellMessage = ({ message }: { message: Message }) => (
     <div
       dir="auto"
       className={cn(
-        'w-full rounded-lg border px-4 py-3 text-base whitespace-pre-wrap [overflow-wrap:break-word] [word-break:break-word] [line-break:loose]',
+        'agave-wrap w-full rounded-lg border px-4 py-3 text-base whitespace-pre-wrap',
         BUBBLE[message.role],
       )}
     >
@@ -112,7 +113,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
       <div
         role="region"
         aria-label="Loaded model"
-        className="flex items-center gap-2 bg-card px-8 py-2 max-drawer:px-4"
+        className="flex items-center gap-2 border-b border-divider bg-card px-8 py-2 max-drawer:px-4"
       >
         <span className="min-w-0 flex-1 truncate font-mono text-sm text-faint" title={name}>{name}</span>
         <Button type="button" size="sm" onClick={function () { setEditing(true); }}>Change model</Button>
@@ -123,7 +124,7 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
   <div
     role="region"
     aria-label="Model loading"
-    className="flex flex-wrap items-center gap-2 bg-card px-8 py-4 max-drawer:flex-col max-drawer:items-stretch max-drawer:px-4"
+    className="flex flex-wrap items-center gap-2 border-b border-divider bg-card px-8 py-4 max-drawer:flex-col max-drawer:items-stretch max-drawer:px-4"
   >
     <label htmlFor="model-url" className="flex-none font-mono text-sm text-faint">Model URL</label>
     <Input
@@ -132,7 +133,8 @@ const ModelBar = ({ loader }: { loader: ModelLoader }) => {
       placeholder="https://example.com/model.gguf"
       autoComplete="url"
       spellCheck={false}
-      className="min-w-[200px] flex-1 font-mono"
+      font="mono"
+      className="min-w-50 flex-1"
       value={loader.url}
       disabled={loader.busy}
       aria-invalid={loader.urlError !== null}
@@ -185,7 +187,7 @@ const ShellEmptyState = ({ ready }: { ready: boolean }) => (
 /** The log: the transcript, the empty hint, and the pending bubble. */
 const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sending: boolean; ready: boolean }) => {
   const logRef = useRef<HTMLDivElement>(null);
-  useEffect(function () {
+  useEffect(() => {
     const log = logRef.current;
     if (log) { log.scrollTop = log.scrollHeight; }
   }, [messages, sending]);
@@ -201,13 +203,13 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
       className="agave-scroll flex-1 overflow-y-auto px-8 py-4 max-drawer:px-4"
     >
       {messages.length === 0 ? <ShellEmptyState ready={ready} /> : null}
-      {messages.map(function (message) { return <ShellMessage key={message.id} message={message} />; })}
+      {messages.map((message) => <ShellMessage key={message.id} message={message} />)}
       {sending ? (
         <div className="mx-auto flex w-full agave-measure flex-col items-start">
           <div
             role="status"
             aria-label="Generating response"
-            className="w-full animate-pulse-soft rounded-lg rounded-es-[2px] border border-border bg-popover px-4 py-3 text-base text-faint"
+            className="w-full animate-pulse-soft px-1 py-3 text-base text-faint"
           >
             …
           </div>
@@ -219,13 +221,13 @@ const ChatLog = ({ messages, sending, ready }: { messages: Array<Message>; sendi
 
 /** The product line, and the control that clears the transcript. */
 const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; onClear: () => void }) => (
-  <header className="flex items-center justify-between gap-4 border-b border-border bg-card px-8 py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
-    <div>
+  <header className="flex items-center justify-between gap-4 border-b border-divider bg-card px-8 py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
+    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold tracking-tight text-primary">
         <span className="mark" aria-hidden="true" />
         agave
       </h1>
-      <small className="text-faint">LLM inference in the browser via WebAssembly</small>
+      <small className="text-sm text-faint">LLM inference in the browser, via WebAssembly</small>
     </div>
         {ready ? (
           <Button type="button" size="sm" onClick={onClear} title="Clear conversation" disabled={busy}>
@@ -247,46 +249,49 @@ type ComposerProps = {
 
 const Composer = ({ prompt, onPrompt, onSend, ready, sending, busy, focus }: ComposerProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(function () { focus(); }, [focus]);
+  useEffect(() => { focus(); }, [focus]);
   return (
     <>
       <form
         aria-label="Send message"
         onSubmit={function (event) { event.preventDefault(); onSend(); }}
-        className="flex gap-2 border-t border-border bg-card px-8 py-4 max-drawer:px-4"
+        className="border-t border-divider bg-card px-8 py-4 max-drawer:px-4"
       >
-        <Input
-          ref={inputRef}
-          id="prompt"
-          placeholder={ready ? 'Type a message...' : 'Load a model to start...'}
-          aria-label="Message input"
-          enterKeyHint="send"
-          autoComplete="off"
-          dir="auto"
-          className="flex-1 text-base max-drawer:text-[16px]"
-          value={prompt}
-          disabled={!ready || busy}
-          aria-describedby={ready ? 'input-hint' : undefined}
-          onChange={function (event) { onPrompt(event.target.value); }}
-          onKeyDown={function (event) {
-            // Ignore Enter during IME composition (CJK input).
-            // There, Enter confirms the conversion; it must not send.
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              onSend();
-            }
-          }}
-        />
-        <Button
-          type="submit"
-          variant="solid"
-          size="lg"
-          aria-label="Send message"
-          aria-busy={sending}
-          disabled={!ready || busy || !prompt.trim()}
-        >
-          {sending ? 'Generating…' : 'Send'}
-        </Button>
+        <div className="mx-auto flex w-full agave-measure gap-2">
+          <Input
+            ref={inputRef}
+            id="prompt"
+            placeholder={ready ? 'Prompt' : 'Load a model first'}
+            aria-label="Message input"
+            enterKeyHint="send"
+            autoComplete="off"
+            dir="auto"
+            size="lg"
+            className="flex-1"
+            value={prompt}
+            disabled={!ready || busy}
+            aria-describedby={ready ? 'input-hint' : undefined}
+            onChange={function (event) { onPrompt(event.target.value); }}
+            onKeyDown={function (event) {
+              // Ignore Enter during IME composition (CJK input).
+              // There, Enter confirms the conversion; it must not send.
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                onSend();
+              }
+            }}
+          />
+          <Button
+            type="submit"
+            variant="solid"
+            size="lg"
+            aria-label="Send message"
+            aria-busy={sending}
+            disabled={!ready || busy || !prompt.trim()}
+          >
+            {sending ? 'Generating…' : 'Send'}
+          </Button>
+        </div>
       </form>
       <p id="input-hint" hidden={!ready} className="px-8 text-center font-mono text-xs text-faint max-drawer:px-4">
         Enter to send
@@ -304,15 +309,15 @@ const useShellChat = (engine: AgaveEngine) => {
   const nextId = useRef(1);
   const announce = useCallback((text: string) => { announceLater(setAnnouncement, text); }, []);
 
-  const addMessage = useCallback(function (role: Role, text: string) {
+  const addMessage = useCallback((role: Role, text: string) => {
     const id = nextId.current;
     nextId.current += 1;
-    setMessages(function (previous) { return [...previous, { id, role, text }]; });
+    setMessages((previous) => [...previous, { id, role, text }]);
     if (role === 'error' || role === 'system') { announce(text); }
     else if (role === 'assistant') { announce(`Agave responded: ${text.slice(0, 200)}`); }
   }, [announce]);
 
-  const send = useCallback(function (ready: boolean, focus: () => void) {
+  const send = useCallback((ready: boolean, focus: () => void) => {
     const text = prompt.trim();
     if (!text || sending || !ready) {return;}
     setSending(true);
@@ -332,7 +337,7 @@ const useShellChat = (engine: AgaveEngine) => {
     })();
   }, [addMessage, announce, engine, prompt, sending]);
 
-  const clearChat = useCallback(function (focus: () => void) {
+  const clearChat = useCallback((focus: () => void) => {
     if (sending) {return;}
     if (messages.length === 0) { return; }
     if (!globalThis.confirm('Clear this conversation?')) {return;} // oxlint-disable-line no-alert -- native confirmation dialog is intentional UX
@@ -347,19 +352,14 @@ const useShellChat = (engine: AgaveEngine) => {
 const Shell = () => {
   const engine = new AgaveEngine();
   const chat = useShellChat(engine);
-  const loader = useModelLoader(engine, function (text, level) {
+  const loader = useModelLoader(engine, (text, level) => {
     chat.addMessage(level === 'error' ? 'error' : 'system', text);
   });
 
   const busy = loader.busy || chat.sending;
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-      <a
-        href="#prompt"
-        className="absolute start-4 top-[-100%] z-50 rounded-lg bg-primary px-4 py-2 font-mono text-sm font-medium text-primary-foreground no-underline transition-[top] duration-200 focus:top-2"
-      >
-        Skip to message input
-      </a>
+      <SkipLink href="#prompt">Skip to message input</SkipLink>
       <ShellHeader ready={loader.ready} busy={busy} onClear={function () { chat.clearChat(loader.focusPrompt); }} />
       <ModelBar loader={loader} />
       <main aria-label="Chat" className="flex min-h-0 flex-1 flex-col">

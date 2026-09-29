@@ -54,16 +54,16 @@ const downloadCopy = (httpStatus: number | undefined): string => {
 const fromMessage = (message: string, prefix: string): string => {
   const lower = message.toLowerCase();
   const known: Array<[RegExp, string]> = [
-    [/^(failed to fetch|load failed)$|networkerror/, DOWNLOAD_REFUSED],
-    [/http 404/, 'The model URL was not found. Check the link.'],
-    [/http (401|403)/, 'The model URL refused the download. Try dropping a GGUF file instead.'],
-    [/^(gguf parse error|.*not a valid gguf)/, 'This file is not a valid GGUF model.'],
-    [/^unsupported arch/, 'This model architecture is not supported in the browser.'],
-    [/^no vocab/, 'This GGUF file has no vocabulary and cannot be used.'],
-    [/^tok error/, 'Could not read the tokenizer from this model file.'],
-    [/^(model init error|failed to initialize model)/, 'Could not initialize this model in the browser.'],
-    [/failed to allocate|out of memory/, 'The model is too large to fit in this browser.'],
-    [/engine not initialized/, 'The engine is not ready. Reload the page and try again.'],
+    [/^(?:failed to fetch|load failed)$|networkerror/u, DOWNLOAD_REFUSED],
+    [/http 404/u, 'The model URL was not found. Check the link.'],
+    [/http (?:401|403)/u, 'The model URL refused the download. Try dropping a GGUF file instead.'],
+    [/^(?:gguf parse error|.*not a valid gguf)/u, 'This file is not a valid GGUF model.'],
+    [/^unsupported arch/u, 'This model architecture is not supported in the browser.'],
+    [/^no vocab/u, 'This GGUF file has no vocabulary and cannot be used.'],
+    [/^tok error/u, 'Could not read the tokenizer from this model file.'],
+    [/^(?:model init error|failed to initialize model)/u, 'Could not initialize this model in the browser.'],
+    [/failed to allocate|out of memory/u, 'The model is too large to fit in this browser.'],
+    [/engine not initialized/u, 'The engine is not ready. Reload the page and try again.'],
   ];
   for (const [pattern, text] of known) {
     if (pattern.test(lower)) { return text; }

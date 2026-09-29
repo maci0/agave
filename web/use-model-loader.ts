@@ -74,7 +74,7 @@ type LoadState = {
 /** The engine handshake and the failure report, shared by both load paths. */
 const useEngineInit = (engine: AgaveEngine, state: LoadState, onReport: Report, focusPrompt: () => void) => {
   const hadModel = useRef(false);
-  return useCallback(async function (load: () => Promise<void>, fromUrl: boolean) {
+  return useCallback(async (load: () => Promise<void>, fromUrl: boolean) => {
     hadModel.current = engine.hasModel;
     state.setLoading(true);
     state.setReady(false);
@@ -112,15 +112,15 @@ const useModelSources = (
   // That failed to load: a stale name would read as a working model.
   const [modelName, setModelName] = useState<string | null>(null);
 
-  const loadFromUrl = useCallback(function () {
+  const loadFromUrl = useCallback(() => {
     const target = url.trim();
     if (!target) { failUrl('Enter a model URL first'); return; }
     if (!isHttpUrl(target)) { failUrl('Enter a valid http(s) URL to a GGUF file'); return; }
     state.setUrlError(null);
-    void initAndLoad(async function () {
+    void initAndLoad(async () => {
       state.setStatus('Downloading model…');
       const modelBytes = await engine.fetchModel(target, {
-        onProgress: function ({ received, total }) {
+        onProgress ({ received, total }) {
           if (total > 0) {
             const percent = Math.round((received / total) * 100);
             state.setStatus(`Downloading model… ${fmtMb(received)} / ${fmtMb(total)} MB (${String(percent)}%)`);
@@ -135,12 +135,12 @@ const useModelSources = (
     }, true);
   }, [engine, failUrl, initAndLoad, state, url]);
 
-  const loadFromBuffer = useCallback(function (file: File) {
+  const loadFromBuffer = useCallback((file: File) => {
     if (file.name && !isGgufName(file.name)) {
       onReport('This is not a GGUF model file. Choose a file ending in .gguf.', 'error');
       return;
     }
-    void initAndLoad(async function () {
+    void initAndLoad(async () => {
       state.setStatus(`Reading ${file.name} (${fmtMb(file.size)} MB)…`);
       const modelBytes = await file.arrayBuffer();
       if (!isGgufBuffer(modelBytes)) { throw new Error('This file is not a valid GGUF model.'); }
@@ -160,26 +160,26 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
   const [dragOver, setDragOver] = useState(false);
   const prompt = useRef<HTMLInputElement>(null);
 
-  const focusPrompt = useCallback(function () { prompt.current?.focus(); }, []);
+  const focusPrompt = useCallback(() => { prompt.current?.focus(); }, []);
   // The reader is looking at the URL field, and the error renders beside it,
   // So focus stays where it is: the prompt is disabled until a model loads,
   // And moving focus there drops it on the body instead.
-  const failUrl = useCallback(function (message: string) {
+  const failUrl = useCallback((message: string) => {
     setStatus(message);
     setUrlError(message);
   }, []);
 
   const state: LoadState = { setStatus, setReady, setLoading, setUrlError };
   const sources = useModelSources(engine, state, onReport, failUrl, focusPrompt);
-  const setUrl = useCallback(function (next: string) { setUrlError(null); sources.setUrl(next); }, [sources]);
+  const setUrl = useCallback((next: string) => { setUrlError(null); sources.setUrl(next); }, [sources]);
 
-  const onDragOver = useCallback(function (event: DragEvent) { event.preventDefault(); setDragOver(true); }, []);
-  const onDragLeave = useCallback(function (event: DragEvent) {
+  const onDragOver = useCallback((event: DragEvent) => { event.preventDefault(); setDragOver(true); }, []);
+  const onDragLeave = useCallback((event: DragEvent) => {
     // Ignore a leave that stays inside the zone (child to child flicker).
     if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) {return;}
     setDragOver(false);
   }, []);
-  const onDrop = useCallback(function (event: DragEvent) {
+  const onDrop = useCallback((event: DragEvent) => {
     event.preventDefault();
     setDragOver(false);
     if (event.dataTransfer.files.length > 0) { sources.loadFromBuffer(event.dataTransfer.files[0]); }

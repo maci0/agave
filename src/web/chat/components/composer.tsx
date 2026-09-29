@@ -6,7 +6,6 @@ import { cn } from '../../ui/cn';
 import type { Sampling } from '../types';
 
 const COMPOSER_MAX_HEIGHT_PX = 200;
-const IMAGE_PREVIEW_MAX_PX = 80;
 
 type ComposerProps = {
   sampling: Sampling;
@@ -35,21 +34,18 @@ const ImagePreview = ({ src, onRemove }: { src: string; onRemove: () => void }) 
   <div className="mx-auto block w-full agave-measure p-2 max-drawer:px-0">
     <div className="relative inline-block max-w-full">
       <img
-        className="block max-w-[200px] rounded-lg border border-border"
-        style={{ maxHeight: `${IMAGE_PREVIEW_MAX_PX}px` }}
+        className="block max-h-20 max-w-50 rounded-lg border border-divider"
         src={src}
         alt="Attached image preview"
       />
       <Button
         type="button"
-        size="iconSm"
+        size="iconRound"
         onClick={onRemove}
         aria-label="Remove image"
         title="Remove image"
-        // The glyph uses --background on --destructive (5.98:1) and
-        // On the lighter hover red (8.47:1). White measured only 2.99:1,
-        // Below the 1.4.3 minimum for this label.
-        className="absolute -end-2 -top-2 rounded-pill border-none bg-destructive text-background hover:bg-destructive-foreground"
+        variant="destructiveSolid"
+        className="absolute -end-2 -top-2"
       >
         <X className="size-4" aria-hidden="true" />
       </Button>
@@ -103,7 +99,7 @@ const PromptField = (props: PromptFieldProps) => (
       }
     }}
     // Min-width: 0 lets the field shrink below its intrinsic width.
-    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-relaxed text-base text-foreground transition-[border-color,box-shadow] outline-none focus:border-primary focus:shadow-focus disabled:opacity-50 max-drawer:text-[16px]"
+    className="max-h-50 min-h-12 min-w-0 flex-1 resize-none rounded-lg border border-input bg-background px-4 py-3 leading-normal text-base text-foreground transition outline-none focus:border-primary focus:shadow-focus disabled:opacity-50 max-drawer:text-touch"
   />
 );
 
@@ -190,14 +186,19 @@ const useComposerForm = (props: ComposerProps, text: string, setText: (next: str
   const fileInput = useRef<HTMLInputElement>(null);
   const focusedOnce = useRef(false);
 
-  useEffect(function () {
+  useEffect(() => {
     const element = area.current;
     if (!element) {return;}
+    /* Re-measured when streaming flips too: the tok/s readout narrows the
+       field mid-turn, and the wrapped hint text would keep that height. The box
+       is border-box and scrollHeight excludes the border, so the border is
+       added back, or the field is 2px short and scrolls on its first line. */
     element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
-  }, [text]);
+    const border = element.offsetHeight - element.clientHeight;
+    element.style.height = `${Math.min(element.scrollHeight + border, COMPOSER_MAX_HEIGHT_PX)}px`;
+  }, [text, props.streaming]);
 
-  useEffect(function () {
+  useEffect(() => {
     if (!focusedOnce.current) {
       focusedOnce.current = true;
       return;
@@ -205,7 +206,7 @@ const useComposerForm = (props: ComposerProps, text: string, setText: (next: str
     area.current?.focus();
   }, [props.focusToken]);
 
-  const onSubmit = useCallback(function (event: SyntheticEvent<HTMLFormElement>) {
+  const onSubmit = useCallback((event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (props.streaming) {return;}
     if (!text.trim() && props.pendingImage === null) {return;}
@@ -253,13 +254,13 @@ export const Composer = (props: ComposerProps) => {
         props.onImageFile(dropped, 'Image dropped');
       }}
       className={cn(
-        'relative z-10 border-t border-border bg-card px-6 pt-4 pb-5 transition-colors max-drawer:p-4',
+        'relative z-10 border-t border-divider bg-card px-6 pt-4 pb-5 transition-colors max-drawer:p-4',
         form.dragOver && 'border-primary bg-primary/10',
       )}
     >
-      {props.pendingImage !== null ? (
+      {props.pendingImage === null ? null : (
         <ImagePreview src={props.pendingImage} onRemove={props.onRemoveImage} />
-      ) : null}
+      )}
 
       {props.settingsOpen ? (
         <SettingsPanel sampling={props.sampling} onChange={props.onSamplingChange} onClearSystem={props.onClearSystem} />
@@ -273,8 +274,8 @@ export const Composer = (props: ComposerProps) => {
         area={form.area}
         fileInput={form.fileInput}
       />
-      <p id="input-hint" className="mx-auto mt-2 w-full agave-measure text-center font-mono text-2xs text-faint max-drawer:sr-only">
-        Enter to send &middot; Shift+Enter for new line &middot; Escape to stop &middot; /help for commands
+      <p id="input-hint" className="mt-2 text-center font-mono text-2xs text-faint max-drawer:sr-only">
+        Enter send &middot; Shift+Enter new line &middot; Esc stop &middot; /help commands
       </p>
     </form>
   );
