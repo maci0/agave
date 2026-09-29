@@ -611,8 +611,8 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
 
 ### SemVer (0.x)
 
-- Product version: **0.9.0**, reported by `agave --version`, `/health` `version`,
-  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.9.0`).
+- Product version: **0.9.1**, reported by `agave --version`, `/health` `version`,
+  Prometheus `agave_build_info`, and OpenAI `system_fingerprint` (`agave-v0.9.1`).
 - On **0.x**, breaking changes are allowed without bumping the major digit, but
   they must be called out in `CHANGELOG.md` under **Breaking** (or **Changed**
   with an explicit compatibility note) before merge.
@@ -621,7 +621,7 @@ flags, and the HTTP API in `docs/API.md`, not a Zig package API.
   features as minor; fixes as patch.
 - Git tag `v1.0` (2026-03-22) is a **milestone name only**. It is not product
   SemVer `1.0.0`. Prefer tags that match the product version (for example
-  `v0.9.0`) for future releases.
+  `v0.9.1`) for future releases.
 
 ### Single sources of truth
 
