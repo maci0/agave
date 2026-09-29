@@ -73,6 +73,9 @@ void main() {
         if (tid < gl_SubgroupSize) { block_max = subgroupMax(block_max); if (tid == 0u) sdata[0] = block_max; }
         barrier();
         float m_new = sdata[0];
+        // Every thread has read the reduced value before the scratch is reused
+        // (write-after-read hazard).
+        barrier();
 
         float m_prev = m_i;
         m_i = max(m_i, m_new);
@@ -92,6 +95,9 @@ void main() {
         if (tid < gl_SubgroupSize) { block_sum = subgroupAdd(block_sum); if (tid == 0u) sdata[0] = block_sum; }
         barrier();
         l_i += sdata[0];
+        // Every thread has read the reduced value before the scratch is reused
+        // (write-after-read hazard).
+        barrier();
 
         // V accumulate (all threads cooperate on head_dim)
         for (uint t = 0u; t < block_len; t++) {
@@ -129,6 +135,9 @@ void main() {
         }
         barrier();
         float tree_score = sdata[0];
+        // Every thread has read the reduced value before the scratch is reused
+        // (write-after-read hazard).
+        barrier();
 
         float m_prev = m_i;
         m_i = max(m_i, tree_score);

@@ -31,6 +31,9 @@ void main() {
     }
     barrier();
     float max_val = shared_vals[0];
+    // Every thread has read the reduced value before any subgroup reuses the
+    // scratch slot for the next reduction (write-after-read hazard).
+    barrier();
 
     // Pass 2: exp(x - max) and sum
     float local_sum = 0.0;
