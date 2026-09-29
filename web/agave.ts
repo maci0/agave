@@ -302,8 +302,7 @@ class AgaveEngine {
     let wasmMemory: WebAssembly.Memory | null = null;
     const importObject: WebAssembly.Imports = {
       env: {
-        // WebGPU API imports would go here for GPU backend
-        // For now, CPU-only via WASM
+        // The module needs no host functions: it runs the CPU backend only.
       },
       wasi_snapshot_preview1: {
         // Minimal WASI stubs for Zig's std library

@@ -108,8 +108,8 @@ const useModelSources = (
 ) => {
   const initAndLoad = useEngineInit(engine, state, onReport, focusPrompt);
   const [url, setUrl] = useState('');
-  // Set only after the engine accepts the bytes, so the bar never names a model
-  // That failed to load: a stale name would read as a working model.
+  /* Set only after the engine accepts the bytes, so the bar never names a model
+     that failed to load: a stale name would read as a working model. */
   const [modelName, setModelName] = useState<string | null>(null);
 
   const loadFromUrl = useCallback(() => {
@@ -161,9 +161,9 @@ export const useModelLoader = (engine: AgaveEngine, onReport: Report): ModelLoad
   const prompt = useRef<HTMLInputElement>(null);
 
   const focusPrompt = useCallback(() => { prompt.current?.focus(); }, []);
-  // The reader is looking at the URL field, and the error renders beside it,
-  // So focus stays where it is: the prompt is disabled until a model loads,
-  // And moving focus there drops it on the body instead.
+  /* The reader is looking at the URL field, and the error renders beside it,
+     so focus stays where it is: the prompt is disabled until a model loads,
+     and moving focus there drops it on the body instead. */
   const failUrl = useCallback((message: string) => {
     setStatus(message);
     setUrlError(message);

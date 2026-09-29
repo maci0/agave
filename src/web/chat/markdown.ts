@@ -224,10 +224,10 @@ const decorateCodeBlock = (block: Element): void => {
   copy.type = 'button';
   copy.className = 'copy-btn';
   copy.textContent = 'Copy';
-  // The key reports its result by swapping its text, so it is a live region:
-  // A screen reader that is not reading the page still has to hear that the
-  // Clipboard write landed (SC 4.1.3), and the name has to stop saying
-  // "Copy" once it did.
+  /* The key reports its result by swapping its text, so it is a live region:
+     A screen reader that is not reading the page still has to hear that the
+     clipboard write landed (SC 4.1.3), and the name has to stop saying
+     "Copy" once it did. */
   copy.setAttribute('aria-live', 'polite');
   const what = lang === '' ? 'code' : `${lang} code`;
   copy.setAttribute('aria-label', `Copy ${what}`);

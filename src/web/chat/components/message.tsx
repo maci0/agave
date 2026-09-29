@@ -52,8 +52,8 @@ export const MessageBody = memo(({ text, phase, onRendered }: MessageBodyProps) 
     }
     if (phase === 'thinking') {
       element.textContent = THINKING_GLYPH;
-      // The glyph is what the node holds, so the next stream paint does not
-      // Extend it. `painted` tracks the text on screen, not the response.
+      /* The glyph is what the node holds, so the next stream paint does not
+         extend it. `painted` tracks the text on screen, not the response. */
       painted.current = THINKING_GLYPH;
       return;
     }
@@ -70,8 +70,8 @@ export const MessageBody = memo(({ text, phase, onRendered }: MessageBodyProps) 
       onRendered(truncateAnnounce(element.textContent, 200));
     }
     if (!markdownReady()) {
-      // The libraries were still in flight, so rebuild once they land,
-      // One message per idle slot, never a whole history in one task.
+      /* The libraries were still in flight, so rebuild once they land,
+         one message per idle slot, never a whole history in one task. */
       onIdle(() => {
         if (element.isConnected) { renderMarkdown(element, text); }
       });

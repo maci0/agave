@@ -66,8 +66,8 @@ const waitFor = async (condition: () => boolean): Promise<boolean> => {
 };
 
 afterAll(async () => {
-  // Preact's scheduler drains through `window`, so let the pending work from
-  // The mounted trees land before the registrator takes the DOM globals away.
+  /* Preact's scheduler drains through `window`, so let the pending work from
+     the mounted trees land before the registrator takes the DOM globals away. */
   for (let index = 0; index < 40; index += 1) { await settle(5); }
   await GlobalRegistrator.unregister();
 });
@@ -128,8 +128,8 @@ test('a prompt streams into the log and the model badge resolves', async () => {
 
   const input = present(document.querySelector<HTMLTextAreaElement>('#msg'), 'composer input');
 
-  // The framework installs its own value setter on the node, so the native descriptor
-  // Is the only way to write a value the controlled input will observe.
+  /* The framework installs its own value setter on the node, so the native descriptor
+     is the only way to write a value the controlled input will observe. */
   // oxlint-disable-next-line typescript-eslint/unbound-method -- `.call` below binds the node, which is the point
   const nativeSetter = present(Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set, 'textarea value setter');
   // SAFETY: the descriptor is the DOM value setter of a textarea.
@@ -156,8 +156,8 @@ test('a prompt streams into the log and the model badge resolves', async () => {
 }, MOUNT_TIMEOUT_MS);
 
 test('a streaming turn replaces the thinking placeholder instead of extending it', async () => {
-  // Imported here, not at the top: react-dom reads the global document when
-  // It loads, so it has to load after the registrator.
+  /* Imported here, not at the top: react-dom reads the global document when
+     it loads, so it has to load after the registrator. */
   const { createRoot } = await import('react-dom/client');
   const { MessageBody } = await import('./chat/components/message');
   const host = mountHost();

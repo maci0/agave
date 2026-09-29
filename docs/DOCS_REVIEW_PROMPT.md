@@ -21,7 +21,7 @@ Ground truth is the Zig under `src/`. Numbers, tables, and routing notes in this
 
 **Model dimensions:** open `src/models/<arch>.zig` and read the struct default fields (`n_embd`, `n_head` / `n_heads`, `n_head_kv`, `head_dim`, `n_ff`, `n_layers`, `vocab_size`, `rope_theta`) plus size-specific named constants in that file. When a doc names an architecture not listed in older tables (DeepSeek V4, DiffusionGemma, Qwen4-Exp, DFlash2), still look it up the same way.
 
-**Key constants (search hints — confirm with `rg` + file:line before citing):**
+**Key constants (search hints; confirm with `rg` + file:line before citing):**
 
 - Q4_K block: 256 elements, **144 bytes/block** (`GGMLType.bytesPerBlock(.q4_k)` in `src/format/gguf.zig`)
 - Q8_0 block: 32 elements, **34 bytes/block** (2-byte f16 scale + 32 i8 quants)
@@ -36,7 +36,7 @@ Ground truth is the Zig under `src/`. Numbers, tables, and routing notes in this
 - PFlash default alpha: **0.85**, default block_size: **64** (`src/spec/pflash.zig`)
 - Block sparse default window: **±1 block** (`window: u32 = 1` in `src/ops/sparse_attn.zig`)
 
-**MoE routing (hints — confirm in the model's MoE function and struct defaults):**
+**MoE routing (hints; confirm in the model's MoE function and struct defaults):**
 - Qwen 3.5 MoE: **softmax** routing, **top-8** of 256 experts
 - GPT-OSS: **softmax** routing, **top-4** of 32 experts
 - Nemotron-Nano: **sigmoid** routing (per-expert independent)

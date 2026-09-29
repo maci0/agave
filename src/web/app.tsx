@@ -1,6 +1,6 @@
-// Server chat UI, embedded by src/server/server.zig, not the WASM shell.
-// Source of truth is the .tsx sources: `scripts/build-web.sh`
-// Refreshes the committed app.js and style.css.
+/* Server chat UI, embedded by src/server/server.zig, not the WASM shell.
+   Source of truth is the .tsx sources: `scripts/build-web.sh` refreshes the
+   committed app.js and style.css. */
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -131,8 +131,8 @@ const useShellChrome = (settings: ReturnType<typeof useSettings>, stopGeneration
     const query = globalThis.matchMedia(DRAWER_BREAKPOINT);
     const sync = function () {
       setIsDrawer(query.matches);
-      // Leaving the drawer breakpoint drops the sheet; otherwise the chat
-      // Stays behind a scrim with no visible way to close it.
+      /* Leaving the drawer breakpoint drops the sheet; otherwise the chat
+         stays behind a scrim with no visible way to close it. */
       if (!query.matches) { setDrawerOpen(false); }
     };
     sync();
@@ -195,16 +195,16 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
     if (text === '/model') { reply(`Model: **${model.modelName || 'unknown'}**`); return; }
     if (text === '/reset' || text === '/clear') { convs.clearAll(); focusComposer(); return; }
     if (text === '/context' || text === '/ctx') { reportContext(reply, model); return; }
-    // Unknown command: give feedback like the REPL does, rather than
-    // Silently sending the "/..." text to the model as a message.
+    /* Unknown command: give feedback like the REPL does, rather than
+       silently sending the "/..." text to the model as a message. */
     reply(`Unknown command: \`${text}\`\n\nType \`/help\` to see the available commands.`);
     announce(`Unknown command ${text}`);
   }, [announce, convs, focusComposer, log, model, settings]);
 
   const submitMessage = useCallback((text: string, attached: string | null) => {
     if (turn.streaming) {return;}
-    // Commands run client-side and never post an image, so the bubble
-    // Would show an attachment the model never received. Keep both.
+    /* Commands run client-side and never post an image, so the bubble
+       would show an attachment the model never received. Keep both. */
     if (attached !== null && text.startsWith('/')) {
       pushToast('Slash commands do not send images. Remove the image or send it as a message.');
       return;

@@ -159,8 +159,8 @@ return (
     onScroll={function (event) {
       const log = event.currentTarget;
       nearBottom.current = log.scrollHeight - log.scrollTop - log.clientHeight < STICK_SLACK_PX;
-      // A reader who scrolls up during a stream otherwise gets no sign that
-      // The turn kept growing below the fold, and no way back to it.
+      /* A reader who scrolls up during a stream otherwise gets no sign that
+         the turn kept growing below the fold, and no way back to it. */
       setShowJump(!nearBottom.current);
       props.onScroll?.(nearBottom.current);
     }}

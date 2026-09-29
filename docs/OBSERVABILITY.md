@@ -56,11 +56,11 @@ Rate and error signals (PromQL uses `rate()` or `increase()` over these):
 
 Latency histograms (use `histogram_quantile` over `_bucket`):
 
-- `agave_request_duration_seconds` — end-to-end request latency.
-- `agave_ttft_seconds` — time to first token.
-- `agave_request_prompt_tokens`, `agave_request_generation_tokens` — size distributions.
+- `agave_request_duration_seconds`: end-to-end request latency.
+- `agave_ttft_seconds`: time to first token.
+- `agave_request_prompt_tokens`, `agave_request_generation_tokens`: size distributions.
 - `agave_time_per_output_token_seconds`, `agave_inter_token_latency_seconds`,
-  `agave_request_queue_time_seconds` — decode, inter-token, and queue-wait time.
+  `agave_request_queue_time_seconds`: decode, inter-token, and queue-wait time.
 
 Saturation and cache:
 
