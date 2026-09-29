@@ -99,8 +99,8 @@ export const useModelInfo = () => {
   }, []);
 
   const markOffline = useCallback(() => {
-    // A failed refresh after a name is known only means the numbers
-    // Are stale, so a live model never becomes an offline badge.
+    /* A failed refresh after a name is known only means the numbers
+       are stale, so a live model never becomes an offline badge. */
     if (resolved.current) { return; }
     setModelResolved(false);
   }, []);
@@ -278,8 +278,8 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
 
   const send = useCallback((body: string, errorLabel: string, url?: string) => {
     const turnId = log.addTurn({ role: 'assistant', text: '', phase: 'thinking' });
-    // Start the markdown fetch alongside the request: by the last
-    // Chunk, marked and DOMPurify are normally already in place.
+    /* Start the markdown fetch alongside the request: by the last
+       chunk, marked and DOMPurify are normally already in place. */
     void loadMarkdown();
     const controller = new AbortController();
     abortRef.current = controller;

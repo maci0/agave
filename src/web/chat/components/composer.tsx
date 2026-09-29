@@ -86,8 +86,8 @@ const PromptField = (props: PromptFieldProps) => (
       }
     }}
     onPaste={function (event) {
-      // Safari's DataTransferItemList is array-like without an iterator,
-      // So it is copied to a real array before the scan.
+      /* Safari's DataTransferItemList is array-like without an iterator,
+         so it is copied to a real array before the scan. */
       // oxlint-disable-next-line unicorn/no-useless-spread -- Safari has no iterator on this list
       for (const item of [...event.clipboardData.items]) {
         if (item.type.startsWith('image/')) {
@@ -142,8 +142,8 @@ const InputRow = (props: ComposerProps & {
       aria-label="Attach image"
       onChange={function (event) {
         const file = event.target.files?.[0];
-        // Clear the field so picking the same image again is still a change
-        // Event: an unsupported or oversized file is often re-picked smaller.
+        /* Clear the field so picking the same image again is still a change
+           event: an unsupported or oversized file is often re-picked smaller. */
         event.target.value = '';
         if (file !== undefined) { props.onImageFile(file, 'Image attached'); }
       }}
@@ -236,8 +236,8 @@ export const Composer = (props: ComposerProps) => {
         form.setDragOver(false);
       }}
       onDrop={function (event) {
-        // Every drop is swallowed here, usable or not: the browser's default
-        // Would navigate the tab away from the conversation.
+        /* Every drop is swallowed here, usable or not: the browser's default
+           would navigate the tab away from the conversation. */
         event.preventDefault();
         form.setDragOver(false);
         const { files } = event.dataTransfer;

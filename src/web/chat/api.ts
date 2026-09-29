@@ -16,7 +16,7 @@ export const newRequestId = (): string => {
   return `${Date.now().toString(16)}.${Math.random().toString(16).slice(2, 10)}`;
 };
 
-/** Map HTTP status codes to short, actionable messages for the chat UI. */
+/** Map HTTP status codes to short messages that say what to do next for the chat UI. */
 export const httpErrorMessage = (status: number): string => {
   if (status === 400) {return 'The request was rejected. Check your message and settings.';}
   if (status === 413) {return 'Message or image is too large.';}
@@ -26,7 +26,7 @@ export const httpErrorMessage = (status: number): string => {
   return `Could not complete the request (error ${status}).`;
 };
 
-/** Map fetch and network failures to short, actionable copy, not the engine's
+/** Map fetch and network failures to short copy that says what to do next, not the engine's
  *  exception text. */
 export const userFacingError = (cause: unknown): string => {
   if (cause instanceof Error) {
@@ -44,9 +44,9 @@ export const userFacingError = (cause: unknown): string => {
 
 const getJson = async <T>(url: string): Promise<T> => {
   const response = await fetch(url);
-  // An error status carries an error object where the caller expects a list or
-  // A record, so it has to reject here: the caller's failure path is what
-  // Tells the reader, and what it guards is a shape the error body is not.
+  /* An error status carries an error object where the caller expects a list or
+     A record, so it has to reject here: the caller's failure path is what
+     tells the reader, and what it guards is a shape the error body is not. */
   if (!response.ok) {throw new Error(httpErrorMessage(response.status));}
   // SAFETY: every route answers with the shape the caller names, and
   // The server serving this page is that same binary.
@@ -60,8 +60,8 @@ const postConversation = async (action: string, id?: string, requestId?: string)
   const target = id === undefined ? `action=${action}` : `action=${action}&id=${encodeURIComponent(id)}`;
   const headers = requestId === undefined ? FORM_HEADERS : { ...FORM_HEADERS, 'X-Request-Id': requestId };
   const response = await fetch('/v1/conversations', { method: 'POST', headers, body: target });
-  // Select, delete and new all answer 4xx or 5xx with an error object, which
-  // The ConvMessages callers would otherwise read as an empty result.
+  /* Select, delete and new all answer 4xx or 5xx with an error object, which
+     the ConvMessages callers would otherwise read as an empty result. */
   if (!response.ok) {throw new Error(httpErrorMessage(response.status));}
   // SAFETY: the POST answers with the ConvMessages shape; a non-JSON
   // Body surfaces as a parse error the caller toasts.

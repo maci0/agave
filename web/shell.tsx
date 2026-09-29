@@ -94,8 +94,8 @@ const ModelDropZone = ({ loader }: { loader: ModelLoader }) => (
       disabled={loader.busy}
       onChange={function (event) {
         const file = event.target.files?.[0];
-        // Clear the field so choosing the same file again is still a change
-        // Event: a rejected file is often re-picked after the reader fixes it.
+        /* Clear the field so choosing the same file again is still a change
+           event: a rejected file is often re-picked after the reader fixes it. */
         event.target.value = '';
         if (file !== undefined) { loader.loadFromBuffer(file); }
       }}

@@ -1,4 +1,4 @@
-/** Engine and network causes mapped to short, actionable copy.
+/** Engine and network causes mapped to short copy that says what to do next.
  *
  *  The browser SDK (`web/agave.ts`) reports a stable `code` plus diagnostic
  *  text; a user needs the first and never the second. The plain-`Error` chains
