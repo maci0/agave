@@ -68,14 +68,14 @@ mkdir -p "$STAGE/server" "$STAGE/wasm"
 # These are Preact bundles: the shadcn/ui components and Radix primitives under
 # src/web/ui/ import from `react` and `react-dom` because that is their published
 # API, and `vendor/react` / `vendor/react-dom` are file: dependencies that
-# re-export preact/compat under those names. bun 1.4.0 has no module aliasing, so
+# re-export preact/compat under those names. bun 1.4.2 has no module aliasing, so
 # the shim packages are how the substitution happens, for the bundler, the test
 # run and tsc alike.
 #
 # The bundles are fully minified, identifiers included. app.js is inlined into
 # the one HTML document server.zig serves, so every cold visit downloads the
 # whole bundle. `scripts/check-web-artifacts.sh` byte-compares the committed
-# output, so the bundler is pinned to bun 1.4.0 above; if a bun release makes the
+# output, so the bundler is pinned to bun 1.4.2 above; if a bun release makes the
 # mangler unstable, that gate is what catches it, and the artifact goes back to
 # `--minify-whitespace --minify-syntax`.
 #

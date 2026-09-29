@@ -11,6 +11,11 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Tooling
+- bun is pinned to 1.4.2 (`packageManager`, `engines.bun`, CI `setup-bun`).
+  The committed bundles are rebuilt with it; `app.js` and `shell.js` differ in
+  9 lines of minified output and pass every web gate unchanged.
+
 ## [0.10.1] - 2026-09-29
 
 ### Changed

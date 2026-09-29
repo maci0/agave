@@ -6,7 +6,7 @@ Templates and step-by-step guides for extending the inference engine.
 
 Install **Zig 0.16.0** from https://ziglang.org/download/ (pin: [`.zigversion`](../.zigversion), also `build.zig.zon` `.minimum_zig_version`). `zig build` exits if the running compiler does not match that pin. GPU backends `dlopen` drivers at runtime; no GPU SDK is needed to compile.
 
-`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.0** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`zig build lint-python`). `scripts/lint-python.sh` runs a `ruff` on PATH when it already reports the `ruff.toml` pin, and otherwise runs the pinned ruff ephemerally through `uvx`, the same way CI does, so no global tool install is required; with neither available it names both ways to get the pin.
+`zig build check` also needs **Python 3.11+** (`scripts/check-docs.py`). TypeScript gates need **bun 1.4.2** (`package.json` `packageManager`, enforced exactly by `scripts/lint-web.sh`) and `bun install --frozen-lockfile`. The remaining `zig build ci` halves need **shellcheck** (`zig build lint-shell`) and **ruff** (`zig build lint-python`). `scripts/lint-python.sh` runs a `ruff` on PATH when it already reports the `ruff.toml` pin, and otherwise runs the pinned ruff ephemerally through `uvx`, the same way CI does, so no global tool install is required; with neither available it names both ways to get the pin.
 
 ```bash
 zig build doctor     # what this machine is missing for `zig build ci`, before the gate finds it
@@ -18,7 +18,7 @@ zig build --help     # all steps
 
 `zig build doctor` reads the same pins the gates read (`.zigversion`, `package.json`, `ruff.toml`), checks the JS dependencies are installed, and prints one line per tool plus the tools only some CI jobs need. It is a probe, not a gate: it exits 0 whatever it finds, so it is safe on a deliberately part-provisioned machine.
 
-Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness + the oxlint `ignorePatterns` ratchet), `lint-shell` (shellcheck) and `lint-python` (ruff check and ruff format --check). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.0. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check) plus the Python unit tests (`zig build test-python`), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
+Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: `check` (format check + docs hygiene + pin consistency + unit tests), `lint-web` (oxlint + tsc + web artifact freshness + the oxlint `ignorePatterns` ratchet), `lint-shell` (shellcheck) and `lint-python` (ruff check and ruff format --check). Run the halves separately when one toolchain is not installed: `check` needs only Python 3.11+, `lint-web` needs bun 1.4.2. `check` covers the Zig jobs (fmt-check, pin consistency, unit tests, and docs-check) plus the Python unit tests (`zig build test-python`), `lint-web` is the blocking TypeScript job, `lint-shell` is the blocking shell job, and `lint-python` is the blocking Python job. CI jobs that cannot run on a workstation (Docker, cross-compile, wasm, PTX freshness) are listed below, as are the extra jobs that fire on specific surfaces:
 
 | You changed | Also run |
 |---|---|
@@ -27,7 +27,7 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | Docs, changelog, version pins | `python3 scripts/check-docs.py` (also part of `zig build check`) |
 | `Dockerfile`, `.zigversion`, `ruff.toml`, or `package.json` (bumping a pin) | `zig build check-pins` (also part of `zig build check`; the Zig version, the Dockerfile's Zig download checksums, the Debian snapshot day, `SOURCE_DATE_EPOCH`, apt source isolation, the listen port, the ruff and bun versions, the committed `uv.lock` files, the vendored anti-slop source against `tools/oxlint/anti-slop/VENDORED.sha256`, and every exact third-party version in `package.json` and the `pyproject.toml` files must agree) |
 | `tools/oxlint/anti-slop/**` (re-vendoring) | `zig build check-pins` after regenerating `tools/oxlint/anti-slop/VENDORED.sha256`; record the upstream commit in that directory's `README.md` and copy upstream's LICENSE file there |
-| Built-in chat UI and browser shell (Preact + Tailwind 4) | `scripts/build-web.sh` (needs bun 1.4.0 and `bun install --frozen-lockfile`) |
+| Built-in chat UI and browser shell (Preact + Tailwind 4) | `scripts/build-web.sh` (needs bun 1.4.2 and `bun install --frozen-lockfile`) |
 | A JavaScript dependency in `dependencies` (ships inside the web bundles) | `zig build check-third-party`: every bundled package needs a `name@version` entry in `THIRD_PARTY_NOTICES.md`, with its upstream license and URL |
 | `src/web/` / `web/` TypeScript | `zig build lint-web` and `scripts/check-web-artifacts.sh` (both part of the blocking CI job `lint-web`) |
 | Weight of the committed web bundles | `scripts/check-web-artifacts.sh` also fails when one grows past its `gzip -9` ceiling, so bundle weight cannot accrete unnoticed. `src/web/app.js` is inlined into the one HTML document the server sends, so its whole compressed size sits on the first-paint path |
@@ -412,7 +412,7 @@ Notes:
 
 ```bash
 # Everything CI runs on a workstation, in one command. Needs Python 3.11+ and
-# bun 1.4.0 with `bun install --frozen-lockfile`.
+# bun 1.4.2 with `bun install --frozen-lockfile`.
 zig build ci
 
 # Local CI gate (format + docs hygiene + pin consistency + third-party notices +
@@ -420,7 +420,7 @@ zig build ci
 # Python 3.11+; run this before pushing.
 zig build check
 
-# Web TypeScript (blocking CI job lint-web). Needs bun 1.4.0 + `bun install --frozen-lockfile`.
+# Web TypeScript (blocking CI job lint-web). Needs bun 1.4.2 + `bun install --frozen-lockfile`.
 zig build lint-web
 # equivalent: bash scripts/lint-web.sh (bun pin check, oxlint ignorePatterns ratchet, oxlint, tsc)
 

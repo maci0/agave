@@ -11,7 +11,7 @@ components in `src/web/ui/` and the Radix primitives they build on import from
 against, and the sources keep those canonical imports.
 
 The usual way to bridge that is a bundler alias (`react` → `preact/compat`).
-The pinned bundler here is bun 1.4.0, which has no module aliasing: no `--alias`
+The pinned bundler here is bun 1.4.2, which has no module aliasing: no `--alias`
 flag in `bun build`, and bunfig's `[alias]` table is not consulted by
 `bun build`, `bun install` or `bun run`. `bun.lock` alias entries are rejected by
 `scripts/check-third-party-notices.py` by design.
