@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 369.74 1151.4" width="369.74" height="1151.4" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1294.916 271.6" width="1294.916" height="271.6" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,81 +19,71 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="SysMsg" data-to="SysPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,93.80000000000001 115.06799999999998,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SysPre" data-to="SysBody" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,212.5 115.06799999999998,260.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SysBody" data-to="SysSuf" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,297.40000000000003 115.06799999999998,353.85" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="UserMsg" data-to="UserPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="266.8985,407.65000000000003 266.8985,444.32500000000005 190.98325,444.32500000000005 190.98325,464.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="UserPre" data-to="UserBody" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,534.8 190.98325,582.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="UserBody" data-to="UserSuf" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,619.6999999999999 190.98325,667.6999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SysSuf" data-to="UserPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="115.06799999999998,424.55 115.06799999999998,444.32500000000005 190.98325,444.32500000000005 190.98325,464.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="UserSuf" data-to="AsstPre" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,721.4999999999999 190.98325,769.4999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="AsstPre" data-to="GenPfx" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,857.0999999999999 190.98325,905.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GenPfx" data-to="GenStart" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="190.98325,1026.5 190.98325,1074.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="node" data-id="SysMsg" data-label="system message
-'You are helpful'" data-shape="rectangle">
-  <rect x="45.557499999999976" y="40" width="139.02100000000002" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="115.06799999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="115.06799999999998" dy="-3.9000000000000012">system message</tspan><tspan x="115.06799999999998" dy="16.900000000000002">&#39;You are helpful&#39;</tspan></text>
+<g class="subgraph" data-id="Config" data-label="Template config (chat_template.zig)">
 </g>
-<g class="node" data-id="SysPre" data-label="system_prefix
-&lt;|im_start|&gt;system
-" data-shape="rectangle">
-  <rect x="40" y="141.8" width="150.13599999999997" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="115.06799999999998" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="115.06799999999998" dy="-12.350000000000001">system_prefix</tspan><tspan x="115.06799999999998" dy="16.900000000000002">&lt;|im_start|&gt;system</tspan><tspan x="115.06799999999998" dy="16.900000000000002"></tspan></text>
+<g class="subgraph" data-id="Runtime" data-label="Runtime resolution">
 </g>
-<g class="node" data-id="SysBody" data-label="message body" data-shape="rectangle">
-  <rect x="51.48549999999999" y="260.5" width="127.16499999999999" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="115.06799999999998" y="278.95" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">message body</text>
+<polyline class="edge" data-from="Messages" data-to="Template" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="233.11399999999995,66.9 281.1139999999999,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Template" data-to="Rendered" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="432.73199999999997,66.9 480.73199999999997,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Rendered" data-to="Tokenizer" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="694.5939999999999,66.9 742.5939999999999,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tokenizer" data-to="TokenIDs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="865.313,66.9 913.313,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokenIDs" data-to="Model" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1073.0819999999999,66.9 1121.0819999999999,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EOGNames" data-to="TokLookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.43100000000004,148.70000000000002 234.43100000000004,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokLookup" data-to="EOGIDs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="383.826,148.70000000000002 431.826,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EOGIDs" data-to="GenLoop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="560.4730000000001,148.70000000000002 608.4730000000001,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Messages" data-label="&quot;Messages
+[system, user, assistant, ..." data-shape="rectangle">
+  <rect x="40" y="40" width="193.11399999999995" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="136.55699999999996" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="136.55699999999996" dy="-3.9000000000000012">&quot;Messages</tspan><tspan x="136.55699999999996" dy="16.900000000000002">[system, user, assistant, ...</tspan></text>
 </g>
-<g class="node" data-id="SysSuf" data-label="system_suffix
-&lt;|im_end|&gt;
-" data-shape="rectangle">
-  <rect x="54.07899999999998" y="353.85" width="121.97800000000001" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="115.06799999999998" y="389.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="115.06799999999998" dy="-12.350000000000001">system_suffix</tspan><tspan x="115.06799999999998" dy="16.900000000000002">&lt;|im_end|&gt;</tspan><tspan x="115.06799999999998" dy="16.900000000000002"></tspan></text>
+<g class="node" data-id="Template" data-label="ChatTemplate
+(prefix/suffix pairs)" data-shape="rectangle">
+  <rect x="281.1139999999999" y="40" width="151.618" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="356.9229999999999" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="356.9229999999999" dy="-3.9000000000000012">ChatTemplate</tspan><tspan x="356.9229999999999" dy="16.900000000000002">(prefix/suffix pairs)</tspan></text>
 </g>
-<g class="node" data-id="UserMsg" data-label="user message
-'What is 2+2?'" data-shape="rectangle">
-  <rect x="204.05700000000002" y="353.85" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="266.8985" y="380.75" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="266.8985" dy="-3.9000000000000012">user message</tspan><tspan x="266.8985" dy="16.900000000000002">&#39;What is 2+2?&#39;</tspan></text>
+<g class="node" data-id="Rendered" data-label="Rendered Prompt
+(flat string with special tokens)" data-shape="rectangle">
+  <rect x="480.73199999999997" y="40" width="213.86199999999997" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="587.663" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="587.663" dy="-3.9000000000000012">Rendered Prompt</tspan><tspan x="587.663" dy="16.900000000000002">(flat string with special tokens)</tspan></text>
 </g>
-<g class="node" data-id="UserPre" data-label="user_prefix
-&lt;|im_start|&gt;user
-" data-shape="rectangle">
-  <rect x="122.58424999999998" y="464.1" width="136.798" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="190.98325" y="499.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="190.98325" dy="-12.350000000000001">user_prefix</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;|im_start|&gt;user</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan></text>
+<g class="node" data-id="Tokenizer" data-label="Tokenizer
+(BPE encode)" data-shape="rectangle">
+  <rect x="742.5939999999999" y="40" width="122.719" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="803.9535" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="803.9535" dy="-3.9000000000000012">Tokenizer</tspan><tspan x="803.9535" dy="16.900000000000002">(BPE encode)</tspan></text>
 </g>
-<g class="node" data-id="UserBody" data-label="message body" data-shape="rectangle">
-  <rect x="127.40074999999999" y="582.8" width="127.16499999999999" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="190.98325" y="601.25" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">message body</text>
+<g class="node" data-id="TokenIDs" data-label="&quot;Token ID sequence
+[1, 428, 999, 13, ..." data-shape="rectangle">
+  <rect x="913.313" y="40" width="159.769" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="993.1975" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="993.1975" dy="-3.9000000000000012">&quot;Token ID sequence</tspan><tspan x="993.1975" dy="16.900000000000002">[1, 428, 999, 13, ...</tspan></text>
 </g>
-<g class="node" data-id="UserSuf" data-label="user_suffix
-(empty)" data-shape="rectangle">
-  <rect x="136.66324999999998" y="667.6999999999999" width="108.64" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="190.98324999999997" y="694.5999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="190.98324999999997" dy="-3.9000000000000012">user_suffix</tspan><tspan x="190.98324999999997" dy="16.900000000000002">(empty)</tspan></text>
+<g class="node" data-id="Model" data-label="Model forward()" data-shape="rectangle">
+  <rect x="1121.0819999999999" y="48.449999999999996" width="133.834" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1187.9989999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Model forward()</text>
 </g>
-<g class="node" data-id="AsstPre" data-label="assistant_prefix
-&lt;|im_end|&gt;
-&lt;|im_start|&gt;assistant
-" data-shape="rectangle">
-  <rect x="109.98724999999999" y="769.4999999999999" width="161.992" height="87.60000000000001" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="190.98325" y="813.2999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="190.98325" dy="-20.8">assistant_prefix</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;|im_end|&gt;</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;|im_start|&gt;assistant</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan></text>
+<g class="node" data-id="EOGNames" data-label="EOG token names
+&lt;|im_end|&gt;, &lt;eos&gt;" data-shape="rectangle">
+  <rect x="40.00000000000006" y="121.80000000000001" width="146.43099999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="113.21550000000005" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="113.21550000000005" dy="-3.9000000000000012">EOG token names</tspan><tspan x="113.21550000000005" dy="16.900000000000002">&lt;|im_end|&gt;, &lt;eos&gt;</tspan></text>
 </g>
-<g class="node" data-id="GenPfx" data-label="generation_prefix
-&lt;think&gt;
-
-&lt;/think&gt;
-
-" data-shape="rectangle">
-  <rect x="117.39724999999997" y="905.0999999999999" width="147.17200000000003" height="121.4" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="190.98325" y="965.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="190.98325" dy="-37.70000000000001">generation_prefix</tspan><tspan x="190.98325" dy="16.900000000000002">&lt;think&gt;</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan><tspan x="190.98325" dy="16.900000000000002">&lt;/think&gt;</tspan><tspan x="190.98325" dy="16.900000000000002"></tspan><tspan x="190.98325" dy="16.900000000000002"></tspan></text>
+<g class="node" data-id="TokLookup" data-label="Tokenizer special
+token map" data-shape="rectangle">
+  <rect x="234.43100000000004" y="121.80000000000001" width="149.395" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="309.12850000000003" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="309.12850000000003" dy="-3.9000000000000012">Tokenizer special</tspan><tspan x="309.12850000000003" dy="16.900000000000002">token map</tspan></text>
 </g>
-<g class="node" data-id="GenStart" data-label="--- model generates here ---" data-shape="rectangle">
-  <rect x="92.94424999999998" y="1074.5" width="196.078" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="190.98325" y="1092.95" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">--- model generates here ---</text>
+<g class="node" data-id="EOGIDs" data-label="&quot;EOG token IDs
+[151643, 151645" data-shape="rectangle">
+  <rect x="431.826" y="121.80000000000001" width="128.647" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="496.1495" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="496.1495" dy="-3.9000000000000012">&quot;EOG token IDs</tspan><tspan x="496.1495" dy="16.900000000000002">[151643, 151645</tspan></text>
+</g>
+<g class="node" data-id="GenLoop" data-label="Generation loop
+(stop check)" data-shape="rectangle">
+  <rect x="608.4730000000001" y="121.80000000000001" width="134.57500000000002" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="675.7605000000001" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="675.7605000000001" dy="-3.9000000000000012">Generation loop</tspan><tspan x="675.7605000000001" dy="16.900000000000002">(stop check)</tspan></text>
 </g>
 </svg>

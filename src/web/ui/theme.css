@@ -86,8 +86,10 @@
   /* Anything that floats over the page: dialogs, toasts, the jump key. */
   --shadow-overlay: 0 8px 20px rgb(0 0 0 / 0.45);
 
-  /* The agave rosette, inlined so both surfaces and the favicon stay in step. */
-  --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-56 -72 112 88' fill='none' stroke='%23000' stroke-linecap='round'%3E%3Cpath stroke-width='6' d='M0-70Q5-35 0 0'/%3E%3Cpath stroke-width='5' d='M0 0Q-20-30-15-65'/%3E%3Cpath stroke-width='5' d='M0 0Q20-30 15-65'/%3E%3Cpath stroke-width='4.5' d='M0 0Q-30-20-35-50'/%3E%3Cpath stroke-width='4.5' d='M0 0Q30-20 35-50'/%3E%3Cpath stroke-width='4' d='M0 5Q-35-5-48-25'/%3E%3Cpath stroke-width='4' d='M0 5Q35-5 48-25'/%3E%3Cpath stroke-width='3.5' d='M0 10Q-38 5-55-8'/%3E%3Cpath stroke-width='3.5' d='M0 10Q38 5 55-8'/%3E%3C/svg%3E");
+  /* The agave rosette (docs/brand/mark.svg), inlined as a mask so both
+     surfaces draw it in one flat color. The favicons in src/web/head.html and
+     web/index.html carry the same geometry on the night tile (app-icon.svg). */
+  --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 4 64 54'%3E%3Cdefs%3E%3Cmask id='a0' maskUnits='userSpaceOnUse' x='0' y='0' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23fff'/%3E%3Cpath d='M24.4 60.9C16.7 47.1 10.6 30 8.2 18.6C18.9 25.8 32.2 39.2 39.6 53.1Z' fill='%23000' stroke='%23000' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M24.4 53.1C31.8 39.2 45.1 25.8 55.8 18.6C53.4 30 47.3 47.1 39.6 60.9Z' fill='%23000' stroke='%23000' stroke-width='3' stroke-linejoin='round'/%3E%3Cpath d='M23.5 57C23.3 38.8 27.3 18 32 5C36.7 18 40.7 38.8 40.5 57Z' fill='%23000' stroke='%23000' stroke-width='3' stroke-linejoin='round'/%3E%3C/mask%3E%3Cmask id='a1' maskUnits='userSpaceOnUse' x='0' y='0' width='64' height='64'%3E%3Crect width='64' height='64' fill='%23fff'/%3E%3Cpath d='M23.5 57C23.3 38.8 27.3 18 32 5C36.7 18 40.7 38.8 40.5 57Z' fill='%23000' stroke='%23000' stroke-width='3' stroke-linejoin='round'/%3E%3C/mask%3E%3CclipPath id='ac'%3E%3Crect width='64' height='57'/%3E%3C/clipPath%3E%3C/defs%3E%3Cg fill='%23000' clip-path='url(%23ac)'%3E%3Cg mask='url(%23a0)'%3E%3Cpath d='M28 63.9C17.2 58.8 5.9 51.2 -0.6 45.5C10.3 43.5 25.4 44.7 36 50.1Z'/%3E%3Cpath d='M28 50.1C38.6 44.7 53.7 43.5 64.6 45.5C58.1 51.2 46.8 58.8 36 63.9Z'/%3E%3C/g%3E%3Cg mask='url(%23a1)'%3E%3Cpath d='M24.4 60.9C16.7 47.1 10.6 30 8.2 18.6C18.9 25.8 32.2 39.2 39.6 53.1Z'/%3E%3Cpath d='M24.4 53.1C31.8 39.2 45.1 25.8 55.8 18.6C53.4 30 47.3 47.1 39.6 60.9Z'/%3E%3C/g%3E%3Cg%3E%3Cpath d='M23.5 57C23.3 38.8 27.3 18 32 5C36.7 18 40.7 38.8 40.5 57Z'/%3E%3C/g%3E%3Cpath d='M24 57A8 8 0 0 1 40 57Z'/%3E%3C/g%3E%3C/svg%3E");
 
   @keyframes pulse-soft {
     0%, 100% { opacity: 0.3; }
@@ -139,7 +141,7 @@
 }
 
 @layer components {
-  /* The agave rosette (docs/logo.svg), drawn as a mask so it is one flat
+  /* The agave rosette (docs/brand/mark.svg), drawn as a mask so it is one flat
      shape. Its color is pinned to the rosette green rather than inherited:
      the mark is the same plant in the header, the empty state, the About
      dialog and the favicon, whatever text it sits beside. */
@@ -147,7 +149,7 @@
     display: inline-block;
     flex-shrink: 0;
     width: 22px;
-    height: 18px;
+    height: 19px;
     background: currentColor;
     color: var(--color-success);
     -webkit-mask: var(--mark) center / contain no-repeat;
@@ -162,7 +164,7 @@
   .mark-lg {
     display: block;
     width: 56px;
-    height: 44px;
+    height: 47px;
     margin: 0 auto 16px;
   }
 

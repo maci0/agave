@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 874.3280000000002 773.009" width="874.3280000000002" height="773.009" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 785.4080000000001 585.4000000000001" width="785.4080000000001" height="585.4000000000001" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,103 +19,86 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="SiLU" data-label="SiLU activation
-x * sigmoid(x)">
-  <rect x="343.13200000000006" y="141.8" width="188.06400000000002" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="343.13200000000006" y="141.8" width="188.06400000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="355.13200000000006" y="155.8" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="355.13200000000006" dy="-3.6000000000000014">SiLU activation</tspan><tspan x="355.13200000000006" dy="15.600000000000001">x * sigmoid(x)</tspan></text>
+<g class="subgraph" data-id="Pass1" data-label="Pass 1, sum of squares">
+  <rect x="109.42800000000011" y="124.9" width="566.5519999999999" height="113.80000000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="109.42800000000011" y="124.9" width="566.5519999999999" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="121.42800000000011" y="138.9" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Pass 1, sum of squares</text>
 </g>
-<g class="subgraph" data-id="Sparsity" data-label="~40% near-zero after SiLU
-(magnitude &lt; threshold)">
-  <rect x="40" y="371.90000000000003" width="794.3280000000002" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="371.90000000000003" width="794.3280000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="385.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">~40% near-zero after SiLU</tspan><tspan x="52" dy="15.600000000000001">(magnitude &lt; threshold)</tspan></text>
+<g class="subgraph" data-id="Scalar" data-label="Scalar normalization">
+  <rect x="186.26600000000008" y="286.70000000000005" width="412.876" height="96.9" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="186.26600000000008" y="286.70000000000005" width="412.876" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="198.26600000000008" y="300.70000000000005" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Scalar normalization</text>
 </g>
-<g class="subgraph" data-id="Check" data-label="isBlockSparse (SIMD max-abs)">
-  <rect x="93.03800000000012" y="533.7" width="688.252" height="199.30900000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="93.03800000000012" y="533.7" width="688.252" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="105.03800000000012" y="547.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">isBlockSparse (SIMD max-abs)</text>
+<g class="subgraph" data-id="Pass2" data-label="Pass 2, normalize + weight">
+  <rect x="40" y="431.6" width="705.4080000000001" height="113.80000000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="431.6" width="705.4080000000001" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="445.6" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Pass 2, normalize + weight</text>
 </g>
-<polyline class="edge" data-from="gate" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="357.7290000000001,93.80000000000001 357.7290000000001,129.8 405.82000000000005,129.8 405.82000000000005,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="up" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="516.5990000000002,93.80000000000001 516.5990000000002,129.8 468.5080000000001,129.8 468.5080000000001,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SiLU" data-to="Sparsity" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="element-wise product" points="437.1640000000001,255.60000000000002 437.1640000000001,371.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Sparsity" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="437.1640000000001,485.70000000000005 437.1640000000001,533.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="sparse" data-to="dense1" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="215.02800000000002,442.80000000000007 263.028,442.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
-<polyline class="edge" data-from="dense1" data-to="sparse2" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="414.6460000000001,442.80000000000007 462.6460000000001,442.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
-<polyline class="edge" data-from="sparse2" data-to="dense2" data-style="dotted" data-arrow-start="false" data-arrow-end="false" points="626.1200000000001,442.80000000000007 674.1200000000001,442.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" />
-<polyline class="edge" data-from="c1" data-to="c2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="297.70600000000013,647.3545 345.70600000000013,647.3545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="c2" data-to="skip" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="461.7968333333335,624.1363333333334 497.01500000000016,624.1363333333334 497.01500000000016,606.4545 608.4850000000001,606.4545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="c2" data-to="compute" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="461.7968333333335,670.5726666666667 497.01500000000016,670.5726666666667 497.01500000000016,688.2545 608.4850000000001,688.2545" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="SiLU" data-to="Sparsity" data-label="element-wise product">
-  <rect x="378.6640000000001" y="298.6" width="116.25400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="436.7910000000001" y="313.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">element-wise product</text>
+<polyline class="edge" data-from="input" data-to="Pass1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="520.3348333333333,76.9 520.3348333333333,112.9 392.70400000000006,112.9 392.70400000000006,124.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pass1" data-to="Scalar" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.70400000000006,238.70000000000002 392.70400000000006,286.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scalar" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="392.70400000000006,383.6 392.70400000000006,431.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="input" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="553.0901666666667,76.9 553.0901666666667,112.9 685.98,112.9 685.98,419.6 569.056,419.6 569.056,431.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="weight" data-to="Pass2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="104.68700000000007,375.6 104.68700000000007,419.6 216.35200000000003,419.6 216.35200000000003,431.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p1a" data-to="p1b" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="312.6140000000001,195.8 360.6140000000001,195.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p1b" data-to="p1c" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="515.9370000000001,195.8 563.9370000000001,195.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="s1" data-to="s2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="405.01300000000003,357.15000000000003 453.01300000000003,357.15000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p2a" data-to="p2b" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="199.467,502.5 247.467,502.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p2b" data-to="p2c" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="386.48800000000006,502.5 434.48800000000006,502.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="p2c" data-to="p2d" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="569.8040000000001,502.5 617.8040000000001,502.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="input" data-label="&quot;input[0..n" data-shape="rectangle">
+  <rect x="487.57950000000005" y="40" width="98.266" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="536.7125000000001" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;input[0..n</text>
 </g>
-<g class="edge-label" data-from="c2" data-to="skip" data-label="yes">
-  <rect x="529.0150000000002" y="590.4545" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="546.7500000000002" y="605.6045" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+<g class="node" data-id="weight" data-label="&quot;weight[0..n" data-shape="rectangle">
+  <rect x="51.10800000000006" y="338.70000000000005" width="107.158" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="104.68700000000007" y="357.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;weight[0..n</text>
 </g>
-<g class="edge-label" data-from="c2" data-to="compute" data-label="no">
-  <rect x="531.9850000000001" y="672.2545000000001" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="546.7500000000001" y="687.4045000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+<g class="node" data-id="p1a" data-label="@mulAdd(V8, xv, xv, acc)
+for each 8-element chunk" data-shape="rectangle">
+  <rect x="125.42800000000011" y="168.9" width="187.18599999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="219.0210000000001" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="219.0210000000001" dy="-3.9000000000000012">@mulAdd(V8, xv, xv, acc)</tspan><tspan x="219.0210000000001" dy="16.900000000000002">for each 8-element chunk</tspan></text>
 </g>
-<g class="node" data-id="gate" data-label="gate_proj output
-(n values)" data-shape="rectangle">
-  <rect x="289.7005000000001" y="40" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="357.7290000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="357.7290000000001" dy="-3.9000000000000012">gate_proj output</tspan><tspan x="357.7290000000001" dy="16.900000000000002">(n values)</tspan></text>
+<g class="node" data-id="p1b" data-label="@reduce(.Add, acc)
+horizontal sum" data-shape="rectangle">
+  <rect x="360.6140000000001" y="168.9" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="438.2755000000001" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="438.2755000000001" dy="-3.9000000000000012">@reduce(.Add, acc)</tspan><tspan x="438.2755000000001" dy="16.900000000000002">horizontal sum</tspan></text>
 </g>
-<g class="node" data-id="up" data-label="up_proj output
-(n values)" data-shape="rectangle">
-  <rect x="453.7575000000001" y="40" width="125.68299999999999" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="516.5990000000002" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="516.5990000000002" dy="-3.9000000000000012">up_proj output</tspan><tspan x="516.5990000000002" dy="16.900000000000002">(n values)</tspan></text>
+<g class="node" data-id="p1c" data-label="&quot;sum_sq
+= Σ input[i" data-shape="rectangle">
+  <rect x="563.9370000000001" y="168.9" width="96.043" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="611.9585000000002" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="611.9585000000002" dy="-3.9000000000000012">&quot;sum_sq</tspan><tspan x="611.9585000000002" dy="16.900000000000002">= Σ input[i</tspan></text>
 </g>
-<g class="node" data-id="act" data-label="gate * sigmoid(gate)
-element-wise" data-shape="rectangle">
-  <rect x="359.13200000000006" y="185.8" width="156.06400000000002" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="437.1640000000001" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="437.1640000000001" dy="-3.9000000000000012">gate * sigmoid(gate)</tspan><tspan x="437.1640000000001" dy="16.900000000000002">element-wise</tspan></text>
+<g class="node" data-id="s1" data-label="rms = sqrt(sum_sq / n + eps)" data-shape="rectangle">
+  <rect x="202.26600000000008" y="330.70000000000005" width="202.74699999999999" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="303.63950000000006" y="349.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">rms = sqrt(sum_sq / n + eps)</text>
 </g>
-<g class="node" data-id="sparse" data-label="block 0: |max| = 0.001
-SKIP" data-shape="rectangle">
-  <rect x="56" y="415.90000000000003" width="159.02800000000002" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="135.514" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="135.514" dy="-3.9000000000000012">block 0: |max| = 0.001</tspan><tspan x="135.514" dy="16.900000000000002">SKIP</tspan></text>
+<g class="node" data-id="s2" data-label="scale = 1.0 / rms" data-shape="rectangle">
+  <rect x="453.01300000000003" y="338.70000000000005" width="130.12900000000002" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="518.0775000000001" y="357.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">scale = 1.0 / rms</text>
 </g>
-<g class="node" data-id="dense1" data-label="block 1: |max| = 0.83
-compute" data-shape="rectangle">
-  <rect x="263.028" y="415.90000000000003" width="151.61800000000002" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="338.83700000000005" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="338.83700000000005" dy="-3.9000000000000012">block 1: |max| = 0.83</tspan><tspan x="338.83700000000005" dy="16.900000000000002">compute</tspan></text>
+<g class="node" data-id="p2a" data-label="@splat(scale)
+broadcast scalar" data-shape="rectangle">
+  <rect x="56" y="475.6" width="143.467" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="127.7335" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="127.7335" dy="-3.9000000000000012">@splat(scale)</tspan><tspan x="127.7335" dy="16.900000000000002">broadcast scalar</tspan></text>
 </g>
-<g class="node" data-id="sparse2" data-label="block 2: |max| = 0.002
-SKIP" data-shape="rectangle">
-  <rect x="462.6460000000001" y="415.90000000000003" width="163.474" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="544.383" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="544.383" dy="-3.9000000000000012">block 2: |max| = 0.002</tspan><tspan x="544.383" dy="16.900000000000002">SKIP</tspan></text>
+<g class="node" data-id="p2b" data-label="xv * scale_v
+normalize chunk" data-shape="rectangle">
+  <rect x="247.467" y="475.6" width="139.02100000000002" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="316.9775" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="316.9775" dy="-3.9000000000000012">xv * scale_v</tspan><tspan x="316.9775" dy="16.900000000000002">normalize chunk</tspan></text>
 </g>
-<g class="node" data-id="dense2" data-label="block 3: |max| = 1.2
-compute" data-shape="rectangle">
-  <rect x="674.1200000000001" y="415.90000000000003" width="144.20800000000003" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="746.2240000000002" y="442.8" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="746.2240000000002" dy="-3.9000000000000012">block 3: |max| = 1.2</tspan><tspan x="746.2240000000002" dy="16.900000000000002">compute</tspan></text>
+<g class="node" data-id="p2c" data-label="normalized * wv
+apply weight" data-shape="rectangle">
+  <rect x="434.48800000000006" y="475.6" width="135.316" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="502.1460000000001" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="502.1460000000001" dy="-3.9000000000000012">normalized * wv</tspan><tspan x="502.1460000000001" dy="16.900000000000002">apply weight</tspan></text>
 </g>
-<g class="node" data-id="c1" data-label="@reduce(.Max, @abs(xv))
-~1 cycle per 8 elements" data-shape="rectangle">
-  <rect x="109.03800000000012" y="620.4545" width="188.668" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="203.37200000000013" y="647.3545" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="203.37200000000013" dy="-3.9000000000000012">@reduce(.Max, @abs(xv))</tspan><tspan x="203.37200000000013" dy="16.900000000000002">~1 cycle per 8 elements</tspan></text>
-</g>
-<g class="node" data-id="c2" data-label="&lt; threshold?" data-shape="diamond">
-  <polygon points="415.3605000000001,577.7 485.0150000000001,647.3545 415.3605000000001,717.009 345.70600000000013,647.3545" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="415.3605000000001" y="647.3545" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&lt; threshold?</text>
-</g>
-<g class="node" data-id="skip" data-label="continue
-(skip dequant + dot)" data-shape="rectangle">
-  <rect x="608.4850000000001" y="579.5545000000001" width="153.841" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="685.4055000000001" y="606.4545" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="685.4055000000001" dy="-3.9000000000000012">continue</tspan><tspan x="685.4055000000001" dy="16.900000000000002">(skip dequant + dot)</tspan></text>
-</g>
-<g class="node" data-id="compute" data-label="normal GEMV block
-(dequant + FMA)" data-shape="rectangle">
-  <rect x="608.4850000000001" y="661.3545" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="686.8875000000002" y="688.2545" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="686.8875000000002" dy="-3.9000000000000012">normal GEMV block</tspan><tspan x="686.8875000000002" dy="16.900000000000002">(dequant + FMA)</tspan></text>
+<g class="node" data-id="p2d" data-label="&quot;output[i..i+8" data-shape="rectangle">
+  <rect x="617.8040000000001" y="484.05" width="111.60400000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="673.6060000000001" y="502.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;output[i..i+8</text>
 </g>
 </svg>

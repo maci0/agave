@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 491.567 365" width="491.567" height="365" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1276.4330000000002 302.69866666666667" width="1276.4330000000002" height="302.69866666666667" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,51 +18,75 @@
   }
 </style>
 <defs>
-  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
-  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<line class="lifeline" data-actor="Code" x1="89.5825" y1="70" x2="89.5825" y2="335" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="Stack" x1="240.5965" y1="70" x2="240.5965" y2="335" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="Cleanup" x1="396.7975" y1="70" x2="396.7975" y2="335" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<g class="message" data-from="Code" data-to="Stack" data-label="defer file.close()" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="89.5825" y1="90" x2="240.5965" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="165.0895" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">defer file.close()</text>
+<polyline class="edge" data-from="Acquire" data-to="Own" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="172.352,136.84391666666664 220.352,136.84391666666667" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Own" data-to="Defer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no, this function owns it" points="357.43783333333334,109.42675 666.1020000000002,109.42675 666.1020000000002,66.9 836.5850000000003,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Own" data-to="Fallible" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes, caller owns it" points="357.43783333333334,164.26108333333335 420.855,164.26108333333335 420.855,191.56216666666666 573.071,191.56216666666666" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Fallible" data-to="ErrDefer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="691.6318333333334,167.85 751.344,167.85 751.344,150.66216666666668 836.5850000000003,150.66216666666668" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Fallible" data-to="None" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="691.6318333333334,215.27433333333335 751.3440000000003,215.27433333333335 751.3440000000003,232.4621666666667 836.5850000000003,232.4621666666667" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Defer" data-to="Success" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="984.4980000000003,66.9 1013.6130000000003,66.9 1013.6130000000003,175.55816666666664 1042.7280000000003,175.55816666666664" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Defer" data-to="Failure" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="984.4980000000003,66.9 1013.6130000000003,66.9 1013.6130000000003,78.0505 1042.7280000000003,78.0505" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ErrDefer" data-to="Success" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="985.9800000000002,150.66216666666668 1014.3540000000003,150.66216666666668 1014.3540000000003,175.55816666666664 1042.7280000000003,175.55816666666664" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ErrDefer" data-to="Failure" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="985.9800000000002,150.66216666666668 1014.3540000000003,150.66216666666668 1014.3540000000003,78.0505 1042.7280000000003,78.0505" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="None" data-to="Success" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1028.9580000000003,232.4621666666667 1037.2470000000003,232.4621666666667 1037.2470000000003,184.78316666666666 1042.7280000000003,184.78316666666666" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Own" data-to="Defer" data-label="no, this function owns it">
+  <rect x="674.1020000000002" y="50.90000000000001" width="122.19399999999999" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="735.1990000000002" y="66.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no, this function owns it</text>
 </g>
-<g class="message" data-from="Code" data-to="Stack" data-label="defer allocator.free(data)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="89.5825" y1="130" x2="240.5965" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="165.0895" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">defer allocator.free(data)</text>
+<g class="edge-label" data-from="Own" data-to="Fallible" data-label="yes, caller owns it">
+  <rect x="428.855" y="175.56216666666666" width="100.21600000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="478.963" y="190.71216666666666" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes, caller owns it</text>
 </g>
-<g class="message" data-from="Code" data-to="Code" data-label="return (normal or error)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="89.5825,185 119.5825,185 119.5825,205 89.5825,205" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="127.5825" y="195" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">return (normal or error)</text>
+<g class="edge-label" data-from="Fallible" data-to="ErrDefer" data-label="yes">
+  <rect x="759.344" y="134.66216666666668" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="777.0790000000001" y="149.81216666666668" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
-<g class="message" data-from="Stack" data-to="Cleanup" data-label="allocator.free(data)  [last declared, first run]" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="240.5965" y1="255" x2="396.7975" y2="255" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="318.697" y="245" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">allocator.free(data)  [last declared, first run]</text>
+<g class="edge-label" data-from="Fallible" data-to="None" data-label="no">
+  <rect x="759.3440000000003" y="216.4621666666667" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="774.1090000000003" y="231.6121666666667" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
-<g class="message" data-from="Stack" data-to="Cleanup" data-label="file.close()          [first declared, last run]" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="240.5965" y1="295" x2="396.7975" y2="295" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="318.697" y="285" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">file.close()          [first declared, last run]</text>
+<g class="node" data-id="Acquire" data-label="alloc / open / init
+a resource" data-shape="rectangle">
+  <rect x="40" y="109.94391666666667" width="132.352" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="106.176" y="136.84391666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="106.176" dy="-3.9000000000000012">alloc / open / init</tspan><tspan x="106.176" dy="16.900000000000002">a resource</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="Code">
-  <polygon points="34.28649999999998,138 138.8785,138 144.8785,144 144.8785,161 34.28649999999998,161" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="138.8785,138 144.8785,144 138.8785,144" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="89.5825" y="149.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">... work happens ...</text>
+<g class="node" data-id="Own" data-label="does the caller
+end up owning it?" data-shape="diamond">
+  <polygon points="302.6035,54.592416666666665 384.855,136.84391666666667 302.6035,219.09541666666667 220.35199999999998,136.84391666666667" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="302.6035" y="136.84391666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="302.6035" dy="-3.9000000000000012">does the caller</tspan><tspan x="302.6035" dy="16.900000000000002">end up owning it?</tspan></text>
 </g>
-<g class="actor" data-id="Code" data-label="Function Body" data-type="participant">
-  <rect x="30" y="30" width="119.16499999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="89.5825" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Function Body</text>
+<g class="node" data-id="Defer" data-label="defer cleanup()
+runs on every exit" data-shape="rectangle">
+  <rect x="836.5850000000003" y="40" width="147.913" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="910.5415000000003" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="910.5415000000003" dy="-3.9000000000000012">defer cleanup()</tspan><tspan x="910.5415000000003" dy="16.900000000000002">runs on every exit</tspan></text>
 </g>
-<g class="actor" data-id="Stack" data-label="Defer Stack" data-type="participant">
-  <rect x="189.165" y="30" width="102.863" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="240.5965" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Defer Stack</text>
+<g class="node" data-id="Fallible" data-label="more fallible
+steps below?" data-shape="diamond">
+  <polygon points="644.2075,120.42566666666666 715.3439999999999,191.56216666666666 644.2075,262.69866666666667 573.071,191.56216666666666" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="644.2075" y="191.56216666666666" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="644.2075" dy="-3.9000000000000012">more fallible</tspan><tspan x="644.2075" dy="16.900000000000002">steps below?</tspan></text>
 </g>
-<g class="actor" data-id="Cleanup" data-label="Cleanup Actions" data-type="participant">
-  <rect x="332.028" y="30" width="129.539" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="396.7975" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Cleanup Actions</text>
+<g class="node" data-id="ErrDefer" data-label="errdefer cleanup()
+runs only on error" data-shape="rectangle">
+  <rect x="836.5850000000003" y="123.76216666666667" width="149.39500000000004" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="911.2825000000003" y="150.66216666666668" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="911.2825000000003" dy="-3.9000000000000012">errdefer cleanup()</tspan><tspan x="911.2825000000003" dy="16.900000000000002">runs only on error</tspan></text>
+</g>
+<g class="node" data-id="None" data-label="no defer needed
+ownership transfers as-is" data-shape="rectangle">
+  <rect x="836.5850000000003" y="205.56216666666668" width="192.373" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="932.7715000000003" y="232.4621666666667" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="932.7715000000003" dy="-3.9000000000000012">no defer needed</tspan><tspan x="932.7715000000003" dy="16.900000000000002">ownership transfers as-is</tspan></text>
+</g>
+<g class="node" data-id="Success" data-label="function returns normally" data-shape="rectangle">
+  <rect x="1042.7280000000003" y="157.10816666666665" width="187.18599999999998" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1136.3210000000004" y="175.55816666666664" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">function returns normally</text>
+</g>
+<g class="node" data-id="Failure" data-label="function returns an error" data-shape="rectangle">
+  <rect x="1042.7280000000003" y="59.6005" width="186.44500000000002" height="36.900000000000006" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="1135.9505000000004" y="78.0505" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c" dy="4.55">function returns an error</text>
 </g>
 </svg>

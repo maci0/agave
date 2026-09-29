@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 677.9914166666667 439.20000000000005" width="677.9914166666667" height="439.20000000000005" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 493.62399999999997 1025.489" width="493.62399999999997" height="1025.489" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,62 +19,78 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="PA" data-to="Arena" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="388.50295000000006,93.80000000000001 388.50295000000006,117.80000000000001 277.07050000000004,117.80000000000001 277.07050000000004,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Arena" data-to="A1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="231.36280000000002,195.60000000000002 231.36280000000002,231.60000000000002 96.543,231.60000000000002 96.543,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Arena" data-to="A2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.7782,195.60000000000002 322.7782,219.60000000000002 499.3444166666667,219.60000000000002 499.3444166666667,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Arena" data-to="A3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="292.30640000000005,195.60000000000002 292.30640000000005,231.60000000000002 358.25841666666673,231.60000000000002 358.25841666666673,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="PA" data-to="Final" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="388.50295000000006,93.80000000000001 388.50295000000006,117.80000000000001 565.8874166666667,117.80000000000001 565.8874166666667,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="A3" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="358.25841666666673,297.40000000000003 358.25841666666673,321.40000000000003 462.0729166666667,321.40000000000003 462.0729166666667,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Final" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="565.8874166666667,195.60000000000002 565.8874166666667,321.40000000000003 462.0729166666667,321.40000000000003 462.0729166666667,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Arena" data-to="Free" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="arena.deinit()" points="261.8346,195.60000000000002 261.8346,265.1 217.086,265.1 217.086,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="Arena" data-to="Free" data-label="arena.deinit()">
-  <rect x="177.086" y="272.1" width="79.42600000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="216.79900000000004" y="287.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">arena.deinit()</text>
+<g class="subgraph" data-id="TestAllocator" data-label="std.testing.allocator, Leak Detection Lifecycle">
+  <rect x="40" y="40" width="413.62399999999997" height="945.4890000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="40" width="413.62399999999997" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">std.testing.allocator, Leak Detection Lifecycle</text>
 </g>
-<g class="node" data-id="PA" data-label="Parent Allocator
-(e.g. GPA)" data-shape="rectangle">
-  <rect x="319.73345000000006" y="40" width="137.539" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="388.50295000000006" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="388.50295000000006" dy="-3.9000000000000012">Parent Allocator</tspan><tspan x="388.50295000000006" dy="16.900000000000002">(e.g. GPA)</tspan></text>
+<polyline class="edge" data-from="T0" data-to="A1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,154.7 216.0605,202.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A1" data-to="A2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,273.4 216.0605,321.4" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A2" data-to="F1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,392.1 216.0605,440.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F1" data-to="TE" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,510.8 216.0605,558.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TE" data-to="CHECK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.0605,595.7 216.0605,643.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CHECK" data-to="PASS" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
+table = {}" points="195.31233333333333,747.4408333333334 195.31233333333333,780.1890000000001 113.6545,780.1890000000001 113.65449999999998,898.7890000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CHECK" data-to="FAIL" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no
+table = {ptr_B}" points="236.80866666666668,747.4408333333333 236.80866666666668,780.1890000000001 318.4665,780.1890000000001 318.4665,898.7890000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="CHECK" data-to="PASS" data-label="yes
+table = {}">
+  <rect x="85.6545" y="811.1890000000001" width="55.666" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="113.4875" y="833.489" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="113.4875" dy="-3.3000000000000007">yes</tspan><tspan x="113.4875" dy="14.3">table = {}</tspan></text>
 </g>
-<g class="node" data-id="Arena" data-label="ArenaAllocator
-defer arena.deinit()" data-shape="rectangle">
-  <rect x="200.89100000000002" y="141.8" width="152.359" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="277.07050000000004" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="277.07050000000004" dy="-3.9000000000000012">ArenaAllocator</tspan><tspan x="277.07050000000004" dy="16.900000000000002">defer arena.deinit()</tspan></text>
+<g class="edge-label" data-from="CHECK" data-to="FAIL" data-label="no
+table = {ptr_B}">
+  <rect x="277.4665" y="811.1890000000001" width="81.802" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="318.3675" y="833.489" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="318.3675" dy="-3.3000000000000007">no</tspan><tspan x="318.3675" dy="14.3">table = {ptr_B}</tspan></text>
 </g>
-<g class="node" data-id="A1" data-label="tokenize()
-arena_alloc" data-shape="rectangle">
-  <rect x="40" y="243.60000000000002" width="113.086" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="96.543" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="96.543" dy="-3.9000000000000012">tokenize()</tspan><tspan x="96.543" dy="16.900000000000002">arena_alloc</tspan></text>
+<g class="node" data-id="T0" data-label="test begins
+allocator created
+alloc table = {}" data-shape="rectangle">
+  <rect x="145.06799999999998" y="84" width="141.985" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="216.0605" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="216.0605" dy="-12.350000000000001">test begins</tspan><tspan x="216.0605" dy="16.900000000000002">allocator created</tspan><tspan x="216.0605" dy="16.900000000000002">alloc table = {}</tspan></text>
 </g>
-<g class="node" data-id="A2" data-label="embed()
-arena_alloc" data-shape="rectangle">
-  <rect x="442.80141666666674" y="243.60000000000002" width="113.086" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="499.34441666666675" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="499.34441666666675" dy="-3.9000000000000012">embed()</tspan><tspan x="499.34441666666675" dy="16.900000000000002">arena_alloc</tspan></text>
+<g class="node" data-id="A1" data-label="alloc(u8, 100)
+registers ptr_A → 100 bytes
+table = {ptr_A}" data-shape="rectangle">
+  <rect x="118.0215" y="202.7" width="196.078" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="216.0605" y="238.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="216.0605" dy="-12.350000000000001">alloc(u8, 100)</tspan><tspan x="216.0605" dy="16.900000000000002">registers ptr_A → 100 bytes</tspan><tspan x="216.0605" dy="16.900000000000002">table = {ptr_A}</tspan></text>
 </g>
-<g class="node" data-id="A3" data-label="generate()
-arena_alloc" data-shape="rectangle">
-  <rect x="301.7154166666667" y="243.60000000000002" width="113.086" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="358.25841666666673" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="358.25841666666673" dy="-3.9000000000000012">generate()</tspan><tspan x="358.25841666666673" dy="16.900000000000002">arena_alloc</tspan></text>
+<g class="node" data-id="A2" data-label="alloc(u32, 64)
+registers ptr_B → 256 bytes
+table = {ptr_A, ptr_B}" data-shape="rectangle">
+  <rect x="115.79849999999999" y="321.4" width="200.524" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="216.0605" y="356.75" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="216.0605" dy="-12.350000000000001">alloc(u32, 64)</tspan><tspan x="216.0605" dy="16.900000000000002">registers ptr_B → 256 bytes</tspan><tspan x="216.0605" dy="16.900000000000002">table = {ptr_A, ptr_B}</tspan></text>
 </g>
-<g class="node" data-id="Final" data-label="decode()
-allocator  (parent)" data-shape="rectangle">
-  <rect x="493.7834166666667" y="141.8" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="565.8874166666667" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="565.8874166666667" dy="-3.9000000000000012">decode()</tspan><tspan x="565.8874166666667" dy="16.900000000000002">allocator  (parent)</tspan></text>
+<g class="node" data-id="F1" data-label="free(ptr_A)
+removes ptr_A from table
+table = {ptr_B}" data-shape="rectangle">
+  <rect x="122.83800000000002" y="440.1" width="186.44499999999996" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="216.0605" y="475.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="216.0605" dy="-12.350000000000001">free(ptr_A)</tspan><tspan x="216.0605" dy="16.900000000000002">removes ptr_A from table</tspan><tspan x="216.0605" dy="16.900000000000002">table = {ptr_B}</tspan></text>
 </g>
-<g class="node" data-id="Return" data-label="return text
-(owned by caller)" data-shape="rectangle">
-  <rect x="391.45091666666667" y="345.40000000000003" width="141.244" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="462.0729166666667" y="372.3" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="462.0729166666667" dy="-3.9000000000000012">return text</tspan><tspan x="462.0729166666667" dy="16.900000000000002">(owned by caller)</tspan></text>
+<g class="node" data-id="TE" data-label="test body exits" data-shape="rectangle">
+  <rect x="153.5895" y="558.8" width="124.942" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="216.0605" y="577.25" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">test body exits</text>
 </g>
-<g class="node" data-id="Free" data-label="ALL temp buffers freed
-in one operation" data-shape="rectangle">
-  <rect x="129.79149999999998" y="345.40000000000003" width="174.58900000000003" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="217.086" y="372.3" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="217.086" dy="-3.9000000000000012">ALL temp buffers freed</tspan><tspan x="217.086" dy="16.900000000000002">in one operation</tspan></text>
+<g class="node" data-id="CHECK" data-label="alloc table
+empty?" data-shape="diamond">
+  <polygon points="216.0605,643.7 278.305,705.9445000000001 216.0605,768.1890000000001 153.81599999999997,705.9445000000001" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="216.0605" y="705.9445000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="216.0605" dy="-3.9000000000000012">alloc table</tspan><tspan x="216.0605" dy="16.900000000000002">empty?</tspan></text>
+</g>
+<g class="node" data-id="PASS" data-label="TEST PASS
+no leaks" data-shape="rectangle">
+  <rect x="56" y="898.7890000000001" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="113.65449999999998" y="925.6890000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="113.65449999999998" dy="-3.9000000000000012">TEST PASS</tspan><tspan x="113.65449999999998" dy="16.900000000000002">no leaks</tspan></text>
+</g>
+<g class="node" data-id="FAIL" data-label="TEST FAIL
+memory leak detected
+ptr_B (256 bytes) was never freed" data-shape="rectangle">
+  <rect x="199.309" y="898.7890000000001" width="238.31499999999997" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="318.4665" y="934.1390000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="318.4665" dy="-12.350000000000001">TEST FAIL</tspan><tspan x="318.4665" dy="16.900000000000002">memory leak detected</tspan><tspan x="318.4665" dy="16.900000000000002">ptr_B (256 bytes) was never freed</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1267.8285 802.37" width="1267.8285" height="802.37" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1267.8285 802.37" width="1267.8285" height="802.37" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,46 +19,40 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Protected" data-label="Always Protected — never evicted">
-  <rect x="357.66425000000004" y="706.37" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="357.66425000000004" y="706.37" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="369.66425000000004" y="720.37" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Always Protected — never evicted</text>
+<g class="subgraph" data-id="Protected" data-label="Always Protected, never evicted">
 </g>
 <g class="subgraph" data-id="Scoring" data-label="Score remaining positions">
-  <rect x="357.66425000000004" y="754.37" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="357.66425000000004" y="754.37" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="369.66425000000004" y="768.37" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Score remaining positions</text>
 </g>
-<polyline class="edge" data-from="NewTok" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.17550000000003,93.80000000000003 217.17550000000006,150.25000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Check" data-to="Generate" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="within budget" points="190.74633333333338,282.39583333333337 190.74633333333338,336.375 119.8845,336.375 119.8845,416.675" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Check" data-to="Modulo" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="over budget" points="243.6046666666667,282.3958333333333 243.6046666666667,336.375 314.4665,336.375 314.4665,416.675" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Modulo" data-to="Skip" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="not yet" points="285.56733333333335,561.1708333333335 285.56733333333335,626.07 271.26874999999995,626.07 271.26875,706.37" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Modulo" data-to="Protected" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes — compress now" points="343.3656666666667,561.1708333333333 343.3656666666667,626.07 357.66425000000004,626.07 357.66425000000004,706.37" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Protected" data-to="Scoring" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="357.66425000000004,706.37 357.66425000000004,754.37" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="NormScore" data-to="Evict" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="885.334,110.7 885.334,130.475 1006.07975,130.475 1006.07975,150.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="TriScore" data-to="Evict" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1126.8255000000001,110.7 1126.8255000000001,130.475 1006.07975,130.475 1006.07975,150.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Evict" data-to="Resume" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1006.07975,204.05 1006.0797500000001,260.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NewTok" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="217.17550000000003,93.80000000000003 217.17550000000006,150.25000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Generate" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="within budget" points="190.74633333333338,282.39583333333337 190.74633333333338,336.375 119.8845,336.375 119.8845,416.675" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Modulo" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="over budget" points="243.6046666666667,282.3958333333333 243.6046666666667,336.375 314.4665,336.375 314.4665,416.675" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Modulo" data-to="Skip" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="not yet" points="285.56733333333335,561.1708333333335 285.56733333333335,626.07 271.26874999999995,626.07 271.26875,706.37" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Modulo" data-to="Protected" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes, compress now" points="343.3656666666667,561.1708333333333 343.3656666666667,626.07 357.66425000000004,626.07 357.66425000000004,706.37" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Protected" data-to="Scoring" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="357.66425000000004,706.37 357.66425000000004,754.37" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NormScore" data-to="Evict" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="885.334,110.7 885.334,130.475 1006.07975,130.475 1006.07975,150.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TriScore" data-to="Evict" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1126.8255000000001,110.7 1126.8255000000001,130.475 1006.07975,130.475 1006.07975,150.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Evict" data-to="Resume" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1006.07975,204.05 1006.0797500000001,260.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Check" data-to="Generate" data-label="within budget">
-  <rect x="80.8845" y="343.375" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="119.7065" y="358.525" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">within budget</text>
+  <rect x="80.8845" y="343.375" width="77.644" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="119.7065" y="358.525" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">within budget</text>
 </g>
 <g class="edge-label" data-from="Check" data-to="Modulo" data-label="over budget">
-  <rect x="276.9665" y="343.375" width="74.08000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="314.0065" y="358.525" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">over budget</text>
+  <rect x="276.9665" y="343.375" width="74.08000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="314.0065" y="358.525" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">over budget</text>
 </g>
 <g class="edge-label" data-from="Modulo" data-to="Skip" data-label="not yet">
-  <rect x="247.26874999999998" y="633.07" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="271.24075" y="648.22" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">not yet</text>
+  <rect x="247.26874999999998" y="633.07" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="271.24075" y="648.22" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">not yet</text>
 </g>
-<g class="edge-label" data-from="Modulo" data-to="Protected" data-label="yes — compress now">
-  <rect x="300.66425000000004" y="633.07" width="113.28400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="357.30625000000003" y="648.22" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes — compress now</text>
+<g class="edge-label" data-from="Modulo" data-to="Protected" data-label="yes, compress now">
+  <rect x="303.66425000000004" y="633.07" width="107.938" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="357.63325000000003" y="648.22" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes, compress now</text>
 </g>
 <g class="node" data-id="NewTok" data-label="New token generated
 (cache length checked)" data-shape="rectangle">
@@ -118,12 +105,12 @@ with compressed cache" data-shape="rectangle">
 </g>
 <g class="node" data-id="Check" data-label="Cache exceeds
 --kv-budget?" data-shape="diamond">
-  <polygon points="217.17550000000003,150.25 296.463,229.5375 217.17550000000003,308.825 137.88800000000003,229.5375" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="217.17550000000003" y="229.5375" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="217.17550000000003" dy="-3.9000000000000012">Cache exceeds</tspan><tspan x="217.17550000000003" dy="16.900000000000002">--kv-budget?</tspan></text>
+  <polygon points="217.17550000000003,150.25 296.463,229.5375 217.17550000000003,308.825 137.88800000000003,229.5375" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="217.17550000000003" y="229.5375" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="217.17550000000003" dy="-3.9000000000000012">Cache exceeds</tspan><tspan x="217.17550000000003" dy="16.900000000000002">--kv-budget?</tspan></text>
 </g>
 <g class="node" data-id="Modulo" data-label="Every 128 tokens?
 (amortized trigger)" data-shape="diamond">
-  <polygon points="314.4665,416.67500000000007 401.164,503.37250000000006 314.4665,590.07 227.76899999999998,503.37250000000006" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="314.4665" y="503.37250000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="314.4665" dy="-3.9000000000000012">Every 128 tokens?</tspan><tspan x="314.4665" dy="16.900000000000002">(amortized trigger)</tspan></text>
+  <polygon points="314.4665,416.67500000000007 401.164,503.37250000000006 314.4665,590.07 227.76899999999998,503.37250000000006" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="314.4665" y="503.37250000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="314.4665" dy="-3.9000000000000012">Every 128 tokens?</tspan><tspan x="314.4665" dy="16.900000000000002">(amortized trigger)</tspan></text>
 </g>
 </svg>

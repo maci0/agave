@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 527.0620000000001 856.4759999999999" width="527.0620000000001" height="856.4759999999999" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 527.0620000000001 856.4759999999999" width="527.0620000000001" height="856.4759999999999" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,34 +19,34 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="RetryLoop" data-label="CAS retry loop">
-  <rect x="40" y="130.9" width="390.10550000000006" height="685.5759999999999" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="130.9" width="390.10550000000006" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="144.9" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">CAS retry loop</text>
+  <rect x="40" y="130.9" width="390.10550000000006" height="685.5759999999999" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="130.9" width="390.10550000000006" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="144.9" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">CAS retry loop</text>
 </g>
-<polyline class="edge" data-from="Start" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="413.10550000000006,76.9 413.10550000000006,603.976 275.76075000000003,603.976 275.76075000000003,627.976" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Read" data-to="Link" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="275.76075000000003,698.6759999999999 275.76075000000003,710.6759999999999 245.15241666666668,710.6759999999999 245.15241666666668,746.6759999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Link" data-to="CAS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="183.25108333333336,746.6759999999999 183.25108333333336,710.6759999999999 57.88158333333338,710.6759999999999 57.88158333333338,390.67599999999993 106.94399999999999,390.67599999999993 106.94399999999999,327.73199999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="CAS" data-to="Success" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes — swap succeeds
-(.release publishes item.next)" points="208.832,327.73199999999997 208.832,390.67599999999993 316.92250000000007,390.67599999999993 316.92250000000007,509.27599999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="CAS" data-to="Retry" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no — spurious fail
-or concurrent push" points="157.88799999999998,378.676 157.88799999999998,390.67599999999993 138.41600000000003,390.67599999999993 138.41600000000005,509.27599999999995" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Retry" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="138.41600000000005,579.976 138.41600000000005,603.976 275.76075000000003,603.976 275.76075000000003,627.976" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="CAS" data-to="Success" data-label="yes — swap succeeds
+<polyline class="edge" data-from="Start" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="413.10550000000006,76.9 413.10550000000006,603.976 275.76075000000003,603.976 275.76075000000003,627.976" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Read" data-to="Link" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="275.76075000000003,698.6759999999999 275.76075000000003,710.6759999999999 245.15241666666668,710.6759999999999 245.15241666666668,746.6759999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Link" data-to="CAS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="183.25108333333336,746.6759999999999 183.25108333333336,710.6759999999999 57.88158333333338,710.6759999999999 57.88158333333338,390.67599999999993 106.94399999999999,390.67599999999993 106.94399999999999,327.73199999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CAS" data-to="Success" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes, swap succeeds
+(.release publishes item.next)" points="208.832,327.73199999999997 208.832,390.67599999999993 316.92250000000007,390.67599999999993 316.92250000000007,509.27599999999995" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CAS" data-to="Retry" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no, spurious fail
+or concurrent push" points="157.88799999999998,378.676 157.88799999999998,390.67599999999993 138.41600000000003,390.67599999999993 138.41600000000005,509.27599999999995" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Retry" data-to="Read" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="138.41600000000005,579.976 138.41600000000005,603.976 275.76075000000003,603.976 275.76075000000003,627.976" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="CAS" data-to="Success" data-label="yes, swap succeeds
 (.release publishes item.next)">
-  <rect x="239.92250000000007" y="421.676" width="153.082" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="316.46350000000007" y="443.976" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="316.46350000000007" dy="-3.3000000000000007">yes — swap succeeds</tspan><tspan x="316.46350000000007" dy="14.3">(.release publishes item.next)</tspan></text>
+  <rect x="239.92250000000007" y="421.676" width="153.082" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="316.46350000000007" y="443.976" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="316.46350000000007" dy="-3.3000000000000007">yes, swap succeeds</tspan><tspan x="316.46350000000007" dy="14.3">(.release publishes item.next)</tspan></text>
 </g>
-<g class="edge-label" data-from="CAS" data-to="Retry" data-label="no — spurious fail
+<g class="edge-label" data-from="CAS" data-to="Retry" data-label="no, spurious fail
 or concurrent push">
-  <rect x="83.41600000000003" y="421.676" width="109.12600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="137.97900000000004" y="443.976" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="137.97900000000004" dy="-3.3000000000000007">no — spurious fail</tspan><tspan x="137.97900000000004" dy="14.3">or concurrent push</tspan></text>
+  <rect x="83.41600000000003" y="421.676" width="109.12600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="137.97900000000004" y="443.976" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="137.97900000000004" dy="-3.3000000000000007">no, spurious fail</tspan><tspan x="137.97900000000004" dy="14.3">or concurrent push</tspan></text>
 </g>
 <g class="node" data-id="Start" data-label="push: item to insert" data-shape="stadium">
   <rect x="339.14900000000006" y="40" width="147.913" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
@@ -72,8 +65,8 @@ item.next = current_head" data-shape="rectangle">
 </g>
 <g class="node" data-id="CAS" data-label="cmpxchgWeak
 head == current_head?" data-shape="diamond">
-  <polygon points="157.88799999999998,174.90000000000003 259.77599999999995,276.788 157.88799999999998,378.676 55.999999999999986,276.788" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="157.88799999999998" y="276.788" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="157.88799999999998" dy="-3.9000000000000012">cmpxchgWeak</tspan><tspan x="157.88799999999998" dy="16.900000000000002">head == current_head?</tspan></text>
+  <polygon points="157.88799999999998,174.90000000000003 259.77599999999995,276.788 157.88799999999998,378.676 55.999999999999986,276.788" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="157.88799999999998" y="276.788" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="157.88799999999998" dy="-3.9000000000000012">cmpxchgWeak</tspan><tspan x="157.88799999999998" dy="16.900000000000002">head == current_head?</tspan></text>
 </g>
 <g class="node" data-id="Success" data-label="Return
 head now points to item" data-shape="stadium">

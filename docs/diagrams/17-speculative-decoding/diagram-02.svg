@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 551.568 461.00000000000006" width="551.568" height="461.00000000000006" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 551.568 461.00000000000006" width="551.568" height="461.00000000000006" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,39 +19,30 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Depth0" data-label="Depth 0 — top tokens at position 1">
-  <rect x="99.44600000000005" y="358.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="99.44600000000005" y="358.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="111.44600000000005" y="372.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Depth 0 — top tokens at position 1</text>
+<g class="subgraph" data-id="Depth0" data-label="Depth 0, top tokens at position 1">
 </g>
-<g class="subgraph" data-id="Depth1" data-label="Depth 1 — top tokens at position 2">
-  <rect x="99.44600000000005" y="386.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="99.44600000000005" y="386.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="111.44600000000005" y="400.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Depth 1 — top tokens at position 2</text>
+<g class="subgraph" data-id="Depth1" data-label="Depth 1, top tokens at position 2">
 </g>
-<g class="subgraph" data-id="Depth2" data-label="Depth 2 — top tokens at position 3">
-  <rect x="99.44600000000005" y="414.75" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="99.44600000000005" y="414.75" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="111.44600000000005" y="428.75" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Depth 2 — top tokens at position 3</text>
+<g class="subgraph" data-id="Depth2" data-label="Depth 2, top tokens at position 3">
 </g>
-<polyline class="edge" data-from="Root" data-to="D0A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,120.02083333333337 159.44600000000003,120.02083333333337" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Root" data-to="D0B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,312.3 159.44600000000003,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Root" data-to="D0C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,394.1 159.44600000000003,394.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D0A" data-to="D1A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,120.02083333333337 266.82000000000005,120.02083333333337 266.82000000000005,75.86666666666667 284.82000000000005,75.86666666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D0A" data-to="D1B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,120.02083333333337 266.82000000000005,120.02083333333337 266.82000000000005,230.50000000000003 284.82000000000005,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D0B" data-to="D1C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,312.3 284.82000000000005,312.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D1A" data-to="D2A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.1940000000001,75.86666666666667 392.1940000000001,75.86666666666667 392.1940000000001,66.9 410.194,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D1A" data-to="D2B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.1940000000001,75.86666666666667 392.1940000000001,75.86666666666667 392.1940000000001,148.70000000000002 410.194,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D1B" data-to="D2C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.194,230.50000000000003 410.194,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Root" data-to="D0A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,120.02083333333337 159.44600000000003,120.02083333333337" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Root" data-to="D0B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,312.3 159.44600000000003,312.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Root" data-to="D0C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="123.446,312.3 141.44600000000003,312.3 141.44600000000003,394.1 159.44600000000003,394.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D0A" data-to="D1A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,120.02083333333337 266.82000000000005,120.02083333333337 266.82000000000005,75.86666666666667 284.82000000000005,75.86666666666667" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D0A" data-to="D1B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,120.02083333333337 266.82000000000005,120.02083333333337 266.82000000000005,230.50000000000003 284.82000000000005,230.50000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D0B" data-to="D1C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="248.82000000000002,312.3 284.82000000000005,312.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D1A" data-to="D2A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.1940000000001,75.86666666666667 392.1940000000001,75.86666666666667 392.1940000000001,66.9 410.194,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D1A" data-to="D2B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.1940000000001,75.86666666666667 392.1940000000001,75.86666666666667 392.1940000000001,148.70000000000002 410.194,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D1B" data-to="D2C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="374.194,230.50000000000003 410.194,230.50000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Root" data-label="&quot;[prefix" data-shape="rectangle">
-  <rect x="40" y="293.85" width="83.446" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="81.723" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;[prefix</text>
+  <rect x="40" y="293.85" width="83.446" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="81.723" y="312.3" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;[prefix</text>
 </g>
 <g class="node" data-id="D0A" data-label="the
 (p=0.60)" data-shape="rectangle">

@@ -16,9 +16,9 @@ import path from 'node:path';
 
 /**
  * All 7 colors required, resvg fails silently if any is missing.
- * Same ink ramp the chat UI and the wordmark use (docs/logo.svg), stepped for a
- * white canvas. Per-role node colors live in the classDef lines of the mermaid
- * blocks; see docs/CONTRIBUTING.md for that palette.
+ * The paper set from docs/brand/README.md, stepped for a white canvas. Per-role
+ * node colors live in the classDef lines of the mermaid blocks; see
+ * docs/CONTRIBUTING.md for that palette.
  */
 const THEME = {
   bg:      '#ffffff',
@@ -30,16 +30,81 @@ const THEME = {
   border:  '#9c938a',
 };
 
-// Resolve CSS custom properties (var(--xxx)) to hex values before rasterizing.
-const resolveVars = (svg, theme) =>
-  svg
-    .replaceAll('var(--bg)', theme.bg)
-    .replaceAll('var(--fg)', theme.fg)
-    .replaceAll('var(--accent)', theme.accent)
-    .replaceAll('var(--line)', theme.line)
-    .replaceAll('var(--muted)', theme.muted)
-    .replaceAll('var(--surface)', theme.surface)
-    .replaceAll('var(--border)', theme.border);
+/**
+ * Layout measures text with Inter metrics; Adwaita Sans is Inter's GNOME cut
+ * with the same metrics, so it is the rasterizer's face and the SVG's first
+ * local fallback. No webfont is fetched.
+ */
+const LAYOUT_FONT = 'Inter';
+const RASTER_FONT = 'Adwaita Sans';
+
+/**
+ * The renderer derives its secondary inks with color-mix(), which resvg cannot
+ * draw and which washes the warm ink toward grey. These are the hand-picked
+ * steps of the ink ramp: --_text-sec and --_line clear 4.5:1 and 3:1 on white,
+ * the pale steps carry no text.
+ */
+const INK_STEPS = {
+  '--_text-sec': THEME.muted,
+  '--_text-muted': '#a8a4a0',
+  '--_text-faint': '#cbc7c3',
+  '--_line': THEME.line,
+  '--_arrow': '#504b47',
+  '--_node-fill': THEME.surface,
+  '--_node-stroke': THEME.border,
+  '--_group-hdr': '#f7f5f3',
+  '--_inner-stroke': '#e2ded9',
+  '--_key-badge': '#eceae6',
+};
+
+/** Pin the brand faces and ink steps into the renderer's style block. */
+const brandStyle = (svg) => {
+  let styled = svg
+    .replace(/^\s*@import url\('https:\/\/fonts\.googleapis\.com[^\n]*\n/mu, '')
+    .replace(
+      /text \{ font-family: 'Inter', system-ui, sans-serif; \}/u,
+      `text { font-family: ${LAYOUT_FONT}, '${RASTER_FONT}', system-ui, sans-serif; }`,
+    );
+  for (const [name, value] of Object.entries(INK_STEPS)) {
+    styled = styled.replace(new RegExp(`(?<decl>${name}:\\s*)[^;]+;`, 'u'), `$<decl>${value};`);
+  }
+  if (styled.includes('color-mix(') || styled.includes('fonts.googleapis')) {
+    throw new Error('render-diagrams: renderer style block changed; update brandStyle');
+  }
+  return styled;
+};
+
+/**
+ * Replace every var(--name) and var(--name, fallback) with its value. resvg
+ * draws no CSS custom property, so an unresolved stroke (every edge uses
+ * var(--_line)) would vanish from the PNG. Values come from the theme and the
+ * declarations in the renderer's own style block, resolved until none remain.
+ */
+const VAR_USE = /var\((?<name>--[\w-]+)(?:,\s*[^()]*(?:\([^()]*\))?[^()]*)?\)/gu;
+const VAR_DECL = /(?<name>--[\w-]+):\s*(?<value>[^;]+);/gu;
+const MAX_VAR_DEPTH = 8;
+
+const resolveVars = (svg, theme) => {
+  const values = new Map(Object.entries(theme).map(([name, value]) => [`--${name}`, value]));
+  for (const match of svg.matchAll(VAR_DECL)) {
+    if (!values.has(match.groups.name)) { values.set(match.groups.name, match.groups.value.trim()); }
+  }
+  let resolved = svg;
+  for (let depth = 0; depth < MAX_VAR_DEPTH && resolved.includes('var(--'); depth += 1) {
+    resolved = resolved.replaceAll(VAR_USE, (use, name) => values.get(name) ?? use);
+  }
+  if (resolved.includes('var(--')) { throw new Error('render-diagrams: unresolved CSS variable'); }
+  return resolved;
+};
+
+/**
+ * The layout engine gives some nested subgraphs a zero-size frame, and their
+ * titles then print over each other in the corner. Drop such a frame, its
+ * header bar and its title; the nodes inside are laid out and drawn anyway.
+ */
+const COLLAPSED_GROUP =
+  /\s*<rect [^>]*width="0" height="0"[^>]*\/>\s*<rect [^>]*width="0" height="\d+"[^>]*\/>\s*<text [^>]*>.*?<\/text>/gu;
+const dropCollapsedGroups = (svg) => svg.replaceAll(COLLAPSED_GROUP, '');
 
 // Extract mermaid blocks from a Markdown file.
 const extractDiagrams = (md) => {
@@ -74,7 +139,8 @@ for (const file of files) {
   for (const { source, index } of diagrams) {
     const name = `diagram-${String(index + 1).padStart(2, '0')}`;
     try {
-      const resolvedSvg = resolveVars(renderMermaidSVG(source, { theme: THEME }), THEME);
+      const rendered = renderMermaidSVG(source, { ...THEME, font: LAYOUT_FONT });
+      const resolvedSvg = resolveVars(dropCollapsedGroups(brandStyle(rendered)), THEME);
 
       if (emitSvg) {
         await Bun.write(path.join(fileDir, `${name}.svg`), resolvedSvg);
@@ -82,7 +148,7 @@ for (const file of files) {
       if (emitPng) {
         await Bun.write(
           path.join(fileDir, `${name}.png`),
-          new Resvg(resolvedSvg, { fitTo: { mode: 'zoom', value: 2 } }).render().asPng(),
+          new Resvg(resolvedSvg, { fitTo: { mode: 'zoom', value: 2 }, font: { loadSystemFonts: true, defaultFontFamily: RASTER_FONT, sansSerifFamily: RASTER_FONT } }).render().asPng(),
         );
       }
       totalDiagrams += 1;

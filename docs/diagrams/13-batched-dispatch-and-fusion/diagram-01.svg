@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 455.158 735" width="455.158" height="735" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1327.4750000000001 256.35900000000004" width="1327.4750000000001" height="256.35900000000004" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,74 +18,72 @@
   }
 </style>
 <defs>
-  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
-  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<line class="lifeline" data-actor="CPU" x1="70" y1="70" x2="70" y2="705" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="GPU" x1="210" y1="70" x2="210" y2="705" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch Q projection" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="70" y1="90" x2="210" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="140" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">dispatch Q projection</text>
+<polyline class="edge" data-from="X" data-to="Batch" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.906,128.17950000000002 215.906,128.17950000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Batch" data-to="Multi" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="362.8718333333333,98.78633333333335 428.265,98.78633333333335 428.265,83.0545 520.181,83.0545" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Batch" data-to="Single" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="362.8718333333333,157.5726666666667 443.0970000000001,157.5726666666667 443.0970000000001,173.30450000000002 520.181,173.30450000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Multi" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="718.4820000000001,83.0545 740.259,83.0545 740.259,128.17950000000002 762.0360000000001,128.17950000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Single" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="709.59,173.30450000000002 740.259,173.30450000000002 740.259,128.17950000000002 762.0360000000001,128.17950000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFN" data-to="Fused" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes, quant supported
++ @hasDecl finds kernel" points="884.3018333333334,103.72633333333334 944.7550000000001,103.72633333333334 944.7550000000001,83.0545 1125.4830000000002,83.0545" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFN" data-to="Unfused" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="884.3018333333334,152.63266666666667 944.7550000000001,152.63266666666667 944.7550000000001,173.30450000000002 1026.285,173.30450000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Batch" data-to="Multi" data-label="yes">
+  <rect x="436.265" y="67.0545" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="454" y="82.20450000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
-<g class="message" data-from="GPU" data-to="GPU" data-label="load x from VRAM, compute Q" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="210,130 240,130 240,150 210,150" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="248" y="140" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">load x from VRAM, compute Q</text>
+<g class="edge-label" data-from="Batch" data-to="Single" data-label="no">
+  <rect x="451.0970000000001" y="157.30450000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="465.8620000000001" y="172.45450000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
-<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (Q done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="210" y1="200" x2="70" y2="200" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="140" y="190" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">barrier (Q done)</text>
+<g class="edge-label" data-from="FFN" data-to="Fused" data-label="yes, quant supported
++ @hasDecl finds kernel">
+  <rect x="952.7550000000001" y="60.054500000000004" width="128.728" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="1017.1190000000001" y="82.3545" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="1017.1190000000001" dy="-3.3000000000000007">yes, quant supported</tspan><tspan x="1017.1190000000001" dy="14.3">+ @hasDecl finds kernel</tspan></text>
 </g>
-<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch K projection" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="70" y1="240" x2="210" y2="240" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="140" y="230" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">dispatch K projection</text>
+<g class="edge-label" data-from="FFN" data-to="Unfused" data-label="no">
+  <rect x="952.7550000000001" y="157.30450000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="967.5200000000001" y="172.45450000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
-<g class="message" data-from="GPU" data-to="GPU" data-label="load x from VRAM again, compute K" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="210,280 240,280 240,300 210,300" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="248" y="290" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">load x from VRAM again, compute K</text>
+<g class="node" data-id="X" data-label="x (input vector)" data-shape="rectangle">
+  <rect x="40" y="109.7295" width="127.906" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="103.953" y="128.17950000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">x (input vector)</text>
 </g>
-<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (K done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="210" y1="350" x2="70" y2="350" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="140" y="340" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">barrier (K done)</text>
+<g class="node" data-id="Batch" data-label="ops share x?
+(Q/K/V projections)" data-shape="diamond">
+  <polygon points="304.0855,40.000000000000014 392.26500000000004,128.17950000000002 304.0855,216.35900000000004 215.906,128.17950000000002" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="304.0855" y="128.17950000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="304.0855" dy="-3.9000000000000012">ops share x?</tspan><tspan x="304.0855" dy="16.900000000000002">(Q/K/V projections)</tspan></text>
 </g>
-<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch V projection" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="70" y1="390" x2="210" y2="390" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="140" y="380" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">dispatch V projection</text>
+<g class="node" data-id="Multi" data-label="gemvMulti(x, ops, k)
+one dispatch per op,
+same encoder, one barrier" data-shape="rectangle">
+  <rect x="520.181" y="47.7045" width="198.30100000000002" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="619.3315" y="83.0545" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="619.3315" dy="-12.350000000000001">gemvMulti(x, ops, k)</tspan><tspan x="619.3315" dy="16.900000000000002">one dispatch per op,</tspan><tspan x="619.3315" dy="16.900000000000002">same encoder, one barrier</tspan></text>
 </g>
-<g class="message" data-from="GPU" data-to="GPU" data-label="load x from VRAM again, compute V" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="210,430 240,430 240,450 210,450" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="248" y="440" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">load x from VRAM again, compute V</text>
+<g class="node" data-id="Single" data-label="gemv(x, w, y)
+one dispatch, one barrier" data-shape="rectangle">
+  <rect x="520.181" y="146.4045" width="189.409" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="614.8855000000001" y="173.30450000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="614.8855000000001" dy="-3.9000000000000012">gemv(x, w, y)</tspan><tspan x="614.8855000000001" dy="16.900000000000002">one dispatch, one barrier</tspan></text>
 </g>
-<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (V done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="210" y1="500" x2="70" y2="500" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="140" y="490" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">barrier (V done)</text>
+<g class="node" data-id="FFN" data-label="gate/up feed
+an activation?" data-shape="diamond">
+  <polygon points="835.3955000000001,54.82000000000002 908.7550000000001,128.17950000000002 835.3955000000001,201.53900000000002 762.0360000000001,128.17950000000002" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="835.3955000000001" y="128.17950000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="835.3955000000001" dy="-3.9000000000000012">gate/up feed</tspan><tspan x="835.3955000000001" dy="16.900000000000002">an activation?</tspan></text>
 </g>
-<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch Q + K + V together" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="70" y1="555" x2="210" y2="555" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="140" y="545" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">dispatch Q + K + V together</text>
+<g class="node" data-id="Fused" data-label="fused FFN kernel
+gate + up + activation
+in ONE dispatch" data-shape="rectangle">
+  <rect x="1125.4830000000002" y="47.7045" width="161.99200000000002" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1206.4790000000003" y="83.0545" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1206.4790000000003" dy="-12.350000000000001">fused FFN kernel</tspan><tspan x="1206.4790000000003" dy="16.900000000000002">gate + up + activation</tspan><tspan x="1206.4790000000003" dy="16.900000000000002">in ONE dispatch</tspan></text>
 </g>
-<g class="message" data-from="GPU" data-to="GPU" data-label="load x once, compute Q then K then V" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="210,595 240,595 240,615 210,615" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="248" y="605" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">load x once, compute Q then K then V</text>
-</g>
-<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (all done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="210" y1="665" x2="70" y2="665" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="140" y="655" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">barrier (all done)</text>
-</g>
-<g class="note" data-position="over" data-actors="CPU,GPU">
-  <polygon points="31.838000000000022,508 242.16199999999998,508 248.16199999999998,514 248.16199999999998,531 31.838000000000022,531" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="242.16199999999998,508 248.16199999999998,514 242.16199999999998,514" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="140" y="519.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Batched (gemvMulti) — 1 dispatch, 1 barrier</text>
-</g>
-<g class="actor" data-id="CPU" data-label="CPU" data-type="participant">
-  <rect x="30" y="30" width="80" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="70" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">CPU</text>
-</g>
-<g class="actor" data-id="GPU" data-label="GPU" data-type="participant">
-  <rect x="170" y="30" width="80" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="210" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">GPU</text>
+<g class="node" data-id="Unfused" data-label="3 dispatches
+gate, up, siluMul/geluMul" data-shape="rectangle">
+  <rect x="1026.285" y="146.4045" width="184.96299999999997" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="1118.7665000000002" y="173.30450000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="1118.7665000000002" dy="-3.9000000000000012">3 dispatches</tspan><tspan x="1118.7665000000002" dy="16.900000000000002">gate, up, siluMul/geluMul</tspan></text>
 </g>
 </svg>

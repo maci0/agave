@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840.097 495" width="840.097" height="495" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 599.2895 889.7" width="599.2895" height="889.7" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,73 +18,96 @@
   }
 </style>
 <defs>
-  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
-  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="block" data-type="alt" data-label="A = K (all accepted)">
-  <rect x="66.37899999999996" y="303" width="493.8040000000001" height="100" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="66.37899999999996" y="303" width="135.79" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="72.37899999999996" y="312" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">alt [A = K (all accepted)]</text>
-  <line x1="66.37899999999996" y1="315" x2="560.183" y2="315" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-  <text x="74.37899999999996" y="329" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">[A &lt; K (partial or zero acceptance)]</text>
+<g class="subgraph" data-id="Draft" data-label="Draft Phase">
+  <rect x="239.0915" y="508.6" width="250.308" height="315.1" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="239.0915" y="508.6" width="250.308" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="251.0915" y="522.6" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Draft Phase</text>
 </g>
-<line class="lifeline" data-actor="DraftKV" x1="137.81399999999996" y1="70" x2="137.81399999999996" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="TargetKV" x1="306.61199999999997" y1="70" x2="306.61199999999997" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="Verifier" x1="482.079" y1="70" x2="482.079" y2="465" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<g class="message" data-from="DraftKV" data-to="DraftKV" data-label="forward passes x K
-KV grows: P -&gt; P+K" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="137.81399999999996,90 167.81399999999996,90 167.81399999999996,110 137.81399999999996,110" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="175.81399999999996" y="100" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)"><tspan x="175.81399999999996" dy="-3.3000000000000007">forward passes x K</tspan><tspan x="175.81399999999996" dy="14.3">KV grows: P -&gt; P+K</tspan></text>
+<g class="subgraph" data-id="Verify" data-label="Verify Phase">
+  <rect x="90.91400000000004" y="58" width="185.09999999999997" height="332" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="90.91400000000004" y="58" width="185.09999999999997" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="102.91400000000004" y="72" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Verify Phase</text>
 </g>
-<g class="message" data-from="TargetKV" data-to="TargetKV" data-label="forwardTree() over draft tree
-KV grows: P -&gt; P+K (tree nodes)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="306.61199999999997,160 336.61199999999997,160 336.61199999999997,180 306.61199999999997,180" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="344.61199999999997" y="170" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)"><tspan x="344.61199999999997" dy="-3.3000000000000007">forwardTree() over draft tree</tspan><tspan x="344.61199999999997" dy="14.3">KV grows: P -&gt; P+K (tree nodes)</tspan></text>
+<g class="subgraph" data-id="Output" data-label="Output">
+  <rect x="56.37250000000001" y="532.6000000000001" width="154.719" height="113.80000000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="56.37250000000001" y="532.6000000000001" width="154.719" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="68.3725" y="546.6000000000001" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Output</text>
 </g>
-<g class="message" data-from="Verifier" data-to="Verifier" data-label="walk tree, find first mismatch
-accepted = A tokens (0 &lt;= A &lt; K)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="482.079,230 512.079,230 512.079,250 482.079,250" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="520.079" y="240" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)"><tspan x="520.079" dy="-3.3000000000000007">walk tree, find first mismatch</tspan><tspan x="520.079" dy="14.3">accepted = A tokens (0 &lt;= A &lt; K)</tspan></text>
+<polyline class="edge" data-from="TB" data-to="TM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="tree: B nodes
+ancestor bitmasks" points="364.2455,807.7 364.2455,841.7 499.3995,841.7 499.3995,40 183.464,40 183.46400000000003,102" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AW" data-to="OS" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="accepted tokens
+(1..K)" points="147.41200000000003,374 147.41200000000003,432.00000000000006 84,432.00000000000006 84,514.6000000000001 113.27883333333335,514.6000000000001 113.27883333333335,564.6000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AW" data-to="OS" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="correction token
+(on rejection)" points="183.46400000000003,374 183.464,514.6000000000001 154.1851666666667,514.6000000000001 154.1851666666667,564.6000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AW" data-to="DM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rollback KV to
+accepted position" points="219.51600000000002,374 219.51600000000002,408 364.2455,408 364.2455,564.6000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="DM" data-to="TB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="K tokens + per-position
+logit distributions" points="364.2455,618.4000000000002 364.2455,737" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TM" data-to="AW" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="argmax at each
+tree node" points="183.46400000000003,172.7 183.46400000000003,303.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="TB" data-to="TM" data-label="tree: B nodes
+ancestor bitmasks">
+  <rect x="447.3995" y="415" width="103.78000000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="499.2895" y="437.3" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="499.2895" dy="-3.3000000000000007">tree: B nodes</tspan><tspan x="499.2895" dy="14.3">ancestor bitmasks</tspan></text>
 </g>
-<g class="message" data-from="Verifier" data-to="TargetKV" data-label="setKvSeqLen(P + A + 1)
-trim to accepted prefix + correction" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="482.079" y1="343" x2="306.61199999999997" y2="343" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="394.3455" y="333" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="394.3455" dy="-3.3000000000000007">setKvSeqLen(P + A + 1)</tspan><tspan x="394.3455" dy="14.3">trim to accepted prefix + correction</tspan></text>
+<g class="edge-label" data-from="AW" data-to="OS" data-label="accepted tokens
+(1..K)">
+  <rect x="35.99999999999999" y="439.00000000000006" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="83.732" y="461.30000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="83.732" dy="-3.3000000000000007">accepted tokens</tspan><tspan x="83.732" dy="14.3">(1..K)</tspan></text>
 </g>
-<g class="message" data-from="Verifier" data-to="DraftKV" data-label="setKvSeqLen(P + A + 1)
-trim to same position" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="482.079" y1="383" x2="137.81399999999996" y2="383" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="309.9465" y="373" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="309.9465" dy="-3.3000000000000007">setKvSeqLen(P + A + 1)</tspan><tspan x="309.9465" dy="14.3">trim to same position</tspan></text>
+<g class="edge-label" data-from="AW" data-to="OS" data-label="correction token
+(on rejection)">
+  <rect x="135.464" y="439.00000000000006" width="95.46400000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="183.19600000000003" y="461.30000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="183.19600000000003" dy="-3.3000000000000007">correction token</tspan><tspan x="183.19600000000003" dy="14.3">(on rejection)</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="DraftKV,TargetKV">
-  <polygon points="118.80299999999997,268 319.62299999999993,268 325.62299999999993,274 325.62299999999993,291 118.80299999999997,291" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="319.62299999999993,268 325.62299999999993,274 319.62299999999993,274" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="222.21299999999997" y="279.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">both caches already at P+K, consistent</text>
+<g class="edge-label" data-from="AW" data-to="DM" data-label="rollback KV to
+accepted position">
+  <rect x="313.7455" y="415" width="100.21600000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="363.8535" y="437.3" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="363.8535" dy="-3.3000000000000007">rollback KV to</tspan><tspan x="363.8535" dy="14.3">accepted position</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="DraftKV,TargetKV">
-  <polygon points="106.92299999999996,391 331.503,391 337.503,397 337.503,414 106.92299999999996,414" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="331.503,391 337.503,397 331.503,397" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="222.21299999999997" y="402.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Separate-model mode: two independent trims</text>
+<g class="edge-label" data-from="DM" data-to="TB" data-label="K tokens + per-position
+logit distributions">
+  <rect x="301.74549999999994" y="649.4000000000001" width="124.57000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="364.03049999999996" y="671.7" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="364.03049999999996" dy="-3.3000000000000007">K tokens + per-position</tspan><tspan x="364.03049999999996" dy="14.3">logit distributions</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="DraftKV,TargetKV">
-  <polygon points="30,418 408.42599999999993,418 414.42599999999993,424 414.42599999999993,441 30,441" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="408.42599999999993,418 414.42599999999993,424 408.42599999999993,424" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="222.21299999999997" y="429.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="222.21299999999997" dy="-3.3000000000000007">Self-draft mode: single shared KV cache</tspan><tspan x="222.21299999999997" dy="14.3">one setKvSeqLen() call covers both</tspan></text>
+<g class="edge-label" data-from="TM" data-to="AW" data-label="argmax at each
+tree node">
+  <rect x="138.96400000000003" y="215.7" width="88.93" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="183.42900000000003" y="238" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="183.42900000000003" dy="-3.3000000000000007">argmax at each</tspan><tspan x="183.42900000000003" dy="14.3">tree node</tspan></text>
 </g>
-<g class="actor" data-id="DraftKV" data-label="Draft KV Cache" data-type="participant">
-  <rect x="76.37899999999996" y="30" width="122.86999999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="137.81399999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Draft KV Cache</text>
+<g class="node" data-id="DM" data-label="Draft Model
+(small / layer-skipped / n-gram)" data-shape="rectangle">
+  <rect x="255.0915" y="564.6000000000001" width="218.308" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="364.2455" y="591.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="364.2455" dy="-3.9000000000000012">Draft Model</tspan><tspan x="364.2455" dy="16.900000000000002">(small / layer-skipped / n-gram)</tspan></text>
 </g>
-<g class="actor" data-id="TargetKV" data-label="Target KV Cache" data-type="participant">
-  <rect x="239.24899999999997" y="30" width="134.726" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="306.61199999999997" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Target KV Cache</text>
+<g class="node" data-id="TB" data-label="DDTree Builder
+best-first heap
+O(B log B)" data-shape="rectangle">
+  <rect x="296.95799999999997" y="737" width="134.575" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="364.2455" y="772.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="364.2455" dy="-12.350000000000001">DDTree Builder</tspan><tspan x="364.2455" dy="16.900000000000002">best-first heap</tspan><tspan x="364.2455" dy="16.900000000000002">O(B log B)</tspan></text>
 </g>
-<g class="actor" data-id="Verifier" data-label="Acceptance Walk" data-type="participant">
-  <rect x="413.975" y="30" width="136.20800000000003" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="482.079" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Acceptance Walk</text>
+<g class="node" data-id="TM" data-label="Target Model
+tree-masked SDPA
+forwardTree()" data-shape="rectangle">
+  <rect x="106.91400000000004" y="102" width="153.09999999999997" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="183.46400000000003" y="137.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="183.46400000000003" dy="-12.350000000000001">Target Model</tspan><tspan x="183.46400000000003" dy="16.900000000000002">tree-masked SDPA</tspan><tspan x="183.46400000000003" dy="16.900000000000002">forwardTree()</tspan></text>
+</g>
+<g class="node" data-id="AW" data-label="Acceptance Walk
+find longest
+matching path" data-shape="rectangle">
+  <rect x="111.36000000000001" y="303.3" width="144.20800000000003" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="183.46400000000003" y="338.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="183.46400000000003" dy="-12.350000000000001">Acceptance Walk</tspan><tspan x="183.46400000000003" dy="16.900000000000002">find longest</tspan><tspan x="183.46400000000003" dy="16.900000000000002">matching path</tspan></text>
+</g>
+<g class="node" data-id="OS" data-label="Output Stream
+/ SSE" data-shape="rectangle">
+  <rect x="72.3725" y="564.6000000000001" width="122.719" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="133.732" y="591.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="133.732" dy="-3.9000000000000012">Output Stream</tspan><tspan x="133.732" dy="16.900000000000002">/ SSE</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 546.3665 965" width="546.3665" height="965" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 546.3665 965" width="546.3665" height="965" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,86 +19,86 @@
 </style>
 <defs>
   <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" />
   </marker>
   <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="#504b47" stroke-width="1" />
   </marker>
 </defs>
-<line class="lifeline" data-actor="Model" x1="79.57900000000001" y1="70" x2="79.57900000000001" y2="935" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="BE" x1="228.7405" y1="70" x2="228.7405" y2="935" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="GPU" x1="389.3875" y1="70" x2="389.3875" y2="935" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Model" x1="79.57900000000001" y1="70" x2="79.57900000000001" y2="935" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="BE" x1="228.7405" y1="70" x2="228.7405" y2="935" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="GPU" x1="389.3875" y1="70" x2="389.3875" y2="935" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
 <g class="message" data-from="Model" data-to="BE" data-label="gemv(x, W_q, ...)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="79.57900000000001" y1="90" x2="228.7405" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="154.15975" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">gemv(x, W_q, ...)</text>
+  <line x1="79.57900000000001" y1="90" x2="228.7405" y2="90" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="154.15975" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">gemv(x, W_q, ...)</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="active_enc == nil: create CommandBuffer + Encoder" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,130 258.7405,130 258.7405,150 228.7405,150" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="140" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">active_enc == nil: create CommandBuffer + Encoder</text>
+  <polyline points="228.7405,130 258.7405,130 258.7405,150 228.7405,150" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="140" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">active_enc == nil: create CommandBuffer + Encoder</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="encode kernel #1 (GEMV)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,200 258.7405,200 258.7405,220 228.7405,220" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="210" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode kernel #1 (GEMV)</text>
+  <polyline points="228.7405,200 258.7405,200 258.7405,220 228.7405,220" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="210" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">encode kernel #1 (GEMV)</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="insert memoryBarrier" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,270 258.7405,270 258.7405,290 228.7405,290" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="280" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">insert memoryBarrier</text>
+  <polyline points="228.7405,270 258.7405,270 258.7405,290 228.7405,290" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="280" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">insert memoryBarrier</text>
 </g>
 <g class="message" data-from="Model" data-to="BE" data-label="gemv(x, W_k, ...)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="79.57900000000001" y1="340" x2="228.7405" y2="340" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="154.15975" y="330" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">gemv(x, W_k, ...)</text>
+  <line x1="79.57900000000001" y1="340" x2="228.7405" y2="340" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="154.15975" y="330" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">gemv(x, W_k, ...)</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="reuse active_enc" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,380 258.7405,380 258.7405,400 228.7405,400" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="390" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">reuse active_enc</text>
+  <polyline points="228.7405,380 258.7405,380 258.7405,400 228.7405,400" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="390" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">reuse active_enc</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="encode kernel #2 (GEMV)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,450 258.7405,450 258.7405,470 228.7405,470" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="460" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">encode kernel #2 (GEMV)</text>
+  <polyline points="228.7405,450 258.7405,450 258.7405,470 228.7405,470" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="460" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">encode kernel #2 (GEMV)</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="insert memoryBarrier" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,520 258.7405,520 258.7405,540 228.7405,540" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="530" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">insert memoryBarrier</text>
+  <polyline points="228.7405,520 258.7405,520 258.7405,540 228.7405,540" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="530" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">insert memoryBarrier</text>
 </g>
 <g class="message" data-from="Model" data-to="BE" data-label="sync()" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="79.57900000000001" y1="605" x2="228.7405" y2="605" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="154.15975" y="595" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">sync()</text>
+  <line x1="79.57900000000001" y1="605" x2="228.7405" y2="605" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="154.15975" y="595" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">sync()</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="endEncoding()" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,645 258.7405,645 258.7405,665 228.7405,665" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="655" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">endEncoding()</text>
+  <polyline points="228.7405,645 258.7405,645 258.7405,665 228.7405,665" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="655" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">endEncoding()</text>
 </g>
-<g class="message" data-from="BE" data-to="GPU" data-label="commit() — submit all work at once" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="228.7405" y1="715" x2="389.3875" y2="715" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="309.06399999999996" y="705" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">commit() — submit all work at once</text>
+<g class="message" data-from="BE" data-to="GPU" data-label="commit(), submit all work at once" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="228.7405" y1="715" x2="389.3875" y2="715" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="309.06399999999996" y="705" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">commit(), submit all work at once</text>
 </g>
 <g class="message" data-from="GPU" data-to="BE" data-label="waitUntilCompleted()" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="389.3875" y1="755" x2="228.7405" y2="755" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="309.06399999999996" y="745" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">waitUntilCompleted()</text>
+  <line x1="389.3875" y1="755" x2="228.7405" y2="755" stroke="#94908c" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="309.06399999999996" y="745" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">waitUntilCompleted()</text>
 </g>
 <g class="message" data-from="BE" data-to="BE" data-label="active_enc = nil, active_cmd = nil" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="228.7405,795 258.7405,795 258.7405,815 228.7405,815" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="266.7405" y="805" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">active_enc = nil, active_cmd = nil</text>
+  <polyline points="228.7405,795 258.7405,795 258.7405,815 228.7405,815" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="266.7405" y="805" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">active_enc = nil, active_cmd = nil</text>
 </g>
-<g class="message" data-from="Model" data-to="Model" data-label="argmax(logits) — safe to read GPU output" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="79.57900000000001,865 109.57900000000001,865 109.57900000000001,885 79.57900000000001,885" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="117.57900000000001" y="875" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">argmax(logits) — safe to read GPU output</text>
+<g class="message" data-from="Model" data-to="Model" data-label="argmax(logits), safe to read GPU output" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="79.57900000000001,865 109.57900000000001,865 109.57900000000001,885 79.57900000000001,885" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="117.57900000000001" y="875" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">argmax(logits), safe to read GPU output</text>
 </g>
 <g class="note" data-position="over" data-actors="Model,BE">
-  <polygon points="33.52375000000002,558 268.79575,558 274.79575,564 274.79575,581 33.52375000000002,581" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="268.79575,558 274.79575,564 268.79575,564" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="154.15975" y="569.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">...20+ more dispatches, same command buffer...</text>
+  <polygon points="33.52375000000002,558 268.79575,558 274.79575,564 274.79575,581 33.52375000000002,581" fill="#ffffff" stroke="#9c938a" stroke-width="0.75" />
+  <polygon points="268.79575,558 274.79575,564 268.79575,564" fill="#e2ded9" stroke="#9c938a" stroke-width="0.75" />
+  <text x="154.15975" y="569.5" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">...20+ more dispatches, same command buffer...</text>
 </g>
 <g class="actor" data-id="Model" data-label="Model (Zig)" data-type="participant">
-  <rect x="30.000000000000007" y="30" width="99.158" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="79.57900000000001" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Model (Zig)</text>
+  <rect x="30.000000000000007" y="30" width="99.158" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="79.57900000000001" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Model (Zig)</text>
 </g>
 <g class="actor" data-id="BE" data-label="MetalBackend" data-type="participant">
-  <rect x="169.15800000000002" y="30" width="119.16499999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="228.7405" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">MetalBackend</text>
+  <rect x="169.15800000000002" y="30" width="119.16499999999999" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="228.7405" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">MetalBackend</text>
 </g>
 <g class="actor" data-id="GPU" data-label="GPU Hardware" data-type="participant">
-  <rect x="328.323" y="30" width="122.129" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="389.3875" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">GPU Hardware</text>
+  <rect x="328.323" y="30" width="122.129" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="389.3875" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">GPU Hardware</text>
 </g>
 </svg>

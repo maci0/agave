@@ -17,7 +17,7 @@ zig build check-reproducible       # build twice from different paths and byte-c
 zig build docs-check               # docs link and count hygiene (scripts/check-docs.py)
 zig build check-third-party        # THIRD_PARTY_NOTICES.md covers every package bundled into the committed web artifacts (CI fmt-check job)
 zig build conv-store-backup-test   # conversation store backup + restore self-test (docs/DURABILITY.md)
-zig build lint-web                 # oxlint + tsc + ignorePatterns ratchet (CI lint-web; needs bun 1.4.0)
+zig build lint-web                 # oxlint + tsc + UI smoke test + W3C (vnu) + ignorePatterns ratchet (CI lint-web; needs bun 1.4.0, Java)
 zig build lint-shell               # shellcheck on scripts/*.sh (CI lint-shell)
 zig build lint-python              # ruff check + ruff format --check on scripts/, tests/, tools/, research/ Python (CI lint-python)
 zig build check-web                # committed bundles and stylesheets match a fresh bun + Tailwind build (CI lint-web)

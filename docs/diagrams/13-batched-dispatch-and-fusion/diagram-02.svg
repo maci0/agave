@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 814.1700000000001 297.40000000000003" width="814.1700000000001" height="297.40000000000003" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 455.158 735" width="455.158" height="735" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,53 +18,74 @@
   }
 </style>
 <defs>
-  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" />
   </marker>
-  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="#504b47" stroke-width="1" />
   </marker>
 </defs>
-<g class="subgraph" data-id="OneDispatch" data-label="Single gemvMulti dispatch">
-  <rect x="269.711" y="203.60000000000002" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="269.711" y="203.60000000000002" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="281.711" y="217.60000000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Single gemvMulti dispatch</text>
+<line class="lifeline" data-actor="CPU" x1="70" y1="70" x2="70" y2="705" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="GPU" x1="210" y1="70" x2="210" y2="705" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch Q projection" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70" y1="90" x2="210" y2="90" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="140" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">dispatch Q projection</text>
 </g>
-<polyline class="edge" data-from="X" data-to="GQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.711,148.70000000000002 275.711,148.70000000000002 275.711,66.9 305.711,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="X" data-to="GK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.711,148.70000000000002 275.711,148.70000000000002 275.711,148.70000000000002 305.711,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="X" data-to="GV" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.711,148.70000000000002 275.711,148.70000000000002 275.711,230.50000000000003 305.711,230.50000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GQ" data-to="Bar" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="437.322,66.9 455.322,66.9 455.322,141.425 473.322,141.425" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GK" data-to="Bar" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="437.322,148.70000000000002 455.322,148.70000000000002 455.322,141.425 473.322,141.425" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GV" data-to="Bar" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="437.322,230.50000000000003 455.322,230.50000000000003 455.322,141.425 473.322,141.425" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Bar" data-to="Attn" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="614.566,141.425 662.566,141.425" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="node" data-id="X" data-label="Input vector x
-(n_embd floats, loaded once)" data-shape="rectangle">
-  <rect x="40" y="121.80000000000001" width="205.711" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="142.8555" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="142.8555" dy="-3.9000000000000012">Input vector x</tspan><tspan x="142.8555" dy="16.900000000000002">(n_embd floats, loaded once)</tspan></text>
+<g class="message" data-from="GPU" data-to="GPU" data-label="load x from VRAM, compute Q" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="210,130 240,130 240,150 210,150" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="248" y="140" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">load x from VRAM, compute Q</text>
 </g>
-<g class="node" data-id="GQ" data-label="GEMV: W_q @ x
-→ Q buffer" data-shape="rectangle">
-  <rect x="305.711" y="40" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="371.5165" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_q @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ Q buffer</tspan></text>
+<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (Q done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="210" y1="200" x2="70" y2="200" stroke="#94908c" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="140" y="190" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">barrier (Q done)</text>
 </g>
-<g class="node" data-id="GK" data-label="GEMV: W_k @ x
-→ K buffer" data-shape="rectangle">
-  <rect x="305.711" y="121.80000000000001" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="371.5165" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_k @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ K buffer</tspan></text>
+<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch K projection" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70" y1="240" x2="210" y2="240" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="140" y="230" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">dispatch K projection</text>
 </g>
-<g class="node" data-id="GV" data-label="GEMV: W_v @ x
-→ V buffer" data-shape="rectangle">
-  <rect x="305.711" y="203.60000000000002" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="371.5165" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="371.5165" dy="-3.9000000000000012">GEMV: W_v @ x</tspan><tspan x="371.5165" dy="16.900000000000002">→ V buffer</tspan></text>
+<g class="message" data-from="GPU" data-to="GPU" data-label="load x from VRAM again, compute K" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="210,280 240,280 240,300 210,300" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="248" y="290" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">load x from VRAM again, compute K</text>
 </g>
-<g class="node" data-id="Bar" data-label="Single barrier
-(all ops complete)" data-shape="rectangle">
-  <rect x="473.322" y="114.525" width="141.244" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="543.944" y="141.425" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="543.944" dy="-3.9000000000000012">Single barrier</tspan><tspan x="543.944" dy="16.900000000000002">(all ops complete)</tspan></text>
+<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (K done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="210" y1="350" x2="70" y2="350" stroke="#94908c" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="140" y="340" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">barrier (K done)</text>
 </g>
-<g class="node" data-id="Attn" data-label="Attention
-computation" data-shape="rectangle">
-  <rect x="662.566" y="114.525" width="111.60400000000001" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="718.368" y="141.425" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="718.368" dy="-3.9000000000000012">Attention</tspan><tspan x="718.368" dy="16.900000000000002">computation</tspan></text>
+<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch V projection" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70" y1="390" x2="210" y2="390" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="140" y="380" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">dispatch V projection</text>
+</g>
+<g class="message" data-from="GPU" data-to="GPU" data-label="load x from VRAM again, compute V" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="210,430 240,430 240,450 210,450" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="248" y="440" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">load x from VRAM again, compute V</text>
+</g>
+<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (V done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="210" y1="500" x2="70" y2="500" stroke="#94908c" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="140" y="490" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">barrier (V done)</text>
+</g>
+<g class="message" data-from="CPU" data-to="GPU" data-label="dispatch Q + K + V together" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="70" y1="555" x2="210" y2="555" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="140" y="545" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">dispatch Q + K + V together</text>
+</g>
+<g class="message" data-from="GPU" data-to="GPU" data-label="load x once, compute Q then K then V" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="210,595 240,595 240,615 210,615" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="248" y="605" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">load x once, compute Q then K then V</text>
+</g>
+<g class="message" data-from="GPU" data-to="CPU" data-label="barrier (all done)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="210" y1="665" x2="70" y2="665" stroke="#94908c" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="140" y="655" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">barrier (all done)</text>
+</g>
+<g class="note" data-position="over" data-actors="CPU,GPU">
+  <polygon points="34.51100000000001,508 239.48899999999998,508 245.48899999999998,514 245.48899999999998,531 34.51100000000001,531" fill="#ffffff" stroke="#9c938a" stroke-width="0.75" />
+  <polygon points="239.48899999999998,508 245.48899999999998,514 239.48899999999998,514" fill="#e2ded9" stroke="#9c938a" stroke-width="0.75" />
+  <text x="140" y="519.5" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Batched (gemvMulti), 1 dispatch, 1 barrier</text>
+</g>
+<g class="actor" data-id="CPU" data-label="CPU" data-type="participant">
+  <rect x="30" y="30" width="80" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="70" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">CPU</text>
+</g>
+<g class="actor" data-id="GPU" data-label="GPU" data-type="participant">
+  <rect x="170" y="30" width="80" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="210" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">GPU</text>
 </g>
 </svg>

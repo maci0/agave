@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740.3715 793" width="740.3715" height="793" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1567.316 236.35199999999998" width="1567.316" height="236.35199999999998" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,89 +18,66 @@
   }
 </style>
 <defs>
-  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
-  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="block" data-type="par" data-label="Workers process chunks">
-  <rect x="323.2405" y="488" width="246.56100000000004" height="130" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="323.2405" y="488" width="180.01000000000002" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="329.2405" y="497" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">par [Workers process chunks]</text>
+<polyline class="edge" data-from="Call" data-to="Small" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="215.32999999999998,118.17599999999999 263.33,118.17599999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Small" data-to="Inline" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="393.6233333333333,92.11733333333332 455.68199999999996,92.11733333333332 455.68199999999996,77.27599999999998 540.182,77.27599999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Small" data-to="Post" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="393.6233333333333,144.23466666666667 455.68199999999996,144.23466666666667 455.68199999999996,159.07599999999996 540.182,159.07599999999996" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Post" data-to="Wake" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="699.21,159.07599999999996 744.24,159.07599999999996" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wake" data-to="Race" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="921.0519999999999,159.07599999999996 969.0519999999999,159.07599999999996" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Race" data-to="Spin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1136.972,159.07599999999996 1184.972,159.07599999999996" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Spin" data-to="Done" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1316.583,159.07599999999996 1364.583,159.076" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Small" data-to="Inline" data-label="yes">
+  <rect x="463.68199999999996" y="61.27599999999999" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="481.417" y="76.42599999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
-<line class="lifeline" data-actor="M" x1="84.76599999999999" y1="70" x2="84.76599999999999" y2="763" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="K" x1="235.40949999999998" y1="70" x2="235.40949999999998" y2="763" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="W1" x1="375.4095" y1="70" x2="375.4095" y2="763" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="W2" x1="515.4095" y1="70" x2="515.4095" y2="763" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<g class="message" data-from="W1" data-to="K" data-label="futexWait(&amp;generation, 0)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="375.4095" y1="90" x2="235.40949999999998" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="305.4095" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">futexWait(&amp;generation, 0)</text>
+<g class="edge-label" data-from="Small" data-to="Post" data-label="no">
+  <rect x="463.68199999999996" y="143.07599999999996" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="478.44699999999995" y="158.22599999999997" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
-<g class="message" data-from="W2" data-to="K" data-label="futexWait(&amp;generation, 0)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="515.4095" y1="130" x2="235.40949999999998" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="375.4095" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">futexWait(&amp;generation, 0)</text>
+<g class="node" data-id="Call" data-label="parallelFor(total, grain,
+ctx, func)" data-shape="rectangle">
+  <rect x="40" y="91.27599999999998" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="127.66499999999999" y="118.17599999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="127.66499999999999" dy="-3.9000000000000012">parallelFor(total, grain,</tspan><tspan x="127.66499999999999" dy="16.900000000000002">ctx, func)</tspan></text>
 </g>
-<g class="message" data-from="M" data-to="M" data-label="generation.fetchAdd(1) → generation=1" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="84.76599999999999,170 114.76599999999999,170 114.76599999999999,190 84.76599999999999,190" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="122.76599999999999" y="180" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">generation.fetchAdd(1) → generation=1</text>
+<g class="node" data-id="Small" data-label="total &lt;= grain
+or no workers?" data-shape="diamond">
+  <polygon points="341.506,40 419.68199999999996,118.17599999999999 341.506,196.35199999999998 263.33,118.17599999999999" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="341.506" y="118.17599999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="341.506" dy="-3.9000000000000012">total &lt;= grain</tspan><tspan x="341.506" dy="16.900000000000002">or no workers?</tspan></text>
 </g>
-<g class="message" data-from="M" data-to="K" data-label="futexWake(&amp;generation, 2)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="84.76599999999999" y1="240" x2="235.40949999999998" y2="240" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="160.08774999999997" y="230" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">futexWake(&amp;generation, 2)</text>
+<g class="node" data-id="Inline" data-label="run func() inline
+on caller's thread" data-shape="rectangle">
+  <rect x="540.182" y="50.37599999999998" width="144.20800000000003" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="612.2860000000001" y="77.27599999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="612.2860000000001" dy="-3.9000000000000012">run func() inline</tspan><tspan x="612.2860000000001" dy="16.900000000000002">on caller&#39;s thread</tspan></text>
 </g>
-<g class="message" data-from="K" data-to="W1" data-label="wake (generation changed)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="235.40949999999998" y1="280" x2="375.4095" y2="280" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="305.4095" y="270" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">wake (generation changed)</text>
+<g class="node" data-id="Post" data-label="post task descriptor
+counter = 0" data-shape="rectangle">
+  <rect x="540.182" y="132.176" width="159.028" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="619.696" y="159.076" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="619.696" dy="-3.9000000000000012">post task descriptor</tspan><tspan x="619.696" dy="16.900000000000002">counter = 0</tspan></text>
 </g>
-<g class="message" data-from="K" data-to="W2" data-label="wake (generation changed)" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="235.40949999999998" y1="320" x2="515.4095" y2="320" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="375.4095" y="310" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">wake (generation changed)</text>
+<g class="node" data-id="Wake" data-label="generation++
+futexWake(all workers)" data-shape="rectangle">
+  <rect x="744.24" y="132.176" width="176.81199999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="832.646" y="159.076" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="832.646" dy="-3.9000000000000012">generation++</tspan><tspan x="832.646" dy="16.900000000000002">futexWake(all workers)</tspan></text>
 </g>
-<g class="message" data-from="W1" data-to="W1" data-label="local_gen = generation.load() → 1" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="375.4095,360 405.4095,360 405.4095,380 375.4095,380" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="413.4095" y="370" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">local_gen = generation.load() → 1</text>
+<g class="node" data-id="Race" data-label="main + workers
+race on task_counter
+(fetchAdd per chunk)" data-shape="rectangle">
+  <rect x="969.0519999999999" y="123.72599999999998" width="167.92000000000002" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1053.012" y="159.076" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1053.012" dy="-12.350000000000001">main + workers</tspan><tspan x="1053.012" dy="16.900000000000002">race on task_counter</tspan><tspan x="1053.012" dy="16.900000000000002">(fetchAdd per chunk)</tspan></text>
 </g>
-<g class="message" data-from="W2" data-to="W2" data-label="local_gen = generation.load() → 1" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="515.4095,430 545.4095,430 545.4095,450 515.4095,450" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="553.4095" y="440" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">local_gen = generation.load() → 1</text>
+<g class="node" data-id="Spin" data-label="main spin-waits
+while active != 0" data-shape="rectangle">
+  <rect x="1184.972" y="132.176" width="131.61100000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1250.7775" y="159.076" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1250.7775" dy="-3.9000000000000012">main spin-waits</tspan><tspan x="1250.7775" dy="16.900000000000002">while active != 0</tspan></text>
 </g>
-<g class="message" data-from="W1" data-to="W1" data-label="doWork()" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="375.4095,528 405.4095,528 405.4095,548 375.4095,548" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="413.4095" y="538" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">doWork()</text>
-</g>
-<g class="message" data-from="W2" data-to="W2" data-label="doWork()" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="515.4095,598 545.4095,598 545.4095,618 515.4095,618" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="553.4095" y="608" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">doWork()</text>
-</g>
-<g class="message" data-from="W1" data-to="M" data-label="active.fetchSub(1)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="375.4095" y1="668" x2="84.76599999999999" y2="668" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="230.08774999999997" y="658" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">active.fetchSub(1)</text>
-</g>
-<g class="message" data-from="W2" data-to="M" data-label="active.fetchSub(1)" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="515.4095" y1="708" x2="84.76599999999999" y2="708" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="300.08774999999997" y="698" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">active.fetchSub(1)</text>
-</g>
-<g class="note" data-position="over" data-actors="W1,W2">
-  <polygon points="340.5145,716 544.3045,716 550.3045,722 550.3045,739 340.5145,739" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="544.3045,716 550.3045,722 544.3045,722" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="445.4095" y="727.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Back to sleep — futexWait(&amp;generation, 1)</text>
-</g>
-<g class="actor" data-id="M" data-label="Main Thread" data-type="participant">
-  <rect x="29.999999999999993" y="30" width="109.532" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="84.76599999999999" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Main Thread</text>
-</g>
-<g class="actor" data-id="K" data-label="Kernel (futex)" data-type="participant">
-  <rect x="179.53199999999998" y="30" width="111.755" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="235.40949999999998" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Kernel (futex)</text>
-</g>
-<g class="actor" data-id="W1" data-label="Worker 1" data-type="participant">
-  <rect x="333.2405" y="30" width="84.338" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="375.4095" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Worker 1</text>
-</g>
-<g class="actor" data-id="W2" data-label="Worker 2" data-type="participant">
-  <rect x="471.0175" y="30" width="88.78399999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="515.4095" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Worker 2</text>
+<g class="node" data-id="Done" data-label="parallelFor() returns" data-shape="rectangle">
+  <rect x="1364.583" y="140.62599999999998" width="162.73300000000003" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1445.9495000000002" y="159.07599999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">parallelFor() returns</text>
 </g>
 </svg>

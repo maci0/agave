@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 582.6819999999999 575.5" width="582.6819999999999" height="575.5" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 687.3711666666667 1033.1619999999998" width="687.3711666666667" height="1033.1619999999998" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,97 +19,104 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Naive" data-label="Naive attention — O(n²) HBM traffic">
-  <rect x="73.5" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="73.5" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="85.5" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Naive attention — O(n²) HBM traffic</text>
+<g class="subgraph" data-id="Q_Path" data-label="Q path (low-rank)">
+  <rect x="40" y="439.06200000000007" width="152.49599999999998" height="300.5" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="439.06200000000007" width="152.49599999999998" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="453.06200000000007" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Q path (low-rank)</text>
 </g>
-<g class="subgraph" data-id="Flash" data-label="FlashAttention — tiled, O(n) HBM traffic">
-  <rect x="73.5" y="156.3" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="73.5" y="156.3" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="85.5" y="170.3" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">FlashAttention — tiled, O(n) HBM traffic</text>
+<g class="subgraph" data-id="KV_Path" data-label="KV path (compressed)">
+  <rect x="220.49599999999998" y="141.8" width="426.8751666666667" height="573.7620000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="220.49599999999998" y="141.8" width="426.8751666666667" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="232.49599999999998" y="155.8" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">KV path (compressed)</text>
 </g>
-<polyline class="edge" data-from="NQ" data-to="NS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="401.68899999999996,230.10000000000002 401.68899999999996,254.10000000000002 451.8544999999999,254.10000000000002 451.8544999999999,278.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="NK" data-to="NS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="502.0199999999999,230.10000000000002 502.0199999999999,254.10000000000002 451.8544999999999,254.10000000000002 451.8544999999999,278.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="NS" data-to="NP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="451.8544999999999,331.90000000000003 451.8544999999999,388.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="NP" data-to="NO" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="451.8544999999999,442.15000000000003 451.8544999999999,461.92500000000007 387.98049999999995,461.92500000000007 387.98049999999995,481.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="NV" data-to="NO" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="324.1065,442.15000000000003 324.1065,461.92500000000007 387.98049999999995,461.92500000000007 387.98049999999995,481.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="FQ" data-to="FTile" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="96.76549999999997,230.10000000000002 96.76549999999997,254.10000000000002 153.9705,254.10000000000002 153.9705,278.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="FK" data-to="FTile" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="211.17549999999997,230.10000000000002 211.17549999999997,254.10000000000002 153.9705,254.10000000000002 153.9705,278.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="FTile" data-to="FO" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="153.9705,348.8 153.97049999999996,388.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Naive" data-to="Flash" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="replace with" points="73.5,40 73.5,156.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="Naive" data-to="Flash" data-label="replace with">
-  <rect x="36" y="83" width="74.08000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="73.04" y="98.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">replace with</text>
+<polyline class="edge" data-from="Hidden" data-to="Q_Path" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="162.13166666666666,93.80000000000001 162.13166666666666,427.06200000000007 56,427.06200000000007 56,439.06200000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Hidden" data-to="KV_Path" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="206.496,93.80000000000001 206.496,129.8 370.3193333333333,129.8 370.3193333333333,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Concat" data-to="SDPA_MLA" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="385.515,806.462 385.515,830.462 406.9305,830.462 406.9305,854.462" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SDPA_MLA" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="406.9305,908.262 406.9305,956.262" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QB" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="116.24799999999999,723.562 116.24799999999999,746.562 385.515,746.562 385.515,769.562" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EmbedQ" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="314.15749999999997,699.5620000000001 314.15749999999997,746.562 385.515,746.562 385.515,769.562" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KPE" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="593.7236666666666,495.962 593.7236666666666,746.562 385.515,746.562 385.515,769.562" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="UnembedOut" data-to="SDPA_MLA" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="499.70349999999996,699.5620000000001 499.70349999999996,830.462 406.9305,830.462 406.9305,854.462" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QA" data-to="QNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="116.24799999999999,536.8620000000001 116.24799999999999,584.8620000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QNorm" data-to="QB" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="116.24799999999999,621.7620000000001 116.24799999999999,669.7620000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVA" data-to="Split" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="464.506,256.5 464.506,304.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Split" data-to="Latent" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="464.506,394.162 464.506,418.162 406.93049999999994,418.162 406.93049999999994,442.162" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Split" data-to="KPE" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="464.506,394.162 464.506,418.162 593.7236666666666,418.162 593.7236666666666,442.162" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Latent" data-to="KVNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="406.93049999999994,495.962 406.93049999999994,543.962" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVNorm" data-to="EmbedQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="406.93049999999994,580.862 406.93049999999994,604.8620000000001 314.15749999999997,604.8620000000001 314.15749999999997,628.8620000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KVNorm" data-to="UnembedOut" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="406.93049999999994,580.862 406.93049999999994,604.8620000000001 499.70349999999996,604.8620000000001 499.70349999999996,628.8620000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Hidden" data-label="&quot;Hidden state
+[n_embd = 2048" data-shape="rectangle">
+  <rect x="117.76733333333333" y="40" width="133.09300000000002" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="184.31383333333332" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="184.31383333333332" dy="-3.9000000000000012">&quot;Hidden state</tspan><tspan x="184.31383333333332" dy="16.900000000000002">[n_embd = 2048</tspan></text>
 </g>
-<g class="node" data-id="NQ" data-label="&quot;Q
-[n × d" data-shape="rectangle">
-  <rect x="365.52349999999996" y="176.3" width="72.33099999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="401.68899999999996" y="203.20000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="401.68899999999996" dy="-3.9000000000000012">&quot;Q</tspan><tspan x="401.68899999999996" dy="16.900000000000002">[n × d</tspan></text>
+<g class="node" data-id="Concat" data-label="&quot;K[h" data-shape="rectangle">
+  <rect x="352.68399999999997" y="769.562" width="65.662" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="385.515" y="788.0120000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;K[h</text>
 </g>
-<g class="node" data-id="NK" data-label="&quot;K
-[n × d" data-shape="rectangle">
-  <rect x="465.8544999999999" y="176.3" width="72.33099999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="502.0199999999999" y="203.20000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="502.0199999999999" dy="-3.9000000000000012">&quot;K</tspan><tspan x="502.0199999999999" dy="16.900000000000002">[n × d</tspan></text>
+<g class="node" data-id="SDPA_MLA" data-label="SDPA
+Q @ Kᵀ / √d → softmax → @ V" data-shape="rectangle">
+  <rect x="311.1145" y="854.462" width="191.63199999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="406.9305" y="881.362" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="406.9305" dy="-3.9000000000000012">SDPA</tspan><tspan x="406.9305" dy="16.900000000000002">Q @ Kᵀ / √d → softmax → @ V</tspan></text>
 </g>
-<g class="node" data-id="NV" data-label="&quot;V
-[n × d" data-shape="rectangle">
-  <rect x="287.941" y="388.35" width="72.33099999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="324.1065" y="415.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="324.1065" dy="-3.9000000000000012">&quot;V</tspan><tspan x="324.1065" dy="16.900000000000002">[n × d</tspan></text>
+<g class="node" data-id="Out" data-label="o_proj → residual" data-shape="rectangle">
+  <rect x="336.3085" y="956.262" width="141.244" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="406.9305" y="974.712" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">o_proj → residual</text>
 </g>
-<g class="node" data-id="NS" data-label="&quot;S = Q @ Kᵀ
-[n × n" data-shape="rectangle">
-  <rect x="399.38699999999994" y="278.1" width="104.93499999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="451.8544999999999" y="305" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="451.8544999999999" dy="-3.9000000000000012">&quot;S = Q @ Kᵀ</tspan><tspan x="451.8544999999999" dy="16.900000000000002">[n × n</tspan></text>
+<g class="node" data-id="QA" data-label="q_a_proj
+2048 → 768" data-shape="rectangle">
+  <rect x="63.41" y="483.06200000000007" width="105.67599999999999" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="116.24799999999999" y="509.96200000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="116.24799999999999" dy="-3.9000000000000012">q_a_proj</tspan><tspan x="116.24799999999999" dy="16.900000000000002">2048 → 768</tspan></text>
 </g>
-<g class="node" data-id="NP" data-label="&quot;P = softmax(S)
-[n × n" data-shape="rectangle">
-  <rect x="388.27199999999993" y="388.35" width="127.16499999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="451.8544999999999" y="415.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="451.8544999999999" dy="-3.9000000000000012">&quot;P = softmax(S)</tspan><tspan x="451.8544999999999" dy="16.900000000000002">[n × n</tspan></text>
+<g class="node" data-id="QNorm" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="65.26249999999999" y="584.8620000000001" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="116.24799999999999" y="603.3120000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">RMSNorm</text>
 </g>
-<g class="node" data-id="NO" data-label="&quot;O = P @ V
-[n × d" data-shape="rectangle">
-  <rect x="339.21799999999996" y="481.70000000000005" width="97.525" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="387.98049999999995" y="508.6" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="387.98049999999995" dy="-3.9000000000000012">&quot;O = P @ V</tspan><tspan x="387.98049999999995" dy="16.900000000000002">[n × d</tspan></text>
+<g class="node" data-id="QB" data-label="q_b_proj
+768 → 20×256" data-shape="rectangle">
+  <rect x="56" y="669.7620000000001" width="120.49599999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="116.24799999999999" y="696.662" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="116.24799999999999" dy="-3.9000000000000012">q_b_proj</tspan><tspan x="116.24799999999999" dy="16.900000000000002">768 → 20×256</tspan></text>
 </g>
-<g class="node" data-id="NMem" data-label="HBM reads/writes:
-n² scores + n² softmax
-→ 2n² elements to/from DRAM" data-shape="rectangle">
-  <rect x="126.08000000000001" y="40" width="209.41599999999994" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="230.78799999999998" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="230.78799999999998" dy="-12.350000000000001">HBM reads/writes:</tspan><tspan x="230.78799999999998" dy="16.900000000000002">n² scores + n² softmax</tspan><tspan x="230.78799999999998" dy="16.900000000000002">→ 2n² elements to/from DRAM</tspan></text>
+<g class="node" data-id="KVA" data-label="kv_a_proj
+2048 → 576
+(512 latent + 64 rope)" data-shape="rectangle">
+  <rect x="385.73299999999995" y="185.8" width="157.546" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="464.506" y="221.15" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="464.506" dy="-12.350000000000001">kv_a_proj</tspan><tspan x="464.506" dy="16.900000000000002">2048 → 576</tspan><tspan x="464.506" dy="16.900000000000002">(512 latent + 64 rope)</tspan></text>
 </g>
-<g class="node" data-id="FQ" data-label="&quot;Q tile
-[Br × d" data-shape="rectangle">
-  <rect x="56.89499999999998" y="176.3" width="79.741" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="96.76549999999997" y="203.20000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="96.76549999999997" dy="-3.9000000000000012">&quot;Q tile</tspan><tspan x="96.76549999999997" dy="16.900000000000002">[Br × d</tspan></text>
+<g class="node" data-id="Split" data-label="split" data-shape="diamond">
+  <polygon points="464.506,304.5 509.337,349.331 464.506,394.16200000000003 419.67499999999995,349.331" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="464.506" y="349.331" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">split</text>
 </g>
-<g class="node" data-id="FK" data-label="&quot;K/V tiles
-[Bc × d" data-shape="rectangle">
-  <rect x="164.63599999999997" y="176.3" width="93.07900000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="211.17549999999997" y="203.20000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="211.17549999999997" dy="-3.9000000000000012">&quot;K/V tiles</tspan><tspan x="211.17549999999997" dy="16.900000000000002">[Bc × d</tspan></text>
+<g class="node" data-id="Latent" data-label="&quot;kv_latent
+[512" data-shape="rectangle">
+  <rect x="357.42699999999996" y="442.162" width="99.007" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="406.93049999999994" y="469.06199999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="406.93049999999994" dy="-3.9000000000000012">&quot;kv_latent</tspan><tspan x="406.93049999999994" dy="16.900000000000002">[512</tspan></text>
 </g>
-<g class="node" data-id="FTile" data-label="Tile loop:
-load K/V block → Br×Bc scores
-online softmax update → accum O" data-shape="rectangle">
-  <rect x="40" y="278.1" width="227.94099999999997" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="153.9705" y="313.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="153.9705" dy="-12.350000000000001">Tile loop:</tspan><tspan x="153.9705" dy="16.900000000000002">load K/V block → Br×Bc scores</tspan><tspan x="153.9705" dy="16.900000000000002">online softmax update → accum O</tspan></text>
+<g class="node" data-id="KPE" data-label="&quot;k_pe
+[64" data-shape="rectangle">
+  <rect x="556.0761666666666" y="442.162" width="75.295" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="593.7236666666666" y="469.06199999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="593.7236666666666" dy="-3.9000000000000012">&quot;k_pe</tspan><tspan x="593.7236666666666" dy="16.900000000000002">[64</tspan></text>
 </g>
-<g class="node" data-id="FO" data-label="&quot;O
-[n × d" data-shape="rectangle">
-  <rect x="117.80499999999998" y="388.35" width="72.33099999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="153.97049999999996" y="415.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="153.97049999999996" dy="-3.9000000000000012">&quot;O</tspan><tspan x="153.97049999999996" dy="16.900000000000002">[n × d</tspan></text>
+<g class="node" data-id="KVNorm" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="355.94499999999994" y="543.962" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="406.93049999999994" y="562.412" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">RMSNorm</text>
 </g>
-<g class="node" data-id="FMem" data-label="HBM reads/writes:
-O(n) — scores never
-leave on-chip SRAM
-→ 5-20× less DRAM traffic" data-shape="rectangle">
-  <rect x="355.496" y="40" width="187.18599999999992" height="87.60000000000001" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="449.08899999999994" y="83.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="449.08899999999994" dy="-20.8">HBM reads/writes:</tspan><tspan x="449.08899999999994" dy="16.900000000000002">O(n) — scores never</tspan><tspan x="449.08899999999994" dy="16.900000000000002">leave on-chip SRAM</tspan><tspan x="449.08899999999994" dy="16.900000000000002">→ 5-20× less DRAM traffic</tspan></text>
+<g class="node" data-id="EmbedQ" data-label="embed_q
+512 → 192 × 20 heads
+(K_nope per head)" data-shape="rectangle">
+  <rect x="236.49599999999998" y="628.8620000000001" width="155.32299999999998" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="314.15749999999997" y="664.2120000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="314.15749999999997" dy="-12.350000000000001">embed_q</tspan><tspan x="314.15749999999997" dy="16.900000000000002">512 → 192 × 20 heads</tspan><tspan x="314.15749999999997" dy="16.900000000000002">(K_nope per head)</tspan></text>
+</g>
+<g class="node" data-id="UnembedOut" data-label="unembed_out
+512 → 256 × 20 heads
+(V per head)" data-shape="rectangle">
+  <rect x="419.81899999999996" y="628.8620000000001" width="159.769" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="499.70349999999996" y="664.2120000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="499.70349999999996" dy="-12.350000000000001">unembed_out</tspan><tspan x="499.70349999999996" dy="16.900000000000002">512 → 256 × 20 heads</tspan><tspan x="499.70349999999996" dy="16.900000000000002">(V per head)</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1318.1760000000002 407.20000000000005" width="1318.1760000000002" height="407.20000000000005" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1318.1760000000002 407.20000000000005" width="1318.1760000000002" height="407.20000000000005" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,27 +19,24 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Effect" data-label="Temperature Effect">
-  <rect x="40" y="367.20000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="367.20000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="381.20000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Temperature Effect</text>
 </g>
-<polyline class="edge" data-from="Logits" data-to="Divide" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.5680000000001,66.9 202.5680000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Divide" data-to="Adjusted" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="377.8980000000001,66.9 425.8980000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Adjusted" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="558.9910000000001,66.9 606.9910000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Softmax" data-to="Probs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="708.9620000000001,66.9 756.9620000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Probs" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="898.2060000000001,66.9 946.2060000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Sample" data-to="Token" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1120.795,66.9 1168.795,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Logits" data-to="Divide" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.5680000000001,66.9 202.5680000000001,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Divide" data-to="Adjusted" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="377.8980000000001,66.9 425.8980000000001,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Adjusted" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="558.9910000000001,66.9 606.9910000000001,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="Probs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="708.9620000000001,66.9 756.9620000000001,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Probs" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="898.2060000000001,66.9 946.2060000000001,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sample" data-to="Token" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1120.795,66.9 1168.795,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Logits" data-label="&quot;Raw Logits
 [3.2, 1.1, 0.4, ..." data-shape="rectangle">
-  <rect x="40.000000000000085" y="40" width="114.56800000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="97.28400000000009" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="97.28400000000009" dy="-3.9000000000000012">&quot;Raw Logits</tspan><tspan x="97.28400000000009" dy="16.900000000000002">[3.2, 1.1, 0.4, ...</tspan></text>
+  <rect x="40.000000000000085" y="40" width="114.56800000000001" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="97.28400000000009" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="97.28400000000009" dy="-3.9000000000000012">&quot;Raw Logits</tspan><tspan x="97.28400000000009" dy="16.900000000000002">[3.2, 1.1, 0.4, ...</tspan></text>
 </g>
 <g class="node" data-id="Divide" data-label="Divide by Temperature
 logit / T" data-shape="rectangle">
@@ -64,8 +54,8 @@ e^x / Σe^x" data-shape="rectangle">
 </g>
 <g class="node" data-id="Probs" data-label="&quot;Probabilities
 [0.72, 0.19, 0.09, ..." data-shape="rectangle">
-  <rect x="756.9620000000001" y="40" width="141.24400000000003" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="827.5840000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="827.5840000000001" dy="-3.9000000000000012">&quot;Probabilities</tspan><tspan x="827.5840000000001" dy="16.900000000000002">[0.72, 0.19, 0.09, ...</tspan></text>
+  <rect x="756.9620000000001" y="40" width="141.24400000000003" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="827.5840000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="827.5840000000001" dy="-3.9000000000000012">&quot;Probabilities</tspan><tspan x="827.5840000000001" dy="16.900000000000002">[0.72, 0.19, 0.09, ...</tspan></text>
 </g>
 <g class="node" data-id="Sample" data-label="Weighted Random Pick" data-shape="rectangle">
   <rect x="946.2060000000001" y="48.449999999999996" width="174.58899999999997" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />

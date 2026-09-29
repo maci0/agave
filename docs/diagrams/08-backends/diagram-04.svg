@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 915.2139999999999 375.6" width="915.2139999999999" height="375.6" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 915.2139999999999 375.6" width="915.2139999999999" height="375.6" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,42 +19,42 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Discrete" data-label="Discrete GPU (NVIDIA RTX, AMD RX)">
-  <rect x="40" y="221.8" width="835.2139999999999" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="221.8" width="835.2139999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="235.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Discrete GPU (NVIDIA RTX, AMD RX)</text>
+  <rect x="40" y="221.8" width="835.2139999999999" height="113.80000000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="221.8" width="835.2139999999999" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="235.8" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Discrete GPU (NVIDIA RTX, AMD RX)</text>
 </g>
 <g class="subgraph" data-id="UMA" data-label="UMA (Apple Silicon, NVIDIA Grace)">
-  <rect x="40" y="40" width="582.24" height="161.8" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="40" width="582.24" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">UMA (Apple Silicon, NVIDIA Grace)</text>
+  <rect x="40" y="40" width="582.24" height="161.8" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="40" width="582.24" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">UMA (Apple Silicon, NVIDIA Grace)</text>
 </g>
 <polyline class="edge" data-from="SysRAM" data-to="PCIe" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="cudaMemcpy
-(explicit copy)" points="222.438,292.70000000000005 392.834,292.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="PCIe" data-to="VRAM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="488.877,292.70000000000005 536.877,292.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="VRAM" data-to="dGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="689.977,292.70000000000005 737.977,292.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+(explicit copy)" points="222.438,292.70000000000005 392.834,292.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PCIe" data-to="VRAM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="488.877,292.70000000000005 536.877,292.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VRAM" data-to="dGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="689.977,292.70000000000005 737.977,292.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="SharedMem" data-to="uGPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="zero-copy pointer
-newBufferWithBytesNoCopy" points="246.891,125.93333333333334 258.89099999999996,125.93333333333334 258.89099999999996,102.45 485.00300000000004,102.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SharedMem" data-to="uCPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="normal pointer" points="246.891,143.86666666666667 258.89099999999996,143.86666666666667 258.89099999999996,167.35000000000002 485.00300000000004,167.35000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+newBufferWithBytesNoCopy" points="246.891,125.93333333333334 258.89099999999996,125.93333333333334 258.89099999999996,102.45 485.00300000000004,102.45" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SharedMem" data-to="uCPU" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="normal pointer" points="246.891,143.86666666666667 258.89099999999996,143.86666666666667 258.89099999999996,167.35000000000002 485.00300000000004,167.35000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="SysRAM" data-to="PCIe" data-label="cudaMemcpy
 (explicit copy)">
-  <rect x="266.438" y="269.7" width="82.39600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="307.63599999999997" y="292" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="307.63599999999997" dy="-3.3000000000000007">cudaMemcpy</tspan><tspan x="307.63599999999997" dy="14.3">(explicit copy)</tspan></text>
+  <rect x="266.438" y="269.7" width="82.39600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="307.63599999999997" y="292" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="307.63599999999997" dy="-3.3000000000000007">cudaMemcpy</tspan><tspan x="307.63599999999997" dy="14.3">(explicit copy)</tspan></text>
 </g>
 <g class="edge-label" data-from="SharedMem" data-to="uGPU" data-label="zero-copy pointer
 newBufferWithBytesNoCopy">
-  <rect x="290.89099999999996" y="79.45" width="150.11200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="365.947" y="101.75" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="365.947" dy="-3.3000000000000007">zero-copy pointer</tspan><tspan x="365.947" dy="14.3">newBufferWithBytesNoCopy</tspan></text>
+  <rect x="290.89099999999996" y="79.45" width="150.11200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="365.947" y="101.75" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="365.947" dy="-3.3000000000000007">zero-copy pointer</tspan><tspan x="365.947" dy="14.3">newBufferWithBytesNoCopy</tspan></text>
 </g>
 <g class="edge-label" data-from="SharedMem" data-to="uCPU" data-label="normal pointer">
-  <rect x="323.561" y="151.35" width="84.77200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="365.947" y="166.5" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">normal pointer</text>
+  <rect x="323.561" y="151.35" width="84.77200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="365.947" y="166.5" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">normal pointer</text>
 </g>
 <g class="node" data-id="SysRAM" data-label="System RAM
 (weights loaded here)" data-shape="rectangle">

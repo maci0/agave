@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1329.9460000000001 306.85" width="1329.9460000000001" height="306.85" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1329.9460000000001 306.85" width="1329.9460000000001" height="306.85" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,41 +19,38 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="CompileTime" data-label="Compile Time: dead code eliminated">
-  <rect x="601.962" y="209.475" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="601.962" y="209.475" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="613.962" y="223.475" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Compile Time: dead code eliminated</text>
 </g>
-<polyline class="edge" data-from="BuildCmd" data-to="Builtin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="228.668,154.575 276.668,154.57500000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Builtin" data-to="MacOS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="409.02,154.57500000000002 457.02,154.575" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="MacOS" data-to="MetalBranch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="601.962,148.425 673.8520000000001,148.425 673.8520000000001,75.35 761.3220000000001,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="MacOS" data-to="Linux" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="601.962,160.72500000000002 637.962,160.72500000000002 637.962,194.82500000000002 719.492,194.82500000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Linux" data-to="VulkanBranch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="854.06,188.675 866.0600000000001,188.675 866.0600000000001,149.7 945.0085000000001,149.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Linux" data-to="CPUBranch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="854.06,200.975 866.06,200.975 866.06,239.95000000000002 945.0085000000001,239.95000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="MetalBranch" data-to="Binary" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="888.4870000000001,75.35 945.0085000000001,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="VulkanBranch" data-to="LinuxBin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1081.8065000000001,149.7 1126.4660000000001,149.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="CPUBranch" data-to="CPUBin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1064.0225000000003,239.95000000000002 1126.4660000000001,239.95000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BuildCmd" data-to="Builtin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="228.668,154.575 276.668,154.57500000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Builtin" data-to="MacOS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="409.02,154.57500000000002 457.02,154.575" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MacOS" data-to="MetalBranch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="601.962,148.425 673.8520000000001,148.425 673.8520000000001,75.35 761.3220000000001,75.35" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MacOS" data-to="Linux" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="601.962,160.72500000000002 637.962,160.72500000000002 637.962,194.82500000000002 719.492,194.82500000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Linux" data-to="VulkanBranch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="854.06,188.675 866.0600000000001,188.675 866.0600000000001,149.7 945.0085000000001,149.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Linux" data-to="CPUBranch" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="854.06,200.975 866.06,200.975 866.06,239.95000000000002 945.0085000000001,239.95000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MetalBranch" data-to="Binary" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="888.4870000000001,75.35 945.0085000000001,75.35" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VulkanBranch" data-to="LinuxBin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1081.8065000000001,149.7 1126.4660000000001,149.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="CPUBranch" data-to="CPUBin" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1064.0225000000003,239.95000000000002 1126.4660000000001,239.95000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="MacOS" data-to="MetalBranch" data-label="yes">
-  <rect x="681.8520000000001" y="59.35" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="699.5870000000001" y="74.5" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+  <rect x="681.8520000000001" y="59.35" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="699.5870000000001" y="74.5" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
 <g class="edge-label" data-from="MacOS" data-to="Linux" data-label="no">
-  <rect x="645.962" y="178.82500000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="660.727" y="193.97500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+  <rect x="645.962" y="178.82500000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="660.727" y="193.97500000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
 <g class="edge-label" data-from="Linux" data-to="VulkanBranch" data-label="yes">
-  <rect x="874.0600000000001" y="133.7" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="891.7950000000001" y="148.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+  <rect x="874.0600000000001" y="133.7" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="891.7950000000001" y="148.85" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
 <g class="edge-label" data-from="Linux" data-to="CPUBranch" data-label="no">
-  <rect x="874.06" y="223.95000000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="888.8249999999999" y="239.10000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+  <rect x="874.06" y="223.95000000000002" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="888.8249999999999" y="239.10000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
 <g class="node" data-id="BuildCmd" data-label="zig build
 -Dtarget=aarch64-macos" data-shape="rectangle">
@@ -106,11 +96,11 @@ Metal code absent)" data-shape="rectangle">
   <text x="1188.5665000000001" y="239.95000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1188.5665000000001" dy="-3.9000000000000012">Other Binary</tspan><tspan x="1188.5665000000001" dy="16.900000000000002">(CPU fallback)</tspan></text>
 </g>
 <g class="node" data-id="MacOS" data-label="os == .macos?" data-shape="hexagon">
-  <polygon points="466.245,136.125 592.737,136.125 601.962,154.575 592.737,173.025 466.245,173.025 457.02,154.575" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="529.491" y="154.575" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">os == .macos?</text>
+  <polygon points="466.245,136.125 592.737,136.125 601.962,154.575 592.737,173.025 466.245,173.025 457.02,154.575" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="529.491" y="154.575" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">os == .macos?</text>
 </g>
 <g class="node" data-id="Linux" data-label="os == .linux?" data-shape="hexagon">
-  <polygon points="728.717,176.375 844.8349999999999,176.375 854.06,194.825 844.8349999999999,213.275 728.717,213.275 719.492,194.825" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="786.776" y="194.825" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">os == .linux?</text>
+  <polygon points="728.717,176.375 844.8349999999999,176.375 854.06,194.825 844.8349999999999,213.275 728.717,213.275 719.492,194.825" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="786.776" y="194.825" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">os == .linux?</text>
 </g>
 </svg>

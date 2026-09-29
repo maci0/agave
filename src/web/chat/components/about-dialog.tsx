@@ -1,4 +1,5 @@
 import { Dialog, DialogContent, DialogTitle } from '../../ui/dialog';
+import { Mark } from '../../ui/icons';
 import { cn } from '../../ui/cn';
 
 type AboutDialogProps = {
@@ -25,7 +26,7 @@ export const AboutDialog = ({ open, onOpenChange, modelName, backendName }: Abou
   <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent>
       <DialogTitle className="mb-5">
-        <span className="mark" aria-hidden="true" />
+        <Mark />
         About Agave
       </DialogTitle>
       <div className="leading-relaxed text-muted-foreground">

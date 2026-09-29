@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 599.2895 889.7" width="599.2895" height="889.7" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 863.8169999999999 297.40000000000003" width="863.8169999999999" height="297.40000000000003" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,95 +19,45 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Draft" data-label="Draft Phase">
-  <rect x="239.0915" y="508.6" width="250.308" height="315.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="239.0915" y="508.6" width="250.308" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="251.0915" y="522.6" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Draft Phase</text>
+<polyline class="edge" data-from="Ctx" data-to="B0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="184.949,148.70000000000002 202.949,148.70000000000002 202.949,66.9 220.949,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Ctx" data-to="B1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="184.949,148.70000000000002 202.949,148.70000000000002 202.949,148.70000000000002 220.949,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Ctx" data-to="B2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="184.949,148.70000000000002 202.949,148.70000000000002 202.949,230.50000000000003 220.949,230.50000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B1" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="379.236,148.70000000000002 439.236,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="594.559,148.70000000000002 642.559,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Ctx" data-label="&quot;Current context
+[token₁, token₂, ..." data-shape="rectangle">
+  <rect x="40" y="121.80000000000001" width="144.949" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="112.4745" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="112.4745" dy="-3.9000000000000012">&quot;Current context</tspan><tspan x="112.4745" dy="16.900000000000002">[token₁, token₂, ...</tspan></text>
 </g>
-<g class="subgraph" data-id="Verify" data-label="Verify Phase">
-  <rect x="90.91400000000004" y="58" width="185.09999999999997" height="332" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="90.91400000000004" y="58" width="185.09999999999997" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="102.91400000000004" y="72" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Verify Phase</text>
+<g class="node" data-id="B0" data-label="&quot;Branch 0
+[tok_a, tok_b, tok_c..." data-shape="rectangle">
+  <rect x="220.949" y="40" width="162.733" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="302.31550000000004" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="302.31550000000004" dy="-3.9000000000000012">&quot;Branch 0</tspan><tspan x="302.31550000000004" dy="16.900000000000002">[tok_a, tok_b, tok_c...</tspan></text>
 </g>
-<g class="subgraph" data-id="Output" data-label="Output">
-  <rect x="56.37250000000001" y="532.6000000000001" width="154.719" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="56.37250000000001" y="532.6000000000001" width="154.719" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="68.3725" y="546.6000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Output</text>
+<g class="node" data-id="B1" data-label="&quot;Branch 1
+[tok_d, tok_e, tok_f..." data-shape="rectangle">
+  <rect x="220.949" y="121.80000000000001" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="300.09250000000003" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="300.09250000000003" dy="-3.9000000000000012">&quot;Branch 1</tspan><tspan x="300.09250000000003" dy="16.900000000000002">[tok_d, tok_e, tok_f...</tspan></text>
 </g>
-<polyline class="edge" data-from="TB" data-to="TM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="tree: B nodes
-ancestor bitmasks" points="364.2455,807.7 364.2455,841.7 499.3995,841.7 499.3995,40 183.464,40 183.46400000000003,102" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="AW" data-to="OS" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="accepted tokens
-(1..K)" points="147.41200000000003,374 147.41200000000003,432.00000000000006 84,432.00000000000006 84,514.6000000000001 113.27883333333335,514.6000000000001 113.27883333333335,564.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="AW" data-to="OS" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="correction token
-(on rejection)" points="183.46400000000003,374 183.464,514.6000000000001 154.1851666666667,514.6000000000001 154.1851666666667,564.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="AW" data-to="DM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="rollback KV to
-accepted position" points="219.51600000000002,374 219.51600000000002,408 364.2455,408 364.2455,564.6000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="DM" data-to="TB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="K tokens + per-position
-logit distributions" points="364.2455,618.4000000000002 364.2455,737" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="TM" data-to="AW" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="argmax at each
-tree node" points="183.46400000000003,172.7 183.46400000000003,303.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="TB" data-to="TM" data-label="tree: B nodes
-ancestor bitmasks">
-  <rect x="447.3995" y="415" width="103.78000000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="499.2895" y="437.3" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="499.2895" dy="-3.3000000000000007">tree: B nodes</tspan><tspan x="499.2895" dy="14.3">ancestor bitmasks</tspan></text>
+<g class="node" data-id="B2" data-label="&quot;Branch 2
+[tok_g, tok_h, tok_i..." data-shape="rectangle">
+  <rect x="220.949" y="203.60000000000002" width="158.287" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="300.09250000000003" y="230.50000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="300.09250000000003" dy="-3.9000000000000012">&quot;Branch 2</tspan><tspan x="300.09250000000003" dy="16.900000000000002">[tok_g, tok_h, tok_i...</tspan></text>
 </g>
-<g class="edge-label" data-from="AW" data-to="OS" data-label="accepted tokens
-(1..K)">
-  <rect x="35.99999999999999" y="439.00000000000006" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="83.732" y="461.30000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="83.732" dy="-3.3000000000000007">accepted tokens</tspan><tspan x="83.732" dy="14.3">(1..K)</tspan></text>
+<g class="node" data-id="M" data-label="N-gram match found
+in Branch 1" data-shape="rectangle">
+  <rect x="439.236" y="121.80000000000001" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="516.8975" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="516.8975" dy="-3.9000000000000012">N-gram match found</tspan><tspan x="516.8975" dy="16.900000000000002">in Branch 1</tspan></text>
 </g>
-<g class="edge-label" data-from="AW" data-to="OS" data-label="correction token
-(on rejection)">
-  <rect x="135.464" y="439.00000000000006" width="95.46400000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="183.19600000000003" y="461.30000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="183.19600000000003" dy="-3.3000000000000007">correction token</tspan><tspan x="183.19600000000003" dy="14.3">(on rejection)</tspan></text>
-</g>
-<g class="edge-label" data-from="AW" data-to="DM" data-label="rollback KV to
-accepted position">
-  <rect x="313.7455" y="415" width="100.21600000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="363.8535" y="437.3" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="363.8535" dy="-3.3000000000000007">rollback KV to</tspan><tspan x="363.8535" dy="14.3">accepted position</tspan></text>
-</g>
-<g class="edge-label" data-from="DM" data-to="TB" data-label="K tokens + per-position
-logit distributions">
-  <rect x="301.74549999999994" y="649.4000000000001" width="124.57000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="364.03049999999996" y="671.7" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="364.03049999999996" dy="-3.3000000000000007">K tokens + per-position</tspan><tspan x="364.03049999999996" dy="14.3">logit distributions</tspan></text>
-</g>
-<g class="edge-label" data-from="TM" data-to="AW" data-label="argmax at each
-tree node">
-  <rect x="138.96400000000003" y="215.7" width="88.93" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="183.42900000000003" y="238" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="183.42900000000003" dy="-3.3000000000000007">argmax at each</tspan><tspan x="183.42900000000003" dy="14.3">tree node</tspan></text>
-</g>
-<g class="node" data-id="DM" data-label="Draft Model
-(small / layer-skipped / n-gram)" data-shape="rectangle">
-  <rect x="255.0915" y="564.6000000000001" width="218.308" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="364.2455" y="591.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="364.2455" dy="-3.9000000000000012">Draft Model</tspan><tspan x="364.2455" dy="16.900000000000002">(small / layer-skipped / n-gram)</tspan></text>
-</g>
-<g class="node" data-id="TB" data-label="DDTree Builder
-best-first heap
-O(B log B)" data-shape="rectangle">
-  <rect x="296.95799999999997" y="737" width="134.575" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="364.2455" y="772.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="364.2455" dy="-12.350000000000001">DDTree Builder</tspan><tspan x="364.2455" dy="16.900000000000002">best-first heap</tspan><tspan x="364.2455" dy="16.900000000000002">O(B log B)</tspan></text>
-</g>
-<g class="node" data-id="TM" data-label="Target Model
-tree-masked SDPA
-forwardTree()" data-shape="rectangle">
-  <rect x="106.91400000000004" y="102" width="153.09999999999997" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="183.46400000000003" y="137.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="183.46400000000003" dy="-12.350000000000001">Target Model</tspan><tspan x="183.46400000000003" dy="16.900000000000002">tree-masked SDPA</tspan><tspan x="183.46400000000003" dy="16.900000000000002">forwardTree()</tspan></text>
-</g>
-<g class="node" data-id="AW" data-label="Acceptance Walk
-find longest
-matching path" data-shape="rectangle">
-  <rect x="111.36000000000001" y="303.3" width="144.20800000000003" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="183.46400000000003" y="338.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="183.46400000000003" dy="-12.350000000000001">Acceptance Walk</tspan><tspan x="183.46400000000003" dy="16.900000000000002">find longest</tspan><tspan x="183.46400000000003" dy="16.900000000000002">matching path</tspan></text>
-</g>
-<g class="node" data-id="OS" data-label="Output Stream
-/ SSE" data-shape="rectangle">
-  <rect x="72.3725" y="564.6000000000001" width="122.719" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="133.732" y="591.5000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="133.732" dy="-3.9000000000000012">Output Stream</tspan><tspan x="133.732" dy="16.900000000000002">/ SSE</tspan></text>
+<g class="node" data-id="Out" data-label="Propose B1 continuation
+as draft tokens" data-shape="rectangle">
+  <rect x="642.559" y="121.80000000000001" width="181.25799999999995" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="733.188" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="733.188" dy="-3.9000000000000012">Propose B1 continuation</tspan><tspan x="733.188" dy="16.900000000000002">as draft tokens</tspan></text>
 </g>
 </svg>

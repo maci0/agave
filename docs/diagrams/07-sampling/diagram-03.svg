@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1621.1555833333334 1178.9289999999999" width="1621.1555833333334" height="1178.9289999999999" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1601.8895833333333 1178.9289999999999" width="1601.8895833333333" height="1178.9289999999999" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,50 +19,44 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Example" data-label="Example: dry_multiplier=1.5, dry_allowed_length=2">
-  <rect x="1553.1555833333332" y="40.00000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="1553.1555833333332" y="40.00000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="1565.1555833333332" y="54.00000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Example: dry_multiplier=1.5, dry_allowed_length=2</text>
 </g>
 <g class="subgraph" data-id="Contrast" data-label="vs repeat_penalty">
-  <rect x="1581.1555833333332" y="40.00000000000005" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="1581.1555833333332" y="40.00000000000005" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="1593.1555833333332" y="54.00000000000005" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">vs repeat_penalty</text>
 </g>
-<polyline class="edge" data-from="History" data-to="Window" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="171.12358333333344,93.80000000000001 171.12358333333339,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Window" data-to="Match" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="171.12358333333339,195.60000000000002 171.12358333333336,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Match" data-to="NoPenalty" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No match" points="139.75441666666669,400.4458333333333 139.75441666666669,536.115 72.28750000000001,536.115 72.28750000000001,1073.129 84.85833333333332,1073.129 84.85833333333332,1085.129" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Match" data-to="Extend" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Match found" points="202.49275,400.4458333333333 202.49275,467.815 245.01733333333337,467.815 245.01733333333337,548.115" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Extend" data-to="Length" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.01733333333337,601.915 245.01733333333343,649.915" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Length" data-to="Allowed" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.01733333333343,703.7149999999999 245.01733333333334,751.7149999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Allowed" data-to="NoPenalty" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No, sequence too short" points="208.83166666666668,932.6433333333333 208.83166666666668,1004.829 163.08841666666666,1004.829 163.08841666666666,1073.129 129.71666666666664,1073.129 129.71666666666664,1085.129" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Allowed" data-to="Penalty" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes, repeated phrase" points="281.203,932.6433333333333 281.203,1004.829 308.09933333333345,1004.829 308.09933333333333,1085.129" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="History" data-to="Window" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="171.12358333333344,93.80000000000001 171.12358333333339,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Window" data-to="Match" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="171.12358333333339,195.60000000000002 171.12358333333336,243.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Match" data-to="NoPenalty" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No match" points="139.75441666666669,400.4458333333333 139.75441666666669,536.115 72.28750000000001,536.115 72.28750000000001,1073.129 84.85833333333332,1073.129 84.85833333333332,1085.129" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Match" data-to="Extend" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Match found" points="202.49275,400.4458333333333 202.49275,467.815 245.01733333333337,467.815 245.01733333333337,548.115" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Extend" data-to="Length" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.01733333333337,601.915 245.01733333333343,649.915" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Length" data-to="Allowed" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="245.01733333333343,703.7149999999999 245.01733333333334,751.7149999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Allowed" data-to="NoPenalty" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="No, sequence too short" points="208.83166666666668,932.6433333333333 208.83166666666668,1004.829 163.08841666666666,1004.829 163.08841666666666,1073.129 129.71666666666664,1073.129 129.71666666666664,1085.129" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Allowed" data-to="Penalty" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Yes, repeated phrase" points="281.203,932.6433333333333 281.203,1004.829 308.09933333333345,1004.829 308.09933333333333,1085.129" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Match" data-to="NoPenalty" data-label="No match">
-  <rect x="42.28750000000001" y="979.529" width="59.824000000000005" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="72.19950000000001" y="994.679" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No match</text>
+  <rect x="42.28750000000001" y="979.529" width="59.824000000000005" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="72.19950000000001" y="994.679" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">No match</text>
 </g>
 <g class="edge-label" data-from="Match" data-to="Extend" data-label="Match found">
-  <rect x="207.5173333333334" y="474.815" width="74.674" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="244.8543333333334" y="489.965" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Match found</text>
+  <rect x="207.5173333333334" y="474.815" width="74.674" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="244.8543333333334" y="489.965" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">Match found</text>
 </g>
 <g class="edge-label" data-from="Allowed" data-to="NoPenalty" data-label="No, sequence too short">
-  <rect x="100.08841666666666" y="1011.8290000000001" width="125.16400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="162.67041666666668" y="1026.979" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">No, sequence too short</text>
+  <rect x="100.08841666666666" y="1011.8290000000001" width="125.16400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="162.67041666666668" y="1026.979" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">No, sequence too short</text>
 </g>
 <g class="edge-label" data-from="Allowed" data-to="Penalty" data-label="Yes, repeated phrase">
-  <rect x="248.09933333333342" y="1011.8290000000001" width="119.81800000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="308.00833333333344" y="1026.979" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Yes, repeated phrase</text>
+  <rect x="248.09933333333342" y="1011.8290000000001" width="119.81800000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="308.00833333333344" y="1026.979" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">Yes, repeated phrase</text>
 </g>
 <g class="node" data-id="History" data-label="&quot;Generation History
 [... the cat sat on the mat ..." data-shape="rectangle">
-  <rect x="79.01258333333345" y="40" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="171.12358333333344" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="171.12358333333344" dy="-3.9000000000000012">&quot;Generation History</tspan><tspan x="171.12358333333344" dy="16.900000000000002">[... the cat sat on the mat ...</tspan></text>
+  <rect x="79.01258333333345" y="40" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="171.12358333333344" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="171.12358333333344" dy="-3.9000000000000012">&quot;Generation History</tspan><tspan x="171.12358333333344" dy="16.900000000000002">[... the cat sat on the mat ...</tspan></text>
 </g>
 <g class="node" data-id="Window" data-label="Sliding Window Scan
 for each candidate token C" data-shape="rectangle">
@@ -92,9 +79,9 @@ how many prior tokens also match?" data-shape="rectangle">
   <text x="245.01733333333343" y="676.8149999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="245.01733333333343" dy="-3.9000000000000012">Match length L</tspan><tspan x="245.01733333333343" dy="16.900000000000002">(tokens in common prefix)</tspan></text>
 </g>
 <g class="node" data-id="Penalty" data-label="Apply penalty
-logit -= dry_multiplier ^ L" data-shape="rectangle">
+logit -= dry_multiplier × L" data-shape="rectangle">
   <rect x="217.09983333333335" y="1085.129" width="181.999" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="308.09933333333333" y="1112.029" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="308.09933333333333" dy="-3.9000000000000012">Apply penalty</tspan><tspan x="308.09933333333333" dy="16.900000000000002">logit -= dry_multiplier ^ L</tspan></text>
+  <text x="308.09933333333333" y="1112.029" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="308.09933333333333" dy="-3.9000000000000012">Apply penalty</tspan><tspan x="308.09933333333333" dy="16.900000000000002">logit -= dry_multiplier × L</tspan></text>
 </g>
 <g class="node" data-id="Ex1" data-label="token 'sat' after 'cat'
 L=1 (just 'sat') → no penalty" data-shape="rectangle">
@@ -102,34 +89,34 @@ L=1 (just 'sat') → no penalty" data-shape="rectangle">
   <text x="385.93908333333343" y="473.215" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="385.93908333333343" dy="-3.9000000000000012">token &#39;sat&#39; after &#39;cat&#39;</tspan><tspan x="385.93908333333343" dy="16.900000000000002">L=1 (just &#39;sat&#39;) → no penalty</tspan></text>
 </g>
 <g class="node" data-id="Ex2" data-label="token 'on' after 'cat sat'
-L=2 (bigram) → penalty x1.5^2=2.25" data-shape="rectangle">
-  <rect x="508.64358333333337" y="40.00000000000005" width="240.53799999999995" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="628.9125833333334" y="66.90000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="628.9125833333334" dy="-3.9000000000000012">token &#39;on&#39; after &#39;cat sat&#39;</tspan><tspan x="628.9125833333334" dy="16.900000000000002">L=2 (bigram) → penalty x1.5^2=2.25</tspan></text>
+L=2 (bigram) → penalty 1.5×2=3.0" data-shape="rectangle">
+  <rect x="508.64358333333337" y="40.00000000000005" width="225.71799999999996" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="621.5025833333334" y="66.90000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="621.5025833333334" dy="-3.9000000000000012">token &#39;on&#39; after &#39;cat sat&#39;</tspan><tspan x="621.5025833333334" dy="16.900000000000002">L=2 (bigram) → penalty 1.5×2=3.0</tspan></text>
 </g>
 <g class="node" data-id="Ex3" data-label="token 'mat' after 'cat sat on'
-L=3 → penalty x1.5^3=3.375" data-shape="rectangle">
-  <rect x="777.1815833333334" y="40.00000000000005" width="198.301" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="876.3320833333333" y="66.90000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="876.3320833333333" dy="-3.9000000000000012">token &#39;mat&#39; after &#39;cat sat on&#39;</tspan><tspan x="876.3320833333333" dy="16.900000000000002">L=3 → penalty x1.5^3=3.375</tspan></text>
+L=3 → penalty 1.5×3=4.5" data-shape="rectangle">
+  <rect x="762.3615833333333" y="40.00000000000005" width="193.85500000000002" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="859.2890833333333" y="66.90000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="859.2890833333333" dy="-3.9000000000000012">token &#39;mat&#39; after &#39;cat sat on&#39;</tspan><tspan x="859.2890833333333" dy="16.900000000000002">L=3 → penalty 1.5×3=4.5</tspan></text>
 </g>
 <g class="node" data-id="RP" data-label="repeat_penalty: penalizes
 each token individually
 'the' always penalized" data-shape="rectangle">
-  <rect x="1003.4825833333333" y="40.00000000000005" width="193.855" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="1100.4100833333332" y="75.35000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="1100.4100833333332" dy="-12.350000000000001">repeat_penalty: penalizes</tspan><tspan x="1100.4100833333332" dy="16.900000000000002">each token individually</tspan><tspan x="1100.4100833333332" dy="16.900000000000002">&#39;the&#39; always penalized</tspan></text>
+  <rect x="984.2165833333333" y="40.00000000000005" width="193.855" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="1081.1440833333334" y="75.35000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="1081.1440833333334" dy="-12.350000000000001">repeat_penalty: penalizes</tspan><tspan x="1081.1440833333334" dy="16.900000000000002">each token individually</tspan><tspan x="1081.1440833333334" dy="16.900000000000002">&#39;the&#39; always penalized</tspan></text>
 </g>
 <g class="node" data-id="DRY2" data-label="DRY: penalizes token only
 when it continues a phrase
 'the' fine alone, penalized in repeated phrase" data-shape="rectangle">
-  <rect x="1225.3375833333334" y="40.00000000000005" width="299.8179999999999" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="1375.2465833333333" y="75.35000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="1375.2465833333333" dy="-12.350000000000001">DRY: penalizes token only</tspan><tspan x="1375.2465833333333" dy="16.900000000000002">when it continues a phrase</tspan><tspan x="1375.2465833333333" dy="16.900000000000002">&#39;the&#39; fine alone, penalized in repeated phrase</tspan></text>
+  <rect x="1206.0715833333334" y="40.00000000000005" width="299.8179999999999" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="1355.9805833333332" y="75.35000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="1355.9805833333332" dy="-12.350000000000001">DRY: penalizes token only</tspan><tspan x="1355.9805833333332" dy="16.900000000000002">when it continues a phrase</tspan><tspan x="1355.9805833333332" dy="16.900000000000002">&#39;the&#39; fine alone, penalized in repeated phrase</tspan></text>
 </g>
 <g class="node" data-id="Match" data-label="Does token C appear
 earlier in history?" data-shape="diamond">
-  <polygon points="171.12358333333336,243.6 265.23108333333334,337.7075 171.12358333333336,431.81499999999994 77.01608333333337,337.7075" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="171.12358333333336" y="337.7075" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="171.12358333333336" dy="-3.9000000000000012">Does token C appear</tspan><tspan x="171.12358333333336" dy="16.900000000000002">earlier in history?</tspan></text>
+  <polygon points="171.12358333333336,243.6 265.23108333333334,337.7075 171.12358333333336,431.81499999999994 77.01608333333337,337.7075" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="171.12358333333336" y="337.7075" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="171.12358333333336" dy="-3.9000000000000012">Does token C appear</tspan><tspan x="171.12358333333336" dy="16.900000000000002">earlier in history?</tspan></text>
 </g>
 <g class="node" data-id="Allowed" data-label="L &gt;= dry_allowed_length?" data-shape="diamond">
-  <polygon points="245.01733333333334,751.7149999999999 353.57433333333336,860.2719999999999 245.01733333333334,968.829 136.46033333333335,860.2719999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="245.01733333333334" y="860.2719999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">L &gt;= dry_allowed_length?</text>
+  <polygon points="245.01733333333334,751.7149999999999 353.57433333333336,860.2719999999999 245.01733333333334,968.829 136.46033333333335,860.2719999999999" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="245.01733333333334" y="860.2719999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">L &gt;= dry_allowed_length?</text>
 </g>
 </svg>

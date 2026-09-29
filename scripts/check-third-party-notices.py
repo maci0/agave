@@ -83,7 +83,7 @@ def local_package(root: Path, spec: str) -> Path | None:
     """
     for prefix in ("file:", "link:"):
         if spec.startswith(prefix):
-            return (root / spec[len(prefix):]).resolve()
+            return (root / spec[len(prefix) :]).resolve()
     return None
 
 
@@ -93,9 +93,7 @@ def production_closure(root: Path) -> set[str]:
     lock = read_lock(root)
 
     deps: list[tuple[str, str]] = list(manifest["dependencies"].items())
-    missing = sorted(
-        name for name, spec in deps if name not in lock and local_package(root, spec) is None
-    )
+    missing = sorted(name for name, spec in deps if name not in lock and local_package(root, spec) is None)
     if missing:
         sys.exit(f"check-third-party-notices: package.json dependencies absent from bun.lock: {', '.join(missing)}")
 

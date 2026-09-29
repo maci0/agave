@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1584.524 227.4" width="1584.524" height="227.4" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1958.950222222222 1083.5" width="1958.950222222222" height="1083.5" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,76 +19,170 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="TmplNames" data-to="Lookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="223.481,119.6 271.481,119.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Lookup" data-to="EOGSet" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="found" points="476.45099999999996,107.81666666666666 512.451,107.81666666666666 512.451,78.69999999999999 608.237,78.69999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Lookup" data-to="Skip" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="not found" points="476.45099999999996,131.38333333333333 671.578,131.38333333333333 671.578,160.5 795.999,160.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="EOGSet" data-to="GenLoop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="760.596,78.69999999999999 795.999,78.69999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GenLoop" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="each token" points="969.847,84.85 1018.444,84.85 1018.444,117.35999999999999 1139.772,117.35999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Check" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="1250.3053333333332,95.25333333333333 1308.412,95.25333333333333 1308.412,87.985 1377.942,87.985 1377.942,66.52833333333334 1392.9119999999998,66.52833333333334" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Check" data-to="Stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="1250.3053333333332,139.46666666666667 1392.9119999999998,139.46666666666664" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Emit" data-to="GenLoop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1392.9119999999998,54.228333333333325 1377.942,54.228333333333325 1377.942,40.04 1127.772,40.04 1127.772,72.55 969.847,72.55" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="Lookup" data-to="EOGSet" data-label="found">
-  <rect x="520.451" y="62.699999999999996" width="43.786" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="542.344" y="77.85" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">found</text>
+<g class="subgraph" data-id="Archs" data-label="Arch enum variants (arch.zig)">
+  <rect x="40" y="40" width="984.063" height="130.7" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="40" width="984.063" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Arch enum variants (arch.zig)</text>
 </g>
-<g class="edge-label" data-from="Lookup" data-to="Skip" data-label="not found">
-  <rect x="679.578" y="144.5" width="59.824" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="709.49" y="159.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">not found</text>
+<g class="subgraph" data-id="Templates" data-label="ChatTemplate constants (chat_template.zig)">
+  <rect x="239.24099999999999" y="423.80000000000007" width="1573.899" height="130.7" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="239.24099999999999" y="423.80000000000007" width="1573.899" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="251.24099999999999" y="437.80000000000007" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">ChatTemplate constants (chat_template.zig)</text>
 </g>
-<g class="edge-label" data-from="GenLoop" data-to="Check" data-label="each token">
-  <rect x="1026.444" y="101.35999999999999" width="69.328" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="1061.108" y="116.50999999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">each token</text>
+<g class="subgraph" data-id="Downstream" data-label="Runtime usage (main.zig)">
+  <rect x="1631.592222222222" y="658.5" width="287.35799999999995" height="385" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="1631.592222222222" y="658.5" width="287.35799999999995" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="1643.592222222222" y="672.5" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Runtime usage (main.zig)</text>
 </g>
-<g class="edge-label" data-from="Check" data-to="Emit" data-label="no">
-  <rect x="1316.412" y="71.985" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="1331.1770000000001" y="87.135" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+<polyline class="edge" data-from="A1" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="100.687,120.9 100.687,170.7 100.68700000000001,413.80000000000007 337.71900000000005,413.80000000000007 337.719,423.80000000000007 337.719,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A2" data-to="T2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplateForLayers()" points="243.03549999999998,137.8 243.03549999999998,170.7 243.03549999999996,380.5 526.3800000000001,380.5 530.576,423.80000000000007 530.576,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A3" data-to="T3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="384.64300000000003,120.9 384.64300000000003,170.7 384.64300000000003,347.20000000000005 735.4185,347.20000000000005 742.4315,423.80000000000007 742.4315,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A4" data-to="T4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="489.08000000000004,120.9 489.08000000000004,170.7 493.27599999999995,313.9 952.2374999999997,313.9 952.2374999999998,423.80000000000007 952.2374999999998,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A5" data-to="T5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="592.276,120.9 592.276,170.7 592.276,280.6 1143.8624999999997,280.6 1143.8624999999997,423.80000000000007 1143.8624999999997,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A6" data-to="T6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="679.076,120.9 679.076,170.7 686.0889999999999,247.29999999999998 1322.5199999999995,247.29999999999998 1322.5199999999998,423.80000000000007 1322.5199999999998,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A7" data-to="T7" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="812.506,154.7 812.506,170.7 812.506,213.99999999999997 1504.5119999999997,213.99999999999997 1504.512,423.80000000000007 1504.512,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A8" data-to="T8" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="chatTemplate()" points="953.743,120.9 953.743,170.7 953.743,180.69999999999996 1701.3239999999996,180.69999999999996 1701.3239999999998,423.80000000000007 1701.3239999999998,467.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T1" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="420.197,494.70000000000005 1635.352986111111,494.70000000000005 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T2" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="616.759,503.1500000000001 1635.352986111111,503.1500000000001 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T3" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="845.287,494.70000000000005 1635.352986111111,494.70000000000005 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T4" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1046.2009999999998,494.70000000000005 1635.352986111111,494.70000000000005 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T5" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1221.524,494.70000000000005 1635.352986111111,494.70000000000005 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T6" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1403.5159999999998,494.70000000000005 1635.352986111111,494.70000000000005 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T7" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1585.5079999999998,494.70000000000005 1635.352986111111,494.70000000000005 1635.352986111111,737.85 1685.1979722222222,737.85" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T8" data-to="Format" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1701.3239999999998,521.6000000000001 1701.3239999999998,554.5 1701.3239999999996,564.5 1701.3239999999996,564.5 1706.32575,658.5 1706.32575,702.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Format" data-to="EOGRes" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1780.2729722222223,773.2 1780.2729722222223,821.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EOGRes" data-to="GenLoop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1770.2694722222222,908.8 1770.2694722222222,956.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="A1" data-to="T1" data-label="chatTemplate()">
+  <rect x="108.687" y="397.80000000000007" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="151.964" y="412.95000000000005" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="edge-label" data-from="Check" data-to="Stop" data-label="yes">
-  <rect x="1316.4119999999998" y="123.46666666666667" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="1334.1469999999997" y="138.61666666666667" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+<g class="edge-label" data-from="A2" data-to="T2" data-label="chatTemplateForLayers()">
+  <rect x="378.3660000000001" y="364.5" width="140.014" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="448.3730000000001" y="379.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplateForLayers()</text>
 </g>
-<g class="node" data-id="TmplNames" data-label="Template EOG names
-&lt;|im_end|&gt;, &lt;|endoftext|&gt;" data-shape="rectangle">
-  <rect x="40" y="92.69999999999999" width="183.481" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="131.7405" y="119.6" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="131.7405" dy="-3.9000000000000012">Template EOG names</tspan><tspan x="131.7405" dy="16.900000000000002">&lt;|im_end|&gt;, &lt;|endoftext|&gt;</tspan></text>
+<g class="edge-label" data-from="A3" data-to="T3" data-label="chatTemplate()">
+  <rect x="640.8645" y="331.20000000000005" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="684.1415000000001" y="346.35" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="node" data-id="Lookup" data-label="Tokenizer special
-token map
-(from GGUF / tokenizer.json)" data-shape="rectangle">
-  <rect x="271.481" y="84.24999999999999" width="204.96999999999997" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="373.966" y="119.6" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="373.966" dy="-12.350000000000001">Tokenizer special</tspan><tspan x="373.966" dy="16.900000000000002">token map</tspan><tspan x="373.966" dy="16.900000000000002">(from GGUF / tokenizer.json)</tspan></text>
+<g class="edge-label" data-from="A4" data-to="T4" data-label="chatTemplate()">
+  <rect x="857.6834999999998" y="297.9" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="900.9604999999998" y="313.04999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="node" data-id="EOGSet" data-label="&quot;Resolved EOG IDs
-[151643, 151645" data-shape="rectangle">
-  <rect x="608.237" y="51.79999999999999" width="152.359" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="684.4164999999999" y="78.69999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="684.4164999999999" dy="-3.9000000000000012">&quot;Resolved EOG IDs</tspan><tspan x="684.4164999999999" dy="16.900000000000002">[151643, 151645</tspan></text>
+<g class="edge-label" data-from="A5" data-to="T5" data-label="chatTemplate()">
+  <rect x="1049.3084999999996" y="264.6" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="1092.5854999999997" y="279.75" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="node" data-id="Skip" data-label="skip
-(token absent in this vocab)" data-shape="rectangle">
-  <rect x="795.999" y="133.6" width="199.042" height="53.800000000000004" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="895.52" y="160.5" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="895.52" dy="-3.9000000000000012">skip</tspan><tspan x="895.52" dy="16.900000000000002">(token absent in this vocab)</tspan></text>
+<g class="edge-label" data-from="A6" data-to="T6" data-label="chatTemplate()">
+  <rect x="1227.9659999999994" y="231.29999999999998" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="1271.2429999999995" y="246.45" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="node" data-id="GenLoop" data-label="Token generation loop" data-shape="rectangle">
-  <rect x="795.999" y="60.24999999999999" width="173.848" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="882.923" y="78.69999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">Token generation loop</text>
+<g class="edge-label" data-from="A7" data-to="T7" data-label="chatTemplate()">
+  <rect x="1409.9579999999996" y="197.99999999999997" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="1453.2349999999997" y="213.14999999999998" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="node" data-id="Emit" data-label="emit token, continue" data-shape="rectangle">
-  <rect x="1392.9119999999998" y="41.92833333333333" width="154.582" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="1470.2029999999997" y="60.37833333333333" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">emit token, continue</text>
+<g class="edge-label" data-from="A8" data-to="T8" data-label="chatTemplate()">
+  <rect x="1606.7699999999995" y="164.69999999999996" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="1650.0469999999996" y="179.84999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">chatTemplate()</text>
 </g>
-<g class="node" data-id="Stop" data-label="stop generation" data-shape="rectangle">
-  <rect x="1392.9119999999998" y="121.01666666666665" width="133.09300000000002" height="36.900000000000006" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="1459.4584999999997" y="139.46666666666664" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c" dy="4.55">stop generation</text>
+<g class="node" data-id="A1" data-label="gemma3" data-shape="rectangle">
+  <rect x="56" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="100.687" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">gemma3</text>
 </g>
-<g class="node" data-id="Check" data-label="token ID
-in EOG set?" data-shape="diamond">
-  <polygon points="1206.0919999999999,51.03999999999999 1272.4119999999998,117.35999999999999 1206.0919999999999,183.67999999999998 1139.772,117.35999999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="1206.0919999999999" y="117.35999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1206.0919999999999" dy="-3.9000000000000012">token ID</tspan><tspan x="1206.0919999999999" dy="16.900000000000002">in EOG set?</tspan></text>
+<g class="node" data-id="A2" data-label="gemma4
+(+ diffusion_gemma)" data-shape="rectangle">
+  <rect x="165.374" y="84" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="243.03549999999998" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="243.03549999999998" dy="-3.9000000000000012">gemma4</tspan><tspan x="243.03549999999998" dy="16.900000000000002">(+ diffusion_gemma)</tspan></text>
+</g>
+<g class="node" data-id="A3" data-label="qwen35" data-shape="rectangle">
+  <rect x="340.697" y="84" width="87.892" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="384.64300000000003" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">qwen35</text>
+</g>
+<g class="node" data-id="A4" data-label="gpt_oss" data-shape="rectangle">
+  <rect x="444.39300000000003" y="84" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="489.08000000000004" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">gpt_oss</text>
+</g>
+<g class="node" data-id="A5" data-label="glm4" data-shape="rectangle">
+  <rect x="557.963" y="84" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="592.276" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">glm4</text>
+</g>
+<g class="node" data-id="A6" data-label="llama4" data-shape="rectangle">
+  <rect x="639.576" y="84" width="79" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="679.076" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">llama4</text>
+</g>
+<g class="node" data-id="A7" data-label="nemotron_h
+nemotron_nano
+(else → chatml)" data-shape="rectangle">
+  <rect x="745.5889999999999" y="84" width="133.834" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="812.506" y="119.35" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="812.506" dy="-12.350000000000001">nemotron_h</tspan><tspan x="812.506" dy="16.900000000000002">nemotron_nano</tspan><tspan x="812.506" dy="16.900000000000002">(else → chatml)</tspan></text>
+</g>
+<g class="node" data-id="A8" data-label="deepseek4" data-shape="rectangle">
+  <rect x="899.423" y="84" width="108.64" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="953.743" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">deepseek4</text>
+</g>
+<g class="node" data-id="T1" data-label="ChatTemplate.gemma
+&lt;start_of_turn&gt; style" data-shape="rectangle">
+  <rect x="255.24099999999999" y="467.80000000000007" width="164.95600000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="337.719" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="337.719" dy="-3.9000000000000012">ChatTemplate.gemma</tspan><tspan x="337.719" dy="16.900000000000002">&lt;start_of_turn&gt; style</tspan></text>
+</g>
+<g class="node" data-id="T2" data-label="ChatTemplate.gemma4
+or gemma4_unified
+(n_layers &gt;= 48)" data-shape="rectangle">
+  <rect x="444.39300000000003" y="467.80000000000007" width="172.36599999999999" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="530.576" y="503.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="530.576" dy="-12.350000000000001">ChatTemplate.gemma4</tspan><tspan x="530.576" dy="16.900000000000002">or gemma4_unified</tspan><tspan x="530.576" dy="16.900000000000002">(n_layers &gt;= 48)</tspan></text>
+</g>
+<g class="node" data-id="T3" data-label="ChatTemplate.qwen35
+ChatML + generation_prefix" data-shape="rectangle">
+  <rect x="639.576" y="467.80000000000007" width="205.71099999999996" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="742.4315" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="742.4315" dy="-3.9000000000000012">ChatTemplate.qwen35</tspan><tspan x="742.4315" dy="16.900000000000002">ChatML + generation_prefix</tspan></text>
+</g>
+<g class="node" data-id="T4" data-label="ChatTemplate.gpt_oss
+&lt;|start|&gt; + developer role" data-shape="rectangle">
+  <rect x="858.2739999999999" y="467.80000000000007" width="187.92699999999996" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="952.2374999999998" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="952.2374999999998" dy="-3.9000000000000012">ChatTemplate.gpt_oss</tspan><tspan x="952.2374999999998" dy="16.900000000000002">&lt;|start|&gt; + developer role</tspan></text>
+</g>
+<g class="node" data-id="T5" data-label="&quot;ChatTemplate.glm4
+[gMASK" data-shape="rectangle">
+  <rect x="1066.2009999999998" y="467.80000000000007" width="155.32299999999998" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="1143.8624999999997" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="1143.8624999999997" dy="-3.9000000000000012">&quot;ChatTemplate.glm4</tspan><tspan x="1143.8624999999997" dy="16.900000000000002">[gMASK</tspan></text>
+</g>
+<g class="node" data-id="T6" data-label="ChatTemplate.llama4
+&lt;|header_id|&gt; style" data-shape="rectangle">
+  <rect x="1241.524" y="467.80000000000007" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1322.52" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1322.52" dy="-3.9000000000000012">ChatTemplate.llama4</tspan><tspan x="1322.52" dy="16.900000000000002">&lt;|header_id|&gt; style</tspan></text>
+</g>
+<g class="node" data-id="T7" data-label="ChatTemplate.chatml
+standard ChatML" data-shape="rectangle">
+  <rect x="1423.5159999999998" y="467.80000000000007" width="161.992" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1504.512" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1504.512" dy="-3.9000000000000012">ChatTemplate.chatml</tspan><tspan x="1504.512" dy="16.900000000000002">standard ChatML</tspan></text>
+</g>
+<g class="node" data-id="T8" data-label="ChatTemplate.deepseek4
+DeepSeek V4 style" data-shape="rectangle">
+  <rect x="1605.5079999999998" y="467.80000000000007" width="191.63199999999998" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1701.3239999999998" y="494.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1701.3239999999998" dy="-3.9000000000000012">ChatTemplate.deepseek4</tspan><tspan x="1701.3239999999998" dy="16.900000000000002">DeepSeek V4 style</tspan></text>
+</g>
+<g class="node" data-id="Format" data-label="template.format()
+or formatConversation()
+-&gt; rendered prompt string" data-shape="rectangle">
+  <rect x="1685.1979722222222" y="702.5" width="190.14999999999995" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1780.2729722222223" y="737.85" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1780.2729722222223" dy="-12.350000000000001">template.format()</tspan><tspan x="1780.2729722222223" dy="16.900000000000002">or formatConversation()</tspan><tspan x="1780.2729722222223" dy="16.900000000000002">-&gt; rendered prompt string</tspan></text>
+</g>
+<g class="node" data-id="EOGRes" data-label="EOG token resolution
+for each eog_tokens name:
+  tokenizer.special_tokens.get(name)
+  -&gt; resolved ID set" data-shape="rectangle">
+  <rect x="1647.592222222222" y="821.2" width="255.35799999999998" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1775.2712222222221" y="865" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1775.2712222222221" dy="-20.8">EOG token resolution</tspan><tspan x="1775.2712222222221" dy="16.900000000000002">for each eog_tokens name:</tspan><tspan x="1775.2712222222221" dy="16.900000000000002">  tokenizer.special_tokens.get(name)</tspan><tspan x="1775.2712222222221" dy="16.900000000000002">  -&gt; resolved ID set</tspan></text>
+</g>
+<g class="node" data-id="GenLoop" data-label="generation loop
+  if token_id in eog_ids:
+    stop" data-shape="rectangle">
+  <rect x="1685.1979722222222" y="956.8" width="170.14299999999997" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1770.2694722222222" y="992.15" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1770.2694722222222" dy="-12.350000000000001">generation loop</tspan><tspan x="1770.2694722222222" dy="16.900000000000002">  if token_id in eog_ids:</tspan><tspan x="1770.2694722222222" dy="16.900000000000002">    stop</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 481.18549999999993 1340.0999999999997" width="481.18549999999993" height="1340.0999999999997" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 481.18549999999993 1340.0999999999997" width="481.18549999999993" height="1340.0999999999997" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,53 +19,47 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Params" data-label="Control Parameters">
-  <rect x="219.46308333333326" y="263.90000000000003" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="219.46308333333326" y="263.90000000000003" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="231.46308333333326" y="277.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Control Parameters</text>
 </g>
 <g class="subgraph" data-id="State" data-label="Running State">
-  <rect x="247.46308333333326" y="263.90000000000003" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="247.46308333333326" y="263.90000000000003" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="259.46308333333326" y="277.90000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Running State</text>
 </g>
-<polyline class="edge" data-from="Logits" data-to="Trunc" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.1219999999999,791.0999999999999 166.1219999999999,839.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Trunc" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.1219999999999,892.8999999999999 166.12199999999993,940.8999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Softmax" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,994.6999999999998 166.12199999999993,1042.6999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Sample" data-to="Surprise" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,1096.4999999999998 166.12199999999993,1144.4999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Surprise" data-to="Error" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,1198.2999999999997 166.12199999999993,1246.2999999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Error" data-to="Update" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="124.69774999999993,1246.2999999999997 124.69774999999993,1234.2999999999997 40.039999999999935,1234.2999999999997 40.039999999999935,555.2 82.75133333333326,555.2 82.75133333333326,263.90000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Update" data-to="NextK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="116.76558333333327,263.90000000000003 116.76558333333327,555.2 114.5664999999999,555.2 114.5664999999999,555.2 138.75283333333326,555.2 138.75283333333326,567.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="NextK" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="next token" points="166.12199999999993,621 166.1219999999999,737.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Update" data-to="Mu" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="adjusts" points="150.77983333333327,263.90000000000003 150.77983333333327,299.90000000000003 217.6774999999999,299.90000000000003 217.6774999999999,380.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Mu" data-to="NextK" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="drives" points="217.6774999999999,450.90000000000003 217.6774999999999,555.2 193.49116666666657,555.2 193.49116666666657,567.2" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Tau" data-to="Error" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="anchors" points="365.3764999999999,1153.9999999999998 365.3764999999999,1234.2999999999997 207.54624999999993,1234.2999999999997 207.54624999999993,1246.2999999999997" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Eta" data-to="Update" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="scales" points="116.76558333333327,93.80000000000001 116.76558333333327,210.1" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Logits" data-to="Trunc" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.1219999999999,791.0999999999999 166.1219999999999,839.0999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Trunc" data-to="Softmax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.1219999999999,892.8999999999999 166.12199999999993,940.8999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Softmax" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,994.6999999999998 166.12199999999993,1042.6999999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sample" data-to="Surprise" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,1096.4999999999998 166.12199999999993,1144.4999999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Surprise" data-to="Error" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="166.12199999999993,1198.2999999999997 166.12199999999993,1246.2999999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Error" data-to="Update" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="124.69774999999993,1246.2999999999997 124.69774999999993,1234.2999999999997 40.039999999999935,1234.2999999999997 40.039999999999935,555.2 82.75133333333326,555.2 82.75133333333326,263.90000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="NextK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="116.76558333333327,263.90000000000003 116.76558333333327,555.2 114.5664999999999,555.2 114.5664999999999,555.2 138.75283333333326,555.2 138.75283333333326,567.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextK" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="next token" points="166.12199999999993,621 166.1219999999999,737.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="Mu" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="adjusts" points="150.77983333333327,263.90000000000003 150.77983333333327,299.90000000000003 217.6774999999999,299.90000000000003 217.6774999999999,380.20000000000005" fill="none" stroke="#94908c" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mu" data-to="NextK" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="drives" points="217.6774999999999,450.90000000000003 217.6774999999999,555.2 193.49116666666657,555.2 193.49116666666657,567.2" fill="none" stroke="#94908c" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tau" data-to="Error" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="anchors" points="365.3764999999999,1153.9999999999998 365.3764999999999,1234.2999999999997 207.54624999999993,1234.2999999999997 207.54624999999993,1246.2999999999997" fill="none" stroke="#94908c" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Eta" data-to="Update" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="scales" points="116.76558333333327,93.80000000000001 116.76558333333327,210.1" fill="none" stroke="#94908c" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="NextK" data-to="Logits" data-label="next token">
-  <rect x="133.12199999999993" y="664" width="65.764" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="166.00399999999993" y="679.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">next token</text>
+  <rect x="133.12199999999993" y="664" width="65.764" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="166.00399999999993" y="679.15" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">next token</text>
 </g>
 <g class="edge-label" data-from="Update" data-to="Mu" data-label="adjusts">
-  <rect x="191.1774999999999" y="306.90000000000003" width="52.102000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="217.22849999999988" y="322.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">adjusts</text>
+  <rect x="191.1774999999999" y="306.90000000000003" width="52.102000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="217.22849999999988" y="322.05" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">adjusts</text>
 </g>
 <g class="edge-label" data-from="Mu" data-to="NextK" data-label="drives">
-  <rect x="193.1774999999999" y="493.90000000000003" width="48.538000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="217.4464999999999" y="509.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">drives</text>
+  <rect x="193.1774999999999" y="493.90000000000003" width="48.538000000000004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="217.4464999999999" y="509.05" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">drives</text>
 </g>
 <g class="edge-label" data-from="Tau" data-to="Error" data-label="anchors">
-  <rect x="335.8764999999999" y="1196.9999999999998" width="58.042" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="364.8974999999999" y="1212.1499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">anchors</text>
+  <rect x="335.8764999999999" y="1196.9999999999998" width="58.042" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="364.8974999999999" y="1212.1499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">anchors</text>
 </g>
 <g class="edge-label" data-from="Eta" data-to="Update" data-label="scales">
-  <rect x="91.76558333333327" y="136.8" width="49.726000000000006" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="116.62858333333327" y="151.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">scales</text>
+  <rect x="91.76558333333327" y="136.8" width="49.726000000000006" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="116.62858333333327" y="151.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">scales</text>
 </g>
 <g class="node" data-id="Logits" data-label="Raw Logits
 one score per vocab token" data-shape="rectangle">

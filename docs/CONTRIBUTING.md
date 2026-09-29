@@ -267,7 +267,8 @@ Run `python3 scripts/check-docs.py` (when present) for link and count hygiene.
 ## Diagram Palette
 
 Mermaid blocks and the SVGs rendered from them share one palette, derived from
-the chat UI tokens in `src/web/ui/theme.css` and the wordmark in `docs/logo.svg`.
+the chat UI tokens in `src/web/ui/theme.css` and the brand palette in
+[docs/brand/README.md](brand/README.md).
 Copy these classDef lines into a new diagram rather than picking colors:
 
 ```text
@@ -292,7 +293,13 @@ Two rules hold the palette together, so keep them if you edit it:
 - Every fill clears 4.5:1 for its text and every stroke clears 3:1 against the
   white canvas (WCAG 1.4.3 and 1.4.11).
 
-To re-render `docs/diagrams/`, see `docs/render-diagrams.mjs`.
+`docs/diagrams/` is an offline PNG and SVG copy of every Mermaid block; the
+docs themselves embed the Mermaid source, which GitHub renders. Re-render it
+with `bun docs/render-diagrams.mjs --png --svg` (needs `beautiful-mermaid` and
+`@resvg/resvg-js` installed globally with bun, and the Adwaita Sans font). The
+layout engine collapses some nested subgraphs to a zero-size frame; the
+renderer drops those frames and their titles rather than print the titles over
+each other, so the offline copy of such a diagram is untitled per group.
 
 ## How to Add a New Chat Template
 

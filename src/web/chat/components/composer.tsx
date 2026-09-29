@@ -1,4 +1,4 @@
-import { Image as ImageIcon, SlidersHorizontal, X } from 'lucide-react';
+import { AttachImageIcon, CloseIcon, SettingsIcon } from '../../ui/icons';
 import { useCallback, useEffect, useRef, useState, type RefObject, type SyntheticEvent } from 'react';
 import { Button } from '../../ui/button';
 import { SettingsPanel } from './settings-panel';
@@ -47,7 +47,7 @@ const ImagePreview = ({ src, onRemove }: { src: string; onRemove: () => void }) 
         variant="destructiveSolid"
         className="absolute -end-2 -top-2"
       >
-        <X className="size-4" aria-hidden="true" />
+        <CloseIcon className="size-4" aria-hidden="true" />
       </Button>
     </div>
   </div>
@@ -157,7 +157,7 @@ const InputRow = (props: ComposerProps & {
         aria-label="Attach image. You can also paste or drop an image."
         disabled={props.streaming}
       >
-        <ImageIcon className="size-5" aria-hidden="true" />
+        <AttachImageIcon className="size-5" aria-hidden="true" />
       </Button>
     ) : null}
     <PromptField {...props} text={props.text} onText={props.onText} />
@@ -171,7 +171,7 @@ const InputRow = (props: ComposerProps & {
       aria-expanded={props.settingsOpen}
       aria-controls="settings-panel"
     >
-      <SlidersHorizontal className="size-5" aria-hidden="true" />
+      <SettingsIcon className="size-5" aria-hidden="true" />
     </Button>
     <SendControl streaming={props.streaming} canSend={props.canSend} onStop={props.onStop} />
     <SpeedReadout tps={props.tps} />

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 987.1120000000001 199.4" width="987.1120000000001" height="199.4" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1363.666 133.8" width="1363.666" height="133.8" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,53 +19,54 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Vocab" data-label="Vocabulary (32K–256K entries)">
-  <rect x="525.6460000000001" y="158.47500000000002" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="525.6460000000001" y="158.47500000000002" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="537.6460000000001" y="172.47500000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Vocabulary (32K–256K entries)</text>
+<polyline class="edge" data-from="Text" data-to="Tok" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="130.115,66.9 178.115,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tok" data-to="Ids" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="293.424,66.9 341.424,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Ids" data-to="Emb" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="443.395,66.9 491.395,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Emb" data-to="Layers" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="603.74,66.9 651.74,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Layers" data-to="Proj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="815.2139999999999,66.9 863.2139999999999,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Proj" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1012.6089999999999,66.9 1060.609,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Logits" data-to="Next" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1139.609,66.9 1187.609,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Text" data-label="Raw text" data-shape="rectangle">
+  <rect x="40" y="48.45" width="90.11500000000001" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="85.0575" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Raw text</text>
 </g>
-<polyline class="edge" data-from="Raw" data-to="Tok" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.16500000000002,103.57500000000002 215.16500000000002,103.57500000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Tok" data-to="IDs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="348.25800000000004,103.57500000000002 396.25800000000004,103.57500000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="IDs" data-to="Embed" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="525.6460000000001,94.60833333333335 561.6460000000001,94.60833333333335 561.6460000000001,66.9 573.6460000000001,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Embed" data-to="Vec" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="746.753,66.9 794.753,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="IDs" data-to="Back" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="decode path" points="525.6460000000001,112.54166666666669 561.6460000000001,112.54166666666669 561.6460000000001,140.25 688.9140000000001,140.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="IDs" data-to="Back" data-label="decode path">
-  <rect x="569.6460000000001" y="124.25" width="75.26800000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="607.2800000000001" y="139.4" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">decode path</text>
+<g class="node" data-id="Tok" data-label="tokenize()
+BPE or SPM" data-shape="rectangle">
+  <rect x="178.115" y="40" width="115.30899999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="235.7695" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="235.7695" dy="-3.9000000000000012">tokenize()</tspan><tspan x="235.7695" dy="16.900000000000002">BPE or SPM</tspan></text>
 </g>
-<g class="node" data-id="Raw" data-label="Raw Text
-\&quot;Hello, world!\&quot;" data-shape="rectangle">
-  <rect x="40" y="76.67500000000001" width="127.165" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="103.58250000000001" y="103.57500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="103.58250000000001" dy="-3.9000000000000012">Raw Text</tspan><tspan x="103.58250000000001" dy="16.900000000000002">\&quot;Hello, world!\&quot;</tspan></text>
+<g class="node" data-id="Ids" data-label="Token IDs" data-shape="rectangle">
+  <rect x="341.424" y="48.45" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="392.4095" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Token IDs</text>
 </g>
-<g class="node" data-id="Tok" data-label="BPE Tokenizer
-bpe.zig" data-shape="rectangle">
-  <rect x="215.16500000000002" y="76.67500000000001" width="133.09300000000002" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="281.7115" y="103.57500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="281.7115" dy="-3.9000000000000012">BPE Tokenizer</tspan><tspan x="281.7115" dy="16.900000000000002">bpe.zig</tspan></text>
+<g class="node" data-id="Emb" data-label="embed()
+table lookup" data-shape="rectangle">
+  <rect x="491.395" y="40" width="112.345" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="547.5675" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="547.5675" dy="-3.9000000000000012">embed()</tspan><tspan x="547.5675" dy="16.900000000000002">table lookup</tspan></text>
 </g>
-<g class="node" data-id="IDs" data-label="&quot;Token IDs
-[15496, 11, 995, 0" data-shape="rectangle">
-  <rect x="396.25800000000004" y="76.67500000000001" width="129.38800000000003" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="460.95200000000006" y="103.57500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="460.95200000000006" dy="-3.9000000000000012">&quot;Token IDs</tspan><tspan x="460.95200000000006" dy="16.900000000000002">[15496, 11, 995, 0</tspan></text>
+<g class="node" data-id="Layers" data-label="N transformer layers
+(Chapters 2-3)" data-shape="rectangle">
+  <rect x="651.74" y="40" width="163.474" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="733.477" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="733.477" dy="-3.9000000000000012">N transformer layers</tspan><tspan x="733.477" dy="16.900000000000002">(Chapters 2-3)</tspan></text>
 </g>
-<g class="node" data-id="Embed" data-label="&quot;Embedding Table
-[vocab_size × n_embd" data-shape="rectangle">
-  <rect x="573.6460000000001" y="40" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="660.1995000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="660.1995000000001" dy="-3.9000000000000012">&quot;Embedding Table</tspan><tspan x="660.1995000000001" dy="16.900000000000002">[vocab_size × n_embd</tspan></text>
+<g class="node" data-id="Proj" data-label="vocab projection
+W_output @ hidden" data-shape="rectangle">
+  <rect x="863.2139999999999" y="40" width="149.395" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="937.9114999999999" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="937.9114999999999" dy="-3.9000000000000012">vocab projection</tspan><tspan x="937.9114999999999" dy="16.900000000000002">W_output @ hidden</tspan></text>
 </g>
-<g class="node" data-id="Vec" data-label="Float Vectors
-ready for the model" data-shape="rectangle">
-  <rect x="794.753" y="40" width="152.359" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="870.9325" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="870.9325" dy="-3.9000000000000012">Float Vectors</tspan><tspan x="870.9325" dy="16.900000000000002">ready for the model</tspan></text>
+<g class="node" data-id="Logits" data-label="Logits" data-shape="rectangle">
+  <rect x="1060.609" y="48.45" width="79" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="1100.109" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">Logits</text>
 </g>
-<g class="node" data-id="Back" data-label="\&quot;Hello, world!\&quot;" data-shape="rectangle">
-  <rect x="688.9140000000001" y="121.80000000000001" width="127.165" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="752.4965000000001" y="140.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">\&quot;Hello, world!\&quot;</text>
+<g class="node" data-id="Next" data-label="argmax / sample
+→ next token ID" data-shape="rectangle">
+  <rect x="1187.609" y="40" width="136.057" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="1255.6374999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1255.6374999999998" dy="-3.9000000000000012">argmax / sample</tspan><tspan x="1255.6374999999998" dy="16.900000000000002">→ next token ID</tspan></text>
 </g>
 </svg>

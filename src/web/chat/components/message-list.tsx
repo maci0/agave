@@ -1,4 +1,4 @@
-import { ArrowDown, X } from 'lucide-react';
+import { CloseIcon, JumpToLatestIcon } from '../../ui/icons';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Message } from './message';
 import { Button } from '../../ui/button';
@@ -53,7 +53,7 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
         aria-label="Dismiss"
         className="inline-flex size-11 shrink-0 items-center justify-center opacity-70 transition-opacity hover:opacity-100"
       >
-        <X className="size-5" aria-hidden="true" />
+        <CloseIcon className="size-5" aria-hidden="true" />
       </button>
     </div>
   );
@@ -100,7 +100,7 @@ const ToastList = ({ toasts, onDismiss }: { toasts: Array<Toast>; onDismiss: (id
 /** Shown only while the reader is scrolled away from the newest turn. */
 const JumpToLatest = ({ onClick }: { onClick: () => void }) => (
   <Button type="button" variant="floating" size="sm" onClick={onClick}>
-    <ArrowDown className="size-4" aria-hidden="true" />
+    <JumpToLatestIcon className="size-4" aria-hidden="true" />
     Jump to latest
   </Button>
 );

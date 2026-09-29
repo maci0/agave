@@ -64,6 +64,13 @@ else
     gap bun "not on PATH (zig build lint-web needs it; pin: package.json packageManager)"
 fi
 
+# Java runs vnu (the vnu-jar dev dependency) for scripts/check-w3c.sh.
+if command -v java >/dev/null 2>&1; then
+    ok java "$(java -version 2>&1 | head -n1) (vnu for check-w3c)"
+else
+    gap java "not on PATH (zig build lint-web runs vnu, which needs Java 11+)"
+fi
+
 # Static shell analysis. lint-shell.sh owns the 0.9.0 floor and fails on a
 # mismatch, so this only reports what is installed.
 if command -v shellcheck >/dev/null 2>&1; then
