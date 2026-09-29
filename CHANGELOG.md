@@ -29,7 +29,11 @@ must still appear under **Changed** or **Breaking** below. See
   Regenerate in one row under the response. The header drops its duplicate
   New key on wide layouts, its toolbar keys go borderless with icons, and on
   a phone the model and context badges take their own row. Empty-state hints
-  that cannot be pressed no longer look like buttons.
+  that cannot be pressed no longer look like buttons, and no longer keep a
+  44px row each. Settings labels use sentence case ("Max tokens", "Top-p").
+  The About dialog drops its repeated title line, restores list bullets, keeps
+  paths and flags from breaking mid-token, and says "n/a" for a missing model
+  or backend. The drawer's close key moves to the outer edge.
 - **New mark and brand guide.** The rosette is redrawn as five broad agave
   blades on a ground line, one flat color that holds at 16px, replacing the
   stroked grass-like mark. `docs/brand/` holds the mark, light and dark

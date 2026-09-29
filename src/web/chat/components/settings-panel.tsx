@@ -67,7 +67,7 @@ const MaxTokensField = ({ sampling, onChange }: { sampling: Sampling; onChange: 
   return (
   <div>
     <Label htmlFor={fieldId} className="mb-1.5 block">
-      Max Tokens
+      Max tokens
     </Label>
     <Input
       id={fieldId}
@@ -110,7 +110,7 @@ const SystemPromptField = ({ sampling, onChange, onClear }: {
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between">
-        <Label htmlFor={fieldId}>System Prompt</Label>
+        <Label htmlFor={fieldId}>System prompt</Label>
         <Button
           type="button"
           variant="plainDestructive"
@@ -155,7 +155,7 @@ export const SettingsPanel = ({ sampling, onChange, onClearSystem }: SettingsPan
         onChange={function (next) { onChange({ ...sampling, temperature: next }); }}
       />
       <SettingSlider
-        label="Top-P"
+        label="Top-p"
         value={sampling.topP}
         min={0}
         max={TOP_P_MAX}

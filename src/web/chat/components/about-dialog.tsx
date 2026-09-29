@@ -10,7 +10,7 @@ type AboutDialogProps = {
 };
 
 /** Inline path or flag in the privacy note, matching `.agave-prose code`. */
-const CODE = 'rounded-xs bg-card px-1.5 py-0.5 font-mono text-xs text-primary';
+const CODE = 'rounded-xs bg-card px-1.5 py-0.5 font-mono text-xs whitespace-nowrap text-primary';
 
 const Row = ({ label, value, chip }: { label: string; value: string; chip?: boolean }) => (
   <div className="flex justify-between gap-4 border-b border-divider py-1.5 text-sm last:border-none">
@@ -20,40 +20,40 @@ const Row = ({ label, value, chip }: { label: string; value: string; chip?: bool
     </span>
   </div>
 );
+/** A section heading inside the dialog. */
+const Section = ({ children }: { children: string }) => (
+  <h3 className="mt-5 mb-1.5 font-mono text-xs font-medium tracking-wide text-primary uppercase">{children}</h3>
+);
+
 /** The About dialog. Radix owns the focus trap, Escape and the focus restore the
  *  hand-rolled modal used to reimplement. */
 export const AboutDialog = ({ open, onOpenChange, modelName, backendName }: AboutDialogProps) => (
   <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent>
-      <DialogTitle className="mb-5">
+      <DialogTitle className="mb-1">
         <Mark />
         About Agave
       </DialogTitle>
-      <div className="leading-relaxed text-muted-foreground">
-        <p>
-          <strong className="text-foreground">Agave LLM Inference Engine</strong>
-        </p>
-        <h3 className="my-2 font-mono text-sm text-primary">System</h3>
-        <Row label="Model" value={modelName || '-'} />
-        <Row label="Backend" value={backendName || '-'} />
+      <div className="text-sm leading-relaxed text-muted-foreground">
+        <Section>System</Section>
+        <Row label="Model" value={modelName || 'n/a'} />
+        <Row label="Backend" value={backendName || 'n/a'} />
         <Row label="API" value="OpenAI-compatible" />
-        <h3 className="my-2 font-mono text-sm text-primary">Features</h3>
-        <ul className="my-1 ps-5">
-          <li className="my-1 text-sm">Runs locally on CPU or GPU</li>
-          <li className="my-1 text-sm">Open GGUF and SafeTensors models</li>
-          <li className="my-1 text-sm">Responses stream token by token</li>
-          <li className="my-1 text-sm">Chats stay on this machine</li>
+        <Section>Features</Section>
+        <ul className="list-disc ps-5 marker:text-success">
+          <li className="my-1">Runs locally on CPU or GPU</li>
+          <li className="my-1">Opens GGUF and SafeTensors models</li>
+          <li className="my-1">Streams responses token by token</li>
         </ul>
-        <h3 className="my-2 font-mono text-sm text-primary">Privacy</h3>
-        <p className="text-sm">
-          Prompts and chats stay on this machine. Conversations are saved to a local file (
-          <code className={CODE}>$XDG_CACHE_HOME/agave/conversations.json</code>
-          , or <code className={CODE}>~/.cache/agave/conversations.json</code>
-          ) and are restored on restart; they stay in memory only when the server is started with{' '}
-          <code className={CODE}>--no-conv-store</code>. The system prompt is kept
-          in session storage for this browser tab and is not sent to third parties. No analytics or telemetry.
+        <Section>Privacy</Section>
+        <p>
+          Prompts and chats stay on this machine. Conversations are saved to{' '}
+          <code className={CODE}>$XDG_CACHE_HOME/agave/conversations.json</code>{' '}
+          (or <code className={CODE}>~/.cache/agave/conversations.json</code>) and restored on restart,
+          unless the server runs with <code className={CODE}>--no-conv-store</code>, which keeps them in
+          memory only. The system prompt lives in this tab&apos;s session storage. No analytics, no telemetry.
         </p>
-        <h3 className="my-2 font-mono text-sm text-primary">Shortcuts</h3>
+        <Section>Shortcuts</Section>
         <Row label="Send" value="Enter" chip />
         <Row label="New line" value="Shift+Enter" chip />
         <Row label="Stop / close" value="Escape" chip />

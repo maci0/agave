@@ -114,15 +114,15 @@ export const Sidebar = (props: SidebarProps) => (
     <div className="flex shrink-0 items-center justify-between gap-2 border-b border-divider px-3 py-3">
       <h2 className="font-mono text-xs font-medium text-faint">Chats</h2>
       <div className="flex shrink-0 items-center gap-1.5">
-        {props.onClose ? (
-          <Button type="button" size="iconSm" onClick={props.onClose} aria-label="Close sidebar" className="max-drawer:inline-flex">
-            <CloseIcon className="size-5" aria-hidden="true" />
-          </Button>
-        ) : null}
         <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
           <NewIcon className="size-4" aria-hidden="true" />
           New
         </Button>
+        {props.onClose ? (
+          <Button type="button" variant="plain" size="iconSm" onClick={props.onClose} aria-label="Close sidebar">
+            <CloseIcon className="size-5" aria-hidden="true" />
+          </Button>
+        ) : null}
       </div>
     </div>
     <div className="agave-scroll flex-1 overflow-y-auto p-2">

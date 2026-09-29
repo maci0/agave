@@ -11,6 +11,6 @@ export const EmptyState = ({ title, line, hints }: { title: string; line: string
     <Mark size="lg" />
     <h2 className="mb-2 font-mono text-lg font-semibold text-foreground">{title}</h2>
     <p className="mb-6 text-base text-muted-foreground">{line}</p>
-    <div className="flex flex-wrap justify-center gap-2">{hints}</div>
+    <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1">{hints}</div>
   </div>
 );
