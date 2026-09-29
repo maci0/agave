@@ -460,6 +460,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
+      # The check is a repo script, so the job needs the tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Verify all jobs passed
         # Env indirection, not ${{ }} interpolation: the job results must never
         # be spliced into a shell body. The check itself lives in
