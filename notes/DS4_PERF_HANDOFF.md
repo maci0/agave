@@ -24,14 +24,14 @@ NCCL_SOCKET_IFNAME=enp1s0f1np1,enP2p1s0f1np1 NCCL_IB_AR_THRESHOLD=0 \
 NCCL_NET_GDR_LEVEL=3 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IB_RETRY_CNT=7 NCCL_IB_TIMEOUT=22
 ```
 
-## Key changes (committed `7bb600e`)
+## Key changes (committed `27a2ec8`)
 
 1. **Batched expert gemv kernel** (`gemv_mxfp4_st_batched.zig` + PTX + `gemvMxfp4StBatched` in cuda.zig + ffnLayer wiring): one launch for all active experts' gate+up / down via device pointer tables. The sustained memory traffic keeps the GB10 memory clock ramped (per-expert 25µs bursts left it idle, 4.2MB reads costing 2-5ms each). Tiny model: FFN 26ms → 1ms/layer, 39 → 272 tok/s.
 2. **Async H2D re-uploads for heap act buffers** (getInputBuf/getInPlaceBuf/findContaining): blocking null-stream copies ~2ms each. Async H2D FAILS (`CUDA_ERROR_INVALID_VALUE`) on mmap'd memory — weights (getOrUpload) stay blocking.
 3. **Free large repacked host buffers after their device upload** (`fmt.freeRepackedTensor` in doGemv) — the ~26GB fp8→bf16 attention repacks are dead weight once uploaded (prevents the OOM).
 4. Fuse: SEQUENTIAL repack reads, then RANDOM + DONTNEED the shard pages (SEQUENTIAL readahead otherwise leaves ~155GB RSS and OOMs the resident copy).
 5. Out-of-range expert routing ids skipped (tiny-random emits ids up to 240 vs 128-expert tables) — the CPU path always tolerated this; CUDA now skips too.
-6. Resident machinery (session 1, commit `dda7bd3`): device-copy local experts + scales + residual weights, DONTNEED the dead mmap pages, no UMA pinning, dedicated CUDA stream + deferred-sync batching (drains measured 0-1ms).
+6. Resident machinery (session 1, commit `27388be`): device-copy local experts + scales + residual weights, DONTNEED the dead mmap pages, no UMA pinning, dedicated CUDA stream + deferred-sync batching (drains measured 0-1ms).
 
 ## Gotchas
 
@@ -50,9 +50,9 @@ NCCL_NET_GDR_LEVEL=3 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IB_RETRY_CNT=7 NCCL_IB_
 
 ---
 
-## Session 3 update (post-reboot driver regression — committed `43d349d`)
+## Session 3 update (post-reboot driver regression — committed `9ca7558`)
 
-**Symptom:** after the node reboots, the agave fails with `CUDA_ERROR_OUT_OF_MEMORY` (700) at the FIRST drain's D2H, then cascades — on BOTH nodes, ALL code states (batched on/off, async/blocking copies), even the very first commit (`dda7bd3`). The tiny standin ran ONCE at 272 tok/s before the reboots; the same code never ran again.
+**Symptom:** after the node reboots, the agave fails with `CUDA_ERROR_OUT_OF_MEMORY` (700) at the FIRST drain's D2H, then cascades — on BOTH nodes, ALL code states (batched on/off, async/blocking copies), even the very first commit (`27388be`). The tiny standin ran ONCE at 272 tok/s before the reboots; the same code never ran again.
 
 **Exhaustive C-harness validation (passes on the same fresh nodes):**
 - cuMemAlloc of every size in the agave's sequence (512B → 128KB, 36 allocs, 720KB total)
@@ -69,4 +69,4 @@ NCCL_NET_GDR_LEVEL=3 NCCL_IB_PCI_RELAXED_ORDERING=1 NCCL_IB_RETRY_CNT=7 NCCL_IB_
 3. Check `journalctl -k` / `dmesg` (root) for the NVMe/UMA driver faults during the run.
 4. Consider a driver reinstall or update.
 
-**Commits:** `43d349d` (all-blocking copies — the fresh driver rejects async copies from unpinned host memory; the batched kernel stays) + the NULL-scale guard. The batched kernel's FFN win (26ms → 1ms/layer) is preserved in the code.
+**Commits:** `9ca7558` (all-blocking copies — the fresh driver rejects async copies from unpinned host memory; the batched kernel stays) + the NULL-scale guard. The batched kernel's FFN win (26ms → 1ms/layer) is preserved in the code.

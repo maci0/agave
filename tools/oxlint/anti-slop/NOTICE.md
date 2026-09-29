@@ -3,7 +3,7 @@
 `index.ts`, `rules/`, and `shared/` are third-party source, copied from:
 
 - Upstream: <https://github.com/dmmulroy/anti-slop>
-- Vendored by: this repository, first in commit `d5ed1f6` ("chore: add the
+- Vendored by: this repository, first in commit `14396ab` ("chore: add the
   oxlint gate, green on what it covers")
 
 The license text upstream publishes is **not recorded here**: the copy was made
