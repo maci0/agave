@@ -63,30 +63,31 @@ layout (iOS zooms into anything smaller).
 
 ![Agave palette](palette.svg)
 
-The product is dark only: warm near-blacks with amber for every action and sage
-for the mark. The paper set is for docs, diagrams and print.
+The product follows the reader's system color scheme. Dark is desert night:
+warm near-blacks, amber for every action, sage for the mark. Light is paper:
+warm off-white surfaces, a deeper amber, and the deep sage mark. Both schemes
+set the same tokens, in `@theme` (dark) and a `prefers-color-scheme: light`
+block (light) in theme.css, so no component knows which scheme it is in.
 
-| Token (theme.css) | Name | Hex | Use | Measured |
-|-------------------|------|-----|-----|----------|
-| `background` | Night | `#1a1714` | Page | |
-| `card` | Char | `#231f1c` | Header, sidebar, composer | |
-| `popover`, `muted` | Ash | `#2c2825` | Dialogs, hover fills | |
-| `divider` | | `#3a3430` | Layout separators, table and code frames | Decorative, exempt from 1.4.11 |
-| `border`, `input` | | `#77716d` | Control edges | 3:1 or better on every surface |
-| `foreground` | Sand | `#ebe3db` | Text | 11.5:1 on Ash |
-| `muted-foreground` | Dust | `#aba39b` | Secondary text | 5.9:1 on Ash |
-| `faint` | | `#9a928b` | Tertiary text, hints | 4.8:1 on Ash |
-| `primary` | Amber | `#d4a574` | Actions, focus ring, links | 6.9:1 on a user turn |
-| `success` | Sage | `#8faa7b` | The mark, success states | 7.0:1 on Night |
-| `destructive` | Signal | `#e57373` | Errors, destructive keys | |
-| | Ink | `#2a2522` | Text on paper | 15.2:1 on white |
-| | Stone | `#6b625b` | Secondary text on paper | 6.0:1 on white |
-| | Sage Deep | `#5a7a48` | The mark on paper | 4.9:1 on white |
-| | Amber Deep | `#9a5f22` | Accents on paper | 5.2:1 on white |
+| Token (theme.css) | Dark | Light | Use | Measured (dark / light) |
+|-------------------|------|-------|-----|-------------------------|
+| `background` | Night `#1a1714` | Paper `#faf8f5` | Page | |
+| `card` | Char `#231f1c` | Linen `#f3efea` | Header, sidebar, composer | |
+| `popover` | Ash `#2c2825` | `#ffffff` | Dialogs | |
+| `muted` | Ash `#2c2825` | `#ece6df` | Hover fills | |
+| `divider` | `#3a3430` | `#e2dcd5` | Layout separators, table and code frames | Decorative, exempt from 1.4.11 |
+| `border`, `input` | `#77716d` | `#8a8179` | Control edges | 3:1 or better on every surface |
+| `foreground` | Sand `#ebe3db` | Ink `#2a2522` | Text | 11.5:1 on Ash / 13.2:1 on Linen |
+| `muted-foreground` | Dust `#aba39b` | Umber `#5f5750` | Secondary text | 5.9:1 / 6.2:1 |
+| `faint` | `#9a928b` | Stone `#6b625b` | Tertiary text, hints | 4.8:1 / 4.8:1 on the hover fill |
+| `primary` | Amber `#d4a574` | Amber Deep `#8a531c` | Actions, focus ring, links | 6.9:1 / 5.3:1 on the amber wash |
+| `success` | Sage `#8faa7b` | Sage Deep `#5a7a48` | The mark, success states | 7.0:1 / 4.6:1 on the page |
+| `destructive` | Signal `#e57373` | Signal Deep `#a8322a` | Errors, destructive keys | 6.0:1 / 6.3:1 on the page |
+| `syntax-*` | kimbie-dark hues | darker steps of the same hues | Code in responses | 5.6:1 or better on the page |
 
 Use the token, never the hex, in UI code: `@shadcn/lint`'s `no-raw-colors` and
 `no-arbitrary-values` fail the build on a palette color or a bracketed value.
-Diagrams have their own role palette, derived from these values, in
+Diagrams have their own role palette, derived from the light values, in
 [docs/CONTRIBUTING.md](../CONTRIBUTING.md#diagram-palette).
 
 The CLI does not use the brand colors. Terminal output sticks to the eight ANSI

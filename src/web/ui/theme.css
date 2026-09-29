@@ -43,6 +43,20 @@
   --color-destructive-foreground: #e8a0a0;
   --color-success: #8faa7b;
   --color-ring: #d4a574;
+  /* The overlay shadow's tone. A token so the light scheme can soften it:
+     Tailwind inlines --shadow-* values into the utility at build time. */
+  --color-shadow: rgb(0 0 0 / 0.45);
+
+  /* Syntax highlighting (highlight.js classes, styled in .agave-prose below).
+     Kimbie-dark's hues, with keyword and tag lifted to clear 4.5:1 on
+     --background; every step measures 5.6:1 or better. */
+  --color-syntax-base: #d3af86;
+  --color-syntax-comment: #d6baad;
+  --color-syntax-keyword: #c08488;
+  --color-syntax-tag: #e56b82;
+  --color-syntax-literal: #f79a32;
+  --color-syntax-string: #889b4a;
+  --color-syntax-title: #f06431;
 
   /* Type scale: five steps, ~1.2 apart, used by every level in the UI. Prose is
      the base step; chrome (labels, badges, stats) is 2xs/xs/sm in the mono face. */
@@ -84,7 +98,7 @@
   --shadow-halo: 0 0 0 4px color-mix(in oklab, var(--color-primary) 15%, transparent);
   --shadow-halo-focus: 0 0 0 4px color-mix(in oklab, var(--color-primary) 25%, transparent);
   /* Anything that floats over the page: dialogs, toasts, the jump key. */
-  --shadow-overlay: 0 8px 20px rgb(0 0 0 / 0.45);
+  --shadow-overlay: 0 8px 20px var(--color-shadow);
 
   /* The agave rosette (docs/brand/mark.svg), inlined as a mask so both
      surfaces draw it in one flat color. The favicons in src/web/head.html and
@@ -106,7 +120,47 @@
   }
 
   html {
-    color-scheme: dark;
+    color-scheme: light dark;
+  }
+
+  /* Paper: the light scheme, from the paper set in docs/brand/README.md. Every
+     text step clears 4.5:1 on every surface it sits on, the amber wash
+     included (primary 5.3:1 on bg-primary/10); control borders clear 3:1;
+     syntax colors clear 5.6:1 on --background. */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --color-background: #faf8f5;
+      --color-foreground: #2a2522;
+      --color-card: #f3efea;
+      --color-card-foreground: #2a2522;
+      --color-popover: #ffffff;
+      --color-popover-foreground: #2a2522;
+      --color-muted: #ece6df;
+      --color-muted-foreground: #5f5750;
+      --color-faint: #6b625b;
+      --color-divider: #e2dcd5;
+      --color-border: #8a8179;
+      --color-border-strong: #6b625b;
+      --color-input: #8a8179;
+      --color-primary: #8a531c;
+      --color-primary-foreground: #ffffff;
+      --color-secondary: #ece6df;
+      --color-secondary-foreground: #2a2522;
+      --color-accent: #ece6df;
+      --color-accent-foreground: #2a2522;
+      --color-destructive: #a8322a;
+      --color-destructive-foreground: #8c1d18;
+      --color-success: #5a7a48;
+      --color-ring: #8a531c;
+      --color-syntax-base: #2a2522;
+      --color-syntax-comment: #6b625b;
+      --color-syntax-keyword: #8a3f5a;
+      --color-syntax-tag: #a8322a;
+      --color-syntax-literal: #8a531c;
+      --color-syntax-string: #4d6b3a;
+      --color-syntax-title: #9a4a1a;
+      --color-shadow: rgb(42 37 34 / 0.16);
+    }
   }
 
   body {
@@ -298,14 +352,22 @@
     color: inherit;
   }
 
-  /* kimbie-dark token lifts: two ramps measure below 4.5:1 on --background
-     (#98676a 3.82:1, #dc3958 4.05:1). Lightened within their hue to 5.9:1 and
-     5.7:1. These selectors outrank the highlight.js theme (`.agave-prose .hljs-*`)
-     so they still win after that stylesheet lands on the first code block. */
+  /* highlight.js output. The colors are the --color-syntax-* tokens, so code
+     follows the color scheme and no highlight.js stylesheet is fetched. */
+  .agave-prose pre .hljs {
+    color: var(--color-syntax-base);
+  }
+
+  .agave-prose pre .hljs-comment,
+  .agave-prose pre .hljs-quote {
+    color: var(--color-syntax-comment);
+    font-style: italic;
+  }
+
   .agave-prose pre .hljs-function,
   .agave-prose pre .hljs-keyword,
   .agave-prose pre .hljs-selector-tag {
-    color: #c08488;
+    color: var(--color-syntax-keyword);
   }
 
   .agave-prose pre .hljs-meta,
@@ -316,7 +378,38 @@
   .agave-prose pre .hljs-tag,
   .agave-prose pre .hljs-template-variable,
   .agave-prose pre .hljs-variable {
-    color: #e56b82;
+    color: var(--color-syntax-tag);
+  }
+
+  .agave-prose pre .hljs-built_in,
+  .agave-prose pre .hljs-deletion,
+  .agave-prose pre .hljs-link,
+  .agave-prose pre .hljs-literal,
+  .agave-prose pre .hljs-number,
+  .agave-prose pre .hljs-params,
+  .agave-prose pre .hljs-type {
+    color: var(--color-syntax-literal);
+  }
+
+  .agave-prose pre .hljs-addition,
+  .agave-prose pre .hljs-bullet,
+  .agave-prose pre .hljs-string,
+  .agave-prose pre .hljs-symbol {
+    color: var(--color-syntax-string);
+  }
+
+  .agave-prose pre .hljs-attribute,
+  .agave-prose pre .hljs-section,
+  .agave-prose pre .hljs-title {
+    color: var(--color-syntax-title);
+  }
+
+  .agave-prose pre .hljs-emphasis {
+    font-style: italic;
+  }
+
+  .agave-prose pre .hljs-strong {
+    font-weight: 700;
   }
 
   .agave-prose .table-wrap {

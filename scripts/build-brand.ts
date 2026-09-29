@@ -36,7 +36,7 @@ const requireEnv = (name: string): string => {
 const FONT_BOLD = requireEnv('BRAND_FONT_BOLD');
 const FONT_REGULAR = requireEnv('BRAND_FONT_REGULAR');
 
-/** Palette, mirrored from theme.css and the paper set in docs/brand/README.md. */
+/** Palette, mirrored from theme.css (dark @theme values, light scheme overrides). */
 const C = {
   night: '#1a1714',
   char: '#231f1c',
@@ -46,11 +46,14 @@ const C = {
   amber: '#d4a574',
   sage: '#8faa7b',
   signal: '#e57373',
-  paper: '#ffffff',
+  paper: '#faf8f5',
+  linen: '#f3efea',
+  umber: '#5f5750',
   ink: '#2a2522',
   stone: '#6b625b',
   sageDeep: '#5a7a48',
-  amberDeep: '#9a5f22',
+  amberDeep: '#8a531c',
+  signalDeep: '#a8322a',
   divider: '#3a3430',
 } as const;
 
@@ -247,11 +250,14 @@ const PRODUCT: ReadonlyArray<Swatch> = [
   { name: 'Signal', hex: C.signal, role: 'errors', ink: C.night },
 ];
 const PAPER: ReadonlyArray<Swatch> = [
-  { name: 'Paper', hex: C.paper, role: 'print, docs', ink: C.ink },
-  { name: 'Ink', hex: C.ink, role: 'text on paper', ink: C.sand },
-  { name: 'Stone', hex: C.stone, role: 'secondary text', ink: C.sand },
-  { name: 'Sage Deep', hex: C.sageDeep, role: 'the mark on paper', ink: C.paper },
-  { name: 'Amber Deep', hex: C.amberDeep, role: 'accents on paper', ink: C.paper },
+  { name: 'Paper', hex: C.paper, role: 'page background', ink: C.ink },
+  { name: 'Linen', hex: C.linen, role: 'cards, bars', ink: C.ink },
+  { name: 'Ink', hex: C.ink, role: 'text', ink: C.sand },
+  { name: 'Umber', hex: C.umber, role: 'secondary text', ink: C.paper },
+  { name: 'Stone', hex: C.stone, role: 'hints, tagline', ink: C.paper },
+  { name: 'Amber Deep', hex: C.amberDeep, role: 'actions, focus', ink: C.paper },
+  { name: 'Sage Deep', hex: C.sageDeep, role: 'the mark, success', ink: C.paper },
+  { name: 'Signal Deep', hex: C.signalDeep, role: 'errors', ink: C.paper },
 ];
 const TILE = 136;
 const PITCH = 148;
@@ -272,9 +278,9 @@ const swatchRow = async (row: ReadonlyArray<Swatch>, top: number): Promise<strin
   return tiles.join('');
 };
 const paletteParts = await Promise.all([
-  text(FONT_REGULAR, 'PRODUCT, DARK', 12, C.dust, MARGIN, 40),
+  text(FONT_REGULAR, 'DARK SCHEME', 12, C.dust, MARGIN, 40),
   swatchRow(PRODUCT, 56),
-  text(FONT_REGULAR, 'PAPER, LIGHT', 12, C.dust, MARGIN, 240),
+  text(FONT_REGULAR, 'LIGHT SCHEME, PAPER', 12, C.dust, MARGIN, 240),
   swatchRow(PAPER, 256),
 ]);
 await write('palette.svg', svg(1240, 436, [`<rect width="1240" height="436" rx="16" fill="${C.char}"/>`, ...paletteParts], 'Agave palette'));

@@ -23,8 +23,13 @@ type DOMPurifyStatic = {
 
 declare const DOMPurify: DOMPurifyStatic | undefined;
 
+type HljsLanguage = {
+  name?: string;
+};
+
 type HljsStatic = {
   highlightElement: (block: HTMLElement) => void;
+  getLanguage: (name: string) => HljsLanguage | undefined;
 };
 
 declare const hljs: HljsStatic | undefined;

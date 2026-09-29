@@ -756,7 +756,7 @@ All responses include these headers:
 | `Referrer-Policy` | `no-referrer` |
 | `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` |
 | `Permissions-Policy` | Disables geolocation, microphone, camera, accelerometer, gyroscope |
-| `Content-Security-Policy` | Restrictive CSP: `default-src 'none'`, allows inline scripts/styles and CDN resources for the web UI |
+| `Content-Security-Policy` | Restrictive CSP: `default-src 'none'`, inline scripts and styles, plus scripts from `cdn.jsdelivr.net` for the web UI's markdown and highlighting libraries |
 | `Cache-Control` | `no-store` on API, SSE, and error responses. `GET /` (chat UI) uses `private, no-cache` plus `ETag` / `Vary: Accept-Encoding`. |
 | `Connection` | `close` (non-streaming) or `keep-alive` (SSE streaming) |
 

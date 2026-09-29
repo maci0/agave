@@ -371,7 +371,7 @@ pub const security_headers_base =
     "Referrer-Policy: no-referrer\r\n" ++
     "Strict-Transport-Security: max-age=31536000; includeSubDomains\r\n" ++
     "Permissions-Policy: geolocation=(), microphone=(), camera=(), accelerometer=(), gyroscope=()\r\n" ++
-    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
+    "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; object-src 'none'; worker-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'\r\n";
 
 /// Common security headers appended to every API/SSE/error response.
 pub const security_headers = security_headers_base ++ "Cache-Control: no-store\r\n";

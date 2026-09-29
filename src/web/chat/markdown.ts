@@ -16,8 +16,6 @@ const PURIFY_URL = 'https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.mi
 const PURIFY_INTEGRITY = 'sha384-46dPGH1XlTmj7bc50bqLjTdORXs/3EP2QpA/6EWbelYWOY9VGp+87RT61S3Mcslb';
 const HLJS_URL = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js';
 const HLJS_INTEGRITY = 'sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp';
-const HLJS_STYLE_URL = 'https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/kimbie-dark.min.css';
-const HLJS_STYLE_INTEGRITY = 'sha384-o5F1vUaMNOmou1sQrsWiFo4/QUGSV0svqNZW+EesmKxWC8MpFJcveBhAyfvTHbGb';
 
 /** Give up on a CDN script that neither loads nor errors. A proxy that accepts
  *  the connection and then stalls fires no event, which would leave the load
@@ -88,24 +86,12 @@ export const loadMarkdown = (): Promise<boolean> => {
   return markdownLoad;
 };
 
-/** Fetch highlight.js and its theme on the first code block. Copy and language
- *  chrome do not wait for it. */
-const appendHighlightTheme = (): void => {
-  if (document.querySelector('link[data-agave-hljs]')) {return;}
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = HLJS_STYLE_URL;
-  link.integrity = HLJS_STYLE_INTEGRITY;
-  link.crossOrigin = 'anonymous';
-  link.referrerPolicy = 'no-referrer';
-  link.dataset.agaveHljs = '1';
-  document.head.append(link);
-};
-
+/** Fetch highlight.js on the first code block. Copy and language chrome do not
+ *  wait for it. The token colors are theme tokens in src/web/ui/theme.css, so
+ *  no highlight.js stylesheet is fetched. */
 export const loadHighlightJs = (): Promise<boolean> => {
   if (highlightLoad) {return highlightLoad;}
   if (cdn.hljs) {return Promise.resolve(true);}
-  appendHighlightTheme();
   highlightLoad = loadCdnScript(HLJS_URL, HLJS_INTEGRITY).then((ok) => ok && Boolean(cdn.hljs));
   return highlightLoad;
 };
@@ -253,8 +239,12 @@ const highlightCodeBlocks = (root: HTMLElement): void => {
     if (!cdn.hljs || !root.isConnected) {return;}
     for (const block of root.querySelectorAll('pre code')) {
       if (block.classList.contains('hljs')) {continue;}
-      // SAFETY: a `pre code` descendant is an HTMLElement, which is
-      // What highlight.js takes; a selector never returns an SVG.
+      /* The CDN build carries the common languages only; a fence naming
+         another one stays plain text instead of logging a highlight.js warning. */
+      const lang = /language-(?<lang>[\w-]+)/u.exec(block.className)?.groups?.lang;
+      if (lang !== undefined && cdn.hljs.getLanguage(lang) === undefined) {continue;}
+      /* SAFETY: a `pre code` descendant is an HTMLElement, which is what
+         highlight.js takes; a selector never returns an SVG. */
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- narrowed by the query above
       cdn.hljs.highlightElement(block as HTMLElement);
     }

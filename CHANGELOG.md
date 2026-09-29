@@ -11,6 +11,29 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Added
+- **Light scheme.** Both chat surfaces follow the system color scheme. The
+  light scheme is the paper set from the brand guide (Paper, Linen, Ink,
+  Amber Deep, Sage Deep), with every text step measured at 4.5:1 or better on
+  the surfaces it sits on and control borders at 3:1. `theme-color` and
+  `color-scheme` follow the scheme too. axe-core reports no WCAG 2.2 A/AA
+  violations on either surface in either scheme, and Lighthouse scores both
+  100 for accessibility and best practices.
+
+### Changed
+- Code highlighting colors are theme tokens (`--color-syntax-*`), so
+  highlight.js's stylesheet is no longer fetched from the CDN, and the CSP's
+  `style-src` drops `cdn.jsdelivr.net`. A fence in a language the CDN build
+  does not carry stays plain text instead of logging a warning.
+
+### Fixed
+- A highlighted code block drew a second, darker frame with its own padding
+  inside the first (the CDN stylesheet's `pre code.hljs` rule won on load
+  order).
+- The `CI passed` job never checked out the tree, so it failed on every run
+  and main reported red even when every required job passed.
+- The serve page had no meta description.
+
 ## [0.9.1] - 2026-09-29
 
 ### Fixed
