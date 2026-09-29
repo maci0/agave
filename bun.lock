@@ -32,6 +32,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "@rikalabs/oxlint-standards@0.8.1": "vendor/patches/@rikalabs%2Foxlint-standards@0.8.1.patch",
+  },
   "packages": {
     "@eslint/core": ["@eslint/core@0.17.0", "", { "dependencies": { "@types/json-schema": "^7.0.15" } }, "sha512-yL/sLrpmtDaFEiUj1osRP4TI2MDz1AddJL+jZ7KSqvBuliN4xqYY54IfdN8qD8Toa6g1iloph1fxQNkjOxrrpQ=="],
 

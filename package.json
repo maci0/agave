@@ -37,5 +37,8 @@
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vnu-jar": "26.9.27"
+  },
+  "patchedDependencies": {
+    "@rikalabs/oxlint-standards@0.8.1": "vendor/patches/@rikalabs%2Foxlint-standards@0.8.1.patch"
   }
 }

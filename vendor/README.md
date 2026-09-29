@@ -1,6 +1,7 @@
 # vendor/
 
-Two shim packages that make `react` and `react-dom` resolve to Preact.
+Two shim packages that make `react` and `react-dom` resolve to Preact, and
+`patches/`, the local patches `bun install` applies to pinned dependencies.
 
 ## Why they exist
 
@@ -54,3 +55,16 @@ from them reaches a bundle.
 If the bundler gains module aliasing, delete this directory, drop the two
 `file:` dependencies from `package.json`, and add the alias to the build
 command. Nothing else changes: no source file imports these paths directly.
+
+## patches/
+
+`bun install` applies each file here to the exact package version named in
+`package.json` `patchedDependencies`; a version bump without a matching patch
+fails the install instead of quietly running the pristine package.
+
+| Patch | What it changes | Why |
+| --- | --- | --- |
+| `@rikalabs%2Foxlint-standards@0.8.1.patch` | Drops `oxc/no-map-object-keys`, `unicorn/prefer-logical-operator-over-short-circuit`, `import/no-extraneous-dependencies`, `import/no-unresolved` and `import/no-reexport` from the presets; renames `oxc/no-new-buffer` to `unicorn/no-new-buffer` | oxlint 1.86 implements none of those names and refuses a config that enables an unknown rule. Every other rule in the strict chain stays on. Remove the patch once a preset release matches oxlint's rule set. |
+
+Regenerate with `bun patch @rikalabs/oxlint-standards`, edit the files under
+`node_modules/`, then `bun patch --commit node_modules/@rikalabs/oxlint-standards --patches-dir vendor/patches`.
