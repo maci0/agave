@@ -1,7 +1,7 @@
 # Changelog
 
 All notable user-facing changes to Agave are recorded here.
-Product version is **0.10.1** (`agave --version`, `/health`, `system_fingerprint`).
+Product version is **0.10.2** (`agave --version`, `/health`, `system_fingerprint`).
 While on **0.x**, SemVer allows breaking changes without a major bump; such changes
 must still appear under **Changed** or **Breaking** below. See
 [Versioning & Releases](docs/CONTRIBUTING.md#versioning--releases).
@@ -10,6 +10,16 @@ must still appear under **Changed** or **Breaking** below. See
 > SemVer. Do not treat it as release `1.0.0`.
 
 ## [Unreleased]
+
+## [0.10.2] - 2026-09-29
+
+### Fixed
+- Vulkan SDPA, paged SDPA, tree SDPA and softmax could compute a wrong softmax
+  under load: a fast subgroup overwrote the reduced max with its partial sum
+  before slower subgroups had read it. A barrier now separates the two
+  reductions. The Vulkan parity test failed 29 of 100 runs on the same
+  machine before and 0 of 100 after; `sdpa` timing is unchanged and `softmax`
+  is 3.8% slower (one barrier on a very small kernel).
 
 ### Tooling
 - bun is pinned to 1.4.2 (`packageManager`, `engines.bun`, CI `setup-bun`).
@@ -1447,7 +1457,8 @@ Hardware-verified on dual NVIDIA GB10 over ConnectX RoCE RDMA:
 - 11 fuzz tests for parsers (JSON, GBNF, JSON schema) and samplers
 - Test compile fixes for device_id parameter + MockModel
 
-[unreleased]: https://github.com/maci0/agave/compare/v0.10.1...HEAD
+[unreleased]: https://github.com/maci0/agave/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/maci0/agave/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/maci0/agave/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/maci0/agave/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/maci0/agave/compare/v0.9.0...v0.9.1
