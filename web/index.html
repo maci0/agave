@@ -9,8 +9,9 @@
          so both chat surfaces read as one product. style.css is a committed build
          output: regenerate it with scripts/build-web.sh. -->
     <link rel="stylesheet" href="style.css">
-    <meta name="theme-color" content="#1a1714">
-    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#1a1714" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#faf8f5" media="(prefers-color-scheme: light)">
+    <meta name="color-scheme" content="light dark">
 <!-- The shell fetches GGUF files from whatever URL the reader pastes. Same
      policy as the serve UI (src/web/head.html): do not hand the local page URL
      to a third-party model host. -->
