@@ -1,4 +1,4 @@
-import { Download, Eraser, Info, Menu, Plus } from 'lucide-react';
+import { AboutIcon, ClearIcon, ExportIcon, Mark, MenuIcon, NewIcon } from '../../ui/icons';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { fmtCtx, fmtInt } from '../format';
@@ -60,19 +60,19 @@ const HeaderActions = (props: AppHeaderProps) => (
       disabled={props.streaming}
       aria-label="New conversation"
     >
-      <Plus className="size-4" aria-hidden="true" />
+      <NewIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:sr-only">New</span>
     </Button>
     <Button type="button" variant="plain" size="sm" onClick={props.onExport} disabled={props.streaming} title="Export conversation" aria-label="Export conversation">
-      <Download className="size-4" aria-hidden="true" />
+      <ExportIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:hidden">Export</span>
     </Button>
     <Button type="button" variant="plain" size="sm" onClick={props.onClear} disabled={props.streaming} title="Clear conversation" aria-label="Clear conversation">
-      <Eraser className="size-4" aria-hidden="true" />
+      <ClearIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:hidden">Clear</span>
     </Button>
     <Button type="button" variant="plain" size="sm" onClick={props.onAbout} title="About" aria-label="About Agave">
-      <Info className="size-4" aria-hidden="true" />
+      <AboutIcon className="size-4" aria-hidden="true" />
       <span className="max-drawer:hidden">Info</span>
     </Button>
   </div>
@@ -94,10 +94,10 @@ export const AppHeader = (props: AppHeaderProps) => {
           aria-expanded={props.sidebarOpen}
           aria-controls="sidebar"
         >
-          <Menu className="size-5" aria-hidden="true" />
+          <MenuIcon className="size-5" aria-hidden="true" />
         </Button>
         <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold tracking-tight text-primary">
-          <span className="mark" aria-hidden="true" />
+          <Mark />
           agave
         </h1>
       </div>

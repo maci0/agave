@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1090.179 215.60000000000002" width="1090.179" height="215.60000000000002" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1083.51 215.60000000000002" width="1083.51" height="215.60000000000002" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,66 +19,66 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <polyline class="edge" data-from="Root" data-to="Shared" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="computed once
-blocks 0,1,2" points="105.66199999999999,107.80000000000001 281.998,107.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Shared" data-to="BranchA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Request A only" points="493.637,98.83333333333334 529.6370000000001,98.83333333333334 529.6370000000001,66.9 669.379,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Shared" data-to="BranchB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Request B only" points="493.637,116.76666666666668 529.6370000000002,116.76666666666668 529.6370000000002,148.70000000000002 669.3790000000001,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="BranchA" data-to="AnsA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="answer" points="784.688,66.9 929.683,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="BranchB" data-to="AnsB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="answer" points="792.0980000000002,148.70000000000002 929.683,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+blocks 0,1,2" points="105.66199999999999,107.80000000000001 281.998,107.80000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Shared" data-to="BranchA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Request A only" points="486.96799999999996,98.83333333333334 522.968,98.83333333333334 522.968,66.9 662.71,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Shared" data-to="BranchB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Request B only" points="486.96799999999996,116.76666666666668 522.968,116.76666666666668 522.968,148.70000000000002 662.71,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BranchA" data-to="AnsA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="answer" points="778.019,66.9 923.014,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BranchB" data-to="AnsB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="answer" points="785.4290000000001,148.70000000000002 923.014,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Root" data-to="Shared" data-label="computed once
 blocks 0,1,2">
-  <rect x="149.66199999999998" y="84.80000000000001" width="88.33600000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="193.82999999999998" y="107.10000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="193.82999999999998" dy="-3.3000000000000007">computed once</tspan><tspan x="193.82999999999998" dy="14.3">blocks 0,1,2</tspan></text>
+  <rect x="149.66199999999998" y="84.80000000000001" width="88.33600000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="193.82999999999998" y="107.10000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="193.82999999999998" dy="-3.3000000000000007">computed once</tspan><tspan x="193.82999999999998" dy="14.3">blocks 0,1,2</tspan></text>
 </g>
 <g class="edge-label" data-from="Shared" data-to="BranchA" data-label="Request A only">
-  <rect x="537.6370000000001" y="50.90000000000001" width="87.74200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="581.508" y="66.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Request A only</text>
+  <rect x="530.968" y="50.90000000000001" width="87.74200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="574.8389999999999" y="66.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">Request A only</text>
 </g>
 <g class="edge-label" data-from="Shared" data-to="BranchB" data-label="Request B only">
-  <rect x="537.6370000000002" y="132.70000000000002" width="87.74200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="581.5080000000002" y="147.85000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Request B only</text>
+  <rect x="530.968" y="132.70000000000002" width="87.74200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="574.8389999999999" y="147.85000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">Request B only</text>
 </g>
 <g class="edge-label" data-from="BranchA" data-to="AnsA" data-label="answer">
-  <rect x="828.688" y="50.90000000000001" width="53.29" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="855.333" y="66.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">answer</text>
+  <rect x="822.019" y="50.90000000000001" width="53.29" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="848.664" y="66.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">answer</text>
 </g>
 <g class="edge-label" data-from="BranchB" data-to="AnsB" data-label="answer">
-  <rect x="836.0980000000002" y="132.70000000000002" width="53.29" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="862.7430000000002" y="147.85000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">answer</text>
+  <rect x="829.4290000000001" y="132.70000000000002" width="53.29" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="856.0740000000001" y="147.85000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">answer</text>
 </g>
 <g class="node" data-id="Root" data-label="root" data-shape="stadium">
   <rect x="40" y="89.35000000000001" width="65.66199999999999" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
   <text x="72.83099999999999" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">root</text>
 </g>
 <g class="node" data-id="Shared" data-label="You are helpful.
-(shared prefix — ref_count=2)" data-shape="rectangle">
-  <rect x="281.998" y="80.9" width="211.639" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="387.8175" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="387.8175" dy="-3.9000000000000012">You are helpful.</tspan><tspan x="387.8175" dy="16.900000000000002">(shared prefix — ref_count=2)</tspan></text>
+(shared prefix, ref_count=2)" data-shape="rectangle">
+  <rect x="281.998" y="80.9" width="204.96999999999997" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="384.48299999999995" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="384.48299999999995" dy="-3.9000000000000012">You are helpful.</tspan><tspan x="384.48299999999995" dy="16.900000000000002">(shared prefix, ref_count=2)</tspan></text>
 </g>
 <g class="node" data-id="BranchA" data-label="What is 2+2?
 block 3" data-shape="rectangle">
-  <rect x="669.379" y="40" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="727.0335" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="727.0335" dy="-3.9000000000000012">What is 2+2?</tspan><tspan x="727.0335" dy="16.900000000000002">block 3</tspan></text>
+  <rect x="662.71" y="40" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="720.3645" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="720.3645" dy="-3.9000000000000012">What is 2+2?</tspan><tspan x="720.3645" dy="16.900000000000002">block 3</tspan></text>
 </g>
 <g class="node" data-id="BranchB" data-label="Tell me a joke.
 block 3'" data-shape="rectangle">
-  <rect x="669.3790000000001" y="121.80000000000001" width="122.71900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="730.7385000000002" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="730.7385000000002" dy="-3.9000000000000012">Tell me a joke.</tspan><tspan x="730.7385000000002" dy="16.900000000000002">block 3&#39;</tspan></text>
+  <rect x="662.71" y="121.80000000000001" width="122.71900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="724.0695000000001" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="724.0695000000001" dy="-3.9000000000000012">Tell me a joke.</tspan><tspan x="724.0695000000001" dy="16.900000000000002">block 3&#39;</tspan></text>
 </g>
 <g class="node" data-id="AnsA" data-label="4
 block 4" data-shape="rectangle">
-  <rect x="929.683" y="40" width="84.18700000000001" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="971.7764999999999" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="971.7764999999999" dy="-3.9000000000000012">4</tspan><tspan x="971.7764999999999" dy="16.900000000000002">block 4</tspan></text>
+  <rect x="923.014" y="40" width="84.18700000000001" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="965.1075000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="965.1075000000001" dy="-3.9000000000000012">4</tspan><tspan x="965.1075000000001" dy="16.900000000000002">block 4</tspan></text>
 </g>
 <g class="node" data-id="AnsB" data-label="Why did the...
 block 4'" data-shape="rectangle">
-  <rect x="929.683" y="121.80000000000001" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="988.0785" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="988.0785" dy="-3.9000000000000012">Why did the...</tspan><tspan x="988.0785" dy="16.900000000000002">block 4&#39;</tspan></text>
+  <rect x="923.014" y="121.80000000000001" width="116.791" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="981.4095" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="981.4095" dy="-3.9000000000000012">Why did the...</tspan><tspan x="981.4095" dy="16.900000000000002">block 4&#39;</tspan></text>
 </g>
 </svg>

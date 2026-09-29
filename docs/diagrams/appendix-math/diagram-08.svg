@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 663.3059999999999 865.6000000000001" width="663.3059999999999" height="865.6000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1949.995 201.8" width="1949.995" height="201.8" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,82 +19,44 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="BW" data-label="Bandwidth-bound operations
-(memory speed is the bottleneck)">
-  <rect x="327.797" y="40" width="290.32199999999995" height="494.4000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="327.797" y="40" width="290.32199999999995" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="339.797" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="339.797" dy="-3.6000000000000014">Bandwidth-bound operations</tspan><tspan x="339.797" dy="15.600000000000001">(memory speed is the bottleneck)</tspan></text>
+<polyline class="edge" data-from="Need" data-to="Dot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="980.7402499999998,76.9 980.7402499999998,94.9 207.69299999999996,94.9 207.69299999999996,112.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Need" data-to="Soft" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="980.7402499999998,76.9 980.7402499999998,94.9 532.1764999999999,94.9 532.1764999999999,112.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Need" data-to="Gemv" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="980.7402499999998,76.9 980.7402499999998,94.9 824.7969999999998,94.9 824.7969999999998,112.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Need" data-to="Gemm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="980.7402499999998,76.9 980.7402499999998,94.9 1136.6834999999999,94.9 1136.6834999999999,112.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Need" data-to="Norm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="980.7402499999998,76.9 980.7402499999998,94.9 1465.2424999999998,94.9 1465.2424999999998,112.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Need" data-to="Act" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="980.7402499999998,76.9 980.7402499999998,94.9 1777.87,94.9 1777.87,112.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Need" data-label="I need to…" data-shape="rectangle">
+  <rect x="932.3482499999999" y="40" width="96.78399999999999" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="980.7402499999998" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">I need to…</text>
 </g>
-<g class="subgraph" data-id="Compute" data-label="Compute-bound operations
-(ALU utilization is the bottleneck)">
-  <rect x="297.41599999999994" y="562.4000000000001" width="325.89" height="263.20000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="297.41599999999994" y="562.4000000000001" width="325.89" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="309.41599999999994" y="576.4000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="309.41599999999994" dy="-3.6000000000000014">Compute-bound operations</tspan><tspan x="309.41599999999994" dy="15.600000000000001">(ALU utilization is the bottleneck)</tspan></text>
+<g class="node" data-id="Dot" data-label="compare directions / attention scores → dot product" data-shape="rectangle">
+  <rect x="40" y="112.9" width="335.3859999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="207.69299999999996" y="131.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">compare directions / attention scores → dot product</text>
 </g>
-<polyline class="edge" data-from="Opt1" data-to="BW" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="279.797,287.20000000000005 327.797,287.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" />
-<polyline class="edge" data-from="Opt2" data-to="Compute" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="249.41599999999997,694.0000000000001 297.41599999999994,694.0000000000001" fill="none" stroke="var(--_line)" stroke-width="1" />
-<g class="node" data-id="Opt1" data-label="Optimization levers
-for bandwidth-bound:
-• Quantization (4-bit → 4× less data)
-• Kernel fusion (fewer passes)
-• Larger batch size" data-shape="rectangle">
-  <rect x="40" y="234.95000000000005" width="239.797" height="104.50000000000001" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="159.8985" y="287.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="159.8985" dy="-29.250000000000004">Optimization levers</tspan><tspan x="159.8985" dy="16.900000000000002">for bandwidth-bound:</tspan><tspan x="159.8985" dy="16.900000000000002">• Quantization (4-bit → 4× less data)</tspan><tspan x="159.8985" dy="16.900000000000002">• Kernel fusion (fewer passes)</tspan><tspan x="159.8985" dy="16.900000000000002">• Larger batch size</tspan></text>
+<g class="node" data-id="Soft" data-label="turn scores into distribution → softmax" data-shape="rectangle">
+  <rect x="403.38599999999997" y="112.9" width="257.5809999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="532.1764999999999" y="131.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">turn scores into distribution → softmax</text>
 </g>
-<g class="node" data-id="Opt2" data-label="Optimization levers
-for compute-bound:
-• FlashAttention (tiled SRAM)
-• Tensor parallelism
-• Higher-TFLOPS GPU" data-shape="rectangle">
-  <rect x="40" y="641.7500000000001" width="209.41599999999997" height="104.50000000000001" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="144.70799999999997" y="694.0000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="144.70799999999997" dy="-29.250000000000004">Optimization levers</tspan><tspan x="144.70799999999997" dy="16.900000000000002">for compute-bound:</tspan><tspan x="144.70799999999997" dy="16.900000000000002">• FlashAttention (tiled SRAM)</tspan><tspan x="144.70799999999997" dy="16.900000000000002">• Tensor parallelism</tspan><tspan x="144.70799999999997" dy="16.900000000000002">• Higher-TFLOPS GPU</tspan></text>
+<g class="node" data-id="Gemv" data-label="apply linear layer to one vector → GEMV" data-shape="rectangle">
+  <rect x="688.9669999999999" y="112.9" width="271.65999999999997" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="824.7969999999998" y="131.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">apply linear layer to one vector → GEMV</text>
 </g>
-<g class="node" data-id="GEMV2" data-label="GEMV — decode
-Reads weight matrix row by row
-Arithmetic intensity: ~0.25 FLOP/byte
-Bottleneck: DRAM bandwidth" data-shape="rectangle">
-  <rect x="338.9805" y="199.60000000000002" width="255.35799999999998" height="87.60000000000001" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="466.6595" y="243.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="466.6595" dy="-20.8">GEMV — decode</tspan><tspan x="466.6595" dy="16.900000000000002">Reads weight matrix row by row</tspan><tspan x="466.6595" dy="16.900000000000002">Arithmetic intensity: ~0.25 FLOP/byte</tspan><tspan x="466.6595" dy="16.900000000000002">Bottleneck: DRAM bandwidth</tspan></text>
+<g class="node" data-id="Gemm" data-label="many tokens × one weight → GEMM / batched" data-shape="rectangle">
+  <rect x="988.627" y="112.9" width="296.11299999999994" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1136.6834999999999" y="131.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">many tokens × one weight → GEMM / batched</text>
 </g>
-<g class="node" data-id="Norm" data-label="RMSNorm / LayerNorm
-Reads vector, writes vector
-Arithmetic intensity: ~2 FLOP/byte
-Bottleneck: memory round-trips" data-shape="rectangle">
-  <rect x="338.9805" y="315.20000000000005" width="237.57399999999998" height="87.60000000000001" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="457.7675" y="359.00000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="457.7675" dy="-20.8">RMSNorm / LayerNorm</tspan><tspan x="457.7675" dy="16.900000000000002">Reads vector, writes vector</tspan><tspan x="457.7675" dy="16.900000000000002">Arithmetic intensity: ~2 FLOP/byte</tspan><tspan x="457.7675" dy="16.900000000000002">Bottleneck: memory round-trips</tspan></text>
+<g class="node" data-id="Norm" data-label="stabilize activations → RMSNorm / LayerNorm" data-shape="rectangle">
+  <rect x="1312.7399999999998" y="112.9" width="305.00500000000005" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1465.2424999999998" y="131.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">stabilize activations → RMSNorm / LayerNorm</text>
 </g>
-<g class="node" data-id="Activation" data-label="Activation functions
-(SiLU, GELU, sigmoid)
-Element-wise, trivial math
-Bottleneck: reading/writing the tensor" data-shape="rectangle">
-  <rect x="338.9805" y="84" width="258.32199999999995" height="87.60000000000001" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="468.14149999999995" y="127.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="468.14149999999995" dy="-20.8">Activation functions</tspan><tspan x="468.14149999999995" dy="16.900000000000002">(SiLU, GELU, sigmoid)</tspan><tspan x="468.14149999999995" dy="16.900000000000002">Element-wise, trivial math</tspan><tspan x="468.14149999999995" dy="16.900000000000002">Bottleneck: reading/writing the tensor</tspan></text>
-</g>
-<g class="node" data-id="ElemWise" data-label="Element-wise ops
-(add, mul, residual)
-One pass over data
-Bottleneck: memory bandwidth" data-shape="rectangle">
-  <rect x="338.9805" y="430.80000000000007" width="216.82599999999994" height="87.60000000000001" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="447.39349999999996" y="474.6000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="447.39349999999996" dy="-20.8">Element-wise ops</tspan><tspan x="447.39349999999996" dy="16.900000000000002">(add, mul, residual)</tspan><tspan x="447.39349999999996" dy="16.900000000000002">One pass over data</tspan><tspan x="447.39349999999996" dy="16.900000000000002">Bottleneck: memory bandwidth</tspan></text>
-</g>
-<g class="node" data-id="Prefill" data-label="GEMM — prefill
-Matrix × matrix (all tokens at once)
-Arithmetic intensity: ~O(seq_len) FLOP/byte
-Bottleneck: GPU TFLOPS" data-shape="rectangle">
-  <rect x="338.9805" y="606.4000000000001" width="293.89" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="485.9255" y="650.2" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="485.9255" dy="-20.8">GEMM — prefill</tspan><tspan x="485.9255" dy="16.900000000000002">Matrix × matrix (all tokens at once)</tspan><tspan x="485.9255" dy="16.900000000000002">Arithmetic intensity: ~O(seq_len) FLOP/byte</tspan><tspan x="485.9255" dy="16.900000000000002">Bottleneck: GPU TFLOPS</tspan></text>
-</g>
-<g class="node" data-id="LongAttn" data-label="Attention — long sequences
-O(seq_len²) dot products per head
-Arithmetic intensity grows with seq_len
-Bottleneck: GPU TFLOPS" data-shape="rectangle">
-  <rect x="338.9805" y="722.0000000000001" width="264.25" height="87.60000000000001" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="471.1055" y="765.8000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="471.1055" dy="-20.8">Attention — long sequences</tspan><tspan x="471.1055" dy="16.900000000000002">O(seq_len²) dot products per head</tspan><tspan x="471.1055" dy="16.900000000000002">Arithmetic intensity grows with seq_len</tspan><tspan x="471.1055" dy="16.900000000000002">Bottleneck: GPU TFLOPS</tspan></text>
+<g class="node" data-id="Act" data-label="gated FFN non-linearity → SiLU / GELU" data-shape="rectangle">
+  <rect x="1645.745" y="112.9" width="264.24999999999994" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="1777.87" y="131.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">gated FFN non-linearity → SiLU / GELU</text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 419.478 1053.9899999999998" width="419.478" height="1053.9899999999998" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 419.478 1053.9899999999998" width="419.478" height="1053.9899999999998" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,27 +19,27 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="Call" data-to="Hash" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,76.9 181.41025000000002,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Hash" data-to="Lookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,161.8 181.41025000000002,209.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Lookup" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Hit (stable weight pointer)" points="140.77858333333336,412.9583333333333 140.77858333333336,591.39 102.5,591.39 102.5,846.3899999999999 148.85408333333336,846.3899999999999 148.85408333333336,858.3899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Lookup" data-to="Align" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Miss (first access)" points="222.04191666666668,412.9583333333333 222.04191666666668,489.59 260.32050000000004,489.59 260.32050000000004,569.89" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Align" data-to="Wrap" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,623.6899999999999 260.32050000000004,671.6899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Wrap" data-to="Store" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,725.4899999999999 260.32050000000004,773.4899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Store" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,810.3899999999999 260.32050000000004,846.3899999999999 213.96641666666665,846.3899999999999 213.96641666666665,858.3899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Return" data-to="Kernel" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,912.1899999999998 181.41025000000002,960.1899999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Call" data-to="Hash" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,76.9 181.41025000000002,124.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Hash" data-to="Lookup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,161.8 181.41025000000002,209.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Lookup" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Hit (stable weight pointer)" points="140.77858333333336,412.9583333333333 140.77858333333336,591.39 102.5,591.39 102.5,846.3899999999999 148.85408333333336,846.3899999999999 148.85408333333336,858.3899999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Lookup" data-to="Align" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Miss (first access)" points="222.04191666666668,412.9583333333333 222.04191666666668,489.59 260.32050000000004,489.59 260.32050000000004,569.89" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Align" data-to="Wrap" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,623.6899999999999 260.32050000000004,671.6899999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wrap" data-to="Store" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,725.4899999999999 260.32050000000004,773.4899999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Store" data-to="Return" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="260.32050000000004,810.3899999999999 260.32050000000004,846.3899999999999 213.96641666666665,846.3899999999999 213.96641666666665,858.3899999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Return" data-to="Kernel" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.41025000000002,912.1899999999998 181.41025000000002,960.1899999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Lookup" data-to="Return" data-label="Hit (stable weight pointer)">
-  <rect x="36" y="598.39" width="132.29200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="102.14600000000002" y="613.54" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Hit (stable weight pointer)</text>
+  <rect x="36" y="598.39" width="132.29200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="102.14600000000002" y="613.54" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">Hit (stable weight pointer)</text>
 </g>
 <g class="edge-label" data-from="Lookup" data-to="Align" data-label="Miss (first access)">
-  <rect x="208.3205" y="496.59" width="103.78000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="260.2105" y="511.73999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Miss (first access)</text>
+  <rect x="208.3205" y="496.59" width="103.78000000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="260.2105" y="511.73999999999995" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">Miss (first access)</text>
 </g>
 <g class="node" data-id="Call" data-label="getBufRef(ptr, len)" data-shape="rectangle">
   <rect x="108.93575000000001" y="40" width="144.949" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
@@ -81,7 +74,7 @@ to Metal compute encoder" data-shape="rectangle">
   <text x="181.41025000000002" y="987.0899999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="181.41025000000002" dy="-3.9000000000000012">Pass BufRef{buf, offset}</tspan><tspan x="181.41025000000002" dy="16.900000000000002">to Metal compute encoder</tspan></text>
 </g>
 <g class="node" data-id="Lookup" data-label="buf_cache.get(aligned_base)?" data-shape="diamond">
-  <polygon points="181.41025000000002,209.8 303.30525,331.695 181.41025000000002,453.59 59.51525000000004,331.695" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="181.41025000000002" y="331.695" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">buf_cache.get(aligned_base)?</text>
+  <polygon points="181.41025000000002,209.8 303.30525,331.695 181.41025000000002,453.59 59.51525000000004,331.695" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="181.41025000000002" y="331.695" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">buf_cache.get(aligned_base)?</text>
 </g>
 </svg>

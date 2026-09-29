@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 471.55999999999995 310" width="471.55999999999995" height="310" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 471.55999999999995 310" width="471.55999999999995" height="310" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,51 +19,51 @@
 </style>
 <defs>
   <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" />
   </marker>
   <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="#504b47" stroke-width="1" />
   </marker>
 </defs>
-<line class="lifeline" data-actor="A" x1="74.7625" y1="70" x2="74.7625" y2="280" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="M" x1="235.77999999999997" y1="70" x2="235.77999999999997" y2="280" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="B" x1="396.79749999999996" y1="70" x2="396.79749999999996" y2="280" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="A" x1="74.7625" y1="70" x2="74.7625" y2="280" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="M" x1="235.77999999999997" y1="70" x2="235.77999999999997" y2="280" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="B" x1="396.79749999999996" y1="70" x2="396.79749999999996" y2="280" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
 <g class="message" data-from="A" data-to="M" data-label="Read counter → 0" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="74.7625" y1="90" x2="235.77999999999997" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="155.27124999999998" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Read counter → 0</text>
+  <line x1="74.7625" y1="90" x2="235.77999999999997" y2="90" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="155.27124999999998" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Read counter → 0</text>
 </g>
 <g class="message" data-from="B" data-to="M" data-label="Read counter → 0" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="396.79749999999996" y1="130" x2="235.77999999999997" y2="130" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="316.28874999999994" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Read counter → 0</text>
+  <line x1="396.79749999999996" y1="130" x2="235.77999999999997" y2="130" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="316.28874999999994" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Read counter → 0</text>
 </g>
 <g class="message" data-from="A" data-to="M" data-label="Write counter = 0+1 = 1" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="74.7625" y1="185" x2="235.77999999999997" y2="185" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="155.27124999999998" y="175" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Write counter = 0+1 = 1</text>
+  <line x1="74.7625" y1="185" x2="235.77999999999997" y2="185" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="155.27124999999998" y="175" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Write counter = 0+1 = 1</text>
 </g>
 <g class="message" data-from="B" data-to="M" data-label="Write counter = 0+1 = 1" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="396.79749999999996" y1="225" x2="235.77999999999997" y2="225" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="316.28874999999994" y="215" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Write counter = 0+1 = 1</text>
+  <line x1="396.79749999999996" y1="225" x2="235.77999999999997" y2="225" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="316.28874999999994" y="215" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Write counter = 0+1 = 1</text>
 </g>
 <g class="note" data-position="over" data-actors="A,B">
-  <polygon points="152.56599999999997,138 312.994,138 318.994,144 318.994,161 152.56599999999997,161" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="312.994,138 318.994,144 312.994,144" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="235.77999999999997" y="149.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Both see 0 before either writes</text>
+  <polygon points="152.56599999999997,138 312.994,138 318.994,144 318.994,161 152.56599999999997,161" fill="#ffffff" stroke="#9c938a" stroke-width="0.75" />
+  <polygon points="312.994,138 318.994,144 312.994,144" fill="#e2ded9" stroke="#9c938a" stroke-width="0.75" />
+  <text x="235.77999999999997" y="149.5" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Both see 0 before either writes</text>
 </g>
 <g class="note" data-position="over" data-actors="M">
-  <polygon points="162.96099999999996,233 302.59899999999993,233 308.59899999999993,239 308.59899999999993,256 162.96099999999996,256" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="302.59899999999993,233 308.59899999999993,239 302.59899999999993,239" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="235.77999999999997" y="244.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">Final value: 1 (expected: 2)</text>
+  <polygon points="162.96099999999996,233 302.59899999999993,233 308.59899999999993,239 308.59899999999993,256 162.96099999999996,256" fill="#ffffff" stroke="#9c938a" stroke-width="0.75" />
+  <polygon points="302.59899999999993,233 308.59899999999993,239 302.59899999999993,239" fill="#e2ded9" stroke="#9c938a" stroke-width="0.75" />
+  <text x="235.77999999999997" y="244.5" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">Final value: 1 (expected: 2)</text>
 </g>
 <g class="actor" data-id="A" data-label="Thread A" data-type="participant">
-  <rect x="30" y="30" width="89.525" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="74.7625" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Thread A</text>
+  <rect x="30" y="30" width="89.525" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="74.7625" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Thread A</text>
 </g>
 <g class="actor" data-id="M" data-label="Memory (counter=0)" data-type="participant">
-  <rect x="159.52499999999998" y="30" width="152.51" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="235.77999999999997" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Memory (counter=0)</text>
+  <rect x="159.52499999999998" y="30" width="152.51" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="235.77999999999997" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Memory (counter=0)</text>
 </g>
 <g class="actor" data-id="B" data-label="Thread B" data-type="participant">
-  <rect x="352.03499999999997" y="30" width="89.525" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="396.79749999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Thread B</text>
+  <rect x="352.03499999999997" y="30" width="89.525" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="396.79749999999996" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Thread B</text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1433.36 693.5" width="1433.36" height="693.5" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1433.36 693.5" width="1433.36" height="693.5" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,45 +19,33 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Files" data-label="Two-file model loading">
-  <rect x="1393.36" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="1393.36" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="1405.36" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Two-file model loading</text>
 </g>
 <g class="subgraph" data-id="VisionEncoder" data-label="Vision encoder (v.blk.* tensors)">
-  <rect x="385.45849999999996" y="302.40000000000003" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="385.45849999999996" y="302.40000000000003" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="397.45849999999996" y="316.40000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Vision encoder (v.blk.* tensors)</text>
 </g>
 <g class="subgraph" data-id="Projector" data-label="Multimodal projector (mm.* tensors)">
-  <rect x="385.45849999999996" y="350.40000000000003" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="385.45849999999996" y="350.40000000000003" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="397.45849999999996" y="364.40000000000003" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Multimodal projector (mm.* tensors)</text>
 </g>
 <g class="subgraph" data-id="LLM" data-label="LLM forward pass">
-  <rect x="148.41299999999995" y="158.7" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="148.41299999999995" y="158.7" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="160.41299999999995" y="172.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">LLM forward pass</text>
 </g>
-<polyline class="edge" data-from="Patch" data-to="PosEmb" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="598.7919999999999,110.70000000000005 598.7919999999999,150.25000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="PosEmb" data-to="ViT" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="598.7919999999999,204.05000000000007 598.7919999999999,260.50000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="TokEmb" data-to="VizSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="539.6289999999999,433.00000000000006 539.6289999999999,469.00000000000006 493.24741666666654,469.00000000000006 493.24741666666654,481.00000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="VizSlot" data-to="Layers" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="462.5437499999999,551.7 462.5437499999999,599.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="MmprojGGUF" data-to="VisionEncoder" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="385.45849999999996,220.95000000000005 385.45849999999996,302.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="VisionEncoder" data-to="Projector" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="385.45849999999996,302.40000000000003 385.45849999999996,350.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="MainGGUF" data-to="LLM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="148.41299999999995,110.7 148.41299999999995,158.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Patch" data-to="PosEmb" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="598.7919999999999,110.70000000000005 598.7919999999999,150.25000000000006" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PosEmb" data-to="ViT" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="598.7919999999999,204.05000000000007 598.7919999999999,260.50000000000006" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokEmb" data-to="VizSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="539.6289999999999,433.00000000000006 539.6289999999999,469.00000000000006 493.24741666666654,469.00000000000006 493.24741666666654,481.00000000000006" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VizSlot" data-to="Layers" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="462.5437499999999,551.7 462.5437499999999,599.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MmprojGGUF" data-to="VisionEncoder" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="385.45849999999996,220.95000000000005 385.45849999999996,302.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="VisionEncoder" data-to="Projector" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="385.45849999999996,302.40000000000003 385.45849999999996,350.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="MainGGUF" data-to="LLM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="148.41299999999995,110.7 148.41299999999995,158.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Projector" data-to="VizSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="projection_dim
-must match n_embd" points="385.45849999999996,350.40000000000003 385.45849999999996,469.00000000000006 431.8400833333332,469.00000000000006 431.8400833333332,481.00000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+must match n_embd" points="385.45849999999996,350.40000000000003 385.45849999999996,469.00000000000006 431.8400833333332,469.00000000000006 431.8400833333332,481.00000000000006" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Projector" data-to="VizSlot" data-label="projection_dim
 must match n_embd">
-  <rect x="331.95849999999996" y="393.40000000000003" width="106.75000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="385.33349999999996" y="415.70000000000005" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="385.33349999999996" dy="-3.3000000000000007">projection_dim</tspan><tspan x="385.33349999999996" dy="14.3">must match n_embd</tspan></text>
+  <rect x="331.95849999999996" y="393.40000000000003" width="106.75000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="385.33349999999996" y="415.70000000000005" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="385.33349999999996" dy="-3.3000000000000007">projection_dim</tspan><tspan x="385.33349999999996" dy="14.3">must match n_embd</tspan></text>
 </g>
 <g class="node" data-id="MainGGUF" data-label="main model.gguf
 tensor prefix: blk.N.*

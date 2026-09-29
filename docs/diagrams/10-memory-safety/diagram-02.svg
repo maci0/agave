@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 531.0191666666667 524.1000000000001" width="531.0191666666667" height="524.1000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 491.567 365" width="491.567" height="365" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,58 +18,51 @@
   }
 </style>
 <defs>
-  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" />
   </marker>
-  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="#504b47" stroke-width="1" />
   </marker>
 </defs>
-<polyline class="edge" data-from="A" data-to="B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="297.258,93.80000000000001 297.258,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="B" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.40683333333334,195.60000000000002 268.40683333333334,231.60000000000002 212.02624999999998,231.60000000000002 212.02624999999998,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="C" data-to="D" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="180.70508333333333,297.40000000000003 180.70508333333333,333.4000000000001 129.51749999999998,333.4000000000001 129.51749999999998,345.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="B" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="KVCache.init() fails" points="326.1091666666666,195.60000000000002 326.1091666666666,231.60000000000008 431.03516666666667,231.60000000000008 431.03516666666667,311.9000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="C" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="Backend.init() fails" points="243.34741666666665,297.40000000000003 243.34741666666665,333.40000000000003 294.53499999999997,333.40000000000003 294.53499999999997,422.00000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="D" data-to="G" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="129.51749999999998,382.30000000000007 129.51749999999998,422.00000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="B" data-to="E" data-label="KVCache.init() fails">
-  <rect x="378.53516666666667" y="238.60000000000008" width="104.96800000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="431.0191666666667" y="253.75000000000009" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">KVCache.init() fails</text>
+<line class="lifeline" data-actor="Code" x1="89.5825" y1="70" x2="89.5825" y2="335" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Stack" x1="240.5965" y1="70" x2="240.5965" y2="335" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Cleanup" x1="396.7975" y1="70" x2="396.7975" y2="335" stroke="#94908c" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="Code" data-to="Stack" data-label="defer file.close()" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="89.5825" y1="90" x2="240.5965" y2="90" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="165.0895" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">defer file.close()</text>
 </g>
-<g class="edge-label" data-from="C" data-to="F" data-label="Backend.init() fails">
-  <rect x="243.03499999999994" y="340.40000000000003" width="102.59200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="294.33099999999996" y="355.55" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">Backend.init() fails</text>
+<g class="message" data-from="Code" data-to="Stack" data-label="defer allocator.free(data)" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="89.5825" y1="130" x2="240.5965" y2="130" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="165.0895" y="120" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">defer allocator.free(data)</text>
 </g>
-<g class="node" data-id="A" data-label="alloc weights
-errdefer free(weights)" data-shape="rectangle">
-  <rect x="212.1865" y="40" width="170.14299999999997" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="297.258" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="297.258" dy="-3.9000000000000012">alloc weights</tspan><tspan x="297.258" dy="16.900000000000002">errdefer free(weights)</tspan></text>
+<g class="message" data-from="Code" data-to="Code" data-label="return (normal or error)" data-line-style="solid" data-arrow-head="filled" data-self="true">
+  <polyline points="89.5825,185 119.5825,185 119.5825,205 89.5825,205" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="127.5825" y="195" font-size="11" text-anchor="start" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">return (normal or error)</text>
 </g>
-<g class="node" data-id="B" data-label="KVCache.init()
-errdefer cache.deinit()" data-shape="rectangle">
-  <rect x="210.7045" y="141.8" width="173.10699999999997" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="297.258" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="297.258" dy="-3.9000000000000012">KVCache.init()</tspan><tspan x="297.258" dy="16.900000000000002">errdefer cache.deinit()</tspan></text>
+<g class="message" data-from="Stack" data-to="Cleanup" data-label="allocator.free(data)  [last declared, first run]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="240.5965" y1="255" x2="396.7975" y2="255" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="318.697" y="245" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">allocator.free(data)  [last declared, first run]</text>
 </g>
-<g class="node" data-id="C" data-label="Backend.init()
-errdefer backend.deinit()" data-shape="rectangle">
-  <rect x="118.06275000000001" y="243.60000000000002" width="187.92699999999996" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="212.02625" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="212.02625" dy="-3.9000000000000012">Backend.init()</tspan><tspan x="212.02625" dy="16.900000000000002">errdefer backend.deinit()</tspan></text>
+<g class="message" data-from="Stack" data-to="Cleanup" data-label="file.close()          [first declared, last run]" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="240.5965" y1="295" x2="396.7975" y2="295" stroke="#94908c" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="318.697" y="285" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">file.close()          [first declared, last run]</text>
 </g>
-<g class="node" data-id="D" data-label="return model  (success)" data-shape="rectangle">
-  <rect x="40" y="345.4000000000001" width="179.03499999999997" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="129.51749999999998" y="363.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">return model  (success)</text>
+<g class="note" data-position="over" data-actors="Code">
+  <polygon points="34.28649999999998,138 138.8785,138 144.8785,144 144.8785,161 34.28649999999998,161" fill="#ffffff" stroke="#9c938a" stroke-width="0.75" />
+  <polygon points="138.8785,138 144.8785,144 138.8785,144" fill="#e2ded9" stroke="#9c938a" stroke-width="0.75" />
+  <text x="89.5825" y="149.5" font-size="11" text-anchor="middle" font-weight="400" fill="#a8a4a0" dy="3.8499999999999996">... work happens ...</text>
 </g>
-<g class="node" data-id="E" data-label="free(weights)" data-shape="rectangle">
-  <rect x="372.2691666666666" y="311.9000000000001" width="117.53200000000001" height="36.900000000000006" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="431.0351666666666" y="330.3500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c" dy="4.55">free(weights)</text>
+<g class="actor" data-id="Code" data-label="Function Body" data-type="participant">
+  <rect x="30" y="30" width="119.16499999999999" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="89.5825" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Function Body</text>
 </g>
-<g class="node" data-id="F" data-label="cache.deinit()
-free(weights)" data-shape="rectangle">
-  <rect x="234.28699999999998" y="422.00000000000006" width="120.49600000000001" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="294.53499999999997" y="448.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="294.53499999999997" dy="-3.9000000000000012">cache.deinit()</tspan><tspan x="294.53499999999997" dy="16.900000000000002">free(weights)</tspan></text>
+<g class="actor" data-id="Stack" data-label="Defer Stack" data-type="participant">
+  <rect x="189.165" y="30" width="102.863" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="240.5965" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Defer Stack</text>
 </g>
-<g class="node" data-id="G" data-label="caller owns model
-no errdefers run" data-shape="rectangle">
-  <rect x="56.67249999999997" y="422.00000000000006" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="129.51749999999998" y="448.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="129.51749999999998" dy="-3.9000000000000012">caller owns model</tspan><tspan x="129.51749999999998" dy="16.900000000000002">no errdefers run</tspan></text>
+<g class="actor" data-id="Cleanup" data-label="Cleanup Actions" data-type="participant">
+  <rect x="332.028" y="30" width="129.539" height="40" rx="4" ry="4" fill="#f1efec" stroke="#9c938a" stroke-width="1" />
+  <text x="396.7975" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="#2a2522" dy="4.55">Cleanup Actions</text>
 </g>
 </svg>

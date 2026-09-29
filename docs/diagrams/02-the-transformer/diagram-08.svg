@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 665.0770000000001 389" width="665.0770000000001" height="389" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 666.08775 642.8000000000001" width="666.08775" height="642.8000000000001" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,87 +19,104 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="GEMV" data-label="GEMV — Decode (1 token at a time)">
-  <rect x="40" y="65" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="65" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="79" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GEMV — Decode (1 token at a time)</text>
+<g class="subgraph" data-id="Internal" data-label="RMSNorm internals">
 </g>
-<g class="subgraph" data-id="GEMM" data-label="GEMM — Prefill (N tokens batched)">
-  <rect x="248.41200000000003" y="65" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="248.41200000000003" y="65" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="260.41200000000003" y="79" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GEMM — Prefill (N tokens batched)</text>
+<g class="subgraph" data-id="PreNorm" data-label="Pre-norm placement (default, all models)">
 </g>
-<polyline class="edge" data-from="WA" data-to="XA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="1 dot product
-per row" points="176.05700000000002,248.3 344.077,248.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="XA" data-to="YA" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="433.451,248.3 476.105,248.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="WB" data-to="XB" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="N dot products
-per row" points="176.05700000000002,322.1 344.077,322.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="XB" data-to="YB" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="454.199,322.1 507.5450000000001,322.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GEMV" data-to="GEMM" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="N=200 prompt tokens
-→ 200× more useful
-work per memory load" points="40,65 248.41200000000003,65" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="WA" data-to="XA" data-label="1 dot product
-per row">
-  <rect x="220.05700000000002" y="225.3" width="74.674" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="257.394" y="247.60000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="257.394" dy="-3.3000000000000007">1 dot product</tspan><tspan x="257.394" dy="14.3">per row</tspan></text>
+<g class="subgraph" data-id="PostNorm" data-label="Post-norm placement (Gemma3, norm before residual add)">
 </g>
-<g class="edge-label" data-from="WB" data-to="XB" data-label="N dot products
-per row">
-  <rect x="220.05700000000002" y="299.1" width="85.36600000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="262.74" y="321.40000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="262.74" dy="-3.3000000000000007">N dot products</tspan><tspan x="262.74" dy="14.3">per row</tspan></text>
+<polyline class="edge" data-from="X" data-to="SqMean" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="551.01975,93.80000000000001 551.01975,113.57500000000002 518.6745000000001,113.57500000000002 518.6745000000001,133.35000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SqMean" data-to="RMS" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="518.6745000000001,187.15000000000003 518.6745000000001,226.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="X" data-to="Divide" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="551.01975,93.80000000000001 551.01975,113.57500000000002 551.01975,113.57500000000002 551.01975,345.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="RMS" data-to="Divide" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="518.6745000000001,280.5 518.6745000000001,333.40000000000003 526.1205833333333,333.40000000000003 526.1205833333333,345.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Divide" data-to="Scale" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="551.0197499999999,399.20000000000005 551.01975,447.20000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scale" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="551.01975,501.00000000000006 551.0197499999999,549" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PNResid" data-to="PNNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="180.996,76.9 180.996,133.35000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PNNorm" data-to="PNSub" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="180.996,170.25000000000003 180.996,226.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PNSub" data-to="PNAdd" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="180.996,280.5 180.996,311.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PNAdd" data-to="PNOut" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="180.996,365.40000000000003 180.996,413.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PoResid" data-to="PoSub" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.98800000000006,76.9 362.988,133.35000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PoSub" data-to="PoNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.988,187.15000000000003 362.98800000000006,226.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PoNorm" data-to="PoAdd" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.98800000000006,263.6 362.98800000000006,311.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PoAdd" data-to="PoOut" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.98800000000006,365.40000000000003 362.98800000000006,413.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="X" data-label="&quot;Input vector x
+[n_embd floats" data-shape="rectangle">
+  <rect x="488.54875000000004" y="40" width="124.94200000000001" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="551.01975" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="551.01975" dy="-3.9000000000000012">&quot;Input vector x</tspan><tspan x="551.01975" dy="16.900000000000002">[n_embd floats</tspan></text>
 </g>
-<g class="edge-label" data-from="GEMV" data-to="GEMM" data-label="N=200 prompt tokens
-→ 200× more useful
-work per memory load">
-  <rect x="84" y="35" width="120.41200000000002" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="144.20600000000002" y="64.45" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="144.20600000000002" dy="-10.450000000000001">N=200 prompt tokens</tspan><tspan x="144.20600000000002" dy="14.3">→ 200× more useful</tspan><tspan x="144.20600000000002" dy="14.3">work per memory load</tspan></text>
+<g class="node" data-id="SqMean" data-label="mean(x²)
+per element" data-shape="rectangle">
+  <rect x="463.98400000000004" y="133.35000000000002" width="109.381" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="518.6745000000001" y="160.25000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="518.6745000000001" dy="-3.9000000000000012">mean(x²)</tspan><tspan x="518.6745000000001" dy="16.900000000000002">per element</tspan></text>
 </g>
-<g class="node" data-id="WA" data-label="&quot;Weight matrix W
-[out × in" data-shape="rectangle">
-  <rect x="40" y="221.4" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="108.02850000000001" y="248.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="108.02850000000001" dy="-3.9000000000000012">&quot;Weight matrix W</tspan><tspan x="108.02850000000001" dy="16.900000000000002">[out × in</tspan></text>
+<g class="node" data-id="RMS" data-label="√(mean + ε)
+scalar" data-shape="rectangle">
+  <rect x="465.0955" y="226.70000000000002" width="107.158" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="518.6745" y="253.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="518.6745" dy="-3.9000000000000012">√(mean + ε)</tspan><tspan x="518.6745" dy="16.900000000000002">scalar</tspan></text>
 </g>
-<g class="node" data-id="XA" data-label="&quot;Input x
-[in floats" data-shape="rectangle">
-  <rect x="344.077" y="221.4" width="89.374" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="388.764" y="248.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="388.764" dy="-3.9000000000000012">&quot;Input x</tspan><tspan x="388.764" dy="16.900000000000002">[in floats</tspan></text>
+<g class="node" data-id="Divide" data-label="x / RMS
+→ unit-scale vector" data-shape="rectangle">
+  <rect x="476.32225" y="345.40000000000003" width="149.395" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="551.01975" y="372.3" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="551.01975" dy="-3.9000000000000012">x / RMS</tspan><tspan x="551.01975" dy="16.900000000000002">→ unit-scale vector</tspan></text>
 </g>
-<g class="node" data-id="YA" data-label="&quot;Output y
-[out floats" data-shape="rectangle">
-  <rect x="476.105" y="221.4" width="96.78399999999999" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="524.4970000000001" y="248.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="524.4970000000001" dy="-3.9000000000000012">&quot;Output y</tspan><tspan x="524.4970000000001" dy="16.900000000000002">[out floats</tspan></text>
+<g class="node" data-id="Scale" data-label="× weight
+(learned per-dim)" data-shape="rectangle">
+  <rect x="480.39775000000003" y="447.20000000000005" width="141.244" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="551.01975" y="474.1" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="551.01975" dy="-3.9000000000000012">× weight</tspan><tspan x="551.01975" dy="16.900000000000002">(learned per-dim)</tspan></text>
 </g>
-<g class="node" data-id="NoteA" data-label="Bandwidth-bound:
-each weight byte used once
-Arithmetic intensity ≈ 1 op/byte" data-shape="rectangle">
-  <rect x="268.41200000000003" y="40" width="211.639" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="374.23150000000004" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="374.23150000000004" dy="-12.350000000000001">Bandwidth-bound:</tspan><tspan x="374.23150000000004" dy="16.900000000000002">each weight byte used once</tspan><tspan x="374.23150000000004" dy="16.900000000000002">Arithmetic intensity ≈ 1 op/byte</tspan></text>
+<g class="node" data-id="Out" data-label="&quot;Normalized output
+[n_embd floats" data-shape="rectangle">
+  <rect x="475.95175" y="549" width="150.136" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="551.01975" y="575.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="551.01975" dy="-3.9000000000000012">&quot;Normalized output</tspan><tspan x="551.01975" dy="16.900000000000002">[n_embd floats</tspan></text>
 </g>
-<g class="node" data-id="WB" data-label="&quot;Weight matrix W
-[out × in" data-shape="rectangle">
-  <rect x="40" y="295.20000000000005" width="136.05700000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="108.02850000000001" y="322.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="108.02850000000001" dy="-3.9000000000000012">&quot;Weight matrix W</tspan><tspan x="108.02850000000001" dy="16.900000000000002">[out × in</tspan></text>
+<g class="node" data-id="PNResid" data-label="Residual stream x" data-shape="rectangle">
+  <rect x="108.15100000000001" y="40" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="180.996" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Residual stream x</text>
 </g>
-<g class="node" data-id="XB" data-label="&quot;Input X
-[N × in floats" data-shape="rectangle">
-  <rect x="344.077" y="295.20000000000005" width="110.122" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="399.138" y="322.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="399.138" dy="-3.9000000000000012">&quot;Input X</tspan><tspan x="399.138" dy="16.900000000000002">[N × in floats</tspan></text>
+<g class="node" data-id="PNNorm" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="130.0105" y="133.35000000000002" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="180.996" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">RMSNorm</text>
 </g>
-<g class="node" data-id="YB" data-label="&quot;Output Y
-[N × out floats" data-shape="rectangle">
-  <rect x="507.5450000000001" y="295.20000000000005" width="117.53200000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="566.311" y="322.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="566.311" dy="-3.9000000000000012">&quot;Output Y</tspan><tspan x="566.311" dy="16.900000000000002">[N × out floats</tspan></text>
+<g class="node" data-id="PNSub" data-label="Sublayer
+(Attention or FFN)" data-shape="rectangle">
+  <rect x="108.89200000000001" y="226.70000000000002" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="180.996" y="253.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="180.996" dy="-3.9000000000000012">Sublayer</tspan><tspan x="180.996" dy="16.900000000000002">(Attention or FFN)</tspan></text>
 </g>
-<g class="node" data-id="NoteB" data-label="Compute-bound:
-each weight byte used N times
-Arithmetic intensity ≈ N ops/byte" data-shape="rectangle">
-  <rect x="40" y="130.7" width="224.97699999999998" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="152.4885" y="166.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="152.4885" dy="-12.350000000000001">Compute-bound:</tspan><tspan x="152.4885" dy="16.900000000000002">each weight byte used N times</tspan><tspan x="152.4885" dy="16.900000000000002">Arithmetic intensity ≈ N ops/byte</tspan></text>
+<g class="node" data-id="PNAdd" data-label="+ x
+(residual add)" data-shape="rectangle">
+  <rect x="119.63650000000001" y="311.6" width="122.719" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="180.996" y="338.5" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="180.996" dy="-3.9000000000000012">+ x</tspan><tspan x="180.996" dy="16.900000000000002">(residual add)</tspan></text>
+</g>
+<g class="node" data-id="PNOut" data-label="Next residual stream" data-shape="rectangle">
+  <rect x="100" y="413.40000000000003" width="161.99200000000002" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="180.996" y="431.85" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Next residual stream</text>
+</g>
+<g class="node" data-id="PoResid" data-label="Residual stream x" data-shape="rectangle">
+  <rect x="290.14300000000003" y="40" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="362.98800000000006" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Residual stream x</text>
+</g>
+<g class="node" data-id="PoSub" data-label="Sublayer
+(Attention or FFN)" data-shape="rectangle">
+  <rect x="290.884" y="133.35000000000002" width="144.208" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="362.988" y="160.25000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="362.988" dy="-3.9000000000000012">Sublayer</tspan><tspan x="362.988" dy="16.900000000000002">(Attention or FFN)</tspan></text>
+</g>
+<g class="node" data-id="PoAdd" data-label="+ x
+(residual add)" data-shape="rectangle">
+  <rect x="301.62850000000003" y="311.6" width="122.719" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="362.98800000000006" y="338.5" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="362.98800000000006" dy="-3.9000000000000012">+ x</tspan><tspan x="362.98800000000006" dy="16.900000000000002">(residual add)</tspan></text>
+</g>
+<g class="node" data-id="PoNorm" data-label="RMSNorm" data-shape="rectangle">
+  <rect x="312.00250000000005" y="226.70000000000002" width="101.971" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="362.98800000000006" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">RMSNorm</text>
+</g>
+<g class="node" data-id="PoOut" data-label="Next residual stream" data-shape="rectangle">
+  <rect x="281.992" y="413.40000000000003" width="161.99200000000002" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="362.98800000000006" y="431.85" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Next residual stream</text>
 </g>
 </svg>

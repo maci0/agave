@@ -6,7 +6,7 @@ import {
   Root,
   Title,
 } from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
+import { CloseIcon } from './icons';
 import type { ComponentProps } from 'react';
 import { cn } from './cn';
 
@@ -52,7 +52,7 @@ export const DialogContent = ({ className, children, side = 'center', hideClose,
           className="absolute end-4 top-4 inline-flex size-11 items-center justify-center rounded-sm text-faint transition-colors hover:bg-card hover:text-foreground"
           aria-label="Close dialog"
         >
-          <X className="size-5" aria-hidden="true" />
+          <CloseIcon className="size-5" aria-hidden="true" />
         </Close>
       )}
     </Content>

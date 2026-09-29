@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 554.8509999999999 796.5999999999999" width="554.8509999999999" height="796.5999999999999" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 495.9839999999999 960.9000000000001" width="495.9839999999999" height="960.9000000000001" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,80 +19,98 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Scope" data-label="Overhead eliminated at each tier">
-  <rect x="469.49199999999996" y="93.80000000000001" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="469.49199999999996" y="93.80000000000001" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="481.49199999999996" y="107.80000000000001" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Overhead eliminated at each tier</text>
+<g class="subgraph" data-id="Input" data-label="Input buffer: qg (interleaved, nh heads)">
+  <rect x="142.10399999999998" y="40" width="211.77599999999998" height="278.3" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="142.10399999999998" y="40" width="211.77599999999998" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="154.10399999999998" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Input buffer: qg (interleaved, nh heads)</text>
 </g>
-<polyline class="edge" data-from="Meta" data-to="T3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="355.67949999999996,93.80000000000001 355.67949999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="T3" data-to="T2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="generates" points="355.67949999999996,212.5 355.67949999999996,328.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="T2" data-to="T1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="builds on" points="355.67949999999996,399.5 355.67949999999996,515.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="T1" data-to="Base" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="builds on" points="355.67949999999996,586.5 355.67949999999996,702.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="T3" data-to="T3" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="eliminates
-per-model shader files" points="202.43599999999998,165.36666666666667 192.43599999999998,165.36666666666667 192.43599999999998,188.93333333333334 202.43599999999998,188.93333333333334" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="T2" data-to="T2" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="eliminates
-per-layer dispatch overhead" points="196.50799999999998,352.3666666666667 186.50799999999998,352.3666666666667 186.50799999999998,375.93333333333334 196.50799999999998,375.93333333333334" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="T1" data-to="T1" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="eliminates
-intermediate VRAM writes" points="230.9645,539.3666666666667 220.9645,539.3666666666667 220.9645,562.9333333333334 230.9645,562.9333333333334" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="T3" data-to="T2" data-label="generates">
-  <rect x="322.17949999999996" y="255.49999999999997" width="66.358" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="355.35849999999994" y="270.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">generates</text>
+<g class="subgraph" data-id="Kernel" data-label="GPU kernel: split_qgate
+(1 thread per element, no sync)">
+  <rect x="160.62899999999996" y="448.90000000000003" width="174.726" height="130.7" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="160.62899999999996" y="448.90000000000003" width="174.726" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="172.62899999999996" y="462.90000000000003" font-size="12" font-weight="600" fill="#75716f"><tspan x="172.62899999999996" dy="-3.6000000000000014">GPU kernel: split_qgate</tspan><tspan x="172.62899999999996" dy="15.600000000000001">(1 thread per element, no sync)</tspan></text>
 </g>
-<g class="edge-label" data-from="T2" data-to="T1" data-label="builds on">
-  <rect x="325.67949999999996" y="442.5" width="59.824" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="355.59149999999994" y="457.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">builds on</text>
+<g class="subgraph" data-id="QOut" data-label="Output: q_buf (contiguous Q)">
+  <rect x="40" y="710.2" width="193.992" height="210.70000000000002" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="710.2" width="193.992" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="724.2" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Output: q_buf (contiguous Q)</text>
 </g>
-<g class="edge-label" data-from="T1" data-to="Base" data-label="builds on">
-  <rect x="325.67949999999996" y="629.5" width="59.824" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="355.59149999999994" y="644.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">builds on</text>
+<g class="subgraph" data-id="GOut" data-label="Output: g_buf (contiguous Gate)">
+  <rect x="261.99199999999996" y="710.2" width="193.992" height="210.70000000000002" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="261.99199999999996" y="710.2" width="193.992" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="273.99199999999996" y="724.2" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Output: g_buf (contiguous Gate)</text>
 </g>
-<g class="edge-label" data-from="T3" data-to="T3" data-label="eliminates
-per-model shader files">
-  <rect x="72.83599999999996" y="154.85" width="121.60000000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="133.63599999999997" y="177.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="133.63599999999997" dy="-3.3000000000000007">eliminates</tspan><tspan x="133.63599999999997" dy="14.3">per-model shader files</tspan></text>
+<polyline class="edge" data-from="Input" data-to="Kernel" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="read interleaved
+per-head block" points="247.992,318.3 247.99199999999996,448.90000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Kernel" data-to="QOut" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write first hd
+elements" points="218.87099999999998,579.6 218.87099999999998,615.6 136.99599999999998,615.6 136.99599999999998,710.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Kernel" data-to="GOut" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="write second hd
+elements (offset +hd)" points="277.11299999999994,579.6 277.11299999999994,615.6 358.98799999999994,615.6 358.98799999999994,710.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Input" data-to="Kernel" data-label="read interleaved
+per-head block">
+  <rect x="199.99199999999996" y="361.3" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="247.72399999999996" y="383.6" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="247.72399999999996" dy="-3.3000000000000007">read interleaved</tspan><tspan x="247.72399999999996" dy="14.3">per-head block</tspan></text>
 </g>
-<g class="edge-label" data-from="T2" data-to="T2" data-label="eliminates
-per-layer dispatch overhead">
-  <rect x="36.019999999999996" y="341.85" width="152.488" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="112.264" y="364.15000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="112.264" dy="-3.3000000000000007">eliminates</tspan><tspan x="112.264" dy="14.3">per-layer dispatch overhead</tspan></text>
+<g class="edge-label" data-from="Kernel" data-to="QOut" data-label="write first hd
+elements">
+  <rect x="99.99600000000001" y="622.6" width="73.486" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="136.739" y="644.9" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="136.739" dy="-3.3000000000000007">write first hd</tspan><tspan x="136.739" dy="14.3">elements</tspan></text>
 </g>
-<g class="edge-label" data-from="T1" data-to="T1" data-label="eliminates
-intermediate VRAM writes">
-  <rect x="85.9205" y="528.85" width="137.04399999999998" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="154.4425" y="551.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="154.4425" dy="-3.3000000000000007">eliminates</tspan><tspan x="154.4425" dy="14.3">intermediate VRAM writes</tspan></text>
+<g class="edge-label" data-from="Kernel" data-to="GOut" data-label="write second hd
+elements (offset +hd)">
+  <rect x="302.98799999999994" y="622.6" width="111.50200000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="358.739" y="644.9" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="358.739" dy="-3.3000000000000007">write second hd</tspan><tspan x="358.739" dy="14.3">elements (offset +hd)</tspan></text>
 </g>
-<g class="node" data-id="Meta" data-label="Model metadata
-(GGUF / SafeTensors)" data-shape="rectangle">
-  <rect x="269.86699999999996" y="40" width="171.62499999999997" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="355.67949999999996" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="355.67949999999996" dy="-3.9000000000000012">Model metadata</tspan><tspan x="355.67949999999996" dy="16.900000000000002">(GGUF / SafeTensors)</tspan></text>
+<g class="node" data-id="H0" data-label="Head 0
+Q0 .. Q_hd-1 | G0 .. G_hd-1
+(stride = hd*2 per head)" data-shape="rectangle">
+  <rect x="158.10399999999998" y="231.60000000000002" width="179.77599999999998" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="247.99199999999996" y="266.95000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="247.99199999999996" dy="-12.350000000000001">Head 0</tspan><tspan x="247.99199999999996" dy="16.900000000000002">Q0 .. Q_hd-1 | G0 .. G_hd-1</tspan><tspan x="247.99199999999996" dy="16.900000000000002">(stride = hd*2 per head)</tspan></text>
 </g>
-<g class="node" data-id="T3" data-label="Tier 3: Composed megakernel
-mega_compose.zig generates MSL at runtime
-from ModelDesc — no hand-written shaders" data-shape="rectangle">
-  <rect x="202.43599999999998" y="141.8" width="306.48699999999997" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="355.67949999999996" y="177.15" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="355.67949999999996" dy="-12.350000000000001">Tier 3: Composed megakernel</tspan><tspan x="355.67949999999996" dy="16.900000000000002">mega_compose.zig generates MSL at runtime</tspan><tspan x="355.67949999999996" dy="16.900000000000002">from ModelDesc — no hand-written shaders</tspan></text>
+<g class="node" data-id="H1" data-label="Head 1
+Q0 .. Q_hd-1 | G0 .. G_hd-1" data-shape="rectangle">
+  <rect x="158.10399999999998" y="84" width="178.29399999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="247.25099999999998" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="247.25099999999998" dy="-3.9000000000000012">Head 1</tspan><tspan x="247.25099999999998" dy="16.900000000000002">Q0 .. Q_hd-1 | G0 .. G_hd-1</tspan></text>
 </g>
-<g class="node" data-id="T2" data-label="Tier 2: True megakernel
-Entire transformer layer in ONE dispatch
-(norm + QKV + RoPE + KV cache + SDPA + FFN)" data-shape="rectangle">
-  <rect x="196.50799999999998" y="328.8" width="318.34299999999996" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="355.67949999999996" y="364.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="355.67949999999996" dy="-12.350000000000001">Tier 2: True megakernel</tspan><tspan x="355.67949999999996" dy="16.900000000000002">Entire transformer layer in ONE dispatch</tspan><tspan x="355.67949999999996" dy="16.900000000000002">(norm + QKV + RoPE + KV cache + SDPA + FFN)</tspan></text>
+<g class="node" data-id="H2" data-label="Head nh-1
+Q0 .. Q_hd-1 | G0 .. G_hd-1" data-shape="rectangle">
+  <rect x="158.10399999999998" y="157.8" width="178.29399999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="247.25099999999998" y="184.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="247.25099999999998" dy="-3.9000000000000012">Head nh-1</tspan><tspan x="247.25099999999998" dy="16.900000000000002">Q0 .. Q_hd-1 | G0 .. G_hd-1</tspan></text>
 </g>
-<g class="node" data-id="T1" data-label="Tier 1: Fused FFN
-3 FFN dispatches → 1 dispatch
-(gate GEMV + up GEMV + activation)" data-shape="rectangle">
-  <rect x="230.9645" y="515.8000000000001" width="249.42999999999995" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="355.67949999999996" y="551.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="355.67949999999996" dy="-12.350000000000001">Tier 1: Fused FFN</tspan><tspan x="355.67949999999996" dy="16.900000000000002">3 FFN dispatches → 1 dispatch</tspan><tspan x="355.67949999999996" dy="16.900000000000002">(gate GEMV + up GEMV + activation)</tspan></text>
+<g class="node" data-id="K" data-label="&quot;tid = h * hd + i
+src = h * hd * 2 + i
+q_out[dst" data-shape="rectangle">
+  <rect x="176.62899999999996" y="492.90000000000003" width="142.726" height="70.7" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="247.99199999999996" y="528.25" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="247.99199999999996" dy="-12.350000000000001">&quot;tid = h * hd + i</tspan><tspan x="247.99199999999996" dy="16.900000000000002">src = h * hd * 2 + i</tspan><tspan x="247.99199999999996" dy="16.900000000000002">q_out[dst</tspan></text>
 </g>
-<g class="node" data-id="Base" data-label="Baseline: gemvMulti + addRmsNorm
-Batched projections, fused residual+norm" data-shape="rectangle">
-  <rect x="212.81" y="702.8" width="285.7389999999999" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="355.67949999999996" y="729.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="355.67949999999996" dy="-3.9000000000000012">Baseline: gemvMulti + addRmsNorm</tspan><tspan x="355.67949999999996" dy="16.900000000000002">Batched projections, fused residual+norm</tspan></text>
+<g class="node" data-id="Q0" data-label="Head 0: Q0..Q_hd-1" data-shape="rectangle">
+  <rect x="56" y="811.1" width="147.913" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="129.9565" y="829.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Head 0: Q0..Q_hd-1</text>
+</g>
+<g class="node" data-id="Q1" data-label="Head 1: Q0..Q_hd-1" data-shape="rectangle">
+  <rect x="56" y="754.2" width="143.467" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="127.7335" y="772.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Head 1: Q0..Q_hd-1</text>
+</g>
+<g class="node" data-id="Q2" data-label="Head nh-1: Q0..Q_hd-1" data-shape="rectangle">
+  <rect x="56" y="868" width="161.992" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="136.99599999999998" y="886.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Head nh-1: Q0..Q_hd-1</text>
+</g>
+<g class="node" data-id="G0" data-label="Head 0: G0..G_hd-1" data-shape="rectangle">
+  <rect x="277.99199999999996" y="811.1" width="147.913" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="351.94849999999997" y="829.5500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Head 0: G0..G_hd-1</text>
+</g>
+<g class="node" data-id="G1" data-label="Head 1: G0..G_hd-1" data-shape="rectangle">
+  <rect x="277.99199999999996" y="754.2" width="143.467" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="349.72549999999995" y="772.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Head 1: G0..G_hd-1</text>
+</g>
+<g class="node" data-id="G2" data-label="Head nh-1: G0..G_hd-1" data-shape="rectangle">
+  <rect x="277.99199999999996" y="868" width="161.992" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="358.98799999999994" y="886.45" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Head nh-1: G0..G_hd-1</text>
 </g>
 </svg>

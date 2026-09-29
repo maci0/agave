@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 655.87275 943.4820000000001" width="655.87275" height="943.4820000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 848.6880000000001 471.20000000000005" width="848.6880000000001" height="471.20000000000005" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,72 +19,80 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="START" data-to="Q1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="402.75874999999996,93.80000000000001 402.75874999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q1" data-to="Q2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
-e.g. return buf, return struct" points="365.83208333333334,326.4333333333334 365.83208333333334,399.35999999999996 287.68375000000003,399.35999999999996 287.68375000000003,493.96000000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q1" data-to="USE_DEFER" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no
-this function owns it fully" points="439.6854166666666,326.4333333333334 439.6854166666666,536.882 517.83375,536.882 517.83375,631.482" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q2" data-to="USE_ERRDEFER" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
-more fallible steps below" points="252.9800833333333,667.4783333333334 252.9800833333333,738.182 159.52800000000002,738.182 159.528,832.782" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q2" data-to="NO_DEFER" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no
-this is the last step" points="322.3874166666667,667.4783333333332 322.3874166666667,738.182 415.83949999999993,738.182 415.83949999999993,832.782" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="Q1" data-to="Q2" data-label="yes
-e.g. return buf, return struct">
-  <rect x="215.18374999999995" y="406.35999999999996" width="144.76600000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="287.56674999999996" y="428.65999999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="287.56674999999996" dy="-3.3000000000000007">yes</tspan><tspan x="287.56674999999996" dy="14.3">e.g. return buf, return struct</tspan></text>
+<g class="subgraph" data-id="Acquire" data-label="Resource Acquisition">
+  <rect x="40" y="130.25" width="346.18600000000004" height="210.70000000000002" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="130.25" width="346.18600000000004" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="144.25" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Resource Acquisition</text>
 </g>
-<g class="edge-label" data-from="Q1" data-to="USE_DEFER" data-label="no
-this function owns it fully">
-  <rect x="454.33374999999995" y="543.882" width="126.946" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="517.80675" y="566.1819999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="517.80675" dy="-3.3000000000000007">no</tspan><tspan x="517.80675" dy="14.3">this function owns it fully</tspan></text>
+<g class="subgraph" data-id="Exit" data-label="Scope Exit">
+  <rect x="434.18600000000004" y="40" width="374.502" height="391.20000000000005" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="434.18600000000004" y="40" width="374.502" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="446.18600000000004" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Scope Exit</text>
 </g>
-<g class="edge-label" data-from="Q2" data-to="USE_ERRDEFER" data-label="yes
-more fallible steps below">
-  <rect x="94.528" y="745.182" width="129.91600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="159.48600000000002" y="767.482" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="159.48600000000002" dy="-3.3000000000000007">yes</tspan><tspan x="159.48600000000002" dy="14.3">more fallible steps below</tspan></text>
+<polyline class="edge" data-from="Acquire" data-to="Exit" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="386.18600000000004,235.60000000000002 434.18600000000004,235.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R1" data-to="D1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="146.115,192.7 202.26600000000002,192.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R2" data-to="D2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="162.417,306.5 202.26600000000002,306.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R3" data-to="D3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="150.561,249.60000000000002 202.26600000000002,249.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="OK" data-to="NE" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="705.023,137.8 705.023,185.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ERR" data-to="ED" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="538.2215,313.40000000000003 538.2215,361.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BOTH" data-to="DD" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="523.772,120.9 523.772,168.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="R1" data-label="open file" data-shape="rectangle">
+  <rect x="56" y="174.25" width="90.11500000000001" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="101.0575" y="192.7" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">open file</text>
 </g>
-<g class="edge-label" data-from="Q2" data-to="NO_DEFER" data-label="no
-this is the last step">
-  <rect x="365.3395" y="745.182" width="100.81000000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="415.7445" y="767.482" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="415.7445" dy="-3.3000000000000007">no</tspan><tspan x="415.7445" dy="14.3">this is the last step</tspan></text>
+<g class="node" data-id="D1" data-label="defer file.close()" data-shape="rectangle">
+  <rect x="202.26600000000002" y="174.25" width="134.57500000000002" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="269.55350000000004" y="192.7" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">defer file.close()</text>
 </g>
-<g class="node" data-id="START" data-label="You just acquired a resource
-(alloc, open, init)" data-shape="rectangle">
-  <rect x="296.56874999999997" y="40" width="212.38" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="402.75874999999996" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="402.75874999999996" dy="-3.9000000000000012">You just acquired a resource</tspan><tspan x="402.75874999999996" dy="16.900000000000002">(alloc, open, init)</tspan></text>
+<g class="node" data-id="R2" data-label="alloc buffer" data-shape="rectangle">
+  <rect x="56" y="288.05" width="106.417" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="109.2085" y="306.5" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">alloc buffer</text>
 </g>
-<g class="node" data-id="USE_DEFER" data-label="use defer
-cleanup runs on ALL exits
-(success and error)" data-shape="rectangle">
-  <rect x="419.79475" y="631.482" width="196.07799999999997" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="517.83375" y="666.832" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="517.83375" dy="-12.350000000000001">use defer</tspan><tspan x="517.83375" dy="16.900000000000002">cleanup runs on ALL exits</tspan><tspan x="517.83375" dy="16.900000000000002">(success and error)</tspan></text>
+<g class="node" data-id="D2" data-label="errdefer free(buffer)" data-shape="rectangle">
+  <rect x="202.26600000000002" y="288.05" width="159.769" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="282.1505" y="306.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">errdefer free(buffer)</text>
 </g>
-<g class="node" data-id="USE_ERRDEFER" data-label="use errdefer
-cleanup runs ONLY on error
-caller gets ownership on success" data-shape="rectangle">
-  <rect x="40" y="832.782" width="239.05599999999998" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="159.528" y="868.1320000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="159.528" dy="-12.350000000000001">use errdefer</tspan><tspan x="159.528" dy="16.900000000000002">cleanup runs ONLY on error</tspan><tspan x="159.528" dy="16.900000000000002">caller gets ownership on success</tspan></text>
+<g class="node" data-id="R3" data-label="init struct" data-shape="rectangle">
+  <rect x="56" y="231.15" width="94.561" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="103.2805" y="249.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">init struct</text>
 </g>
-<g class="node" data-id="NO_DEFER" data-label="no defer needed
-return and transfer ownership
-no error path to guard" data-shape="rectangle">
-  <rect x="307.056" y="832.782" width="217.56699999999998" height="70.7" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="415.8395" y="868.1320000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="415.8395" dy="-12.350000000000001">no defer needed</tspan><tspan x="415.8395" dy="16.900000000000002">return and transfer ownership</tspan><tspan x="415.8395" dy="16.900000000000002">no error path to guard</tspan></text>
+<g class="node" data-id="D3" data-label="errdefer struct.deinit()" data-shape="rectangle">
+  <rect x="202.26600000000002" y="231.15" width="170.14299999999997" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="287.3375" y="249.60000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">errdefer struct.deinit()</text>
 </g>
-<g class="node" data-id="Q1" data-label="Are you going to return
-this resource to the caller?" data-shape="diamond">
-  <polygon points="402.75874999999996,141.8 513.5387499999999,252.57999999999998 402.75874999999996,363.35999999999996 291.97875,252.57999999999998" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="402.75874999999996" y="252.57999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="402.75874999999996" dy="-3.9000000000000012">Are you going to return</tspan><tspan x="402.75874999999996" dy="16.900000000000002">this resource to the caller?</tspan></text>
+<g class="node" data-id="OK" data-label="success path
+return value" data-shape="rectangle">
+  <rect x="644.4045000000001" y="84" width="121.23700000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="705.0230000000001" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="705.0230000000001" dy="-3.9000000000000012">success path</tspan><tspan x="705.0230000000001" dy="16.900000000000002">return value</tspan></text>
 </g>
-<g class="node" data-id="Q2" data-label="Could the function
-error out after this point?" data-shape="diamond">
-  <polygon points="287.68375,493.9599999999999 391.79474999999996,598.0709999999999 287.68375,702.1819999999999 183.57274999999998,598.0709999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="287.68375" y="598.0709999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="287.68375" dy="-3.9000000000000012">Could the function</tspan><tspan x="287.68375" dy="16.900000000000002">error out after this point?</tspan></text>
+<g class="node" data-id="NE" data-label="errdefers skipped
+caller owns resources" data-shape="rectangle">
+  <rect x="617.3580000000001" y="185.8" width="175.32999999999998" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="705.023" y="212.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="705.023" dy="-3.9000000000000012">errdefers skipped</tspan><tspan x="705.023" dy="16.900000000000002">caller owns resources</tspan></text>
+</g>
+<g class="node" data-id="ERR" data-label="error path
+return error" data-shape="rectangle">
+  <rect x="481.308" y="259.6" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="538.2215" y="286.5" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="538.2215" dy="-3.9000000000000012">error path</tspan><tspan x="538.2215" dy="16.900000000000002">return error</tspan></text>
+</g>
+<g class="node" data-id="ED" data-label="errdefers run
+partial state cleaned up" data-shape="rectangle">
+  <rect x="450.18600000000004" y="361.40000000000003" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="538.2215" y="388.3" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="538.2215" dy="-3.9000000000000012">errdefers run</tspan><tspan x="538.2215" dy="16.900000000000002">partial state cleaned up</tspan></text>
+</g>
+<g class="node" data-id="BOTH" data-label="always" data-shape="rectangle">
+  <rect x="482.04900000000004" y="84" width="83.446" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="523.772" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">always</text>
+</g>
+<g class="node" data-id="DD" data-label="defers run
+(in reverse order)" data-shape="rectangle">
+  <rect x="450.18600000000004" y="168.9" width="147.17200000000003" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="523.772" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="523.772" dy="-3.9000000000000012">defers run</tspan><tspan x="523.772" dy="16.900000000000002">(in reverse order)</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 963.7239999999999 347.2" width="963.7239999999999" height="347.2" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980.7669999999999 342.3" width="980.7669999999999" height="342.3" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,20 +19,20 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="Budget" data-to="KV" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 185.83349999999996,111.80000000000001 185.83349999999996,129.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Budget" data-to="Q" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 316.54549999999995,111.80000000000001 316.54549999999995,129.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Budget" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 436.8834999999999,111.80000000000001 436.8834999999999,129.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Budget" data-to="Scores" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 555.7394999999999,111.80000000000001 555.7394999999999,129.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Budget" data-to="Shared" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 672.3725,111.80000000000001 672.3725,129.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Budget" data-to="Free" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 819.757,111.80000000000001 819.757,129.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="KV" data-to="Constraint" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.83349999999996,183.60000000000002 185.83349999999996,234.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Free" data-to="Fallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="819.757,200.5 819.757,234.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Budget" data-to="KV" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 185.83349999999996,111.80000000000001 185.83349999999996,129.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Budget" data-to="Q" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 316.54549999999995,111.80000000000001 316.54549999999995,129.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Budget" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 436.8834999999999,111.80000000000001 436.8834999999999,129.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Budget" data-to="Scores" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 555.7394999999999,111.80000000000001 555.7394999999999,129.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Budget" data-to="Shared" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 672.3725,111.80000000000001 672.3725,129.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Budget" data-to="Free" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="496.3114999999999,93.80000000000001 496.3114999999999,111.80000000000001 819.757,111.80000000000001 819.757,129.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="KV" data-to="Constraint" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.83349999999996,183.60000000000002 185.83349999999996,234.05" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Free" data-to="Fallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="819.757,200.5 819.757,234.05" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Budget" data-label="Apple Silicon threadgroup
 memory limit: 32 KB total" data-shape="rectangle">
   <rect x="399.0134999999999" y="40" width="194.596" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
@@ -47,28 +40,28 @@ memory limit: 32 KB total" data-shape="rectangle">
 </g>
 <g class="node" data-id="KV" data-label="&quot;kv_block
 float[16 × 256" data-shape="rectangle">
-  <rect x="128.91999999999996" y="129.8" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="185.83349999999996" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="185.83349999999996" dy="-3.9000000000000012">&quot;kv_block</tspan><tspan x="185.83349999999996" dy="16.900000000000002">float[16 × 256</tspan></text>
+  <rect x="128.91999999999996" y="129.8" width="113.827" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="185.83349999999996" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="185.83349999999996" dy="-3.9000000000000012">&quot;kv_block</tspan><tspan x="185.83349999999996" dy="16.900000000000002">float[16 × 256</tspan></text>
 </g>
 <g class="node" data-id="Q" data-label="&quot;q_local
 float[256" data-shape="rectangle">
-  <rect x="270.74699999999996" y="129.8" width="91.597" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="316.54549999999995" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="316.54549999999995" dy="-3.9000000000000012">&quot;q_local</tspan><tspan x="316.54549999999995" dy="16.900000000000002">float[256</tspan></text>
+  <rect x="270.74699999999996" y="129.8" width="91.597" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="316.54549999999995" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="316.54549999999995" dy="-3.9000000000000012">&quot;q_local</tspan><tspan x="316.54549999999995" dy="16.900000000000002">float[256</tspan></text>
 </g>
 <g class="node" data-id="Out" data-label="&quot;out_acc
 float[256" data-shape="rectangle">
-  <rect x="390.34399999999994" y="129.8" width="93.07900000000001" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="436.8834999999999" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="436.8834999999999" dy="-3.9000000000000012">&quot;out_acc</tspan><tspan x="436.8834999999999" dy="16.900000000000002">float[256</tspan></text>
+  <rect x="390.34399999999994" y="129.8" width="93.07900000000001" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="436.8834999999999" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="436.8834999999999" dy="-3.9000000000000012">&quot;out_acc</tspan><tspan x="436.8834999999999" dy="16.900000000000002">float[256</tspan></text>
 </g>
 <g class="node" data-id="Scores" data-label="&quot;scores
 float[16" data-shape="rectangle">
-  <rect x="511.42299999999994" y="129.8" width="88.633" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="555.7394999999999" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="555.7394999999999" dy="-3.9000000000000012">&quot;scores</tspan><tspan x="555.7394999999999" dy="16.900000000000002">float[16</tspan></text>
+  <rect x="511.42299999999994" y="129.8" width="88.633" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="555.7394999999999" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="555.7394999999999" dy="-3.9000000000000012">&quot;scores</tspan><tspan x="555.7394999999999" dy="16.900000000000002">float[16</tspan></text>
 </g>
 <g class="node" data-id="Shared" data-label="&quot;shared
 float[8" data-shape="rectangle">
-  <rect x="628.0559999999999" y="129.8" width="88.633" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="672.3725" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="672.3725" dy="-3.9000000000000012">&quot;shared</tspan><tspan x="672.3725" dy="16.900000000000002">float[8</tspan></text>
+  <rect x="628.0559999999999" y="129.8" width="88.633" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="672.3725" y="156.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="672.3725" dy="-3.9000000000000012">&quot;shared</tspan><tspan x="672.3725" dy="16.900000000000002">float[8</tspan></text>
 </g>
 <g class="node" data-id="Free" data-label="headroom
 ~13.4 KB remaining
@@ -82,10 +75,9 @@ Increasing head_dim to 512 → 32 KB (maxed)" data-shape="rectangle">
   <rect x="40" y="234.05" width="291.667" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
   <text x="185.8335" y="269.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="185.8335" dy="-12.350000000000001">Constraint: 16 positions × 256 head_dim</tspan><tspan x="185.8335" dy="16.900000000000002">Increasing to 32 pos → 32 KB (maxed)</tspan><tspan x="185.8335" dy="16.900000000000002">Increasing head_dim to 512 → 32 KB (maxed)</tspan></text>
 </g>
-<g class="node" data-id="Fallback" data-label="Contexts &gt; 4096 tokens
-or head_dim &gt; 256
-fall back to chunked attention" data-shape="rectangle">
-  <rect x="715.79" y="234.05" width="207.93399999999994" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="819.757" y="269.40000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="819.757" dy="-12.350000000000001">Contexts &gt; 4096 tokens</tspan><tspan x="819.757" dy="16.900000000000002">or head_dim &gt; 256</tspan><tspan x="819.757" dy="16.900000000000002">fall back to chunked attention</tspan></text>
+<g class="node" data-id="Fallback" data-label="seq_len &gt; 65536 or head_dim &gt; 512
+panics (no silent fallback)" data-shape="rectangle">
+  <rect x="698.747" y="234.05" width="242.01999999999998" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="819.757" y="260.95" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="819.757" dy="-3.9000000000000012">seq_len &gt; 65536 or head_dim &gt; 512</tspan><tspan x="819.757" dy="16.900000000000002">panics (no silent fallback)</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 244.95600000000002 915.9999999999999" width="244.95600000000002" height="915.9999999999999" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 987.1120000000001 199.4" width="987.1120000000001" height="199.4" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,61 +19,50 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="Start" data-to="S1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="find most frequent pair" points="122.47800000000001,93.80000000000001 122.47800000000001,210.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="S1" data-to="S2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="find next most frequent pair" points="122.47800000000001,263.90000000000003 122.47800000000001,380.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="S2" data-to="S3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="find next most frequent pair" points="122.47800000000001,434.00000000000006 122.47800000000001,550.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="S3" data-to="S4" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="find next most frequent pair" points="122.47800000000001,604.1 122.47800000000001,720.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="S4" data-to="Done" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="122.47800000000001,774.1999999999999 122.47800000000001,822.1999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="Start" data-to="S1" data-label="find most frequent pair">
-  <rect x="62.47800000000001" y="136.8" width="119.22400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="122.09000000000002" y="151.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">find most frequent pair</text>
+<g class="subgraph" data-id="Vocab" data-label="Vocabulary (32K–256K entries)">
 </g>
-<g class="edge-label" data-from="S1" data-to="S2" data-label="find next most frequent pair">
-  <rect x="51.47800000000001" y="306.90000000000003" width="141.20200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="122.07900000000002" y="322.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">find next most frequent pair</text>
+<polyline class="edge" data-from="Raw" data-to="Tok" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.16500000000002,103.57500000000002 215.16500000000002,103.57500000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tok" data-to="IDs" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="348.25800000000004,103.57500000000002 396.25800000000004,103.57500000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IDs" data-to="Embed" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="525.6460000000001,94.60833333333335 561.6460000000001,94.60833333333335 561.6460000000001,66.9 573.6460000000001,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Embed" data-to="Vec" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="746.753,66.9 794.753,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="IDs" data-to="Back" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="decode path" points="525.6460000000001,112.54166666666669 561.6460000000001,112.54166666666669 561.6460000000001,140.25 688.9140000000001,140.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="IDs" data-to="Back" data-label="decode path">
+  <rect x="569.6460000000001" y="124.25" width="75.26800000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="607.2800000000001" y="139.4" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">decode path</text>
 </g>
-<g class="edge-label" data-from="S2" data-to="S3" data-label="find next most frequent pair">
-  <rect x="51.47800000000001" y="477.00000000000006" width="141.20200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="122.07900000000002" y="492.15000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">find next most frequent pair</text>
+<g class="node" data-id="Raw" data-label="Raw Text
+\&quot;Hello, world!\&quot;" data-shape="rectangle">
+  <rect x="40" y="76.67500000000001" width="127.165" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="103.58250000000001" y="103.57500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="103.58250000000001" dy="-3.9000000000000012">Raw Text</tspan><tspan x="103.58250000000001" dy="16.900000000000002">\&quot;Hello, world!\&quot;</tspan></text>
 </g>
-<g class="edge-label" data-from="S3" data-to="S4" data-label="find next most frequent pair">
-  <rect x="51.47800000000001" y="647.1" width="141.20200000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="122.07900000000002" y="662.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">find next most frequent pair</text>
+<g class="node" data-id="Tok" data-label="BPE Tokenizer
+bpe.zig" data-shape="rectangle">
+  <rect x="215.16500000000002" y="76.67500000000001" width="133.09300000000002" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="281.7115" y="103.57500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="281.7115" dy="-3.9000000000000012">BPE Tokenizer</tspan><tspan x="281.7115" dy="16.900000000000002">bpe.zig</tspan></text>
 </g>
-<g class="node" data-id="Start" data-label="Input bytes
-H · e · l · l · o" data-shape="rectangle">
-  <rect x="62.971000000000004" y="40" width="119.01400000000001" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="122.47800000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="122.47800000000001" dy="-3.9000000000000012">Input bytes</tspan><tspan x="122.47800000000001" dy="16.900000000000002">H · e · l · l · o</tspan></text>
+<g class="node" data-id="IDs" data-label="&quot;Token IDs
+[15496, 11, 995, 0" data-shape="rectangle">
+  <rect x="396.25800000000004" y="76.67500000000001" width="129.38800000000003" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="460.95200000000006" y="103.57500000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="460.95200000000006" dy="-3.9000000000000012">&quot;Token IDs</tspan><tspan x="460.95200000000006" dy="16.900000000000002">[15496, 11, 995, 0</tspan></text>
 </g>
-<g class="node" data-id="S1" data-label="Merge: l+l → ll
-H · e · ll · o" data-shape="rectangle">
-  <rect x="63.712" y="210.1" width="117.53200000000001" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="122.47800000000001" y="237" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="122.47800000000001" dy="-3.9000000000000012">Merge: l+l → ll</tspan><tspan x="122.47800000000001" dy="16.900000000000002">H · e · ll · o</tspan></text>
+<g class="node" data-id="Embed" data-label="&quot;Embedding Table
+[vocab_size × n_embd" data-shape="rectangle">
+  <rect x="573.6460000000001" y="40" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="660.1995000000001" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="660.1995000000001" dy="-3.9000000000000012">&quot;Embedding Table</tspan><tspan x="660.1995000000001" dy="16.900000000000002">[vocab_size × n_embd</tspan></text>
 </g>
-<g class="node" data-id="S2" data-label="Merge: H+e → He
-He · ll · o" data-shape="rectangle">
-  <rect x="53.33800000000001" y="380.20000000000005" width="138.28" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="122.47800000000001" y="407.1" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="122.47800000000001" dy="-3.9000000000000012">Merge: H+e → He</tspan><tspan x="122.47800000000001" dy="16.900000000000002">He · ll · o</tspan></text>
+<g class="node" data-id="Vec" data-label="Float Vectors
+ready for the model" data-shape="rectangle">
+  <rect x="794.753" y="40" width="152.359" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="870.9325" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="870.9325" dy="-3.9000000000000012">Float Vectors</tspan><tspan x="870.9325" dy="16.900000000000002">ready for the model</tspan></text>
 </g>
-<g class="node" data-id="S3" data-label="Merge: He+ll → Hell
-Hell · o" data-shape="rectangle">
-  <rect x="47.41000000000001" y="550.3000000000001" width="150.136" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="122.47800000000001" y="577.2" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="122.47800000000001" dy="-3.9000000000000012">Merge: He+ll → Hell</tspan><tspan x="122.47800000000001" dy="16.900000000000002">Hell · o</tspan></text>
-</g>
-<g class="node" data-id="S4" data-label="Merge: Hell+o → Hello
-Hello" data-shape="rectangle">
-  <rect x="40" y="720.4" width="164.95600000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="122.47800000000001" y="747.3" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="122.47800000000001" dy="-3.9000000000000012">Merge: Hell+o → Hello</tspan><tspan x="122.47800000000001" dy="16.900000000000002">Hello</tspan></text>
-</g>
-<g class="node" data-id="Done" data-label="Token: Hello
-ID: 15496" data-shape="rectangle">
-  <rect x="64.8235" y="822.1999999999999" width="115.30900000000001" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="122.47800000000001" y="849.0999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="122.47800000000001" dy="-3.9000000000000012">Token: Hello</tspan><tspan x="122.47800000000001" dy="16.900000000000002">ID: 15496</tspan></text>
+<g class="node" data-id="Back" data-label="\&quot;Hello, world!\&quot;" data-shape="rectangle">
+  <rect x="688.9140000000001" y="121.80000000000001" width="127.165" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="752.4965000000001" y="140.25" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">\&quot;Hello, world!\&quot;</text>
 </g>
 </svg>

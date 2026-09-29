@@ -30,6 +30,15 @@ must still appear under **Changed** or **Breaking** below. See
   New key on wide layouts, its toolbar keys go borderless with icons, and on
   a phone the model and context badges take their own row. Empty-state hints
   that cannot be pressed no longer look like buttons.
+- **New mark and brand guide.** The rosette is redrawn as five broad agave
+  blades on a ground line, one flat color that holds at 16px, replacing the
+  stroked grass-like mark. `docs/brand/` holds the mark, light and dark
+  lockups, the app icon, a 1280x640 social card, palette and icon sheets, and
+  a guide to their use; `scripts/build-brand.ts` regenerates all of them. The
+  favicons are the mark on the Night tile.
+- **One icon set.** Every glyph comes from `src/web/ui/icons.tsx`, named for
+  its action (`NewIcon`, `ClearIcon`, `DeleteIcon`, …); deleting a
+  conversation shows a trash glyph instead of the close X.
 
 ### Fixed
 - The serve composer showed a scrollbar on its first line (autosize ignored
@@ -38,6 +47,10 @@ must still appear under **Changed** or **Breaking** below. See
 - `cn()` did not know the theme's custom steps (`text-2xs`, `rounded-pill`,
   the `shadow-*` tokens), so tailwind-merge could keep both of two conflicting
   classes.
+- The offline diagram set (`docs/diagrams/`) drew no edges (resvg ignores
+  CSS variables) and still used the pre-brand palette; it is re-rendered with
+  every variable resolved, the brand inks and faces, and no web-font fetch.
+  Six chapters that had no rendered copy now have one.
 
 ### Tooling
 - oxlint 1.86 with `@shadcn/lint` at error on every rule (`no-restyle`,
@@ -46,6 +59,10 @@ must still appear under **Changed** or **Breaking** below. See
   `@rikalabs/oxlint-standards` strict. Components restyle through variants
   (`Button` `plain`, `plainDestructive`, `destructiveSolid`, `floating`, `xs`,
   `iconRound`; `Input` `font`/`size`), never through ad-hoc classes.
+- `zig build lint-web` validates the serve page, the shell page, both
+  stylesheets and the brand SVGs with the W3C Nu validator (`vnu-jar`, needs
+  Java). Tailwind's `@property` output is rewritten by
+  `scripts/css-conform.ts` into its own unguarded fallback so the CSS passes.
 
 ## [0.8.0] - 2026-09-28
 

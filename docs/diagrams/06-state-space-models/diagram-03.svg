@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 727.79225 744.5999999999999" width="727.79225" height="744.5999999999999" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 727.79225 744.5999999999999" width="727.79225" height="744.5999999999999" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,31 +19,31 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="QKV" data-to="Q" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.88041666666666,219.60000000000002 186.88041666666666,231.60000000000002 109.14000000000001,231.60000000000002 109.14000000000001,488.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="QKV" data-to="K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.88041666666666,219.60000000000002 186.88041666666666,231.60000000000002 179.647,231.60000000000002 179.647,386.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="QKV" data-to="V" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.88041666666666,219.60000000000002 186.88041666666666,231.60000000000002 328.143,231.60000000000002 328.143,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="State" data-to="Decay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="573.3755833333333,102.25000000000001 573.3755833333333,129.8 537.0305000000001,129.8 537.0305000000001,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Decay" data-to="SK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="537.0305000000001,195.60000000000002 537.0305000000001,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="V" data-to="Delta" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="328.143,297.40000000000003 328.143,321.40000000000003 432.58675000000005,321.40000000000003 432.58675000000005,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SK" data-to="Delta" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="537.0305,297.40000000000003 537.0305,321.40000000000003 432.58675000000005,321.40000000000003 432.58675000000005,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Delta" data-to="Update" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="432.58675,399.20000000000005 432.58675,435.20000000000005 476.19441666666665,435.20000000000005 476.19441666666665,447.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Update" data-to="State" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="545.01175,447.20000000000005 545.01175,435.20000000000005 666.9290000000001,435.20000000000005 666.9290000000001,129.8 630.5839166666667,129.8 630.5839166666667,102.25000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Update" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="510.6030833333333,517.9000000000001 510.6030833333333,553.9 370.8301666666666,553.9 370.8301666666666,565.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="109.14000000000001,541.9 109.14000000000001,553.9 370.8301666666666,553.9 370.8301666666666,565.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Output" data-to="Gate" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="370.8301666666667,619.6999999999999 370.8301666666667,667.6999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QKV" data-to="Q" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.88041666666666,219.60000000000002 186.88041666666666,231.60000000000002 109.14000000000001,231.60000000000002 109.14000000000001,488.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QKV" data-to="K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.88041666666666,219.60000000000002 186.88041666666666,231.60000000000002 179.647,231.60000000000002 179.647,386.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QKV" data-to="V" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="186.88041666666666,219.60000000000002 186.88041666666666,231.60000000000002 328.143,231.60000000000002 328.143,243.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="State" data-to="Decay" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="573.3755833333333,102.25000000000001 573.3755833333333,129.8 537.0305000000001,129.8 537.0305000000001,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Decay" data-to="SK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="537.0305000000001,195.60000000000002 537.0305000000001,243.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V" data-to="Delta" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="328.143,297.40000000000003 328.143,321.40000000000003 432.58675000000005,321.40000000000003 432.58675000000005,345.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SK" data-to="Delta" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="537.0305,297.40000000000003 537.0305,321.40000000000003 432.58675000000005,321.40000000000003 432.58675000000005,345.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Delta" data-to="Update" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="432.58675,399.20000000000005 432.58675,435.20000000000005 476.19441666666665,435.20000000000005 476.19441666666665,447.20000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="State" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="545.01175,447.20000000000005 545.01175,435.20000000000005 666.9290000000001,435.20000000000005 666.9290000000001,129.8 630.5839166666667,129.8 630.5839166666667,102.25000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Update" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="510.6030833333333,517.9000000000001 510.6030833333333,553.9 370.8301666666666,553.9 370.8301666666666,565.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="109.14000000000001,541.9 109.14000000000001,553.9 370.8301666666666,553.9 370.8301666666666,565.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Output" data-to="Gate" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="370.8301666666667,619.6999999999999 370.8301666666667,667.6999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Input" data-label="&quot;Input token x[t" data-shape="rectangle">
-  <rect x="363.22525" y="48.45" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="425.69625" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;Input token x[t</text>
+  <rect x="363.22525" y="48.45" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="425.69625" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;Input token x[t</text>
 </g>
 <g class="node" data-id="QKV" data-label="QKV" data-shape="rectangle">
-  <rect x="152.56741666666667" y="182.70000000000002" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="186.88041666666666" y="201.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">QKV</text>
+  <rect x="152.56741666666667" y="182.70000000000002" width="68.62599999999999" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="186.88041666666666" y="201.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">QKV</text>
 </g>
 <g class="node" data-id="Q" data-label="Query q
 (what to retrieve)" data-shape="rectangle">

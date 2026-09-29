@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 608.624 582" width="608.624" height="582" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 608.624 582" width="608.624" height="582" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,20 +19,20 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="Input" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,92.25 190.568,92.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Input" data-to="GELU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,224.75 190.568,224.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Input" data-to="ReLU2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,357.25 190.568,357.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Input" data-to="Sigmoid" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,489.75 190.568,489.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SiLU" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="376.27199999999993,92.25 405.23249999999996,92.25000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="GELU" data-to="FFN2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="344.409,224.75 405.23249999999996,224.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="ReLU2" data-to="FFN3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="338.481,357.25 405.23249999999996,357.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Sigmoid" data-to="Router" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.193,489.75 405.23249999999996,489.75" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="SiLU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,92.25 190.568,92.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="GELU" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,224.75 190.568,224.75" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="ReLU2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,357.25 190.568,357.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="Sigmoid" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="154.56799999999998,291 172.56799999999998,291 172.56799999999998,489.75 190.568,489.75" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SiLU" data-to="FFN" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="376.27199999999993,92.25 405.23249999999996,92.25000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GELU" data-to="FFN2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="344.409,224.75 405.23249999999996,224.75" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ReLU2" data-to="FFN3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="338.481,357.25 405.23249999999996,357.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sigmoid" data-to="Router" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="362.193,489.75 405.23249999999996,489.75" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Input" data-label="Input value x" data-shape="rectangle">
   <rect x="40" y="272.55" width="114.568" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
   <text x="97.28399999999999" y="291" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Input value x</text>

@@ -152,7 +152,7 @@ agave/
 │   │   ├── app.tsx        # Chat UI entry (Preact; SSE streaming, conversation management)
 │   │   ├── app.test.tsx   # Chat UI tests (bun test)
 │   │   ├── chat/          # Chat UI state (hooks) and components
-│   │   ├── ui/            # shadcn primitives, the shared Tailwind 4 theme, and the motifs both chat surfaces draw (empty state, hint chips)
+│   │   ├── ui/            # shadcn primitives, the shared Tailwind 4 theme, the icon set (icons.tsx) and the motifs both chat surfaces draw (empty state, hint chips); see docs/brand/README.md
 │   │   ├── globals.d.ts   # Ambient declarations for the embedded script/style assets
 │   │   ├── app.css        # Tailwind 4 entry for this surface
 │   │   ├── app.js         # Generated classic script; embedded by server.zig

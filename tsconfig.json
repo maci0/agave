@@ -54,6 +54,7 @@
     "web/agave.ts",
     "web/shell.tsx",
     "web/load-errors.ts",
-    "web/use-model-loader.ts"
+    "web/use-model-loader.ts",
+    "scripts/**/*.ts"
   ]
 }

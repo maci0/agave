@@ -1,4 +1,4 @@
-import { Plus, X } from 'lucide-react';
+import { CloseIcon, DeleteIcon, NewIcon } from '../../ui/icons';
 import { Button } from '../../ui/button';
 import { cn } from '../../ui/cn';
 import type { ReactNode } from 'react';
@@ -72,7 +72,7 @@ const ConversationRow = ({ conversation, streaming, onSelect, onDelete }: {
         aria-label={`Delete conversation: ${label}`}
         className="agave-reveal inline-flex size-9 shrink-0 items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
       >
-        <X className="size-4" aria-hidden="true" />
+        <DeleteIcon className="size-4" aria-hidden="true" />
       </button>
     </div>
   );
@@ -116,11 +116,11 @@ export const Sidebar = (props: SidebarProps) => (
       <div className="flex shrink-0 items-center gap-1.5">
         {props.onClose ? (
           <Button type="button" size="iconSm" onClick={props.onClose} aria-label="Close sidebar" className="max-drawer:inline-flex">
-            <X className="size-5" aria-hidden="true" />
+            <CloseIcon className="size-5" aria-hidden="true" />
           </Button>
         ) : null}
         <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
-          <Plus className="size-4" aria-hidden="true" />
+          <NewIcon className="size-4" aria-hidden="true" />
           New
         </Button>
       </div>

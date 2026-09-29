@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 527.2585 1300" width="527.2585" height="1300" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 527.2585 1300" width="527.2585" height="1300" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,50 +19,50 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="BlockTable" data-label="PagedKvView — block table indirection">
-  <rect x="275.6295" y="295" width="156.942" height="267.6" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="275.6295" y="295" width="156.942" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="287.6295" y="309" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">PagedKvView — block table indirection</text>
+<g class="subgraph" data-id="BlockTable" data-label="PagedKvView, block table indirection">
+  <rect x="275.6295" y="295" width="156.942" height="267.6" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="275.6295" y="295" width="156.942" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="287.6295" y="309" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">PagedKvView, block table indirection</text>
 </g>
 <g class="subgraph" data-id="PhysPool" data-label="Physical KV pool (non-contiguous blocks)">
-  <rect x="220.9425" y="712.4" width="266.31600000000003" height="261.40000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="220.9425" y="712.4" width="266.31600000000003" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="232.9425" y="726.4" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Physical KV pool (non-contiguous blocks)</text>
+  <rect x="220.9425" y="712.4" width="266.31600000000003" height="261.40000000000003" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="220.9425" y="712.4" width="266.31600000000003" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="232.9425" y="726.4" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Physical KV pool (non-contiguous blocks)</text>
 </g>
-<polyline class="edge" data-from="Token" data-to="BlockIdx" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="t / block_size" points="254.7765,76.9 254.7765,193.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="BlockIdx" data-to="PhysBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="dereference" points="223.08483333333334,247 223.08483333333334,530.3 155.4525,530.3 155.4525,610.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="PhysBlock" data-to="KVSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="t % block_size" points="155.4525,664.4 155.4525,1009.8000000000001 223.20833333333331,1009.8000000000001 223.20833333333331,1021.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="BlockIdx" data-to="BlockTable" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="286.46816666666666,247 286.46816666666666,283 354.1005,283 354.1005,295" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="BlockTable" data-to="PhysPool" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="physical block ID" points="354.1005,562.6 354.1005,712.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="PhysPool" data-to="KVSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="354.1005,973.8 354.1005,1009.8000000000001 286.3446666666666,1009.8000000000001 286.3446666666666,1021.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Token" data-to="BlockIdx" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="t / block_size" points="254.7765,76.9 254.7765,193.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BlockIdx" data-to="PhysBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="dereference" points="223.08483333333334,247 223.08483333333334,530.3 155.4525,530.3 155.4525,610.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PhysBlock" data-to="KVSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="t % block_size" points="155.4525,664.4 155.4525,1009.8000000000001 223.20833333333331,1009.8000000000001 223.20833333333331,1021.8000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BlockIdx" data-to="BlockTable" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="286.46816666666666,247 286.46816666666666,283 354.1005,283 354.1005,295" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BlockTable" data-to="PhysPool" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="physical block ID" points="354.1005,562.6 354.1005,712.4" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="PhysPool" data-to="KVSlot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="354.1005,973.8 354.1005,1009.8000000000001 286.3446666666666,1009.8000000000001 286.3446666666666,1021.8000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="KVSlot" data-to="SDPA" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="all heads in parallel
-(thread pool)" points="254.7765,1075.6000000000001 254.7765,1206.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+(thread pool)" points="254.7765,1075.6000000000001 254.7765,1206.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Token" data-to="BlockIdx" data-label="t / block_size">
-  <rect x="215.2765" y="119.9" width="78.83200000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="254.6925" y="135.05" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">t / block_size</text>
+  <rect x="215.2765" y="119.9" width="78.83200000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="254.6925" y="135.05" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">t / block_size</text>
 </g>
 <g class="edge-label" data-from="BlockIdx" data-to="PhysBlock" data-label="dereference">
-  <rect x="116.45249999999999" y="537.3" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="154.9775" y="552.4499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">dereference</text>
+  <rect x="116.45249999999999" y="537.3" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="154.9775" y="552.4499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">dereference</text>
 </g>
 <g class="edge-label" data-from="PhysBlock" data-to="KVSlot" data-label="t % block_size">
-  <rect x="113.95249999999999" y="948.5000000000001" width="82.99000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="155.4475" y="963.6500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">t % block_size</text>
+  <rect x="113.95249999999999" y="948.5000000000001" width="82.99000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="155.4475" y="963.6500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">t % block_size</text>
 </g>
 <g class="edge-label" data-from="BlockTable" data-to="PhysPool" data-label="physical block ID">
-  <rect x="305.1005" y="639.1" width="97.24600000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="353.7235" y="654.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">physical block ID</text>
+  <rect x="305.1005" y="639.1" width="97.24600000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="353.7235" y="654.25" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">physical block ID</text>
 </g>
 <g class="edge-label" data-from="KVSlot" data-to="SDPA" data-label="all heads in parallel
 (thread pool)">
-  <rect x="200.7765" y="1118.6000000000001" width="107.34400000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="254.44850000000002" y="1140.9" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="254.44850000000002" dy="-3.3000000000000007">all heads in parallel</tspan><tspan x="254.44850000000002" dy="14.3">(thread pool)</tspan></text>
+  <rect x="200.7765" y="1118.6000000000001" width="107.34400000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="254.44850000000002" y="1140.9" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="254.44850000000002" dy="-3.3000000000000007">all heads in parallel</tspan><tspan x="254.44850000000002" dy="14.3">(thread pool)</tspan></text>
 </g>
 <g class="node" data-id="Token" data-label="Logical token position t" data-shape="rectangle">
   <rect x="167.482" y="40" width="174.589" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
@@ -77,8 +70,8 @@
 </g>
 <g class="node" data-id="BlockIdx" data-label="&quot;Block table index
 block_table[t / block_size" data-shape="rectangle">
-  <rect x="159.7015" y="193.2" width="190.14999999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="254.7765" y="220.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="254.7765" dy="-3.9000000000000012">&quot;Block table index</tspan><tspan x="254.7765" dy="16.900000000000002">block_table[t / block_size</tspan></text>
+  <rect x="159.7015" y="193.2" width="190.14999999999998" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="254.7765" y="220.1" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="254.7765" dy="-3.9000000000000012">&quot;Block table index</tspan><tspan x="254.7765" dy="16.900000000000002">block_table[t / block_size</tspan></text>
 </g>
 <g class="node" data-id="PhysBlock" data-label="Physical block ID
 (16-token block, on-demand alloc)" data-shape="rectangle">
@@ -87,8 +80,8 @@ block_table[t / block_size" data-shape="rectangle">
 </g>
 <g class="node" data-id="KVSlot" data-label="&quot;KV slot within block
 keys[pos_in_block * kvd" data-shape="rectangle">
-  <rect x="160.072" y="1021.8000000000001" width="189.409" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="254.7765" y="1048.7" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="254.7765" dy="-3.9000000000000012">&quot;KV slot within block</tspan><tspan x="254.7765" dy="16.900000000000002">keys[pos_in_block * kvd</tspan></text>
+  <rect x="160.072" y="1021.8000000000001" width="189.409" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="254.7765" y="1048.7" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="254.7765" dy="-3.9000000000000012">&quot;KV slot within block</tspan><tspan x="254.7765" dy="16.900000000000002">keys[pos_in_block * kvd</tspan></text>
 </g>
 <g class="node" data-id="SDPA" data-label="SDPA kernel
 attention output" data-shape="rectangle">
@@ -96,20 +89,20 @@ attention output" data-shape="rectangle">
   <text x="254.7765" y="1233.1000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="254.7765" dy="-3.9000000000000012">SDPA kernel</tspan><tspan x="254.7765" dy="16.900000000000002">attention output</tspan></text>
 </g>
 <g class="node" data-id="BT0" data-label="&quot;block_table[0" data-shape="rectangle">
-  <rect x="291.6295" y="395.9" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="354.1005" y="414.34999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;block_table[0</text>
+  <rect x="291.6295" y="395.9" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="354.1005" y="414.34999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;block_table[0</text>
 </g>
 <g class="node" data-id="BT1" data-label="&quot;block_table[1" data-shape="rectangle">
-  <rect x="291.6295" y="339" width="120.49600000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="351.8775" y="357.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;block_table[1</text>
+  <rect x="291.6295" y="339" width="120.49600000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="351.8775" y="357.45" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;block_table[1</text>
 </g>
 <g class="node" data-id="BT2" data-label="&quot;block_table[2" data-shape="rectangle">
-  <rect x="291.6295" y="452.8" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="354.1005" y="471.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;block_table[2</text>
+  <rect x="291.6295" y="452.8" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="354.1005" y="471.25" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;block_table[2</text>
 </g>
 <g class="node" data-id="BT3" data-label="&quot;block_table[3" data-shape="rectangle">
-  <rect x="291.6295" y="509.70000000000005" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="354.1005" y="528.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;block_table[3</text>
+  <rect x="291.6295" y="509.70000000000005" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="354.1005" y="528.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;block_table[3</text>
 </g>
 <g class="node" data-id="P2" data-label="Block #2
 tokens 32-47" data-shape="rectangle">

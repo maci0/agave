@@ -15,6 +15,7 @@ import { Button } from '../src/web/ui/button';
 import { EmptyState } from '../src/web/ui/empty-state';
 import { HintChip } from '../src/web/ui/hint-chip';
 import { Input } from '../src/web/ui/input';
+import { Mark } from '../src/web/ui/icons';
 import { SkipLink } from '../src/web/ui/skip-link';
 import { cn } from '../src/web/ui/cn';
 import { friendlyGenerateError } from './load-errors';
@@ -224,7 +225,7 @@ const ShellHeader = ({ ready, busy, onClear }: { ready: boolean; busy: boolean; 
   <header className="flex items-center justify-between gap-4 border-b border-divider bg-card px-8 py-4 max-drawer:flex-wrap max-drawer:px-4 max-drawer:py-3">
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
       <h1 className="inline-flex items-center gap-2 font-mono text-lg font-semibold tracking-tight text-primary">
-        <span className="mark" aria-hidden="true" />
+        <Mark />
         agave
       </h1>
       <small className="text-sm text-faint">LLM inference in the browser, via WebAssembly</small>

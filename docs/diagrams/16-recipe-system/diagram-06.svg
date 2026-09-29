@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1102.353 437.40000000000003" width="1102.353" height="437.40000000000003" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1102.353 437.40000000000003" width="1102.353" height="437.40000000000003" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,39 +19,39 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Examples" data-label="Example preset order in array">
-  <rect x="40" y="40" width="254.754" height="266.70000000000005" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="40" width="254.754" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Example preset order in array</text>
+  <rect x="40" y="40" width="254.754" height="266.70000000000005" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="40" width="254.754" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Example preset order in array</text>
 </g>
 <polyline class="edge" data-from="Exact" data-to="AnyQ" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="most specific
-check first" points="173.68300000000002,362.05 331.327,362.05000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+check first" points="173.68300000000002,362.05 331.327,362.05000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="AnyQ" data-to="Any" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="narrower before
-broader" points="457.01,362.05000000000007 640.474,362.05000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+broader" points="457.01,362.05000000000007 640.474,362.05000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Any" data-to="Fallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="last resort
-before null" points="782.4590000000001,362.05000000000007 937.4110000000001,362.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="P1" data-to="P2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.377,120.9 167.377,168.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="P2" data-to="P3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="159.377,205.8 159.377,253.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+before null" points="782.4590000000001,362.05000000000007 937.4110000000001,362.05" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P1" data-to="P2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="167.377,120.9 167.377,168.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P2" data-to="P3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="159.377,205.8 159.377,253.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Exact" data-to="AnyQ" data-label="most specific
 check first">
-  <rect x="209.68300000000002" y="339.05000000000007" width="77.644" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="248.50500000000002" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="248.50500000000002" dy="-3.3000000000000007">most specific</tspan><tspan x="248.50500000000002" dy="14.3">check first</tspan></text>
+  <rect x="209.68300000000002" y="339.05000000000007" width="77.644" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="248.50500000000002" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="248.50500000000002" dy="-3.3000000000000007">most specific</tspan><tspan x="248.50500000000002" dy="14.3">check first</tspan></text>
 </g>
 <g class="edge-label" data-from="AnyQ" data-to="Any" data-label="narrower before
 broader">
-  <rect x="501.01000000000005" y="339.05000000000007" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="548.7420000000001" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="548.7420000000001" dy="-3.3000000000000007">narrower before</tspan><tspan x="548.7420000000001" dy="14.3">broader</tspan></text>
+  <rect x="501.01000000000005" y="339.05000000000007" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="548.7420000000001" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="548.7420000000001" dy="-3.3000000000000007">narrower before</tspan><tspan x="548.7420000000001" dy="14.3">broader</tspan></text>
 </g>
 <g class="edge-label" data-from="Any" data-to="Fallback" data-label="last resort
 before null">
-  <rect x="826.4590000000001" y="339.05000000000007" width="66.952" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="859.9350000000001" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="859.9350000000001" dy="-3.3000000000000007">last resort</tspan><tspan x="859.9350000000001" dy="14.3">before null</tspan></text>
+  <rect x="826.4590000000001" y="339.05000000000007" width="66.952" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="859.9350000000001" y="361.3500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="859.9350000000001" dy="-3.3000000000000007">last resort</tspan><tspan x="859.9350000000001" dy="14.3">before null</tspan></text>
 </g>
 <g class="node" data-id="Exact" data-label="Specific model
 Specific quant" data-shape="rectangle">

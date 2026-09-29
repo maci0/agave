@@ -108,6 +108,11 @@ fi
 
 "$TAILWIND" -i src/web/app.css -o "$STAGE/server/style.css" --minify
 "$TAILWIND" -i web/shell.css -o "$STAGE/wasm/style.css" --minify
+# Tailwind's @property registrations and their @supports-guarded fallback are
+# valid CSS the W3C checker does not know; css-conform.ts keeps the fallback,
+# unguarded, so both stylesheets pass vnu with the same behavior.
+bun scripts/css-conform.ts "$STAGE/server/style.css"
+bun scripts/css-conform.ts "$STAGE/wasm/style.css"
 
 install_artifact() {
     mkdir -p "$(dirname "$OUT_ROOT/$1")"

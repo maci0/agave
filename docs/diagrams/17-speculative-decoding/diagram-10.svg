@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2125.7029999999995 249.39999999999998" width="2125.7029999999995" height="249.39999999999998" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1473.658 1501.364" width="1473.658" height="1501.364" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,78 +19,140 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Compression" data-label="PFlash Compression (8-20x)">
-  <rect x="909.773" y="179.60000000000002" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="909.773" y="179.60000000000002" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="921.773" y="193.60000000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">PFlash Compression (8-20x)</text>
+<g class="subgraph" data-id="RingBuffer" data-label="History buffer (last 2048 generated tokens, 8 KB)">
+  <rect x="40" y="1330.664" width="303.65999999999997" height="130.7" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="1330.664" width="303.65999999999997" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="1344.664" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">History buffer (last 2048 generated tokens, 8 KB)</text>
 </g>
-<polyline class="edge" data-from="Prompt" data-to="Scorer" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="156.791,124.7 204.791,124.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Scorer" data-to="Scores" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="451.99799999999993,124.7 499.99799999999993,124.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Scores" data-to="Threshold" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="693.853,124.7 741.853,124.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Threshold" data-to="Drop" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="909.7729999999999,124.69999999999999 933.7729999999999,124.69999999999999 933.7729999999999,75.35 957.7729999999999,75.35" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Threshold" data-to="Keep" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="909.7729999999999,124.69999999999999 933.7729999999999,124.69999999999999 933.7729999999999,174.04999999999998 957.773,174.04999999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Keep" data-to="Target" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1141.9950000000001,174.05 1189.9950000000001,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Target" data-to="KVCache" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1391.26,174.05 1439.26,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="KVCache" data-to="Decode" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1652.3809999999999,174.05 1700.3809999999999,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Decode" data-to="Tokens" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1910.5379999999998,174.05 1958.5379999999998,174.05" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="node" data-id="Prompt" data-label="Long Prompt
-128K tokens" data-shape="rectangle">
-  <rect x="40" y="97.80000000000001" width="116.79099999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="98.3955" y="124.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="98.3955" dy="-3.9000000000000012">Long Prompt</tspan><tspan x="98.3955" dy="16.900000000000002">128K tokens</tspan></text>
+<g class="subgraph" data-id="Query" data-label="Query Construction">
+  <rect x="200.945" y="40" width="205.107" height="298.20000000000005" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="200.945" y="40" width="205.107" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="212.945" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Query Construction</text>
 </g>
-<g class="node" data-id="Scorer" data-label="Scorer Model
-(draft model or dedicated tiny model)
-block-sparse O(n) pass" data-shape="rectangle">
-  <rect x="204.791" y="89.35" width="247.20699999999997" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="328.3945" y="124.69999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="328.3945" dy="-12.350000000000001">Scorer Model</tspan><tspan x="328.3945" dy="16.900000000000002">(draft model or dedicated tiny model)</tspan><tspan x="328.3945" dy="16.900000000000002">block-sparse O(n) pass</tspan></text>
+<g class="subgraph" data-id="Performance" data-label="Performance Profile">
+  <rect x="434.05199999999996" y="984.4640000000002" width="999.6059999999999" height="96.9" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="434.05199999999996" y="984.4640000000002" width="999.6059999999999" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="446.05199999999996" y="998.4640000000002" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Performance Profile</text>
 </g>
-<g class="node" data-id="Scores" data-label="&quot;Block Importance Scores
-[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ..." data-shape="rectangle">
-  <rect x="499.99799999999993" y="97.80000000000001" width="193.85500000000002" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="596.9254999999999" y="124.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="596.9254999999999" dy="-3.9000000000000012">&quot;Block Importance Scores</tspan><tspan x="596.9254999999999" dy="16.900000000000002">[0.1, 0.9, 0.2, 0.8, 0.3, 0.7, ...</tspan></text>
+<polyline class="edge" data-from="Search" data-to="Found" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="303.4985,545.5 303.4985,593.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Found" data-to="Proposal" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes
+(found at position j)" points="285.8378333333333,681.8033333333333 285.8378333333333,711.4640000000002 191.82999999999998,711.4640000000002 191.82999999999998,806.0640000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Found" data-to="Fallback" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no match
+(novel context)" points="321.15916666666664,681.8033333333333 321.15916666666664,1117.364 415.167,1117.364 415.167,1211.964" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Proposal" data-to="Verify" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="proposed draft tokens" points="191.82999999999998,876.7640000000001 191.83,993.0640000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="accepted tokens" points="158.03883333333334,1046.864 158.03883333333334,1082.864 142.09799999999996,1082.864 142.09799999999996,1151.164 172.4883333333333,1151.164 172.4883333333333,1163.164" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Verify" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="correction token" points="225.62116666666665,1046.864 225.62116666666665,1082.864 241.56199999999998,1082.864 241.56199999999998,1151.164 211.17166666666662,1151.164 211.17166666666662,1163.164" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Emit" data-to="RingBuffer" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="append new token
+(compact if full)" points="191.82999999999996,1200.064 191.82999999999998,1330.664" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gram" data-to="Search" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="scan history buffer
+for matching prefix" points="303.4985,322.20000000000005 303.4985,474.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="QT" data-to="Gram" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="build query gram
+[t-2, t-1, t0]" points="303.4985,137.8 303.4985,268.4" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Found" data-to="Proposal" data-label="yes
+(found at position j)">
+  <rect x="140.32999999999998" y="718.4640000000002" width="102.59200000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="191.626" y="740.7640000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="191.626" dy="-3.3000000000000007">yes</tspan><tspan x="191.626" dy="14.3">(found at position j)</tspan></text>
 </g>
-<g class="node" data-id="Threshold" data-label="Adaptive Threshold
-alpha x mean(scores)
-(default alpha=0.85)" data-shape="rectangle">
-  <rect x="741.853" y="89.35" width="167.92" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="825.813" y="124.69999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="825.813" dy="-12.350000000000001">Adaptive Threshold</tspan><tspan x="825.813" dy="16.900000000000002">alpha x mean(scores)</tspan><tspan x="825.813" dy="16.900000000000002">(default alpha=0.85)</tspan></text>
+<g class="edge-label" data-from="Found" data-to="Fallback" data-label="no match
+(novel context)">
+  <rect x="372.167" y="1124.364" width="85.96000000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="415.147" y="1146.664" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="415.147" dy="-3.3000000000000007">no match</tspan><tspan x="415.147" dy="14.3">(novel context)</tspan></text>
 </g>
-<g class="node" data-id="Drop" data-label="Dropped Blocks
-~85-95% of prompt
-(boilerplate, padding, off-topic)" data-shape="rectangle">
-  <rect x="957.7729999999999" y="40" width="214.60299999999992" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
-  <text x="1065.0745" y="75.35" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="1065.0745" dy="-12.350000000000001">Dropped Blocks</tspan><tspan x="1065.0745" dy="16.900000000000002">~85-95% of prompt</tspan><tspan x="1065.0745" dy="16.900000000000002">(boilerplate, padding, off-topic)</tspan></text>
+<g class="edge-label" data-from="Proposal" data-to="Verify" data-label="proposed draft tokens">
+  <rect x="130.82999999999998" y="919.7640000000001" width="121.00600000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="191.333" y="934.9140000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">proposed draft tokens</text>
 </g>
-<g class="node" data-id="Keep" data-label="Kept Blocks
-~5-15% of prompt
-(high-relevance context)" data-shape="rectangle">
-  <rect x="957.773" y="138.7" width="184.22199999999998" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="1049.884" y="174.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1049.884" dy="-12.350000000000001">Kept Blocks</tspan><tspan x="1049.884" dy="16.900000000000002">~5-15% of prompt</tspan><tspan x="1049.884" dy="16.900000000000002">(high-relevance context)</tspan></text>
+<g class="edge-label" data-from="Verify" data-to="Emit" data-label="accepted tokens">
+  <rect x="94.09799999999998" y="1089.864" width="95.46400000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="141.82999999999998" y="1105.0140000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">accepted tokens</text>
 </g>
-<g class="node" data-id="Target" data-label="Target Model
-prefill compressed prompt
-6-13K tokens instead of 128K" data-shape="rectangle">
-  <rect x="1189.9950000000001" y="138.7" width="201.265" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="1290.6275" y="174.04999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1290.6275" dy="-12.350000000000001">Target Model</tspan><tspan x="1290.6275" dy="16.900000000000002">prefill compressed prompt</tspan><tspan x="1290.6275" dy="16.900000000000002">6-13K tokens instead of 128K</tspan></text>
+<g class="edge-label" data-from="Verify" data-to="Emit" data-label="correction token">
+  <rect x="193.56199999999995" y="1089.864" width="95.46400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="241.29399999999998" y="1105.0140000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">correction token</text>
 </g>
-<g class="node" data-id="KVCache" data-label="KV Cache
-(compressed representation)" data-shape="rectangle">
-  <rect x="1439.26" y="147.15" width="213.12099999999995" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="1545.8205" y="174.05" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="1545.8205" dy="-3.9000000000000012">KV Cache</tspan><tspan x="1545.8205" dy="16.900000000000002">(compressed representation)</tspan></text>
+<g class="edge-label" data-from="Emit" data-to="RingBuffer" data-label="append new token
+(compact if full)">
+  <rect x="140.82999999999998" y="1243.064" width="101.99800000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="191.829" y="1265.364" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="191.829" dy="-3.3000000000000007">append new token</tspan><tspan x="191.829" dy="14.3">(compact if full)</tspan></text>
 </g>
-<g class="node" data-id="Decode" data-label="DDTree Speculative Decode
-normal token generation loop" data-shape="rectangle">
-  <rect x="1700.3809999999999" y="147.15" width="210.15699999999995" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="1805.4595" y="174.05" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1805.4595" dy="-3.9000000000000012">DDTree Speculative Decode</tspan><tspan x="1805.4595" dy="16.900000000000002">normal token generation loop</tspan></text>
+<g class="edge-label" data-from="Gram" data-to="Search" data-label="scan history buffer
+for matching prefix">
+  <rect x="250.49849999999998" y="387.20000000000005" width="105.56200000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="303.2795" y="409.50000000000006" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="303.2795" dy="-3.3000000000000007">scan history buffer</tspan><tspan x="303.2795" dy="14.3">for matching prefix</tspan></text>
 </g>
-<g class="node" data-id="Tokens" data-label="Output Tokens" data-shape="rectangle">
-  <rect x="1958.5379999999998" y="155.60000000000002" width="127.16499999999999" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="2022.1204999999998" y="174.05" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Output Tokens</text>
+<g class="edge-label" data-from="QT" data-to="Gram" data-label="build query gram
+[t-2, t-1, t0]">
+  <rect x="254.99850000000004" y="180.8" width="96.058" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="303.02750000000003" y="203.10000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="303.02750000000003" dy="-3.3000000000000007">build query gram</tspan><tspan x="303.02750000000003" dy="14.3">[t-2, t-1, t0]</tspan></text>
+</g>
+<g class="node" data-id="Search" data-label="N-gram Search
+O(window) linear scan
+stop at first length-N match" data-shape="rectangle">
+  <rect x="208.053" y="474.80000000000007" width="190.891" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="303.4985" y="510.1500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="303.4985" dy="-12.350000000000001">N-gram Search</tspan><tspan x="303.4985" dy="16.900000000000002">O(window) linear scan</tspan><tspan x="303.4985" dy="16.900000000000002">stop at first length-N match</tspan></text>
+</g>
+<g class="node" data-id="Proposal" data-label="Proposal: tokens at j+1..j+K
+from history buffer
+(up to spec-tokens K tokens)" data-shape="rectangle">
+  <rect x="88.97450000000002" y="806.0640000000001" width="205.71099999999996" height="70.7" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="191.82999999999998" y="841.4140000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="191.82999999999998" dy="-12.350000000000001">Proposal: tokens at j+1..j+K</tspan><tspan x="191.82999999999998" dy="16.900000000000002">from history buffer</tspan><tspan x="191.82999999999998" dy="16.900000000000002">(up to spec-tokens K tokens)</tspan></text>
+</g>
+<g class="node" data-id="Fallback" data-label="Fallback:
+single-token decode
+(no speculation this step)" data-shape="rectangle">
+  <rect x="322.6855" y="1211.964" width="184.96299999999997" height="70.7" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="415.167" y="1247.3139999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="415.167" dy="-12.350000000000001">Fallback:</tspan><tspan x="415.167" dy="16.900000000000002">single-token decode</tspan><tspan x="415.167" dy="16.900000000000002">(no speculation this step)</tspan></text>
+</g>
+<g class="node" data-id="Verify" data-label="Target Model Verification
+standard accept/reject loop" data-shape="rectangle">
+  <rect x="90.45650000000003" y="993.0640000000001" width="202.74699999999996" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="191.83" y="1019.964" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="191.83" dy="-3.9000000000000012">Target Model Verification</tspan><tspan x="191.83" dy="16.900000000000002">standard accept/reject loop</tspan></text>
+</g>
+<g class="node" data-id="Emit" data-label="Emit to output" data-shape="rectangle">
+  <rect x="133.80499999999995" y="1163.164" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="191.82999999999996" y="1181.614" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18" dy="4.55">Emit to output</text>
+</g>
+<g class="node" data-id="Found" data-label="match
+found?" data-shape="diamond">
+  <polygon points="303.4985,593.5 356.4805,646.482 303.4985,699.4639999999999 250.51649999999998,646.482" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="303.4985" y="646.482" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="303.4985" dy="-3.9000000000000012">match</tspan><tspan x="303.4985" dy="16.900000000000002">found?</tspan></text>
+</g>
+<g class="node" data-id="RB" data-label="append until capacity
+when full: shift newest half forward
+(amortized compaction, no head pointer)" data-shape="rectangle">
+  <rect x="56" y="1374.664" width="271.65999999999997" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="191.82999999999998" y="1410.014" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="191.82999999999998" dy="-12.350000000000001">append until capacity</tspan><tspan x="191.82999999999998" dy="16.900000000000002">when full: shift newest half forward</tspan><tspan x="191.82999999999998" dy="16.900000000000002">(amortized compaction, no head pointer)</tspan></text>
+</g>
+<g class="node" data-id="QT" data-label="Current output tail
+(last N tokens, N = 3..10)" data-shape="rectangle">
+  <rect x="216.945" y="84" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="303.4985" y="110.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="303.4985" dy="-3.9000000000000012">Current output tail</tspan><tspan x="303.4985" dy="16.900000000000002">(last N tokens, N = 3..10)</tspan></text>
+</g>
+<g class="node" data-id="Gram" data-label="&quot;Query: ['
+', '4', '. '" data-shape="rectangle">
+  <rect x="256.21799999999996" y="268.4" width="94.561" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="303.4985" y="295.29999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="303.4985" dy="-3.9000000000000012">&quot;Query: [&#39;</tspan><tspan x="303.4985" dy="16.900000000000002">&#39;, &#39;4&#39;, &#39;. &#39;</tspan></text>
+</g>
+<g class="node" data-id="P1" data-label="Zero draft model weight memory" data-shape="rectangle">
+  <rect x="723.7769999999998" y="1028.4640000000002" width="224.236" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="835.8949999999998" y="1046.9140000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">Zero draft model weight memory</text>
+</g>
+<g class="node" data-id="P2" data-label="O(window) lookup per step" data-shape="rectangle">
+  <rect x="976.0129999999999" y="1028.4640000000002" width="193.855" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="1072.9405" y="1046.9140000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">O(window) lookup per step</text>
+</g>
+<g class="node" data-id="P3" data-label="Best on: code, JSON, repeated lists" data-shape="rectangle">
+  <rect x="450.05199999999996" y="1028.4640000000002" width="245.72499999999994" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="572.9145" y="1046.9140000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">Best on: code, JSON, repeated lists</text>
+</g>
+<g class="node" data-id="P4" data-label="Useless on: novel creative text" data-shape="rectangle">
+  <rect x="1197.868" y="1028.4640000000002" width="219.78999999999994" height="36.900000000000006" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="1307.763" y="1046.9140000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520" dy="4.55">Useless on: novel creative text</text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1062.9830000000002 215.60000000000002" width="1062.9830000000002" height="215.60000000000002" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1048.163 215.60000000000002" width="1048.163" height="215.60000000000002" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,57 +19,54 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Gate_Mechanism" data-label="Gate Mechanism">
-  <rect x="353.445" y="162.70000000000002" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="353.445" y="162.70000000000002" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="365.445" y="176.70000000000002" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Gate Mechanism</text>
 </g>
-<polyline class="edge" data-from="Input" data-to="Gate" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.31599999999997,107.80000000000001 199.31599999999997,107.80000000000001 199.31599999999997,66.9 223.31599999999997,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Input" data-to="Up" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.31599999999997,107.80000000000001 199.31599999999997,107.80000000000001 199.31599999999997,148.70000000000002 398.1105,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Gate" data-to="Act" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.77599999999995,66.9 398.1105,66.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Act" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="528.2395,66.9 550.5722499999999,66.9 550.5722499999999,107.80000000000001 572.905,107.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Up" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="521.5705,148.70000000000002 550.5722499999999,148.70000000000002 550.5722499999999,107.80000000000001 572.905,107.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Mul" data-to="Down" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="691.178,107.80000000000001 739.178,107.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Down" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="862.638,107.80000000000001 910.638,107.80000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="Gate" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.31599999999997,107.80000000000001 199.31599999999997,107.80000000000001 199.31599999999997,66.9 223.31599999999997,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Input" data-to="Up" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="175.31599999999997,107.80000000000001 199.31599999999997,107.80000000000001 199.31599999999997,148.70000000000002 394.40549999999996,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Gate" data-to="Act" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="339.366,66.9 394.40549999999996,66.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Act" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="524.5345,66.9 545.01475,66.9 545.01475,107.80000000000001 565.495,107.80000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Up" data-to="Mul" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="510.4555,148.70000000000002 545.01475,148.70000000000002 545.01475,107.80000000000001 565.495,107.80000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mul" data-to="Down" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="683.768,107.80000000000001 731.768,107.80000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Down" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="847.818,107.80000000000001 895.818,107.80000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Input" data-label="Hidden State
 (e.g. 2304 floats)" data-shape="rectangle">
   <rect x="40" y="80.9" width="135.31599999999997" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
   <text x="107.65799999999999" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="107.65799999999999" dy="-3.9000000000000012">Hidden State</tspan><tspan x="107.65799999999999" dy="16.900000000000002">(e.g. 2304 floats)</tspan></text>
 </g>
 <g class="node" data-id="Gate" data-label="gate_proj
-(2304 → 12288)" data-shape="rectangle">
-  <rect x="223.31599999999997" y="40" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="285.046" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="285.046" dy="-3.9000000000000012">gate_proj</tspan><tspan x="285.046" dy="16.900000000000002">(2304 → 12288)</tspan></text>
+(2304 → 9216)" data-shape="rectangle">
+  <rect x="223.31599999999997" y="40" width="116.05" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="281.34099999999995" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="281.34099999999995" dy="-3.9000000000000012">gate_proj</tspan><tspan x="281.34099999999995" dy="16.900000000000002">(2304 → 9216)</tspan></text>
 </g>
 <g class="node" data-id="Up" data-label="up_proj
-(2304 → 12288)" data-shape="rectangle">
-  <rect x="398.1105" y="121.80000000000001" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="459.8405" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="459.8405" dy="-3.9000000000000012">up_proj</tspan><tspan x="459.8405" dy="16.900000000000002">(2304 → 12288)</tspan></text>
+(2304 → 9216)" data-shape="rectangle">
+  <rect x="394.40549999999996" y="121.80000000000001" width="116.05" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="452.43049999999994" y="148.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="452.43049999999994" dy="-3.9000000000000012">up_proj</tspan><tspan x="452.43049999999994" dy="16.900000000000002">(2304 → 9216)</tspan></text>
 </g>
 <g class="node" data-id="Act" data-label="SiLU activation
 x * sigmoid(x)" data-shape="rectangle">
-  <rect x="398.1105" y="40" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="463.175" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="463.175" dy="-3.9000000000000012">SiLU activation</tspan><tspan x="463.175" dy="16.900000000000002">x * sigmoid(x)</tspan></text>
+  <rect x="394.40549999999996" y="40" width="130.12900000000002" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="459.46999999999997" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="459.46999999999997" dy="-3.9000000000000012">SiLU activation</tspan><tspan x="459.46999999999997" dy="16.900000000000002">x * sigmoid(x)</tspan></text>
 </g>
 <g class="node" data-id="Mul" data-label="Element-wise
 multiply ⊗" data-shape="rectangle">
-  <rect x="572.905" y="80.9" width="118.273" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
-  <text x="632.0414999999999" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="632.0414999999999" dy="-3.9000000000000012">Element-wise</tspan><tspan x="632.0414999999999" dy="16.900000000000002">multiply ⊗</tspan></text>
+  <rect x="565.495" y="80.9" width="118.273" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="624.6315" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="624.6315" dy="-3.9000000000000012">Element-wise</tspan><tspan x="624.6315" dy="16.900000000000002">multiply ⊗</tspan></text>
 </g>
 <g class="node" data-id="Down" data-label="down_proj
-(12288 → 2304)" data-shape="rectangle">
-  <rect x="739.178" y="80.9" width="123.46" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="800.908" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="800.908" dy="-3.9000000000000012">down_proj</tspan><tspan x="800.908" dy="16.900000000000002">(12288 → 2304)</tspan></text>
+(9216 → 2304)" data-shape="rectangle">
+  <rect x="731.768" y="80.9" width="116.05" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="789.793" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="789.793" dy="-3.9000000000000012">down_proj</tspan><tspan x="789.793" dy="16.900000000000002">(9216 → 2304)</tspan></text>
 </g>
 <g class="node" data-id="Output" data-label="FFN Output
 (2304 floats)" data-shape="rectangle">
-  <rect x="910.638" y="80.9" width="112.345" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="966.8105" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="966.8105" dy="-3.9000000000000012">FFN Output</tspan><tspan x="966.8105" dy="16.900000000000002">(2304 floats)</tspan></text>
+  <rect x="895.818" y="80.9" width="112.345" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="951.9905" y="107.80000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="951.9905" dy="-3.9000000000000012">FFN Output</tspan><tspan x="951.9905" dy="16.900000000000002">(2304 floats)</tspan></text>
 </g>
 </svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 717.106 1163.4" width="717.106" height="1163.4" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 717.106 1180.3000000000002" width="717.106" height="1180.3000000000002" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,45 +19,46 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="GGUF" data-label="GGUF File (e.g. Qwen3.5-0.8B-MTP-Q4_K_M.gguf)">
-  <rect x="40" y="40" width="637.106" height="964.7" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="40" width="637.106" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">GGUF File (e.g. Qwen3.5-0.8B-MTP-Q4_K_M.gguf)</text>
+  <rect x="40" y="40" width="637.106" height="964.7" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="40" width="637.106" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">GGUF File (e.g. Qwen3.5-0.8B-MTP-Q4_K_M.gguf)</text>
 <g class="subgraph" data-id="Main" data-label="Main Model Tensors  blk.0 … blk.63">
-  <rect x="56" y="84" width="70.84899999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="56" y="84" width="70.84899999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="68" y="98" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Main Model Tensors  blk.0 … blk.63</text>
+  <rect x="56" y="84" width="70.84899999999999" height="36.900000000000006" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="56" y="84" width="70.84899999999999" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="68" y="98" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Main Model Tensors  blk.0 … blk.63</text>
 </g>
 <g class="subgraph" data-id="MTP" data-label="MTP Head Tensors  blk.64.*">
-  <rect x="146.849" y="84" width="70.849" height="36.900000000000006" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="146.849" y="84" width="70.849" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="158.849" y="98" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">MTP Head Tensors  blk.64.*</text>
+  <rect x="146.849" y="84" width="70.849" height="36.900000000000006" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="146.849" y="84" width="70.849" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="158.849" y="98" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">MTP Head Tensors  blk.64.*</text>
 </g>
 <g class="subgraph" data-id="Main" data-label="Main Model Tensors  blk.0 … blk.63">
-  <rect x="350.183" y="202.7" width="198.438" height="312.1" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="350.183" y="202.7" width="198.438" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="362.183" y="216.7" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Main Model Tensors  blk.0 … blk.63</text>
+  <rect x="350.183" y="202.7" width="198.438" height="312.1" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="350.183" y="202.7" width="198.438" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="362.183" y="216.7" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Main Model Tensors  blk.0 … blk.63</text>
 </g>
 <g class="subgraph" data-id="MTP" data-label="MTP Head Tensors  blk.64.*">
-  <rect x="237.69799999999998" y="562.8" width="423.40799999999996" height="425.90000000000003" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="237.69799999999998" y="562.8" width="423.40799999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="249.69799999999998" y="576.8" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">MTP Head Tensors  blk.64.*</text>
+  <rect x="237.69799999999998" y="562.8" width="423.40799999999996" height="425.90000000000003" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="237.69799999999998" y="562.8" width="423.40799999999996" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="249.69799999999998" y="576.8" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">MTP Head Tensors  blk.64.*</text>
 </g>
 </g>
-<polyline class="edge" data-from="GGUF" data-to="Note" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="358.553,1004.7 358.553,1052.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Meta" data-to="Main" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="449.402,154.7 449.402,202.7" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Main" data-to="MTP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="449.402,514.8 449.40199999999993,562.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="GGUF" data-to="Note" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="358.553,1004.7 358.553,1052.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Meta" data-to="Main" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="449.402,154.7 449.402,202.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Main" data-to="MTP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="449.402,514.8 449.40199999999993,562.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Note" data-label="Loader detects MTP depth:
-n_mtp_layers = max_blk_idx - block_count
-Here: 64 - 64 = 1 MTP head" data-shape="rectangle">
-  <rect x="214.2015" y="1052.7" width="288.703" height="70.7" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
-  <text x="358.553" y="1088.05" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="358.553" dy="-12.350000000000001">Loader detects MTP depth:</tspan><tspan x="358.553" dy="16.900000000000002">n_mtp_layers = max_blk_idx - block_count</tspan><tspan x="358.553" dy="16.900000000000002">Here: 64 - 64 = 1 MTP head</tspan></text>
+Reads nextn_predict_layers from GGUF metadata,
+or probes for blk.{n_layers}.nextn.eh_proj.
+(max_blk_idx + 1) - block_count = 65 - 64 = 1 MTP head" data-shape="rectangle">
+  <rect x="185.3025" y="1052.7" width="346.501" height="87.60000000000001" rx="0" ry="0" fill="#d2bcb6" stroke="#a97f75" stroke-width="0.75" />
+  <text x="358.553" y="1096.5" text-anchor="middle" font-size="13" font-weight="500" fill="#3d2520"><tspan x="358.553" dy="-20.8">Loader detects MTP depth:</tspan><tspan x="358.553" dy="16.900000000000002">Reads nextn_predict_layers from GGUF metadata,</tspan><tspan x="358.553" dy="16.900000000000002">or probes for blk.{n_layers}.nextn.eh_proj.</tspan><tspan x="358.553" dy="16.900000000000002">(max_blk_idx + 1) - block_count = 65 - 64 = 1 MTP head</tspan></text>
 </g>
 <g class="node" data-id="Meta" data-label="GGUF Header + Metadata
 qwen3_5.nextn_predict_layers = 1
@@ -92,33 +86,33 @@ blk.63.ffn_gate.weight
 </g>
 <g class="node" data-id="EHProj" data-label="&quot;blk.64.nextn.eh_proj
 [n_embd, 2×n_embd" data-shape="rectangle">
-  <rect x="253.69799999999998" y="680.5999999999999" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="336.5465" y="707.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="336.5465" dy="-3.9000000000000012">&quot;blk.64.nextn.eh_proj</tspan><tspan x="336.5465" dy="16.900000000000002">[n_embd, 2×n_embd</tspan></text>
+  <rect x="253.69799999999998" y="680.5999999999999" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="336.5465" y="707.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="336.5465" dy="-3.9000000000000012">&quot;blk.64.nextn.eh_proj</tspan><tspan x="336.5465" dy="16.900000000000002">[n_embd, 2×n_embd</tspan></text>
 </g>
 <g class="node" data-id="Embed" data-label="&quot;blk.64.nextn.embed_tokens
 [vocab, n_embd" data-shape="rectangle">
-  <rect x="439.395" y="680.5999999999999" width="205.71099999999996" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="542.2505" y="707.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="542.2505" dy="-3.9000000000000012">&quot;blk.64.nextn.embed_tokens</tspan><tspan x="542.2505" dy="16.900000000000002">[vocab, n_embd</tspan></text>
+  <rect x="439.395" y="680.5999999999999" width="205.71099999999996" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="542.2505" y="707.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="542.2505" dy="-3.9000000000000012">&quot;blk.64.nextn.embed_tokens</tspan><tspan x="542.2505" dy="16.900000000000002">[vocab, n_embd</tspan></text>
 </g>
 <g class="node" data-id="ENorm" data-label="&quot;blk.64.nextn.enorm
 [n_embd" data-shape="rectangle">
-  <rect x="253.69799999999998" y="606.8" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="332.1005" y="633.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="332.1005" dy="-3.9000000000000012">&quot;blk.64.nextn.enorm</tspan><tspan x="332.1005" dy="16.900000000000002">[n_embd</tspan></text>
+  <rect x="253.69799999999998" y="606.8" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="332.1005" y="633.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="332.1005" dy="-3.9000000000000012">&quot;blk.64.nextn.enorm</tspan><tspan x="332.1005" dy="16.900000000000002">[n_embd</tspan></text>
 </g>
 <g class="node" data-id="HNorm" data-label="&quot;blk.64.nextn.hnorm
 [n_embd" data-shape="rectangle">
-  <rect x="430.503" y="606.8" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="508.90549999999996" y="633.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="508.90549999999996" dy="-3.9000000000000012">&quot;blk.64.nextn.hnorm</tspan><tspan x="508.90549999999996" dy="16.900000000000002">[n_embd</tspan></text>
+  <rect x="430.503" y="606.8" width="156.805" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="508.90549999999996" y="633.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="508.90549999999996" dy="-3.9000000000000012">&quot;blk.64.nextn.hnorm</tspan><tspan x="508.90549999999996" dy="16.900000000000002">[n_embd</tspan></text>
 </g>
 <g class="node" data-id="SHH" data-label="&quot;blk.64.nextn.shared_head_head
 [vocab, n_embd" data-shape="rectangle">
-  <rect x="253.69799999999998" y="754.4" width="236.833" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="372.11449999999996" y="781.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="372.11449999999996" dy="-3.9000000000000012">&quot;blk.64.nextn.shared_head_head</tspan><tspan x="372.11449999999996" dy="16.900000000000002">[vocab, n_embd</tspan></text>
+  <rect x="253.69799999999998" y="754.4" width="236.833" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="372.11449999999996" y="781.3" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="372.11449999999996" dy="-3.9000000000000012">&quot;blk.64.nextn.shared_head_head</tspan><tspan x="372.11449999999996" dy="16.900000000000002">[vocab, n_embd</tspan></text>
 </g>
 <g class="node" data-id="SHN" data-label="&quot;blk.64.nextn.shared_head_norm
 [n_embd" data-shape="rectangle">
-  <rect x="253.69799999999998" y="828.2" width="236.833" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="372.11449999999996" y="855.1" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="372.11449999999996" dy="-3.9000000000000012">&quot;blk.64.nextn.shared_head_norm</tspan><tspan x="372.11449999999996" dy="16.900000000000002">[n_embd</tspan></text>
+  <rect x="253.69799999999998" y="828.2" width="236.833" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="372.11449999999996" y="855.1" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="372.11449999999996" dy="-3.9000000000000012">&quot;blk.64.nextn.shared_head_norm</tspan><tspan x="372.11449999999996" dy="16.900000000000002">[n_embd</tspan></text>
 </g>
 <g class="node" data-id="AttnW" data-label="blk.64.attn_q/k/v/o.weight
 blk.64.ffn_gate/up/down.weight

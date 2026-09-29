@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1624.038 304.0166666666667" width="1624.038" height="304.0166666666667" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1624.038 304.0166666666667" width="1624.038" height="304.0166666666667" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,34 +19,34 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Scores" data-label="Attention Score Computation">
-  <rect x="624.847" y="40" width="589.5229999999999" height="113.80000000000001" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="624.847" y="40" width="589.5229999999999" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="636.847" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Attention Score Computation</text>
+  <rect x="624.847" y="40" width="589.5229999999999" height="113.80000000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="624.847" y="40" width="589.5229999999999" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="636.847" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Attention Score Computation</text>
 </g>
-<polyline class="edge" data-from="HiddenState" data-to="Wq" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.69,151.8 208.208,151.8 208.208,70 230.726,70" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="HiddenState" data-to="Wk" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.69,151.8 208.208,151.8 208.208,151.8 230.726,151.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="HiddenState" data-to="Wv" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.69,151.8 208.208,151.8 208.208,237.1166666666667 907.2129999999999,237.1166666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Wq" data-to="Q" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="360.114,70 408.114,70" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Wk" data-to="K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="360.114,151.8 408.114,151.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Wv" data-to="V" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1036.6009999999999,237.1166666666667 1084.6009999999999,237.1166666666667" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="V" data-to="WeightedSum" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1244.37,237.1166666666667 1256.37,237.1166666666667 1256.37,159.80000000000004 1268.37,159.80000000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="WeightedSum" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1390.348,159.8 1438.348,159.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q" data-to="Dot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="573.8109999999999,70 607.329,70 607.329,110.9 640.847,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="K" data-to="Dot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="567.883,151.8 607.329,151.8 607.329,110.9 640.847,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="SM" data-to="WeightedSum" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1198.37,110.9 1256.37,110.9 1256.37,159.80000000000004 1268.37,159.80000000000004" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Dot" data-to="Scale" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="763.566,110.9 811.566,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Scale" data-to="SM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="975.781,110.9 1023.781,110.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HiddenState" data-to="Wq" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.69,151.8 208.208,151.8 208.208,70 230.726,70" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HiddenState" data-to="Wk" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.69,151.8 208.208,151.8 208.208,151.8 230.726,151.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HiddenState" data-to="Wv" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.69,151.8 208.208,151.8 208.208,237.1166666666667 907.2129999999999,237.1166666666667" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wq" data-to="Q" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="360.114,70 408.114,70" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wk" data-to="K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="360.114,151.8 408.114,151.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Wv" data-to="V" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1036.6009999999999,237.1166666666667 1084.6009999999999,237.1166666666667" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V" data-to="WeightedSum" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1244.37,237.1166666666667 1256.37,237.1166666666667 1256.37,159.80000000000004 1268.37,159.80000000000004" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="WeightedSum" data-to="Out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1390.348,159.8 1438.348,159.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q" data-to="Dot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="573.8109999999999,70 607.329,70 607.329,110.9 640.847,110.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K" data-to="Dot" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="567.883,151.8 607.329,151.8 607.329,110.9 640.847,110.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SM" data-to="WeightedSum" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1198.37,110.9 1256.37,110.9 1256.37,159.80000000000004 1268.37,159.80000000000004" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Dot" data-to="Scale" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="763.566,110.9 811.566,110.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Scale" data-to="SM" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="975.781,110.9 1023.781,110.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="HiddenState" data-label="&quot;Hidden State x
 [hidden_dim floats" data-shape="rectangle">
-  <rect x="40" y="124.90000000000002" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="112.845" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="112.845" dy="-3.9000000000000012">&quot;Hidden State x</tspan><tspan x="112.845" dy="16.900000000000002">[hidden_dim floats</tspan></text>
+  <rect x="40" y="124.90000000000002" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="112.845" y="151.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="112.845" dy="-3.9000000000000012">&quot;Hidden State x</tspan><tspan x="112.845" dy="16.900000000000002">[hidden_dim floats</tspan></text>
 </g>
 <g class="node" data-id="Wq" data-label="W_q projection
 GEMV" data-shape="rectangle">
@@ -72,8 +65,8 @@ GEMV" data-shape="rectangle">
 </g>
 <g class="node" data-id="Q" data-label="&quot;Query Q
 [n_heads × head_dim" data-shape="rectangle">
-  <rect x="408.114" y="43.099999999999994" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="490.9625" y="70" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="490.9625" dy="-3.9000000000000012">&quot;Query Q</tspan><tspan x="490.9625" dy="16.900000000000002">[n_heads × head_dim</tspan></text>
+  <rect x="408.114" y="43.099999999999994" width="165.697" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="490.9625" y="70" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="490.9625" dy="-3.9000000000000012">&quot;Query Q</tspan><tspan x="490.9625" dy="16.900000000000002">[n_heads × head_dim</tspan></text>
 </g>
 <g class="node" data-id="K" data-label="Key K
 (stored in KV cache)" data-shape="rectangle">
@@ -92,8 +85,8 @@ weights × V" data-shape="rectangle">
 </g>
 <g class="node" data-id="Out" data-label="&quot;Attention Output
 [hidden_dim floats" data-shape="rectangle">
-  <rect x="1438.348" y="132.90000000000003" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="1511.193" y="159.80000000000004" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1511.193" dy="-3.9000000000000012">&quot;Attention Output</tspan><tspan x="1511.193" dy="16.900000000000002">[hidden_dim floats</tspan></text>
+  <rect x="1438.348" y="132.90000000000003" width="145.69" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="1511.193" y="159.80000000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="1511.193" dy="-3.9000000000000012">&quot;Attention Output</tspan><tspan x="1511.193" dy="16.900000000000002">[hidden_dim floats</tspan></text>
 </g>
 <g class="node" data-id="Dot" data-label="Q · Kᵀ
 (dot products)" data-shape="rectangle">

@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 826.9309999999998 1680.3000000000002" width="826.9309999999998" height="1680.3000000000002" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
+<style>
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #2a2522;
+    --_text-sec:      #75716f;
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          #94908c;
+    --_arrow:         #504b47;
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
+    --_group-fill:    #ffffff;
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="Block0" data-label="Layers 0–3">
+  <rect x="579.6009999999999" y="124.9" width="158.424" height="419.20000000000005" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="579.6009999999999" y="124.9" width="158.424" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="591.6009999999999" y="138.9" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Layers 0–3</text>
+</g>
+<g class="subgraph" data-id="Block1" data-label="Layers 4–7">
+  <rect x="579.6009999999999" y="592.1" width="158.424" height="419.20000000000005" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="579.6009999999999" y="592.1" width="158.424" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="591.6009999999999" y="606.1" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Layers 4–7</text>
+</g>
+<g class="subgraph" data-id="BlockMid" data-label="Layers 8–59  (pattern repeats × 13)">
+  <rect x="530.6949999999999" y="1059.3000000000002" width="256.23599999999993" height="113.80000000000001" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="530.6949999999999" y="1059.3000000000002" width="256.23599999999993" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="542.6949999999999" y="1073.3000000000002" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Layers 8–59  (pattern repeats × 13)</text>
+</g>
+<g class="subgraph" data-id="Block60" data-label="Layers 60–63">
+  <rect x="579.6009999999999" y="1221.1000000000001" width="158.424" height="419.20000000000005" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="579.6009999999999" y="1221.1000000000001" width="158.424" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="591.6009999999999" y="1235.1000000000001" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Layers 60–63</text>
+</g>
+<polyline class="edge" data-from="Input" data-to="Block0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,76.9 658.8129999999999,124.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Block0" data-to="Block1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,544.1 658.8129999999999,592.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Block1" data-to="BlockMid" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,1011.3000000000001 658.8129999999999,1059.3000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="BlockMid" data-to="Block60" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,1173.1000000000001 658.8129999999999,1221.1000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L0" data-to="L1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,222.70000000000002 658.8129999999999,270.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L1" data-to="L2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,324.5 658.8129999999999,372.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L2" data-to="L3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,426.30000000000007 658.8129999999999,474.30000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L4" data-to="L5" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,689.9000000000001 658.8129999999999,737.9000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L5" data-to="L6" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,791.7 658.8129999999999,839.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L6" data-to="L7" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,893.5 658.8129999999999,941.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L60" data-to="L61" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,1318.9 658.8129999999999,1366.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L61" data-to="L62" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,1420.7000000000003 658.8129999999999,1468.7000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L62" data-to="L63" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="658.8129999999999,1522.5000000000002 658.8129999999999,1570.5000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Input" data-label="Token embedding" data-shape="rectangle">
+  <rect x="585.5974999999999" y="40" width="146.43099999999998" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Token embedding</text>
+</g>
+<g class="node" data-id="LegSSM" data-label="DeltaNet SSM, O(d²) per token
+48 layers, fast state update" data-shape="rectangle">
+  <rect x="40" y="40" width="216.08499999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="148.0425" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="148.0425" dy="-3.9000000000000012">DeltaNet SSM, O(d²) per token</tspan><tspan x="148.0425" dy="16.900000000000002">48 layers, fast state update</tspan></text>
+</g>
+<g class="node" data-id="LegATN" data-label="Full Attention ✦, O(n) per token
+16 layers, exact recall checkpoint" data-shape="rectangle">
+  <rect x="276.085" y="40" width="234.60999999999993" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="393.38999999999993" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="393.38999999999993" dy="-3.9000000000000012">Full Attention ✦, O(n) per token</tspan><tspan x="393.38999999999993" dy="16.900000000000002">16 layers, exact recall checkpoint</tspan></text>
+</g>
+<g class="node" data-id="L0" data-label="Layer 0
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="168.9" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="195.8" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 0</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L1" data-label="Layer 1
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="270.70000000000005" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="297.6" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 1</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L2" data-label="Layer 2
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="372.5" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="399.4" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 2</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L3" data-label="Layer 3
+Full Attention ✦" data-shape="rectangle">
+  <rect x="595.6009999999999" y="474.30000000000007" width="126.424" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="658.8129999999999" y="501.20000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 3</tspan><tspan x="658.8129999999999" dy="16.900000000000002">Full Attention ✦</tspan></text>
+</g>
+<g class="node" data-id="L4" data-label="Layer 4
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="636.1" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="663" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 4</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L5" data-label="Layer 5
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="737.9000000000001" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="764.8000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 5</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L6" data-label="Layer 6
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="839.7" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="866.6" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 6</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L7" data-label="Layer 7
+Full Attention ✦" data-shape="rectangle">
+  <rect x="595.6009999999999" y="941.5" width="126.424" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="658.8129999999999" y="968.4" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 7</tspan><tspan x="658.8129999999999" dy="16.900000000000002">Full Attention ✦</tspan></text>
+</g>
+<g class="node" data-id="LM" data-label="SSM → SSM → SSM → Attention ✦
+every 4th layer is attention" data-shape="rectangle">
+  <rect x="546.6949999999999" y="1103.3000000000002" width="224.23599999999993" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="1130.2000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">SSM → SSM → SSM → Attention ✦</tspan><tspan x="658.8129999999999" dy="16.900000000000002">every 4th layer is attention</tspan></text>
+</g>
+<g class="node" data-id="L60" data-label="Layer 60
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="1265.1000000000001" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="1292.0000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 60</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L61" data-label="Layer 61
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="1366.9" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="1393.8000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 61</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L62" data-label="Layer 62
+DeltaNet SSM" data-shape="rectangle">
+  <rect x="597.8239999999998" y="1468.7000000000003" width="121.97799999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="658.8129999999999" y="1495.6000000000004" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 62</tspan><tspan x="658.8129999999999" dy="16.900000000000002">DeltaNet SSM</tspan></text>
+</g>
+<g class="node" data-id="L63" data-label="Layer 63
+Full Attention ✦" data-shape="rectangle">
+  <rect x="595.6009999999999" y="1570.5000000000002" width="126.424" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="658.8129999999999" y="1597.4000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="658.8129999999999" dy="-3.9000000000000012">Layer 63</tspan><tspan x="658.8129999999999" dy="16.900000000000002">Full Attention ✦</tspan></text>
+</g>
+</svg>

@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 813.5145 609.0000000000001" width="813.5145" height="609.0000000000001" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 813.5145 609.0000000000001" width="813.5145" height="609.0000000000001" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,30 +19,27 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Confidence" data-label="Model confidence drives top-p size">
-  <rect x="773.5145" y="40" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="773.5145" y="40" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="785.5145" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Model confidence drives top-p size</text>
 </g>
-<polyline class="edge" data-from="Start" data-to="TopK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,93.80000000000007 246.00249999999994,117.80000000000007 132.111,117.80000000000007 132.111,141.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Start" data-to="TopP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,93.80000000000007 246.00249999999994,117.80000000000007 359.8939999999999,117.80000000000007 359.8939999999999,141.80000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="TopK" data-to="K_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,195.60000000000008 132.111,243.60000000000008" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="TopP" data-to="P_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.8939999999999,195.60000000000008 359.89399999999995,243.60000000000008" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="K_out" data-to="Renorm_K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,297.4000000000001 132.111,345.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="P_out" data-to="Renorm_P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.89399999999995,297.4000000000001 359.8939999999999,345.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Renorm_K" data-to="Combined" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,382.30000000000007 132.111,406.30000000000007 246.00249999999994,406.30000000000007 246.00249999999994,430.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Renorm_P" data-to="Combined" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.8939999999999,382.30000000000007 359.8939999999999,406.30000000000007 246.00249999999994,406.30000000000007 246.00249999999994,430.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Combined" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,484.10000000000014 246.0024999999999,532.1000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Start" data-to="TopK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,93.80000000000007 246.00249999999994,117.80000000000007 132.111,117.80000000000007 132.111,141.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Start" data-to="TopP" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,93.80000000000007 246.00249999999994,117.80000000000007 359.8939999999999,117.80000000000007 359.8939999999999,141.80000000000007" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TopK" data-to="K_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,195.60000000000008 132.111,243.60000000000008" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TopP" data-to="P_out" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.8939999999999,195.60000000000008 359.89399999999995,243.60000000000008" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K_out" data-to="Renorm_K" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,297.4000000000001 132.111,345.4000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P_out" data-to="Renorm_P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.89399999999995,297.4000000000001 359.8939999999999,345.4000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Renorm_K" data-to="Combined" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="132.111,382.30000000000007 132.111,406.30000000000007 246.00249999999994,406.30000000000007 246.00249999999994,430.3000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Renorm_P" data-to="Combined" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="359.8939999999999,382.30000000000007 359.8939999999999,406.30000000000007 246.00249999999994,406.30000000000007 246.00249999999994,430.3000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Combined" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="246.00249999999994,484.10000000000014 246.0024999999999,532.1000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="Start" data-label="&quot;Sorted Token Probabilities
 [0.40, 0.25, 0.15, 0.10, 0.06, 0.04" data-shape="rectangle">
-  <rect x="139.07149999999996" y="40.000000000000064" width="213.86199999999997" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="246.00249999999994" y="66.90000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="246.00249999999994" dy="-3.9000000000000012">&quot;Sorted Token Probabilities</tspan><tspan x="246.00249999999994" dy="16.900000000000002">[0.40, 0.25, 0.15, 0.10, 0.06, 0.04</tspan></text>
+  <rect x="139.07149999999996" y="40.000000000000064" width="213.86199999999997" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="246.00249999999994" y="66.90000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="246.00249999999994" dy="-3.9000000000000012">&quot;Sorted Token Probabilities</tspan><tspan x="246.00249999999994" dy="16.900000000000002">[0.40, 0.25, 0.15, 0.10, 0.06, 0.04</tspan></text>
 </g>
 <g class="node" data-id="TopK" data-label="Top-K Filter
 keep only top K tokens" data-shape="rectangle">
@@ -63,13 +53,13 @@ cumulate until sum &gt;= P" data-shape="rectangle">
 </g>
 <g class="node" data-id="K_out" data-label="&quot;Fixed K candidates
 e.g. top-3: [0.40, 0.25, 0.15" data-shape="rectangle">
-  <rect x="40" y="243.60000000000008" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="132.111" y="270.50000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="132.111" dy="-3.9000000000000012">&quot;Fixed K candidates</tspan><tspan x="132.111" dy="16.900000000000002">e.g. top-3: [0.40, 0.25, 0.15</tspan></text>
+  <rect x="40" y="243.60000000000008" width="184.22199999999998" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="132.111" y="270.50000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="132.111" dy="-3.9000000000000012">&quot;Fixed K candidates</tspan><tspan x="132.111" dy="16.900000000000002">e.g. top-3: [0.40, 0.25, 0.15</tspan></text>
 </g>
 <g class="node" data-id="P_out" data-label="&quot;Variable candidates
 e.g. P=0.9: [0.40, 0.25, 0.15, 0.10" data-shape="rectangle">
-  <rect x="252.22199999999998" y="243.60000000000008" width="215.34399999999994" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="359.89399999999995" y="270.50000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="359.89399999999995" dy="-3.9000000000000012">&quot;Variable candidates</tspan><tspan x="359.89399999999995" dy="16.900000000000002">e.g. P=0.9: [0.40, 0.25, 0.15, 0.10</tspan></text>
+  <rect x="252.22199999999998" y="243.60000000000008" width="215.34399999999994" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="359.89399999999995" y="270.50000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="359.89399999999995" dy="-3.9000000000000012">&quot;Variable candidates</tspan><tspan x="359.89399999999995" dy="16.900000000000002">e.g. P=0.9: [0.40, 0.25, 0.15, 0.10</tspan></text>
 </g>
 <g class="node" data-id="Renorm_K" data-label="Renormalize to 1.0" data-shape="rectangle">
   <rect x="60.00699999999996" y="345.4000000000001" width="144.20800000000003" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />

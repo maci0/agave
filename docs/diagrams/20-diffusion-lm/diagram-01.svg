@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 593.2428333333334 1516.4699999999998" width="593.2428333333334" height="1516.4699999999998" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
+<style>
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #2a2522;
+    --_text-sec:      #75716f;
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          #94908c;
+    --_arrow:         #504b47;
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
+    --_group-fill:    #ffffff;
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Prefill" data-to="NewCanvas" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="146.5605,180.63599999999997 146.5605,228.63599999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NewCanvas" data-to="Forward" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="182.08066666666667,282.436 182.08066666666667,318.436 218.89216666666667,318.436 218.89216666666667,330.436" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Forward" data-to="Accept" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="259.3523333333333,401.13599999999997 259.3523333333333,449.13599999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Accept" data-to="AllLocked" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="259.3523333333333,502.936 259.3523333333333,538.9359999999999 326.26458333333335,538.9359999999999 326.26458333333335,569.8316666666666" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AllLocked" data-to="NextStep" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="364.0559166666666,569.8316666666665 364.0559166666666,538.9359999999999 419.73283333333336,538.9359999999999 419.73283333333336,470.63599999999997 407.8881666666666,470.63599999999997 407.8881666666666,214.13599999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextStep" data-to="Forward" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="364.35416666666663,170.60199999999998 364.35416666666663,250.13599999999997 299.8125,250.13599999999997 299.8125,330.436" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextStep" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no (max_steps reached)" points="451.4221666666666,170.60199999999998 451.4221666666666,700.31 492.23283333333336,700.31 492.23283333333336,768.6099999999999 449.05158333333327,768.6099999999999 449.05158333333327,780.6099999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AllLocked" data-to="Emit" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="345.16025,664.31 345.16025,780.6099999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Emit" data-to="EosCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="397.10591666666664,834.4099999999999 397.10591666666664,882.4099999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EosCheck" data-to="Stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="369.93575,1018.2608333333332 369.93575,1149.7309999999998 324.1206666666667,1149.7309999999998 324.1206666666667,1427.5699999999997 428.57550000000003,1427.5699999999997 428.57550000000003,1427.5699999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EosCheck" data-to="LenCheck" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="424.2760833333333,1018.2608333333332 424.2760833333333,1081.4309999999998 446.3601666666667,1081.4309999999998 446.3601666666667,1161.7309999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LenCheck" data-to="Stop" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="473.2833333333333,1296.346833333333 473.2833333333333,1427.5699999999997 472.93983333333335,1427.5699999999997 472.93983333333335,1427.5699999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="LenCheck" data-to="NextBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="419.437,1296.346833333333 419.437,1335.2699999999998 297.02683333333334,1335.2699999999998 297.02683333333334,1403.5699999999997 244.34608333333333,1403.5699999999997 244.34608333333333,1427.5699999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="NextBlock" data-to="NewCanvas" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="185.16174999999998,1427.5699999999997 185.16174999999998,1403.5699999999997 111.04033333333334,1403.5699999999997 111.04033333333334,282.436" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="AllLocked" data-to="NextStep" data-label="no">
+  <rect x="404.73283333333336" y="477.63599999999997" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="419.49783333333335" y="492.78599999999994" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="NextStep" data-to="Forward" data-label="yes">
+  <rect x="281.8125" y="257.13599999999997" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="299.5475" y="272.28599999999994" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="NextStep" data-to="Emit" data-label="no (max_steps reached)">
+  <rect x="426.73283333333336" y="707.31" width="130.51000000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="491.98783333333336" y="722.4599999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no (max_steps reached)</text>
+</g>
+<g class="edge-label" data-from="AllLocked" data-to="Emit" data-label="yes">
+  <rect x="327.16025" y="707.31" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="344.89525000000003" y="722.4599999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="EosCheck" data-to="Stop" data-label="yes">
+  <rect x="306.1206666666667" y="1297.9699999999998" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="323.8556666666667" y="1313.12" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="EosCheck" data-to="LenCheck" data-label="no">
+  <rect x="431.3601666666667" y="1088.4309999999998" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="446.1251666666667" y="1103.581" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="LenCheck" data-to="Stop" data-label="yes">
+  <rect x="455.2833333333333" y="1366.2699999999998" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="473.0183333333333" y="1381.4199999999998" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="LenCheck" data-to="NextBlock" data-label="no">
+  <rect x="282.02683333333334" y="1342.2699999999998" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="296.79183333333333" y="1357.4199999999998" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="Prefill" data-label="model.prefill(prompt)
+encode prompt into KV cache" data-shape="rectangle">
+  <rect x="41.111499999999985" y="126.83599999999996" width="210.898" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="146.5605" y="153.73599999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="146.5605" dy="-3.9000000000000012">model.prefill(prompt)</tspan><tspan x="146.5605" dy="16.900000000000002">encode prompt into KV cache</tspan></text>
+</g>
+<g class="node" data-id="NewCanvas" data-label="&quot;canvas = 256 random tokens
+locked = [false" data-shape="rectangle">
+  <rect x="40" y="228.63599999999997" width="213.12099999999998" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="146.5605" y="255.53599999999997" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="146.5605" dy="-3.9000000000000012">&quot;canvas = 256 random tokens</tspan><tspan x="146.5605" dy="16.900000000000002">locked = [false</tspan></text>
+</g>
+<g class="node" data-id="Forward" data-label="forwardCanvas(canvas)
+bidirectional attention over canvas
++ causal attention over prompt KV" data-shape="rectangle">
+  <rect x="137.9718333333333" y="330.436" width="242.76100000000002" height="70.7" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="259.3523333333333" y="365.786" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="259.3523333333333" dy="-12.350000000000001">forwardCanvas(canvas)</tspan><tspan x="259.3523333333333" dy="16.900000000000002">bidirectional attention over canvas</tspan><tspan x="259.3523333333333" dy="16.900000000000002">+ causal attention over prompt KV</tspan></text>
+</g>
+<g class="node" data-id="Accept" data-label="for each unlocked position:
+confidence &gt;= threshold? lock : re-noise" data-shape="rectangle">
+  <rect x="122.04033333333334" y="449.13599999999997" width="274.62399999999997" height="53.800000000000004" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="259.3523333333333" y="476.03599999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116"><tspan x="259.3523333333333" dy="-3.9000000000000012">for each unlocked position:</tspan><tspan x="259.3523333333333" dy="16.900000000000002">confidence &gt;= threshold? lock : re-noise</tspan></text>
+</g>
+<g class="node" data-id="AllLocked" data-label="all 256
+locked?" data-shape="diamond">
+  <polygon points="345.16025,550.9359999999999 401.84725000000003,607.6229999999999 345.16025,664.31 288.47325,607.6229999999999" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="345.16025" y="607.6229999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="345.16025" dy="-3.9000000000000012">all 256</tspan><tspan x="345.16025" dy="16.900000000000002">locked?</tspan></text>
+</g>
+<g class="node" data-id="NextStep" data-label="step &lt; max_steps?" data-shape="diamond">
+  <polygon points="407.8881666666666,40 494.9561666666666,127.06799999999998 407.8881666666666,214.13599999999997 320.82016666666664,127.06799999999998" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="407.8881666666666" y="127.06799999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">step &lt; max_steps?</text>
+</g>
+<g class="node" data-id="Emit" data-label="write canvas text to stdout
+model.prefill(canvas) → adds block to KV cache" data-shape="rectangle">
+  <rect x="241.26891666666668" y="780.6099999999999" width="311.674" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="397.10591666666664" y="807.5099999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="397.10591666666664" dy="-3.9000000000000012">write canvas text to stdout</tspan><tspan x="397.10591666666664" dy="16.900000000000002">model.prefill(canvas) → adds block to KV cache</tspan></text>
+</g>
+<g class="node" data-id="EosCheck" data-label="canvas contains
+EOS token?" data-shape="diamond">
+  <polygon points="397.10591666666664,882.4099999999999 478.6164166666666,963.9204999999998 397.10591666666664,1045.4309999999998 315.59541666666667,963.9204999999998" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="397.10591666666664" y="963.9204999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="397.10591666666664" dy="-3.9000000000000012">canvas contains</tspan><tspan x="397.10591666666664" dy="16.900000000000002">EOS token?</tspan></text>
+</g>
+<g class="node" data-id="LenCheck" data-label="total_generated
+&gt;= max_tokens?" data-shape="diamond">
+  <polygon points="446.3601666666667,1161.7309999999998 527.1296666666667,1242.5004999999996 446.3601666666667,1323.2699999999995 365.5906666666667,1242.5004999999996" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="446.3601666666667" y="1242.5004999999996" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="446.3601666666667" dy="-3.9000000000000012">total_generated</tspan><tspan x="446.3601666666667" dy="16.900000000000002">&gt;= max_tokens?</tspan></text>
+</g>
+<g class="node" data-id="Stop" data-label="stop generation" data-shape="stadium">
+  <rect x="384.2111666666667" y="1427.5699999999997" width="133.09300000000002" height="36.900000000000006" rx="18.450000000000003" ry="18.450000000000003" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="450.75766666666675" y="1446.0199999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c" dy="4.55">stop generation</text>
+</g>
+<g class="node" data-id="NextBlock" data-label="start next canvas block" data-shape="rectangle">
+  <rect x="125.97741666666664" y="1427.5699999999997" width="177.55300000000003" height="36.900000000000006" rx="0" ry="0" fill="#f9f3ea" stroke="#c4823a" stroke-width="0.75" />
+  <text x="214.75391666666667" y="1446.0199999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">start next canvas block</text>
+</g>
+</svg>

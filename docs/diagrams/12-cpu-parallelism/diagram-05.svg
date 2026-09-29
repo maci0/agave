@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 574.2669999999998 597" width="574.2669999999998" height="597" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 463.732 1226.6999999999998" width="463.732" height="1226.6999999999998" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -25,60 +18,122 @@
   }
 </style>
 <defs>
-  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
-  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
-    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<line class="lifeline" data-actor="M" x1="164.29799999999994" y1="70" x2="164.29799999999994" y2="567" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="W" x1="321.98099999999994" y1="70" x2="321.98099999999994" y2="567" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<g class="message" data-from="M" data-to="M" data-label="task_total = 1024 (plain write)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="164.29799999999994,90 194.29799999999994,90 194.29799999999994,110 164.29799999999994,110" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="202.29799999999994" y="100" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">task_total = 1024 (plain write)</text>
+<g class="subgraph" data-id="Ready" data-label="Ready">
+  <rect x="40" y="297.8" width="383.732" height="534.1999999999999" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="40" y="297.8" width="383.732" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="52" y="311.8" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Ready</text>
 </g>
-<g class="message" data-from="M" data-to="M" data-label="task_grain = 4 (plain write)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="164.29799999999994,160 194.29799999999994,160 194.29799999999994,180 164.29799999999994,180" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="202.29799999999994" y="170" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">task_grain = 4 (plain write)</text>
+<polyline class="edge" data-from="_start" data-to="Uninit" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="231.866,68 231.86599999999999,116" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Uninit" data-to="Ready" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="init(n_workers)
+pool fields zeroed
+no threads exist" points="231.86599999999999,152.9 231.866,297.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Ready" data-to="ShuttingDown" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="deinit()
+shutdown = true
+generation++
+futexWake(all)" points="231.866,832 231.866,991.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ShuttingDown" data-to="_end" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="all workers join()
+pool memory released" points="231.866,1028.1 231.866,1158.6999999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="_start2" data-to="Idle" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="347.504,369.8 347.504,417.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Idle" data-to="Spawning" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="spawn(io)
+stores Io context" points="347.504,454.70000000000005 347.504,585.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Spawning" data-to="Sleeping" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="std.Thread.spawn()
+for each worker
+workers enter futexWait" points="347.504,622.2 347.504,731.0999999999999 260.875,731.0999999999999 260.875,773.0999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sleeping" data-to="Working" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="parallelFor()
+generation++
+futexWake(all)" points="237.42000000000002,773.0999999999999 237.42000000000002,634.2 199.38616666666667,634.2 199.38616666666667,622.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Working" data-to="Sleeping" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="all workers complete
+active decrements to 0
+main returns from spin" points="168.8538333333333,622.2 168.8538333333333,634.2 130.82,634.2 130.82,731.0999999999999 213.965,731.0999999999999 213.965,773.0999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sleeping" data-to="Sleeping" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="spurious wakeup
+local_gen == generation
+worker loops back" points="190.51000000000002,785.4 180.51000000000002,785.4 180.51000000000002,797.7 190.51000000000002,797.7" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Uninit" data-to="Ready" data-label="init(n_workers)
+pool fields zeroed
+no threads exist">
+  <rect x="181.36599999999999" y="195.90000000000003" width="100.81000000000003" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="231.77100000000002" y="225.35000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="231.77100000000002" dy="-10.450000000000001">init(n_workers)</tspan><tspan x="231.77100000000002" dy="14.3">pool fields zeroed</tspan><tspan x="231.77100000000002" dy="14.3">no threads exist</tspan></text>
 </g>
-<g class="message" data-from="M" data-to="M" data-label="generation.fetchAdd(1, .release)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="164.29799999999994,230 194.29799999999994,230 194.29799999999994,250 164.29799999999994,250" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="202.29799999999994" y="240" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">generation.fetchAdd(1, .release)</text>
+<g class="edge-label" data-from="Ready" data-to="ShuttingDown" data-label="deinit()
+shutdown = true
+generation++
+futexWake(all)">
+  <rect x="185.866" y="875" width="91.30600000000003" height="73.2" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="231.51900000000003" y="911.6" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="231.51900000000003" dy="-17.6">deinit()</tspan><tspan x="231.51900000000003" dy="14.3">shutdown = true</tspan><tspan x="231.51900000000003" dy="14.3">generation++</tspan><tspan x="231.51900000000003" dy="14.3">futexWake(all)</tspan></text>
 </g>
-<g class="message" data-from="W" data-to="W" data-label="local_gen = generation.load(.acquire)" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="321.98099999999994,342 351.98099999999994,342 351.98099999999994,362 321.98099999999994,362" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="359.98099999999994" y="352" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">local_gen = generation.load(.acquire)</text>
+<g class="edge-label" data-from="ShuttingDown" data-to="_end" data-label="all workers join()
+pool memory released">
+  <rect x="170.866" y="1071.1" width="121.00600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="231.36900000000003" y="1093.3999999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="231.36900000000003" dy="-3.3000000000000007">all workers join()</tspan><tspan x="231.36900000000003" dy="14.3">pool memory released</tspan></text>
 </g>
-<g class="message" data-from="W" data-to="W" data-label="read task_total → sees 1024 ✓" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="321.98099999999994,427 351.98099999999994,427 351.98099999999994,447 321.98099999999994,447" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="359.98099999999994" y="437" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">read task_total → sees 1024 ✓</text>
+<g class="edge-label" data-from="Idle" data-to="Spawning" data-label="spawn(io)
+stores Io context">
+  <rect x="300.004" y="497.7" width="94.87" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="347.439" y="520" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="347.439" dy="-3.3000000000000007">spawn(io)</tspan><tspan x="347.439" dy="14.3">stores Io context</tspan></text>
 </g>
-<g class="message" data-from="W" data-to="W" data-label="read task_grain → sees 4 ✓" data-line-style="solid" data-arrow-head="filled" data-self="true">
-  <polyline points="321.98099999999994,497 351.98099999999994,497 351.98099999999994,517 321.98099999999994,517" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="359.98099999999994" y="507" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">read task_grain → sees 4 ✓</text>
+<g class="edge-label" data-from="Spawning" data-to="Sleeping" data-label="std.Thread.spawn()
+for each worker
+workers enter futexWait">
+  <rect x="283.004" y="665.1999999999999" width="128.728" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="347.36800000000005" y="694.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="347.36800000000005" dy="-10.450000000000001">std.Thread.spawn()</tspan><tspan x="347.36800000000005" dy="14.3">for each worker</tspan><tspan x="347.36800000000005" dy="14.3">workers enter futexWait</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="M">
-  <polygon points="30,268 292.5959999999999,268 298.5959999999999,274 298.5959999999999,291 30,291" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="292.5959999999999,268 298.5959999999999,274 292.5959999999999,274" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="164.29799999999994" y="279.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="164.29799999999994" dy="-3.3000000000000007">.release: all prior writes</tspan><tspan x="164.29799999999994" dy="14.3">are visible before this store</tspan></text>
+<g class="edge-label" data-from="Sleeping" data-to="Working" data-label="parallelFor()
+generation++
+futexWake(all)">
+  <rect x="195.42000000000002" y="665.1999999999999" width="83.58400000000002" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="237.21200000000002" y="694.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="237.21200000000002" dy="-10.450000000000001">parallelFor()</tspan><tspan x="237.21200000000002" dy="14.3">generation++</tspan><tspan x="237.21200000000002" dy="14.3">futexWake(all)</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="M,W">
-  <polygon points="163.19249999999994,295 317.08649999999994,295 323.08649999999994,301 323.08649999999994,318 163.19249999999994,318" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="317.08649999999994,295 323.08649999999994,301 317.08649999999994,301" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="243.13949999999994" y="306.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">futexWake / futexWait handoff</text>
+<g class="edge-label" data-from="Working" data-to="Sleeping" data-label="all workers complete
+active decrements to 0
+main returns from spin">
+  <rect x="69.82" y="665.1999999999999" width="121.60000000000002" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="130.62" y="694.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="130.62" dy="-10.450000000000001">all workers complete</tspan><tspan x="130.62" dy="14.3">active decrements to 0</tspan><tspan x="130.62" dy="14.3">main returns from spin</tspan></text>
 </g>
-<g class="note" data-position="over" data-actors="W">
-  <polygon points="136.00500000000002,380 501.9569999999999,380 507.9569999999999,386 507.9569999999999,403 136.00500000000002,403" fill="#ffffff" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <polygon points="501.9569999999999,380 507.9569999999999,386 501.9569999999999,386" fill="var(--_inner-stroke)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="321.98099999999994" y="391.5" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)"><tspan x="321.98099999999994" dy="-10.450000000000001">.acquire: all writes that</tspan><tspan x="321.98099999999994" dy="14.3">happened before the .release</tspan><tspan x="321.98099999999994" dy="14.3">are now visible here</tspan></text>
+<g class="edge-label" data-from="Sleeping" data-to="Sleeping" data-label="spurious wakeup
+local_gen == generation
+worker loops back">
+  <rect x="52" y="762.0999999999999" width="130.51000000000002" height="58.900000000000006" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="117.25500000000001" y="791.55" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="117.25500000000001" dy="-10.450000000000001">spurious wakeup</tspan><tspan x="117.25500000000001" dy="14.3">local_gen == generation</tspan><tspan x="117.25500000000001" dy="14.3">worker loops back</tspan></text>
 </g>
-<g class="actor" data-id="M" data-label="Main Thread" data-type="participant">
-  <rect x="109.53199999999995" y="30" width="109.532" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="164.29799999999994" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Main Thread</text>
+<g class="node" data-id="_start" data-label="" data-shape="state-start">
+  <circle cx="231.866" cy="54" r="12" fill="#2a2522" stroke="none" />
 </g>
-<g class="actor" data-id="W" data-label="Worker Thread" data-type="participant">
-  <rect x="259.06399999999996" y="30" width="125.834" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="321.98099999999994" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Worker Thread</text>
+<g class="node" data-id="Uninit" data-label="Uninit" data-shape="rounded">
+  <rect x="194.589" y="116" width="74.554" height="36.900000000000006" rx="6" ry="6" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="231.86599999999999" y="134.45" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">Uninit</text>
+</g>
+<g class="node" data-id="ShuttingDown" data-label="ShuttingDown" data-shape="rounded">
+  <rect x="170.877" y="991.2" width="121.978" height="36.900000000000006" rx="6" ry="6" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="231.866" y="1009.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">ShuttingDown</text>
+</g>
+<g class="node" data-id="_end" data-label="" data-shape="state-end">
+  <circle cx="231.866" cy="1172.6999999999998" r="12" fill="none" stroke="#2a2522" stroke-width="1.5" />
+  <circle cx="231.866" cy="1172.6999999999998" r="8" fill="#2a2522" stroke="none" />
+</g>
+<g class="node" data-id="_start2" data-label="" data-shape="state-start">
+  <circle cx="347.504" cy="355.8" r="12" fill="#2a2522" stroke="none" />
+</g>
+<g class="node" data-id="Idle" data-label="Idle" data-shape="rounded">
+  <rect x="316.15500000000003" y="417.8" width="62.69799999999999" height="36.900000000000006" rx="6" ry="6" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="347.504" y="436.25" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">Idle</text>
+</g>
+<g class="node" data-id="Spawning" data-label="Spawning" data-shape="rounded">
+  <rect x="297.63" y="585.3" width="99.748" height="36.900000000000006" rx="6" ry="6" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="347.504" y="603.75" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">Spawning</text>
+</g>
+<g class="node" data-id="Sleeping" data-label="Sleeping" data-shape="rounded">
+  <rect x="190.51000000000002" y="773.0999999999999" width="93.82" height="36.900000000000006" rx="6" ry="6" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="237.42000000000002" y="791.55" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">Sleeping</text>
+</g>
+<g class="node" data-id="Working" data-label="Working" data-shape="rounded">
+  <rect x="138.3215" y="585.3" width="91.59700000000001" height="36.900000000000006" rx="6" ry="6" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="184.12" y="603.75" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">Working</text>
 </g>
 </svg>

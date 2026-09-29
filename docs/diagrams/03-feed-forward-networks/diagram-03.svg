@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 726.8725 827.4999999999999" width="726.8725" height="827.4999999999999" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 726.8725 827.4999999999999" width="726.8725" height="827.4999999999999" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,50 +19,50 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="Token" data-to="Router" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="444.89465,93.80000000000001 444.89465,117.80000000000001 322.99199999999996,117.80000000000001 322.99199999999996,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Token" data-to="Router" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="444.89465,93.80000000000001 444.89465,117.80000000000001 322.99199999999996,117.80000000000001 322.99199999999996,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Router" data-to="Norm" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="top-6
-scores" points="322.99199999999996,212.5 322.99199999999996,343.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Norm" data-to="E3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 102.471,445.025 102.471,476.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Norm" data-to="E1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 250.967,445.025 250.967,476.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Norm" data-to="E87" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 395.01699999999994,445.025 395.01699999999994,476.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Norm" data-to="Edots" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 530.5455000000001,445.025 530.5455000000001,476.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Token" data-to="Shared" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="444.89465,93.80000000000001 444.89465,117.80000000000001 622.549,117.80000000000001 622.549,372" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="E3" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× 0.193" points="102.471,546.95 102.471,636.8 336.8206666666666,636.8 336.8206666666666,648.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="E1" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× 0.182" points="250.967,546.95 250.96699999999998,624.8 365.9188333333333,624.8 365.9188333333333,648.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="E87" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× 0.169" points="395.01699999999994,546.95 395.01700000000005,648.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Edots" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× ..." points="530.5455,530.05 530.5455000000001,624.8 424.1151666666667,624.8 424.1151666666667,648.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Shared" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="+ 1.0" points="622.549,442.7 622.549,636.8 453.21333333333337,636.8 453.21333333333337,648.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Sum" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.01700000000005,702.5999999999999 395.01700000000005,750.5999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+scores" points="322.99199999999996,212.5 322.99199999999996,343.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Norm" data-to="E3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 102.471,445.025 102.471,476.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Norm" data-to="E1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 250.967,445.025 250.967,476.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Norm" data-to="E87" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 395.01699999999994,445.025 395.01699999999994,476.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Norm" data-to="Edots" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="322.99199999999996,413.8 322.99199999999996,445.025 530.5455000000001,445.025 530.5455000000001,476.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Token" data-to="Shared" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="444.89465,93.80000000000001 444.89465,117.80000000000001 622.549,117.80000000000001 622.549,372" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="E3" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× 0.193" points="102.471,546.95 102.471,636.8 336.8206666666666,636.8 336.8206666666666,648.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="E1" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× 0.182" points="250.967,546.95 250.96699999999998,624.8 365.9188333333333,624.8 365.9188333333333,648.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="E87" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× 0.169" points="395.01699999999994,546.95 395.01700000000005,648.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Edots" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="× ..." points="530.5455,530.05 530.5455000000001,624.8 424.1151666666667,624.8 424.1151666666667,648.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Shared" data-to="Sum" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="+ 1.0" points="622.549,442.7 622.549,636.8 453.21333333333337,636.8 453.21333333333337,648.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sum" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="395.01700000000005,702.5999999999999 395.01700000000005,750.5999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Router" data-to="Norm" data-label="top-6
 scores">
-  <rect x="296.49199999999996" y="255.5" width="52.102" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="322.54299999999995" y="277.8" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="322.54299999999995" dy="-3.3000000000000007">top-6</tspan><tspan x="322.54299999999995" dy="14.3">scores</tspan></text>
+  <rect x="296.49199999999996" y="255.5" width="52.102" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="322.54299999999995" y="277.8" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="322.54299999999995" dy="-3.3000000000000007">top-6</tspan><tspan x="322.54299999999995" dy="14.3">scores</tspan></text>
 </g>
 <g class="edge-label" data-from="E3" data-to="Sum" data-label="× 0.193">
-  <rect x="78.471" y="599.5" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="102.44300000000001" y="614.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">× 0.193</text>
+  <rect x="78.471" y="599.5" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="102.44300000000001" y="614.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">× 0.193</text>
 </g>
 <g class="edge-label" data-from="E1" data-to="Sum" data-label="× 0.182">
-  <rect x="226.96699999999998" y="587.5" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="250.939" y="602.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">× 0.182</text>
+  <rect x="226.96699999999998" y="587.5" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="250.939" y="602.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">× 0.182</text>
 </g>
 <g class="edge-label" data-from="E87" data-to="Sum" data-label="× 0.169">
-  <rect x="371.01699999999994" y="575.5" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="394.9889999999999" y="590.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">× 0.169</text>
+  <rect x="371.01699999999994" y="575.5" width="47.944" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="394.9889999999999" y="590.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">× 0.169</text>
 </g>
 <g class="edge-label" data-from="Edots" data-to="Sum" data-label="× ...">
-  <rect x="514.0455000000001" y="587.5" width="32.5" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="530.2955000000001" y="602.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">× ...</text>
+  <rect x="514.0455000000001" y="587.5" width="32.5" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="530.2955000000001" y="602.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">× ...</text>
 </g>
 <g class="edge-label" data-from="Shared" data-to="Sum" data-label="+ 1.0">
-  <rect x="604.049" y="599.5" width="36.064" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="622.081" y="614.65" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">+ 1.0</text>
+  <rect x="604.049" y="599.5" width="36.064" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="622.081" y="614.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">+ 1.0</text>
 </g>
 <g class="node" data-id="Token" data-label="Token hidden state
 (e.g. 4096 floats)" data-shape="rectangle">
@@ -85,8 +78,8 @@ hidden @ gate_weight
 <g class="node" data-id="Norm" data-label="&quot;Softmax normalize
 selected scores
 → weights [0.19, 0.18, ..." data-shape="rectangle">
-  <rect x="241.62549999999996" y="343.1" width="162.73300000000003" height="70.7" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="322.99199999999996" y="378.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="322.99199999999996" dy="-12.350000000000001">&quot;Softmax normalize</tspan><tspan x="322.99199999999996" dy="16.900000000000002">selected scores</tspan><tspan x="322.99199999999996" dy="16.900000000000002">→ weights [0.19, 0.18, ...</tspan></text>
+  <rect x="241.62549999999996" y="343.1" width="162.73300000000003" height="70.7" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="322.99199999999996" y="378.45000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="322.99199999999996" dy="-12.350000000000001">&quot;Softmax normalize</tspan><tspan x="322.99199999999996" dy="16.900000000000002">selected scores</tspan><tspan x="322.99199999999996" dy="16.900000000000002">→ weights [0.19, 0.18, ...</tspan></text>
 </g>
 <g class="node" data-id="E3" data-label="Expert 3
 'programming'

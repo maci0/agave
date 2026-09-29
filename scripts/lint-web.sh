@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# CI lint-web job: oxlint + tsc for src/web and web, plus the chat UI smoke
-# test. The UI is a Preact tree that only exists once mounted, so a broken
-# import or a dead render passes every static check; `bun test src/web` mounts
-# it against a stubbed server and fails if a turn does not land in the log.
+# CI lint-web job: oxlint + tsc for src/web and web, the chat UI smoke test,
+# and W3C conformance (scripts/check-w3c.sh). The UI is a Preact tree that only
+# exists once mounted, so a broken import or a dead render passes every static
+# check; `bun test src/web` mounts it against a stubbed server and fails if a
+# turn does not land in the log.
 # Canonical: zig build lint-web  (or this script from the repo root).
 set -euo pipefail
 export LC_ALL=C TZ=UTC
@@ -41,3 +42,4 @@ fi
 bun run lint
 bun run typecheck
 bun test src/web
+bash scripts/check-w3c.sh

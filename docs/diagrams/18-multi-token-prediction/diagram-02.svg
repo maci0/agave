@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 516.4579999999999 1033.1" width="516.4579999999999" height="1033.1" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 516.4579999999999 1033.1" width="516.4579999999999" height="1033.1" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,23 +19,23 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<polyline class="edge" data-from="HiddenState" data-to="HNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.11799999999997,93.80000000000001 152.11799999999997,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="TokenEmbed" data-to="ENorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="384.3469999999999,93.80000000000001 384.347,141.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="HNorm" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.11799999999997,195.60000000000002 152.11799999999997,219.60000000000002 268.23249999999996,219.60000000000002 268.23249999999996,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="ENorm" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="384.347,195.60000000000002 384.347,219.60000000000002 268.23249999999996,219.60000000000002 268.23249999999996,243.60000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Concat" data-to="EHProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,297.40000000000003 268.23249999999996,345.40000000000003" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="EHProj" data-to="AttnBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,399.20000000000005 268.23249999999996,447.20000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="AttnBlock" data-to="FFNBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,501.00000000000006 268.23249999999996,549" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="FFNBlock" data-to="HeadNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,602.8000000000001 268.23249999999996,650.8000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="HeadNorm" data-to="HeadProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,704.6 268.23249999999996,752.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="HeadProj" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,823.3000000000001 268.23249999999996,871.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Logits" data-to="ArgMax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,908.2 268.23249999999996,956.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HiddenState" data-to="HNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.11799999999997,93.80000000000001 152.11799999999997,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TokenEmbed" data-to="ENorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="384.3469999999999,93.80000000000001 384.347,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HNorm" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="152.11799999999997,195.60000000000002 152.11799999999997,219.60000000000002 268.23249999999996,219.60000000000002 268.23249999999996,243.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="ENorm" data-to="Concat" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="384.347,195.60000000000002 384.347,219.60000000000002 268.23249999999996,219.60000000000002 268.23249999999996,243.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Concat" data-to="EHProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,297.40000000000003 268.23249999999996,345.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="EHProj" data-to="AttnBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,399.20000000000005 268.23249999999996,447.20000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AttnBlock" data-to="FFNBlock" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,501.00000000000006 268.23249999999996,549" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="FFNBlock" data-to="HeadNorm" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,602.8000000000001 268.23249999999996,650.8000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HeadNorm" data-to="HeadProj" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,704.6 268.23249999999996,752.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="HeadProj" data-to="Logits" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,823.3000000000001 268.23249999999996,871.3000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Logits" data-to="ArgMax" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="268.23249999999996,908.2 268.23249999999996,956.2" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="node" data-id="HiddenState" data-label="Pre-norm Hidden State
 (from main model, n_embd floats)" data-shape="rectangle">
   <rect x="40" y="40" width="224.23599999999993" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
@@ -65,8 +58,8 @@
 </g>
 <g class="node" data-id="Concat" data-label="&quot;Concatenate
 [embed ; hidden" data-shape="rectangle">
-  <rect x="202.42699999999996" y="243.60000000000002" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="268.23249999999996" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="268.23249999999996" dy="-3.9000000000000012">&quot;Concatenate</tspan><tspan x="268.23249999999996" dy="16.900000000000002">[embed ; hidden</tspan></text>
+  <rect x="202.42699999999996" y="243.60000000000002" width="131.611" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="268.23249999999996" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="268.23249999999996" dy="-3.9000000000000012">&quot;Concatenate</tspan><tspan x="268.23249999999996" dy="16.900000000000002">[embed ; hidden</tspan></text>
 </g>
 <g class="node" data-id="EHProj" data-label="eh_proj GEMV
 2×n_embd → n_embd" data-shape="rectangle">
@@ -95,8 +88,8 @@ n_embd → vocab_size" data-shape="rectangle">
   <text x="268.23249999999996" y="787.95" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="268.23249999999996" dy="-12.350000000000001">Output GEMV</tspan><tspan x="268.23249999999996" dy="16.900000000000002">(shared_head_head)</tspan><tspan x="268.23249999999996" dy="16.900000000000002">n_embd → vocab_size</tspan></text>
 </g>
 <g class="node" data-id="Logits" data-label="&quot;Logits [vocab_size" data-shape="rectangle">
-  <rect x="189.08899999999994" y="871.3000000000001" width="158.287" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="268.23249999999996" y="889.7500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;Logits [vocab_size</text>
+  <rect x="189.08899999999994" y="871.3000000000001" width="158.287" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="268.23249999999996" y="889.7500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;Logits [vocab_size</text>
 </g>
 <g class="node" data-id="ArgMax" data-label="argmax → draft token t+2" data-shape="rectangle">
   <rect x="178.34449999999998" y="956.2" width="179.77599999999998" height="36.900000000000006" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />

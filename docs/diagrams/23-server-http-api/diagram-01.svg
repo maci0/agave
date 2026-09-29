@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660.508 1067.8999999999999" width="660.508" height="1067.8999999999999" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
+<style>
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #2a2522;
+    --_text-sec:      #75716f;
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          #94908c;
+    --_arrow:         #504b47;
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
+    --_group-fill:    #ffffff;
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Accept" data-to="Parse" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.1855,93.80000000000001 346.1855,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Parse" data-to="Tmpl" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.1855,195.60000000000002 346.1855,243.60000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Tmpl" data-to="Enqueue" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.1855,297.40000000000003 346.1855,345.40000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Enqueue" data-to="Sched" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.1855,399.20000000000005 346.1855,447.20000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sched" data-to="Mask" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="grammar configured" points="301.7745,501.00000000000006 301.7745,537 208.9525,537 208.95250000000004,625.75" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sched" data-to="Spec" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="draft model configured" points="390.5965,501.00000000000006 390.5965,553.9000000000001 449.703,553.9000000000001 449.703,625.75" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Mask" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="208.95250000000004,679.55 208.95250000000004,699.325 346.1855,699.325 346.1855,719.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Spec" data-to="Sample" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="449.70300000000003,662.65 449.70300000000003,699.325 346.1855,699.325 346.1855,719.1" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Sample" data-to="Check" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.1855,772.9 346.1855,820.9" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Sse" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes, plain content" points="318.842,857.8 318.842,869.8 136.9275,869.8 136.9275,962.0999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="SseTools" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes, tool calls" points="346.1855,857.8 346.1855,962.0999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Check" data-to="Json" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="373.529,857.8 373.529,869.8 539.5120000000001,869.8 539.512,962.0999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Sched" data-to="Mask" data-label="grammar configured">
+  <rect x="152.4525" y="544" width="112.09600000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="208.5005" y="559.15" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">grammar configured</text>
+</g>
+<g class="edge-label" data-from="Sched" data-to="Spec" data-label="draft model configured">
+  <rect x="388.703" y="560.9000000000001" width="121.00600000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="449.206" y="576.0500000000001" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">draft model configured</text>
+</g>
+<g class="edge-label" data-from="Check" data-to="Sse" data-label="yes, plain content">
+  <rect x="87.42750000000001" y="876.8" width="98.43400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="136.64450000000002" y="891.9499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes, plain content</text>
+</g>
+<g class="edge-label" data-from="Check" data-to="SseTools" data-label="yes, tool calls">
+  <rect x="305.6855" y="900.8" width="80.61400000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="345.9925" y="915.9499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes, tool calls</text>
+</g>
+<g class="edge-label" data-from="Check" data-to="Json" data-label="no">
+  <rect x="524.5120000000001" y="876.8" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="539.277" y="891.9499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
+</g>
+<g class="node" data-id="Accept" data-label="accept connection
+(one thread per connection)" data-shape="rectangle">
+  <rect x="244.812" y="40" width="202.74699999999996" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="346.1855" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="346.1855" dy="-3.9000000000000012">accept connection</tspan><tspan x="346.1855" dy="16.900000000000002">(one thread per connection)</tspan></text>
+</g>
+<g class="node" data-id="Parse" data-label="parse JSON/form body
+→ SamplingParams + messages" data-shape="rectangle">
+  <rect x="234.438" y="141.8" width="223.49499999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="346.1855" y="168.70000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="346.1855" dy="-3.9000000000000012">parse JSON/form body</tspan><tspan x="346.1855" dy="16.900000000000002">→ SamplingParams + messages</tspan></text>
+</g>
+<g class="node" data-id="Tmpl" data-label="ChatTemplate.formatConversation()
++ tool defs / grammar / image tokens" data-shape="rectangle">
+  <rect x="222.2115" y="243.60000000000002" width="247.94799999999995" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="346.1855" y="270.5" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="346.1855" dy="-3.9000000000000012">ChatTemplate.formatConversation()</tspan><tspan x="346.1855" dy="16.900000000000002">+ tool defs / grammar / image tokens</tspan></text>
+</g>
+<g class="node" data-id="Enqueue" data-label="RequestManager.enqueue()
+radix-tree prefix match" data-shape="rectangle">
+  <rect x="242.589" y="345.40000000000003" width="207.19299999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="346.1855" y="372.3" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="346.1855" dy="-3.9000000000000012">RequestManager.enqueue()</tspan><tspan x="346.1855" dy="16.900000000000002">radix-tree prefix match</tspan></text>
+</g>
+<g class="node" data-id="Sched" data-label="scheduler step
+(shared across all active requests)" data-shape="hexagon">
+  <polygon points="226.40249999999997,447.20000000000005 465.9685,447.20000000000005 479.4185,474.1 465.9685,501.00000000000006 226.40249999999997,501.00000000000006 212.9525,474.1" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="346.1855" y="474.1" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="346.1855" dy="-3.9000000000000012">scheduler step</tspan><tspan x="346.1855" dy="16.900000000000002">(shared across all active requests)</tspan></text>
+</g>
+<g class="node" data-id="Mask" data-label="maskLogits()
+or jump-decode if 1 legal token" data-shape="rectangle">
+  <rect x="103.50350000000003" y="625.75" width="210.898" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="208.95250000000004" y="652.65" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="208.95250000000004" dy="-3.9000000000000012">maskLogits()</tspan><tspan x="208.95250000000004" dy="16.900000000000002">or jump-decode if 1 legal token</tspan></text>
+</g>
+<g class="node" data-id="Spec" data-label="draft → verify → accept/correct" data-shape="rectangle">
+  <rect x="342.40150000000006" y="625.75" width="214.60299999999995" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="449.70300000000003" y="644.2" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">draft → verify → accept/correct</text>
+</g>
+<g class="node" data-id="Sample" data-label="sample or argmax
+(temperature==0 default → greedy)" data-shape="rectangle">
+  <rect x="227.028" y="719.1" width="238.315" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="346.1855" y="746" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="346.1855" dy="-3.9000000000000012">sample or argmax</tspan><tspan x="346.1855" dy="16.900000000000002">(temperature==0 default → greedy)</tspan></text>
+</g>
+<g class="node" data-id="Check" data-label="stream?" data-shape="hexagon">
+  <polygon points="300.7235,820.9 391.6474999999999,820.9 400.87249999999995,839.35 391.6474999999999,857.8 300.7235,857.8 291.4985,839.35" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="346.1855" y="839.35" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">stream?</text>
+</g>
+<g class="node" data-id="Sse" data-label="&quot;emit SSE chunk per token
+data: [DONE" data-shape="rectangle">
+  <rect x="40" y="962.0999999999999" width="193.855" height="53.800000000000004" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="136.9275" y="988.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="136.9275" dy="-3.9000000000000012">&quot;emit SSE chunk per token</tspan><tspan x="136.9275" dy="16.900000000000002">data: [DONE</tspan></text>
+</g>
+<g class="node" data-id="SseTools" data-label="buffer full generation
+then emit delta chunks" data-shape="rectangle">
+  <rect x="261.855" y="962.0999999999999" width="168.661" height="53.800000000000004" rx="0" ry="0" fill="#e8c3c3" stroke="#c05c5c" stroke-width="0.75" />
+  <text x="346.18550000000005" y="988.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a1c1c"><tspan x="346.18550000000005" dy="-3.9000000000000012">buffer full generation</tspan><tspan x="346.18550000000005" dy="16.900000000000002">then emit delta chunks</tspan></text>
+</g>
+<g class="node" data-id="Json" data-label="buffer full generation
+one JSON response" data-shape="rectangle">
+  <rect x="458.51599999999996" y="962.0999999999999" width="161.99200000000002" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="539.512" y="988.9999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="539.512" dy="-3.9000000000000012">buffer full generation</tspan><tspan x="539.512" dy="16.900000000000002">one JSON response</tspan></text>
+</g>
+</svg>

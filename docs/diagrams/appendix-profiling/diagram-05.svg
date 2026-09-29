@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 787.8041249999999 1157.377" width="787.8041249999999" height="1157.377" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 787.8041249999999 1157.377" width="787.8041249999999" height="1157.377" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,75 +19,66 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Measure" data-label="Measure">
-  <rect x="691.8041249999999" y="394.6" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="691.8041249999999" y="394.6" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="703.8041249999999" y="408.6" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Measure</text>
 </g>
 <g class="subgraph" data-id="Diagnose" data-label="Diagnose">
-  <rect x="719.8041249999999" y="804.4769999999999" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="719.8041249999999" y="804.4769999999999" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="731.8041249999999" y="818.4769999999999" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Diagnose</text>
 </g>
 <g class="subgraph" data-id="Remediate" data-label="Remediate">
-  <rect x="747.8041249999999" y="40.00000000000004" width="0" height="0" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="747.8041249999999" y="40.00000000000004" width="0" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="759.8041249999999" y="54.00000000000004" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Remediate</text>
 </g>
 <polyline class="edge" data-from="Step1" data-to="Step2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="record expected
-dispatch/barrier/sync counts" points="581.3261249999999,110.7 581.326125,241.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+dispatch/barrier/sync counts" points="581.3261249999999,110.7 581.326125,241.3" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Step2" data-to="Step3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="capture feature
-branch numbers" points="581.326125,312 581.3261249999999,442.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Step3" data-to="Step4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="581.3261249999999,513.3 581.3261249999998,561.3000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Step4" data-to="Regression" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="552.1799583333332,707.0308333333331 552.1799583333332,748.1769999999999 430.38599999999997,748.1769999999999 430.38599999999997,840.4769999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Step4" data-to="NoReg" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no obvious delta" points="610.4722916666665,707.0308333333334 610.4722916666665,772.1769999999999 651.1295,772.1769999999999 651.1295,840.4769999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+branch numbers" points="581.326125,312 581.3261249999999,442.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Step3" data-to="Step4" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="581.3261249999999,513.3 581.3261249999998,561.3000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Step4" data-to="Regression" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="552.1799583333332,707.0308333333331 552.1799583333332,748.1769999999999 430.38599999999997,748.1769999999999 430.38599999999997,840.4769999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Step4" data-to="NoReg" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no obvious delta" points="610.4722916666665,707.0308333333334 610.4722916666665,772.1769999999999 651.1295,772.1769999999999 651.1295,840.4769999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Regression" data-to="Step5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="comment out
-changes one by one" points="430.38599999999997,911.1769999999999 430.38599999999997,1017.7769999999999 392.5690416666666,1017.7769999999999 392.5690416666666,1029.777" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Step5" data-to="Step6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="regression fixed" points="284.5265416666666,1029.777 284.5265416666666,1017.7769999999999 193.658625,1017.7769999999999 193.658625,911.1769999999999 174.0745,911.1769999999999 174.0745,860.8769999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+changes one by one" points="430.38599999999997,911.1769999999999 430.38599999999997,1017.7769999999999 392.5690416666666,1017.7769999999999 392.5690416666666,1029.777" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Step5" data-to="Step6" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="regression fixed" points="284.5265416666666,1029.777 284.5265416666666,1017.7769999999999 193.658625,1017.7769999999999 193.658625,911.1769999999999 174.0745,911.1769999999999 174.0745,860.8769999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Step6" data-to="Done" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="counters match
-baseline" points="116.71875,860.8769999999998 116.71875,896.8769999999998 96.9135,896.8769999999998 96.9135,991.4769999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Step6" data-to="Step5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="still regressed" points="231.43024999999997,860.8769999999998 231.43024999999997,911.1769999999999 318.300375,911.1769999999999 318.300375,1017.7769999999999 338.5477916666666,1017.7769999999999 338.5477916666666,1029.777" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+baseline" points="116.71875,860.8769999999998 116.71875,896.8769999999998 96.9135,896.8769999999998 96.9135,991.4769999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Step6" data-to="Step5" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="still regressed" points="231.43024999999997,860.8769999999998 231.43024999999997,911.1769999999999 318.300375,911.1769999999999 318.300375,1017.7769999999999 338.5477916666666,1017.7769999999999 338.5477916666666,1029.777" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="Step1" data-to="Step2" data-label="record expected
 dispatch/barrier/sync counts">
-  <rect x="502.826125" y="153.7" width="156.05200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="580.852125" y="176" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="580.852125" dy="-3.3000000000000007">record expected</tspan><tspan x="580.852125" dy="14.3">dispatch/barrier/sync counts</tspan></text>
+  <rect x="502.826125" y="153.7" width="156.05200000000002" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="580.852125" y="176" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="580.852125" dy="-3.3000000000000007">record expected</tspan><tspan x="580.852125" dy="14.3">dispatch/barrier/sync counts</tspan></text>
 </g>
 <g class="edge-label" data-from="Step2" data-to="Step3" data-label="capture feature
 branch numbers">
-  <rect x="533.326125" y="355" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="581.058125" y="377.3" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="581.058125" dy="-3.3000000000000007">capture feature</tspan><tspan x="581.058125" dy="14.3">branch numbers</tspan></text>
+  <rect x="533.326125" y="355" width="95.46400000000001" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="581.058125" y="377.3" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="581.058125" dy="-3.3000000000000007">capture feature</tspan><tspan x="581.058125" dy="14.3">branch numbers</tspan></text>
 </g>
 <g class="edge-label" data-from="Step4" data-to="Regression" data-label="yes">
-  <rect x="412.38599999999997" y="755.1769999999999" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="430.121" y="770.3269999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+  <rect x="412.38599999999997" y="755.1769999999999" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="430.121" y="770.3269999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
 <g class="edge-label" data-from="Step4" data-to="NoReg" data-label="no obvious delta">
-  <rect x="604.1295" y="779.1769999999999" width="93.68200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="650.9705" y="794.3269999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no obvious delta</text>
+  <rect x="604.1295" y="779.1769999999999" width="93.68200000000002" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="650.9705" y="794.3269999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no obvious delta</text>
 </g>
 <g class="edge-label" data-from="Regression" data-to="Step5" data-label="comment out
 changes one by one">
-  <rect x="373.88599999999997" y="942.1769999999999" width="112.09600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="429.93399999999997" y="964.4769999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="429.93399999999997" dy="-3.3000000000000007">comment out</tspan><tspan x="429.93399999999997" dy="14.3">changes one by one</tspan></text>
+  <rect x="373.88599999999997" y="942.1769999999999" width="112.09600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="429.93399999999997" y="964.4769999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="429.93399999999997" dy="-3.3000000000000007">comment out</tspan><tspan x="429.93399999999997" dy="14.3">changes one by one</tspan></text>
 </g>
 <g class="edge-label" data-from="Step5" data-to="Step6" data-label="regression fixed">
-  <rect x="145.65862499999997" y="918.1769999999999" width="95.46400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="193.390625" y="933.3269999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">regression fixed</text>
+  <rect x="145.65862499999997" y="918.1769999999999" width="95.46400000000003" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="193.390625" y="933.3269999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">regression fixed</text>
 </g>
 <g class="edge-label" data-from="Step6" data-to="Done" data-label="counters match
 baseline">
-  <rect x="51.9135" y="903.8769999999998" width="89.524" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="96.6755" y="926.1769999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="96.6755" dy="-3.3000000000000007">counters match</tspan><tspan x="96.6755" dy="14.3">baseline</tspan></text>
+  <rect x="51.9135" y="903.8769999999998" width="89.524" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="96.6755" y="926.1769999999998" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="96.6755" dy="-3.3000000000000007">counters match</tspan><tspan x="96.6755" dy="14.3">baseline</tspan></text>
 </g>
 <g class="edge-label" data-from="Step6" data-to="Step5" data-label="still regressed">
-  <rect x="275.300375" y="956.477" width="85.96000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="318.280375" y="971.627" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">still regressed</text>
+  <rect x="275.300375" y="956.477" width="85.96000000000001" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="318.280375" y="971.627" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">still regressed</text>
 </g>
 <g class="node" data-id="Step1" data-label="1. Establish baseline
 git checkout main
@@ -116,8 +100,8 @@ check dispatch/barrier/sync deltas" data-shape="rectangle">
 </g>
 <g class="node" data-id="Step4" data-label="4. Isolate
 regression found?" data-shape="diamond">
-  <polygon points="581.3261249999999,561.3 668.7646249999999,648.7384999999999 581.3261249999999,736.1769999999999 493.88762499999996,648.7384999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="581.3261249999999" y="648.7384999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="581.3261249999999" dy="-3.9000000000000012">4. Isolate</tspan><tspan x="581.3261249999999" dy="16.900000000000002">regression found?</tspan></text>
+  <polygon points="581.3261249999999,561.3 668.7646249999999,648.7384999999999 581.3261249999999,736.1769999999999 493.88762499999996,648.7384999999999" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="581.3261249999999" y="648.7384999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522"><tspan x="581.3261249999999" dy="-3.9000000000000012">4. Isolate</tspan><tspan x="581.3261249999999" dy="16.900000000000002">regression found?</tspan></text>
 </g>
 <g class="node" data-id="Step5" data-label="5. Fix
 move CPU work to GPU kernel

@@ -1,10 +1,13 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Agave" width="480">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/lockup-dark.svg">
+    <img src="docs/brand/lockup-light.svg" alt="Agave, LLM inference engine" width="420">
+  </picture>
 </p>
 
 <p align="center">
-  A high-performance LLM inference engine written in Zig.<br>
-  Zero external ML libraries, all kernels, quantization, and model logic from scratch.
+  An LLM inference engine written in Zig.<br>
+  Every kernel, quantizer, tokenizer and model lives in this repo, with no external ML library underneath.
 </p>
 
 <p align="center">

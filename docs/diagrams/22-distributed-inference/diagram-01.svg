@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 485.336 993.1999999999998" width="485.336" height="993.1999999999998" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
+<style>
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          #2a2522;
+    --_text-sec:      #75716f;
+    --_text-muted:    #a8a4a0;
+    --_text-faint:    #cbc7c3;
+    --_line:          #94908c;
+    --_arrow:         #504b47;
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
+    --_group-fill:    #ffffff;
+    --_group-hdr:     #f7f5f3;
+    --_inner-stroke:  #e2ded9;
+    --_key-badge:     #eceae6;
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Enum" data-to="Init" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="243.77949999999998,93.80000000000001 243.77949999999998,141.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Init" data-to="Setup" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="243.77949999999998,178.70000000000002 243.77949999999998,226.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Setup" data-to="Shm" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="215.17649999999998,263.6 215.17649999999998,299.6 141.18824999999998,299.6 141.18824999999998,388.35" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Setup" data-to="TcpNccl" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="272.3825,263.6 272.3825,316.5 346.37075,316.5 346.37075,388.35" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Shm" data-to="Shard" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="141.18824999999998,442.15000000000003 141.18824999999998,461.92500000000007 243.77949999999998,461.92500000000007 243.77949999999998,481.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="TcpNccl" data-to="Shard" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="346.37075,425.25 346.37075,461.92500000000007 243.77949999999998,461.92500000000007 243.77949999999998,481.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Shard" data-to="Fwd" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="243.77949999999998,535.5 243.77949999999998,583.5" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Fwd" data-to="Collect" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="243.77949999999998,620.4 243.77949999999998,668.4" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Collect" data-to="AllReduce" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="TP" points="223.3275,705.3 223.3275,717.3 137.6685,717.3 137.6685,797.5999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Collect" data-to="SendRecv" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="PP" points="264.2315,705.3 264.2315,717.3 349.8905,717.3 349.8905,797.5999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="AllReduce" data-to="Next" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="137.6685,851.3999999999999 137.6685,899.3999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="SendRecv" data-to="Output" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="349.8905,851.3999999999999 349.8905,899.3999999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Setup" data-to="Shm" data-label="yes">
+  <rect x="123.18825" y="306.6" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="140.92325" y="321.75" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
+</g>
+<g class="edge-label" data-from="Setup" data-to="TcpNccl" data-label="no">
+  <rect x="331.37075" y="323.5" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="346.13575" y="338.65" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
+</g>
+<g class="edge-label" data-from="Collect" data-to="AllReduce" data-label="TP">
+  <rect x="121.6685" y="724.3" width="31.906" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="137.6215" y="739.4499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">TP</text>
+</g>
+<g class="edge-label" data-from="Collect" data-to="SendRecv" data-label="PP">
+  <rect x="333.8905" y="724.3" width="31.906" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="349.84349999999995" y="739.4499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">PP</text>
+</g>
+<g class="node" data-id="Enum" data-label="enumerate() local devices
+per-backend probe" data-shape="rectangle">
+  <rect x="147.96349999999998" y="40" width="191.63199999999998" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="243.77949999999998" y="66.9" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="243.77949999999998" dy="-3.9000000000000012">enumerate() local devices</tspan><tspan x="243.77949999999998" dy="16.900000000000002">per-backend probe</tspan></text>
+</g>
+<g class="node" data-id="Init" data-label="Transport.init(kind, rank, world_size)" data-shape="rectangle">
+  <rect x="114.61850000000001" y="141.8" width="258.32199999999995" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="243.77949999999998" y="160.25" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">Transport.init(kind, rank, world_size)</text>
+</g>
+<g class="node" data-id="Setup" data-label="same-node peers?" data-shape="hexagon">
+  <polygon points="167.19549999999998,226.70000000000002 320.36349999999993,226.70000000000002 329.58849999999995,245.15000000000003 320.36349999999993,263.6 167.19549999999998,263.6 157.9705,245.15000000000003" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="243.77949999999998" y="245.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">same-node peers?</text>
+</g>
+<g class="node" data-id="Shm" data-label="setupShm()
+mmap shared regions" data-shape="rectangle">
+  <rect x="57.22824999999999" y="388.35" width="167.92" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="141.18824999999998" y="415.25" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="141.18824999999998" dy="-3.9000000000000012">setupShm()</tspan><tspan x="141.18824999999998" dy="16.900000000000002">mmap shared regions</tspan></text>
+</g>
+<g class="node" data-id="TcpNccl" data-label="connectPeer / setupNccl" data-shape="rectangle">
+  <rect x="253.14824999999996" y="388.35" width="186.44500000000002" height="36.900000000000006" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="346.37075" y="406.8" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a" dy="4.55">connectPeer / setupNccl</text>
+</g>
+<g class="node" data-id="Shard" data-label="shard weights (TP)
+or layer range (PP)" data-shape="rectangle">
+  <rect x="166.85899999999998" y="481.70000000000005" width="153.84099999999998" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="243.77949999999998" y="508.6" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="243.77949999999998" dy="-3.9000000000000012">shard weights (TP)</tspan><tspan x="243.77949999999998" dy="16.900000000000002">or layer range (PP)</tspan></text>
+</g>
+<g class="node" data-id="Fwd" data-label="forward local slice" data-shape="rectangle">
+  <rect x="169.4525" y="583.5" width="148.654" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="243.77949999999998" y="601.95" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">forward local slice</text>
+</g>
+<g class="node" data-id="Collect" data-label="TP or PP?" data-shape="hexagon">
+  <polygon points="191.64849999999998,668.4 295.91049999999996,668.4 305.1355,686.85 295.91049999999996,705.3 191.64849999999998,705.3 182.4235,686.85" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="243.77949999999998" y="686.85" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">TP or PP?</text>
+</g>
+<g class="node" data-id="AllReduce" data-label="allReduceAdd
+sum partials across ranks" data-shape="rectangle">
+  <rect x="40" y="797.5999999999999" width="195.337" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="137.6685" y="824.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="137.6685" dy="-3.9000000000000012">allReduceAdd</tspan><tspan x="137.6685" dy="16.900000000000002">sum partials across ranks</tspan></text>
+</g>
+<g class="node" data-id="SendRecv" data-label="sendBuf / recvBuf
+activation to next stage" data-shape="rectangle">
+  <rect x="263.337" y="797.5999999999999" width="173.107" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="349.8905" y="824.4999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="349.8905" dy="-3.9000000000000012">sendBuf / recvBuf</tspan><tspan x="349.8905" dy="16.900000000000002">activation to next stage</tspan></text>
+</g>
+<g class="node" data-id="Next" data-label="next layer" data-shape="rectangle">
+  <rect x="87.424" y="899.3999999999999" width="100.48899999999999" height="36.900000000000006" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
+  <text x="137.6685" y="917.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26" dy="4.55">next layer</text>
+</g>
+<g class="node" data-id="Output" data-label="assembled output
+(last stage samples token)" data-shape="rectangle">
+  <rect x="254.445" y="899.3999999999999" width="190.891" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
+  <text x="349.8905" y="926.2999999999998" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="349.8905" dy="-3.9000000000000012">assembled output</tspan><tspan x="349.8905" dy="16.900000000000002">(last stage samples token)</tspan></text>
+</g>
+</svg>

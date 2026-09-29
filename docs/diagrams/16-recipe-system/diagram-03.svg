@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1169.563 837.622" width="1169.563" height="837.622" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1169.563 837.622" width="1169.563" height="837.622" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,57 +19,57 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
 <g class="subgraph" data-id="Resolution" data-label="Per-parameter resolution (independent for each param)">
-  <rect x="562.255" y="40" width="304.07599999999996" height="598.6719999999999" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="562.255" y="40" width="304.07599999999996" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="574.255" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Per-parameter resolution (independent for each param)</text>
+  <rect x="562.255" y="40" width="304.07599999999996" height="598.6719999999999" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="562.255" y="40" width="304.07599999999996" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="574.255" y="54" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Per-parameter resolution (independent for each param)</text>
 </g>
 <polyline class="edge" data-from="CLI" data-to="Final" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="highest priority
-overrides everything" points="204.5555,66.9 381.601,66.9 381.601,135.25 393.601,135.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+overrides everything" points="204.5555,66.9 381.601,66.9 381.601,135.25 393.601,135.25" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Recipe" data-to="Final" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="used when user
-did NOT set flag" points="220.1165,148.70000000000002 393.601,148.70000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+did NOT set flag" points="220.1165,148.70000000000002 393.601,148.70000000000002" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <polyline class="edge" data-from="Default" data-to="Final" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="used when neither
-user nor recipe set it" points="220.1165,230.50000000000003 381.601,230.5 381.601,162.15 393.601,162.15" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q1" data-to="Use1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="645.1923333333333,251.34333333333336 645.1923333333333,296.812 617.771,296.812 617.771,638.6719999999999 617.771,778.472 705.241,778.472" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q2" data-to="Use2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="776.4776666666667,585.7453333333332 776.4776666666667,638.6719999999999 776.4776666666667,648.6719999999998 989.8009999999999,648.6719999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q2" data-to="Use3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="702.6243333333333,585.7453333333333 702.6243333333333,638.6719999999999 702.6243333333333,713.5719999999999 784.1543333333334,713.5719999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="Q1" data-to="Q2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="712.1296666666667,251.34333333333328 712.1296666666667,296.812 739.5509999999999,296.812 739.5509999999999,401.11199999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+user nor recipe set it" points="220.1165,230.50000000000003 381.601,230.5 381.601,162.15 393.601,162.15" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q1" data-to="Use1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="645.1923333333333,251.34333333333336 645.1923333333333,296.812 617.771,296.812 617.771,638.6719999999999 617.771,778.472 705.241,778.472" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q2" data-to="Use2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="yes" points="776.4776666666667,585.7453333333332 776.4776666666667,638.6719999999999 776.4776666666667,648.6719999999998 989.8009999999999,648.6719999999998" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q2" data-to="Use3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="702.6243333333333,585.7453333333333 702.6243333333333,638.6719999999999 702.6243333333333,713.5719999999999 784.1543333333334,713.5719999999999" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Q1" data-to="Q2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="no" points="712.1296666666667,251.34333333333328 712.1296666666667,296.812 739.5509999999999,296.812 739.5509999999999,401.11199999999997" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
 <g class="edge-label" data-from="CLI" data-to="Final" data-label="highest priority
 overrides everything">
-  <rect x="255.565" y="43.900000000000006" width="118.03600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="314.583" y="66.2" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="314.583" dy="-3.3000000000000007">highest priority</tspan><tspan x="314.583" dy="14.3">overrides everything</tspan></text>
+  <rect x="255.565" y="43.900000000000006" width="118.03600000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="314.583" y="66.2" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="314.583" dy="-3.3000000000000007">highest priority</tspan><tspan x="314.583" dy="14.3">overrides everything</tspan></text>
 </g>
 <g class="edge-label" data-from="Recipe" data-to="Final" data-label="used when user
 did NOT set flag">
-  <rect x="257.10699999999997" y="125.70000000000003" width="92.49400000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="303.354" y="148.00000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="303.354" dy="-3.3000000000000007">used when user</tspan><tspan x="303.354" dy="14.3">did NOT set flag</tspan></text>
+  <rect x="257.10699999999997" y="125.70000000000003" width="92.49400000000003" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="303.354" y="148.00000000000003" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="303.354" dy="-3.3000000000000007">used when user</tspan><tspan x="303.354" dy="14.3">did NOT set flag</tspan></text>
 </g>
 <g class="edge-label" data-from="Default" data-to="Final" data-label="used when neither
 user nor recipe set it">
-  <rect x="259.72299999999996" y="207.50000000000003" width="113.87800000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="316.662" y="229.80000000000004" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)"><tspan x="316.662" dy="-3.3000000000000007">used when neither</tspan><tspan x="316.662" dy="14.3">user nor recipe set it</tspan></text>
+  <rect x="259.72299999999996" y="207.50000000000003" width="113.87800000000004" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="316.662" y="229.80000000000004" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="316.662" dy="-3.3000000000000007">used when neither</tspan><tspan x="316.662" dy="14.3">user nor recipe set it</tspan></text>
 </g>
 <g class="edge-label" data-from="Q1" data-to="Use1" data-label="yes">
-  <rect x="625.771" y="762.472" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="643.506" y="777.622" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+  <rect x="625.771" y="762.472" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="643.506" y="777.622" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
 <g class="edge-label" data-from="Q2" data-to="Use2" data-label="yes">
-  <rect x="910.331" y="632.6719999999998" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="928.066" y="647.8219999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">yes</text>
+  <rect x="910.331" y="632.6719999999998" width="35.47" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="928.066" y="647.8219999999998" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">yes</text>
 </g>
 <g class="edge-label" data-from="Q2" data-to="Use3" data-label="no">
-  <rect x="710.6243333333333" y="697.5719999999999" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="725.3893333333333" y="712.7219999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+  <rect x="710.6243333333333" y="697.5719999999999" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="725.3893333333333" y="712.7219999999999" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
 <g class="edge-label" data-from="Q1" data-to="Q2" data-label="no">
-  <rect x="724.551" y="327.812" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="739.316" y="342.962" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">no</text>
+  <rect x="724.551" y="327.812" width="29.53" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="739.316" y="342.962" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">no</text>
 </g>
 <g class="node" data-id="CLI" data-label="--temperature 0.8
 (user-provided flag)" data-shape="rectangle">
@@ -111,11 +104,11 @@ used for inference" data-shape="rectangle">
   <text x="854.0353333333334" y="713.5719999999999" text-anchor="middle" font-size="13" font-weight="500" fill="#4a3116" dy="4.55">use CLI baseline</text>
 </g>
 <g class="node" data-id="Q1" data-label="user_set.temperature?" data-shape="diamond">
-  <polygon points="678.661,84.00000000000001 779.0669999999999,184.406 678.661,284.812 578.255,184.406" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="678.661" y="184.406" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">user_set.temperature?</text>
+  <polygon points="678.661,84.00000000000001 779.0669999999999,184.406 678.661,284.812 578.255,184.406" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="678.661" y="184.406" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">user_set.temperature?</text>
 </g>
 <g class="node" data-id="Q2" data-label="recipe.temperature != null?" data-shape="diamond">
-  <polygon points="739.5509999999999,401.11199999999997 850.3309999999999,511.89199999999994 739.5509999999999,622.6719999999999 628.771,511.89199999999994" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="739.5509999999999" y="511.89199999999994" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">recipe.temperature != null?</text>
+  <polygon points="739.5509999999999,401.11199999999997 850.3309999999999,511.89199999999994 739.5509999999999,622.6719999999999 628.771,511.89199999999994" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="739.5509999999999" y="511.89199999999994" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">recipe.temperature != null?</text>
 </g>
 </svg>

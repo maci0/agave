@@ -37,6 +37,18 @@
 		"shadcn/no-inline-styles": "error",
 		"shadcn/no-unknown-classes": "error",
 		"shadcn/require-static-classes": "error",
+		// One icon set, named by action: src/web/ui/icons.tsx is the only importer.
+		"no-restricted-imports": [
+			"error",
+			{
+				"paths": [
+					{
+						"name": "lucide-react",
+						"message": "Import icons from src/web/ui/icons.tsx, which names each glyph for its action."
+					}
+				]
+			}
+		],
 		// The strict preset enables the whole style category, whose one-var
 		// default merges declarations into `let a, b;`. One binding per
 		// statement keeps diffs and blame to one line per name.
@@ -73,6 +85,33 @@
 		]
 	},
 	"overrides": [
+		{
+			// Typed bun CLI scripts (scripts/build-brand.ts): Bun and node:path are
+			// their runtime, top-level await is how a bun entry point waits, and
+			// stdout is their output. Type-aware rules stay on.
+			"files": [
+				"scripts/**/*.ts"
+			],
+			"globals": {
+				"Bun": "readonly"
+			},
+			"env": {
+				"node": true
+			},
+			"rules": {
+				"import/no-nodejs-modules": "off",
+				"no-console": "off",
+				"node/no-top-level-await": "off"
+			}
+		},
+		{
+			"files": [
+				"src/web/ui/icons.tsx"
+			],
+			"rules": {
+				"no-restricted-imports": "off"
+			}
+		},
 		{
 			// The design-system components own their classes; the restyle and
 			// arbitrary-value policies apply to the code that uses them.

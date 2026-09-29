@@ -1,4 +1,4 @@
-import { Copy, RefreshCw } from 'lucide-react';
+import { CopyIcon, Mark, RegenerateIcon } from '../../ui/icons';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { copyText, markdownReady, onIdle, renderMarkdown } from '../markdown';
 import { fmtInt, fmtNum, truncateAnnounce } from '../format';
@@ -140,7 +140,7 @@ const CopyResponse = ({ text }: { text: string }) => {
   }, [text]);
   return (
     <button type="button" onClick={copy} aria-label="Copy response" className={ACTION}>
-      <Copy className="size-3.5" aria-hidden="true" />
+      <CopyIcon className="size-3.5" aria-hidden="true" />
       {label}
     </button>
   );
@@ -154,7 +154,7 @@ const RegenerateButton = ({ retry, onRegenerate }: { retry: boolean; onRegenerat
     aria-label={retry ? 'Retry generating response' : 'Regenerate response'}
     className={ACTION}
   >
-    <RefreshCw className="size-3.5" aria-hidden="true" />
+    <RegenerateIcon className="size-3.5" aria-hidden="true" />
     {retry ? 'Retry' : 'Regenerate'}
   </button>
 );
@@ -178,7 +178,7 @@ const Message = memo(({ bubble, showStats, canRegenerate, onRegenerate, onRender
         id={roleId}
         className={cn('inline-flex items-center gap-1.5 px-1 font-mono text-xs font-medium', isUser ? 'text-faint' : 'text-primary')}
       >
-        {isUser ? null : <span className="mark mark-sm" aria-hidden="true" />}
+        {isUser ? null : <Mark size="sm" />}
         {isUser ? 'You' : 'agave'}
       </span>
       <div

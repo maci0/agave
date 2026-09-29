@@ -1,23 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1167.5439999999999 322.65000000000003" width="1167.5439999999999" height="322.65000000000003" style="--bg:#FFFFFF;--fg:#2A2522;background:#ffffff">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1039.235 451.24000000000007" width="1039.235" height="451.24000000000007" style="--bg:#ffffff;--fg:#2a2522;--line:#94908c;--accent:#c4823a;--muted:#75716f;--surface:#f1efec;--border:#9c938a;background:#ffffff">
 <style>
-  /* Agave's own faces, the same stacks the chat UI and the wordmark use, so a
-     diagram sits in the same product as the app. No webfont fetch. */
-  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'Noto Sans', sans-serif; }
-  .actor text, .subgraph text { font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Noto Sans Mono', monospace; }
+  text { font-family: Inter, 'Adwaita Sans', system-ui, sans-serif; }
   svg {
-    /* Desert-night inks on a white canvas: --_text is the light-surface
-       counterpart of the app's --text (docs/logo.svg), and the rest are
-       hand-picked steps of it rather than mixes toward white, which would wash
-       the warmth out. --_text-sec and --_line clear 4.5:1 and 3:1 on white;
-       the pale steps carry no text. Overridable via --line, --accent, etc. */
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
     --_text:          #2a2522;
-    --_text-sec:      var(--muted, #75716f);
+    --_text-sec:      #75716f;
     --_text-muted:    #a8a4a0;
     --_text-faint:    #cbc7c3;
-    --_line:          var(--line, #94908c);
+    --_line:          #94908c;
     --_arrow:         #504b47;
-    --_node-fill:     var(--surface, #f1efec);
-    --_node-stroke:   var(--border, #9c938a);
+    --_node-fill:     #f1efec;
+    --_node-stroke:   #9c938a;
     --_group-fill:    #ffffff;
     --_group-hdr:     #f7f5f3;
     --_inner-stroke:  #e2ded9;
@@ -26,73 +19,112 @@
 </style>
 <defs>
   <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
-    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="0 0, 8 2.5, 0 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
   <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
-    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+    <polygon points="8 0, 0 2.5, 8 5" fill="#504b47" stroke="#504b47" stroke-width="0.75" stroke-linejoin="round" />
   </marker>
 </defs>
-<g class="subgraph" data-id="Block" data-label="Q4_0 block — 18 bytes total
-encode 32 elements">
-  <rect x="40" y="72.82500000000002" width="447.703" height="153.375" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="40" y="72.82500000000002" width="447.703" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="52" y="86.82500000000002" font-size="12" font-weight="600" fill="var(--_text-sec)"><tspan x="52" dy="-3.6000000000000014">Q4_0 block — 18 bytes total</tspan><tspan x="52" dy="15.600000000000001">encode 32 elements</tspan></text>
+<g class="subgraph" data-id="Weight" data-label="Weight matrix W (4 rows)">
+  <rect x="264.07099999999997" y="96.60000000000001" width="162.87" height="291.6" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="264.07099999999997" y="96.60000000000001" width="162.87" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="276.07099999999997" y="110.60000000000001" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">Weight matrix W (4 rows)</text>
 </g>
-<g class="subgraph" data-id="Byte" data-label="Single nibble byte (byte j)">
-  <rect x="617.707" y="40" width="164.352" height="153.8" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="617.707" y="40" width="164.352" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="629.707" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Single nibble byte (byte j)</text>
+<g class="subgraph" data-id="FMA" data-label="FMA units (4 independent accumulators)">
+  <rect x="486.941" y="90.45000000000003" width="199.92" height="291.6" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="486.941" y="90.45000000000003" width="199.92" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="498.941" y="104.45000000000003" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">FMA units (4 independent accumulators)</text>
 </g>
-<g class="subgraph" data-id="Decode" data-label="Dequantize element">
-  <rect x="912.063" y="67.05" width="215.481" height="215.60000000000002" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <rect x="912.063" y="67.05" width="215.481" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="924.063" y="81.05" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">Dequantize element</text>
+<g class="subgraph" data-id="Output" data-label="y (4 output values)">
+  <rect x="873.415" y="90.45000000000002" width="125.82" height="291.6" rx="0" ry="0" fill="#ffffff" stroke="#9c938a" stroke-width="1" />
+  <rect x="873.415" y="90.45000000000002" width="125.82" height="28" rx="0" ry="0" fill="#f7f5f3" stroke="#9c938a" stroke-width="1" />
+  <text x="885.415" y="104.45000000000002" font-size="12" font-weight="600" fill="#75716f" dy="4.199999999999999">y (4 output values)</text>
 </g>
-<polyline class="edge" data-from="Byte" data-to="Decode" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="q0, q1" points="782.059,116.9 900.063,116.9 900.063,138.91666666666669 912.063,138.91666666666669" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="nibbles" data-to="Byte" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="byte j" points="471.703,152.175 487.703,152.175 523.703,152.175 523.703,116.9 617.707,116.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="scale" data-to="Decode" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="scale" points="240.22199999999998,186.63333333333335 252.22199999999998,186.63333333333335 252.22199999999998,197.52500000000003 487.703,197.52500000000003 605.707,197.52500000000003 605.707,232.8 900.063,232.8 900.063,210.78333333333336 912.063,210.78333333333336" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<polyline class="edge" data-from="scale" data-to="nibbles" data-style="solid" data-arrow-start="false" data-arrow-end="false" points="240.22199999999998,163.0666666666667 252.22199999999998,163.0666666666667 252.22199999999998,152.175 288.222,152.175" fill="none" stroke="var(--_line)" stroke-width="1" />
-<polyline class="edge" data-from="d1" data-to="d2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="1019.8035,164.85000000000002 1019.8035,212.85000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
-<g class="edge-label" data-from="Byte" data-to="Decode" data-label="q0, q1">
-  <rect x="826.059" y="100.9" width="42.004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="847.0609999999999" y="116.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">q0, q1</text>
+<polyline class="edge" data-from="x_mem" data-to="acc0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="load ONCE
+reuse 4x" points="216.07099999999997,228.84000000000003 240.07099999999997,228.84000000000003 240.07099999999997,58 468.941,58 468.941,146.75000000000006 504.423,146.75000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="x_mem" data-to="acc1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.07099999999997,244.98000000000005 455.459,244.98000000000005 455.459,282.70000000000005 504.423,282.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="x_mem" data-to="acc2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.07099999999997,244.98000000000005 461.387,244.98000000000005 461.387,217.8 504.423,217.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="x_mem" data-to="acc3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="216.07099999999997,244.98000000000005 461.387,244.98000000000005 461.387,347.6 504.423,347.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="w0" data-to="acc0" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="403.531,159.05 504.423,159.05000000000004" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="w1" data-to="acc1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="406.495,288.85 455.459,288.85 455.459,282.70000000000005 504.423,282.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="w2" data-to="acc2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="418.351,223.95 461.387,223.95 461.387,217.8 504.423,217.8" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="w3" data-to="acc3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="418.351,353.75 461.387,353.75 461.387,347.6 504.423,347.6" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="acc0" data-to="y0" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="@reduce(.Add)" points="672.3430000000001,152.90000000000003 889.415,152.90000000000003" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="acc1" data-to="y1" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="@reduce(.Add)" points="663.451,282.70000000000005 889.415,282.70000000000005" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="acc2" data-to="y2" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="@reduce(.Add)" points="672.3430000000001,217.80000000000007 889.415,217.80000000000004" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="acc3" data-to="y3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="@reduce(.Add)" points="672.3430000000001,347.6000000000001 889.415,347.6000000000001" fill="none" stroke="#94908c" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="x_mem" data-to="acc0" data-label="load ONCE
+reuse 4x">
+  <rect x="380.801" y="35" width="68.14" height="44.6" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="414.871" y="57.3" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f"><tspan x="414.871" dy="-3.3000000000000007">load ONCE</tspan><tspan x="414.871" dy="14.3">reuse 4x</tspan></text>
 </g>
-<g class="edge-label" data-from="nibbles" data-to="Byte" data-label="byte j">
-  <rect x="531.703" y="100.9" width="42.004" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="552.7049999999999" y="116.05000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">byte j</text>
+<g class="edge-label" data-from="acc0" data-to="y0" data-label="@reduce(.Add)">
+  <rect x="736.8609999999999" y="136.90000000000006" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="780.1379999999999" y="152.05000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">@reduce(.Add)</text>
 </g>
-<g class="edge-label" data-from="scale" data-to="Decode" data-label="scale">
-  <rect x="824.2769999999999" y="216.8" width="43.786" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="var(--_inner-stroke)" stroke-width="1" />
-  <text x="846.17" y="231.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">scale</text>
+<g class="edge-label" data-from="acc1" data-to="y1" data-label="@reduce(.Add)">
+  <rect x="736.8609999999999" y="266.70000000000005" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="780.1379999999999" y="281.85" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">@reduce(.Add)</text>
 </g>
-<g class="node" data-id="scale" data-label="bytes 0-1
-f16 scale
-applied to all 32 elements" data-shape="rectangle">
-  <rect x="56" y="139.5" width="184.22199999999998" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="148.111" y="174.85" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="148.111" dy="-12.350000000000001">bytes 0-1</tspan><tspan x="148.111" dy="16.900000000000002">f16 scale</tspan><tspan x="148.111" dy="16.900000000000002">applied to all 32 elements</tspan></text>
+<g class="edge-label" data-from="acc2" data-to="y2" data-label="@reduce(.Add)">
+  <rect x="736.8609999999999" y="201.80000000000007" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="780.1379999999999" y="216.95000000000007" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">@reduce(.Add)</text>
 </g>
-<g class="node" data-id="nibbles" data-label="bytes 2-17
-16 packed bytes
-= 32 nibbles (4 bits each)" data-shape="rectangle">
-  <rect x="288.222" y="116.82500000000002" width="183.481" height="70.7" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
-  <text x="379.9625" y="152.175" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="379.9625" dy="-12.350000000000001">bytes 2-17</tspan><tspan x="379.9625" dy="16.900000000000002">16 packed bytes</tspan><tspan x="379.9625" dy="16.900000000000002">= 32 nibbles (4 bits each)</tspan></text>
+<g class="edge-label" data-from="acc3" data-to="y3" data-label="@reduce(.Add)">
+  <rect x="736.8609999999999" y="331.6" width="86.554" height="30.3" rx="2" ry="2" fill="#ffffff" stroke="#e2ded9" stroke-width="1" />
+  <text x="780.1379999999999" y="346.75" text-anchor="middle" font-size="11" font-weight="400" fill="#75716f" dy="3.8499999999999996">@reduce(.Add)</text>
 </g>
-<g class="node" data-id="lo" data-label="&quot;low nibble [3:0" data-shape="rectangle">
-  <rect x="633.707" y="84" width="126.424" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="696.919" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;low nibble [3:0</text>
+<g class="node" data-id="x_mem" data-label="x vector
+(k floats in L1/L2 cache)" data-shape="rectangle">
+  <rect x="40" y="218.08000000000004" width="176.07099999999997" height="53.800000000000004" rx="0" ry="0" fill="#e2e5e8" stroke="#5f7480" stroke-width="0.75" />
+  <text x="128.03549999999998" y="244.98000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#25333a"><tspan x="128.03549999999998" dy="-3.9000000000000012">x vector</tspan><tspan x="128.03549999999998" dy="16.900000000000002">(k floats in L1/L2 cache)</tspan></text>
 </g>
-<g class="node" data-id="hi" data-label="&quot;high nibble [7:4" data-shape="rectangle">
-  <rect x="633.707" y="140.9" width="132.352" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
-  <text x="699.883" y="159.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">&quot;high nibble [7:4</text>
+<g class="node" data-id="w0" data-label="&quot;row 0: w[0..k" data-shape="rectangle">
+  <rect x="287.481" y="140.60000000000002" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="345.506" y="159.05" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;row 0: w[0..k</text>
 </g>
-<g class="node" data-id="d1" data-label="q = nibble - 8
-(center at zero)" data-shape="rectangle">
-  <rect x="954.3685" y="111.05" width="130.87" height="53.800000000000004" rx="0" ry="0" fill="#d0dac9" stroke="#7d9b6a" stroke-width="0.75" />
-  <text x="1019.8035" y="137.95" text-anchor="middle" font-size="13" font-weight="500" fill="#2f3f26"><tspan x="1019.8035" dy="-3.9000000000000012">q = nibble - 8</tspan><tspan x="1019.8035" dy="16.900000000000002">(center at zero)</tspan></text>
+<g class="node" data-id="w1" data-label="&quot;row 1: w[k..2k" data-shape="rectangle">
+  <rect x="287.481" y="270.40000000000003" width="119.01400000000001" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="346.988" y="288.85" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;row 1: w[k..2k</text>
 </g>
-<g class="node" data-id="d2" data-label="f32 = scale * q
-(apply block scale once)" data-shape="rectangle">
-  <rect x="928.063" y="212.85000000000002" width="183.481" height="53.800000000000004" rx="0" ry="0" fill="#a9ba9e" stroke="#5f7f4c" stroke-width="0.75" />
-  <text x="1019.8035" y="239.75000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#1e2b18"><tspan x="1019.8035" dy="-3.9000000000000012">f32 = scale * q</tspan><tspan x="1019.8035" dy="16.900000000000002">(apply block scale once)</tspan></text>
+<g class="node" data-id="w2" data-label="&quot;row 2: w[2k..3k" data-shape="rectangle">
+  <rect x="287.481" y="205.5" width="130.87" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="352.916" y="223.95" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;row 2: w[2k..3k</text>
+</g>
+<g class="node" data-id="w3" data-label="&quot;row 3: w[3k..4k" data-shape="rectangle">
+  <rect x="287.481" y="335.3" width="130.87" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="352.916" y="353.75" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;row 3: w[3k..4k</text>
+</g>
+<g class="node" data-id="acc0" data-label="&quot;acc0 += xv * w0[i..i+8" data-shape="rectangle">
+  <rect x="504.423" y="134.45000000000005" width="167.92" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="588.383" y="152.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;acc0 += xv * w0[i..i+8</text>
+</g>
+<g class="node" data-id="acc1" data-label="&quot;acc1 += xv * w1[i..i+8" data-shape="rectangle">
+  <rect x="504.423" y="264.25000000000006" width="159.02800000000002" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="583.937" y="282.70000000000005" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;acc1 += xv * w1[i..i+8</text>
+</g>
+<g class="node" data-id="acc2" data-label="&quot;acc2 += xv * w2[i..i+8" data-shape="rectangle">
+  <rect x="504.423" y="199.35000000000002" width="167.92" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="588.383" y="217.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;acc2 += xv * w2[i..i+8</text>
+</g>
+<g class="node" data-id="acc3" data-label="&quot;acc3 += xv * w3[i..i+8" data-shape="rectangle">
+  <rect x="504.423" y="329.15000000000003" width="167.92" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="588.383" y="347.6" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;acc3 += xv * w3[i..i+8</text>
+</g>
+<g class="node" data-id="y0" data-label="&quot;y[row" data-shape="rectangle">
+  <rect x="889.415" y="134.45000000000002" width="79" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="928.915" y="152.90000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;y[row</text>
+</g>
+<g class="node" data-id="y1" data-label="&quot;y[row+1" data-shape="rectangle">
+  <rect x="889.415" y="264.25" width="89.374" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="934.102" y="282.7" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;y[row+1</text>
+</g>
+<g class="node" data-id="y2" data-label="&quot;y[row+2" data-shape="rectangle">
+  <rect x="889.415" y="199.35000000000002" width="93.82" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="936.3249999999999" y="217.8" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;y[row+2</text>
+</g>
+<g class="node" data-id="y3" data-label="&quot;y[row+3" data-shape="rectangle">
+  <rect x="889.415" y="329.15000000000003" width="93.82" height="36.900000000000006" rx="0" ry="0" fill="#f1efec" stroke="#9c938a" stroke-width="0.75" />
+  <text x="936.3249999999999" y="347.6" text-anchor="middle" font-size="13" font-weight="500" fill="#2a2522" dy="4.55">&quot;y[row+3</text>
 </g>
 </svg>
