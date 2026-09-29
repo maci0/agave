@@ -688,7 +688,7 @@ zig build -Dtarget=aarch64-linux-musl \
 - **[Kernel Status](docs/KERNELS.md)**: Per-backend kernel implementation status
 - **[Distributed Inference](docs/PARALLELISM.md)**: TP, PP, disaggregated prefill/decode
 - **[Contributing](docs/CONTRIBUTING.md)**: How to add backends, models, quantization; [versioning & releases](docs/CONTRIBUTING.md#versioning--releases)
-- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.9.0`, 0.x SemVer)
+- **[Changelog](CHANGELOG.md)**: User-facing history (product version `0.9.1`, 0.x SemVer)
 - **[API Reference](docs/API.md)**: HTTP API endpoints, request/response formats
 - **[Observability](docs/OBSERVABILITY.md)**: `--serve` Prometheus metrics, health endpoints, request log correlation
 - **[Durability and recovery](docs/DURABILITY.md)**: On-disk state, RPO/RTO, conversation-store backup and restore
