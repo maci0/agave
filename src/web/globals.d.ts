@@ -7,8 +7,8 @@ type MarkedOptions = {
 };
 
 type MarkedStatic = {
-  setOptions(options: MarkedOptions): void;
-  parse(src: string): string;
+  setOptions: (options: MarkedOptions) => void;
+  parse: (src: string) => string;
 };
 
 declare const marked: MarkedStatic | undefined;
@@ -18,13 +18,13 @@ type DOMPurifyConfig = {
 };
 
 type DOMPurifyStatic = {
-  sanitize(dirty: string, cfg?: DOMPurifyConfig): string;
+  sanitize: (dirty: string, cfg?: DOMPurifyConfig) => string;
 };
 
 declare const DOMPurify: DOMPurifyStatic | undefined;
 
 type HljsStatic = {
-  highlightElement(block: HTMLElement): void;
+  highlightElement: (block: HTMLElement) => void;
 };
 
 declare const hljs: HljsStatic | undefined;

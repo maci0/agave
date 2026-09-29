@@ -29,13 +29,13 @@
 
 type AgaveWasmExports = {
   memory: WebAssembly.Memory;
-  agave_alloc(len: number): number;
-  agave_dealloc(ptr: number, len: number): void;
-  agave_init(ptr: number, len: number): number;
-  agave_get_output(ctx: number, buf: number, len: number): number;
-  agave_generate(ctx: number, promptPtr: number, promptLen: number, maxTokens: number): number;
-  agave_last_error(ctx: number): number;
-  agave_free(ctx: number): void;
+  agave_alloc: (len: number) => number;
+  agave_dealloc: (ptr: number, len: number) => void;
+  agave_init: (ptr: number, len: number) => number;
+  agave_get_output: (ctx: number, buf: number, len: number) => number;
+  agave_generate: (ctx: number, promptPtr: number, promptLen: number, maxTokens: number) => number;
+  agave_last_error: (ctx: number) => number;
+  agave_free: (ctx: number) => void;
 };
 
 type GenerateOptions = {
@@ -77,10 +77,10 @@ type AgaveErrorCode =
  * `httpStatus` is set when a fetch failed with an HTTP status.
  */
 class AgaveError extends Error {
-  readonly code: AgaveErrorCode;
-  readonly httpStatus: number | undefined;
+  public readonly code: AgaveErrorCode;
+  public readonly httpStatus: number | undefined;
 
-  constructor(code: AgaveErrorCode, message: string, httpStatus?: number) {
+  public constructor(code: AgaveErrorCode, message: string, httpStatus?: number) {
     super(message);
     this.name = 'AgaveError';
     this.code = code;
@@ -272,17 +272,17 @@ class AgaveEngine {
   #init_message = '';
 
   /** True once `init()` has instantiated a module. `destroy()` keeps it true. */
-  get ready(): boolean {
+  public get ready(): boolean {
     return this.#wasm !== null;
   }
 
   /** True while a model is loaded and `generate()` can run. */
-  get hasModel(): boolean {
+  public get hasModel(): boolean {
     return this.#ctx !== 0;
   }
 
   /** Model banner from the last successful `loadModel()` ('' when none). */
-  get initMessage(): string {
+  public get initMessage(): string {
     return this.#init_message;
   }
 
@@ -291,7 +291,7 @@ class AgaveEngine {
    * skip the default same-origin fetch (tests, custom hosting). `signal` aborts
    * the URL fetch; it does not unload a module that already instantiated.
    */
-  async init(
+  public async init(
     source: string | ArrayBuffer | ArrayBufferView = default_wasm_url,
     signal?: AbortSignal,
   ): Promise<void> {
@@ -347,7 +347,7 @@ class AgaveEngine {
    * an HTTP error response.
    */
   // oxlint-disable-next-line eslint/class-methods-use-this -- engine instance method for discoverability; it touches no engine state
-  async fetchModel(url: string, options: FetchModelOptions = {}): Promise<ArrayBuffer> {
+  public async fetchModel(url: string, options: FetchModelOptions = {}): Promise<ArrayBuffer> {
     const init: RequestInit | undefined = options.signal === undefined
       ? undefined
       : { signal: options.signal };
@@ -400,7 +400,7 @@ class AgaveEngine {
    * `tokenizer`, or `init_failed` when the bytes are not a model this engine can
    * use. A failed load leaves any previously loaded model in place.
    */
-  async loadModel(source: ModelSource, signal?: AbortSignal): Promise<void> {
+  public async loadModel(source: ModelSource, signal?: AbortSignal): Promise<void> {
     if (!this.#wasm) { throw new AgaveError('not_initialized', 'Engine not initialized'); }
     const exp = wasmExports(this.#wasm);
     // oxlint-disable-next-line anti-slop/no-runtime-typeof -- boundary type test for the string|buffer union; no schema parser to delegate to
@@ -469,7 +469,7 @@ class AgaveEngine {
    * tokenization report, not model output.
    */
   // oxlint-disable-next-line eslint/require-await, typescript-eslint/require-await -- async signature is the documented Promise API contract
-  async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {
+  public async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {
     if (!this.#wasm) { throw new AgaveError('not_initialized', 'Engine not initialized'); }
     if (!this.#ctx) { throw new AgaveError('no_model', 'No model loaded'); }
     const exp = wasmExports(this.#wasm);
@@ -523,7 +523,7 @@ class AgaveEngine {
    * Free the loaded model. The WASM instance stays, so `loadModel()` can run
    * again without another `init()`. Safe to call twice.
    */
-  destroy(): void {
+  public destroy(): void {
     if (this.#wasm && this.#ctx) {
       wasmExports(this.#wasm).agave_free(this.#ctx);
     }

@@ -40,7 +40,7 @@ export const DialogContent = ({ className, children, side = 'center', hideClose,
     <Overlay className={overlayClass} />
     <Content
       className={cn(
-        'fixed z-50 border border-border bg-popover text-popover-foreground shadow-[0_8px_20px_rgb(0_0_0/0.45)]',
+        'fixed z-50 border border-border bg-popover text-popover-foreground shadow-overlay',
         side === 'center' ? centerClass : 'inset-y-0 start-0 flex w-(--spacing-sidebar) max-w-[85vw] flex-col border-e',
         className,
       )}
@@ -60,5 +60,5 @@ export const DialogContent = ({ className, children, side = 'center', hideClose,
 );
 
 export const DialogTitle = ({ className, ...props }: ComponentProps<typeof Title>) => (
-  <Title className={cn('font-mono text-lg font-semibold text-primary', className)} {...props} />
+  <Title className={cn('flex items-center gap-2 font-mono text-lg font-semibold text-primary', className)} {...props} />
 );

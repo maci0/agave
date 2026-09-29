@@ -14,11 +14,11 @@ const REDUCED_MOTION_FACTOR = 2;
 
 const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) => {
   const [paused, setPaused] = useState(false);
-  useEffect(function () {
+  useEffect(() => {
     if (paused) { return undefined; }
     const base = toast.level === 'error' ? TOAST_ERROR_MS : TOAST_INFO_MS;
     const doubled = globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const timer = setTimeout(function () { onDismiss(toast.id); }, doubled ? base * REDUCED_MOTION_FACTOR : base);
+    const timer = setTimeout(() => { onDismiss(toast.id); }, doubled ? base * REDUCED_MOTION_FACTOR : base);
     return function () { clearTimeout(timer); };
   }, [paused, toast.id, toast.level, onDismiss]);
 
@@ -30,7 +30,7 @@ const ToastItem = ({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       onFocus={function () { setPaused(true); }}
       onBlur={function () { setPaused(false); }}
       className={cn(
-        'mx-auto flex w-full agave-measure items-center gap-2 rounded-lg border px-[18px] py-3 text-sm shadow-lg',
+        'mx-auto flex w-full agave-measure items-center gap-2 rounded-lg border px-4.5 py-3 text-sm shadow-overlay',
         toast.level === 'error'
           ? 'border-destructive bg-destructive/10 text-destructive-foreground'
           : 'border-border-strong bg-primary/10 text-muted-foreground',
@@ -91,15 +91,15 @@ onScroll?: (nearBottom: boolean) => void;
 /** The toasts, oldest last, in the same column as the transcript. */
 const ToastList = ({ toasts, onDismiss }: { toasts: Array<Toast>; onDismiss: (id: number) => void }) => (
   <>
-    {toasts.map(function (toast) {
-      return <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />;
-    })}
+    {toasts.map((toast) =>
+      <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />
+    )}
   </>
 );
 
 /** Shown only while the reader is scrolled away from the newest turn. */
 const JumpToLatest = ({ onClick }: { onClick: () => void }) => (
-  <Button type="button" variant="solid" size="sm" onClick={onClick} className="shadow-lg">
+  <Button type="button" variant="floating" size="sm" onClick={onClick}>
     <ArrowDown className="size-4" aria-hidden="true" />
     Jump to latest
   </Button>
@@ -131,15 +131,15 @@ const LogOverlay = ({ toasts, showJump, onJump, onDismiss }: {
 const STICK_SLACK_PX = 80;
 /** The chat log. It owns its scroll position: a reader who scrolls up is left
  *  alone, and a reader at the bottom is carried along by every new turn. */
-export const MessageList = memo(function MessageList(props: MessageListProps) {
+export const MessageList = memo((props: MessageListProps) => {
 const ref = useRef<HTMLDivElement>(null);
 const nearBottom = useRef(true);
 const [showJump, setShowJump] = useState(false);
-useEffect(function () {
+useEffect(() => {
   const log = ref.current;
   if (log && nearBottom.current) { log.scrollTop = log.scrollHeight; }
 }, [props.bubbles]);
-const jumpToLatest = useCallback(function () {
+const jumpToLatest = useCallback(() => {
   const log = ref.current;
   if (!log) { return; }
   log.scrollTop = log.scrollHeight;
@@ -174,8 +174,8 @@ return (
       <TranscriptEmptyState vision={props.vision} onRunCommand={props.onRunCommand} />
     ) : null}
     {props.loading ? <div role="status" className="m-auto font-mono text-xs text-faint">Loading conversation…</div> : null}
-    {props.bubbles.map(function (bubble) {
-      return (
+    {props.bubbles.map((bubble) =>
+      (
         <Message
           key={bubble.id}
           bubble={bubble}
@@ -184,8 +184,8 @@ return (
           onRegenerate={props.onRegenerate}
           onRendered={props.onRendered}
         />
-      );
-    })}
+      )
+    )}
   </div>
   <LogOverlay toasts={props.toasts} showJump={showJump} onJump={jumpToLatest} onDismiss={props.onDismissToast} />
   </div>

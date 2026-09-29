@@ -10,6 +10,7 @@ import { Composer as ComposerForm } from './chat/components/composer';
 import { MessageList } from './chat/components/message-list';
 import { Sidebar, type SidebarProps } from './chat/components/sidebar';
 import { Dialog, DialogContent } from './ui/dialog';
+import { SkipLink } from './ui/skip-link';
 import {
   type Announce,
   type PushToast,
@@ -57,12 +58,7 @@ type ChatShellProps = {
 /** The page frame: skip link, header, the two columns, and the live region. */
 const ChatShell = ({ header, sidebar, log, composer, announcement, about }: ChatShellProps) => (
   <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-    <a
-      href="#msg"
-      className="absolute start-4 top-[-100%] z-50 rounded-lg bg-primary px-4 py-2 font-mono text-sm font-medium text-primary-foreground no-underline transition-[top] duration-200 focus:top-2"
-    >
-      Skip to message input
-    </a>
+    <SkipLink href="#msg">Skip to message input</SkipLink>
     {header}
     <div className="relative z-1 flex flex-1 overflow-hidden">
       {sidebar}
@@ -90,7 +86,7 @@ const ConversationPanel = ({
 }) => {
   if (!isDrawer) {
     return (
-      <aside id="sidebar" aria-label="Conversations" className="z-20 w-sidebar shrink-0 border-e border-border">
+      <aside id="sidebar" aria-label="Conversations" className="z-20 w-sidebar shrink-0 border-e border-divider">
         <Sidebar {...sidebarProps} />
       </aside>
     );
@@ -98,7 +94,7 @@ const ConversationPanel = ({
   // Radix supplies the scrim, the focus trap and the inert backdrop.
   return (
     <Dialog open={drawerOpen} onOpenChange={onDrawerChange}>
-      <DialogContent side="left" hideClose className="p-0">
+      <DialogContent side="left" hideClose>
         <Sidebar {...sidebarProps} onClose={function () { onDrawerChange(false); }} />
       </DialogContent>
     </Dialog>
@@ -107,7 +103,7 @@ const ConversationPanel = ({
 
 /** Answer `/context` from the last `/v1/models` refresh. */
 const reportContext = (reply: (text: string) => void, model: ReturnType<typeof useModelInfo>): void => {
-  void model.refresh().then(function (record) {
+  void model.refresh().then((record) => {
     const used = record?.kv_seq_len ?? 0;
     const max = record?.ctx_size ?? 0;
     if (record === null || max <= 0) { reply('Could not retrieve context info.'); return; }
@@ -118,8 +114,8 @@ const reportContext = (reply: (text: string) => void, model: ReturnType<typeof u
 /** A counter the composer watches to pull focus back after a turn. */
 const useFocusToken = () => {
   const [focusToken, setFocusToken] = useState(0);
-  const focusComposer = useCallback(function () {
-    setFocusToken(function (token) { return token + 1; });
+  const focusComposer = useCallback(() => {
+    setFocusToken((token) => token + 1);
   }, []);
   return { focusToken, focusComposer };
 };
@@ -131,7 +127,7 @@ const useShellChrome = (settings: ReturnType<typeof useSettings>, stopGeneration
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isDrawer, setIsDrawer] = useState(false);
 
-  useEffect(function () {
+  useEffect(() => {
     const query = globalThis.matchMedia(DRAWER_BREAKPOINT);
     const sync = function () {
       setIsDrawer(query.matches);
@@ -145,7 +141,7 @@ const useShellChrome = (settings: ReturnType<typeof useSettings>, stopGeneration
   }, []);
 
   const { togglePanel: closeSettings, open: settingsOpen } = settings;
-  const onEscapeKey = useCallback(function (event: KeyboardEvent) {
+  const onEscapeKey = useCallback((event: KeyboardEvent) => {
     if (event.key !== 'Escape') {return;}
     if (aboutOpen) { setAboutOpen(false); }
     else if (drawerOpen) { setDrawerOpen(false); }
@@ -153,7 +149,7 @@ const useShellChrome = (settings: ReturnType<typeof useSettings>, stopGeneration
     else { stopGeneration(); }
   }, [aboutOpen, closeSettings, drawerOpen, settingsOpen, stopGeneration]);
 
-  useEffect(function () {
+  useEffect(() => {
     document.addEventListener('keydown', onEscapeKey);
     return function () { document.removeEventListener('keydown', onEscapeKey); };
   }, [onEscapeKey]);
@@ -172,7 +168,7 @@ const useChatState = (announce: Announce, focusComposer: () => void) => {
   const turn = useChatTurn({
     log,
     announce,
-    onTurnEnd: function () { void model.refresh(); void convs.load(); focusComposer(); },
+    onTurnEnd () { void model.refresh(); void convs.load(); focusComposer(); },
   });
   return { toasts, pushToast, dismissToast, model, log, convs, image, turn, settings };
 };
@@ -190,7 +186,7 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
   pushToast: PushToast;
   focusComposer: () => void;
 }) => {
-  const runSlash = useCallback(function (text: string) {
+  const runSlash = useCallback((text: string) => {
     const reply = function (message: string) {
       log.append(log.allocate({ role: 'assistant', text: message, phase: 'done' }));
     };
@@ -205,7 +201,7 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
     announce(`Unknown command ${text}`);
   }, [announce, convs, focusComposer, log, model, settings]);
 
-  const submitMessage = useCallback(function (text: string, attached: string | null) {
+  const submitMessage = useCallback((text: string, attached: string | null) => {
     if (turn.streaming) {return;}
     // Commands run client-side and never post an image, so the bubble
     // Would show an attachment the model never received. Keep both.
@@ -221,16 +217,16 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
     if (text.startsWith('/')) { runSlash(text); } else { turn.send(chatRequestBody(text, attached, settings.sampling), 'Failed to get response'); }
   }, [focusComposer, image, log, pushToast, settings.sampling, turn]);
 
-  const regenerate = useCallback(function () {
+  const regenerate = useCallback(() => {
     if (turn.streaming) {return;}
     log.dropLastAssistant();
     turn.send(regenerateBody(settings.sampling), 'Failed to regenerate', '/v1/chat/regenerate');
   }, [log, settings.sampling, turn]);
 
-  const exportConversation = useCallback(function () {
-    const markdown = log.bubbles.map(function (bubble) {
-      return `## ${bubble.role === 'user' ? 'User' : 'Assistant'}\n\n${bubble.text.trim()}\n\n`;
-    }).join('');
+  const exportConversation = useCallback(() => {
+    const markdown = log.bubbles.map((bubble) =>
+      `## ${bubble.role === 'user' ? 'User' : 'Assistant'}\n\n${bubble.text.trim()}\n\n`
+    ).join('');
     if (log.bubbles.length === 0) { pushToast('Nothing to export.', 'info'); return; }
     const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }));
     const anchor = document.createElement('a');
@@ -335,10 +331,10 @@ const ChatApp = () => {
     conversations: convs.conversations,
     loadError: convs.loadError,
     streaming: turn.streaming,
-    onSelect: function (id) { convs.open(id); focusComposer(); },
-    onDelete: function (id) { convs.remove(id); focusComposer(); },
-    onNew: function () { convs.startNew(); focusComposer(); },
-    onRetryLoad: function () { void convs.load(); },
+    onSelect (id) { convs.open(id); focusComposer(); },
+    onDelete (id) { convs.remove(id); focusComposer(); },
+    onNew () { convs.startNew(); focusComposer(); },
+    onRetryLoad () { void convs.load(); },
   };
 
   return (

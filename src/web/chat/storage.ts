@@ -40,7 +40,7 @@ const readSystemPrompt = (): string => {
 /** Clamp a raw max-tokens field to the allowed range; unparseable text becomes
  *  the minimum. */
 export const clampMaxTokens = (raw: string): number => {
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Math.trunc(Number(raw));
   if (Number.isNaN(parsed) || parsed < MAX_TOKENS_MIN) {return MAX_TOKENS_MIN;}
   if (parsed > MAX_TOKENS_MAX) {return MAX_TOKENS_MAX;}
   return parsed;
@@ -49,7 +49,7 @@ export const clampMaxTokens = (raw: string): number => {
 /** A field is valid only when it holds a whole number inside the range, with no
  *  stray text. */
 export const isMaxTokensValid = (raw: string): boolean => {
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Math.trunc(Number(raw));
   return !Number.isNaN(parsed) && String(parsed) === raw.trim() && parsed >= MAX_TOKENS_MIN && parsed <= MAX_TOKENS_MAX;
 };
 
@@ -63,18 +63,22 @@ const readMaxTokens = (): string => {
   return String(clampMaxTokens(stored));
 };
 
+/** A stored number, or `fallback` when the key is missing, blank or not a
+ *  finite number. `Number('')` is 0, so blank is checked before coercing. */
+const readFinite = (key: string, fallback: number): number => {
+  const raw = localStorage.getItem(key)?.trim() ?? '';
+  const value = raw === '' ? Number.NaN : Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+};
+
 /** The stored settings, normalized on the way out. A missing or unparseable
  *  key falls back to the engine default rather than poisoning the turn. */
-export const readSampling = (): Sampling => {
-  const temperature = Number.parseFloat(localStorage.getItem(TEMPERATURE_KEY) ?? '');
-  const topP = Number.parseFloat(localStorage.getItem(TOP_P_KEY) ?? '');
-  return {
-    temperature: Number.isFinite(temperature) ? temperature : 0,
-    topP: Number.isFinite(topP) ? topP : 1,
-    maxTokens: readMaxTokens(),
-    system: readSystemPrompt(),
-  };
-};
+export const readSampling = (): Sampling => ({
+  temperature: readFinite(TEMPERATURE_KEY, 0),
+  topP: readFinite(TOP_P_KEY, 1),
+  maxTokens: readMaxTokens(),
+  system: readSystemPrompt(),
+});
 
 /** Persist the sampling record. A max-tokens field the user is still typing
  *  into is not stored, so a half-typed value cannot survive a reload; the

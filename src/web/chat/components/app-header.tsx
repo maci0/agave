@@ -1,4 +1,4 @@
-import { Download, Info, Menu, X } from 'lucide-react';
+import { Download, Eraser, Info, Menu, Plus } from 'lucide-react';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { fmtCtx, fmtInt } from '../format';
@@ -38,20 +38,54 @@ const ContextBadge = ({ ctx }: { ctx: Context | null }) => {
     // Screen reader as a bare ratio, with the near-full warning left to a "!"
     // Glyph and a color. The sentence is real text instead, and the numbers it
     // Repeats are hidden so the badge is not read twice.
-    <Badge variant={nearFull ? 'warning' : 'default'} className="ms-2 shrink-0" title={described}>
+    <Badge variant={nearFull ? 'warning' : 'default'} className="shrink-0" title={described}>
       <span aria-hidden="true">{label}</span>
       <span className="sr-only">{described}</span>
     </Badge>
   );
 };
 
+/** Conversation actions. Icons carry the meaning on narrow layouts, where the
+ *  labels drop to keep the header on one row. */
+const HeaderActions = (props: AppHeaderProps) => (
+  <div className="flex flex-wrap justify-end gap-1 ms-auto">
+    {/* The sidebar carries its own New key; this one covers the drawer
+        layout, where the sidebar is closed. */}
+    <Button
+      type="button"
+      variant="primaryOutline"
+      size="sm"
+      className="hidden max-drawer:inline-flex"
+      onClick={props.onNew}
+      disabled={props.streaming}
+      aria-label="New conversation"
+    >
+      <Plus className="size-4" aria-hidden="true" />
+      <span className="max-drawer:sr-only">New</span>
+    </Button>
+    <Button type="button" variant="plain" size="sm" onClick={props.onExport} disabled={props.streaming} title="Export conversation" aria-label="Export conversation">
+      <Download className="size-4" aria-hidden="true" />
+      <span className="max-drawer:hidden">Export</span>
+    </Button>
+    <Button type="button" variant="plain" size="sm" onClick={props.onClear} disabled={props.streaming} title="Clear conversation" aria-label="Clear conversation">
+      <Eraser className="size-4" aria-hidden="true" />
+      <span className="max-drawer:hidden">Clear</span>
+    </Button>
+    <Button type="button" variant="plain" size="sm" onClick={props.onAbout} title="About" aria-label="About Agave">
+      <Info className="size-4" aria-hidden="true" />
+      <span className="max-drawer:hidden">Info</span>
+    </Button>
+  </div>
+);
+
 export const AppHeader = (props: AppHeaderProps) => {
   const { model, modelResolved } = props;
   return (
-    <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-6 py-3 max-drawer:px-4">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2.5">
+    <header className="z-10 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-divider bg-card px-6 py-3 max-drawer:px-4">
+      <div className="flex items-center gap-2.5">
         <Button
           type="button"
+          variant="plain"
           size="iconSm"
           className="hidden max-drawer:inline-flex"
           onClick={props.onOpenSidebar}
@@ -66,8 +100,12 @@ export const AppHeader = (props: AppHeaderProps) => {
           <span className="mark" aria-hidden="true" />
           agave
         </h1>
+      </div>
+      {/* Model and context: beside the name on wide layouts, on their own row
+          under it in the drawer layout so the actions keep the first row. */}
+      <div className="flex min-w-0 flex-1 items-center gap-2 max-drawer:order-last max-drawer:basis-full">
         {modelResolved ? (
-          <Badge className="max-w-50" title={model?.id}>
+          <Badge className="max-w-72 min-w-0" title={model?.id}>
             {model?.id ?? 'unknown'}
           </Badge>
         ) : (
@@ -85,23 +123,7 @@ export const AppHeader = (props: AppHeaderProps) => {
         )}
         <ContextBadge ctx={props.ctx} />
       </div>
-      <div className="flex flex-wrap justify-end gap-1.5 ms-auto">
-        <Button type="button" variant="primaryOutline" size="sm" onClick={props.onNew} disabled={props.streaming} aria-label="New conversation">
-          + New
-        </Button>
-        <Button type="button" size="sm" onClick={props.onExport} disabled={props.streaming} title="Export conversation" aria-label="Export conversation">
-          <span className="max-drawer:hidden">Export </span>
-          <Download className="hidden size-4 max-drawer:inline-flex" aria-hidden="true" />
-        </Button>
-        <Button type="button" size="sm" onClick={props.onClear} disabled={props.streaming} title="Clear conversation" aria-label="Clear conversation">
-          <span className="max-drawer:hidden">Clear </span>
-          <X className="hidden size-4 max-drawer:inline-flex" aria-hidden="true" />
-        </Button>
-        <Button type="button" size="sm" onClick={props.onAbout} title="About" aria-label="About Agave">
-          <span className="max-drawer:hidden">Info </span>
-          <Info className="hidden size-4 max-drawer:inline-flex" aria-hidden="true" />
-        </Button>
-      </div>
+      <HeaderActions {...props} />
     </header>
   );
 };
