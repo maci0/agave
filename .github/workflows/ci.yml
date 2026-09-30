@@ -403,13 +403,11 @@ jobs:
           persist-credentials: false
 
       # scripts/lint-python.sh resolves the ruff.toml pin and runs it through
-      # uvx. The runner image ships neither ruff nor uv (only pipx), so the job
-      # used to fail before reading a single file. Install uv here and put its
-      # shims on PATH; the ruff version stays pinned in ruff.toml alone.
-      - name: Install uv
-        run: |
-          pipx install uv
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # uvx. The runner image ships neither ruff nor uv, so install uv here; the
+      # ruff version stays pinned in ruff.toml alone.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.20"
 
       # scripts/lint-python.sh is the single entry point, so this job and
       # `zig build lint-python` run the same rules, the same ruff version and

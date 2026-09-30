@@ -325,7 +325,7 @@ llama-cli -m model.gguf -ngl 99 -c 512 -p "prompt" -n 32 --temp 0
 
 ### MLX (when deepseek_v4 module is added)
 ```bash
-pip install mlx-lm
+uv tool install mlx-lm
 mlx_lm generate --model mlx-community/DeepSeek-V4-Flash-4bit -p "prompt" --max-tokens 32
 ```
 
