@@ -1711,12 +1711,15 @@ const EscapedToolCall = struct {
 
 /// Extract the name and arguments of one `<tool_call>` payload and escape both.
 /// Returns null when the payload has no name or an allocation fails; the caller
-/// skips that call.
+/// skips that call. `arguments` is held to the same single-complete-object rule
+/// as the Anthropic path (see `resolveAnthropicToolInput`): the OpenAI spec types
+/// it as a JSON object, and `extractObjectField` returns an unterminated
+/// remainder when the model ran out of tokens mid-object.
 fn escapedToolCall(allocator: Allocator, tc_json: []const u8) ?EscapedToolCall {
     const name = json.extractField(tc_json, "name") orelse return null;
-    const args = json.extractObjectField(tc_json, "arguments") orelse
-        (json.extractField(tc_json, "arguments") orelse "{}");
-
+    const resolved = resolveOpenAiToolArguments(allocator, tc_json);
+    defer if (resolved.owned) |b| allocator.free(b);
+    const args = resolved.obj;
     const escaped_name = json.jsonEscape(allocator, name) catch {
         std.log.warn("req={d} tool call name escaping failed (OOM), skipping tool call", .{log_request_id});
         return null;
@@ -5537,6 +5540,35 @@ const ResolvedToolInput = struct {
     owned: ?[]u8 = null,
 };
 
+/// Resolve `arguments` for the OpenAI-shaped paths (`/v1/chat/completions`
+/// tool_calls, `/v1/responses` function_call). Same single-complete-object rule
+/// as `resolveAnthropicToolInput`, applied to the same untrusted model output:
+/// a payload the model truncated mid-object, or one whose `arguments` is not an
+/// object at all, becomes `{}` rather than a half-written string a
+/// spec-compliant client cannot parse.
+fn resolveOpenAiToolArguments(allocator: Allocator, tc_json: []const u8) ResolvedToolInput {
+    if (json.extractObjectField(tc_json, "arguments")) |o| {
+        if (isCompleteJsonObject(o)) return .{ .obj = o };
+        std.log.warn("req={d} tool call arguments object is truncated, substituting {{}}", .{log_request_id});
+        return .{ .obj = "{}" };
+    }
+    // Not an object literal: a JSON string holding one is unwrapped, anything
+    // else (bare scalar, absent field) substitutes {}.
+    const s = json.extractField(tc_json, "arguments") orelse return .{ .obj = "{}" };
+    const unescaped = json.jsonUnescape(allocator, s) catch return .{ .obj = "{}" };
+    if (unescaped.ptr == s.ptr) {
+        const trimmed_borrowed = std.mem.trim(u8, unescaped, " \t\r\n");
+        if (isCompleteJsonObject(trimmed_borrowed)) return .{ .obj = trimmed_borrowed };
+        std.log.warn("req={d} tool call arguments not a JSON object, substituting {{}}", .{log_request_id});
+        return .{ .obj = "{}" };
+    }
+    const trimmed = std.mem.trim(u8, unescaped, " \t\r\n");
+    if (isCompleteJsonObject(trimmed)) return .{ .obj = trimmed, .owned = @constCast(unescaped) };
+    std.log.warn("req={d} tool call arguments not a JSON object, substituting {{}}", .{log_request_id});
+    allocator.free(@constCast(unescaped));
+    return .{ .obj = "{}" };
+}
+
 /// True when `s` is a single JSON object that closes on its last byte.
 /// Braces inside strings do not count, and the object must end where the
 /// brace depth returns to zero, so an object truncated mid-body is not
@@ -9240,4 +9272,34 @@ test "fuzz: model output tool-call, thinking, and tool-input parsers" {
             try std.testing.expect(hasToolCalls(text));
         }
     }.f, .{});
+}
+
+test "escapedToolCall substitutes {} for arguments that are not a complete JSON object" {
+    const allocator = std.testing.allocator;
+
+    // Complete object: passed through unchanged.
+    const good = escapedToolCall(allocator, "{\"name\": \"a\", \"arguments\": {\"city\": \"Paris\"}}") orelse return error.TestUnexpectedResult;
+    defer good.deinit(allocator);
+    try std.testing.expectEqualStrings("a", good.name);
+    try std.testing.expectEqualStrings("{\\\"city\\\": \\\"Paris\\\"}", good.args);
+
+    // The model ran out of tokens mid-object. extractObjectField returns the
+    // unterminated remainder, so without a structural check the client would
+    // receive a half-written arguments string.
+    const cut = escapedToolCall(allocator, "{\"name\": \"a\", \"arguments\": {\"city\": {\"name\": \"Pa") orelse return error.TestUnexpectedResult;
+    defer cut.deinit(allocator);
+    try std.testing.expectEqualStrings("a", cut.name);
+    try std.testing.expectEqualStrings("{}", cut.args);
+
+    // Arguments is a bare scalar, not an object: the OpenAI spec types
+    // arguments as a JSON object, so a client that parses it fails.
+    const scalar = escapedToolCall(allocator, "{\"name\": \"a\", \"arguments\": 5}") orelse return error.TestUnexpectedResult;
+    defer scalar.deinit(allocator);
+    try std.testing.expectEqualStrings("{}", scalar.args);
+
+    // A JSON string that decodes to an object is unwrapped, as on the
+    // Anthropic path.
+    const wrapped = escapedToolCall(allocator, "{\"name\": \"a\", \"arguments\": \"{\\\"city\\\": \\\"Paris\\\"}\"}") orelse return error.TestUnexpectedResult;
+    defer wrapped.deinit(allocator);
+    try std.testing.expectEqualStrings("{\\\"city\\\": \\\"Paris\\\"}", wrapped.args);
 }
