@@ -708,9 +708,11 @@ Single GPU dispatch:
 | Gemma 3/4 Q8_0 | Yes | Yes | -- |
 | Nemotron-H Q8_0 | Yes | -- | -- |
 
+The table lists kernel files on disk. The `--megakernel` gate in `src/main.zig` only accepts Qwen 3.5, Gemma 3/4, and GLM-4 on Metal and Qwen 3.5 on CUDA, so the ROCm column is not reachable from the CLI.
+
 **TurboQuant+ in megakernels:** The `mega_kv_append_tq` and `mega_sdpa_inline` building blocks integrate TurboQuant+ directly. KV values are quantized inline during append, and SDPA dequantizes them on-the-fly with sparse V optimization (positions with softmax weight below 1e-6 skip V dequantization).
 
-**Total megakernel code:** ~4,923 lines across 16 files (hand-written) plus ~1,050 lines in `mega_compose.zig` (auto-generator).
+**Total megakernel code:** ~4,440 lines across 11 files (6 hand-written Metal per-model kernels, `mega_common.metal`, 3 CUDA, 1 ROCm) plus ~1,050 lines in `mega_compose.zig` (auto-generator).
 
 ### Tier 3: Composed Megakernels (Auto-Generated)
 

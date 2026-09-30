@@ -60,7 +60,7 @@ All distributed communication goes through `src/parallel/transport.zig`. Four tr
 | **NCCL** | `dlopen("libnccl.so.2")`, GPU-direct | CUDA multi-GPU, RoCE RDMA | Up to 400 Gbps |
 | **RCCL** (declared only) | AMD's NCCL equivalent | ROCm multi-GPU | n/a |
 
-RCCL (`rccl`) is declared in `TransportKind` and nothing else: `Transport.init` returns `error.NotImplemented` for it (`src/parallel/transport.zig:925`). The row above records the intended mechanism, not a shipped transport. An implementation would mirror NCCL's API and `dlopen("librccl.so")`.
+RCCL (`rccl`) is declared in `TransportKind` and nothing else: `Transport.init` returns `error.NotImplemented` for any kind other than tcp, shm, and nccl (`src/parallel/transport.zig:235`). The row above records the intended mechanism, not a shipped transport. An implementation would mirror NCCL's API and `dlopen("librccl.so")`.
 
 Auto-selection (`--transport auto`): same-node peers (`localhost`/`127.0.0.1`) → shm, otherwise → tcp.
 

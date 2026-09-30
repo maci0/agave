@@ -234,7 +234,7 @@ flowchart LR
     end
 ```
 
-**Step 1: Score.** Run the scorer model over the full prompt with block sparse attention. In the current implementation, each block is scored by its position in the sequence (recency heuristic). A KV-dot-product scorer (scoreFromLastQ) is defined but not yet integrated into the main prefill pipeline.
+**Step 1: Score.** Run the scorer model over the full prompt with block sparse attention. In the current implementation, each block is scored by its position in the sequence (recency heuristic), because attention-weight extraction is not wired into the pipeline yet.
 
 **Step 2: Select.** Apply the adaptive threshold:
 

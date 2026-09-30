@@ -52,7 +52,7 @@ agave/
 │   ├── calibrate.zig      # TriAttention calibration subcommand (agave calibrate)
 │   ├── steering.zig       # Directional steering (--dir-steering-file); activation projection
 │   ├── eval.zig           # Token NLL scoring library (scoreCase; no --eval CLI yet)
-│   ├── expert_profile.zig # MoE expert activation profiler (library; no CLI yet)
+│   ├── expert_profile.zig # MoE expert activation profiler (--expert-profile-out / --expert-profile-in)
 │   ├── expert_cache.zig   # SSD expert LRU streaming cache (--ssd-streaming CLI)
 │   ├── ngram_cache.zig    # PLE ngram shard LRU (library; not yet wired to a CLI flag)
 │   ├── image_tokens.zig   # Multimodal image placeholder token IDs (shared by arch + chat_template)
@@ -532,7 +532,7 @@ DDTree speculative decode -> output tokens
 | `mlx_q` | 4-8 | 64 | MLX models (affine: scale × uint + bias) |
 | `gptq` | 4.25 | 32-128 | GPTQ INT4 (row-major packed u32, per-group scales/qzeros) |
 | `awq` | 4.25 | 32-128 | AWQ INT4 (column-major packed u32, GEMM-order interleave [0,2,4,6,1,3,5,7]) |
-| `hqq` | 4.0 | 64 | HQQ INT4 (uint8 2-nibble packed, float meta.scale/meta.zero, CPU only) |
+| `hqq` | 4.0 | 64 | HQQ INT4 (uint8 2-nibble packed, float meta.scale/meta.zero), native on all 6 backends |
 
 **KV Cache Quantization Types** (see `src/ops/kv_quant.zig`):
 
@@ -569,6 +569,8 @@ DDTree speculative decode -> output tokens
 - **Fast path**: when all blocks are on GPU, dispatches a single `be.sdpa()` with zero overhead.
 - **Mixed path**: GPU SDPA with softmax statistics runs concurrently with CPU SDPA on the thread pool, then partial outputs are merged via [FlashAttention-2 (Dao, 2023)](https://arxiv.org/abs/2307.08691) online softmax correction (exact, no approximation).
 - **CPU-only path**: falls back to CPU SDPA on the thread pool when all blocks have been offloaded.
+
+Split-attention SDPA is only fully implemented for Gemma 3; other architectures tier the blocks but compute SDPA against the first block only, so `main.zig` warns at startup that long-sequence output may be wrong.
 
 **Paged KV cache and paged SDPA** (`src/kvcache/view.zig`, `src/kvcache/manager.zig`, `src/backend/kernels/cpu/sdpa.zig`):
 - KV cache is organized into 256-token blocks managed by `PagedKvCache` with `RadixTree` prefix sharing and `BlockAllocator` for efficient allocation.

@@ -534,6 +534,8 @@ flowchart TB
 
 **UMA optimization:** On Apple Silicon and NVIDIA GB10 (unified memory), both GPU and CPU read the same physical memory. No data transfer, just concurrent compute on the same cache.
 
+**Model support:** the mixed-tier SDPA path is only fully implemented for Gemma 3. Other architectures tier the blocks but compute SDPA against the first block only, so `agave` warns at startup that long-sequence output may be incorrect.
+
 ---
 
 ### Per-Head KV Quantization

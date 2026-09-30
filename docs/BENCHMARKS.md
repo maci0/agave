@@ -55,7 +55,7 @@ Largest gains on models with mixed quantization (Q4_K_M = Q4_K + Q6_K layers) wh
 
 True megakernels execute an entire transformer layer in a single GPU dispatch using composable building blocks with atomic grid sync. 18 primitives in `mega_common.metal` (752 lines) include cooperative RMS norm, per-format GEMV, activations, RoPE, KV cache append with TurboQuant encoding, and inline SDPA with TQ+ dequant and sparse V.
 
-**Implementations**: 5 Metal (Qwen Q8/Q4K, Gemma Q4K/Q8, Nemotron-H Q8), 3 CUDA (Qwen Q8, Gemma Q4K/Q8), 1 ROCm (Qwen Q8). Total megakernel code: ~4,923 lines across 16 files.
+**Implementations**: 5 Metal (Qwen Q8/Q4K, Gemma Q4K/Q8, Nemotron-H Q8), 3 CUDA (Qwen Q8, Gemma Q4K/Q8), 1 ROCm (Qwen Q8). Total megakernel code: ~4,440 lines across 11 files, counting the 6 Metal building blocks plus `mega_common.metal` and the 3 CUDA / 1 ROCm per-model kernels.
 
 ## Prefill Throughput
 

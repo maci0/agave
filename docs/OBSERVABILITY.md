@@ -32,8 +32,9 @@ line only; the server ID stays authoritative.
 Both health endpoints collapse details when the request is unauthenticated, so an
 orchestrator probe sees `{"status":...}` only.
 
-`agave_ready` in `/metrics` mirrors the `/ready` decision, so alerts do not have to
-re-implement the health formula.
+There is no `agave_ready` gauge: `/metrics` does not mirror the `/ready` decision,
+so an alert has to probe `GET /ready` directly rather than re-implementing the
+health formula as a metric query.
 
 ## Metrics
 
@@ -70,7 +71,7 @@ Saturation and cache:
 | `agave_kv_blocks_used` / `agave_kv_blocks_total` | KV occupancy; `agave_kv_cache_usage_perc` and `agave_gpu_cache_usage_perc` are the derived ratios. |
 | `agave_kv_cache_tier_blocks{tier,state}` | Per-tier occupancy, `state` in `used`/`total`, `tier` in `vram`/`ram`/`ssd`. A full VRAM tier under a half-empty total is blocks spilling down the hierarchy. |
 | `agave_kv_cache_demotions_vram_to_ram_total`, `agave_kv_cache_demotions_ram_to_ssd_total` | Blocks demoted out of VRAM and out of RAM under cache pressure. A sustained rate is the KV-pressure signal; a rising `ram_to_ssd` rate is the expensive one. |
-| `agave_kv_cache_hits_total`, `agave_kv_cache_misses_total`, `agave_prefix_tokens_reused_total`, `agave_prefix_cache_hit_rate` | Prefix-cache behavior. |
+| `agave_kv_cache_hits_total`, `agave_kv_cache_misses_total`, `agave_prefix_tokens_reused_total`, `agave_prefix_tokens_total`, `agave_prefix_cache_hit_rate` | Prefix-cache behavior. `agave_prefix_tokens_total` is the denominator behind `agave_prefix_cache_hit_rate`. |
 | `agave_input_tokens_in_flight` | Prompt tokens still to prefill across running requests. Drops before `agave_active_requests` as prefill completes, so it is the load signal for routing decisions. |
 | `agave_tokens_per_second`, `agave_avg_prompt_throughput_toks_per_s`, `agave_avg_generation_throughput_toks_per_s` | Throughput; the first is the last request, the other two are since-start averages. |
 | `agave_tokens_generated_total`, `agave_prefill_tokens_total` | Token counters. |

@@ -177,7 +177,7 @@ UMA platforms (Apple Silicon, GB10) already optimal via zero-copy mmap. Discrete
 
 ## Pre-Sharded Weights
 
-Not built. The only subcommands today are `pull`, `calibrate`, and `help`; there is no `agave shard`.
+Not built. The subcommands today are `pull`, `calibrate`, `update`, and `help`; there is no `agave shard`.
 
 Planned: an `agave shard` subcommand splitting GGUF by TP degree → `model-tp0.gguf`, `model-tp1.gguf`. Zero init-time sharding, peak memory = shard size. Auto-detect via GGUF metadata.
 

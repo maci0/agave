@@ -63,7 +63,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **2 Formats**: GGUF, SafeTensors (multi-shard, MLX quantized, NVFP4)
 - **20+ Quantization Types**: F32, F16, BF16, Q2_K, Q3_K, Q4_0, Q4_1, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0, TQ1_0, IQ4_XS, IQ4_NL, FP8 E4M3, FP8 E5M2, NVFP4, MXFP4, MLX 4/6/8-bit, GPTQ
 - **19 KV Cache Quantization Types**: F32, F16, Q8_0, INT8, FP8, NVFP4, NVFP4-MLA, TurboQuant 2/3/4-bit, PlanarQuant 2/3/4-bit, IsoQuant 2/3/4-bit, RotorQuant 2/3/4-bit, with asymmetric K/V support and paged SDPA
-- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`)
+- **Tiered KV Cache**: VRAM + RAM + SSD offloading with async prefetch, on unified-memory backends only (`--kv-tiers vram+ram+ssd`). Split-attention SDPA over mixed tiers is fully implemented for Gemma 3; other architectures warn and may produce incorrect output on long sequences
 - **Chat Templates**: Data-driven per-architecture prompt formatting (ChatML, Gemma, Gemma 4, Qwen 3.5, GLM-4, GPT-OSS, Llama 4)
 - **Recipes**: Optional proven-default configs per model/hardware/quant combo
 - **Model Download**: `agave pull <org/repo>`, download GGUF models from HuggingFace Hub with auto quant selection
