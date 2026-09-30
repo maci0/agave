@@ -48,6 +48,7 @@
   "include": [
     "src/web/app.tsx",
     "src/web/app.test.tsx",
+    "src/web/shell.test.tsx",
     "src/web/globals.d.ts",
     "src/web/chat/**/*",
     "src/web/ui/**/*",

@@ -351,7 +351,14 @@ const useShellChat = (engine: AgaveEngine) => {
 };
 
 const Shell = () => {
-  const engine = new AgaveEngine();
+  /* One engine per mount, not per render: `new AgaveEngine()` in the component
+     body threw away the instantiated module and the loaded model on every state
+     change, so the composer came back "Load a GGUF model first." after a load.
+     A lazy ref keeps the instance stable and still constructs it during render,
+     which is when the first instance was built. */
+  const engineRef = useRef<AgaveEngine | null>(null);
+  engineRef.current ??= new AgaveEngine();
+  const engine = engineRef.current;
   const chat = useShellChat(engine);
   const loader = useModelLoader(engine, (text, level) => {
     chat.addMessage(level === 'error' ? 'error' : 'system', text);

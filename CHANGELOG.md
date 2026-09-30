@@ -11,6 +11,12 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Fixed
+- The browser WASM shell (`web/`, `zig build wasm`) rebuilt its `AgaveEngine`
+  on every render, so each state change threw away the instantiated module and
+  the loaded model. Typing a prompt after loading a GGUF reported "Load a GGUF
+  model first." and never produced a reply. One engine is now held per mount.
+
 ## [0.10.2] - 2026-09-29
 
 ### Fixed
