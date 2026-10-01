@@ -51,13 +51,30 @@ class StubEngine {
   public initMessage = '';
   public downloads = 0;
   public readonly prompted: Array<string> = [];
+  /** True once `init()` has run to completion, whether it was gated or not. */
+  public initialized = false;
+  /** True when `fetchModel()` ran before `init()` finished. */
+  public downloadStartedBeforeInit = false;
+  /** The latch a gated `init()` parks on; null until that call arrives. */
+  public releaseInit: (() => void) | null = null;
+  /** True holds `init()` open until the test calls `releaseInit`, so the
+   *  model's download can be observed against an unfinished WASM handshake. */
+  public gated = false;
 
   public constructor() { engines.push(this); }
 
-  public async init(): Promise<void> { await Promise.resolve(); this.ready = true; }
+  public async init(): Promise<void> {
+    await (this.gated
+      // oxlint-disable-next-line promise/avoid-new -- a deferred latch is the point; no library promise defers a later call
+      ? new Promise<void>((resolve) => { this.releaseInit = resolve; })
+      : Promise.resolve());
+    this.initialized = true;
+    this.ready = true;
+  }
 
   public async fetchModel(): Promise<ArrayBuffer> {
     await Promise.resolve();
+    this.downloadStartedBeforeInit = !this.initialized;
     this.downloads += 1;
     return new Uint8Array(GGUF).buffer;
   }
@@ -123,25 +140,6 @@ afterAll(async () => {
 /** The transcript, as one line of text, for a copy assertion. */
 const transcriptText = (): string => present(document.querySelector('#chat'), 'chat log').textContent;
 
-/** A stub whose `init()` stays pending until the test releases it, so the
- *  model's download can be observed against an unfinished WASM handshake. */
-class GatedEngine extends StubEngine {
-  public releaseInit: () => void = () => {};
-  public initialized = false;
-  public downloadStartedBeforeInit = false;
-
-  public override async init(): Promise<void> {
-    await new Promise<void>((resolve) => { this.releaseInit = resolve; });
-    this.initialized = true;
-    this.ready = true;
-  }
-
-  public override async fetchModel(): Promise<ArrayBuffer> {
-    this.downloadStartedBeforeInit = !this.initialized;
-    return super.fetchModel();
-  }
-}
-
 /** Mount the shell against whatever `globalThis.AgaveEngine` currently is. The
  *  cache-busting query re-runs the module's top-level `createRoot`, so each
  *  test owns its own tree instead of sharing the first one. */
@@ -155,7 +153,9 @@ const mountShell = async (): Promise<void> => {
 
 test('the model download overlaps the WASM handshake instead of queueing behind it', async () => {
   engines.length = 0;
-  const engine = new GatedEngine();
+  const engine = new StubEngine();
+  engine.gated = true;
+  // oxlint-disable-next-line eslint/object-shorthand -- the shell calls `new AgaveEngine()`, which a method shorthand cannot be
   Object.assign(globalThis, { AgaveEngine: function () { return engine; } });
   await mountShell();
 
@@ -164,12 +164,12 @@ test('the model download overlaps the WASM handshake instead of queueing behind 
   clickButtonLabelled('Load model');
   await settle();
 
-  /* init() has not settled, yet the fetch is already in flight: a load that
+  /* `init()` has not settled, yet the fetch is already in flight: a load that
      awaited init() up front could not have started the download yet. */
   expect(engine.initialized).toBe(false);
   expect(engine.downloadStartedBeforeInit).toBe(true);
 
-  engine.releaseInit();
+  present(engine.releaseInit, 'init() latch')();
   expect(await transcriptHolds('Loaded: stub-model')).toBe(true);
   /* The bytes land only once the module exists: loadModel rejects otherwise. */
   expect(engine.hasModel).toBe(true);

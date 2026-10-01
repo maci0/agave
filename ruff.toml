@@ -34,6 +34,11 @@ select = [
     "C4",   # flake8-comprehensions
     "SIM",  # flake8-simplify
     "RET",  # flake8-return
+    "FA",   # flake8-future-annotations: `from __future__ import annotations` where the runtime needs it
+    "Q",    # flake8-quotes: one quote style, so a diff is never a re-quote
+    "SLF",  # flake8-self: a private member reached from outside its class
+    "RSE",  # flake8-raise: parens and other noise around a raised error
+    "ASYNC", # flake8-async: a blocking or wrong-thread call inside an async body
     "PIE",  # flake8-pie
     "RUF",  # ruff-specific
     "PT",   # flake8-pytest-style

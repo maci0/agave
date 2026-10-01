@@ -407,9 +407,24 @@ fi
 if ! command -v uv >/dev/null 2>&1; then
     echo "check-pins: uv not on PATH, skipping the uv.lock freshness check"
 else
+    # `uv lock --check` also wants a writable cache, and the failure it reports
+    # for an unwritable one looks exactly like a stale lock. A sandbox or a
+    # container running as a different user cannot open $HOME/.cache/uv, so the
+    # second attempt moves the cache somewhere writable; only if that fails too
+    # is the lock really out of date. Without the retry the check reports a
+    # disagreement that does not exist, and a gate that cries wolf is ignored.
+    uv_check_ok() {
+        local cache
+        if (cd "$1" && uv lock --check >/dev/null 2>&1); then return 0; fi
+        cache="$(mktemp -d)"
+        (cd "$1" && UV_CACHE_DIR="$cache" uv lock --check >/dev/null 2>&1)
+        local status=$?
+        rm -rf "$cache"
+        return "$status"
+    }
     for dir in tests research/kernels; do
         [[ -f "$dir/pyproject.toml" && -f "$dir/uv.lock" ]] || continue
-        if ! (cd "$dir" && uv lock --check >/dev/null 2>&1); then
+        if ! uv_check_ok "$dir"; then
             echo "check-pins: $dir/uv.lock disagrees with $dir/pyproject.toml; run 'uv lock' in $dir" >&2
             exit 1
         fi

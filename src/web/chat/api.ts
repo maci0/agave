@@ -178,8 +178,8 @@ export const streamChat = async (request: StreamRequest, callbacks: StreamCallba
   const stream = response.body;
   if (!stream) {throw new Error('empty response body');}
   const reader = stream.getReader();
-  // Holds the lead bytes of a character the next chunk completes, so a 4-byte
-  // emoji split across two reads never reaches a frame as a fragment.
+  // Holds the lead bytes of a character the next chunk completes, so a
+  // 4-byte emoji split across two reads never reaches a frame as a fragment.
   const decoder = new TextDecoder();
   let buffer = '';
   let content = '';
