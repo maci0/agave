@@ -267,6 +267,11 @@ const runStream = async (
 
 export type ChatTurn = {
   streaming: boolean;
+  /** True while a turn is in flight. Reads the same ref `send` checks, so it
+   *  answers inside the tick a click happened in: `streaming` is state and is
+   *  still false until the re-render commits. A caller that mutates the log
+   *  before handing off to `send` reads this first. */
+  busy: () => boolean;
   tps: number | null;
   send: (body: string, errorLabel: string, url?: string) => void;
   stop: () => void;
@@ -278,10 +283,23 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
   const [tps, setTps] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stopped = useRef(false);
+  /* Synchronous in-flight latch. `streaming` is React state, so it is still
+     false in the closure of a second click that lands before the re-render
+     commits, and `send` mints a fresh idempotency key per call. A duplicate
+     therefore reached the server as a distinct logical operation: a second
+     `/v1/chat` appended a second user turn, and a second
+     `/v1/chat/regenerate` popped a second assistant message. A ref writes
+     during the click, so the latch holds across that window. It clears only
+     when the turn actually ends, which is also when the retry affordance
+     appears and a deliberate second message has to go through. */
+  const inFlight = useRef(false);
+  const busy = useCallback((): boolean => inFlight.current, []);
 
   const stop = useCallback(() => { abortRef.current?.abort(); }, []);
 
-  const send = useCallback((body: string, errorLabel: string, url?: string) => {
+  const send = useCallback((body: string, errorLabel: string, url?: string): void => {
+    if (inFlight.current) {return;}
+    inFlight.current = true;
     const turnId = log.addTurn({ role: 'assistant', text: '', phase: 'thinking' });
     /* Start the markdown fetch alongside the request: by the last
        chunk, marked and DOMPurify are normally already in place. */
@@ -296,6 +314,7 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
       (wasStopped) => {
         stopped.current = wasStopped;
         abortRef.current = null;
+        inFlight.current = false;
         setStreaming(false);
         setTps(null);
         onTurnEnd();
@@ -304,7 +323,7 @@ export const useChatTurn = ({ log, announce, onTurnEnd }: { log: LogApi; announc
       setTps);
   }, [announce, log, onTurnEnd]);
 
-  return { streaming, tps, send, stop };
+  return { streaming, busy, tps, send, stop };
 };
 
 type ConversationsInput = {

@@ -202,7 +202,7 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
   }, [announce, convs, focusComposer, log, model, settings]);
 
   const submitMessage = useCallback((text: string, attached: string | null) => {
-    if (turn.streaming) {return;}
+    if (turn.busy()) {return;}
     /* Commands run client-side and never post an image, so the bubble
        would show an attachment the model never received. Keep both. */
     if (attached !== null && text.startsWith('/')) {
@@ -218,7 +218,12 @@ const useChatCommands = ({ log, model, convs, image, turn, settings, announce, p
   }, [focusComposer, image, log, pushToast, settings.sampling, turn]);
 
   const regenerate = useCallback(() => {
-    if (turn.streaming) {return;}
+    /* Drop the reply only for a turn that will actually run. Popping first on a
+       refused duplicate would delete the live turn's bubble and leave no
+       request to replace it. `busy` reads the same latch `send` checks, so it
+       holds before the re-render that sets `turn.streaming`. The drop has to
+       precede `send`, which appends the new turn's own bubble. */
+    if (turn.busy()) {return;}
     log.dropLastAssistant();
     turn.send(regenerateBody(settings.sampling), 'Failed to regenerate', '/v1/chat/regenerate');
   }, [log, settings.sampling, turn]);
