@@ -93,6 +93,9 @@ const sseResponse = (frames: Array<string>): Response => {
 
 const MODEL = { data: [{ id: 'test-model', backend: 'cpu', ctx_size: 4096, kv_seq_len: 5, vision: false }] };
 
+/** One finished assistant turn, for the `MessageList` state tests. */
+const stubTurn = (text: string) => ({ id: text.length, role: 'assistant' as const, text, phase: 'done' as const });
+
 /** Mounting the real tree and waiting out the stream throttle costs more than
  *  the 5s default on a loaded machine; a timeout here is not a verdict. */
 const MOUNT_TIMEOUT_MS = 30_000;
@@ -183,6 +186,98 @@ test('model text renders as text when the sanitizer has not loaded', () => {
   renderMarkdown(markdownTarget, UNSANITIZED_TEXT);
   expect(markdownTarget.querySelector('img')).toBeNull();
   expect(markdownTarget.textContent).toBe(UNSANITIZED_TEXT);
+});
+
+test('a conversation list that fails to refresh keeps the last copy on screen', async () => {
+  const { createRoot } = await import('react-dom/client');
+  const { useConversations } = await import('./chat/hooks');
+  let fail = false;
+  // SAFETY: the stub answers only `GET /v1/conversations`, the one route
+  // this hook calls.
+  globalThis.fetch = function (input: RequestInfo | URL): Promise<Response> {
+    void input;
+    if (fail) { return Promise.reject(new TypeError('Failed to fetch')); }
+    return Promise.resolve(Response.json([{ id: 'a', title: 'Chat a', active: true }]));
+  } as unknown as typeof fetch;
+  const toasts: Array<string> = [];
+  let api: { conversations: Array<unknown> | null; loadError: string | null; load: () => Promise<void> } | null = null;
+  const host = mountHost();
+  const root = createRoot(host);
+  function Probe(): null {
+    api = useConversations({
+      log: null as never,
+      announce: function (): void {},
+      pushToast: function (text: string) { toasts.push(text); },
+    });
+    return null;
+  }
+  root.render(<Probe />);
+  const live = () => present(api, 'useConversations result');
+  expect(await waitFor(() => live().conversations?.length === 1)).toBe(true);
+
+  // `load` also runs after every turn, so a blip on the refresh must not
+  // replace a list the reader is already looking at with the retry state.
+  fail = true;
+  await live().load();
+  expect(live().conversations).toHaveLength(1);
+  expect(live().loadError).toBeNull();
+  expect(toasts.at(-1)).toContain('Could not refresh the conversation list');
+  root.unmount();
+  host.remove();
+});
+
+test('switching conversations hides the outgoing transcript while it loads', async () => {
+  const { createRoot } = await import('react-dom/client');
+  const { MessageList } = await import('./chat/components/message-list');
+  const host = mountHost();
+  const root = createRoot(host);
+  const noop = function (): void {};
+
+  // The outgoing conversation is still in the log when the fetch starts, so
+  // it stayed readable behind the loader and read as the selected one.
+  root.render(
+    <MessageList
+      bubbles={[stubTurn('the previous answer')]}
+      toasts={[]}
+      showStats={false}
+      vision={false}
+      streaming={false}
+      loading
+      lastAssistantId={null}
+      onRegenerate={noop}
+      onRendered={noop}
+      onRunCommand={noop}
+      onDismissToast={noop}
+    />,
+  );
+  expect(await waitFor(() => host.textContent.includes('Loading conversation'))).toBe(true);
+  // `MessageBody` paints markdown, and the sanitizer is torn down by an
+  // earlier test, so the turn's words are not in the DOM. The message group
+  // is: with the outgoing transcript left on screen the loader would have a
+  // rendered turn above it.
+  expect(host.querySelectorAll('[role="group"]')).toHaveLength(0);
+
+  // Once the fetch lands, the transcript takes the column back: both turns
+  // are rendered and the loader is gone.
+  root.render(
+    <MessageList
+      bubbles={[stubTurn('the previous answer'), stubTurn('the selected answer')]}
+      toasts={[]}
+      showStats={false}
+      vision={false}
+      streaming={false}
+      loading={false}
+      lastAssistantId={null}
+      onRegenerate={noop}
+      onRendered={noop}
+      onRunCommand={noop}
+      onDismissToast={noop}
+    />,
+  );
+  expect(await waitFor(() => host.querySelectorAll('[role="group"]').length === 2)).toBe(true);
+  expect(host.textContent).not.toContain('Loading conversation');
+  root.unmount();
+  host.remove();
 });
 
 test('a link that survives the sanitizer loses its script scheme', () => {

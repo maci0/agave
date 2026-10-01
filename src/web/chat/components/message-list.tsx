@@ -170,21 +170,29 @@ return (
       props.toasts.length > 0 ? 'pb-28' : 'pb-2',
     )}
   >
-    {props.bubbles.length === 0 && !props.loading ? (
-      <TranscriptEmptyState vision={props.vision} onRunCommand={props.onRunCommand} />
-    ) : null}
+    {/* A fetch replaces the log rather than joining it. The outgoing turns
+        stayed on screen behind "Loading conversation…", so a reader who
+        clicked a conversation could not tell the click from a no-op and read
+        the old answer as the newly-selected one. */}
     {props.loading ? <div role="status" className="m-auto font-mono text-xs text-faint">Loading conversation…</div> : null}
-    {props.bubbles.map((bubble) =>
-      (
-        <Message
-          key={bubble.id}
-          bubble={bubble}
-          showStats={props.showStats}
-          canRegenerate={bubble.id === props.lastAssistantId && !props.streaming}
-          onRegenerate={props.onRegenerate}
-          onRendered={props.onRendered}
-        />
-      )
+    {props.loading ? null : (
+      <>
+        {props.bubbles.length === 0 ? (
+          <TranscriptEmptyState vision={props.vision} onRunCommand={props.onRunCommand} />
+        ) : null}
+        {props.bubbles.map((bubble) =>
+          (
+            <Message
+              key={bubble.id}
+              bubble={bubble}
+              showStats={props.showStats}
+              canRegenerate={bubble.id === props.lastAssistantId && !props.streaming}
+              onRegenerate={props.onRegenerate}
+              onRendered={props.onRendered}
+            />
+          )
+        )}
+      </>
     )}
   </div>
   <LogOverlay toasts={props.toasts} showJump={showJump} onJump={jumpToLatest} onDismiss={props.onDismissToast} />

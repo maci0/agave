@@ -337,7 +337,16 @@ const useConversationActions = ({ log, announce, pushToast, load, setLoading }: 
 
   const startNew = useCallback(() => {
     void createConversation().then(
-      () => { log.clear(); void load(); announce('New conversation started'); },
+      /* New empties the log and moves the sidebar selection, which is the
+         whole screen changing at once. The live region says it for a screen
+         reader; sighted readers got nothing back, while every other finished
+         action here toasts. Same pattern, so New toasts too. */
+      () => {
+        log.clear();
+        void load();
+        announce('New conversation started');
+        pushToast('New conversation started.', 'info');
+      },
       () => { pushToast('Could not create a new conversation. Check that the server is running.'); },
     );
   }, [announce, load, log, pushToast]);
@@ -375,14 +384,22 @@ export const useConversations = ({ log, announce, pushToast }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  /* True once a fetch has landed, so a later failure has a list to keep. */
+  const loaded = useRef(false);
   const load = useCallback(async () => {
     try {
       setConversations(await loadConversations());
+      loaded.current = true;
       setLoadError(null);
-    } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- the sidebar shows the retry state
+    } catch { // oxlint-disable-line @rikalabs/no-silent-catch-fallback -- reported by the sidebar or a toast
+      /* `load` also runs after every turn, so a blip here used to replace the
+         whole list with the retry state: the reader lost sight of every
+         conversation and had to guess that Retry was the way back. Only the
+         first fetch has nothing to keep, so only it takes over the list. */
+      if (loaded.current) { pushToast('Could not refresh the conversation list. Showing the last copy.'); return; }
       setLoadError('Could not load conversations.');
     }
-  }, []);
+  }, [pushToast]);
 
   useEffect(() => { void load(); }, [load]);
 
