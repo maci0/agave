@@ -1353,6 +1353,26 @@ fn parseFormConversationId(body: []const u8) FormConversationId {
     return .{ .value = id };
 }
 
+/// Parse the conversation `id` form field and send the matching 400 on a bad
+/// one. Returns null once the response is written, so the caller returns.
+fn requireFormConversationId(stream: http.TcpStream, body: []const u8, method: []const u8, path: []const u8, request_start: i64) ?u32 {
+    switch (parseFormConversationId(body)) {
+        .missing => {
+            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
+            g_server.metrics.recordClientError();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return null;
+        },
+        .invalid => {
+            sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
+            g_server.metrics.recordClientError();
+            logRequestDone(method, path, 400, elapsedMs(request_start));
+            return null;
+        },
+        .value => |v| return v,
+    }
+}
+
 /// 304 for the chat UI document. No `Content-Length`: RFC 9110 15.4.5 lets a 304
 /// carry one only when it equals the length the matching 200 would have sent,
 /// and this response has no body to measure. `Vary` and `Cache-Control` repeat
@@ -3380,21 +3400,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             g_server.metrics.recordCompletion();
             logRequestDone(method, path, 200, elapsedMs(request_start));
         } else if (std.mem.eql(u8, action, "select")) {
-            const id: u32 = switch (parseFormConversationId(body)) {
-                .missing => {
-                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
-                    g_server.metrics.recordClientError();
-                    logRequestDone(method, path, 400, elapsedMs(request_start));
-                    return;
-                },
-                .invalid => {
-                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
-                    g_server.metrics.recordClientError();
-                    logRequestDone(method, path, 400, elapsedMs(request_start));
-                    return;
-                },
-                .value => |v| v,
-            };
+            const id = requireFormConversationId(stream, body, method, path, request_start) orelse return;
             var mbuf: [conv_msgs_buf_size]u8 = undefined;
             var mw: std.Io.Writer = .fixed(&mbuf);
             var switched = false;
@@ -3441,21 +3447,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 },
             }
         } else if (std.mem.eql(u8, action, "delete")) {
-            const id: u32 = switch (parseFormConversationId(body)) {
-                .missing => {
-                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "Missing required field: id", "id", "missing_required_parameter");
-                    g_server.metrics.recordClientError();
-                    logRequestDone(method, path, 400, elapsedMs(request_start));
-                    return;
-                },
-                .invalid => {
-                    sendJsonErrorEx(stream, "400 Bad Request", "invalid_request_error", "id must be a positive integer", "id", "invalid_value");
-                    g_server.metrics.recordClientError();
-                    logRequestDone(method, path, 400, elapsedMs(request_start));
-                    return;
-                },
-                .value => |v| v,
-            };
+            const id = requireFormConversationId(stream, body, method, path, request_start) orelse return;
             const delete_result: ?bool = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);

@@ -64,6 +64,17 @@ fn unpackU8(w: [*]const u32, idx: usize) u8 {
     return @truncate(w[wi] >> bo);
 }
 
+/// Scalar unpack for a value that does not straddle a u32 word (2, 4 or 8 bits).
+/// 6-bit values can straddle, so `unpackU6` is not reachable from here.
+inline fn unpackPacked(comptime bits: u32, w: [*]const u32, idx: usize) u32 {
+    return switch (bits) {
+        2 => unpackU2(w, idx),
+        4 => unpackU4(w, idx),
+        8 => unpackU8(w, idx),
+        else => @compileError("unpackPacked: only 2, 4 or 8 bits pack within a u32"),
+    };
+}
+
 /// MLX affine GEMV: y[row] = sum_j(dequant(W[row,j]) * x[j])
 /// Dequant: float_val = scale * int_val + bias, per group of `gs` elements.
 ///
@@ -110,139 +121,30 @@ pub fn mlxGemvRows(
     const wpg = wordsPerGroup(bits, gs);
     const wpr = gpr * wpg;
 
-    if (bits == 2) {
-        mlxGemvQ2Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
-    } else if (bits == 4) {
-        mlxGemvQ4Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
-    } else if (bits == 6) {
+    if (bits == 6) {
         mlxGemvQ6Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
     } else {
-        mlxGemvQ8Rows(x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs);
+        // `bits` is a runtime argument, so instantiate the packed kernel per width.
+        switch (bits) {
+            2 => mlxGemvPackedRows(2, x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs),
+            4 => mlxGemvPackedRows(4, x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs),
+            else => mlxGemvPackedRows(8, x, pw, sc, bi, y, start_row, n_rows, k, gpr, wpg, wpr, gs),
+        }
     }
 }
 
-/// SIMD-optimized 2-bit MLX GEMV for a range of rows.
-/// 16 crumbs per u32 word, same factored scale/bias pattern as Q4.
-/// @mulAdd maps to NEON fmla (1 instruction vs fmul+fadd chain).
-/// 2-row batching reuses x vector loads across rows.
-fn mlxGemvQ2Rows(
-    x: [*]const f32,
-    pw: [*]const u32,
-    sc: [*]const u16,
-    bi: [*]const u16,
-    y: [*]f32,
-    start_row: usize,
-    n_rows: usize,
-    k: usize,
-    gpr: usize,
-    wpg: usize,
-    wpr: usize,
-    gs: usize,
-) void {
-    const V = crumbs_per_u32;
-    const VecF32 = @Vector(V, f32);
-    const vzero: VecF32 = @splat(0.0);
-    const VecU32 = @Vector(V, u32);
-    const crumb_shifts: VecU32 = .{ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30 };
-    const mask2: VecU32 = @splat(0x3);
-
-    // 2-row batching for x-vector cache reuse
-    var row = start_row;
-    while (row + 2 <= start_row + n_rows) : (row += 2) {
-        var sum0: f32 = 0.0;
-        var sum1: f32 = 0.0;
-        const wr0 = pw + row * wpr;
-        const wr1 = pw + (row + 1) * wpr;
-        const sr0 = sc + row * gpr;
-        const sr1 = sc + (row + 1) * gpr;
-        const br0 = bi + row * gpr;
-        const br1 = bi + (row + 1) * gpr;
-
-        for (0..gpr) |g| {
-            const scale0 = quant.bf16ToF32(sr0[g]);
-            const scale1 = quant.bf16ToF32(sr1[g]);
-            const bias0 = quant.bf16ToF32(br0[g]);
-            const bias1 = quant.bf16ToF32(br1[g]);
-            const xo = g * gs;
-            const wo = g * wpg;
-            const elems = @min(gs, k - xo);
-            const full_words = elems / V;
-
-            var q_acc0: VecF32 = vzero;
-            var q_acc1: VecF32 = vzero;
-            var x_acc: VecF32 = vzero;
-
-            for (0..full_words) |wi| {
-                const xv: VecF32 = (x + xo + wi * V)[0..V].*;
-                const w0: VecU32 = @splat(wr0[wo + wi]);
-                const vals0: VecF32 = @floatFromInt((w0 >> crumb_shifts) & mask2);
-                q_acc0 = @mulAdd(VecF32, xv, vals0, q_acc0);
-                const w1: VecU32 = @splat(wr1[wo + wi]);
-                const vals1: VecF32 = @floatFromInt((w1 >> crumb_shifts) & mask2);
-                q_acc1 = @mulAdd(VecF32, xv, vals1, q_acc1);
-                x_acc += xv;
-            }
-            const x_sum = @reduce(.Add, x_acc);
-            sum0 += scale0 * @reduce(.Add, q_acc0) + bias0 * x_sum;
-            sum1 += scale1 * @reduce(.Add, q_acc1) + bias1 * x_sum;
-
-            // Scalar tail
-            const done = full_words * V;
-            for (done..elems) |i| {
-                const xval = x[xo + i];
-                const val0: u32 = unpackU2(wr0 + wo, i);
-                const val1: u32 = unpackU2(wr1 + wo, i);
-                sum0 += xval * (scale0 * @as(f32, @floatFromInt(val0)) + bias0);
-                sum1 += xval * (scale1 * @as(f32, @floatFromInt(val1)) + bias1);
-            }
-        }
-        y[row] = sum0;
-        y[row + 1] = sum1;
-    }
-
-    // Remainder: single row
-    while (row < start_row + n_rows) : (row += 1) {
-        var sum: f32 = 0.0;
-        const wr = pw + row * wpr;
-        const sr = sc + row * gpr;
-        const br = bi + row * gpr;
-
-        for (0..gpr) |g| {
-            const scale = quant.bf16ToF32(sr[g]);
-            const bias = quant.bf16ToF32(br[g]);
-            const xo = g * gs;
-            const wo = g * wpg;
-            const elems = @min(gs, k - xo);
-            const full_words = elems / V;
-
-            var q_acc: VecF32 = vzero;
-            var x_acc: VecF32 = vzero;
-
-            for (0..full_words) |wi| {
-                const xv: VecF32 = (x + xo + wi * V)[0..V].*;
-                const word: VecU32 = @splat(wr[wo + wi]);
-                const vals: VecF32 = @floatFromInt((word >> crumb_shifts) & mask2);
-                q_acc = @mulAdd(VecF32, xv, vals, q_acc);
-                x_acc += xv;
-            }
-            sum += scale * @reduce(.Add, q_acc) + bias * @reduce(.Add, x_acc);
-
-            const done = full_words * V;
-            for (done..elems) |i| {
-                const val: u32 = unpackU2(wr + wo, i);
-                sum += x[xo + i] * (scale * @as(f32, @floatFromInt(val)) + bias);
-            }
-        }
-        y[row] = sum;
-    }
-}
-
-/// SIMD-optimized 4-bit MLX GEMV for a range of rows.
+/// SIMD MLX affine GEMV over a range of rows, for the bit widths that pack
+/// whole values into a u32 word (2, 4 or 8 bits; 6-bit is scalar because its
+/// values can straddle a word boundary).
+///
 /// Uses factored scale/bias: sum(x*(scale*q+bias)) = scale*dot(x,q) + bias*sum(x).
 /// Accumulates q_dot and x_sum per group, applies scale/bias once per group.
 /// @mulAdd maps to NEON fmla (1 instruction vs fmul+fadd chain).
-/// 2-row batching reuses x vector loads across rows.
-fn mlxGemvQ4Rows(
+/// 2-row batching reuses x vector loads across rows. The 2-bit and 4-bit
+/// arithmetic here is byte-for-byte what their separate kernels did; 8-bit
+/// gains the 2-row batching it previously lacked.
+fn mlxGemvPackedRows(
+    comptime bits: u32,
     x: [*]const f32,
     pw: [*]const u32,
     sc: [*]const u16,
@@ -256,11 +158,15 @@ fn mlxGemvQ4Rows(
     wpr: usize,
     gs: usize,
 ) void {
-    const V = nibbles_per_u32;
+    const V = bits_per_u32 / @as(usize, bits);
     const VecF32 = @Vector(V, f32);
     const VecU32 = @Vector(V, u32);
-    const nibble_shifts: VecU32 = .{ 0, 4, 8, 12, 16, 20, 24, 28 };
-    const mask4: VecU32 = @splat(0xF);
+    const shifts: VecU32 = comptime blk: {
+        var s: [V]u32 = undefined;
+        for (&s, 0..) |*e, i| e.* = @intCast(i * bits);
+        break :blk s;
+    };
+    const mask: VecU32 = @splat((@as(u32, 1) << @intCast(bits)) - 1);
     const vzero: VecF32 = @splat(0.0);
 
     // 2-row batching for x-vector cache reuse
@@ -292,10 +198,10 @@ fn mlxGemvQ4Rows(
             for (0..full_words) |wi| {
                 const xv: VecF32 = (x + xo + wi * V)[0..V].*;
                 const w0: VecU32 = @splat(wr0[wo + wi]);
-                const vals0: VecF32 = @floatFromInt((w0 >> nibble_shifts) & mask4);
+                const vals0: VecF32 = @floatFromInt((w0 >> shifts) & mask);
                 q_acc0 = @mulAdd(VecF32, xv, vals0, q_acc0);
                 const w1: VecU32 = @splat(wr1[wo + wi]);
-                const vals1: VecF32 = @floatFromInt((w1 >> nibble_shifts) & mask4);
+                const vals1: VecF32 = @floatFromInt((w1 >> shifts) & mask);
                 q_acc1 = @mulAdd(VecF32, xv, vals1, q_acc1);
                 x_acc += xv;
             }
@@ -307,8 +213,8 @@ fn mlxGemvQ4Rows(
             const done = full_words * V;
             for (done..elems) |i| {
                 const xval = x[xo + i];
-                const val0: u32 = unpackU4(wr0 + wo, i);
-                const val1: u32 = unpackU4(wr1 + wo, i);
+                const val0: u32 = unpackPacked(bits, wr0 + wo, i);
+                const val1: u32 = unpackPacked(bits, wr1 + wo, i);
                 sum0 += xval * (scale0 * @as(f32, @floatFromInt(val0)) + bias0);
                 sum1 += xval * (scale1 * @as(f32, @floatFromInt(val1)) + bias1);
             }
@@ -338,7 +244,7 @@ fn mlxGemvQ4Rows(
             for (0..full_words) |wi| {
                 const xv: VecF32 = (x + xo + wi * V)[0..V].*;
                 const word: VecU32 = @splat(wr[wo + wi]);
-                const vals: VecF32 = @floatFromInt((word >> nibble_shifts) & mask4);
+                const vals: VecF32 = @floatFromInt((word >> shifts) & mask);
                 q_acc = @mulAdd(VecF32, xv, vals, q_acc);
                 x_acc += xv;
             }
@@ -346,7 +252,7 @@ fn mlxGemvQ4Rows(
 
             const done = full_words * V;
             for (done..elems) |i| {
-                const val: u32 = unpackU4(wr + wo, i);
+                const val: u32 = unpackPacked(bits, wr + wo, i);
                 sum += x[xo + i] * (scale * @as(f32, @floatFromInt(val)) + bias);
             }
         }
@@ -382,65 +288,6 @@ fn mlxGemvQ6Rows(
             const elems = @min(gs, k - xo);
             for (0..elems) |i| {
                 const val: u32 = unpackU6(wr + wo, i);
-                sum += x[xo + i] * (scale * @as(f32, @floatFromInt(val)) + bias);
-            }
-        }
-        y[row] = sum;
-    }
-}
-
-/// SIMD-optimized 8-bit MLX GEMV for a range of rows.
-/// 4 values per u32 word, same factored scale/bias pattern as Q4.
-fn mlxGemvQ8Rows(
-    x: [*]const f32,
-    pw: [*]const u32,
-    sc: [*]const u16,
-    bi: [*]const u16,
-    y: [*]f32,
-    start_row: usize,
-    n_rows: usize,
-    k: usize,
-    gpr: usize,
-    wpg: usize,
-    wpr: usize,
-    gs: usize,
-) void {
-    const V = bytes_per_u32;
-    const VecF32 = @Vector(V, f32);
-    const VecU32 = @Vector(V, u32);
-    const byte_shifts: VecU32 = .{ 0, 8, 16, 24 };
-    const vzero: VecF32 = @splat(0.0);
-    const mask8: VecU32 = @splat(0xFF);
-
-    for (start_row..start_row + n_rows) |row| {
-        var sum: f32 = 0.0;
-        const wr = pw + row * wpr;
-        const sr = sc + row * gpr;
-        const br = bi + row * gpr;
-        for (0..gpr) |g| {
-            const scale = quant.bf16ToF32(sr[g]);
-            const bias = quant.bf16ToF32(br[g]);
-            const xo = g * gs;
-            const wo = g * wpg;
-            const elems = @min(gs, k - xo);
-            const full_words = elems / V;
-
-            var q_acc: VecF32 = vzero;
-            var x_acc: VecF32 = vzero;
-
-            for (0..full_words) |wi| {
-                const xv: VecF32 = (x + xo + wi * V)[0..V].*;
-                const word: VecU32 = @splat(wr[wo + wi]);
-                const vals: VecF32 = @floatFromInt((word >> byte_shifts) & mask8);
-                q_acc = @mulAdd(VecF32, xv, vals, q_acc);
-                x_acc += xv;
-            }
-            sum += scale * @reduce(.Add, q_acc) + bias * @reduce(.Add, x_acc);
-
-            // Scalar tail
-            const done = full_words * V;
-            for (done..elems) |i| {
-                const val: u32 = unpackU8(wr + wo, i);
                 sum += x[xo + i] * (scale * @as(f32, @floatFromInt(val)) + bias);
             }
         }
@@ -581,7 +428,7 @@ pub fn mlxMxfp4GemvRows(
 /// Weight-stationary batched MLX-Q4 GEMM: y[n_tok, n_out] = x[n_tok, k] @ W[n_out, k]^T.
 /// Reads each weight row ONCE and accumulates dot products for all n_tok input vectors.
 /// This is N× less memory bandwidth than N sequential GEMVs.
-/// Uses the same factored scale/bias as mlxGemvQ4Rows.
+/// Uses the same factored scale/bias as `mlxGemvPackedRows`.
 pub fn mlxGemmQ4(
     x: [*]const f32,
     pw: [*]const u32,
@@ -824,6 +671,45 @@ test "mlxGemvRaw 4-bit with bias" {
 
     // Each element: x[j] * (scale*0 + bias) = 1.0 * 1.0 = 1.0, sum = 8.0
     try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[0], 1e-3);
+}
+
+test "mlxGemvRaw 4-bit two rows" {
+    // 2 output rows through the 2-row batching path. gs=64 => 8 words per row
+    // (only the first carries the k=8 weights; the rest stay zero).
+    // Row 0: nibbles 0xF (all 15), Row 1: nibbles 0x1. scale=1.0, bias=0.0, x all ones, k=8.
+    // Row 0: 8*15 = 120.0, Row 1: 8*1 = 8.0
+    var pw = [_]u32{0} ** 16;
+    pw[0] = 0xFFFFFFFF;
+    pw[8] = 0x11111111;
+    const sc = [_]u16{ 0x3F80, 0x3F80 }; // bf16(1.0)
+    const bi = [_]u16{ 0x0000, 0x0000 }; // bf16(0.0)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{ 0, 0 };
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 2, 8, 4, mlx_group_size);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 120.0), y[0], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 8.0), y[1], 1e-3);
+}
+
+test "mlxGemvRaw 8-bit two rows" {
+    // 8-bit packs 4 values per u32 word; gs=64 => 16 words per row.
+    // Row 0: all bytes 0xFF (255), Row 1: all bytes 0x01. scale=0.5, bias=0.25, x all ones.
+    // Row 0: 8 * (0.5*255 + 0.25) = 1022.0, Row 1: 8 * (0.5*1 + 0.25) = 6.0
+    var pw = [_]u32{0} ** 32;
+    pw[0] = 0xFFFFFFFF;
+    pw[1] = 0xFFFFFFFF;
+    pw[16] = 0x01010101;
+    pw[17] = 0x01010101;
+    const sc = [_]u16{ 0x3F00, 0x3F00 }; // bf16(0.5)
+    const bi = [_]u16{ 0x3E80, 0x3E80 }; // bf16(0.25)
+    const x = [_]f32{ 1, 1, 1, 1, 1, 1, 1, 1 };
+    var y = [_]f32{ 0, 0 };
+
+    mlxGemvRaw(&x, &pw, &sc, &bi, &y, 2, 8, 8, mlx_group_size);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 1022.0), y[0], 1e-2);
+    try std.testing.expectApproxEqAbs(@as(f32, 6.0), y[1], 1e-3);
 }
 
 test "mlxEmbLookup 2-bit basic" {
