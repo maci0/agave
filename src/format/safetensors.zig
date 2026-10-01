@@ -91,6 +91,10 @@ fn metaFloatAsU32(f: f64) ?u32 {
 pub const SafeTensorsDir = struct {
     allocator: Allocator,
 
+    /// Lazily-built per-layer weight prefetch ranges, owned by this loader and
+    /// freed in deinit(). Built on the first Format.prefetchLayer call.
+    prefetch_plan: ?*Format.PrefetchPlan = null,
+
     /// All tensors across all shards, keyed by their original HuggingFace name.
     tensors: std.StringHashMap(TensorEntry),
 
@@ -369,6 +373,10 @@ pub const SafeTensorsDir = struct {
 
     /// Release all resources: unmap shards, free owned strings, deinit maps.
     pub fn deinit(self: *SafeTensorsDir) void {
+        if (self.prefetch_plan) |p| {
+            p.deinit(self.allocator);
+            self.prefetch_plan = null;
+        }
         for (self.shard_data) |s| if (s.data.len > 0) std.posix.munmap(s.data);
         self.allocator.free(self.shard_data);
 
@@ -394,6 +402,29 @@ pub const SafeTensorsDir = struct {
     }
 
     // ── VTable implementations ────────────────────────────────────────────────
+
+    /// Build the per-layer prefetch plan on first use. The layer count comes
+    /// from config.json (`num_hidden_layers`, or the arch-prefixed alias a
+    /// converted GGUF header carries); without one there is nothing to walk.
+    fn getPrefetchPlanImpl(ptr: *anyopaque) *Format.PrefetchPlan {
+        const self: *SafeTensorsDir = @ptrCast(@alignCast(ptr));
+        if (self.prefetch_plan) |p| return p;
+        var n_layers: u32 = 0;
+        for (layer_count_keys) |key| {
+            if (getMetaU32Impl(ptr, key)) |v| {
+                n_layers = v;
+                break;
+            }
+        }
+        if (n_layers == 0) return &emptyPrefetchPlan;
+        const plan = format_mod.buildPrefetchPlan(self.allocator, getTensorImpl, self, n_layers) catch {
+            return &emptyPrefetchPlan;
+        };
+        self.prefetch_plan = plan;
+        return plan;
+    }
+
+    var emptyPrefetchPlan: Format.PrefetchPlan = .{ .ranges = &.{} };
 
     /// Look up a tensor by name. Tries exact GGUF-style name first, then
     /// translates to HuggingFace-style using known prefixes ("language_model.model.", "model.").
@@ -636,6 +667,7 @@ pub const SafeTensorsDir = struct {
             }
         }.f,
         .get_tensor = getTensorImpl,
+        .get_prefetch_plan = getPrefetchPlanImpl,
         .get_meta_str = getMetaStrImpl,
         .get_meta_u32 = getMetaU32Impl,
         .get_meta_f32 = getMetaF32Impl,
@@ -1084,6 +1116,10 @@ const gguf_hf_meta_map = [_]struct { []const u8, []const u8 }{
     .{ "hash_layer_count", "num_hash_layers" },
     .{ "attention.layernorm_rms_epsilon", "rms_norm_eps" },
 };
+
+/// Metadata keys that can carry the transformer layer count, most direct
+/// first. A converted GGUF header stores the arch-prefixed alias.
+const layer_count_keys = [_][]const u8{ "num_hidden_layers", "block_count" };
 
 /// Translate a GGUF-style metadata key to HuggingFace config.json key.
 /// Handles both arch-prefixed keys ("gemma3.block_count") and bare keys

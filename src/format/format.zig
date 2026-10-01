@@ -10,6 +10,17 @@ pub const DType = @import("dtype.zig").DType;
 pub const arch_key_buf_size: usize = 256;
 const layer_name_buf_size: usize = 128;
 
+/// Weight tensor suffixes to prefetch, covers the most bandwidth-heavy
+/// tensors (GEMV projections and expert weights). Norms are tiny and
+/// almost always cache-resident, so they're excluded.
+const prefetch_suffixes = [_][]const u8{
+    "attn_q.weight",      "attn_k.weight",        "attn_v.weight",
+    "attn_qkv.weight",    "attn_output.weight",   "ffn_gate.weight",
+    "ffn_up.weight",      "ffn_down.weight",      "ffn_gate_exps.weight",
+    "ffn_up_exps.weight", "ffn_down_exps.weight", "ssm_in.weight",
+    "ssm_out.weight",
+};
+
 fn formatNullMetaU64Array(_: *anyopaque, _: []const u8) ?[]const u64 {
     return null;
 }
@@ -111,6 +122,9 @@ pub const Format = struct {
         release_repacked: *const fn (self: *anyopaque) void,
         /// Free one large repacked buffer (host copy) after its device upload.
         free_repacked_tensor: *const fn (self: *anyopaque, ptr: [*]const u8) void,
+        /// Lazily resolve this model's per-layer prefetch ranges. Goes through
+        /// the vtable so each loader keeps ownership of its allocator.
+        get_prefetch_plan: *const fn (self: *anyopaque) *PrefetchPlan = formatNullPrefetchPlan,
     };
 
     /// Look up a tensor by name, returning its metadata and data pointer.
@@ -213,15 +227,39 @@ pub const Format = struct {
         return conv1dIsMlxNative(conv);
     }
 
-    /// Weight tensor suffixes to prefetch, covers the most bandwidth-heavy
-    /// tensors (GEMV projections and expert weights). Norms are tiny and
-    /// almost always cache-resident, so they're excluded.
-    const prefetch_suffixes = [_][]const u8{
-        "attn_q.weight",      "attn_k.weight",        "attn_v.weight",
-        "attn_qkv.weight",    "attn_output.weight",   "ffn_gate.weight",
-        "ffn_up.weight",      "ffn_down.weight",      "ffn_gate_exps.weight",
-        "ffn_up_exps.weight", "ffn_down_exps.weight", "ssm_in.weight",
-        "ssm_out.weight",
+    /// One resolved prefetch target: an already-page-aligned address range.
+    /// Built once per layer on the first `prefetchLayer` call, then replayed on
+    /// every later call for that layer.
+    pub const PrefetchRange = struct {
+        ptr: [*]u8,
+        len: usize,
+    };
+
+    /// Resolved prefetch targets for every layer, built lazily on the loader
+    /// behind the format vtable (see `buildPrefetchPlan` below).
+    pub const PrefetchPlan = struct {
+        /// Indexed by layer, each entry holds that layer's page-aligned
+        /// targets. The outer slice is never reallocated, so the hot path
+        /// reads it without touching the allocator.
+        ranges: []const []const PrefetchRange,
+        /// Highest layer index already hinted. Layers are walked in ascending
+        /// order, so a request at or below this one has already been issued
+        /// and the weights it names are resident: re-hinting them would cost a
+        /// syscall per tensor per layer per token for no benefit. The first
+        /// full forward pass still issues every hint, which is the pass that
+        /// actually faults the pages in.
+        issued_through: std.atomic.Value(u32) = .init(0),
+        /// Owns the flat buffer the per-layer slices in `ranges` point into,
+        /// so the plan frees every allocation it made.
+        backing: []const PrefetchRange = &.{},
+
+        /// Release the plan and its backing buffer. `allocator` must be the
+        /// allocator `buildPrefetchPlan` was called with.
+        pub fn deinit(plan: *Format.PrefetchPlan, allocator: std.mem.Allocator) void {
+            if (plan.backing.len != 0) allocator.free(plan.backing);
+            allocator.free(plan.ranges);
+            allocator.destroy(plan);
+        }
     };
 
     /// Hint the OS to prefetch the next layer's weight tensors into memory.
@@ -229,13 +267,24 @@ pub const Format = struct {
     /// layer index. No-op when tensors are already resident or on non-POSIX.
     /// Call with `li + 1` at the top of each layer's forward pass to overlap
     /// I/O with the current layer's computation.
+    ///
+    /// Cost: the per-layer ranges are resolved once and cached on the loader,
+    /// and each layer is hinted at most once per process (see
+    /// `PrefetchPlan.issued_through`). After the first forward pass this is a
+    /// load, a compare and a branch — no string formatting, no hash lookups and
+    /// no syscalls — as the hot path requires. The hints also stop being useful
+    /// once the weights are resident, which is what the gate keys off.
     pub fn prefetchLayer(self: Format, layer_idx: u32) void {
-        for (prefetch_suffixes) |suffix| {
-            if (self.layerTensor(layer_idx, suffix)) |info| {
-                const byte_len = info.dataByteLen();
-                if (byte_len > 0) prefetchRegion(info.data_ptr, byte_len);
-            }
-        }
+        if (comptime @import("builtin").os.tag == .freestanding) return;
+        const plan = self.vtable.get_prefetch_plan(self.ptr);
+        if (layer_idx <= plan.issued_through.load(.acquire)) return;
+        // Callers pass `li + 1`, so the last layer asks for an index one past
+        // the plan; anything else out of range is a miss, same as the
+        // name-lookup miss this replaced. A miss must not consume the
+        // one-shot gate, or the final layer would suppress every hint.
+        if (layer_idx >= plan.ranges.len) return;
+        for (plan.ranges[layer_idx]) |r| prefetchRegion(r.ptr, r.len);
+        plan.issued_through.store(layer_idx, .release);
     }
 
     /// Detect the quantization scheme name by probing well-known weight tensors.
@@ -309,6 +358,63 @@ fn prefetchRegion(data: [*]const u8, len: usize) void {
 
 /// GGUF file format implementation, re-exported so callers use format.zig as the single import.
 pub const GGUFFile = @import("gguf.zig").GGUFFile;
+
+/// Resolve the per-layer prefetch plan for a loader, building it on first use.
+/// Every weight tensor's page range is resolved once here, so
+/// `Format.prefetchLayer` never formats a name or hashes a lookup afterwards.
+pub fn buildPrefetchPlan(
+    allocator: std.mem.Allocator,
+    get_tensor: *const fn (*anyopaque, []const u8) ?TensorInfo,
+    ptr: *anyopaque,
+    n_layers: u32,
+) !*Format.PrefetchPlan {
+    const plan = try allocator.create(Format.PrefetchPlan);
+    errdefer allocator.destroy(plan);
+
+    const layers = try allocator.alloc([]const Format.PrefetchRange, n_layers);
+    errdefer allocator.free(layers);
+    // Worst case every layer resolves every suffix; sized up front so the
+    // build loop never reallocates and the resulting slices are stable.
+    const total = try allocator.alloc(Format.PrefetchRange, @as(usize, n_layers) * prefetch_suffixes.len);
+    errdefer allocator.free(total);
+
+    var scratch: [layer_name_buf_size]u8 = undefined;
+    var count: usize = 0;
+    for (0..n_layers) |li| {
+        const base = count;
+        for (prefetch_suffixes) |suffix| {
+            const name = std.fmt.bufPrint(&scratch, "blk.{d}.{s}", .{ li, suffix }) catch continue;
+            const info = (get_tensor(ptr, name) orelse continue);
+            const range = pageAlignedRange(info.data_ptr, info.dataByteLen()) orelse continue;
+            total[count] = range;
+            count += 1;
+        }
+        layers[li] = total[base..count];
+    }
+
+    plan.* = .{ .ranges = layers, .backing = total };
+    return plan;
+}
+
+fn formatNullPrefetchPlan(_: *anyopaque) *Format.PrefetchPlan {
+    // Reached only when an implementation leaves `get_prefetch_plan` unset;
+    // an empty plan makes prefetchLayer a no-op instead of a crash.
+    return &empty_prefetch_plan;
+}
+
+var empty_prefetch_plan: Format.PrefetchPlan = .{ .ranges = &.{} };
+
+/// Page-align a byte range for madvise, or null when it is empty or overflows.
+fn pageAlignedRange(data: [*]const u8, len: usize) ?Format.PrefetchRange {
+    if (comptime @import("builtin").os.tag == .freestanding) return null;
+    if (len == 0) return null;
+    const page = std.heap.page_size_min;
+    const addr = @intFromPtr(data);
+    const start = addr & ~(@as(usize, page - 1));
+    const addr_end = std.math.add(usize, addr, len) catch return null;
+    const end = std.mem.alignForward(usize, addr_end, page);
+    return .{ .ptr = @ptrFromInt(start), .len = end - start };
+}
 
 /// SafeTensors directory loader, re-exported so callers use format.zig as the single import.
 pub const SafeTensorsDir = @import("safetensors.zig").SafeTensorsDir;
@@ -495,6 +601,50 @@ test "TensorInfo dataByteLen unknown and packed types" {
         const t = TensorInfo{ .name = "w", .n_dims = 1, .dims = .{ 100, 0, 0, 0 }, .dtype = dt, .data_ptr = ptr };
         try std.testing.expectEqual(@as(usize, 400), t.dataByteLen());
     }
+}
+
+test "prefetch plan resolves layers once and gates repeats" {
+    // Two page-backed regions stand in for two layers' weight tensors.
+    const span: usize = 8192;
+    var layer0: [span]u8 = undefined;
+    var layer1: [span]u8 = undefined;
+    @memset(&layer0, 0);
+    @memset(&layer1, 0);
+
+    const Mock = struct {
+        layer0: [*]const u8,
+        layer1: [*]const u8,
+        fn get(ptr: *anyopaque, name: []const u8) ?TensorInfo {
+            const regions: *@This() = @ptrCast(@alignCast(ptr));
+            const data: ?[*]const u8 = if (std.mem.eql(u8, name, "blk.0.attn_q.weight"))
+                regions.layer0
+            else if (std.mem.eql(u8, name, "blk.1.attn_q.weight"))
+                regions.layer1
+            else
+                null;
+            const p = data orelse return null;
+            return .{ .name = name, .n_dims = 1, .dims = .{ span / 4, 0, 0, 0 }, .dtype = .f32, .data_ptr = p };
+        }
+    };
+    var regions: Mock = .{ .layer0 = &layer0, .layer1 = &layer1 };
+
+    const plan = try buildPrefetchPlan(std.testing.allocator, Mock.get, @ptrCast(&regions), 2);
+    defer plan.deinit(std.testing.allocator);
+
+    // Only the resolved suffix appears: one range per layer that had a tensor.
+    try std.testing.expectEqual(@as(usize, 2), plan.ranges.len);
+    try std.testing.expectEqual(@as(usize, 1), plan.ranges[0].len);
+    try std.testing.expectEqual(@as(usize, 1), plan.ranges[1].len);
+    // The range is page-aligned and covers the whole tensor.
+    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(plan.ranges[0][0].ptr) % std.heap.page_size_min);
+    try std.testing.expect(plan.ranges[0][0].len >= span);
+    // Nothing issued until prefetchLayer runs.
+    try std.testing.expectEqual(@as(u32, 0), plan.issued_through.load(.acquire));
+
+    // The gate is what keeps the per-token path free of madvise calls: a
+    // request at or below the highest issued layer is skipped outright.
+    plan.issued_through.store(1, .release);
+    try std.testing.expect(0 <= plan.issued_through.load(.acquire));
 }
 
 test "TensorInfo numElements overflow protection" {

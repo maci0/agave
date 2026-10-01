@@ -293,6 +293,9 @@ pub const GGUFFile = struct {
     /// Tensor overrides: merged LoRA weights that replace mmap'd tensors.
     /// Keyed by GGUF tensor name. Values are allocator-owned F32 slices.
     lora_overrides: std.StringHashMapUnmanaged(LoraOverride) = .empty,
+    /// Lazily-built per-layer weight prefetch ranges, owned by this file and
+    /// freed in deinit(). Built from `block_count` on the first prefetchLayer.
+    prefetch_plan: ?*Format.PrefetchPlan = null,
 
     pub const LoraOverride = struct {
         data: []f32,
@@ -541,6 +544,7 @@ pub const GGUFFile = struct {
             fn f(_: *anyopaque, _: [*]const u8) void {}
         }.f,
         .get_tensor = @ptrCast(&fmtGetTensor),
+        .get_prefetch_plan = @ptrCast(&fmtGetPrefetchPlan),
         .get_meta_str = @ptrCast(&fmtGetMetaStr),
         .get_meta_u32 = @ptrCast(&fmtGetMetaU32),
         .get_meta_f32 = @ptrCast(&fmtGetMetaF32),
@@ -655,8 +659,32 @@ pub const GGUFFile = struct {
         return total;
     }
 
+    /// Build the per-layer prefetch plan on first use. `block_count` gives the
+    /// layer count; a model without it has no per-layer weight layout to walk.
+    fn fmtGetPrefetchPlan(self: *GGUFFile) *Format.PrefetchPlan {
+        if (self.prefetch_plan) |p| return p;
+        const n_layers = fmtGetMetaU32(self, "block_count") orelse return &emptyPrefetchPlan;
+        const plan = fmt.buildPrefetchPlan(self.allocator, getTensorByPtr, self, n_layers) catch {
+            return &emptyPrefetchPlan;
+        };
+        self.prefetch_plan = plan;
+        return plan;
+    }
+
+    /// `fmtGetTensor` takes `*GGUFFile`; the plan builder works through the
+    /// vtable's `*anyopaque` shape.
+    fn getTensorByPtr(ptr: *anyopaque, name: []const u8) ?FormatTensorInfo {
+        return fmtGetTensor(@ptrCast(@alignCast(ptr)), name);
+    }
+
+    var emptyPrefetchPlan: Format.PrefetchPlan = .{ .ranges = &.{} };
+
     /// Release all resources: metadata, tensors, owned strings, and the mmap.
     pub fn deinit(self: *GGUFFile) void {
+        if (self.prefetch_plan) |p| {
+            p.deinit(self.allocator);
+            self.prefetch_plan = null;
+        }
         var ov_iter = self.lora_overrides.valueIterator();
         while (ov_iter.next()) |ov| self.allocator.free(ov.data);
         var ov_key_iter = self.lora_overrides.keyIterator();
