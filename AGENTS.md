@@ -39,8 +39,8 @@ zig build -Denable-bench=false     # skip installing agave-bench
 zig build test -Dtest-filter=<str> # only tests whose name contains <str>. Repeat to AND filters. A filter matching no `test "..."` name aborts the build (an empty match would otherwise exit 0).
 zig build wasm                     # browser WASM module into zig-out/web/ (agave.wasm + the index.html, style.css, agave.js, shell.js the page loads), not src/web/. Compile only, see Gotchas.
 zig build validate                 # every GPU kernel against the CPU backend. Needs the GPU; -Dvalidate-backend= picks it (default rocm).
-zig build ptx                      # CUDA kernels to zig-out/ptx/*.ptx (see Build: commit them)
-zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.hsaco (see Build)
+zig build ptx [-Dcuda-sm=sm_120] # CUDA kernels to zig-out/ptx/*.ptx (see Build: commit them)
+zig build amdgcn -Drocm-arch=gfx1100  # ROCm kernels to zig-out/rocm/kernels.hsaco (see Build). Both sm/arch defaults must match the committed artifacts or CI's PTX freshness job fails.
 ```
 
 Every flag, including `--spec-mode`: `agave --help`, or the `cli_specs` table in `src/main.zig`.
@@ -74,12 +74,13 @@ Non-negotiable. Every change must respect all of them.
 
 ### Dispatcher
 - High-level code and models import `backend/backend.zig`, never `cuda.zig` / `metal.zig` / other implementations. Test-only `_ = @import` in `main.zig` is the exception.
-- Backend-specific types (`CUcontext`, `hsa_queue_t`) stay private to their backend file.
+- Backend-specific types (`CUcontext` in `cuda.zig`, the `hip*` function-pointer typedefs in `rocm.zig`, the `objc` message-send types in `metal.zig`) stay private to their backend file.
 - Same pattern: `models/model.zig`, `tokenizer/tokenizer.zig`, `format/format.zig`.
 
 ### GPU backends
-- Missing kernels `@panic`. Never silently fall through to CPU.
-- Exceptions: `embLookup` (single-row CPU read is faster) and Metal `softmax` when `n < softmax_cpu_threshold` (128). Must have a performance-justification comment.
+- A kernel that exists for that backend but is missing at load `@panic`s. Fail closed; never `@panic` into a CPU path on load failure.
+- Per op, a backend either implements the kernel or deliberately routes to CPU, and that choice is commented. Both are fine; a silent, unjustified third option is the defect. CPU-routed today: `embLookup` on Metal (single-row CPU read beats dispatch overhead), Metal `softmax` under `softmax_cpu_threshold` (128), `clampedSiluMul` on CUDA/ROCm/WebGPU, CPU SDPA for KV layouts with no GPU kernel (`KvQuantType.cpuSdpaOnly` / `discreteGpuUsesCpuSdpa` in `src/ops/kv_quant.zig` — `nvfp4_ds_mla` everywhere, plus `q8_0` on the discrete backends), `gemm` as a sequential loop-of-GEMV on ROCm/Vulkan and for non-Q8_0 dtypes on CUDA (no native batched GEMM kernel), and CUDA `deltaNet` when the PTX has no `deltanet_recurrence_kernel`. Fail-closed instead: WebGPU IQ2/IQ3/IQ1 GEMV, Vulkan IQ2/IQ3/IQ1. Match the neighbours, not this list — it is not exhaustive.
+- Keep the decision in one place per op: gate on a `KvQuantType` predicate or a function-pointer null check, not on backend name.
 - `--allow-cpu-fallback` is a stub (warns, does nothing). Do not add CPU fallbacks behind it.
 
 ### Quantization
@@ -97,10 +98,11 @@ Non-negotiable. Every change must respect all of them.
 - Production is ReleaseFast and stripped (unstripped binaries embed host paths). `agave-debug` and tests are ReleaseSafe: Debug optimize mode breaks linking with GCC 16 `.sframe`. Do not switch tests to ReleaseFast: that no-ops `std.debug.assert`.
 - One `-Denable-*` model flag per architecture: 12 architectures, plus the DFlash2 block-diffusion drafter. The slug is not the display name: `gemma3` (Gemma3), `gemma4` (Gemma4), `diffusion-gemma` (DiffusionGemma), `qwen35` (Qwen3.5), `qwen4exp` (Qwen 3.8 Flash-Next GGUF), `qwen4-exp` (Qwen4-Exp SafeTensors), `gpt-oss` (GPT-OSS), `nemotron-h` (Nemotron-H), `nemotron-nano` (Nemotron-Nano), `glm4` (GLM-4), `deepseek4` (DeepSeek V4), `llama4` (Llama 4), `dflash2` (DFlash2 drafter).
 - Committed GPU kernel artifacts (`src/backend/kernels/**/*.ptx`, `.spv`, `.hsaco`, `.metal`, `.wgsl`) are `@embedFile`d and are *not* rebuilt by `zig build`. Editing a kernel source without regenerating its artifact ships stale GPU code, and CI's kernel-freshness job (`scripts/check-shader-artifacts.sh --ptx-only`) fails on PTX drift. Regenerate and commit:
-  - PTX: `zig build ptx`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`.
+  - PTX: `zig build ptx -Dcuda-sm=<sm>`, copy `zig-out/ptx/*.ptx` into `src/backend/kernels/cuda/`. `cuda.zig` embeds `all.ptx` only, but every committed `.ptx` must be regenerated together.
   - SPIR-V: `glslangValidator -V --target-env vulkan1.1` per `.comp` in `src/backend/kernels/vulkan/`.
   - ROCm: `zig build amdgcn`, copy `zig-out/rocm/kernels.hsaco` to `src/backend/kernels/rocm/kernels.hsaco`. The step also installs `zig-out/rocm/kernels.o` (relocatable ELF, for manual linking only); it is not the HSACO.
   - Metal and WGSL are hand-written; no compile step.
+- The committed web bundles are the same class of artifact: `src/web/app.js`, `src/web/style.css`, `web/shell.js`, and `web/style.css` are bun + Tailwind outputs, `@embedFile`d by `server.zig` or shipped as-is, and not rebuilt by `zig build`. Edit a `.tsx` or `.css` under `src/web/` or `web/` without `bash scripts/build-web.sh` and you ship the old bundle; `zig build check-web` (via `lint-web`) byte-compares and fails.
 
 ### Errors, docs, tests
 - Explicit error sets and `try`/`catch`. Never `catch undefined`. `catch {}` only where the failure provably cannot affect state (advisory syscalls like `madvise`, thread affinity, best-effort cleanup) or in test cleanup; never to swallow an error that loses data or hides a failed operation.
@@ -121,7 +123,7 @@ Non-negotiable. Every change must respect all of them.
 
 **Metal threadgroup memory ≤ 32KB.** Sum `q_local + kv_block + out_acc + scores + shared`. `makePipeline` fails silently without its error logging.
 
-**WASM runs init, parse, and tokenize only.** A Zig 0.16 + LLVM 21 wasm32 codegen bug (invalid cast in SIMD vector lowering) blocks the full forward pass, so `agave_generate` does not run. `zig build wasm` compiles the module with Gemma3 only; every other arch is off there.
+**WASM runs init, parse, and tokenize only.** A Zig 0.16 + LLVM 21 wasm32 codegen bug (invalid cast in SIMD vector lowering) blocks the forward pass: `agave_generate` is exported and tokenizes, then reports the token count instead of generating text. `zig build wasm` compiles the module with Gemma3 only; every other arch is off there.
 
 **Kernel targets.** NVIDIA `nvptx64-cuda`, AMD `amdgcn-amdhsa`. Vulkan = GLSL compute → embedded SPIR-V. WebGPU = WGSL. No OpenCL or PAL.
 
