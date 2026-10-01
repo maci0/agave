@@ -1113,11 +1113,17 @@ fn isRebindHostUnauthenticated(headers: []const u8) bool {
     return !http.isLoopbackHttpHost(host);
 }
 
-/// Browser cross-origin call with no API key (CSRF / data theft via localhost).
+/// Browser cross-site call with no API key (CSRF / data theft via localhost).
 /// Missing Origin (curl, probes) is allowed. Authenticated mode skips this
 /// check (clients already present a secret).
+///
+/// `Sec-Fetch-Site` is checked first because it covers the requests Origin
+/// cannot see: a cross-site form POST omits Origin in some browsers and a
+/// cross-site form GET never sends one, so Origin-only would let a hostile
+/// page drive the mutating routes with the victim's ambient access (CWE-352).
 fn isCrossOriginUnauthenticated(headers: []const u8) bool {
     if (g_server.api_key != null) return false;
+    if (http.isCrossSiteFetch(headers)) return true;
     const origin = http.getHeaderValue(headers, "origin") orelse return false;
     const host = http.getHeaderValue(headers, "host") orelse return true;
     return !http.originMatchesHost(origin, host);
@@ -2288,14 +2294,14 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
         return;
     }
 
-    // Block browser cross-origin calls when running without an API key so a
-    // malicious page cannot drive inference or read conversation state on a
-    // loopback --serve (CWE-352 / CWE-942).
+    // Block browser cross-origin and cross-site calls when running without an
+    // API key so a malicious page cannot drive inference or read conversation
+    // state on a loopback --serve (CWE-352 / CWE-942).
     if (isCrossOriginUnauthenticated(req.headers)) {
         logRequest(method, path);
         g_server.metrics.recordRequest();
         g_server.metrics.recordClientError();
-        std.log.warn("req={d} cross-origin request rejected (no API key)", .{log_request_id});
+        std.log.warn("req={d} cross-origin/cross-site request rejected (no API key)", .{log_request_id});
         sendPreflightErrorEx(stream, path, "403 Forbidden", "cross_origin_forbidden", "Cross-origin request rejected");
         logRequestDone(method, path, 403, elapsedMs(request_start));
         return;
@@ -8208,6 +8214,54 @@ test "originMatchesHost rejects path userinfo and cross-origin" {
     try std.testing.expect(!http.originMatchesHost("http://evil.com", "127.0.0.1:49453"));
     try std.testing.expect(!http.originMatchesHost("null", "127.0.0.1:49453"));
     try std.testing.expect(!http.originMatchesHost("http://user@127.0.0.1:49453", "127.0.0.1:49453"));
+}
+
+test "isCrossSiteFetch rejects a cross-site browser request with no Origin" {
+    // The form-POST / form-GET CSRF case: no Origin header at all, so an
+    // Origin-only check would let the request through.
+    const hdrs = "Host: 127.0.0.1:49453\r\nSec-Fetch-Site: cross-site\r\nContent-Type: text/plain\r\n\r\n";
+    try std.testing.expect(http.isCrossSiteFetch(hdrs));
+    // Header name and value are case-insensitive on the wire.
+    try std.testing.expect(http.isCrossSiteFetch("host: 127.0.0.1\r\nSEC-FETCH-SITE: Cross-Site\r\n"));
+}
+
+test "isCrossSiteFetch allows same-origin, same-site, none, and non-browser clients" {
+    try std.testing.expect(!http.isCrossSiteFetch("Host: 127.0.0.1:49453\r\nSec-Fetch-Site: same-origin\r\n"));
+    try std.testing.expect(!http.isCrossSiteFetch("Host: 127.0.0.1:49453\r\nSec-Fetch-Site: same-site\r\n"));
+    try std.testing.expect(!http.isCrossSiteFetch("Host: 127.0.0.1:49453\r\nSec-Fetch-Site: none\r\n"));
+    // No Sec-Fetch-Site at all: curl, SDKs, and health probes.
+    try std.testing.expect(!http.isCrossSiteFetch("Host: 127.0.0.1:49453\r\nAuthorization: Bearer k\r\n"));
+}
+
+test "isCrossSiteFetch ignores a second Sec-Fetch-Site header" {
+    // getHeaderValue returns null on a duplicate, so the header reads as
+    // absent rather than as an attacker-chosen second value.
+    try std.testing.expect(!http.isCrossSiteFetch("Sec-Fetch-Site: cross-site\r\nSec-Fetch-Site: same-origin\r\n"));
+}
+
+test "unauthenticated gate rejects a cross-site form POST that carries no Origin" {
+    var srv: Server = undefined;
+    srv.api_key = null;
+    g_server = &srv;
+    defer g_server = undefined;
+
+    // A hostile page auto-submitting a cross-site form: no Origin header, so
+    // the Origin comparison alone passes it. This is the CWE-352 case.
+    const form_post = "Host: 127.0.0.1:49453\r\nSec-Fetch-Site: cross-site\r\n" ++
+        "Content-Type: text/plain\r\nContent-Length: 2\r\n\r\n{}";
+    try std.testing.expect(isCrossOriginUnauthenticated(form_post));
+
+    // The embedded UI and non-browser clients are unaffected.
+    try std.testing.expect(!isCrossOriginUnauthenticated("Host: 127.0.0.1:49453\r\nSec-Fetch-Site: same-origin\r\n"));
+    try std.testing.expect(!isCrossOriginUnauthenticated("Host: 127.0.0.1:49453\r\n"));
+    try std.testing.expect(!isCrossOriginUnauthenticated(
+        "Host: 127.0.0.1:49453\r\nOrigin: http://127.0.0.1:49453\r\n",
+    ));
+
+    // With an API key configured the key is the control, so neither header
+    // check applies.
+    srv.api_key = "matrix-secret";
+    try std.testing.expect(!isCrossOriginUnauthenticated(form_post));
 }
 
 test "isLoopbackHttpHost accepts loopback Host values" {

@@ -137,6 +137,20 @@ pub fn originMatchesHost(origin: []const u8, host: []const u8) bool {
     return std.ascii.eqlIgnoreCase(rest, host);
 }
 
+/// True when the `Sec-Fetch-Site` header marks a browser cross-site request.
+/// Every current browser attaches it to every request, including ones that
+/// carry no `Origin` (a cross-site HTML form POST with `enctype=text/plain`
+/// sends `Origin` in some browsers and omits it in others, and a cross-site
+/// form GET never carries one), so `cross-site` is a cross-site drive-by even
+/// when `Origin` is absent (CWE-352). `same-site` is a different registrable
+/// domain, `none` is a user-typed navigation, and `same-origin` is the
+/// embedded UI. A missing header is a non-browser client (curl, SDKs, health
+/// probes) with no ambient credentials to abuse, so it stays allowed.
+pub fn isCrossSiteFetch(headers: []const u8) bool {
+    const site = getHeaderValue(headers, "sec-fetch-site") orelse return false;
+    return std.ascii.eqlIgnoreCase(site, "cross-site");
+}
+
 /// Hostname from a Host header: strip `:port` or `[ipv6]:port`.
 pub fn hostnameFromHost(host: []const u8) []const u8 {
     if (host.len == 0) return host;
