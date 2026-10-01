@@ -5704,7 +5704,16 @@ test {
     if (comptime build_options.enable_metal and @import("builtin").os.tag == .macos) {
         _ = @import("backend/metal.zig");
     }
-    _ = @import("backend/vulkan.zig");
+    // Vulkan dlopens its loader, so a build with the backend disabled has no
+    // Vulkan to test against. Importing it anyway ran VulkanBackend.init's
+    // inline tests in a build that deliberately disabled the backend: they
+    // segfaulted on a static musl test binary (where the dlopen path fails
+    // hard rather than reporting the loader as absent) and only passed on
+    // glibc hosts that happened to have libvulkan.so.1 installed. Same gate
+    // as the dispatcher (see backend.zig VulkanBackend).
+    if (comptime build_options.enable_vulkan) {
+        _ = @import("backend/vulkan.zig");
+    }
     _ = @import("backend/kernels/cpu/activation.zig");
     _ = @import("backend/kernels/cpu/elementwise.zig");
     _ = @import("backend/kernels/cpu/embedding.zig");

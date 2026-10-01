@@ -240,6 +240,18 @@ jobs:
       - name: Build for target
         run: bash scripts/build-cross-target.sh "${{ matrix.target }}"
 
+      # Building the musl targets only proved they compile. The CPU-only musl
+      # configuration is a documented claim (README "Static musl builds": Alpine,
+      # embedded systems, minimal distros), and a static binary needs no musl
+      # loader, so the x86_64 one runs unchanged on this glibc runner. Unit
+      # tests too: with every dlopen backend off, that is the configuration
+      # where a backend's inline tests could be compiled into the suite without
+      # the backend itself (the enable_vulkan gate in src/main.zig), and they
+      # segfaulted there instead of skipping.
+      - name: Test on static musl target
+        if: matrix.target == 'x86_64-linux-musl'
+        run: bash scripts/build-cross-target.sh --test "${{ matrix.target }}"
+
   # wasm32-freestanding is a separate build step, so the cross-compile matrix
   # (which only varies -Dtarget) never touches it. Untested it rots: the
   # baseline wasm32 CPU has no 64-bit atomics, and a plain

@@ -79,6 +79,14 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
       - /home/agave:size=64m,uid=10001,gid=10001,mode=0755
+      # POSIX shm transport (--transport auto on localhost peers, the
+      # zero-copy same-node IPC the README advertises) allocates one 16 MiB
+      # region per direction per rank pair: 32 MiB for TP=2, 64 MiB for TP=4.
+      # Docker's default /dev/shm is 64 MiB and is not sized by this file's
+      # read_only/tmpfs list, so a TP=4 run fills it and shm_open fails with
+      # ENOSPC. Size it above the world_size you intend to run; 512m covers
+      # TP=8 plus headroom for anything else in the container's /dev/shm.
+      - /dev/shm:size=512m
     mem_limit: 8g
     cpus: "4.0"
     pids_limit: 256

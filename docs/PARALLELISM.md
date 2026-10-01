@@ -97,6 +97,22 @@ Two shared memory regions per rank pair:
 
 Each region: 16 MB data + 64-byte header (`ShmHeader` with atomic `ready` flag + `size`). Spin-wait with `std.atomic.spinLoopHint()` for synchronization. Zero-copy: data written directly to shared mapping, read directly from peer's mapping.
 
+`shm_open` allocates out of the platform's POSIX shared-memory filesystem,
+`/dev/shm`, so that filesystem must hold `16 MiB x 2 x (world_size - 1)`: 32 MB
+for TP=2, 64 MB for TP=4. Docker mounts `/dev/shm` at 64 MB by default and
+`--read-only` does not raise it, so a containerized TP=4 run runs that
+filesystem out and `shm_open` returns `ENOSPC`. Size it explicitly:
+
+```yaml
+services:
+  agave:
+    tmpfs:
+      - /dev/shm:size=512m   # docker-compose.yml ships this
+```
+
+Outside a container, `/dev/shm` is sized by the initramfs (`--shm-size=` on
+systemd's `tmpfs.mount`) and defaults to half of RAM, which is ample.
+
 ---
 
 ## Tensor Parallelism (TP)

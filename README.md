@@ -73,7 +73,7 @@ A KV cache is a type of data storage system that stores key-value pairs, allowin
 - **Structured Output**: GBNF grammar (`--grammar-string`, `--grammar`), JSON schema (`--json-schema`), JSON mode (`--json-output`), server `response_format: json_object/json_schema`
 - **Full Sampling**: CLI: temperature, top-k, top-p, min-p, repeat penalty, DRY, XTC, Mirostat, seed. HTTP API also: frequency/presence penalties, stop sequences
 - **Batched Prefill**: Chunked GEMM + fused FlashAttention-2 for fast prompt processing
-- **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
+- **Distributed Inference**: Tensor parallelism (TP), pipeline parallelism (PP), disaggregated prefill/decode. Same-node multi-GPU via POSIX shm (zero-copy IPC, needs 32 MB of `/dev/shm` per rank pair — see [Parallelism](docs/PARALLELISM.md#posix-shared-memory)), cross-node via TCP. Heterogeneous: mix CUDA + Vulkan + CPU across x86_64 + aarch64
 - **Speculative Decoding**: Modes: auto, standard, ddtree, self, ngram, suffix, lookahead, mtp/medusa, eagle, eagle3, mlp, pflash, dspark, dflash2; plus FR-Spec vocab map and LoRA (`--lora`)
 - **Fused Megakernels**: Composable GPU megakernels, gate+up+SiLU fused into single dispatch (3→1)
 - **Sparse GEMV**: Skip near-zero FFN activation blocks (~40% sparsity from SiLU). CPU +21%, Metal +12%, all GPU backends. Inspired by PowerInfer/TurboSparse
