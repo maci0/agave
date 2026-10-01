@@ -50,7 +50,8 @@ pub const DirectionalSteering = struct {
         attn_scale: f32,
     ) !DirectionalSteering {
         if (n_embd > max_embd_dim) return error.EmbeddingTooLarge;
-        const expected_floats: usize = @as(usize, n_layers) * @as(usize, n_embd);
+        // n_layers comes from model metadata, so the product can wrap a usize.
+        const expected_floats = std.math.mul(usize, @as(usize, n_layers), @as(usize, n_embd)) catch return error.SteeringFileSizeMismatch;
         if (data.len != expected_floats) {
             std.log.err("steering: data size {d} floats != expected {d} ({d} layers × {d} embd)", .{
                 data.len, expected_floats, n_layers, n_embd,
@@ -79,8 +80,11 @@ pub const DirectionalSteering = struct {
         attn_scale: f32,
     ) !DirectionalSteering {
         if (n_embd > max_embd_dim) return error.EmbeddingTooLarge;
-        const expected_floats: usize = @as(usize, n_layers) * @as(usize, n_embd);
-        const expected_bytes: usize = expected_floats * @sizeOf(f32);
+        // Both products come from model metadata (n_layers) and would wrap a
+        // usize, letting `bytes` extend past the allocation and letting apply()
+        // index with the true layer count. Fail closed instead.
+        const expected_floats = std.math.mul(usize, @as(usize, n_layers), @as(usize, n_embd)) catch return error.SteeringFileSizeMismatch;
+        const expected_bytes = std.math.mul(usize, expected_floats, @sizeOf(f32)) catch return error.SteeringFileSizeMismatch;
         const Io = @TypeOf(io);
         const Dir = if (@hasDecl(Io, "Dir")) Io.Dir else std.fs.Dir;
 
