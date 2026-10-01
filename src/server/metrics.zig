@@ -721,7 +721,7 @@ pub const Metrics = struct {
         try writer.print("agave_gpu_cache_usage_perc {d:.4}\n", .{vram_perc});
 
         // Inter-token latency histogram
-        try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency: wall-clock time between consecutive tokens", .{
+        try self.renderHistogram(writer, "agave_inter_token_latency_seconds", "Inter-token latency: elapsed monotonic time between consecutive tokens", .{
             "itl_5ms",   "itl_10ms",  "itl_20ms",  "itl_50ms",
             "itl_100ms", "itl_200ms", "itl_500ms", "itl_1s",
             "itl_inf",

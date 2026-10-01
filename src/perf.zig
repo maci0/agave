@@ -53,7 +53,8 @@ const report_buf_size: usize = 4096;
 pub const PerfCounters = struct {
     /// Per-operation invocation counts, indexed by `@intFromEnum(Op)`.
     counts: [n_ops]u64 = [_]u64{0} ** n_ops,
-    /// Cumulative wall-clock microseconds per operation, indexed by `@intFromEnum(Op)`.
+    /// Cumulative elapsed monotonic microseconds per operation, indexed by
+    /// `@intFromEnum(Op)`.
     times_us: [n_ops]u64 = [_]u64{0} ** n_ops,
     /// Total tokens generated since last reset (used for per-token averaging).
     n_tokens: u64 = 0,

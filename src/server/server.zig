@@ -1067,10 +1067,12 @@ fn elapsedBetween(start: i64, end: i64) u64 {
     return @intCast(@max(end - start, 0));
 }
 
-/// Wall-clock gap sampler for a streaming decode loop. One instance per
-/// request: every emitted token records the gap since the previous one, so
-/// `agave_inter_token_latency_seconds` covers every streaming endpoint and not
-/// only the one whose loop samples it.
+/// Gap sampler for a streaming decode loop, on the monotonic clock. One
+/// instance per request: every emitted token records the gap since the
+/// previous one, so `agave_inter_token_latency_seconds` covers every streaming
+/// endpoint and not only the one whose loop samples it. Monotonic, not
+/// REALTIME: an NTP step between two tokens would otherwise report a gap of
+/// zero (step back) or one of millions of milliseconds (step forward).
 const ItlTracker = struct {
     last_ms: i64,
 
