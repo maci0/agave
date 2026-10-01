@@ -117,6 +117,32 @@ class VersionConsistencyTest(unittest.TestCase):
             errors = self._errors()
         self.assertEqual(errors, [])
 
+    def test_breaking_entry_in_a_patch_release_is_reported(self) -> None:
+        # The product version is the newest section, so the Breaking entry
+        # belongs there and the patch is the bump from [9.9.8].
+        errors = self._errors({"CHANGELOG.md": self._changelog("### Breaking\n- A flag was removed.\n", prev="9.9.8")})
+        self.assertTrue(any("[9.9.9]" in e and "Breaking entry" in e for e in errors), errors)
+
+    def test_breaking_entry_in_a_minor_release_is_accepted(self) -> None:
+        errors = self._errors({"CHANGELOG.md": self._changelog("### Breaking\n- A flag was removed.\n", prev="9.8.0")})
+        self.assertEqual(errors, [])
+
+    def test_patch_release_without_a_breaking_entry_is_accepted(self) -> None:
+        errors = self._errors({"CHANGELOG.md": self._changelog("### Fixed\n- A crash.\n", prev="9.9.8")})
+        self.assertEqual(errors, [])
+
+    @staticmethod
+    def _changelog(section: str, prev: str) -> str:
+        """A two-release changelog: `prev`, then PRODUCT carrying `section`."""
+        return (
+            f"Product version is **{PRODUCT}**\n\n## [Unreleased]\n\n"
+            f"## [{prev}] - 2026-01-01\n\n### Fixed\n- Something older.\n\n"
+            f"## [{PRODUCT}] - 2026-01-02\n\n{section}\n"
+            f"[unreleased]: https://example.invalid/compare/v{PRODUCT}...HEAD\n"
+            f"[{PRODUCT}]: https://example.invalid/compare/v{prev}...v{PRODUCT}\n"
+            f"[{prev}]: https://example.invalid/compare/v0.0.1...v{prev}\n"
+        )
+
 
 class DocsWorkflowPathsTest(unittest.TestCase):
     """The docs-check path filter must cover every file check-docs.py reads."""

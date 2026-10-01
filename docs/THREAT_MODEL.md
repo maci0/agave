@@ -2,7 +2,7 @@
 
 Living model of what this codebase exposes to attack, what it costs when attacked, and which controls stand in the way. Findings feed sec-review; this file does not prescribe code fixes.
 
-- **Last reviewed:** 2026-09-30 (every `path:line` below re-resolved against source in this pass)
+- **Last reviewed:** 2026-10-01 (every `path:line` below re-resolved against source in this pass)
 - **Owner / review cadence:** organizational fields, to be assigned; not defined in-repo
 - **Scope:** inference CLI (`src/main.zig`), HTTP server (`src/server/`), model loaders (`src/format/`), Hub downloads (`src/pull.zig`), the self-updater (`src/update.zig`), distributed transports (`src/parallel/`), WASM/browser demo (`web/`, `src/wasm_entry.zig`), container artifacts (`Dockerfile`, `docker-compose.yml`)
 - **Out of scope:** backend kernel internals beyond their input parsing; GPU driver attack surface
@@ -155,7 +155,7 @@ Privilege transitions: none at runtime. The process starts and stays at its laun
 
 Single points of failure: the API key alone carries all client-side authn on 49453 and, because no principal is derived from it, also all of the shared-state isolation that does not exist; the loopback-bind default carries all safety for no-key users; neither extends to the distributed ports. On the update path, the single SHA-256 sidecar carries the entire publisher-authenticity guarantee, because the digest and the payload share a source.
 
-Docs-vs-code check (2026-09-30): `docs/API.md` auth / CORS / Host-rebind / rate-limit / security-header / health / ready claims match `src/server/http.zig` and `src/server/server.zig`. `SECURITY.md` version and support claims match `build.zig.zon:4` (`.version = "0.10.2"`). Peer-discovery ports in `SECURITY.md`, `docs/PARALLELISM.md`, and `docs/CONTRIBUTING.md` all name the real 49454/49455/49456 base. **Corrections made in this pass:**
+Docs-vs-code check (2026-10-01): `docs/API.md` auth / CORS / Host-rebind / rate-limit / security-header / health / ready claims match `src/server/http.zig` and `src/server/server.zig`. `SECURITY.md` version and support claims match `build.zig.zon:4` (`.version = "0.10.2"`). Peer-discovery ports in `SECURITY.md`, `docs/PARALLELISM.md`, and `docs/CONTRIBUTING.md` all name the real 49454/49455/49456 base. **Corrections made in this pass:**
 
 - Every `src/server/server.zig` and `src/main.zig` line number in the previous revision predated a large edit to both files, and the HTTP parsing and header helpers moved to `src/server/http.zig` (`corsHeaders`, `parseContentLength`, `sanitizeClientRequestId`, `security_headers`). This revision re-resolved all references by symbol. A cheap guard for the next pass: `rg -n` the symbol and confirm the literal, rather than trusting the number recorded here.
 - `src/parallel/peer_discovery.zig` was cited bare in the previous revision; it is now always cited with its directory, and the three prose instances that omitted it were fixed.

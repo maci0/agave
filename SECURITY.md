@@ -4,7 +4,7 @@ Claims in this file are checked against source by the threat-model pass. If one
 disagrees with the code, the code wins; see the docs-vs-code check at the end of
 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#4-mitigations-map).
 
-- **Last reviewed:** 2026-09-30
+- **Last reviewed:** 2026-10-01
 
 ## Supported versions
 

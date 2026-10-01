@@ -118,7 +118,7 @@ curl http://localhost:49453/v1/chat/completions -d '{
 | mirostat_eta | float | 0.1 | Mirostat learning rate |
 | logit_bias | object | null | Token ID → bias mapping: `{"123": 5.0, "456": -2.0}` (max 16 entries) |
 | logprobs | bool | false | Return log probabilities for output tokens (streaming only) |
-| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only). Omitting it still returns the sampled token's own `logprob` with an empty `top_logprobs` list |
+| top_logprobs | int | null | Number of top token log probabilities to return per position, 0-20 (streaming only). Omitting it still returns the sampled token's own `logprob` with an empty `top_logprobs` list. The array is shorter than the requested count when fewer distinct candidates exist (for example when `min_p` or XTC masks every token but one), so read it by length, not by padding |
 | n | int | 1 | Number of completions (only n=1 supported, n>1 returns 400) |
 | truncation_side | string | "right" | Which side of the prompt to drop when it exceeds the context window: `"right"` drops the tail, `"left"` drops the beginning (preserves recency) |
 | user | string | null | OpenAI compatibility only; accepted but ignored (not logged; often holds PII) |
@@ -410,6 +410,8 @@ When `--api-key` is configured and no valid auth header is provided, returns onl
 ```json
 {"status":"ready","queue_depth":0,"kv_cache_used":100,"kv_cache_total":8192}
 ```
+
+The error-rate test counts server faults (`agave_requests_failed_total`: 5xx and inference failures, with client 4xx tracked apart) over the requests that have settled **since the last healthy snapshot**, not since process start. `reason` is `"high_error_rate"` at 50% of at least 10 settled requests in that window, or `"kv_pressure"` at 90% KV cache occupancy. Because the window rebases on every healthy reading, an early burst of failures stops degrading the server once enough later requests have settled, and a fresh burst degrades it again.
 
 Degraded response (503):
 ```json

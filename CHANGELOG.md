@@ -11,11 +11,78 @@ must still appear under **Changed** or **Breaking** below. See
 
 ## [Unreleased]
 
+### Breaking
+- A vision `mmproj` whose header dimensions do not form exact patch grids is now
+  refused at startup instead of loaded. Before: a checkpoint with
+  `image_size % patch_size != 0` (for example 100 / 32) loaded, encoded only
+  `patches_per_side * patch_size` pixels per side, and silently dropped the
+  rest of the image; a patch grid whose side was not a multiple of the merge
+  factor dropped whole rows or columns of patches. After: both are rejected with
+  `Error: failed to init vision encoder: error.InvalidMetadata` and the server
+  does not start. Published checkpoints that divide evenly are unaffected; a
+  mismatched one was already returning wrong pixels, so the fix fails closed.
+
+### Changed
+- **Readiness measures the error rate over a window, not the process lifetime.**
+  `GET /ready` and the `agave_ready` gauge still go to 503 when server faults
+  reach 50% of at least 10 settled requests, but the ratio now runs from the
+  last healthy snapshot instead of from process start. Before: ten failures in
+  the first hour of a server that has since served a million good requests held
+  `/ready` at 503 and `agave_ready` at 0 until enough successes diluted it,
+  taking a healthy instance out of a load balancer with no cause left to find.
+  After: the same server returns to ready, and a fresh burst of failures after
+  that point degrades it again. A dashboard that watched `agave_ready` expect a
+  latching value has to change; nothing else about the endpoints moved.
+- `agave_request_duration_seconds` is now sampled for streaming requests that
+  end in a server fault. Those requests counted in `agave_requests_failed_total`
+  but never reached the latency histogram, so the histogram described only the
+  requests that worked. Streaming successes, client disconnects and server
+  deadlines are recorded exactly as before, so no request is counted twice.
+- A tool call whose `arguments` is not a single complete JSON object now
+  carries `{}` instead of the model's literal text. Before: an object the
+  model truncated mid-body reached the client as a half-written string that no
+  spec-compliant JSON parser can read, and a bare scalar was passed through as
+  `arguments`. After: both become `{}` with a `tool call arguments ...`
+  warning in the log. `arguments` is a JSON object in the OpenAI schema, and a
+  JSON string that decodes to one is still unwrapped, so well-formed tool
+  calls are unaffected.
+- The browser WASM shell (`web/`, `zig build wasm`) says what it does. The
+  engine can init, parse and tokenize but not generate (a Zig wasm32 codegen
+  bug blocks the forward pass), yet the shell still drew an "Agave" reply
+  bubble, an "LLM inference in the browser" subtitle and a "Replies capped at
+  N tokens" hint. The reply bubble is now an "Engine" card, the header and the
+  empty state name the limit, the composer button says "Tokenizing...", and
+  the hint reads "Forward pass pending a Zig wasm32 fix".
+
 ### Fixed
 - The browser WASM shell (`web/`, `zig build wasm`) rebuilt its `AgaveEngine`
   on every render, so each state change threw away the instantiated module and
   the loaded model. Typing a prompt after loading a GGUF reported "Load a GGUF
   model first." and never produced a reply. One engine is now held per mount.
+- `--kv-eviction tri` scored a SafeTensors directory model against no
+  statistics: it looked for `model-dir.cal` next to `model-dir/` only after
+  stripping a `.gguf` suffix, which a directory path has none of, so the
+  calibration `agave calibrate` had written was never loaded. Calibration
+  writes and reads now derive the same `.cal` name.
+- An MTP safetensors checkpoint whose header is not a JSON object (a bare
+  array, number, string or `null`) trapped instead of reporting a bad file,
+  and so did a `shape` whose element was a string, a negative number or `null`
+  (`"shape": ["4",-1,...]` is legal JSON). The header, its entries and every
+  `shape` element must now be objects and numbers; anything else is
+  `InvalidFormat`, the same message path as an unusable checkpoint. Both cases
+  are covered by a fuzz target over the header bytes.
+- `top_logprobs` could list fewer real candidates than requested and then pad
+  the rest with token id 0 at logprob `-inf`: fully masked logits (every
+  `min_p` or XTC cutoff removing every token) and all-equal logits never beat
+  the `-inf` sentinel, so each unfilled slot was emitted anyway. Only slots a
+  logit claimed are reported now, so the `top_logprobs` array is as long as the
+  candidates that exist and never repeats token 0.
+
+### Tooling
+- `GITHUB_TOKEN`, read by `agave update` since 0.8.0, is now documented in the
+  environment-variable table in [docs/API.md](docs/API.md), and `agave pull`
+  prints `HF_ENDPOINT` in its help. Both variables treat empty and
+  whitespace-only values as unset, as the rest of the environment does.
 
 ## [0.10.2] - 2026-09-29
 

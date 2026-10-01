@@ -204,6 +204,52 @@ def check_version_consistency() -> list[str]:
             errors.append(f"CHANGELOG.md: 'bumps `{bump}`' is stale (product version is {product})")
 
     errors.extend(_check_release_tags(changelog, product))
+    errors.extend(_check_bump_matches_breaking(changelog))
+    return errors
+
+
+def _released_sections(changelog: str) -> list[tuple[str, str]]:
+    """(version, body) for every dated release section, oldest first.
+
+    Sorted by parsed version rather than file position: a section appended out
+    of order would otherwise compare against the wrong predecessor, and a hand
+    reordered changelog must not decide whether a break is reported.
+    """
+    pat = re.compile(r"^## \[(\d+\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}$", re.M)
+    matches = list(pat.finditer(changelog))
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(changelog)
+        version = m.group(1)
+        out.append((version, changelog[m.end() : end]))
+    out.sort(key=lambda pair: [int(p) for p in pair[0].split(".")])
+    return out
+
+
+def _check_bump_matches_breaking(changelog: str) -> list[str]:
+    """A `### Breaking` entry may not ride a patch release.
+
+    The 0.x rule in docs/CONTRIBUTING.md lets a breaking change land without a
+    major digit but still requires at least a minor bump, so a consumer who
+    tracks `-Dversion_patch` upgrades without reading notes keeps the breaking
+    one. This is the only check that ties a section's content to its bump;
+    every other guard compares strings against the manifest.
+    """
+    errors: list[str] = []
+    sections = _released_sections(changelog)
+    prev: str | None = None
+    for version, body in sections:
+        if prev is not None and re.search(r"^### Breaking", body, re.M):
+            prev_parts = prev.split(".")
+            parts = version.split(".")
+            is_patch = prev_parts[:2] == parts[:2]
+            if is_patch:
+                errors.append(
+                    f"CHANGELOG.md: [{version}] has a Breaking entry but bumps only "
+                    f"the patch digit from [{prev}]; cut it as a minor release "
+                    f"({prev_parts[0]}.{int(prev_parts[1]) + 1}.0) or drop the Breaking heading"
+                )
+        prev = version
     return errors
 
 
