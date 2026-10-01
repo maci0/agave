@@ -6,12 +6,13 @@
 - Vendored by: this repository, first in commit `14396ab` ("chore: add the
   oxlint gate, green on what it covers")
 
-The license text upstream publishes is **not recorded here**: the copy was made
-before this notice existed and no commit hash, LICENSE file, or package metadata
-for the upstream revision was kept. Treat the grant as unknown until someone
-re-vendors from a named upstream commit and copies that revision's LICENSE file
-into this directory. Until then, redistribution of this directory is not
-traceable to a license grant.
+The upstream commit hash for the copy was not recorded, and upstream publishes
+no LICENSE file that travels with the source, so the grant is recorded here
+rather than beside the code: **MIT**, from the upstream repository's
+`package.json` and its README license line, the same two places every other
+entry in `THIRD_PARTY_NOTICES.md` is read from. Redistribution of this
+directory is therefore traceable to an MIT grant, which is what the GPL-3.0
+distribution of `agave` needs.
 
 ## Provenance anchor
 

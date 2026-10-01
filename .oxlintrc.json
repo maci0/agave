@@ -134,6 +134,28 @@
 			}
 		},
 		{
+			// Same class of rule as the two jest/require-hook entries at the top of
+			// this file: the strict preset turns on jest plugin rules that read
+			// vitest imports as the test framework's globals. This is not about
+			// the happy-dom registration at module scope, which is
+			// jest/require-hook's problem and is turned off above. The file is
+			// not a vitest test at all, and there is no vitest in this tree:
+			// `bun test src/web` is the runner, and the tests import test,
+			// expect and afterAll from bun:test. Which vitest rule would fire
+			// here, and on which line, could not be established without oxlint
+			// and its node_modules, so the turn-off is recorded as
+			// best-effort: if a future release stops flagging these files,
+			// delete this block and the lint run says so.
+			"files": [
+				"src/web/**/*.test.ts",
+				"src/web/**/*.test.tsx"
+			],
+			"rules": {
+				"vitest/require-hook": "off",
+				"vitest/prefer-importing-vitest-globals": "off"
+			}
+		},
+		{
 			"files": [
 				"web/shell.tsx",
 				"web/use-model-loader.ts",

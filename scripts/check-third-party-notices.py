@@ -17,14 +17,15 @@ package.json, bun.lock or any uv.lock, so nothing else can see them:
 - PEP 723 headers (`# /// script`) make a Python file its own environment.
   `uv run scripts/brand-glyphs.py` resolves the requirements in that header
   against PyPI with no lockfile in between.
-- docs/render-diagrams.mjs pins its two renderer packages in a comment and
-  installs them globally, so no manifest holds them.
+- docs/render-diagrams.mjs pins its two renderer packages in its header and
+  installs them with `bun add -g`, so no manifest holds them.
 
 Neither ships in a release artifact, so the closure above cannot name them and
 the versioned `name@version` table is the wrong shape for them. They are
 recorded in the notices file in PEP 508 form (`name==version`), which the
 table's PACKAGE_REF does not match, and the check below compares that set both
-ways so neither direction drifts.
+ways so neither direction drifts: the two sources are folded into one set, so a
+renderer that leaves the header, or a header that gains a package, fails here.
 """
 
 from __future__ import annotations
@@ -139,9 +140,12 @@ def listed_entries(notices: Path) -> set[str]:
 
 
 # A PEP 508 reference (`name==version`), the form an inline requirement takes in
-# a PEP 723 header. Distinct from PACKAGE_REF, so a `name==version` in the
-# notices file is not read as a bundle entry and vice versa.
-PEP508_REF = re.compile(r"`(?P<name>@?[\w.-]+)==(?P<version>[^\s`]+)`")
+# a PEP 723 header or on a `bun add -g` line. Distinct from PACKAGE_REF, so a
+# `name==version` in the notices file is not read as a bundle entry and vice
+# versa. The name part matches PACKAGE_REF's, scoped name included: a scoped
+# package that the pinned list could not read would be invisible here, so its
+# notices row would never be compared against anything.
+PEP508_REF = re.compile(r"`(?P<name>@?[\w.-]+(?:/[\w.-]+)*)==(?P<version>[^\s`]+)`")
 
 
 def listed_pep508(notices: Path) -> set[str]:
@@ -156,6 +160,16 @@ def listed_pep508(notices: Path) -> set[str]:
 PEP723_DEPENDENCIES = re.compile(r"^# dependencies = \[(?P<body>.*?)\]", re.MULTILINE | re.DOTALL)
 PEP723_MARKER = re.compile(r"^# /// script$", re.MULTILINE)
 
+# The renderer scripts hold their requirements where no manifest can: the
+# `bun add -g` line in their own header, which is also what a re-run has to
+# type, so the pin is recorded in a comment rather than installed anywhere.
+#   bun add -g beautiful-mermaid@1.1.3 @resvg/resvg-js@2.6.2
+# The names are folded to PEP 508 (`name==version`) so they land in the same
+# inventory as the inline Python requirements: the notices table shape
+# (PACKAGE_REF) would read `name@version` prose as a bundled package, and the
+# renderer output ships no third-party code.
+GLOBAL_BUN_ADD = re.compile(r"bun add -g (?P<specs>[^\n*]+)")
+
 
 def pep723_requirements(root: Path) -> set[str]:
     """Every inline requirement a PEP 723 script in the tree carries."""
@@ -169,6 +183,24 @@ def pep723_requirements(root: Path) -> set[str]:
                 continue
             for body in PEP723_DEPENDENCIES.findall(text):
                 found.update(re.findall(r'"([^"]+)"', body))
+    return found
+
+
+def global_bun_requirements(root: Path) -> set[str]:
+    """`name==version` for every package a header installs with `bun add -g`."""
+    found: set[str] = set()
+    for base in ("scripts", "tools", "docs", "web", "src"):
+        for path in sorted((root / base).rglob("*")):
+            if path.suffix not in (".mjs", ".js", ".ts", ".tsx") or path.is_dir():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            specs_list = GLOBAL_BUN_ADD.findall(text)
+            if not specs_list:
+                continue
+            for specs in specs_list:
+                for spec in specs.split():
+                    at = spec.rfind("@")
+                    found.add(f"{spec[:at]}=={spec[at + 1 :]}" if at > 0 else spec)
     return found
 
 
@@ -200,12 +232,15 @@ def main() -> int:
             + "\nremove them, or move them to the not-shipped section if they are build-only"
         )
 
-    inline = pep723_requirements(root)
+    # PEP 723 headers and `bun add -g` header lines are both manifests a
+    # package.json cannot hold, so they share one inventory and one notices
+    # section: a renderer installed by neither is silently unaccounted for.
+    inline = pep723_requirements(root) | global_bun_requirements(root)
     listed_inline = listed_pep508(notices)
     unlisted_inline = sorted(inline - listed_inline)
     if unlisted_inline:
         sys.exit(
-            "check-third-party-notices: these PEP 723 script requirements are missing from "
+            "check-third-party-notices: these inline script requirements are missing from "
             "THIRD_PARTY_NOTICES.md:\n"
             + "\n".join(f"  {entry}" for entry in unlisted_inline)
             + "\nrecord each with its license in the not-shipped section, then rerun"
@@ -213,15 +248,15 @@ def main() -> int:
     stale_inline = sorted(listed_inline - inline)
     if stale_inline:
         sys.exit(
-            "check-third-party-notices: THIRD_PARTY_NOTICES.md lists PEP 508 requirements that "
-            "no PEP 723 header in the tree carries:\n"
+            "check-third-party-notices: THIRD_PARTY_NOTICES.md lists inline requirements that "
+            "no script header in the tree carries:\n"
             + "\n".join(f"  {entry}" for entry in stale_inline)
             + "\nremove them, or record the package that needs them"
         )
 
     print(
         f"Third-party notices OK: {len(closure)} bundled packages and "
-        f"{len(inline)} PEP 723 requirement(s) listed in THIRD_PARTY_NOTICES.md"
+        f"{len(inline)} inline requirement(s) listed in THIRD_PARTY_NOTICES.md"
     )
     return 0
 

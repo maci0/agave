@@ -5,6 +5,16 @@
     {
       "groupName": "oxlint",
       "matchPackageNames": ["oxlint*", "@oxlint/*", "@rikalabs/oxlint-standards"]
+    },
+    {
+      "//": "scripts/check-pins.sh fails any requirement that is not one exact version, so a bump that rewrote package.json, a pyproject.toml or a PEP 723 header into a range would open a PR that leaves `zig build check` red. rangeStrategy=pin keeps the edited manifest at one version; bun.lock and the uv.lock files are what a reviewer reads for the resolved tree. Pre-releases are already excluded (ignoreUnstable defaults to true), so nothing here opts into one.",
+      "matchManagers": ["npm", "pep621", "pep723", "pip_requirements", "uv"],
+      "rangeStrategy": "pin"
+    },
+    {
+      "//": "A release from the hour it was published is not reviewable: this tree ships GPL code, THIRD_PARTY_NOTICES.md records exact versions, and the CI install is keyed on bun.lock. A day is enough for a broken or pulled release to stop being offered; the weekly schedule still lands it the week after.",
+      "matchManagers": ["npm", "pep621", "pep723", "pip_requirements", "uv"],
+      "minimumReleaseAge": "1 day"
     }
   ]
 }

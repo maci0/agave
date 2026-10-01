@@ -38,10 +38,15 @@ Before a PR, run `zig build ci`, the local half of the blocking `ci-pass` gate: 
 | `Dockerfile`, `docker-compose.yml` | `AGAVE_API_KEY=local docker compose config --quiet`, then build the image the way the `docker-build` job does (its `build-args` in `.github/workflows/ci.yml`, plus `--build-arg AGAVE_VERSION=$(bash scripts/product-version.sh)` so the image is not labelled `dev`; tag it `agave:ci`) and run `bash scripts/check-docker-image.sh agave:ci`. The job runs both; neither has a `zig build` step, so copy the build args rather than inventing a subset. `zig build check-pins` fails if those args and `docker-compose.yml` disagree |
 | A new model or backend `-Denable-*` flag | The flag list is written out in `docker-compose.yml`, in the `docker-build` job's `build-args`, in the `Dockerfile`'s `ARG`s, and in `scripts/check-reproducible.sh`'s `BUILD_FLAGS`. `zig build check-pins` compares them, names the file that drifted, and fails on a flag that reached `build.zig` without ever reaching the Dockerfile |
 
-Dependabot (`.github/dependabot.yml`) opens weekly bumps for the GitHub
-Actions, Docker, npm and Python ecosystems. Two of them cannot be merged on
-their own, because `zig build check-pins` deliberately fails until a human
-completes the pin:
+Bumps come from two bots. Dependabot (`.github/dependabot.yml`) opens weekly
+bumps for the GitHub Actions, Docker and Python ecosystems; Renovate
+(`renovate.json`) opens the JavaScript ones, because its npm manager reads
+`bun.lock`, which Dependabot's npm entry cannot. Renovate pins every version it
+edits (`rangeStrategy: pin`), waits a day after a release before offering it,
+and groups the oxlint tree into one PR.
+
+Two Dependabot bumps cannot be merged on their own, because `zig build
+check-pins` deliberately fails until a human completes the pin:
 
 - A `debian:bookworm-YYYYMMDD-slim` bump also needs `DEBIAN_SNAPSHOT` (both
   stages) and `SOURCE_DATE_EPOCH` (both stages) set to the same new day.

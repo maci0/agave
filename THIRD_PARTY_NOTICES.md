@@ -90,23 +90,28 @@ Two dependency sets live in the tree but in no manifest, so neither
 | Requirement | License | Used by | Why it is not a lockfile entry |
 | --- | --- | --- | --- |
 | `fonttools==4.66.0` | MIT | `scripts/brand-glyphs.py` | PEP 723 header: `uv run` on the file builds its own environment from it. Nothing else references it, so a project-level entry would be an orphan. |
+| `beautiful-mermaid==1.1.3` | MIT | `docs/render-diagrams.mjs` | `bun add -g` on the script's own header line, which is where the command a re-run has to type is written down. |
+| `@resvg/resvg-js==2.6.2` | MPL-2.0 | `docs/render-diagrams.mjs` | The same line: the layout engine emits SVG, and the committed PNG copies need a rasterizer. |
 
-`docs/render-diagrams.mjs` is the other one: it pins `beautiful-mermaid` (MIT)
-and `@resvg/resvg-js` (MPL-2.0) in its own header and installs them with
-`bun add -g`, deliberately outside `package.json` so a layout engine and a
-native rasterizer stay out of every contributor's and CI runner's
-`bun install`. Neither ships: the rendered PNG/SVG copies carry no third-party
-code. `scripts/check-pins.sh` holds the exact version of everything named
-here, and `scripts/check-third-party-notices.py` fails when the `fonttools`
-pin drifts from the header that carries it.
+`scripts/check-third-party-notices.py` reads both header forms, so a pin that
+drifts from the header carrying it, or a header that gains a package, fails the
+gate rather than only this file.
+
+`docs/render-diagrams.mjs` keeps both packages deliberately outside
+`package.json` so a layout engine and a native rasterizer stay out of every
+contributor's and CI runner's `bun install`. Neither ships: the rendered
+PNG/SVG copies carry no third-party code. `scripts/check-pins.sh` holds the
+exact version of everything named here.
 
 The Zig engine itself has no third-party dependencies: `build.zig.zon` declares
 none, so there is nothing to attribute there.
 
 `tools/oxlint/anti-slop/` is vendored third-party source with its own notice at
 [tools/oxlint/anti-slop/NOTICE.md](tools/oxlint/anti-slop/NOTICE.md). It is
-loaded from a path by oxlint, not bundled, and its upstream license text is
-still unrecorded there.
+loaded from a path by oxlint, not bundled, so its license does not travel in a
+bundle the way the table above travels; its commit is not recorded either, and
+the sha256 manifest beside it is the provenance anchor `zig build check-pins`
+enforces.
 
 ## Updating this file
 
