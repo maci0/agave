@@ -2215,6 +2215,40 @@ fn rejectBadImage(
     return true;
 }
 
+/// Write the `{"messages":[...]}` body that `action=select` returns.
+///
+/// Emits the same per-message shape `conv_store.encode` writes to disk,
+/// including `tool_call_id` when the turn has one, so a tool result that
+/// round-trips through a client keeps the pairing with its assistant tool
+/// call. `msgs` borrow their content; escapes are freed before returning.
+/// Returns false when the fixed writer or an allocation fails.
+fn writeSelectMessages(allocator: std.mem.Allocator, w: *std.Io.Writer, msgs: []const Message) bool {
+    w.writeAll("{\"messages\":[") catch return false;
+    for (msgs, 0..) |msg, mi| {
+        if (mi > 0) w.writeByte(',') catch return false;
+        const role_str: []const u8 = switch (msg.role) {
+            .user => "user",
+            .assistant => "assistant",
+            .tool => "tool",
+        };
+        const esc_content = json.jsonEscape(allocator, msg.content) catch return false;
+        defer if (esc_content.ptr != msg.content.ptr) allocator.free(esc_content);
+        if (msg.tool_call_id) |tcid| {
+            const esc_tcid = json.jsonEscape(allocator, tcid) catch return false;
+            defer if (esc_tcid.ptr != tcid.ptr) allocator.free(esc_tcid);
+            w.print(
+                \\{{"role":"{s}","content":"{s}","tool_call_id":"{s}"}}
+            , .{ role_str, esc_content, esc_tcid }) catch return false;
+        } else {
+            w.print(
+                \\{{"role":"{s}","content":"{s}"}}
+            , .{ role_str, esc_content }) catch return false;
+        }
+    }
+    w.writeAll("]}") catch return false;
+    return true;
+}
+
 /// Main HTTP request dispatcher. Wakes the server from sleep mode if needed,
 /// enforces CORS policy and authentication, then routes the request by method
 /// and path to the appropriate endpoint handler (health, chat completions,
@@ -3401,21 +3435,7 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
 
                 const conv = g_server.getConvById(id) orelse break :blk .not_found;
                 switched = g_server.selectConv(id);
-                mw.writeAll("{\"messages\":[") catch break :blk .format_fail;
-                for (conv.messages.items, 0..) |msg, mi| {
-                    if (mi > 0) mw.writeByte(',') catch break :blk .format_fail;
-                    const role_str: []const u8 = switch (msg.role) {
-                        .user => "user",
-                        .assistant => "assistant",
-                        .tool => "tool",
-                    };
-                    const esc_content = json.jsonEscape(g_server.allocator, msg.content) catch break :blk .format_fail;
-                    defer if (esc_content.ptr != msg.content.ptr) g_server.allocator.free(esc_content);
-                    mw.print(
-                        \\{{"role":"{s}","content":"{s}"}}
-                    , .{ role_str, esc_content }) catch break :blk .format_fail;
-                }
-                mw.writeAll("]}") catch break :blk .format_fail;
+                if (!writeSelectMessages(g_server.allocator, &mw, conv.messages.items)) break :blk .format_fail;
                 break :blk .format_ok;
             };
             switch (select_result) {
@@ -8762,6 +8782,44 @@ test "Conversation.clearMessages releases tool_call_id" {
     });
     conv.clearMessages(allocator);
     try std.testing.expectEqual(@as(usize, 0), conv.messages.items.len);
+}
+
+test "writeSelectMessages keeps tool_call_id the store wrote" {
+    // The select body and the on-disk store serialize the same Message. A tool
+    // turn that loses its id here cannot be paired with its assistant tool
+    // call after a client posts the conversation back.
+    const allocator = std.testing.allocator;
+    const msgs = [_]Message{
+        .{ .role = .user, .content = "Weather?" },
+        .{ .role = .tool, .content = "{\"temp\":18}", .tool_call_id = "call_1" },
+    };
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try std.testing.expect(writeSelectMessages(allocator, &w, &msgs));
+    try std.testing.expectEqualStrings(
+        \\{"messages":[{"role":"user","content":"Weather?"},{"role":"tool","content":"{\"temp\":18}","tool_call_id":"call_1"}]}
+    , w.buffered());
+
+    // A turn with no id must not grow a null or empty field.
+    var buf2: [512]u8 = undefined;
+    var w2: std.Io.Writer = .fixed(&buf2);
+    try std.testing.expect(writeSelectMessages(allocator, &w2, msgs[0..1]));
+    try std.testing.expectEqualStrings(
+        \\{"messages":[{"role":"user","content":"Weather?"}]}
+    , w2.buffered());
+
+    // Content and id are escaped, not emitted raw.
+    const tricky = [_]Message{.{
+        .role = .tool,
+        .content = "line\"one",
+        .tool_call_id = "id\\two",
+    }};
+    var buf3: [512]u8 = undefined;
+    var w3: std.Io.Writer = .fixed(&buf3);
+    try std.testing.expect(writeSelectMessages(allocator, &w3, &tricky));
+    try std.testing.expectEqualStrings(
+        \\{"messages":[{"role":"tool","content":"line\"one","tool_call_id":"id\\two"}]}
+    , w3.buffered());
 }
 
 test "Conversation.setTitle keeps trailing multi-byte characters" {

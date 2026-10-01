@@ -90,6 +90,11 @@ must still appear under **Changed** or **Breaking** below. See
   the `-inf` sentinel, so each unfilled slot was emitted anyway. Only slots a
   logit claimed are reported now, so the `top_logprobs` array is as long as the
   candidates that exist and never repeats token 0.
+- `POST /v1/conversations` with `action=select` returned each stored turn as
+  `role` and `content` only, dropping the `tool_call_id` the store had written
+  to disk. A client that fetched a conversation and posted it back lost the
+  pairing between a tool result and the assistant tool call it answers. The
+  field is emitted when present, matching the shape `conv_store` serialises.
 
 ### Tooling
 - `GITHUB_TOKEN`, read by `agave update` since 0.8.0, is now documented in the

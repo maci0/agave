@@ -311,6 +311,10 @@ Select and delete require a positive integer `id`. Missing `id` returns `400`
 `400` (`code: invalid_value`). Unknown `id` returns `404`
 (`code: conversation_not_found`).
 
+A stored tool turn also carries `tool_call_id`, the same field the store writes
+to disk, so a client that posts a selected conversation back keeps the pairing
+between a tool result and the assistant tool call it answers.
+
 `action=new` allocates an id and persists a row, so it honors `X-Request-Id` as
 an idempotency key. `select` and `delete` do not: both converge on the same
 state, so a retry of them repeats no side effect. See
