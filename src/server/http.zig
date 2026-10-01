@@ -296,7 +296,9 @@ pub fn parseContentLength(headers: []const u8) ?usize {
     while (iter.next()) |line| {
         const colon = std.mem.indexOf(u8, line, ":") orelse continue;
         if (colon == header_name.len and std.ascii.eqlIgnoreCase(line[0..header_name.len], header_name)) {
-            const val = std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " "), 10) catch return null;
+            // OWS is SP and HTAB (RFC 9110 5.6.3); trimming SP only rejected a
+            // tab-separated value every other header parser here accepts.
+            const val = std.fmt.parseInt(usize, std.mem.trim(u8, line[colon + 1 ..], " \t"), 10) catch return null;
             if (found != null) return null; // Duplicate Content-Length, reject
             found = val;
         }

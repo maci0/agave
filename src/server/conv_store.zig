@@ -47,6 +47,28 @@ pub const LoadedConv = struct {
     messages: []Message,
 };
 
+/// Free one loaded message: content and optional `tool_call_id`, both wiped
+/// first because they hold user text. Every owner of a `[]Message` frees
+/// through this so a path added later cannot skip the wipe or leave a field
+/// behind.
+pub fn freeMessages(allocator: Allocator, messages: []const Message) void {
+    for (messages) |msg| {
+        freeMessage(allocator, msg);
+    }
+}
+
+/// Wipe and free one loaded message. See `freeMessages`.
+pub fn freeMessage(allocator: Allocator, msg: Message) void {
+    const content = @constCast(msg.content);
+    @memset(content, 0);
+    allocator.free(content);
+    if (msg.tool_call_id) |tcid| {
+        const owned = @constCast(tcid);
+        @memset(owned, 0);
+        allocator.free(owned);
+    }
+}
+
 /// Owned snapshot of the conversation list.
 pub const Snapshot = struct {
     allocator: Allocator,
@@ -58,16 +80,7 @@ pub const Snapshot = struct {
     pub fn deinit(self: *Snapshot) void {
         for (self.conversations) |*conv| {
             self.allocator.free(conv.title);
-            for (conv.messages) |msg| {
-                const content = @constCast(msg.content);
-                @memset(content, 0);
-                self.allocator.free(content);
-                if (msg.tool_call_id) |tcid| {
-                    const t = @constCast(tcid);
-                    @memset(t, 0);
-                    self.allocator.free(t);
-                }
-            }
+            freeMessages(self.allocator, conv.messages);
             self.allocator.free(conv.messages);
         }
         self.allocator.free(self.conversations);
@@ -302,10 +315,7 @@ fn parse(allocator: Allocator, data: []const u8) !ParseResult {
     errdefer {
         for (convs.items) |*conv| {
             allocator.free(conv.title);
-            for (conv.messages) |msg| {
-                allocator.free(@constCast(msg.content));
-                if (msg.tool_call_id) |tcid| allocator.free(@constCast(tcid));
-            }
+            freeMessages(allocator, conv.messages);
             allocator.free(conv.messages);
         }
         convs.deinit(allocator);
@@ -365,10 +375,7 @@ fn parse(allocator: Allocator, data: []const u8) !ParseResult {
             .messages = messages,
         }) catch |err| {
             allocator.free(title);
-            for (messages) |msg| {
-                allocator.free(@constCast(msg.content));
-                if (msg.tool_call_id) |tcid| allocator.free(@constCast(tcid));
-            }
+            freeMessages(allocator, messages);
             allocator.free(messages);
             return err;
         };
@@ -389,10 +396,7 @@ fn parseMessages(allocator: Allocator, arr: []const u8, truncated: *bool) ![]Mes
     if (arr.len < 2 or arr[0] != '[') return error.CorruptStore;
     var list: std.ArrayList(Message) = .empty;
     errdefer {
-        for (list.items) |msg| {
-            allocator.free(msg.content);
-            if (msg.tool_call_id) |tcid| allocator.free(tcid);
-        }
+        freeMessages(allocator, list.items);
         list.deinit(allocator);
     }
 
@@ -425,7 +429,10 @@ fn parseMessages(allocator: Allocator, arr: []const u8, truncated: *bool) ![]Mes
         var tool_call_id: ?[]const u8 = null;
         if (json.extractField(obj, "tool_call_id")) |tcid_raw| {
             tool_call_id = json.jsonUnescapeOwned(allocator, tcid_raw) catch |err| {
-                allocator.free(content);
+                // No tool_call_id to free yet, so only the content needs the wipe.
+                const owned = @constCast(content);
+                @memset(owned, 0);
+                allocator.free(owned);
                 return err;
             };
         }
@@ -435,8 +442,12 @@ fn parseMessages(allocator: Allocator, arr: []const u8, truncated: *bool) ![]Mes
             .content = content,
             .tool_call_id = tool_call_id,
         }) catch |err| {
-            allocator.free(content);
-            if (tool_call_id) |tcid| allocator.free(@constCast(tcid));
+            // Not yet in `list`, so the errdefer above does not see it.
+            freeMessage(allocator, .{
+                .role = role,
+                .content = content,
+                .tool_call_id = tool_call_id,
+            });
             return err;
         };
     }

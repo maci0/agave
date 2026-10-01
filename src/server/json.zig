@@ -819,11 +819,6 @@ pub fn extractMessages(json: []const u8, allocator: Allocator) ?ExtractedMessage
         } else if (std.mem.eql(u8, role_str, "assistant")) {
             messages_buf[count] = .{ .role = .assistant, .content = owned_content };
             count += 1;
-        } else if (std.mem.eql(u8, role_str, "tool")) {
-            // Tool result message, extract tool_call_id and include content
-            const tcid = extractField(obj_slice, "tool_call_id");
-            messages_buf[count] = .{ .role = .tool, .content = owned_content, .tool_call_id = tcid };
-            count += 1;
         } else {
             wipeFree(allocator, owned_content);
         }

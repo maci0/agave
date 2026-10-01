@@ -499,16 +499,11 @@ const Conversation = struct {
     }
 
     /// Free one owned message: content and optional `tool_call_id`.
-    /// Matches `conv_store.Snapshot.deinit` so loaded tool messages cannot leak.
+    /// Delegates to `conv_store.freeMessage` so a loaded tool message and a
+    /// generated one are freed by the same code, and neither path can forget
+    /// the wipe or the id.
     fn freeOwnedMessage(allocator: Allocator, msg: Message) void {
-        const content = @constCast(msg.content);
-        @memset(content, 0);
-        allocator.free(content);
-        if (msg.tool_call_id) |tcid| {
-            const t = @constCast(tcid);
-            @memset(t, 0);
-            allocator.free(t);
-        }
+        conv_store.freeMessage(allocator, msg);
     }
 
     /// Put a held message back at the end of `self`. Used to undo a pop on a
@@ -522,10 +517,9 @@ const Conversation = struct {
     }
 
     fn freeMessageContents(self: *Conversation, allocator: Allocator) void {
-        // Zero content before free so prompt/response text does not linger in the allocator freelist.
-        for (self.messages.items) |msg| {
-            freeOwnedMessage(allocator, msg);
-        }
+        // conv_store.freeMessage zeroes content before free so prompt/response
+        // text does not linger in the allocator freelist.
+        conv_store.freeMessages(allocator, self.messages.items);
     }
 
     fn clearMessages(self: *Conversation, allocator: Allocator) void {
@@ -2151,16 +2145,14 @@ fn noteHealthTransition(view: HealthView) void {
         std.log.info("server: health recovered ({s} -> ok, kv={d}/{d} errors={d}/{d})", .{
             @tagName(prev_state), view.kv_used, view.kv_total, view.failed, view.completed + view.failed,
         });
+        // Rebase the error-rate window here rather than on every healthy poll,
+        // so the next degradation is measured from the last real transition.
+        g_server.health_baseline_completed.store(view.completed, .monotonic);
+        g_server.health_baseline_failed.store(view.failed, .monotonic);
     } else {
         std.log.warn("server: health {s} (was {s}, kv={d}/{d} errors={d}/{d} queue={d})", .{
             @tagName(view.state()), @tagName(prev_state), view.kv_used, view.kv_total, view.window_failed, view.window_completed + view.window_failed, view.queue,
         });
-    }
-    // Rebase the error-rate window every time health is ok, so the next
-    // degradation is measured from here rather than from process start.
-    if (view.state() == .ok) {
-        g_server.health_baseline_completed.store(view.completed, .monotonic);
-        g_server.health_baseline_failed.store(view.failed, .monotonic);
     }
 }
 
@@ -2221,32 +2213,33 @@ fn rejectBadImage(
 /// including `tool_call_id` when the turn has one, so a tool result that
 /// round-trips through a client keeps the pairing with its assistant tool
 /// call. `msgs` borrow their content; escapes are freed before returning.
-/// Returns false when the fixed writer or an allocation fails.
-fn writeSelectMessages(allocator: std.mem.Allocator, w: *std.Io.Writer, msgs: []const Message) bool {
-    w.writeAll("{\"messages\":[") catch return false;
+/// Returns error.NoSpaceLeft when the fixed writer is full, error.OutOfMemory
+/// when an escape cannot be allocated: the two are reported separately so an
+/// allocation failure is not answered as a buffer overflow.
+fn writeSelectMessages(allocator: std.mem.Allocator, w: *std.Io.Writer, msgs: []const Message) error{ NoSpaceLeft, OutOfMemory }!void {
+    w.writeAll("{\"messages\":[") catch return error.NoSpaceLeft;
     for (msgs, 0..) |msg, mi| {
-        if (mi > 0) w.writeByte(',') catch return false;
+        if (mi > 0) w.writeByte(',') catch return error.NoSpaceLeft;
         const role_str: []const u8 = switch (msg.role) {
             .user => "user",
             .assistant => "assistant",
             .tool => "tool",
         };
-        const esc_content = json.jsonEscape(allocator, msg.content) catch return false;
+        const esc_content = try json.jsonEscape(allocator, msg.content);
         defer if (esc_content.ptr != msg.content.ptr) allocator.free(esc_content);
         if (msg.tool_call_id) |tcid| {
-            const esc_tcid = json.jsonEscape(allocator, tcid) catch return false;
+            const esc_tcid = try json.jsonEscape(allocator, tcid);
             defer if (esc_tcid.ptr != tcid.ptr) allocator.free(esc_tcid);
             w.print(
                 \\{{"role":"{s}","content":"{s}","tool_call_id":"{s}"}}
-            , .{ role_str, esc_content, esc_tcid }) catch return false;
+            , .{ role_str, esc_content, esc_tcid }) catch return error.NoSpaceLeft;
         } else {
             w.print(
                 \\{{"role":"{s}","content":"{s}"}}
-            , .{ role_str, esc_content }) catch return false;
+            , .{ role_str, esc_content }) catch return error.NoSpaceLeft;
         }
     }
-    w.writeAll("]}") catch return false;
-    return true;
+    w.writeAll("]}") catch return error.NoSpaceLeft;
 }
 
 /// Main HTTP request dispatcher. Wakes the server from sleep mode if needed,
@@ -3429,13 +3422,16 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
             var mbuf: [conv_msgs_buf_size]u8 = undefined;
             var mw: std.Io.Writer = .fixed(&mbuf);
             var switched = false;
-            const select_result: enum { not_found, format_ok, format_fail } = blk: {
+            const select_result: enum { not_found, format_ok, format_fail, oom } = blk: {
                 g_server.mutex.lockUncancelable(g_server.io);
                 defer g_server.mutex.unlock(g_server.io);
 
                 const conv = g_server.getConvById(id) orelse break :blk .not_found;
                 switched = g_server.selectConv(id);
-                if (!writeSelectMessages(g_server.allocator, &mw, conv.messages.items)) break :blk .format_fail;
+                writeSelectMessages(g_server.allocator, &mw, conv.messages.items) catch |err| switch (err) {
+                    error.OutOfMemory => break :blk .oom,
+                    error.NoSpaceLeft => break :blk .format_fail,
+                };
                 break :blk .format_ok;
             };
             switch (select_result) {
@@ -3453,6 +3449,11 @@ fn handleRequest(stream: http.TcpStream, req: http.HttpRequest) void {
                 },
                 .format_fail => {
                     sendJsonError(stream, "500 Internal Server Error", "server_error", "Response buffer overflow");
+                    g_server.metrics.recordFailure();
+                    logRequestDone(method, path, 500, elapsedMs(request_start));
+                },
+                .oom => {
+                    sendJsonError(stream, "500 Internal Server Error", "server_error", "Out of memory");
                     g_server.metrics.recordFailure();
                     logRequestDone(method, path, 500, elapsedMs(request_start));
                 },
@@ -8551,6 +8552,14 @@ test "parseContentLength case insensitive" {
     try std.testing.expectEqual(@as(?usize, 7), http.parseContentLength("CONTENT-LENGTH: 7\r\nHost: x"));
 }
 
+test "parseContentLength accepts tab OWS" {
+    // OWS is SP and HTAB (RFC 9110 5.6.3). A tab-separated value parses here
+    // like every other header in http.zig; trimming SP only rejected it as a
+    // malformed request.
+    try std.testing.expectEqual(@as(?usize, 42), http.parseContentLength("Content-Length:\t42\r\nHost: x"));
+    try std.testing.expectEqual(@as(?usize, 42), http.parseContentLength("Content-Length: \t 42 \t\r\nHost: x"));
+}
+
 test "splitPathQuery strips query from path" {
     const no_q = http.splitPathQuery("/v1/kv_cache");
     try std.testing.expectEqualStrings("/v1/kv_cache", no_q.path);
@@ -8795,7 +8804,7 @@ test "writeSelectMessages keeps tool_call_id the store wrote" {
     };
     var buf: [512]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    try std.testing.expect(writeSelectMessages(allocator, &w, &msgs));
+    try writeSelectMessages(allocator, &w, &msgs);
     try std.testing.expectEqualStrings(
         \\{"messages":[{"role":"user","content":"Weather?"},{"role":"tool","content":"{\"temp\":18}","tool_call_id":"call_1"}]}
     , w.buffered());
@@ -8803,7 +8812,7 @@ test "writeSelectMessages keeps tool_call_id the store wrote" {
     // A turn with no id must not grow a null or empty field.
     var buf2: [512]u8 = undefined;
     var w2: std.Io.Writer = .fixed(&buf2);
-    try std.testing.expect(writeSelectMessages(allocator, &w2, msgs[0..1]));
+    try writeSelectMessages(allocator, &w2, msgs[0..1]);
     try std.testing.expectEqualStrings(
         \\{"messages":[{"role":"user","content":"Weather?"}]}
     , w2.buffered());
@@ -8816,10 +8825,16 @@ test "writeSelectMessages keeps tool_call_id the store wrote" {
     }};
     var buf3: [512]u8 = undefined;
     var w3: std.Io.Writer = .fixed(&buf3);
-    try std.testing.expect(writeSelectMessages(allocator, &w3, &tricky));
+    try writeSelectMessages(allocator, &w3, &tricky);
     try std.testing.expectEqualStrings(
         \\{"messages":[{"role":"tool","content":"line\"one","tool_call_id":"id\\two"}]}
     , w3.buffered());
+
+    // A writer that fills reports NoSpaceLeft, so the caller does not blame a
+    // buffer overflow for an allocation failure.
+    var tiny: [8]u8 = undefined;
+    var w4: std.Io.Writer = .fixed(&tiny);
+    try std.testing.expectError(error.NoSpaceLeft, writeSelectMessages(allocator, &w4, &msgs));
 }
 
 test "Conversation.setTitle keeps trailing multi-byte characters" {
