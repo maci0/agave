@@ -65,7 +65,7 @@ gh workflow run golden_tests.yml -f runner=self-hosted
 
 Leaving `runner` empty keeps the matrix on the GitHub-hosted labels, where the run stops at the `Require local GGUF models` step. Without `runner` there is no way to reach a machine that has weights, so the workflow always fails.
 
-`ci-pass` also requires the `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, `kernel-artifacts`, and `reproducible-build` jobs. `zig build ci` does not cover them. Fuzz smoke runs anywhere (`zig build test --fuzz=1000 --summary all`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
+`ci-pass` also requires the `sanitize`, `fuzz-smoke`, `docker-build`, `cross-compile-check`, `wasm-build`, `kernel-artifacts`, and `reproducible-build` jobs. `zig build ci` does not cover them. Fuzz smoke and sanitize run anywhere (`zig build test --fuzz=1000 --summary all`; `zig build test -Dsanitize-c=full`); the rest need Docker, cross toolchains, or `glslangValidator` (SPIR-V freshness, see `scripts/check-shader-artifacts.sh`). A green `zig build ci` can still go red on those jobs after push.
 
 Every shell step in `.github/workflows/ci.yml` is a script in `scripts/`, so `zig build lint-shell` analyses the shell CI depends on: `scripts/check-ci-pass.sh` (the `ci-pass` gate, `NEEDS_JSON=${{ toJSON(needs) }}`), `scripts/check-docker-image.sh` (the `docker-build` smoke test), `scripts/build-cross-target.sh` (the `cross-compile-check` matrix), `scripts/build-wasm.sh` (the `wasm-build` output check), and `scripts/product-version.sh` (the product SemVer the `docker-build` job stamps into the image). A new `run:` block with logic in it belongs in one of those, not in the YAML.
 
@@ -462,6 +462,18 @@ zig build test -Denable-webgpu=false    # skip WebGPU tests
 
 # Fuzz smoke (CI fuzz-smoke job)
 zig build test --fuzz=1000 --summary all
+
+# AddressSanitizer + UndefinedBehaviorSanitizer (CI sanitize job).
+# ReleaseSafe bounds and overflow checks do not see a wild pointer into a
+# mapped region, a use-after-free, an unaligned load or an out-of-range
+# shift, and the engine reads all four out of a downloaded GGUF. Costs about
+# 3x the wall clock, so CI filters it to the untrusted-input parsers and the
+# durable-write paths; drop the filters to sanitize everything.
+zig build test -Dsanitize-c=full
+zig build test -Dsanitize-c=full -Dtest-filter=gguf -Dtest-filter=tokenizer
+# -Dsanitize-c=trap is UBSan with a trap instead of a report, for a target
+# whose sanitizer runtime is unavailable. Off by default, so the release
+# binaries are unchanged.
 
 # Golden tests (need ./zig-out/bin/agave and weights under ./models; skipped if missing)
 zig build

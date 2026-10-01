@@ -331,6 +331,75 @@ jobs:
         # Focus on untrusted-input surfaces (JSON, GGUF, image, grammar, CLI).
         run: zig build test --fuzz=1000 --summary all
 
+  # The whole suite again under AddressSanitizer + UndefinedBehaviorSanitizer.
+  # ReleaseSafe bounds and overflow checks do not cover a wild pointer into a
+  # mapped region, a use-after-free of a weight buffer, an unaligned load or a
+  # shift past the width of its type, and the engine reads all four out of a
+  # downloaded GGUF: headers, mmap-backed weights, tokenizer tables, a dtype
+  # taken from the file. A parser bug in that path is a wrong answer from a
+  # real model, not a crash, so nothing else in CI would notice it.
+  #
+  # Sanitizers are wired in as -Dsanitize-c rather than by replacing the
+  # optimizer mode, so the code under test is the same ReleaseSafe build the
+  # plain test job runs, with the same asserts armed.
+  #
+  # The run is filtered to the untrusted-input and durable-write paths rather
+  # than the full suite: ASan roughly triples the wall clock, and those are
+  # the surfaces where a memory error is both reachable from a downloaded
+  # file and expensive to notice later. Raise it to the full suite when the
+  # budget allows; a filter that matches nothing is a build failure here
+  # (build.zig rejectEmptyTestFilters), not a silent green.
+  sanitize:
+    name: Unit tests under ASan + UBSan
+    needs: fmt-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-zig
+        id: zig
+
+      - name: Cache Zig build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            .zig-cache
+            ~/.cache/zig
+          # The sanitizer flag is part of the build command, not the cache key:
+          # the key covers the sources, and the local cache is keyed on the full
+          # command line too, so a sanitized build never reuses unsanitized
+          # objects.
+          key: zig-${{ steps.zig.outputs.version }}-sanitize-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**', 'tests/**') }}
+          restore-keys: zig-${{ steps.zig.outputs.version }}-sanitize-
+
+      - name: Run parser tests under ASan and UBSan
+        # Every filter below is verified to match at least one `test "..."`
+        # name: build.zig rejects a filter that matches nothing, so a renamed
+        # test turns this job red rather than quietly sanitizing less.
+        run: >-
+          zig build test -Dsanitize-c=full --summary all
+          -Dtest-filter=gguf
+          -Dtest-filter=tokenizer
+          -Dtest-filter=dequant
+          -Dtest-filter=json
+          -Dtest-filter=grammar
+          -Dtest-filter=chat
+
+      - name: Run filesystem and store tests under ASan and UBSan
+        # The durable-write and conversation-store paths are where an
+        # allocation bug costs data rather than a wrong token, and where the
+        # tests deliberately inject faults, so they are worth a second
+        # sanitized pass.
+        run: >-
+          zig build test -Dsanitize-c=full --summary all
+          -Dtest-filter=injected
+          -Dtest-filter=torn
+          -Dtest-filter=quarantin
+          -Dtest-filter=store
+
   # oxlint + tsc are configured in-tree but never ran on GitHub: the chat UI
   # and WASM shell could regress without a red check. Blocking. Every .tsx
   # source is linted; .oxlintrc.json ignorePatterns holds build outputs only,
@@ -479,7 +548,7 @@ jobs:
   ci-pass:
     name: CI passed
     if: always()
-    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, kernel-artifacts, reproducible-build, lint-web, lint-shell, lint-python, python-tests]
+    needs: [fmt-check, test-linux-x86, test-macos, docker-build, cross-compile-check, wasm-build, fuzz-smoke, sanitize, kernel-artifacts, reproducible-build, lint-web, lint-shell, lint-python, python-tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:

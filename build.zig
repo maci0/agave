@@ -285,7 +285,7 @@ pub fn build(b: *std.Build) void {
     mod_rel.addImport("build_options", backend_options.createModule());
 
     const exe_rel = b.addExecutable(.{ .name = "agave", .root_module = mod_rel });
-    linkPlatform(mod_rel, exe_rel, target, link_metal);
+    linkPlatform(mod_rel, exe_rel, target, link_metal, .off);
     b.installArtifact(exe_rel);
 
     // A binary with no man page documents itself only through --help, which
@@ -305,7 +305,7 @@ pub fn build(b: *std.Build) void {
     mod_dbg.addImport("build_options", backend_options.createModule());
 
     const exe_dbg = b.addExecutable(.{ .name = "agave-debug", .root_module = mod_dbg });
-    linkPlatform(mod_dbg, exe_dbg, target, link_metal);
+    linkPlatform(mod_dbg, exe_dbg, target, link_metal, .off);
     if (enable_debug_binary) b.installArtifact(exe_dbg);
 
     // ── Run step (uses the optimized binary) ─────────────────────
@@ -331,6 +331,30 @@ pub fn build(b: *std.Build) void {
     // Reusing mod_rel (ReleaseFast) silently no-ops ~400 assert-based checks
     // in fuzz and unit tests (see std.debug.assert docs).
     const test_optimize: std.builtin.OptimizeMode = .ReleaseSafe;
+
+    // AddressSanitizer + UndefinedBehaviorSanitizer for the test build. The
+    // engine parses attacker-controlled GGUF headers, mmap-backed weight
+    // blobs and tokenizer tables out of a downloaded file, so the memory
+    // errors that matter here are exactly the ones ReleaseSafe's bounds and
+    // overflow checks do not see: a wild pointer into a mapped region, a
+    // use-after-free of a weight buffer, an unaligned load, a shift past the
+    // width of its type. `zig build test` cannot find those; ASan/UBSan find
+    // them and abort the run, which is the only thing that turns one into a
+    // build failure rather than a corrupt inference result.
+    //
+    // `full` is ASan+UBSan; `trap` is UBSan with a trap instead of a report,
+    // for a target whose sanitizer runtime is unavailable. `off` is the
+    // default, so the ordinary `zig build test` and the release binaries are
+    // untouched: sanitizer runtimes slow a run down and add nothing to
+    // shipped code. ReleaseSafe (not Debug) is required, for the GCC 16
+    // .sframe linking failure the rest of the test build already avoids.
+    //
+    // Usage: zig build test -Dsanitize-c=full
+    const sanitize_c: std.zig.SanitizeC = b.option(
+        std.zig.SanitizeC,
+        "sanitize-c",
+        "Sanitize the test build: off (default), trap (UBSan), full (ASan+UBSan)",
+    ) orelse .off;
 
     // Default `--listen=-` server deadlocks under parallel `addRunArtifact` on
     // this host: children block in receiveMessage and the parent never sends
@@ -359,28 +383,32 @@ pub fn build(b: *std.Build) void {
         mod_test.addImport("build_options", backend_options.createModule());
         // No name filters: run the full inline suite from src/ (ReleaseSafe so asserts fire).
         const t = b.addTest(.{ .root_module = mod_test, .test_runner = fuzz_test_runner, .filters = test_filters });
-        linkPlatform(mod_test, t, target, link_metal);
+        linkPlatform(mod_test, t, target, link_metal, sanitize_c);
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
     // SDPA oracle self-tests (validates ground-truth reference for GPU tests)
+    const sdpa_oracle_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/sdpa_oracle.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    sdpa_oracle_test_mod.sanitize_c = sanitize_c;
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/sdpa_oracle.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        }),
+        .root_module = sdpa_oracle_test_mod,
         .test_runner = simple_test_runner,
         .filters = test_filters,
     })).step);
 
     // Golden harness unit tests (degenerate output detection)
+    const golden_harness_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/models/golden_harness.zig"),
+        .target = target,
+        .optimize = test_optimize,
+    });
+    golden_harness_test_mod.sanitize_c = sanitize_c;
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/models/golden_harness.zig"),
-            .target = target,
-            .optimize = test_optimize,
-        }),
+        .root_module = golden_harness_test_mod,
         .test_runner = simple_test_runner,
         .filters = test_filters,
     })).step);
@@ -393,6 +421,7 @@ pub fn build(b: *std.Build) void {
         .optimize = test_optimize,
     });
     backend_test_mod.addImport("build_options", backend_options.createModule());
+    backend_test_mod.sanitize_c = sanitize_c;
 
     // Shared oracle module for SDPA hardware tests
     const oracle_mod = b.createModule(.{
@@ -419,6 +448,7 @@ pub fn build(b: *std.Build) void {
         .filters = test_filters,
         .test_runner = simple_test_runner,
         .link_metal = link_metal,
+        .sanitize_c = sanitize_c,
     };
 
     // CUDA SDPA correctness tests (skips at runtime if no CUDA hardware).
@@ -456,7 +486,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_bench_test.addImport("build_options", backend_options.createModule());
         const t = b.addTest(.{ .root_module = mod_bench_test, .test_runner = simple_test_runner, .filters = test_filters });
-        linkPlatform(mod_bench_test, t, target, link_metal);
+        linkPlatform(mod_bench_test, t, target, link_metal, sanitize_c);
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
@@ -469,7 +499,7 @@ pub fn build(b: *std.Build) void {
         });
         mod_wasm_test.addImport("build_options", backend_options.createModule());
         const t = b.addTest(.{ .root_module = mod_wasm_test, .test_runner = simple_test_runner, .filters = test_filters });
-        linkPlatform(mod_wasm_test, t, target, link_metal);
+        linkPlatform(mod_wasm_test, t, target, link_metal, sanitize_c);
         test_step.dependOn(&b.addRunArtifact(t).step);
     }
 
@@ -483,7 +513,7 @@ pub fn build(b: *std.Build) void {
     mod_bench.addImport("build_options", backend_options.createModule());
 
     const exe_bench = b.addExecutable(.{ .name = "agave-bench", .root_module = mod_bench });
-    linkPlatform(mod_bench, exe_bench, target, link_metal);
+    linkPlatform(mod_bench, exe_bench, target, link_metal, .off);
     if (enable_bench) b.installArtifact(exe_bench);
 
     const bench_run = b.addRunArtifact(exe_bench);
@@ -751,6 +781,9 @@ const BackendTest = struct {
     filters: []const []const u8,
     test_runner: std.Build.Step.Compile.TestRunner,
     link_metal: bool,
+    /// Mirrors the -Dsanitize-c option, so the GPU-gated hardware tests get
+    /// the same instrumentation as the rest of `zig build test`.
+    sanitize_c: std.zig.SanitizeC,
 
     /// Compiles `root` with a named `backend` import, adds it to `test_step`, and
     /// returns the run step. `extra_name`/`extra_mod` add a second named import
@@ -769,7 +802,7 @@ const BackendTest = struct {
         mod.addImport("backend", self.backend_mod);
         if (extra_name) |name| mod.addImport(name, extra_mod.?);
         const t = self.b.addTest(.{ .root_module = mod, .test_runner = self.test_runner, .filters = self.filters });
-        linkPlatform(mod, t, self.target, self.link_metal);
+        linkPlatform(mod, t, self.target, self.link_metal, self.sanitize_c);
         const run = self.b.addRunArtifact(t);
         self.test_step.dependOn(&run.step);
         return run;
@@ -781,17 +814,25 @@ const BackendTest = struct {
 /// `link_metal` is set, the three macOS frameworks the Metal backend calls into.
 /// Vulkan (libvulkan.so / libvulkan.1.dylib via the KosmicKrisp ICD) is loaded at
 /// runtime through std.DynLib and needs no link-time dependency.
+///
+/// `sanitize_c` is threaded through here rather than set per module because
+/// every artifact that needs it already calls this: the sanitizer has to cover
+/// the whole test binary, including libc and the compiler_rt builtins, not
+/// just the module this function was handed. `.off` leaves the flag off, so
+/// the release binaries are byte-identical to a build without the option.
 fn linkPlatform(
     mod: *std.Build.Module,
     compile: *std.Build.Step.Compile,
     resolved: std.Build.ResolvedTarget,
     link_metal: bool,
+    sanitize_c: std.zig.SanitizeC,
 ) void {
     mod.link_libc = true;
     // Canaries on every function with a local array. Off by default, and the
     // engine parses attacker-controlled GGUF headers and weights, so the one
     // overflow worth guarding is the one in a decode loop.
     mod.stack_protector = true;
+    if (sanitize_c != .off) mod.sanitize_c = sanitize_c;
     // zig 0.16 ReleaseFast defaults to a non-PIE ET_EXEC on Linux.
     switch (resolved.result.os.tag) {
         .linux, .macos => compile.pie = true,

@@ -10,6 +10,7 @@ Zig LLM inference engine. No C/C++ ML libraries. Kernels, quants, and models are
 zig build                          # agave (ReleaseFast, stripped) + agave-debug (ReleaseSafe) + agave-bench
 zig build doctor                   # report whether this machine can run `zig build ci`, and name what is missing
 zig build test                     # unit tests at ReleaseSafe so asserts fire. Does not build agave-bench.
+zig build test -Dsanitize-c=full   # the same unit tests under ASan+UBSan (CI sanitize job). `trap` = UBSan only. Off by default, so release binaries are unchanged.
 zig build ci                        # full local CI gate: check + lint-web (incl. check-web) + lint-shell + lint-python
 zig build check                    # fmt-check + docs hygiene + pin consistency + third-party notices + unit tests + Python unit tests + conv-store backup self-test (local CI gate)
 zig build check-pins               # Zig/Docker reproducibility pins, uv.lock freshness, and exact third-party version pins agree (CI fmt-check job)
@@ -46,7 +47,7 @@ Every flag, including `--spec-mode`: `agave --help`, or the `cli_specs` table in
 
 After backend or model interface changes run `zig build`, not only `zig build test`.
 
-`zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
+`zig build ci` is what a workstation reproduces. CI also runs, with no local step covering them: the macOS test job, the Docker build, the cross-compile matrix, the wasm build, PTX freshness, a bounded fuzz pass, an ASan+UBSan pass. See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 Docs: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md). Dispatchers: `src/backend/backend.zig`, `src/models/model.zig`, `src/format/format.zig`, `src/tokenizer/tokenizer.zig`. `--serve` UI is `src/web/` (Preact in `app.tsx`, Tailwind 4 in `app.css`, shadcn primitives in `ui/`; `scripts/build-web.sh` bundles them into the committed `src/web/app.js` and `src/web/style.css`). Browser WASM shell is `web/` (Preact in `shell.tsx`, `shell.css`), not `src/web/`. Both surfaces reach Preact through the `vendor/react` shims, not through React.
 
