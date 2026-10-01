@@ -21,9 +21,16 @@ else `$HOME/.cache/agave/`. In the compose image that is
 | Vulkan pipeline cache | `<cache>/agave/vk_pipeline_cache.bin` | yes, rebuilt on first run | One slower startup |
 | Expert profile | caller-supplied path | yes | Profile re-recorded |
 | TriAttention calibration | `<model>.cal`, next to the model | yes, `agave calibrate <model.gguf>` | Re-measured at full cost, and it is not in the cache dir, so the backup tier never covered it |
+| Sampling settings and stats toggle | browser `localStorage`, keys `agave_*` | yes, re-set in the UI | Defaults, so losing it costs nothing. The backup script cannot reach it: it is per-browser state on the client, not a file the server writes |
+| System prompt | browser `sessionStorage`, key `agave_system_prompt` | only by retyping it | Gone when the tab closes. Scoped to the tab on purpose so prompt text does not outlive it, so the durability answer is "do not rely on it" rather than "back it up" |
 
 Only the first three cannot be rebuilt. Everything else is a cache with a
 rebuild path, so this document is about the conversation store.
+
+Two paths in that table sit outside `$XDG_CACHE_HOME/agave/`, which is why
+nothing in this document's backup tier reaches them: the calibration file is
+named after the model, and browser state is not on this host at all. Both are
+listed so the inventory is complete, not because the tier could hold them.
 
 Writes for all of them go through `src/durable_file.zig`: write a sibling
 `*.tmp.<pid>`, `fsync`, `rename` over the live path, `fsync` the parent
@@ -95,6 +102,7 @@ Message content is user data, so every copy of the store is owner-only:
 | `docker compose down -v` | the whole store | n/a | Deletes the volume |
 | Malicious or accidental deletion | last backup taken | same | Only if backups were taken |
 | Logical corruption (a bad build writing a wrong but well-formed store) | the interval between backups | seconds to restore | `verify` checks structure, not meaning; see below |
+| Mass deletion through the API, then the usual retention window | the interval between backups | seconds to restore the newest surviving copy | The live store looks like one the server never had, so the dated copies of the deleted conversations are the only evidence. They rotate on `AGAVE_KEEP`; the rotation log names what went |
 | Bad deploy | none expected | n/a | The on-disk envelope is version 1 and validated on load; an unreadable version is left in place, not silently reinterpreted and not quarantined, so a downgrade keeps the newer build's store for the build that wrote it |
 
 RPO is "last server save", not "last token": the server persists on conversation
@@ -149,6 +157,18 @@ stores are both present).
 
 Pruning matches the exact names above, so it never deletes a file this script
 did not create.
+
+Every dated backup that leaves the tier is recorded in
+`{backup dir}/.conversations-rotated.log` before it is removed: the file name,
+its size, and the envelope version read from it, one line per removal. Rotation
+is the deletion path this system has, and a store deleted from the live path is
+indistinguishable from one the server never had: without the record, the dated
+copies of deleted conversations are rotated away on schedule and the loss
+becomes permanent with nothing left naming what was there. The record carries
+no conversation text, is written outside both tiers, and is never itself
+rotated. `check` reads it, and a tier holding the log with no dated backup in
+it was emptied by something other than this script, which it reports instead of
+calling the tier unprimed.
 
 Destination is `AGAVE_BACKUP_DIR`, default `$HOME/.agave-backups`. **Set it to
 a different filesystem than the cache directory.** A backup on the same disk
@@ -210,6 +230,13 @@ taken. A store path that cannot be resolved, or whose directory is absent
 because the tier is being checked on a recovery host, has no filesystem to
 compare against and is not a failure.
 
+`check` also reads the snapshot tier instead of only counting it, and names
+each quarantined, overflow, or pre-restore copy that does not verify, so an
+alert can key on `WARNING` or on the `N of them not verifying` count. It does
+not fail the run for one: like `backup`, it keeps the file, because that copy
+is the only one there is and reporting a green check over an unreadable one is
+the failure this is guarding against, while failing would only hide it.
+
 Schedule it next to the backup and alert on a nonzero exit; a monthly `check`
 against a daily backup is the minimum, since `AGAVE_MAX_AGE_HOURS` has to
 exceed the real backup interval to be meaningful.
@@ -262,12 +289,23 @@ Add `--store PATH` to `restore` when the server was started with
 default path and leaves the relocated store untouched.
 
 `restore` verifies the backup before touching anything, refuses a file that is
-truncated, unbalanced, or written in a different envelope version, snapshots
-the current live store to `{backup dir}/conversations-prerestore-<stamp>.json`
-so a wrong restore is undoable, installs through a temporary file and renames,
-then verifies what it installed. Restart the server to load it; a store the
-current build still cannot parse is left in place, not dropped, so a failed
-restore leaves the data recoverable.
+truncated, unbalanced, over the load cap, or written in a different envelope
+version, snapshots the current live store to
+`{backup dir}/conversations-prerestore-<stamp>.json` so a wrong restore is
+undoable, installs through a temporary file and renames, then verifies what it
+installed. Restart the server to load it; a store the current build still
+cannot parse is left in place, not dropped, so a failed restore leaves the data
+recoverable.
+
+The envelope version is read as the value of the top-level `"version"` key, the
+way the server reads it (`json.extractIntField`), not matched anywhere in the
+file. Message content is arbitrary user text, and a conversation quoting
+`"version":1` used to be enough for a whole-file match to accept a store in
+another envelope version: `verify` passed, `restore` installed it over a good
+live store, and the server then left it at the live path with persistence
+disabled, so the operator had traded a working store for one nothing reads. A
+quoted value (`"version":"1"`) is rejected too, since the server never reads it
+as a version.
 
 ## Verify the restore path
 
@@ -277,6 +315,9 @@ whole path in CI and locally:
 ```bash
 zig build conv-store-backup-test     # backup, verify, reject-truncated,
                                     # reject-other-envelope-version,
+                                    # reject-version-quoted-in-content,
+                                    # reject-quoted-version,
+                                    # reject-missing-version,
                                     # format-version drift guard,
                                     # load-cap drift guard, reject-oversize,
                                     # restore, pre-restore snapshot,
@@ -284,6 +325,7 @@ zig build conv-store-backup-test     # backup, verify, reject-truncated,
                                     # same-filesystem refusal,
                                     # check fresh/missing/stale,
                                     # check rejects a shared filesystem,
+                                    # check reads the snapshot tier,
                                     # check without a store,
                                     # --store override, whole help text
 scripts/conv-store-backup.sh --self-test   # same, standalone

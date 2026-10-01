@@ -143,6 +143,10 @@ stamp() {
 readonly DATED_RE='^conversations-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
 readonly SNAPSHOT_RE='^conversations-(corrupt|overflow|prerestore)-[0-9]{8}T[0-9]{6}Z(-[0-9]+)?\.json$'
 
+# Undated rotation record. Matches no tier name, so ordinary rotation and
+# retention never reach it, and it is not a copy of any conversation.
+readonly ROTATION_LOG_NAME='.conversations-rotated.log'
+
 # mtime as seconds.fraction. GNU stat and BSD/macOS stat take the same field
 # under different syntax, so the flavor is probed once instead of guessed from
 # uname. The fraction is not optional: a `backup` run writes the dated copy and
@@ -233,6 +237,61 @@ brace_balance() {
     ' "$1"
 }
 
+# The envelope version of a store, on stdout, or nothing and a nonzero exit
+# when there is no readable one.
+#
+# The top-level `"version"` is the only thing that says which schema wrote the
+# file, and matching the string anywhere in the file does not find it: a
+# conversation that quotes `"version":1` satisfies such a grep, so a store in
+# another envelope version (or one truncated before its version reached the
+# top level) verifies and then gets restored. A restore installs that file at
+# the live path, so the server leaves it there with persistence disabled
+# instead of loading it: the backup looks fine and the conversation history is
+# gone.
+#
+# Read the way the server reads it: src/server/json.zig extractIntField takes
+# the first `"version":` whose value parses as a number, without caring how
+# deep the key sits, and conv_store.parse rejects any value but
+# format_version. A quoted `"version":"1"` is text the server never reads as a
+# version, so it is rejected here too.
+#
+# The scan is a byte loop over the whole file because the string and escape
+# state has to carry across lines: a store is one JSON line, but awk's record
+# handling is not something to depend on for correctness here. Byte offsets
+# inside a line, so a store larger than one awk line still reads right.
+envelope_version() {
+    awk -v want="\"version\":" '
+    function emit(v) { print v; found = 1; exit }
+    {
+        n = length($0)
+        for (i = 1; i <= n; i++) {
+            c = substr($0, i, 1)
+            if (esc) { esc = 0; continue }
+            if (c == "\\") { if (in_string) esc = 1; continue }
+            if (c == "\"") {
+                if (!in_string && substr($0, i, length(want)) == want) {
+                    # want is the whole key and its colon, so the value starts
+                    # after whatever whitespace the writer put there.
+                    j = i + length(want)
+                    while (j <= n && substr($0, j, 1) ~ /[ \t]/) j++
+                    neg = ""
+                    if (j <= n && substr($0, j, 1) == "-") { neg = "-"; j++ }
+                    start = j
+                    while (j <= n && substr($0, j, 1) ~ /[0-9]/) j++
+                    if (j > start) emit(neg substr($0, start, j - start))
+                }
+                in_string = !in_string
+                continue
+            }
+            if (in_string) continue
+            if (c == "{") depth++
+            else if (c == "}") { if (depth == 0) exit; depth-- }
+        }
+    }
+    END { if (!found) exit 1 }
+    ' "$1"
+}
+
 # The envelope version src/server/conv_store.zig writes. `verify_store` matches
 # STORE_FORMAT_VERSION, so a format bump that never reaches this script makes
 # every backup fail after it has already copied the store, and every restore
@@ -287,8 +346,8 @@ verify_store() {
     (( size <= MAX_STORE_BYTES )) ||
         die "$file is $size bytes, over the $MAX_STORE_BYTES-byte limit the server loads within: the server would not read it back. Nothing has been changed."
     [[ "$(head -c 1 "$file")" == "{" ]] || die "not a JSON object: $file"
-    grep -Eq '"version":[[:space:]]*'"$STORE_FORMAT_VERSION"'([[:space:]]*[,}])' "$file" ||
-        die "no \"version\":$STORE_FORMAT_VERSION envelope in $file (written by a different format version; inspect before restoring)"
+    envelope_version "$file" | grep -qx "$STORE_FORMAT_VERSION" ||
+        die "no top-level \"version\":$STORE_FORMAT_VERSION envelope in $file (written by a different format version, or too damaged for the envelope to be read; inspect before restoring)"
     # Balanced braces catches the truncation that a single missing byte causes.
     # Only braces outside string literals count: message content is arbitrary
     # user text, so a store whose conversation mentions `fn f() {` is loadable
@@ -371,8 +430,47 @@ do_backup() {
 # backups, is a deletion path with no recovery window.
 prune() {
     local dir="$1"
-    prune_tier "$dir" "$DATED_RE" "$KEEP"
+    prune_dated "$dir"
     prune_tier "$dir" "$SNAPSHOT_RE" "$KEEP_SNAPSHOT"
+}
+
+# Prune the dated tier, recording what went. Rotation is a deletion path, and
+# this is the record that keeps it from being a silent one: a store deleted
+# from the live path looks exactly like a store the server never had, so
+# without the record the dated copies of the deleted conversations are rotated
+# away on schedule and the loss becomes permanent with nothing left that names
+# what was there. The record is written before the files go, so a crash
+# mid-rotation leaves the trail rather than the hole.
+#
+# The record is dated by nothing, so it is outside both tiers and outside
+# DATED_RE and SNAPSHOT_RE: ordinary rotation must never reach it. It carries
+# no conversation text (file name, byte size, envelope version), so it is not
+# another copy of the history to protect.
+prune_dated() {
+    local dir="$1"
+    # `=()` not just `-a`: under `set -u` an array that was declared but never
+    # assigned reads as unbound when the tier is empty.
+    local -a files=()
+    local line f
+    # A `while read` loop, not mapfile: macOS still ships bash 3.2, and the
+    # runbook schedules this script with cron on any host, macOS included.
+    while IFS= read -r line; do
+        files+=("$line")
+    done < <(list_backups "$dir" "$DATED_RE")
+    (( ${#files[@]} > KEEP )) || return 0
+
+    local log="$dir/$ROTATION_LOG_NAME" when version
+    when="$(stamp)"
+    local i
+    for ((i = KEEP; i < ${#files[@]}; i++)); do
+        f="${files[i]}"
+        version="$(envelope_version "$f" 2>/dev/null || printf 'unreadable')"
+        printf '%s pruned %s bytes=%s version=%s\n' \
+            "$when" "${f##*/}" "$(file_size "$f")" "$version" >>"$log" ||
+            die "cannot append to the rotation log $log; refusing to prune so the loss is recorded"
+        rm -f -- "$f" || die "prune failed: $f"
+        note "pruned old backup $f (recorded in $log)"
+    done
 }
 
 prune_tier() {
@@ -445,7 +543,16 @@ do_check() {
     fi
     local newest
     newest="$(list_backups "$dir" "$DATED_RE" | head -1)"
-    [[ -n "$newest" ]] || die "no dated backup in $dir (the backup job has never produced one)"
+    if [[ -z "$newest" ]]; then
+        # The rotation log is the record of what this script pruned. If it is
+        # there and the dated tier is not, the copies were removed by something
+        # else, and `check` reporting an empty tier as merely unprimed would
+        # read as "the job has never run" rather than "the copies are gone".
+        if [[ -s "$dir/$ROTATION_LOG_NAME" ]]; then
+            die "no dated backup in $dir, but $ROTATION_LOG_NAME records pruned copies: the dated tier was emptied outside this script; read the log and the backup destination's own history before trusting the tier"
+        fi
+        die "no dated backup in $dir (the backup job has never produced one)"
+    fi
     local mtime
     mtime="$(mtime_of "$newest")"
     local age_seconds max_age_seconds
@@ -456,9 +563,30 @@ do_check() {
         die "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old, over AGAVE_MAX_AGE_HOURS=$MAX_AGE_HOURS; the backup job is not running or cannot write $dir"
     fi
     verify_store "$newest"
-    local snapshots
+    # The snapshot tier holds state the live path does not: a quarantined store
+    # is the only copy of a file the server could not parse, an overflow store
+    # the only copy of the part a capped load dropped, and a pre-restore
+    # snapshot the only undo for a restore installed by mistake. Counting them
+    # without reading them makes `check` report a recovery path for a tier
+    # whose only remaining copy of something is unreadable, which is the same
+    # failure `check` exists to catch for the dated tier. Each one that fails
+    # is named and does not fail the run, for the reason `backup` keeps a
+    # non-verifying sidecar: the copy is still the only one there is, and
+    # refusing to say so would hide it. An alert can grep for these lines.
+    #
+    # Each verify runs in a subshell because verify_store ends in `die`, which
+    # exits: called directly it would take the whole check down on the first
+    # unreadable sidecar instead of counting it.
+    local snapshots snap snap_bad=0
+    while IFS= read -r snap; do
+        [[ -n "$snap" ]] || continue
+        if ! (verify_store "$snap") >/dev/null 2>&1; then
+            note "WARNING: $snap does not verify; it is the only copy of the state it holds, so keep it and inspect by hand"
+            snap_bad=$((snap_bad + 1))
+        fi
+    done < <(list_backups "$dir" "$SNAPSHOT_RE")
     snapshots="$(list_backups "$dir" "$SNAPSHOT_RE" | wc -l)"
-    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/overflow/pre-restore copies on file"
+    note "newest backup $newest is $(( age_seconds / HOUR_SECONDS ))h old; $(( age_seconds % HOUR_SECONDS / 60 ))m; $snapshots quarantined/overflow/pre-restore copies on file, $snap_bad of them not verifying"
 }
 
 do_self_test() {
@@ -520,6 +648,48 @@ do_self_test() {
         echo "conv-store-backup: self-test FAILED: a store in another envelope version was accepted" >&2
         status=1
     fi
+
+    # The envelope version is only meaningful as the value of the top-level
+    # key, and message content is arbitrary user text: a conversation quoting
+    # `"version":1` used to satisfy a whole-file grep, so a store the server
+    # refuses to load verified and then got installed over a good live store,
+    # leaving persistence disabled with nothing to restore from. The version
+    # has to be read the way the server reads it.
+    printf '%s' '{"version":99,"conversations":[{"id":1,"title":"t","messages":[{"role":"user","content":"see \"version\":1, in a chat"}]}]}' >"$tmp/future_quote.json"
+    if (verify_store "$tmp/future_quote.json") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: an envelope version quoted in message content was accepted" >&2
+        status=1
+    fi
+    if (AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_restore "$tmp/future_quote.json") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a store whose version appears only in message content was restored" >&2
+        status=1
+    fi
+    cmp -s "$store" "$backup" || {
+        echo "conv-store-backup: self-test FAILED: the rejected version-quote restore changed the live store" >&2
+        status=1
+    }
+    # A quoted value is text the server never reads as a version either, so it
+    # does not stand in for one. The brace scan is satisfied by the whole file,
+    # which is what makes this case a false accept if the version check ever
+    # loosens again.
+    printf '%s' '{"version":"1","conversations":[]}' >"$tmp/quoted_version.json"
+    if (verify_store "$tmp/quoted_version.json") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a quoted envelope version was accepted" >&2
+        status=1
+    fi
+    # A store with no version key at all: the check fails on absence, not only
+    # on a disagreeing number.
+    printf '%s' '{"conversations":[]}' >"$tmp/no_version.json"
+    if (verify_store "$tmp/no_version.json") >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: a store with no envelope version was accepted" >&2
+        status=1
+    fi
+    # A good store still verifies, and the reader agrees with the script about
+    # which version it carries.
+    [[ "$(envelope_version "$store")" == "$STORE_FORMAT_VERSION" ]] || {
+        echo "conv-store-backup: self-test FAILED: envelope_version did not read the live store's version" >&2
+        status=1
+    }
 
     # The version this script verifies has to be the version the server writes,
     # or every backup of a good store dies at the verify step.
@@ -603,6 +773,34 @@ do_self_test() {
         status=1
     }
 
+    # Rotation has to leave a record. A store deleted from the live path is
+    # indistinguishable from one the server never had, so without it the dated
+    # copies of the deleted conversations are rotated away on schedule and the
+    # loss is permanent with nothing left naming what was there. The record is
+    # written before the files go, names each removed file, and is never itself
+    # rotated.
+    ( KEEP=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
+    local rotation_log="$tmp/backups/.conversations-rotated.log"
+    if ! grep -q 'conversations-2[0-9]*T[0-9]*Z\.json' "$rotation_log" 2>/dev/null; then
+        echo "conv-store-backup: self-test FAILED: rotation pruned files without recording them" >&2
+        status=1
+    fi
+    # The record is metadata, not another copy of the history, and it must
+    # survive the rotation that writes it.
+    ( KEEP=1; AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_backup ) >/dev/null
+    [[ -f "$rotation_log" ]] || {
+        echo "conv-store-backup: self-test FAILED: rotation deleted its own record" >&2
+        status=1
+    }
+    # And a tier emptied by hand is not the same as one that was never primed:
+    # `check` has to say so rather than read it as an unstarted job.
+    mkdir -p "$tmp/emptied"
+    cp -- "$rotation_log" "$tmp/emptied/.conversations-rotated.log"
+    if (AGAVE_BACKUP_DIR="$tmp/emptied" XDG_CACHE_HOME="$tmp/cache" do_check) >/dev/null 2>&1; then
+        echo "conv-store-backup: self-test FAILED: check passed on a tier emptied by hand" >&2
+        status=1
+    fi
+
     # Retention must not reach files this script did not name, so a store
     # dropped into the backup dir by hand survives.
     printf '%s' '{"version":1}' >"$tmp/backups/conversations-manual.json"
@@ -611,6 +809,31 @@ do_self_test() {
         echo "conv-store-backup: self-test FAILED: retention deleted a file it did not create" >&2
         status=1
     }
+
+    # `check` has to read the snapshot tier, not just count it. A quarantined
+    # store the server could not parse is the only copy of that file, so a tier
+    # holding one that does not verify is not a recovery path for it. The run
+    # stays green and names the file: refusing to say so would hide the only
+    # copy there is, which is the same reason `backup` keeps a non-verifying
+    # sidecar instead of dropping it.
+    printf '%s' '{"version":1,' >"$tmp/backups/conversations-corrupt-20260101T000000Z.json"
+    local check_out
+    check_out="$(AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check 2>&1)" || {
+        echo "conv-store-backup: self-test FAILED: check failed on an unreadable quarantined store" >&2
+        status=1
+    }
+    if [[ "$check_out" != *"conversations-corrupt-20260101T000000Z.json"* ||
+        "$check_out" != *"1 of them not verifying"* ]]; then
+        echo "conv-store-backup: self-test FAILED: check did not report the unreadable quarantined store" >&2
+        status=1
+    fi
+    # A quarantined store that verifies is counted, not warned about.
+    printf '%s' '{"version":1,"active_id":0,"next_id":1,"conversations":[]}' >"$tmp/backups/conversations-corrupt-20260101T000000Z.json"
+    check_out="$(AGAVE_BACKUP_DIR="$tmp/backups" XDG_CACHE_HOME="$tmp/cache" do_check 2>&1)"
+    if [[ "$check_out" != *"0 of them not verifying"* ]]; then
+        echo "conv-store-backup: self-test FAILED: check warned about a quarantined store that verifies" >&2
+        status=1
+    fi
 
     # A backup on the store's own filesystem covers a bad save and nothing
     # else. The temp dir here is one filesystem, so this is that case.
@@ -717,7 +940,7 @@ do_self_test() {
     fi
 
     if (( status == 0 )); then
-        note "self-test passed: backup, verify, reject-truncated, reject-other-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
+        note "self-test passed: backup, verify, reject-truncated, reject-other-version, reject-version-quoted-in-content, reject-quoted-version, reject-missing-version, format-version-agrees, load-cap-agrees, reject-oversize, braces-in-content, restore, pre-restore snapshot, retention, snapshot-tier-retention, sidecars, retention-scope, reject-same-filesystem, check-fresh, check-missing, check-stale, check-rejects-shared-filesystem, check-without-a-store, reject-bad-retention, store-override, whole-help"
     fi
     return "$status"
 }
