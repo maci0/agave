@@ -426,11 +426,16 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
     var top_vals: [max_top_logprobs]f32 = .{-std.math.inf(f32)} ** max_top_logprobs;
     var top_ids: [max_top_logprobs]u32 = .{0} ** max_top_logprobs;
     var mi: usize = 0;
+    // Slots actually claimed by a logit. A slot keeps its -inf sentinel when no
+    // logit beat it, so emitting 0..limit would report token id 0 repeatedly
+    // (all-equal or fully masked logits: `-inf > -inf` never fires).
+    var filled: usize = 0;
 
     for (logits, 0..) |v, i| {
         if (v > top_vals[mi]) {
             top_vals[mi] = v;
             top_ids[mi] = @intCast(i);
+            if (filled < limit) filled += 1;
             mi = 0;
             for (1..limit) |j| {
                 if (top_vals[j] < top_vals[mi]) mi = j;
@@ -438,12 +443,12 @@ pub fn topLogProbs(logits: []const f32, n: u32, out_ids: []u32, out_logprobs: []
         }
     }
 
-    for (0..limit) |i| {
+    for (0..filled) |i| {
         out_ids[i] = top_ids[i];
         const lp = (top_vals[i] - max_val) - log_norm;
         out_logprobs[i] = if (std.math.isFinite(lp)) lp else -std.math.inf(f32);
     }
-    return limit;
+    return @intCast(filled);
 }
 
 /// Apply min_p filtering: mask tokens with probability < min_p * max_probability
@@ -1277,11 +1282,30 @@ test "topLogProbs all -inf is not NaN" {
     const logits = [_]f32{ -std.math.inf(f32), -std.math.inf(f32) };
     var ids: [2]u32 = undefined;
     var probs: [2]f32 = undefined;
+    // No logit beats the -inf sentinel, so no token is a candidate: emitting
+    // unfilled slots would report token id 0 twice with logprob -inf.
     const n = topLogProbs(&logits, 2, &ids, &probs);
-    try std.testing.expectEqual(@as(u32, 2), n);
+    try std.testing.expectEqual(@as(u32, 0), n);
+}
+
+test "topLogProbs reports only real candidates when all logits tie" {
+    // Every token is equally likely; the scan claims exactly `limit` of them,
+    // each a distinct id, and never falls back to the sentinel slot 0.
+    const logits = [_]f32{ 1.0, 1.0, 1.0, 1.0 };
+    var ids: [3]u32 = undefined;
+    var probs: [3]f32 = undefined;
+    const n = topLogProbs(&logits, 3, &ids, &probs);
+    try std.testing.expectEqual(@as(u32, 3), n);
+    var seen = [_]bool{false} ** 4;
+    for (ids[0..n]) |id| {
+        try std.testing.expect(id < 4);
+        try std.testing.expect(!seen[id]);
+        seen[id] = true;
+        try std.testing.expect(logits[id] == 1.0);
+    }
     for (probs[0..n]) |p| {
-        try std.testing.expect(!std.math.isNan(p));
-        try std.testing.expect(p <= 0);
+        try std.testing.expect(std.math.isFinite(p));
+        try std.testing.expectApproxEqAbs(-@as(f32, @log(4.0)), p, 1e-5);
     }
 }
 

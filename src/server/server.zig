@@ -8196,6 +8196,15 @@ test "computeLogprobs without top_logprobs still reports the sampled token" {
     try std.testing.expect(info.token_logprob < 0);
 }
 
+test "computeLogprobs on fully masked logits reports no duplicate candidates" {
+    // min_p / xtc can leave every logit at -inf. The candidate list must then be
+    // empty rather than token id 0 repeated once per requested slot.
+    const logits = [_]f32{ -std.math.inf(f32), -std.math.inf(f32), -std.math.inf(f32) };
+    const info = computeLogprobs(&logits, 1, 5);
+    try std.testing.expectEqual(@as(u32, 0), info.count);
+    try std.testing.expect(std.math.isNegativeInf(info.token_logprob));
+}
+
 /// A tool-call context over the testing allocator and an empty registry, for
 /// tests that must not reach into the process-wide server state.
 fn testToolCallCtx(tp: *const json.ToolParams, reg: *const tools_mod.Registry) ToolCallCtx {
